@@ -72,7 +72,7 @@ export default function Dashboard() {
     try {
       const [ordersRes, quotesRes, inventoryRes, deliveriesRes, activityRes] =
         await Promise.all([
-          supabase.from('orders').select('total_price, total_profit, total_margin_pct, status'),
+          supabase.from('orders').select('customer_id, total_price, total_profit, total_margin_pct, status'),
           supabase.from('quotes').select('status, total_price'),
           supabase.from('inventory').select('quantity_available, quantity_prebooked'),
           supabase
@@ -106,6 +106,29 @@ export default function Dashboard() {
       const inventoryAvailable = inv.reduce((s, i) => s + (i.quantity_available || 0), 0);
       const inventoryPrebooked = inv.reduce((s, i) => s + (i.quantity_prebooked || 0), 0);
 
+      const customerRevenue: Record<string, { farm_name: string; total: number }> = {};
+      for (const ord of orders) {
+        const cid = (ord as Record<string, unknown>).customer_id as string;
+        if (!cid) continue;
+        if (!customerRevenue[cid]) customerRevenue[cid] = { farm_name: '', total: 0 };
+        customerRevenue[cid].total += ord.total_price || 0;
+      }
+
+      if (Object.keys(customerRevenue).length > 0) {
+        const { data: custNames } = await supabase
+          .from('customers')
+          .select('id, farm_name')
+          .in('id', Object.keys(customerRevenue));
+        (custNames || []).forEach((c) => {
+          if (customerRevenue[c.id]) customerRevenue[c.id].farm_name = c.farm_name;
+        });
+      }
+
+      const topCustomers = Object.values(customerRevenue)
+        .filter((c) => c.farm_name)
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 5);
+
       setData({
         totalRevenue,
         totalProfit,
@@ -116,7 +139,7 @@ export default function Dashboard() {
         inventoryPrebooked,
         upcomingDeliveries: (deliveriesRes.data as unknown as DashboardData['upcomingDeliveries']) || [],
         recentActivity: activityRes.data || [],
-        topCustomers: [],
+        topCustomers,
       });
     } catch {
       // Silently handle
@@ -281,6 +304,38 @@ export default function Dashboard() {
           )}
         </Card>
       </div>
+
+      {!isDriver && data.topCustomers.length > 0 && (
+        <Card padding={false}>
+          <div className="p-5">
+            <CardHeader
+              title="Top"
+              accent="Customers"
+              action={
+                <Button variant="ghost" size="sm" onClick={() => navigate('/customers')}>
+                  View All
+                </Button>
+              }
+            />
+          </div>
+          <div className="px-5 pb-5 space-y-2">
+            {data.topCustomers.map((c, idx) => (
+              <div
+                key={idx}
+                className="flex items-center justify-between p-3 rounded-lg hover:bg-crx-green-tint transition-colors"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-xs font-semibold text-secondary">
+                    {idx + 1}
+                  </div>
+                  <span className="text-sm font-medium text-nav-dark">{c.farm_name}</span>
+                </div>
+                <span className="text-sm font-mono text-nav-dark">{fmt(c.total)}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {(isAdmin || role === 'sales_rep') && (
         <Card>

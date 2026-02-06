@@ -4,10 +4,11 @@ import { ArrowLeft, Save, Plus, Trash2 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import type { Customer, CustomerAddress } from '../types';
+import type { Customer, CustomerAddress, Quote, Order, Delivery } from '../types';
 
 export default function CustomerDetail() {
   const { id } = useParams();
@@ -38,12 +39,23 @@ export default function CustomerDetail() {
   const [saving, setSaving] = useState(false);
   const [tab, setTab] = useState<'info' | 'quotes' | 'orders' | 'deliveries'>('info');
 
+  const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [orders, setOrders] = useState<(Order & { fulfillment_pct: number })[]>([]);
+  const [deliveries, setDeliveries] = useState<(Delivery & { driver_name: string })[]>([]);
+  const [tabLoading, setTabLoading] = useState(false);
+
   useEffect(() => {
     if (!isNew && id) {
       fetchCustomer();
       fetchAddresses();
     }
   }, [id]);
+
+  useEffect(() => {
+    if (!isNew && id && tab !== 'info') {
+      fetchTabData(tab);
+    }
+  }, [tab, id]);
 
   const fetchCustomer = async () => {
     const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
@@ -54,6 +66,65 @@ export default function CustomerDetail() {
   const fetchAddresses = async () => {
     const { data } = await supabase.from('customer_addresses').select('*').eq('customer_id', id).order('created_at');
     setAddresses(data || []);
+  };
+
+  const fetchTabData = async (selectedTab: string) => {
+    setTabLoading(true);
+    if (selectedTab === 'quotes') {
+      const { data } = await supabase
+        .from('quotes')
+        .select('*')
+        .eq('customer_id', id)
+        .order('created_at', { ascending: false });
+      setQuotes((data || []) as Quote[]);
+    } else if (selectedTab === 'orders') {
+      const { data } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('customer_id', id)
+        .order('order_date', { ascending: false });
+      const rows = ((data || []) as Order[]).map((o) => {
+        const { data: items } = { data: null as null };
+        void items;
+        return { ...o, fulfillment_pct: 0 };
+      });
+      setOrders(rows);
+
+      const orderIds = rows.map((o) => o.id);
+      if (orderIds.length > 0) {
+        const { data: itemsData } = await supabase
+          .from('order_items')
+          .select('order_id, total_units_needed, quantity_delivered')
+          .in('order_id', orderIds);
+        const byOrder: Record<string, { needed: number; delivered: number }> = {};
+        (itemsData || []).forEach((item) => {
+          if (!byOrder[item.order_id]) byOrder[item.order_id] = { needed: 0, delivered: 0 };
+          byOrder[item.order_id].needed += item.total_units_needed || 0;
+          byOrder[item.order_id].delivered += item.quantity_delivered || 0;
+        });
+        setOrders((prev) =>
+          prev.map((o) => {
+            const stats = byOrder[o.id];
+            return {
+              ...o,
+              fulfillment_pct: stats && stats.needed > 0 ? Math.round((stats.delivered / stats.needed) * 100) : 0,
+            };
+          })
+        );
+      }
+    } else if (selectedTab === 'deliveries') {
+      const { data } = await supabase
+        .from('deliveries')
+        .select('*, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+        .eq('customer_id', id)
+        .order('scheduled_date', { ascending: false });
+      const rows = ((data || []) as Array<Delivery & { driver: { full_name: string } | null }>).map((d) => ({
+        ...d,
+        driver_name: d.driver?.full_name || 'Unassigned',
+      }));
+      setDeliveries(rows);
+    }
+    setTabLoading(false);
   };
 
   const handleSave = async () => {
@@ -73,7 +144,7 @@ export default function CustomerDetail() {
           }
         }
         toast('success', 'Customer created');
-        navigate(`/customers/${data.id}`);
+        navigate(`/customers/${data.id}`, { replace: true });
       }
     } else {
       const { error } = await supabase
@@ -82,14 +153,54 @@ export default function CustomerDetail() {
         .eq('id', id);
       if (error) {
         toast('error', error.message);
-      } else {
-        toast('success', 'Customer updated');
+        setSaving(false);
+        return;
       }
+
+      const existingIds = addresses.filter((a) => a.id).map((a) => a.id!);
+
+      const { data: currentAddrs } = await supabase
+        .from('customer_addresses')
+        .select('id')
+        .eq('customer_id', id);
+      const currentIds = (currentAddrs || []).map((a) => a.id);
+      const toDelete = currentIds.filter((cid) => !existingIds.includes(cid));
+
+      for (const delId of toDelete) {
+        await supabase.from('customer_addresses').delete().eq('id', delId);
+      }
+
+      for (const addr of addresses) {
+        if (addr.id) {
+          await supabase
+            .from('customer_addresses')
+            .update({
+              label: addr.label,
+              address_line: addr.address_line,
+              city: addr.city,
+              state: addr.state,
+              zip: addr.zip,
+              delivery_notes: addr.delivery_notes,
+              is_default: addr.is_default,
+            })
+            .eq('id', addr.id);
+        } else if (addr.label || addr.address_line) {
+          await supabase
+            .from('customer_addresses')
+            .insert([{ ...addr, customer_id: id }]);
+        }
+      }
+
+      toast('success', 'Customer updated');
+      fetchAddresses();
     }
     setSaving(false);
   };
 
   const update = (field: string, value: unknown) => setCustomer((c) => ({ ...c, [field]: value }));
+
+  const fmt = (n: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   if (loading) {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
@@ -183,7 +294,7 @@ export default function CustomerDetail() {
             ) : (
               <div className="space-y-4">
                 {addresses.map((addr, idx) => (
-                  <div key={idx} className="p-4 border border-gray-100 rounded-lg space-y-3">
+                  <div key={addr.id || idx} className="p-4 border border-gray-100 rounded-lg space-y-3">
                     <div className="flex justify-between items-center">
                       <span className="text-sm font-medium text-secondary">Address {idx + 1}</span>
                       <button onClick={() => setAddresses((a) => a.filter((_, i) => i !== idx))} className="text-gray-400 hover:text-red-500">
@@ -226,18 +337,188 @@ export default function CustomerDetail() {
       )}
 
       {tab === 'quotes' && !isNew && (
-        <Card>
-          <p className="text-sm text-secondary">Quotes for this customer will appear here.</p>
+        <Card padding={false}>
+          <div className="p-5">
+            <CardHeader
+              title="Customer"
+              accent="Quotes"
+              action={
+                <Button variant="ghost" size="sm" onClick={() => navigate('/quotes/new')}>
+                  New Quote
+                </Button>
+              }
+            />
+          </div>
+          {tabLoading ? (
+            <div className="px-5 pb-5 space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : quotes.length === 0 ? (
+            <div className="px-5 pb-5">
+              <p className="text-sm text-secondary">No quotes for this customer yet.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-t border-b border-gray-100">
+                    <th className="px-5 py-3 text-left font-medium text-secondary">Quote #</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Tier</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Total</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Margin</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {quotes.map((q) => (
+                    <tr
+                      key={q.id}
+                      onClick={() => navigate(`/quotes/${q.id}`)}
+                      className="border-b border-gray-50 hover:bg-crx-green-tint cursor-pointer transition-colors"
+                    >
+                      <td className="px-5 py-3 font-medium text-nav-dark">{q.quote_number}</td>
+                      <td className="px-4 py-3">
+                        <Badge variant={statusToBadgeVariant[q.status] || 'default'}>
+                          {q.status}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">T{q.tier}</td>
+                      <td className="px-4 py-3 font-mono">{fmt(q.total_price)}</td>
+                      <td className="px-4 py-3 font-mono text-emerald-600">{q.total_margin_pct.toFixed(1)}%</td>
+                      <td className="px-4 py-3 text-secondary">
+                        {new Date(q.created_at).toLocaleDateString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
+
       {tab === 'orders' && !isNew && (
-        <Card>
-          <p className="text-sm text-secondary">Orders for this customer will appear here.</p>
+        <Card padding={false}>
+          <div className="p-5">
+            <CardHeader title="Customer" accent="Orders" />
+          </div>
+          {tabLoading ? (
+            <div className="px-5 pb-5 space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : orders.length === 0 ? (
+            <div className="px-5 pb-5">
+              <p className="text-sm text-secondary">No orders for this customer yet.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-t border-b border-gray-100">
+                    <th className="px-5 py-3 text-left font-medium text-secondary">Order #</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Total</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Profit</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Date</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary w-40">Fulfillment</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orders.map((o) => (
+                    <tr
+                      key={o.id}
+                      onClick={() => navigate(`/orders/${o.id}`)}
+                      className="border-b border-gray-50 hover:bg-crx-green-tint cursor-pointer transition-colors"
+                    >
+                      <td className="px-5 py-3 font-medium text-nav-dark">{o.order_number}</td>
+                      <td className="px-4 py-3">
+                        <Badge variant={statusToBadgeVariant[o.status] || 'default'}>
+                          {o.status.replace('_', ' ')}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 font-mono">{fmt(o.total_price)}</td>
+                      <td className="px-4 py-3 font-mono text-emerald-600">{fmt(o.total_profit)}</td>
+                      <td className="px-4 py-3 text-secondary">
+                        {new Date(o.order_date).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-crx-green rounded-full transition-all"
+                              style={{ width: `${o.fulfillment_pct}%` }}
+                            />
+                          </div>
+                          <span className="text-xs text-secondary w-8">{o.fulfillment_pct}%</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
+
       {tab === 'deliveries' && !isNew && (
-        <Card>
-          <p className="text-sm text-secondary">Deliveries for this customer will appear here.</p>
+        <Card padding={false}>
+          <div className="p-5">
+            <CardHeader title="Customer" accent="Deliveries" />
+          </div>
+          {tabLoading ? (
+            <div className="px-5 pb-5 space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : deliveries.length === 0 ? (
+            <div className="px-5 pb-5">
+              <p className="text-sm text-secondary">No deliveries for this customer yet.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-t border-b border-gray-100">
+                    <th className="px-5 py-3 text-left font-medium text-secondary">Delivery #</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Driver</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Scheduled</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Completed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deliveries.map((d) => (
+                    <tr
+                      key={d.id}
+                      onClick={() => navigate(`/deliveries/${d.id}`)}
+                      className="border-b border-gray-50 hover:bg-crx-green-tint cursor-pointer transition-colors"
+                    >
+                      <td className="px-5 py-3 font-medium text-nav-dark">{d.delivery_number}</td>
+                      <td className="px-4 py-3">
+                        <Badge variant={statusToBadgeVariant[d.status] || 'default'}>
+                          {d.status.replace('_', ' ')}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">{d.driver_name}</td>
+                      <td className="px-4 py-3 text-secondary">
+                        {new Date(d.scheduled_date).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3 text-secondary">
+                        {d.completed_at ? new Date(d.completed_at).toLocaleDateString() : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Card>
       )}
     </div>

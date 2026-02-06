@@ -18,6 +18,7 @@ import Deliveries from './pages/Deliveries';
 import NewDelivery from './pages/NewDelivery';
 import DeliveryDetail from './pages/DeliveryDetail';
 import PurchaseOrders from './pages/PurchaseOrders';
+import NewPurchaseOrder from './pages/NewPurchaseOrder';
 import PurchaseOrderDetail from './pages/PurchaseOrderDetail';
 import BrandVsGeneric from './pages/BrandVsGeneric';
 import Reports from './pages/Reports';
@@ -54,6 +55,7 @@ export default function App() {
               <Route path="deliveries/new" element={<NewDelivery />} />
               <Route path="deliveries/:id" element={<DeliveryDetail />} />
               <Route path="purchase-orders" element={<PurchaseOrders />} />
+              <Route path="purchase-orders/new" element={<NewPurchaseOrder />} />
               <Route path="purchase-orders/:id" element={<PurchaseOrderDetail />} />
               <Route path="brand-vs-generic" element={<BrandVsGeneric />} />
               <Route path="reports" element={<Reports />} />

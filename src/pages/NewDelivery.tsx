@@ -171,10 +171,10 @@ export default function NewDelivery() {
       return;
     }
 
-    const { data: countData } = await supabase
+    const { count } = await supabase
       .from('deliveries')
-      .select('id', { count: 'exact', head: true });
-    const nextNum = (countData as unknown as number || 0) + 1;
+      .select('*', { count: 'exact', head: true });
+    const nextNum = (count || 0) + 1;
     const deliveryNumber = `DEL-${String(nextNum).padStart(5, '0')}`;
 
     const { data: delData, error: delError } = await supabase
