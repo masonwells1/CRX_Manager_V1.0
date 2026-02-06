@@ -1,15 +1,21 @@
 import { useState, type FormEvent } from 'react';
+import { useNavigate, Navigate } from 'react-router-dom';
 import { ChevronRight, Loader2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import logoWhite from '../../assets/logo_3-01_(3).png';
 import logoDark from '../../assets/logo_3-02_(2).png';
 
 export default function LoginPage() {
-  const { signIn } = useAuth();
+  const { signIn, session } = useAuth();
+  const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  if (session) {
+    return <Navigate to="/" replace />;
+  }
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -18,8 +24,10 @@ export default function LoginPage() {
     const { error: err } = await signIn(email, password);
     if (err) {
       setError(err);
+      setLoading(false);
+      return;
     }
-    setLoading(false);
+    navigate('/', { replace: true });
   };
 
   return (
