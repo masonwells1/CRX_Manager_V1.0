@@ -179,8 +179,8 @@ export default function ProductDetail() {
                   <span className="font-medium">Auto-Calculate:</span> Set a <span className="font-semibold">Net Margin %</span> for any tier, and prices will automatically recalculate whenever cost changes.
                 </p>
                 <div className="text-xs text-gray-600 space-y-1">
-                  <p><span className="font-medium">Net Margin</span> = Markup % (e.g., 25% net → $125 price on $100 cost)</p>
-                  <p><span className="font-medium">Gross Margin</span> = Profit % of price (auto-calculated for reference)</p>
+                  <p><span className="font-medium">Net Margin</span> = Profit % of price (e.g., 20% net → $100 price on $80 cost)</p>
+                  <p><span className="font-medium">Gross Margin</span> = Markup % (auto-calculated, e.g., 25%)</p>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -198,7 +198,7 @@ export default function ProductDetail() {
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 1</h4>
                   <Input label="Price" type="number" value={product.tier1_price ?? ''} onChange={(e) => update('tier1_price', e.target.value ? parseFloat(e.target.value) : null)} placeholder={product.tier1_margin != null ? 'Auto-calculated on save' : ''} />
-                  <Input label="Net Margin %" type="number" value={product.tier1_margin != null ? (product.tier1_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier1_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 25 for 25%" />
+                  <Input label="Net Margin %" type="number" value={product.tier1_margin != null ? (product.tier1_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier1_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 20 for 20%" />
                   {product.tier1_gross_margin != null && (
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>
@@ -209,7 +209,7 @@ export default function ProductDetail() {
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 2</h4>
                   <Input label="Price" type="number" value={product.tier2_price ?? ''} onChange={(e) => update('tier2_price', e.target.value ? parseFloat(e.target.value) : null)} placeholder={product.tier2_margin != null ? 'Auto-calculated on save' : ''} />
-                  <Input label="Net Margin %" type="number" value={product.tier2_margin != null ? (product.tier2_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier2_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 30 for 30%" />
+                  <Input label="Net Margin %" type="number" value={product.tier2_margin != null ? (product.tier2_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier2_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 25 for 25%" />
                   {product.tier2_gross_margin != null && (
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>
@@ -223,7 +223,7 @@ export default function ProductDetail() {
                 <div className="space-y-3">
                   <h4 className="text-sm font-medium text-secondary">Tier 3</h4>
                   <Input label="Price" type="number" value={product.tier3_price ?? ''} onChange={(e) => update('tier3_price', e.target.value ? parseFloat(e.target.value) : null)} placeholder={product.tier3_margin != null ? 'Auto-calculated on save' : ''} />
-                  <Input label="Net Margin %" type="number" value={product.tier3_margin != null ? (product.tier3_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier3_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 35 for 35%" />
+                  <Input label="Net Margin %" type="number" value={product.tier3_margin != null ? (product.tier3_margin * 100).toFixed(1) : ''} onChange={(e) => update('tier3_margin', e.target.value ? parseFloat(e.target.value) / 100 : null)} placeholder="e.g., 30 for 30%" />
                   {product.tier3_gross_margin != null && (
                     <div className="px-3 py-2 bg-gray-50 rounded-lg border border-gray-100">
                       <span className="text-xs text-gray-500">Gross Margin: </span>

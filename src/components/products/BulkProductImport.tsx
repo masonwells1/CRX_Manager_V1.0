@@ -240,7 +240,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
               tier3_margin, suggested_rate, rate_per_acre, rate_unit, notes
             </p>
             <p className="text-xs text-green-600 mt-2">
-              💡 <span className="font-medium">Tip:</span> Margin columns are Net Margins (markup %). Gross margins are calculated automatically. Prices will auto-recalculate when costs change!
+              💡 <span className="font-medium">Tip:</span> Margin columns are Net Margins (profit % of price). Gross margins (markup %) are calculated automatically. Prices will auto-recalculate when costs change!
             </p>
           </div>
         </div>
