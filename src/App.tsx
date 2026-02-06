@@ -26,6 +26,8 @@ import Reports from './pages/Reports';
 import TeamBoard from './pages/TeamBoard';
 import Notifications from './pages/Notifications';
 import SettingsPage from './pages/SettingsPage';
+import { BlendTickets } from './pages/BlendTickets';
+import { BlendTicketDetail } from './pages/BlendTicketDetail';
 
 export default function App() {
   return (
@@ -56,6 +58,8 @@ export default function App() {
               <Route path="deliveries" element={<Deliveries />} />
               <Route path="deliveries/new" element={<NewDelivery />} />
               <Route path="deliveries/:id" element={<DeliveryDetail />} />
+              <Route path="blend-tickets" element={<BlendTickets />} />
+              <Route path="blend-tickets/:id" element={<BlendTicketDetail />} />
               <Route path="purchase-orders" element={<PurchaseOrders />} />
               <Route path="purchase-orders/new" element={<NewPurchaseOrder />} />
               <Route path="purchase-orders/:id" element={<PurchaseOrderDetail />} />

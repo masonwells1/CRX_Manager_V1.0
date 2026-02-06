@@ -364,3 +364,76 @@ export interface UnitConversion {
   factor_oz: number;
   notes: string | null;
 }
+
+export type BlendTicketStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'needs_review';
+export type BlendTicketReviewStatus = 'unreviewed' | 'approved' | 'rejected';
+export type OCRQueueStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+export interface BlendTicket {
+  id: string;
+  ticket_number: string;
+  uploaded_by: string;
+  customer_id: string | null;
+  upload_date: string;
+  ticket_date: string | null;
+  status: BlendTicketStatus;
+  review_status: BlendTicketReviewStatus;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  ocr_confidence_score: number;
+  raw_ocr_text: string | null;
+  driver_name: string | null;
+  tank_number: string | null;
+  applicator_name: string | null;
+  signature_detected: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  uploader?: Profile;
+  reviewer?: Profile;
+  customer?: Customer;
+  images?: BlendTicketImage[];
+  products?: BlendTicketProduct[];
+}
+
+export interface BlendTicketProduct {
+  id: string;
+  blend_ticket_id: string;
+  product_id: string | null;
+  product_name: string;
+  quantity: number;
+  unit: string | null;
+  lot_number: string | null;
+  sequence_order: number;
+  confidence_score: number;
+  manually_corrected: boolean;
+  created_at: string;
+  product?: Product;
+}
+
+export interface BlendTicketImage {
+  id: string;
+  blend_ticket_id: string;
+  storage_path: string;
+  image_url: string;
+  file_size: number;
+  mime_type: string;
+  upload_order: number;
+  width: number | null;
+  height: number | null;
+  created_at: string;
+}
+
+export interface OCRProcessingQueue {
+  id: string;
+  blend_ticket_id: string;
+  status: OCRQueueStatus;
+  priority: number;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  retry_count: number;
+  max_retries: number;
+  created_at: string;
+  updated_at: string;
+}
