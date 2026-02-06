@@ -20,6 +20,7 @@ export interface Product {
   manufacturer: string | null;
   container_size: number | null;
   unit_size: string | null;
+  epa_registration: string | null;
   current_cost: number | null;
   cost_updated_date: string | null;
   tier1_price: number | null;

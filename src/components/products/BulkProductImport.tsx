@@ -19,6 +19,7 @@ interface ParsedProduct {
   manufacturer?: string;
   container_size?: number;
   unit_size?: string;
+  epa_registration?: string;
   current_cost?: number;
   tier1_price?: number;
   tier1_margin?: number;
@@ -45,6 +46,7 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
   manufacturer: ['manufacturer', 'mfg', 'brand'],
   container_size: ['container_size', 'size', 'container', 'package_size'],
   unit_size: ['unit_size', 'unit', 'uom', 'units'],
+  epa_registration: ['epa_registration', 'epa_reg', 'epa_number', 'epa', 'registration_number', 'reg_number'],
   current_cost: ['current_cost', 'cost', 'price', 'unit_cost', 'base_cost'],
   tier1_price: ['tier1_price', 'tier_1_price', 't1_price', 'price_tier1'],
   tier1_margin: ['tier1_margin', 'tier_1_margin', 't1_margin', 'margin_tier1', 'tier1_margin_%'],
@@ -144,7 +146,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
 
             if (field === 'product_name' || field === 'sku' || field === 'category' ||
                 field === 'vendor' || field === 'manufacturer' || field === 'unit_size' ||
-                field === 'suggested_rate' || field === 'rate_unit' || field === 'notes') {
+                field === 'epa_registration' || field === 'suggested_rate' || field === 'rate_unit' || field === 'notes') {
               if (value) product[field] = value;
             } else if (field === 'container_size' || field === 'current_cost' ||
                        field === 'tier1_price' || field === 'tier2_price' ||
@@ -236,8 +238,8 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
             <p className="text-xs font-medium text-secondary mb-1">Supported Columns:</p>
             <p className="text-xs text-gray-500 font-mono">
               product_name, sku, category, vendor, manufacturer, container_size, unit_size,
-              current_cost, tier1_price, tier1_margin, tier2_price, tier2_margin, tier3_price,
-              tier3_margin, suggested_rate, rate_per_acre, rate_unit, notes
+              epa_registration, current_cost, tier1_price, tier1_margin, tier2_price, tier2_margin,
+              tier3_price, tier3_margin, suggested_rate, rate_per_acre, rate_unit, notes
             </p>
             <p className="text-xs text-green-600 mt-2">
               💡 <span className="font-medium">Tip:</span> Margin columns are Net Margins (profit % of price). Gross margins (markup %) are calculated automatically. Prices will auto-recalculate when costs change!

@@ -26,6 +26,7 @@ export default function ProductDetail() {
     manufacturer: '',
     container_size: undefined,
     unit_size: '',
+    epa_registration: '',
     current_cost: undefined,
     tier1_price: undefined,
     tier2_price: undefined,
@@ -155,6 +156,7 @@ export default function ProductDetail() {
               <Input label="Manufacturer" value={product.manufacturer || ''} onChange={(e) => update('manufacturer', e.target.value)} disabled={!isAdmin} />
               <Input label="Container Size" type="number" value={product.container_size ?? ''} onChange={(e) => update('container_size', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
               <Input label="Unit Size" value={product.unit_size || ''} onChange={(e) => update('unit_size', e.target.value)} disabled={!isAdmin} />
+              <Input label="EPA Registration" value={product.epa_registration || ''} onChange={(e) => update('epa_registration', e.target.value)} disabled={!isAdmin} placeholder="e.g., 34704-69" />
               <Input label="Suggested Rate" value={product.suggested_rate || ''} onChange={(e) => update('suggested_rate', e.target.value)} disabled={!isAdmin} />
               <Input label="Rate Per Acre" type="number" value={product.rate_per_acre ?? ''} onChange={(e) => update('rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
               <Input label="Rate Unit" value={product.rate_unit || ''} onChange={(e) => update('rate_unit', e.target.value)} disabled={!isAdmin} />
