@@ -4,6 +4,9 @@ import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase } from '../../lib/db';
+import * as pdfjsLib from 'pdfjs-dist';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -43,9 +46,9 @@ const ORDER_FIELD_MAPPINGS: Record<string, string[]> = {
 };
 
 const ITEM_FIELD_MAPPINGS: Record<string, string[]> = {
-  product_name: ['product_name', 'product', 'item', 'description', 'item_description'],
+  product_name: ['product_name', 'product', 'item', 'description', 'chemical'],
   quantity: ['quantity', 'qty', 'amount', 'units', 'total_units'],
-  price_per_unit: ['price_per_unit', 'unit_price', 'price', 'rate', 'unit_rate'],
+  price_per_unit: ['price_per_unit', 'unit_price', 'price', 'rate', 'unit_rate', 'cost'],
   unit_cost: ['unit_cost', 'cost', 'cost_per_unit'],
   unit_size: ['unit_size', 'size', 'package_size'],
   item_notes: ['item_notes', 'item_comment', 'line_notes'],
@@ -90,17 +93,98 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     return { headers, rows };
   };
 
-  const handleParse = async () => {
-    if (!file) return;
+  const extractTextFromPDF = async (file: File): Promise<string> => {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = '';
 
-    setParsing(true);
-    const text = await file.text();
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => item.str)
+        .join(' ');
+      fullText += pageText + '\n';
+    }
+
+    return fullText;
+  };
+
+  const parsePDFInvoice = (text: string): ParsedOrder[] => {
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+
+    let invoiceNumber = '';
+    let customerName = '';
+    let invoiceDate = '';
+    const items: ParsedOrderItem[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      if (line.includes('Invoice #') || line.includes('Invoice#')) {
+        const match = line.match(/Invoice\s*#?\s*([A-Z0-9-]+)/i);
+        if (match) invoiceNumber = match[1];
+      }
+
+      if (line.includes('Invoice Date')) {
+        const match = line.match(/Invoice Date\s+(\d{2}\/\d{2}\/\d{4})/);
+        if (match) invoiceDate = match[1];
+      }
+
+      if (!customerName && i < 20) {
+        if (line.match(/^[A-Z][A-Z\s&]+(?:LLC|INC|CORP|LTD)?$/i) &&
+            line.length > 5 &&
+            !line.includes('Invoice') &&
+            !line.includes('Crop RX') &&
+            !line.includes('Date') &&
+            !line.includes('Chemical')) {
+          customerName = line;
+        }
+      }
+    }
+
+    const fullText = lines.join(' ');
+
+    const datePattern = /(\d{2}\/\d{2}\/\d{4})\s+([A-Za-z0-9\s\.\-\(\)]+?)\s+(?:(\d+\-\d+(?:\-\d+)?))?\s*([\d,]+\.?\d*)\s*GL\s*\$?([\d,]+\.?\d*)\s*(?:GL)?\s*\$?([\d,]+\.?\d*)/g;
+
+    let match;
+    while ((match = datePattern.exec(fullText)) !== null) {
+      const [, date, productName, epaReg, quantity, cost, total] = match;
+
+      const cleanQuantity = parseFloat(quantity.replace(/,/g, ''));
+      const cleanCost = parseFloat(cost.replace(/,/g, ''));
+      const cleanTotal = parseFloat(total.replace(/,/g, ''));
+
+      if (!isNaN(cleanQuantity) && !isNaN(cleanCost) && cleanQuantity > 0) {
+        items.push({
+          product_name: productName.trim(),
+          quantity: cleanQuantity,
+          price_per_unit: cleanCost,
+          unit_cost: cleanCost,
+          unit_size: 'GL',
+          notes: epaReg ? `EPA Reg: ${epaReg}` : undefined,
+        });
+      }
+    }
+
+    if (!invoiceNumber || items.length === 0) {
+      return [];
+    }
+
+    return [{
+      order_number: invoiceNumber,
+      customer_name: customerName || 'Unknown Customer',
+      order_date: invoiceDate || new Date().toISOString().split('T')[0],
+      status: 'confirmed',
+      items,
+    }];
+  };
+
+  const parseCSVOrders = (text: string): { valid: ParsedOrder[]; invalid: any[] } => {
     const { headers, rows } = parseCSV(text);
 
     if (headers.length === 0 || rows.length === 0) {
-      toast({ title: 'Invalid CSV file', variant: 'error' });
-      setParsing(false);
-      return;
+      return { valid: [], invalid: [] };
     }
 
     const orderFieldMap: Record<string, number> = {};
@@ -124,13 +208,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     const missingItemFields = requiredItemFields.filter((f) => !(f in itemFieldMap));
 
     if (missingOrderFields.length > 0 || missingItemFields.length > 0) {
-      toast({
-        title: 'Missing required columns',
-        description: `Required: ${[...missingOrderFields, ...missingItemFields].join(', ')}`,
-        variant: 'error',
-      });
-      setParsing(false);
-      return;
+      return { valid: [], invalid: [] };
     }
 
     const ordersMap = new Map<string, ParsedOrder>();
@@ -192,9 +270,55 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     });
 
     const valid = Array.from(ordersMap.values());
+    return { valid, invalid };
+  };
 
-    setValidation({ valid, invalid });
-    setParsing(false);
+  const handleParse = async () => {
+    if (!file) return;
+
+    setParsing(true);
+
+    try {
+      let parsedOrders: ParsedOrder[] = [];
+      let invalid: any[] = [];
+
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        const text = await extractTextFromPDF(file);
+        parsedOrders = parsePDFInvoice(text);
+
+        if (parsedOrders.length === 0) {
+          toast({
+            title: 'Could not parse PDF',
+            description: 'Unable to extract invoice data from PDF',
+            variant: 'error'
+          });
+          setParsing(false);
+          return;
+        }
+      } else {
+        const text = await file.text();
+        const result = parseCSVOrders(text);
+        parsedOrders = result.valid;
+        invalid = result.invalid;
+
+        if (parsedOrders.length === 0 && invalid.length === 0) {
+          toast({
+            title: 'Invalid file format',
+            description: 'Please check the CSV column headers',
+            variant: 'error'
+          });
+          setParsing(false);
+          return;
+        }
+      }
+
+      setValidation({ valid: parsedOrders, invalid });
+    } catch (error) {
+      console.error('Error parsing file:', error);
+      toast({ title: 'Error parsing file', variant: 'error' });
+    } finally {
+      setParsing(false);
+    }
   };
 
   const handleUpload = async () => {
@@ -306,13 +430,23 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           <div className="flex items-start gap-3">
             <FileText className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-blue-900">
-              <p className="font-medium mb-2">CSV Format Requirements:</p>
-              <ul className="list-disc list-inside space-y-1 text-xs">
-                <li>Required: order_number, customer_name, product_name, quantity, price_per_unit</li>
-                <li>Optional: order_date, status, unit_cost, unit_size, notes</li>
-                <li>Multiple items per order: Use same order_number on multiple rows</li>
-                <li>Customer names must match existing customers in the system</li>
-              </ul>
+              <p className="font-medium mb-2">Supported Formats:</p>
+              <div className="space-y-2">
+                <div>
+                  <p className="font-medium text-xs">CSV Files:</p>
+                  <ul className="list-disc list-inside space-y-1 text-xs ml-2">
+                    <li>Required: order_number, customer_name, product_name, quantity, price_per_unit</li>
+                    <li>Optional: order_date, status, unit_cost, unit_size, notes</li>
+                  </ul>
+                </div>
+                <div>
+                  <p className="font-medium text-xs">PDF Invoices:</p>
+                  <ul className="list-disc list-inside space-y-1 text-xs ml-2">
+                    <li>Automatically extracts invoice number, customer, date, and line items</li>
+                    <li>Works with standard invoice formats</li>
+                  </ul>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -321,13 +455,13 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           <Upload className="w-12 h-12 text-gray-400 mx-auto mb-3" />
           <input
             type="file"
-            accept=".csv"
+            accept=".csv,.pdf"
             onChange={handleFileChange}
             className="hidden"
-            id="order-csv-upload"
+            id="order-file-upload"
           />
           <label
-            htmlFor="order-csv-upload"
+            htmlFor="order-file-upload"
             className="cursor-pointer text-sm text-gray-600 hover:text-gray-900"
           >
             {file ? (
@@ -336,7 +470,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
               <span>
                 Click to upload or drag and drop
                 <br />
-                <span className="text-xs text-gray-500">CSV files only</span>
+                <span className="text-xs text-gray-500">CSV or PDF files</span>
               </span>
             )}
           </label>
@@ -344,7 +478,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
 
         {file && !validation && (
           <Button onClick={handleParse} disabled={parsing} className="w-full">
-            {parsing ? 'Parsing...' : 'Parse CSV'}
+            {parsing ? 'Parsing...' : 'Parse File'}
           </Button>
         )}
 
@@ -371,6 +505,20 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
                 </div>
               )}
             </div>
+
+            {validation.valid.length > 0 && (
+              <div className="max-h-60 overflow-y-auto bg-gray-50 border border-gray-200 rounded-lg p-3">
+                <p className="text-xs font-medium text-nav-dark mb-2">Preview:</p>
+                {validation.valid.map((order, idx) => (
+                  <div key={idx} className="mb-3 pb-3 border-b border-gray-200 last:border-0">
+                    <p className="text-xs font-medium text-nav-dark">
+                      {order.order_number} - {order.customer_name}
+                    </p>
+                    <p className="text-xs text-secondary">{order.items.length} items</p>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {validation.invalid.length > 0 && (
               <div className="max-h-40 overflow-y-auto bg-red-50 border border-red-200 rounded-lg p-3">
