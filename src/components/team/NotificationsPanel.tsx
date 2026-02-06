@@ -47,8 +47,6 @@ export default function NotificationsPanel() {
     };
   }, [isOpen]);
 
-  useRealtimeNotifications(profile?.id || '', fetchNotifications);
-
   const fetchNotifications = async () => {
     if (!profile) return;
 
@@ -62,6 +60,8 @@ export default function NotificationsPanel() {
     setNotifications((data || []) as Notification[]);
     setLoading(false);
   };
+
+  useRealtimeNotifications(profile?.id || '', fetchNotifications);
 
   const markAsRead = async (notificationId: string) => {
     await supabase
