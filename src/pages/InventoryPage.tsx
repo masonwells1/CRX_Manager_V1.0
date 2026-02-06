@@ -17,7 +17,7 @@ interface InventoryRow extends Inventory {
 }
 
 export default function InventoryPage() {
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const { toast } = useToast();
   const [inventory, setInventory] = useState<InventoryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -134,14 +134,26 @@ export default function InventoryPage() {
     const qty = parseInt(receiveQty);
     if (!qty || qty <= 0) return;
     const target = inventory.find((i) => i.id === selectedId);
-    if (!target) return;
+    if (!target || !profile) return;
     const { error } = await supabase
       .from('inventory')
-      .update({ quantity_available: target.quantity_available + qty })
+      .update({
+        quantity_available: target.quantity_available + qty,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', selectedId);
     if (error) {
       toast('error', 'Failed to receive shipment');
     } else {
+      // Create audit trail record
+      await supabase.from('inventory_transactions').insert({
+        product_id: target.product_id,
+        transaction_type: 'received',
+        quantity: qty,
+        to_location: target.location || 'Main Warehouse',
+        performed_by: profile.id,
+        notes: `Received ${qty} units`,
+      });
       toast('success', `Received ${qty} units`);
       setReceiveOpen(false);
       setReceiveQty('');
@@ -153,14 +165,26 @@ export default function InventoryPage() {
     const qty = parseInt(adjustQty);
     if (isNaN(qty)) return;
     const target = inventory.find((i) => i.id === selectedId);
-    if (!target) return;
+    if (!target || !profile) return;
     const { error } = await supabase
       .from('inventory')
-      .update({ quantity_available: target.quantity_available + qty })
+      .update({
+        quantity_available: target.quantity_available + qty,
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', selectedId);
     if (error) {
       toast('error', 'Failed to adjust inventory');
     } else {
+      // Create audit trail record (includes the reason/note the user typed)
+      await supabase.from('inventory_transactions').insert({
+        product_id: target.product_id,
+        transaction_type: 'adjusted',
+        quantity: qty,
+        to_location: target.location || 'Main Warehouse',
+        performed_by: profile.id,
+        notes: adjustNote || `Manual adjustment of ${qty} units`,
+      });
       toast('success', `Adjusted by ${qty} units`);
       setAdjustOpen(false);
       setAdjustQty('');

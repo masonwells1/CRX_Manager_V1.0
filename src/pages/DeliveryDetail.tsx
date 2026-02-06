@@ -12,7 +12,7 @@ import type { Delivery, DeliveryItem, Customer, CustomerAddress, Profile } from 
 export default function DeliveryDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const { toast } = useToast();
   const [delivery, setDelivery] = useState<Delivery | null>(null);
   const [items, setItems] = useState<DeliveryItem[]>([]);
@@ -64,20 +64,102 @@ export default function DeliveryDetail() {
       toast('error', 'Please enter a signature name');
       return;
     }
+    if (!delivery || !profile) return;
     setCompleting(true);
-    const { error } = await supabase
-      .from('deliveries')
-      .update({
-        status: 'completed',
-        completed_at: new Date().toISOString(),
-        signed_by: signedBy,
-      })
-      .eq('id', id!);
-    if (error) {
-      toast('error', 'Failed to complete delivery');
-    } else {
+
+    try {
+      // Step 1: Mark the delivery itself as completed
+      const { error: delError } = await supabase
+        .from('deliveries')
+        .update({
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+          signed_by: signedBy,
+        })
+        .eq('id', id!);
+
+      if (delError) throw delError;
+
+      // Step 2: For each item in this delivery, update the matching order_item
+      // and reduce inventory
+      for (const item of items) {
+        // 2a: Get the current order_item so we can update its delivered/remaining counts
+        const { data: orderItem } = await supabase
+          .from('order_items')
+          .select('quantity_delivered, quantity_remaining')
+          .eq('id', item.order_item_id)
+          .maybeSingle();
+
+        if (orderItem) {
+          const newDelivered = (Number(orderItem.quantity_delivered) || 0) + Number(item.quantity);
+          const newRemaining = (Number(orderItem.quantity_remaining) || 0) - Number(item.quantity);
+
+          await supabase
+            .from('order_items')
+            .update({
+              quantity_delivered: newDelivered,
+              quantity_remaining: Math.max(0, newRemaining),
+            })
+            .eq('id', item.order_item_id);
+        }
+
+        // 2b: Create an inventory_transaction record (audit trail)
+        await supabase.from('inventory_transactions').insert({
+          product_id: item.product_id,
+          transaction_type: 'delivered',
+          quantity: Number(item.quantity),
+          to_location: null,
+          from_location: 'Main Warehouse',
+          order_id: delivery.order_id,
+          delivery_id: delivery.id,
+          performed_by: profile.id,
+          notes: `Delivery ${delivery.delivery_number} completed. Signed by: ${signedBy}`,
+        });
+
+        // 2c: Reduce available inventory for this product
+        const { data: inv } = await supabase
+          .from('inventory')
+          .select('id, quantity_available')
+          .eq('product_id', item.product_id)
+          .eq('location', 'Main Warehouse')
+          .maybeSingle();
+
+        if (inv) {
+          await supabase
+            .from('inventory')
+            .update({
+              quantity_available: Math.max(0, (Number(inv.quantity_available) || 0) - Number(item.quantity)),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', inv.id);
+        }
+      }
+
+      // Step 3: Check if the entire order is now fully delivered
+      const { data: allOrderItems } = await supabase
+        .from('order_items')
+        .select('quantity_remaining')
+        .eq('order_id', delivery.order_id);
+
+      if (allOrderItems) {
+        const allFullyDelivered = allOrderItems.every(
+          (oi: any) => Number(oi.quantity_remaining) <= 0
+        );
+
+        await supabase
+          .from('orders')
+          .update({
+            status: allFullyDelivered ? 'fulfilled' : 'partially_fulfilled',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', delivery.order_id);
+      }
+
       toast('success', 'Delivery completed');
       fetchDelivery();
+    } catch (error) {
+      console.error('Error completing delivery:', error);
+      toast('error', 'Failed to complete delivery');
     }
     setCompleting(false);
   };

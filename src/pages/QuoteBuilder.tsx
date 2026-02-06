@@ -116,6 +116,7 @@ export default function QuoteBuilder() {
   const [tier, setTier] = useState(1);
   const [validDays, setValidDays] = useState(15);
   const [headerNotes, setHeaderNotes] = useState('');
+  const [footerNotes, setFooterNotes] = useState('');
   const [commissionSplit, setCommissionSplit] = useState<CommissionSplit>({
     splits: [
       { recipient: 'Mason Wells', percentage: 50 },
@@ -192,6 +193,7 @@ export default function QuoteBuilder() {
     setTier(q.tier);
     setValidDays(q.valid_days);
     setHeaderNotes(q.header_notes || '');
+    setFooterNotes(q.footer_notes || '');
     setStatus(q.status);
     if (q.commission_split) setCommissionSplit(q.commission_split);
 
@@ -457,6 +459,7 @@ export default function QuoteBuilder() {
         Date.now() + validDays * 24 * 60 * 60 * 1000
       ).toISOString(),
       header_notes: headerNotes || null,
+      footer_notes: footerNotes || null,
       ...(newStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
     };
 
@@ -626,6 +629,26 @@ export default function QuoteBuilder() {
 
     if (orderItems.length > 0) {
       await supabase.from('order_items').insert(orderItems);
+    }
+
+    // Create commission records from the commission split
+    if (commissionSplit.splits && commissionSplit.splits.length > 0) {
+      const commissionRecords = commissionSplit.splits
+        .filter((s) => s.recipient && s.percentage > 0)
+        .map((s) => ({
+          order_id: orderData.id,
+          customer_id: customerId,
+          recipient: s.recipient,
+          split_percentage: s.percentage,
+          commission_amount: totals.totalProfit * (s.percentage / 100),
+          order_profit: totals.totalProfit,
+          order_date: new Date().toISOString().split('T')[0],
+          status: 'pending' as const,
+        }));
+
+      if (commissionRecords.length > 0) {
+        await supabase.from('commissions').insert(commissionRecords);
+      }
     }
 
     toast('success', `Order ${orderNum} created`);
@@ -1036,6 +1059,21 @@ export default function QuoteBuilder() {
           Add Section
         </Button>
       </div>
+
+      <Card>
+        <div>
+          <label className="block text-sm font-medium text-secondary mb-1">
+            Footer Notes
+          </label>
+          <textarea
+            value={footerNotes}
+            onChange={(e) => setFooterNotes(e.target.value)}
+            rows={2}
+            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            placeholder="Notes visible at the bottom of the quote (terms, disclaimers, etc.)..."
+          />
+        </div>
+      </Card>
 
       <Card>
         <CardHeader title="Quote" accent="Totals" />

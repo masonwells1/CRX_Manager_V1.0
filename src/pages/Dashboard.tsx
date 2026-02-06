@@ -15,6 +15,7 @@ import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { SkeletonCard } from '../components/ui/Skeleton';
+import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 
@@ -49,6 +50,7 @@ interface DashboardData {
 export default function Dashboard() {
   const { role } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<DashboardData>({
     totalRevenue: 0,
@@ -141,8 +143,9 @@ export default function Dashboard() {
         recentActivity: activityRes.data || [],
         topCustomers,
       });
-    } catch {
-      // Silently handle
+    } catch (err) {
+      console.error('Dashboard load error:', err);
+      toast('error', 'Failed to load dashboard data. Please refresh.');
     }
     setLoading(false);
   };
