@@ -24,10 +24,13 @@ export interface Product {
   cost_updated_date: string | null;
   tier1_price: number | null;
   tier1_margin: number | null;
+  tier1_gross_margin: number | null;
   tier2_price: number | null;
   tier2_margin: number | null;
+  tier2_gross_margin: number | null;
   tier3_price: number | null;
   tier3_margin: number | null;
+  tier3_gross_margin: number | null;
   tier1_price_per_acre: number | null;
   tier2_price_per_acre: number | null;
   tier3_price_per_acre: number | null;
