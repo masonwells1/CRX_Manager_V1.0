@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Upload } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
+import BulkPricingImport from '../components/products/BulkPricingImport';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import type { Product } from '../types';
@@ -18,6 +19,7 @@ export default function Products() {
   const [vendorFilter, setVendorFilter] = useState('');
   const [categories, setCategories] = useState<string[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
 
   useEffect(() => {
     fetchProducts();
@@ -118,7 +120,14 @@ export default function Products() {
   return (
     <div className="space-y-4">
       {isAdmin && (
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="secondary"
+            icon={<Upload className="w-4 h-4" />}
+            onClick={() => setBulkImportOpen(true)}
+          >
+            Bulk Update Pricing
+          </Button>
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/products/new')}>
             Add Product
           </Button>
@@ -171,6 +180,15 @@ export default function Products() {
           />
         </div>
       </Card>
+
+      <BulkPricingImport
+        open={bulkImportOpen}
+        onClose={() => setBulkImportOpen(false)}
+        onSuccess={() => {
+          fetchProducts();
+          setBulkImportOpen(false);
+        }}
+      />
     </div>
   );
 }
