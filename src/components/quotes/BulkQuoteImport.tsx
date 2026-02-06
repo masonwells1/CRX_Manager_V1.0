@@ -55,7 +55,7 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
 
 export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteImportProps) {
   const { toast } = useToast();
-  const { user } = useAuth();
+  const { profile } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -199,7 +199,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
   };
 
   const handleUpload = async () => {
-    if (!validation || validation.valid.length === 0 || !user) return;
+    if (!validation || validation.valid.length === 0 || !profile) return;
     setUploading(true);
 
     const details: string[] = [];
@@ -251,7 +251,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             .insert({
               quote_number: quoteNumber,
               customer_id: customerId,
-              created_by: user.id,
+              created_by: profile!.id,
               tier: firstItem.tier || 1,
               status: firstItem.status || 'draft',
               valid_days: firstItem.valid_days || 15,

@@ -24,7 +24,7 @@ function nextKey() {
 
 export default function NewPurchaseOrder() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { profile } = useAuth();
   const { toast } = useToast();
 
   const [vendor, setVendor] = useState('');
@@ -127,7 +127,7 @@ export default function NewPurchaseOrder() {
         expected_delivery_date: expectedDate || null,
         total_cost: totalCost,
         notes: notes || null,
-        created_by: user!.id,
+        created_by: profile!.id,
       })
       .select('id')
       .maybeSingle();

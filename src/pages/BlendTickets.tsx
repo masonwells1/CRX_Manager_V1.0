@@ -17,7 +17,7 @@ import type { BlendTicket, Customer } from '../types';
 
 export function BlendTickets() {
   usePageMeta({ title: 'Blend Tickets' });
-  const { user } = useAuth();
+  const { profile } = useAuth();
   const [tickets, setTickets] = useState<BlendTicket[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);

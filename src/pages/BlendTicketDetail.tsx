@@ -14,7 +14,7 @@ import type { BlendTicket, BlendTicketProduct, BlendTicketImage, Customer, Produ
 export function BlendTicketDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { profile } = useAuth();
   usePageMeta({ title: 'Blend Ticket Detail' });
 
   const [ticket, setTicket] = useState<BlendTicket | null>(null);
@@ -142,14 +142,14 @@ export function BlendTicketDetail() {
   }
 
   async function handleApprove() {
-    if (!ticket || !user) return;
+    if (!ticket || !profile) return;
 
     try {
       await supabase
         .from('blend_tickets')
         .update({
           review_status: 'approved',
-          reviewed_by: user.id,
+          reviewed_by: profile.id,
           reviewed_at: new Date().toISOString(),
         })
         .eq('id', ticket.id);
@@ -161,14 +161,14 @@ export function BlendTicketDetail() {
   }
 
   async function handleReject() {
-    if (!ticket || !user) return;
+    if (!ticket || !profile) return;
 
     try {
       await supabase
         .from('blend_tickets')
         .update({
           review_status: 'rejected',
-          reviewed_by: user.id,
+          reviewed_by: profile.id,
           reviewed_at: new Date().toISOString(),
         })
         .eq('id', ticket.id);

@@ -21,7 +21,7 @@ interface DeliveryItemDraft {
 export default function NewDelivery() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { user } = useAuth();
+  const { profile } = useAuth();
   const { toast } = useToast();
 
   const preselectedOrderId = searchParams.get('order') || '';
@@ -189,7 +189,7 @@ export default function NewDelivery() {
         scheduled_time: scheduledTime || null,
         delivery_notes: deliveryNotes || null,
         status: 'scheduled',
-        created_by: user!.id,
+        created_by: profile!.id,
       })
       .select('id')
       .maybeSingle();

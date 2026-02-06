@@ -19,7 +19,7 @@ interface BulkTicketUploadProps {
 }
 
 export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUploadProps) {
-  const { user } = useAuth();
+  const { profile } = useAuth();
   const [images, setImages] = useState<ImageFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -93,7 +93,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
       return;
     }
 
-    if (!user) {
+    if (!profile) {
       setError('You must be logged in to upload');
       return;
     }
@@ -111,7 +111,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
 
       const ticketData: any = {
         ticket_number: ticketNumber,
-        uploaded_by: user.id,
+        uploaded_by: profile!.id,
         upload_date: new Date().toISOString(),
         status: 'pending',
         review_status: 'unreviewed',
