@@ -129,7 +129,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for complete instructions.
 - Restart dev server after adding environment variables
 
 ### Tests fail
-- Verify test user exists in database (test@example.com)
+- Verify test user exists in database (mason@croprxsolutions.com)
 - Check `.env` has correct Supabase credentials
 - See [TESTING.md](./TESTING.md) troubleshooting section
 

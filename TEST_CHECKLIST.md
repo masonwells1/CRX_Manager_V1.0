@@ -56,7 +56,7 @@ npm run build
 ```
 
 ### Tests Fail
-- Check that test user exists in database (test@example.com)
+- Check that test user exists in database (mason@croprxsolutions.com)
 - Verify `.env` has correct credentials
 - See TESTING.md troubleshooting section
 

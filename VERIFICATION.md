@@ -74,7 +74,7 @@
 ### Running Tests
 
 **Before running tests, ensure:**
-- You have a test user in your database (email: test@example.com)
+- You have a test user in your database (email: mason@croprxsolutions.com)
 - Your `.env` file is configured with valid Supabase credentials
 
 **Run tests:**

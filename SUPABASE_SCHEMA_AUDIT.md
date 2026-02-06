@@ -333,7 +333,7 @@ CREATE TRIGGER on_auth_user_created
 ```bash
 # 1. Create test user (via Supabase Dashboard or API)
 # 2. Verify profile auto-created
-SELECT * FROM profiles WHERE email = 'test@example.com';
+SELECT * FROM profiles WHERE email = 'mason@croprxsolutions.com';
 
 # 3. Verify RLS policies work
 # (As authenticated test user)
