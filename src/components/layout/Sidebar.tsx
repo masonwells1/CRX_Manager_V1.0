@@ -114,7 +114,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
           </div>
         </nav>
 
-        <div className="border-t border-white/10 p-4">
+        <div className="border-t border-white/10 p-4" data-testid="user-menu">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-8 h-8 rounded-full bg-crx-green/20 flex items-center justify-center">
               <span className="text-xs font-semibold text-crx-green">

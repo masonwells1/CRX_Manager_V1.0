@@ -28,8 +28,15 @@ import Notifications from './pages/Notifications';
 import SettingsPage from './pages/SettingsPage';
 import { BlendTickets } from './pages/BlendTickets';
 import { BlendTicketDetail } from './pages/BlendTicketDetail';
+import { checkEnvVars, EnvErrorScreen } from './components/EnvCheck';
 
 export default function App() {
+  const envCheck = checkEnvVars();
+
+  if (!envCheck.isValid) {
+    return <EnvErrorScreen missing={envCheck.missing} />;
+  }
+
   return (
     <BrowserRouter>
       <AuthProvider>
