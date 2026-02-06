@@ -30,6 +30,7 @@ export default function SettingsPage() {
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
   const [newRole, setNewRole] = useState<UserRole>('sales_rep');
+  const [newPassword, setNewPassword] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [creatingUser, setCreatingUser] = useState(false);
 
@@ -105,25 +106,44 @@ export default function SettingsPage() {
   };
 
   const handleCreateUser = async () => {
-    if (!newEmail.trim() || !newName.trim()) return;
+    if (!newEmail.trim() || !newName.trim() || !newPassword.trim()) return;
+    if (newPassword.length < 6) {
+      toast('error', 'Password must be at least 6 characters');
+      return;
+    }
     setCreatingUser(true);
-    const { error } = await supabase.from('profiles').insert({
-      email: newEmail,
-      full_name: newName,
-      role: newRole,
-      phone: newPhone || null,
-      is_active: true,
-    });
-    if (error) {
-      toast('error', error.message || 'Failed to create user');
-    } else {
-      toast('success', 'User profile created');
-      setUserModalOpen(false);
-      setNewEmail('');
-      setNewName('');
-      setNewRole('sales_rep');
-      setNewPhone('');
-      fetchUsers();
+    try {
+      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-user`;
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session?.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: newEmail,
+          password: newPassword,
+          full_name: newName,
+          role: newRole,
+          phone: newPhone || null,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        toast('error', result.error || 'Failed to create user');
+      } else {
+        toast('success', 'User created successfully');
+        setUserModalOpen(false);
+        setNewEmail('');
+        setNewName('');
+        setNewPassword('');
+        setNewRole('sales_rep');
+        setNewPhone('');
+        fetchUsers();
+      }
+    } catch {
+      toast('error', 'Failed to create user');
     }
     setCreatingUser(false);
   };
@@ -251,6 +271,7 @@ export default function SettingsPage() {
         <div className="space-y-4">
           <Input label="Full Name" value={newName} onChange={(e) => setNewName(e.target.value)} />
           <Input label="Email" type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} />
+          <Input label="Password" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Min 6 characters" />
           <div>
             <label className="block text-sm font-medium text-secondary mb-1">Role</label>
             <select
