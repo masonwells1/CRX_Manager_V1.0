@@ -1,8 +1,5 @@
-import { Menu, Bell } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { useEffect, useState } from 'react';
-import { supabase } from '../../lib/db';
-import { useAuth } from '../../contexts/AuthContext';
+import { Menu } from 'lucide-react';
+import NotificationsPanel from '../team/NotificationsPanel';
 
 interface TopBarProps {
   onMenuClick: () => void;
@@ -11,25 +8,6 @@ interface TopBarProps {
 }
 
 export default function TopBar({ onMenuClick, title, accent }: TopBarProps) {
-  const navigate = useNavigate();
-  const { profile } = useAuth();
-  const [unreadCount, setUnreadCount] = useState(0);
-
-  useEffect(() => {
-    if (!profile) return;
-    const fetchUnread = async () => {
-      const { count } = await supabase
-        .from('notifications')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', profile.id)
-        .eq('is_read', false);
-      setUnreadCount(count || 0);
-    };
-    fetchUnread();
-    const interval = setInterval(fetchUnread, 30000);
-    return () => clearInterval(interval);
-  }, [profile]);
-
   return (
     <header className="sticky top-0 z-30 bg-cream/80 backdrop-blur-md border-b border-gray-200/50">
       <div className="flex items-center justify-between h-16 px-4 lg:px-6">
@@ -47,17 +25,7 @@ export default function TopBar({ onMenuClick, title, accent }: TopBarProps) {
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => navigate('/notifications')}
-            className="relative p-2 rounded-lg text-secondary hover:bg-white hover:shadow-sm transition-all"
-          >
-            <Bell className="w-5 h-5" />
-            {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </span>
-            )}
-          </button>
+          <NotificationsPanel />
         </div>
       </div>
     </header>

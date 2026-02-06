@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, CheckSquare, Square, Pin, PinOff, Clock, Pencil, Trash2 } from 'lucide-react';
+import { Plus, CheckSquare, Square, Pin, PinOff, Clock, Pencil, Trash2, MessageCircle, Tag as TagIcon, Activity } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -8,7 +8,13 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { useRealtimeNotes } from '../hooks/useRealtimeSubscription';
+import TeamBoardFilters, { FilterState } from '../components/team/TeamBoardFilters';
+import CommentsSection from '../components/team/CommentsSection';
+import TagsManager from '../components/team/TagsManager';
+import ActivityFeed from '../components/team/ActivityFeed';
 import type { TeamNote, Profile, NoteType, NotePriority } from '../types';
+import { useSearchParams } from 'react-router-dom';
 
 const priorityVariant: Record<NotePriority, 'default' | 'info' | 'warning' | 'error'> = {
   low: 'default',
@@ -17,13 +23,25 @@ const priorityVariant: Record<NotePriority, 'default' | 'info' | 'warning' | 'er
   urgent: 'error',
 };
 
+interface ExtendedTeamNote extends TeamNote {
+  tags?: Array<{
+    id: string;
+    name: string;
+    color: string;
+  }>;
+  comment_count?: number;
+}
+
 export default function TeamBoard() {
   const { profile, role } = useAuth();
   const { toast } = useToast();
-  const [notes, setNotes] = useState<TeamNote[]>([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [notes, setNotes] = useState<ExtendedTeamNote[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [selectedNote, setSelectedNote] = useState<ExtendedTeamNote | null>(null);
   const [editingNote, setEditingNote] = useState<TeamNote | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
@@ -33,13 +51,31 @@ export default function TeamBoard() {
   const [assignedTo, setAssignedTo] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState<'comments' | 'activity'>('comments');
+
+  const [filters, setFilters] = useState<FilterState>({
+    search: '',
+    tags: [],
+    assignees: [],
+    priorities: [],
+    showCompleted: false,
+  });
 
   const isAdmin = role === 'admin';
 
   useEffect(() => {
     fetchNotes();
     fetchProfiles();
-  }, []);
+
+    const noteId = searchParams.get('note');
+    if (noteId) {
+      openNoteDetail(noteId);
+    }
+  }, [searchParams]);
+
+  useRealtimeNotes(() => {
+    fetchNotes();
+  });
 
   const fetchProfiles = async () => {
     const { data } = await supabase.from('profiles').select('*').eq('is_active', true).order('full_name');
@@ -47,13 +83,46 @@ export default function TeamBoard() {
   };
 
   const fetchNotes = async () => {
-    const { data } = await supabase
+    const { data: notesData } = await supabase
       .from('team_notes')
       .select('*, creator:profiles!team_notes_created_by_fkey(full_name), assignee:profiles!team_notes_assigned_to_fkey(full_name)')
       .order('is_pinned', { ascending: false })
       .order('created_at', { ascending: false });
-    setNotes((data || []) as TeamNote[]);
+
+    if (notesData) {
+      const notesWithExtras = await Promise.all(
+        notesData.map(async (note) => {
+          const { data: tags } = await supabase
+            .from('team_note_tags')
+            .select('tag_id, note_tags(id, name, color)')
+            .eq('note_id', note.id);
+
+          const { count: commentCount } = await supabase
+            .from('team_note_comments')
+            .select('*', { count: 'exact', head: true })
+            .eq('note_id', note.id)
+            .is('deleted_at', null);
+
+          return {
+            ...note,
+            tags: tags?.map((t: any) => t.note_tags).filter(Boolean) || [],
+            comment_count: commentCount || 0,
+          };
+        })
+      );
+
+      setNotes(notesWithExtras as ExtendedTeamNote[]);
+    }
     setLoading(false);
+  };
+
+  const openNoteDetail = async (noteId: string) => {
+    const note = notes.find(n => n.id === noteId);
+    if (note) {
+      setSelectedNote(note);
+      setDetailModalOpen(true);
+      setSearchParams({});
+    }
   };
 
   const resetForm = () => {
@@ -162,19 +231,58 @@ export default function TeamBoard() {
 
   const canEdit = (note: TeamNote) => isAdmin || note.created_by === profile?.id;
 
-  const notesByType = (type: NoteType) => notes.filter((n) => n.note_type === type);
+  const applyFilters = (notes: ExtendedTeamNote[]): ExtendedTeamNote[] => {
+    return notes.filter(note => {
+      if (!filters.showCompleted && note.is_completed) return false;
+
+      if (filters.search) {
+        const searchLower = filters.search.toLowerCase();
+        const matchesTitle = note.title.toLowerCase().includes(searchLower);
+        const matchesContent = note.content?.toLowerCase().includes(searchLower);
+        if (!matchesTitle && !matchesContent) return false;
+      }
+
+      if (filters.tags.length > 0) {
+        const noteTags = note.tags?.map(t => t.id) || [];
+        const hasTag = filters.tags.some(tagId => noteTags.includes(tagId));
+        if (!hasTag) return false;
+      }
+
+      if (filters.assignees.length > 0) {
+        const isUnassigned = !note.assigned_to;
+        const matchesUnassigned = filters.assignees.includes('unassigned') && isUnassigned;
+        const matchesAssignee = note.assigned_to && filters.assignees.includes(note.assigned_to);
+        if (!matchesUnassigned && !matchesAssignee) return false;
+      }
+
+      if (filters.priorities.length > 0) {
+        if (!filters.priorities.includes(note.priority)) return false;
+      }
+
+      return true;
+    });
+  };
+
+  const notesByType = (type: NoteType) => applyFilters(notes).filter((n) => n.note_type === type);
   const getName = (p: TeamNote['creator']) => (p as unknown as { full_name: string })?.full_name || '';
 
-  const renderCard = (note: TeamNote, showCheckbox: boolean) => (
+  const renderCard = (note: ExtendedTeamNote, showCheckbox: boolean) => (
     <div
       key={note.id}
-      className={`p-4 rounded-lg border border-gray-100 hover:border-gray-200 transition-colors group ${
+      className={`p-4 rounded-lg border border-gray-100 hover:border-gray-200 transition-colors group cursor-pointer ${
         note.is_completed ? 'opacity-60' : ''
       }`}
+      onClick={() => {
+        setSelectedNote(note);
+        setDetailModalOpen(true);
+      }}
     >
       <div className="flex items-start gap-3">
         {showCheckbox && (
-          <button onClick={() => toggleComplete(note)} className="mt-0.5 text-secondary hover:text-crx-green">
+          <button
+            onClick={(e) => { e.stopPropagation(); toggleComplete(note); }}
+            className="mt-0.5 text-secondary hover:text-crx-green"
+          >
             {note.is_completed ? <CheckSquare className="w-5 h-5 text-crx-green" /> : <Square className="w-5 h-5" />}
           </button>
         )}
@@ -189,6 +297,23 @@ export default function TeamBoard() {
           {note.content && (
             <p className="text-xs text-secondary mt-1 line-clamp-2">{note.content}</p>
           )}
+          {note.tags && note.tags.length > 0 && (
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              {note.tags.map(tag => (
+                <span
+                  key={tag.id}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
+                  style={{
+                    backgroundColor: `${tag.color}15`,
+                    color: tag.color,
+                    border: `1px solid ${tag.color}30`,
+                  }}
+                >
+                  {tag.name}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
             {getName(note.creator) && <span>{getName(note.creator)}</span>}
             {getName(note.assignee) && (
@@ -200,26 +325,32 @@ export default function TeamBoard() {
                 {new Date(note.due_date).toLocaleDateString()}
               </span>
             )}
+            {note.comment_count !== undefined && note.comment_count > 0 && (
+              <span className="flex items-center gap-1 text-crx-green">
+                <MessageCircle className="w-3 h-3" />
+                {note.comment_count}
+              </span>
+            )}
           </div>
         </div>
         {canEdit(note) && (
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
             <button
-              onClick={() => togglePin(note)}
+              onClick={(e) => { e.stopPropagation(); togglePin(note); }}
               className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-amber-500"
               title={note.is_pinned ? 'Unpin' : 'Pin'}
             >
               {note.is_pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
             </button>
             <button
-              onClick={() => openEditModal(note)}
+              onClick={(e) => { e.stopPropagation(); openEditModal(note); }}
               className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-500"
               title="Edit"
             >
               <Pencil className="w-3.5 h-3.5" />
             </button>
             <button
-              onClick={() => setDeleteConfirmId(note.id)}
+              onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(note.id); }}
               className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-red-500"
               title="Delete"
             >
@@ -243,7 +374,10 @@ export default function TeamBoard() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-between items-start gap-4">
+        <div className="flex-1">
+          <TeamBoardFilters filters={filters} onChange={setFilters} />
+        </div>
         <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
           Add Note
         </Button>
@@ -354,6 +488,85 @@ export default function TeamBoard() {
             </Button>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        open={detailModalOpen}
+        onClose={() => { setDetailModalOpen(false); setSelectedNote(null); }}
+        title={selectedNote?.title || 'Note Details'}
+        size="large"
+      >
+        {selectedNote && (
+          <div className="space-y-6">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Badge variant={priorityVariant[selectedNote.priority]}>{selectedNote.priority}</Badge>
+                <Badge variant="default">{selectedNote.note_type}</Badge>
+                {selectedNote.is_completed && <Badge variant="info">Completed</Badge>}
+              </div>
+              {selectedNote.content && (
+                <p className="text-sm text-secondary whitespace-pre-wrap">{selectedNote.content}</p>
+              )}
+              <div className="flex items-center gap-3 text-xs text-gray-400">
+                {getName(selectedNote.creator) && <span>Created by {getName(selectedNote.creator)}</span>}
+                {getName(selectedNote.assignee) && (
+                  <span className="text-crx-green">Assigned to {getName(selectedNote.assignee)}</span>
+                )}
+                {selectedNote.due_date && (
+                  <span className="flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    Due {new Date(selectedNote.due_date).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <TagsManager noteId={selectedNote.id} onTagsChange={fetchNotes} />
+
+            <div className="border-t border-gray-200">
+              <div className="flex border-b border-gray-200">
+                <button
+                  onClick={() => setActiveTab('comments')}
+                  className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                    activeTab === 'comments'
+                      ? 'text-crx-green border-b-2 border-crx-green'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-center gap-2">
+                    <MessageCircle className="w-4 h-4" />
+                    Comments
+                    {selectedNote.comment_count !== undefined && selectedNote.comment_count > 0 && (
+                      <span className="px-1.5 py-0.5 bg-crx-green/10 text-crx-green rounded-full text-xs font-semibold">
+                        {selectedNote.comment_count}
+                      </span>
+                    )}
+                  </div>
+                </button>
+                <button
+                  onClick={() => setActiveTab('activity')}
+                  className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                    activeTab === 'activity'
+                      ? 'text-crx-green border-b-2 border-crx-green'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-center gap-2">
+                    <Activity className="w-4 h-4" />
+                    Activity
+                  </div>
+                </button>
+              </div>
+              <div className="mt-4">
+                {activeTab === 'comments' ? (
+                  <CommentsSection noteId={selectedNote.id} noteTitle={selectedNote.title} />
+                ) : (
+                  <ActivityFeed noteId={selectedNote.id} />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal

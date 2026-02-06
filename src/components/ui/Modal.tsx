@@ -8,6 +8,7 @@ interface ModalProps {
   accent?: string;
   children: ReactNode;
   maxWidth?: string;
+  size?: 'default' | 'large';
 }
 
 export default function Modal({
@@ -16,8 +17,10 @@ export default function Modal({
   title,
   accent,
   children,
-  maxWidth = 'max-w-lg',
+  maxWidth,
+  size = 'default',
 }: ModalProps) {
+  const sizeClass = maxWidth || (size === 'large' ? 'max-w-4xl' : 'max-w-lg');
   useEffect(() => {
     if (open) {
       document.body.style.overflow = 'hidden';
@@ -40,7 +43,7 @@ export default function Modal({
       <div
         className={`
           relative bg-white rounded-xl shadow-xl border border-gray-100
-          w-full mx-4 ${maxWidth} max-h-[90vh] overflow-y-auto
+          w-full mx-4 ${sizeClass} max-h-[90vh] overflow-y-auto
           animate-in fade-in zoom-in-95
         `}
       >
