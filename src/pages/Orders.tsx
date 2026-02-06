@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Plus, Upload } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import Button from '../components/ui/Button';
+import BulkOrderImport from '../components/orders/BulkOrderImport';
 import { supabase } from '../lib/db';
 import type { Order } from '../types';
 
@@ -15,6 +18,7 @@ export default function Orders() {
   const [orders, setOrders] = useState<OrderWithFulfillment[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
+  const [showImportModal, setShowImportModal] = useState(false);
 
   useEffect(() => {
     fetchOrders();
@@ -111,6 +115,23 @@ export default function Orders() {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-nav-dark">Orders</h1>
+          <p className="text-sm text-secondary mt-1">Manage customer orders and invoices</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={() => setShowImportModal(true)}>
+            <Upload className="w-4 h-4" />
+            Import Orders
+          </Button>
+          <Button onClick={() => navigate('/orders/new')}>
+            <Plus className="w-4 h-4" />
+            New Order
+          </Button>
+        </div>
+      </div>
+
       <Card padding={false}>
         <div className="p-5">
           <DataTable
@@ -139,6 +160,15 @@ export default function Orders() {
           />
         </div>
       </Card>
+
+      <BulkOrderImport
+        open={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onSuccess={() => {
+          setShowImportModal(false);
+          fetchOrders();
+        }}
+      />
     </div>
   );
 }

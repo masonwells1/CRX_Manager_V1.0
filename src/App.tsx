@@ -12,6 +12,7 @@ import CustomerDetail from './pages/CustomerDetail';
 import Quotes from './pages/Quotes';
 import QuoteBuilder from './pages/QuoteBuilder';
 import Orders from './pages/Orders';
+import NewOrder from './pages/NewOrder';
 import OrderDetail from './pages/OrderDetail';
 import InventoryPage from './pages/InventoryPage';
 import Deliveries from './pages/Deliveries';
@@ -49,6 +50,7 @@ export default function App() {
               <Route path="quotes/new" element={<QuoteBuilder />} />
               <Route path="quotes/:id" element={<QuoteBuilder />} />
               <Route path="orders" element={<Orders />} />
+              <Route path="orders/new" element={<NewOrder />} />
               <Route path="orders/:id" element={<OrderDetail />} />
               <Route path="inventory" element={<InventoryPage />} />
               <Route path="deliveries" element={<Deliveries />} />
