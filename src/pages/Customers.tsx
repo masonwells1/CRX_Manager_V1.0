@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Upload } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
+import BulkCustomerImport from '../components/customers/BulkCustomerImport';
 import { supabase } from '../lib/db';
 import type { Customer } from '../types';
 
@@ -13,6 +14,7 @@ export default function Customers() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [tierFilter, setTierFilter] = useState('');
+  const [importModalOpen, setImportModalOpen] = useState(false);
 
   useEffect(() => {
     fetchCustomers();
@@ -70,11 +72,24 @@ export default function Customers() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="secondary"
+          icon={<Upload className="w-4 h-4" />}
+          onClick={() => setImportModalOpen(true)}
+        >
+          Bulk Import
+        </Button>
         <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/customers/new')}>
           Add Customer
         </Button>
       </div>
+
+      <BulkCustomerImport
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onSuccess={fetchCustomers}
+      />
 
       <Card padding={false}>
         <div className="p-5">
