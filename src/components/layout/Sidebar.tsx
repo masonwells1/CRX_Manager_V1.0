@@ -13,12 +13,12 @@ import {
   MessageSquare,
   Bell,
   Settings,
-  Sprout,
   LogOut,
   X,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
+import logoWhite from '../../assets/logo_3-01_(3).png';
 
 interface NavItem {
   path: string;
@@ -87,17 +87,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         `}
       >
         <div className="flex items-center justify-between px-5 py-5 border-b border-white/10">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 bg-crx-green rounded-lg flex items-center justify-center">
-              <Sprout className="w-5 h-5 text-white" />
-            </div>
-            <div>
-              <span className="text-white font-heading font-semibold text-lg leading-none">
-                Crop RX
-              </span>
-              <span className="block text-gray-500 text-[11px] font-heading">Solutions</span>
-            </div>
-          </div>
+          <img src={logoWhite} alt="Crop RX Solutions" className="h-10 w-auto" />
           <button onClick={onClose} className="lg:hidden text-gray-400 hover:text-white p-1">
             <X className="w-5 h-5" />
           </button>

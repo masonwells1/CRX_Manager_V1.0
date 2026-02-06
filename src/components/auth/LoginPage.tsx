@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react';
-import { Sprout, ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronRight, Loader2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import logoWhite from '../../assets/logo_3-01_(3).png';
+import logoDark from '../../assets/logo_3-02_(2).png';
 
 export default function LoginPage() {
   const { signIn } = useAuth();
@@ -24,15 +26,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-cream flex">
       <div className="hidden lg:flex lg:flex-1 bg-nav-dark relative overflow-hidden items-center justify-center">
         <div className="relative z-10 px-16">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-12 h-12 bg-crx-green rounded-xl flex items-center justify-center">
-              <Sprout className="w-7 h-7 text-white" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold font-heading text-white">Crop RX</h1>
-              <p className="text-sm text-gray-400 font-heading">Solutions</p>
-            </div>
-          </div>
+          <img src={logoWhite} alt="Crop RX Solutions" className="h-14 w-auto mb-8" />
           <h2 className="text-3xl font-heading font-semibold text-white leading-tight mb-4">
             Business Management
             <br />
@@ -51,12 +45,7 @@ export default function LoginPage() {
 
       <div className="flex-1 flex items-center justify-center px-6">
         <div className="w-full max-w-sm">
-          <div className="flex items-center gap-2 mb-8 lg:hidden">
-            <div className="w-10 h-10 bg-crx-green rounded-xl flex items-center justify-center">
-              <Sprout className="w-6 h-6 text-white" />
-            </div>
-            <span className="text-xl font-bold font-heading text-nav-dark">Crop RX</span>
-          </div>
+          <img src={logoDark} alt="Crop RX Solutions" className="h-12 w-auto mb-8 lg:hidden" />
 
           <h2 className="text-2xl font-semibold font-heading text-nav-dark mb-1">
             Welcome <span className="split-heading-accent">Back</span>
