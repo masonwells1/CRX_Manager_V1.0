@@ -4,7 +4,7 @@ import { ArrowLeft, Truck } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { Order, OrderItem, Customer } from '../types';
 
 export default function OrderDetail() {

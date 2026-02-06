@@ -7,7 +7,7 @@ import Input from '../components/ui/Input';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { Customer, CustomerAddress, Quote, Order, Delivery } from '../types';
 
 export default function CustomerDetail() {

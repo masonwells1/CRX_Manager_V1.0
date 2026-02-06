@@ -3,7 +3,7 @@ import { Upload, CheckCircle, AlertCircle, FileText } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '../../lib/db';
 
 interface BulkProductImportProps {
   open: boolean;

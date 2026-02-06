@@ -4,7 +4,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 
 type TabKey = 'customer' | 'product' | 'commission' | 'revenue';
 

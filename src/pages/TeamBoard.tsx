@@ -7,7 +7,7 @@ import Modal from '../components/ui/Modal';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { TeamNote, Profile, NoteType, NotePriority } from '../types';
 
 const priorityVariant: Record<NotePriority, 'default' | 'info' | 'warning' | 'error'> = {

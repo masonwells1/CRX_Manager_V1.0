@@ -1,7 +1,7 @@
 import { Menu, Bell } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import { supabase } from '../../lib/supabase';
+import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 
 interface TopBarProps {

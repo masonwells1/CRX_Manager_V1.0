@@ -3,7 +3,7 @@ import { FlaskConical } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import EmptyState from '../components/ui/EmptyState';
 import SplitHeading from '../components/ui/SplitHeading';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { Product, IngredientMap } from '../types';
 
 export default function BrandVsGeneric() {

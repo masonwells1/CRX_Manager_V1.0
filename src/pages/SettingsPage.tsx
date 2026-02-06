@@ -9,7 +9,7 @@ import Modal from '../components/ui/Modal';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 export default function SettingsPage() {

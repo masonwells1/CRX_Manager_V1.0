@@ -5,7 +5,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { Customer } from '../types';
 
 export default function Customers() {

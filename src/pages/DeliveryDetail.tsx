@@ -6,7 +6,7 @@ import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { Delivery, DeliveryItem, Customer, CustomerAddress, Profile } from '../types';
 
 export default function DeliveryDetail() {

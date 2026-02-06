@@ -6,7 +6,7 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { Notification as NotificationType } from '../types';
 
 export default function Notifications() {

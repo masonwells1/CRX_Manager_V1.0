@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { Order } from '../types';
 
 interface OrderWithFulfillment extends Order {

@@ -8,7 +8,7 @@ import Badge from '../components/ui/Badge';
 import BulkPricingImport from '../components/products/BulkPricingImport';
 import BulkProductImport from '../components/products/BulkProductImport';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../lib/db';
 import type { Product } from '../types';
 
 export default function Products() {
