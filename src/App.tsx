@@ -15,6 +15,7 @@ import Orders from './pages/Orders';
 import OrderDetail from './pages/OrderDetail';
 import InventoryPage from './pages/InventoryPage';
 import Deliveries from './pages/Deliveries';
+import NewDelivery from './pages/NewDelivery';
 import DeliveryDetail from './pages/DeliveryDetail';
 import PurchaseOrders from './pages/PurchaseOrders';
 import PurchaseOrderDetail from './pages/PurchaseOrderDetail';
@@ -50,6 +51,7 @@ export default function App() {
               <Route path="orders/:id" element={<OrderDetail />} />
               <Route path="inventory" element={<InventoryPage />} />
               <Route path="deliveries" element={<Deliveries />} />
+              <Route path="deliveries/new" element={<NewDelivery />} />
               <Route path="deliveries/:id" element={<DeliveryDetail />} />
               <Route path="purchase-orders" element={<PurchaseOrders />} />
               <Route path="purchase-orders/:id" element={<PurchaseOrderDetail />} />

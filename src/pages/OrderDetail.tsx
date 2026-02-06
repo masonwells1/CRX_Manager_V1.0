@@ -83,7 +83,7 @@ export default function OrderDetail() {
         </button>
         <Button
           icon={<Truck className="w-4 h-4" />}
-          onClick={() => navigate(`/deliveries?order=${order.id}`)}
+          onClick={() => navigate(`/deliveries/new?order=${order.id}`)}
         >
           Schedule Delivery
         </Button>

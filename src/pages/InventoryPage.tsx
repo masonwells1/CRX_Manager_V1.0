@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Package, ArrowDownToLine, Pencil } from 'lucide-react';
+import { Package, ArrowDownToLine, Pencil, Plus } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -8,7 +8,7 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import type { Inventory } from '../types';
+import type { Inventory, Product } from '../types';
 
 interface InventoryRow extends Inventory {
   product_name: string;
@@ -25,10 +25,18 @@ export default function InventoryPage() {
   const [locations, setLocations] = useState<string[]>([]);
   const [receiveOpen, setReceiveOpen] = useState(false);
   const [adjustOpen, setAdjustOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [selectedId, setSelectedId] = useState('');
   const [receiveQty, setReceiveQty] = useState('');
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustNote, setAdjustNote] = useState('');
+  const [products, setProducts] = useState<Product[]>([]);
+  const [addProductId, setAddProductId] = useState('');
+  const [addLocation, setAddLocation] = useState('Main Warehouse');
+  const [addQty, setAddQty] = useState('');
+  const [addUnitSize, setAddUnitSize] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [productSearch, setProductSearch] = useState('');
 
   const isAdmin = role === 'admin';
 
@@ -56,6 +64,60 @@ export default function InventoryPage() {
     setLocations(locs.sort());
     setInventory(rows);
     setLoading(false);
+  };
+
+  const fetchProducts = async () => {
+    const { data } = await supabase
+      .from('products')
+      .select('*')
+      .eq('is_active', true)
+      .order('product_name');
+    setProducts((data || []) as Product[]);
+  };
+
+  const openAddModal = () => {
+    fetchProducts();
+    setAddProductId('');
+    setAddLocation('Main Warehouse');
+    setAddQty('');
+    setAddUnitSize('');
+    setProductSearch('');
+    setAddOpen(true);
+  };
+
+  const handleAdd = async () => {
+    if (!addProductId) {
+      toast('error', 'Please select a product');
+      return;
+    }
+    const qty = parseInt(addQty) || 0;
+    setAdding(true);
+
+    const existing = inventory.find(
+      (i) => i.product_id === addProductId && i.location === addLocation
+    );
+    if (existing) {
+      toast('error', 'Inventory record already exists for this product at this location. Use Receive or Adjust instead.');
+      setAdding(false);
+      return;
+    }
+
+    const product = products.find((p) => p.id === addProductId);
+    const { error } = await supabase.from('inventory').insert({
+      product_id: addProductId,
+      location: addLocation || 'Main Warehouse',
+      quantity_available: qty,
+      unit_size: addUnitSize || product?.unit_size || null,
+    });
+
+    if (error) {
+      toast('error', error.message || 'Failed to add inventory');
+    } else {
+      toast('success', 'Inventory record added');
+      setAddOpen(false);
+      fetchInventory();
+    }
+    setAdding(false);
   };
 
   const filtered = inventory.filter((i) => {
@@ -167,11 +229,23 @@ export default function InventoryPage() {
     { label: 'Total on Floor', value: totalOnFloor, color: 'bg-blue-50 text-blue-600' },
     { label: 'Available', value: totalAvailable, color: 'bg-emerald-50 text-emerald-600' },
     { label: 'Pre-booked', value: totalPrebooked, color: 'bg-amber-50 text-amber-600' },
-    { label: 'On Order', value: totalOnOrder, color: 'bg-purple-50 text-purple-600' },
+    { label: 'On Order', value: totalOnOrder, color: 'bg-teal-50 text-teal-600' },
   ];
+
+  const filteredProducts = products.filter((p) =>
+    !productSearch || p.product_name.toLowerCase().includes(productSearch.toLowerCase())
+  );
 
   return (
     <div className="space-y-4">
+      {isAdmin && (
+        <div className="flex justify-end">
+          <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
+            Add Inventory
+          </Button>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {summaryCards.map((c) => (
           <Card key={c.label}>
@@ -212,6 +286,68 @@ export default function InventoryPage() {
           />
         </div>
       </Card>
+
+      <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add" accent="Inventory">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-1">Product</label>
+            <input
+              type="text"
+              value={productSearch}
+              onChange={(e) => setProductSearch(e.target.value)}
+              placeholder="Search products..."
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-2"
+            />
+            <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
+              {filteredProducts.length === 0 ? (
+                <p className="px-3 py-4 text-sm text-secondary text-center">No products found</p>
+              ) : (
+                filteredProducts.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      setAddProductId(p.id);
+                      setAddUnitSize(p.unit_size || '');
+                    }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0 ${
+                      addProductId === p.id ? 'bg-crx-green/10 text-crx-green font-medium' : 'text-nav-dark'
+                    }`}
+                  >
+                    <span>{p.product_name}</span>
+                    {p.sku && <span className="text-secondary ml-2">({p.sku})</span>}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+          <Input
+            label="Location"
+            value={addLocation}
+            onChange={(e) => setAddLocation(e.target.value)}
+            placeholder="e.g. Main Warehouse"
+          />
+          <Input
+            label="Initial Quantity"
+            type="number"
+            min="0"
+            value={addQty}
+            onChange={(e) => setAddQty(e.target.value)}
+          />
+          <Input
+            label="Unit Size"
+            value={addUnitSize}
+            onChange={(e) => setAddUnitSize(e.target.value)}
+            placeholder="e.g. Gal, Qt, Lb"
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setAddOpen(false)}>Cancel</Button>
+            <Button onClick={handleAdd} disabled={adding}>
+              {adding ? 'Adding...' : 'Add Inventory'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={receiveOpen} onClose={() => setReceiveOpen(false)} title="Receive" accent="Shipment">
         <div className="space-y-4">
