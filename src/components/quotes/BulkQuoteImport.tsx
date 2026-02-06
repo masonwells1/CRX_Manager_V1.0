@@ -1,0 +1,573 @@
+import { useState } from 'react';
+import { Upload, CheckCircle, AlertCircle, FileText, Info } from 'lucide-react';
+import Modal from '../ui/Modal';
+import Button from '../ui/Button';
+import { useToast } from '../ui/Toast';
+import { supabase } from '../../lib/db';
+import { useAuth } from '../../contexts/AuthContext';
+
+interface BulkQuoteImportProps {
+  open: boolean;
+  onClose: () => void;
+  onSuccess: () => void;
+}
+
+interface ParsedQuoteItem {
+  quote_number: string;
+  customer_farm_name: string;
+  section_name?: string;
+  product_name: string;
+  acres?: number;
+  price_per_unit?: number;
+  oz_per_acre?: number;
+  actual_rate?: number;
+  rate_unit?: string;
+  notes?: string;
+  tier?: number;
+  status?: string;
+  valid_days?: number;
+  header_notes?: string;
+  footer_notes?: string;
+}
+
+interface ValidationResult {
+  valid: ParsedQuoteItem[];
+  invalid: Array<{ row: number; error: string; data: Record<string, string> }>;
+}
+
+const FIELD_MAPPINGS: Record<string, string[]> = {
+  quote_number: ['quote_number', 'quote_num', 'quote_id', 'quote', 'quote#'],
+  customer_farm_name: ['customer_farm_name', 'customer', 'farm_name', 'farm', 'customer_name'],
+  section_name: ['section_name', 'section', 'category', 'group'],
+  product_name: ['product_name', 'product', 'product_code', 'item', 'sku'],
+  acres: ['acres', 'acre', 'acreage'],
+  price_per_unit: ['price_per_unit', 'price', 'unit_price', 'cost'],
+  oz_per_acre: ['oz_per_acre', 'oz/acre', 'oz_acre', 'ounces_per_acre'],
+  actual_rate: ['actual_rate', 'rate', 'application_rate'],
+  rate_unit: ['rate_unit', 'unit', 'rate_uom'],
+  notes: ['notes', 'note', 'item_notes', 'comments'],
+  tier: ['tier', 'price_tier', 'pricing_tier'],
+  status: ['status', 'quote_status'],
+  valid_days: ['valid_days', 'validity', 'expiry_days'],
+  header_notes: ['header_notes', 'header', 'quote_header'],
+  footer_notes: ['footer_notes', 'footer', 'quote_footer'],
+};
+
+export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteImportProps) {
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const [file, setFile] = useState<File | null>(null);
+  const [parsing, setParsing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [uploadResults, setUploadResults] = useState<{ success: number; failed: number; details: string[] } | null>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      setValidation(null);
+      setUploadResults(null);
+    }
+  };
+
+  const detectFieldMapping = (header: string): string | null => {
+    const normalized = header.toLowerCase().trim().replace(/\s+/g, '_');
+    for (const [field, aliases] of Object.entries(FIELD_MAPPINGS)) {
+      if (aliases.includes(normalized)) {
+        return field;
+      }
+    }
+    return null;
+  };
+
+  const parseCSV = (text: string): { headers: string[]; rows: string[][] } => {
+    const lines = text.trim().split('\n');
+    if (lines.length < 2) return { headers: [], rows: [] };
+
+    const headers = lines[0].split(',').map((h) => h.trim());
+    const rows: string[][] = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map((c) => c.trim());
+      if (cols.length > 0 && cols[0]) {
+        rows.push(cols);
+      }
+    }
+
+    return { headers, rows };
+  };
+
+  const handleParse = async () => {
+    if (!file) return;
+    setParsing(true);
+
+    try {
+      const text = await file.text();
+      const { headers, rows } = parseCSV(text);
+
+      if (rows.length === 0) {
+        toast('error', 'No valid data found in file');
+        setParsing(false);
+        return;
+      }
+
+      const fieldMapping: Record<number, string> = {};
+      headers.forEach((header, idx) => {
+        const field = detectFieldMapping(header);
+        if (field) {
+          fieldMapping[idx] = field;
+        }
+      });
+
+      const requiredFields = ['quote_number', 'customer_farm_name', 'product_name'];
+      const missingFields = requiredFields.filter(
+        (field) => !Object.values(fieldMapping).includes(field)
+      );
+
+      if (missingFields.length > 0) {
+        toast('error', `Missing required columns: ${missingFields.join(', ')}`);
+        setParsing(false);
+        return;
+      }
+
+      const valid: ParsedQuoteItem[] = [];
+      const invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
+
+      rows.forEach((cols, idx) => {
+        const item: Partial<ParsedQuoteItem> = {};
+        const rowData: Record<string, string> = {};
+
+        cols.forEach((value, colIdx) => {
+          const field = fieldMapping[colIdx];
+          if (field) {
+            rowData[field] = value;
+
+            if (
+              field === 'quote_number' ||
+              field === 'customer_farm_name' ||
+              field === 'section_name' ||
+              field === 'product_name' ||
+              field === 'rate_unit' ||
+              field === 'notes' ||
+              field === 'status' ||
+              field === 'header_notes' ||
+              field === 'footer_notes'
+            ) {
+              if (value) item[field] = value;
+            } else if (
+              field === 'acres' ||
+              field === 'price_per_unit' ||
+              field === 'oz_per_acre' ||
+              field === 'actual_rate'
+            ) {
+              const num = parseFloat(value);
+              if (!isNaN(num)) {
+                item[field] = num;
+              }
+            } else if (field === 'tier') {
+              const tier = parseInt(value);
+              if ([1, 2, 3].includes(tier)) {
+                item[field] = tier;
+              }
+            } else if (field === 'valid_days') {
+              const days = parseInt(value);
+              if (!isNaN(days) && days > 0) {
+                item[field] = days;
+              }
+            }
+          }
+        });
+
+        if (!item.quote_number || !item.customer_farm_name || !item.product_name) {
+          invalid.push({
+            row: idx + 2,
+            error: 'Missing required fields (quote_number, customer_farm_name, or product_name)',
+            data: rowData,
+          });
+          return;
+        }
+
+        valid.push(item as ParsedQuoteItem);
+      });
+
+      setValidation({ valid, invalid });
+    } catch (error) {
+      toast('error', 'Failed to parse file. Please ensure it is a valid CSV.');
+    }
+    setParsing(false);
+  };
+
+  const handleUpload = async () => {
+    if (!validation || validation.valid.length === 0 || !user) return;
+    setUploading(true);
+
+    const details: string[] = [];
+    let successCount = 0;
+    let failCount = 0;
+
+    try {
+      const { data: customers } = await supabase.from('customers').select('id, farm_name');
+      const { data: products } = await supabase.from('products').select('id, product_name, product_code');
+
+      if (!customers || !products) {
+        toast('error', 'Failed to load reference data');
+        setUploading(false);
+        return;
+      }
+
+      const customerMap = new Map(
+        customers.map((c) => [c.farm_name.toLowerCase().trim(), c.id])
+      );
+      const productMap = new Map(
+        products.flatMap((p) => [
+          [p.product_name.toLowerCase().trim(), p.id],
+          p.product_code ? [p.product_code.toLowerCase().trim(), p.id] : null,
+        ].filter(Boolean) as [string, string][])
+      );
+
+      const quoteGroups = new Map<string, ParsedQuoteItem[]>();
+      validation.valid.forEach((item) => {
+        const key = item.quote_number;
+        if (!quoteGroups.has(key)) {
+          quoteGroups.set(key, []);
+        }
+        quoteGroups.get(key)!.push(item);
+      });
+
+      for (const [quoteNumber, items] of quoteGroups) {
+        try {
+          const firstItem = items[0];
+          const customerId = customerMap.get(firstItem.customer_farm_name.toLowerCase().trim());
+
+          if (!customerId) {
+            details.push(`Quote ${quoteNumber}: Customer "${firstItem.customer_farm_name}" not found`);
+            failCount++;
+            continue;
+          }
+
+          const { data: quote, error: quoteError } = await supabase
+            .from('quotes')
+            .insert({
+              quote_number: quoteNumber,
+              customer_id: customerId,
+              created_by: user.id,
+              tier: firstItem.tier || 1,
+              status: firstItem.status || 'draft',
+              valid_days: firstItem.valid_days || 15,
+              header_notes: firstItem.header_notes || '',
+              footer_notes: firstItem.footer_notes || '',
+            })
+            .select()
+            .single();
+
+          if (quoteError || !quote) {
+            details.push(`Quote ${quoteNumber}: Failed to create quote - ${quoteError?.message}`);
+            failCount++;
+            continue;
+          }
+
+          const sectionGroups = new Map<string, ParsedQuoteItem[]>();
+          items.forEach((item) => {
+            const sectionName = item.section_name || 'Default';
+            if (!sectionGroups.has(sectionName)) {
+              sectionGroups.set(sectionName, []);
+            }
+            sectionGroups.get(sectionName)!.push(item);
+          });
+
+          let itemsCreated = 0;
+          let itemsFailed = 0;
+
+          for (const [sectionName, sectionItems] of sectionGroups) {
+            const { data: section, error: sectionError } = await supabase
+              .from('quote_sections')
+              .insert({
+                quote_id: quote.id,
+                section_name: sectionName,
+                sort_order: 0,
+              })
+              .select()
+              .single();
+
+            if (sectionError || !section) {
+              itemsFailed += sectionItems.length;
+              continue;
+            }
+
+            for (const item of sectionItems) {
+              const productId = productMap.get(item.product_name.toLowerCase().trim());
+
+              if (!productId) {
+                itemsFailed++;
+                continue;
+              }
+
+              const { data: product } = await supabase
+                .from('products')
+                .select('current_cost')
+                .eq('id', productId)
+                .single();
+
+              const current_cost = product?.current_cost || 0;
+              const price_per_unit = item.price_per_unit || 0;
+              const acres = item.acres || 0;
+              const oz_per_acre = item.oz_per_acre || 0;
+              const total_units_needed = acres && oz_per_acre ? (acres * oz_per_acre) / 16 : 0;
+              const total_price = price_per_unit * total_units_needed;
+              const total_cost = current_cost * total_units_needed;
+              const profit = total_price - total_cost;
+              const net_margin = total_price > 0 ? (profit / total_price) * 100 : 0;
+
+              const { error: itemError } = await supabase.from('quote_items').insert({
+                quote_id: quote.id,
+                section_id: section.id,
+                product_id: productId,
+                sort_order: 0,
+                price_per_unit,
+                current_cost,
+                actual_rate: item.actual_rate || null,
+                rate_unit: item.rate_unit || null,
+                oz_per_acre: oz_per_acre || null,
+                acres: acres || null,
+                total_units_needed: total_units_needed || null,
+                price_per_acre: acres > 0 ? total_price / acres : null,
+                total_price,
+                profit,
+                net_margin,
+                notes: item.notes || '',
+              });
+
+              if (itemError) {
+                itemsFailed++;
+              } else {
+                itemsCreated++;
+              }
+            }
+          }
+
+          if (itemsCreated > 0) {
+            details.push(`Quote ${quoteNumber}: Created with ${itemsCreated} items`);
+            successCount++;
+          } else {
+            details.push(`Quote ${quoteNumber}: No items could be created`);
+            failCount++;
+          }
+        } catch (error) {
+          details.push(`Quote ${quoteNumber}: Unexpected error`);
+          failCount++;
+        }
+      }
+
+      setUploadResults({ success: successCount, failed: failCount, details });
+
+      if (successCount > 0) {
+        toast('success', `Successfully imported ${successCount} quote(s)`);
+        onSuccess();
+      }
+      if (failCount > 0) {
+        toast('error', `Failed to import ${failCount} quote(s)`);
+      }
+    } catch (error) {
+      toast('error', 'Import failed');
+    }
+    setUploading(false);
+  };
+
+  const handleClose = () => {
+    setFile(null);
+    setValidation(null);
+    setUploadResults(null);
+    onClose();
+  };
+
+  return (
+    <Modal open={open} onClose={handleClose} title="Bulk Quote" accent="Import" maxWidth="max-w-4xl">
+      <div className="space-y-4">
+        <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg">
+          <h4 className="text-sm font-medium text-nav-dark mb-2 flex items-center gap-2">
+            <Info className="w-4 h-4" />
+            How to Import Quotes
+          </h4>
+          <ol className="text-xs text-secondary space-y-1 list-decimal list-inside mb-3">
+            <li>Each row in your CSV represents one line item on a quote</li>
+            <li>Multiple rows with the same quote_number will be grouped into one quote</li>
+            <li>Customers and products must already exist in the system</li>
+            <li>Upload your CSV file and review before importing</li>
+          </ol>
+          <div className="p-3 bg-white rounded border border-gray-200">
+            <p className="text-xs font-medium text-secondary mb-2">Required Columns:</p>
+            <div className="grid grid-cols-3 gap-2 mb-3">
+              <div className="text-xs">
+                <span className="font-mono text-red-600">quote_number</span>
+                <p className="text-gray-500">Unique quote ID</p>
+              </div>
+              <div className="text-xs">
+                <span className="font-mono text-red-600">customer_farm_name</span>
+                <p className="text-gray-500">Must match existing customer</p>
+              </div>
+              <div className="text-xs">
+                <span className="font-mono text-red-600">product_name</span>
+                <p className="text-gray-500">Must match existing product</p>
+              </div>
+            </div>
+            <p className="text-xs font-medium text-secondary mb-2">Optional Columns:</p>
+            <p className="text-xs text-gray-500 font-mono">
+              section_name, acres, price_per_unit, oz_per_acre, actual_rate, rate_unit, notes, tier (1-3),
+              status (draft/sent/accepted), valid_days, header_notes, footer_notes
+            </p>
+          </div>
+        </div>
+
+        {!validation && !uploadResults && (
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-2">Select CSV File</label>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={handleFileChange}
+              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-crx-green-light file:text-crx-green hover:file:bg-crx-green hover:file:text-white transition-colors cursor-pointer"
+            />
+            {file && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-secondary">
+                <FileText className="w-4 h-4" />
+                <span>
+                  {file.name} ({(file.size / 1024).toFixed(1)} KB)
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {validation && !uploadResults && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="p-4 bg-green-50 border border-green-100 rounded-lg">
+                <div className="flex items-center gap-2 mb-1">
+                  <CheckCircle className="w-5 h-5 text-green-600" />
+                  <span className="text-sm font-medium text-secondary">Valid Items</span>
+                </div>
+                <p className="text-2xl font-semibold text-green-600">{validation.valid.length}</p>
+              </div>
+              <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg">
+                <div className="flex items-center gap-2 mb-1">
+                  <FileText className="w-5 h-5 text-blue-600" />
+                  <span className="text-sm font-medium text-secondary">Unique Quotes</span>
+                </div>
+                <p className="text-2xl font-semibold text-blue-600">
+                  {new Set(validation.valid.map((v) => v.quote_number)).size}
+                </p>
+              </div>
+              <div className="p-4 bg-red-50 border border-red-100 rounded-lg">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertCircle className="w-5 h-5 text-red-600" />
+                  <span className="text-sm font-medium text-secondary">Invalid Rows</span>
+                </div>
+                <p className="text-2xl font-semibold text-red-600">{validation.invalid.length}</p>
+              </div>
+            </div>
+
+            {validation.valid.length > 0 && (
+              <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
+                <p className="text-xs font-medium text-secondary mb-2">Preview (first 10 items):</p>
+                <div className="space-y-2">
+                  {validation.valid.slice(0, 10).map((item, idx) => (
+                    <div key={idx} className="text-xs bg-white p-2 rounded border border-gray-100">
+                      <p className="font-medium text-nav-dark">
+                        Quote: {item.quote_number} | Customer: {item.customer_farm_name}
+                      </p>
+                      <p className="text-gray-500">
+                        Product: {item.product_name}
+                        {item.acres && ` | ${item.acres} acres`}
+                        {item.section_name && ` | Section: ${item.section_name}`}
+                      </p>
+                    </div>
+                  ))}
+                  {validation.valid.length > 10 && (
+                    <p className="text-xs text-secondary text-center pt-1">
+                      + {validation.valid.length - 10} more items
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {validation.invalid.length > 0 && (
+              <div className="p-3 bg-red-50 border border-red-100 rounded-lg max-h-32 overflow-y-auto">
+                <p className="text-xs font-medium text-secondary mb-1">Invalid Rows:</p>
+                <div className="space-y-1">
+                  {validation.invalid.map((inv, idx) => (
+                    <p key={idx} className="text-xs text-secondary">
+                      Row {inv.row}: {inv.error}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {uploadResults && (
+          <div className="space-y-3">
+            <div className="p-4 bg-green-50 border border-green-100 rounded-lg text-center">
+              <CheckCircle className="w-12 h-12 text-green-600 mx-auto mb-2" />
+              <h4 className="text-sm font-medium text-nav-dark mb-1">Import Complete</h4>
+              <p className="text-xs text-secondary">
+                Successfully imported {uploadResults.success} quote(s)
+                {uploadResults.failed > 0 && `, ${uploadResults.failed} failed`}
+              </p>
+            </div>
+            {uploadResults.details.length > 0 && (
+              <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
+                <p className="text-xs font-medium text-secondary mb-2">Details:</p>
+                <div className="space-y-1">
+                  {uploadResults.details.map((detail, idx) => (
+                    <p key={idx} className="text-xs text-secondary">
+                      {detail}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="secondary" onClick={handleClose}>
+            {uploadResults ? 'Close' : 'Cancel'}
+          </Button>
+          {!validation && !uploadResults && (
+            <Button
+              icon={<Upload className="w-4 h-4" />}
+              onClick={handleParse}
+              disabled={!file || parsing}
+              loading={parsing}
+            >
+              Parse File
+            </Button>
+          )}
+          {validation && !uploadResults && (
+            <>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  setFile(null);
+                  setValidation(null);
+                }}
+              >
+                Choose Different File
+              </Button>
+              <Button
+                onClick={handleUpload}
+                disabled={validation.valid.length === 0 || uploading}
+                loading={uploading}
+              >
+                Import {new Set(validation.valid.map((v) => v.quote_number)).size} Quote(s)
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    </Modal>
+  );
+}

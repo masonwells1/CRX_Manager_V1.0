@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Upload } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { supabase } from '../lib/db';
 import type { Quote } from '../types';
 
@@ -13,6 +14,7 @@ export default function Quotes() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
+  const [importModalOpen, setImportModalOpen] = useState(false);
 
   useEffect(() => {
     fetchQuotes();
@@ -85,11 +87,24 @@ export default function Quotes() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="secondary"
+          icon={<Upload className="w-4 h-4" />}
+          onClick={() => setImportModalOpen(true)}
+        >
+          Bulk Import
+        </Button>
         <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/quotes/new')}>
           New Quote
         </Button>
       </div>
+
+      <BulkQuoteImport
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onSuccess={fetchQuotes}
+      />
 
       <Card padding={false}>
         <div className="p-5">
