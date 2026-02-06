@@ -21,8 +21,11 @@ interface ParsedProduct {
   unit_size?: string;
   current_cost?: number;
   tier1_price?: number;
+  tier1_margin?: number;
   tier2_price?: number;
+  tier2_margin?: number;
   tier3_price?: number;
+  tier3_margin?: number;
   suggested_rate?: string;
   rate_per_acre?: number;
   rate_unit?: string;
@@ -44,8 +47,11 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
   unit_size: ['unit_size', 'unit', 'uom', 'units'],
   current_cost: ['current_cost', 'cost', 'price', 'unit_cost', 'base_cost'],
   tier1_price: ['tier1_price', 'tier_1_price', 't1_price', 'price_tier1'],
+  tier1_margin: ['tier1_margin', 'tier_1_margin', 't1_margin', 'margin_tier1', 'tier1_margin_%'],
   tier2_price: ['tier2_price', 'tier_2_price', 't2_price', 'price_tier2'],
+  tier2_margin: ['tier2_margin', 'tier_2_margin', 't2_margin', 'margin_tier2', 'tier2_margin_%'],
   tier3_price: ['tier3_price', 'tier_3_price', 't3_price', 'price_tier3'],
+  tier3_margin: ['tier3_margin', 'tier_3_margin', 't3_margin', 'margin_tier3', 'tier3_margin_%'],
   suggested_rate: ['suggested_rate', 'rate', 'application_rate', 'use_rate'],
   rate_per_acre: ['rate_per_acre', 'acre_rate', 'per_acre', 'application_per_acre'],
   rate_unit: ['rate_unit', 'unit', 'rate_uom'],
@@ -147,6 +153,11 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
               if (!isNaN(num) && num >= 0) {
                 product[field] = num;
               }
+            } else if (field === 'tier1_margin' || field === 'tier2_margin' || field === 'tier3_margin') {
+              const num = parseFloat(value);
+              if (!isNaN(num) && num >= 0) {
+                product[field] = num > 1 ? num / 100 : num;
+              }
             }
           }
         });
@@ -225,8 +236,11 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
             <p className="text-xs font-medium text-secondary mb-1">Supported Columns:</p>
             <p className="text-xs text-gray-500 font-mono">
               product_name, sku, category, vendor, manufacturer, container_size, unit_size,
-              current_cost, tier1_price, tier2_price, tier3_price, suggested_rate, rate_per_acre,
-              rate_unit, notes
+              current_cost, tier1_price, tier1_margin, tier2_price, tier2_margin, tier3_price,
+              tier3_margin, suggested_rate, rate_per_acre, rate_unit, notes
+            </p>
+            <p className="text-xs text-green-600 mt-2">
+              💡 <span className="font-medium">Tip:</span> Include margin columns (e.g., tier1_margin) and prices will auto-calculate when costs change!
             </p>
           </div>
         </div>
