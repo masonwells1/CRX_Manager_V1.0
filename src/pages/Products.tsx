@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload } from 'lucide-react';
+import { Plus, Upload, FileUp } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import BulkPricingImport from '../components/products/BulkPricingImport';
+import BulkProductImport from '../components/products/BulkProductImport';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import type { Product } from '../types';
@@ -20,6 +21,7 @@ export default function Products() {
   const [categories, setCategories] = useState<string[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [bulkProductImportOpen, setBulkProductImportOpen] = useState(false);
 
   useEffect(() => {
     fetchProducts();
@@ -123,10 +125,17 @@ export default function Products() {
         <div className="flex justify-end gap-2">
           <Button
             variant="secondary"
+            icon={<FileUp className="w-4 h-4" />}
+            onClick={() => setBulkProductImportOpen(true)}
+          >
+            Import Products
+          </Button>
+          <Button
+            variant="secondary"
             icon={<Upload className="w-4 h-4" />}
             onClick={() => setBulkImportOpen(true)}
           >
-            Bulk Update Pricing
+            Update Pricing
           </Button>
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/products/new')}>
             Add Product
@@ -187,6 +196,15 @@ export default function Products() {
         onSuccess={() => {
           fetchProducts();
           setBulkImportOpen(false);
+        }}
+      />
+
+      <BulkProductImport
+        open={bulkProductImportOpen}
+        onClose={() => setBulkProductImportOpen(false)}
+        onSuccess={() => {
+          fetchProducts();
+          setBulkProductImportOpen(false);
         }}
       />
     </div>
