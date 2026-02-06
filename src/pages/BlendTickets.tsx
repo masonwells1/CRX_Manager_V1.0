@@ -283,7 +283,7 @@ export function BlendTickets() {
 
         {filteredTickets.length === 0 ? (
           <EmptyState
-            icon={FileText}
+            icon={<FileText className="w-6 h-6 text-gray-400" />}
             title="No blend tickets found"
             description={
               tickets.length === 0
