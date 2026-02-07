@@ -19,6 +19,7 @@ import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
 import type {
   Quote,
   QuoteSection,
@@ -542,6 +543,17 @@ export default function QuoteBuilder() {
     const result = await saveQuote('draft');
     if (result) {
       toast('success', 'Quote saved as draft');
+      // === GAP FIX #5: Log activity for quote created/updated ===
+      if (profile) {
+        await logActivity(
+          isEditing ? 'quote_updated' : 'quote_created',
+          `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'} for ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
+          profile.id,
+          'quote',
+          result,
+          customerId
+        );
+      }
       if (!isEditing) navigate(`/quotes/${result}`, { replace: true });
     }
     setSaving(false);
@@ -552,6 +564,67 @@ export default function QuoteBuilder() {
     setConfirmSendOpen(false);
     const result = await saveQuote('sent');
     if (result) {
+      // === GAP FIX #6: Create a quote version snapshot ===
+      if (profile) {
+        const { count } = await supabase
+          .from('quote_versions')
+          .select('*', { count: 'exact', head: true })
+          .eq('quote_id', result);
+        const versionNum = (count || 0) + 1;
+
+        const snapshotData = {
+          quote_number: quoteNumber,
+          customer_id: customerId,
+          customer_name: selectedCustomer?.farm_name || '',
+          tier,
+          valid_days: validDays,
+          header_notes: headerNotes,
+          footer_notes: footerNotes,
+          commission_split: commissionSplit,
+          totals,
+          sections: sections.map((sec) => ({
+            section_name: sec.section_name,
+            sort_order: sec.sort_order,
+            section_notes: sec.section_notes,
+            items: sec.items
+              .filter((i) => i.product_id)
+              .map((i) => ({
+                product_id: i.product_id,
+                product_name: i.product?.product_name || '',
+                price_per_unit: i.price_per_unit,
+                current_cost: i.current_cost,
+                actual_rate: i.actual_rate,
+                rate_unit: i.rate_unit,
+                acres: i.acres,
+                total_units_needed: i.total_units_needed,
+                total_price: i.total_price,
+                profit: i.profit,
+                net_margin: i.net_margin,
+              })),
+          })),
+        };
+
+        await supabase.from('quote_versions').insert({
+          quote_id: result,
+          version_number: versionNum,
+          sent_by: profile.id,
+          sent_at: new Date().toISOString(),
+          sent_method: 'manual',
+          snapshot_data: snapshotData,
+          notes: `Version ${versionNum} sent`,
+        });
+
+        // === GAP FIX #5: Log activity for quote sent ===
+        await logActivity(
+          'quote_sent',
+          `Quote ${quoteNumber} v${versionNum} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
+          profile.id,
+          'quote',
+          result,
+          customerId
+        );
+      }
+
       setStatus('sent');
       toast('success', 'Quote sent successfully');
     }
@@ -631,6 +704,38 @@ export default function QuoteBuilder() {
       await supabase.from('order_items').insert(orderItems);
     }
 
+    // === GAP FIX #3: Pre-book inventory for each order item ===
+    for (const item of orderItems) {
+      const { data: inv } = await supabase
+        .from('inventory')
+        .select('id, quantity_prebooked')
+        .eq('product_id', item.product_id)
+        .eq('location', 'Main Warehouse')
+        .maybeSingle();
+
+      if (inv) {
+        await supabase
+          .from('inventory')
+          .update({
+            quantity_prebooked: (Number(inv.quantity_prebooked) || 0) + Number(item.total_units_needed),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', inv.id);
+      }
+
+      if (profile) {
+        await supabase.from('inventory_transactions').insert({
+          product_id: item.product_id,
+          transaction_type: 'booked',
+          quantity: Number(item.total_units_needed),
+          to_location: 'Main Warehouse',
+          order_id: orderData.id,
+          performed_by: profile.id,
+          notes: `Pre-booked for order ${orderNum}`,
+        });
+      }
+    }
+
     // Create commission records from the commission split
     if (commissionSplit.splits && commissionSplit.splits.length > 0) {
       const commissionRecords = commissionSplit.splits
@@ -649,6 +754,18 @@ export default function QuoteBuilder() {
       if (commissionRecords.length > 0) {
         await supabase.from('commissions').insert(commissionRecords);
       }
+    }
+
+    // === GAP FIX #5: Log activity for order creation ===
+    if (profile) {
+      await logActivity(
+        'order_created',
+        `Order ${orderNum} created from quote ${quoteNumber} for ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
+        profile.id,
+        'order',
+        orderData.id,
+        customerId
+      );
     }
 
     toast('success', `Order ${orderNum} created`);

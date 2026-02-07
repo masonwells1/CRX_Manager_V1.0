@@ -82,6 +82,36 @@ export default function ProductDetail() {
         navigate('/products');
       }
     } else {
+      // === GAP FIX #16: Detect pricing changes and log to cost_history ===
+      const { data: current } = await supabase
+        .from('products')
+        .select('current_cost, tier1_price, tier2_price, tier3_price')
+        .eq('id', id)
+        .maybeSingle();
+
+      const pricingChanged = current && (
+        Number(current.current_cost) !== Number(product.current_cost) ||
+        Number(current.tier1_price) !== Number(product.tier1_price) ||
+        Number(current.tier2_price) !== Number(product.tier2_price) ||
+        Number(current.tier3_price) !== Number(product.tier3_price)
+      );
+
+      if (pricingChanged && profile) {
+        await supabase.from('cost_history').insert({
+          product_id: id,
+          changed_by: profile.id,
+          old_cost: current.current_cost,
+          new_cost: product.current_cost,
+          old_tier1_price: current.tier1_price,
+          new_tier1_price: product.tier1_price,
+          old_tier2_price: current.tier2_price,
+          new_tier2_price: product.tier2_price,
+          old_tier3_price: current.tier3_price,
+          new_tier3_price: product.tier3_price,
+          change_note: 'Updated via product detail save',
+        });
+      }
+
       const { error } = await supabase
         .from('products')
         .update({ ...product, updated_at: new Date().toISOString() })
@@ -90,6 +120,7 @@ export default function ProductDetail() {
         toast('error', error.message);
       } else {
         toast('success', 'Product updated');
+        if (pricingChanged) fetchCostHistory();
       }
     }
     setSaving(false);

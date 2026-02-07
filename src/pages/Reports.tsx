@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
+import { Download, CheckCircle2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import Button from '../components/ui/Button';
 import SplitHeading from '../components/ui/SplitHeading';
+import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 
 type TabKey = 'customer' | 'product' | 'commission' | 'revenue';
 
@@ -33,6 +37,7 @@ interface CommissionRow {
   order_profit: number;
   order_date: string;
   status: string;
+  paid_date: string | null;
 }
 
 interface RevenueSummary {
@@ -42,8 +47,44 @@ interface RevenueSummary {
   orders: number;
 }
 
+// === GAP FIX #8: Date range presets ===
+function getPresetDates(preset: string): { start: string; end: string } {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth(); // 0-indexed
+
+  switch (preset) {
+    case 'this_season':
+      // Crop season = July 1 to June 30
+      if (month >= 6) {
+        // July-December: season started this year
+        return { start: `${year}-07-01`, end: `${year + 1}-06-30` };
+      } else {
+        // Jan-June: season started last year
+        return { start: `${year - 1}-07-01`, end: `${year}-06-30` };
+      }
+    case 'last_season':
+      if (month >= 6) {
+        return { start: `${year - 1}-07-01`, end: `${year}-06-30` };
+      } else {
+        return { start: `${year - 2}-07-01`, end: `${year - 1}-06-30` };
+      }
+    case 'ytd':
+      return { start: `${year}-01-01`, end: now.toISOString().split('T')[0] };
+    case 'last30':
+      const thirtyAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      return { start: thirtyAgo.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+    case 'last90':
+      const ninetyAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      return { start: ninetyAgo.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+    default:
+      return { start: '', end: '' };
+  }
+}
+
 export default function Reports() {
   const { role, profile } = useAuth();
+  const { toast } = useToast();
   const [tab, setTab] = useState<TabKey>('customer');
   const [customerData, setCustomerData] = useState<CustomerProfit[]>([]);
   const [productData, setProductData] = useState<ProductProfit[]>([]);
@@ -51,11 +92,19 @@ export default function Reports() {
   const [revenueData, setRevenueData] = useState<RevenueSummary[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // === GAP FIX #8: Date range state ===
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  // === GAP FIX #9: Commission selection state ===
+  const [selectedCommissions, setSelectedCommissions] = useState<Set<string>>(new Set());
+  const [markingPaid, setMarkingPaid] = useState(false);
+
   const isAdmin = role === 'admin';
 
   useEffect(() => {
     fetchData();
-  }, [tab]);
+  }, [tab, startDate, endDate]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -67,9 +116,13 @@ export default function Reports() {
   };
 
   const fetchCustomerProfitability = async () => {
-    const { data } = await supabase
+    let query = supabase
       .from('orders')
       .select('total_price, total_profit, total_margin_pct, customer:customers(farm_name)');
+    if (startDate) query = query.gte('order_date', startDate);
+    if (endDate) query = query.lte('order_date', endDate);
+    const { data } = await query;
+
     const grouped: Record<string, CustomerProfit> = {};
     ((data || []) as Array<{ total_price: number; total_profit: number; total_margin_pct: number; customer: { farm_name: string }[] | null }>).forEach((o) => {
       const name = o.customer?.[0]?.farm_name || 'Unknown';
@@ -89,9 +142,14 @@ export default function Reports() {
   };
 
   const fetchProductProfitability = async () => {
-    const { data } = await supabase
+    // For product data, we need to filter by order date through the order_items -> orders relationship
+    let query = supabase
       .from('order_items')
-      .select('product_name, total_price, profit, total_units_needed');
+      .select('product_name, total_price, profit, total_units_needed, order:orders!inner(order_date)');
+    if (startDate) query = query.gte('order.order_date', startDate);
+    if (endDate) query = query.lte('order.order_date', endDate);
+    const { data } = await query;
+
     const grouped: Record<string, ProductProfit> = {};
     ((data || []) as Array<{ product_name: string; total_price: number; profit: number; total_units_needed: number }>).forEach((i) => {
       const name = i.product_name;
@@ -113,17 +171,24 @@ export default function Reports() {
   const fetchCommissions = async () => {
     let query = supabase.from('commissions').select('*').order('order_date', { ascending: false });
     if (!isAdmin && profile) {
-      query = query.eq('recipient', profile.id);
+      query = query.eq('recipient', profile.full_name);
     }
+    if (startDate) query = query.gte('order_date', startDate);
+    if (endDate) query = query.lte('order_date', endDate);
     const { data } = await query;
     setCommissionData((data || []) as CommissionRow[]);
+    setSelectedCommissions(new Set());
   };
 
   const fetchRevenue = async () => {
-    const { data } = await supabase
+    let query = supabase
       .from('orders')
       .select('order_date, total_price, total_profit')
       .order('order_date');
+    if (startDate) query = query.gte('order_date', startDate);
+    if (endDate) query = query.lte('order_date', endDate);
+    const { data } = await query;
+
     const grouped: Record<string, RevenueSummary> = {};
     ((data || []) as Array<{ order_date: string; total_price: number; total_profit: number }>).forEach((o) => {
       const month = o.order_date.substring(0, 7);
@@ -137,6 +202,104 @@ export default function Reports() {
     setRevenueData(Object.values(grouped).sort((a, b) => b.month.localeCompare(a.month)));
   };
 
+  // === GAP FIX #9: Mark commissions as paid ===
+  const handleMarkPaid = async () => {
+    if (selectedCommissions.size === 0) {
+      toast('error', 'Select at least one commission to mark as paid');
+      return;
+    }
+    setMarkingPaid(true);
+    const today = new Date().toISOString().split('T')[0];
+    
+    const { error } = await supabase
+      .from('commissions')
+      .update({ status: 'paid', paid_date: today })
+      .in('id', Array.from(selectedCommissions));
+
+    if (error) {
+      toast('error', 'Failed to update commissions');
+    } else {
+      toast('success', `${selectedCommissions.size} commission(s) marked as paid`);
+      fetchCommissions();
+    }
+    setMarkingPaid(false);
+  };
+
+  const toggleCommissionSelect = (id: string) => {
+    setSelectedCommissions((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const pendingIds = commissionData.filter((c) => c.status === 'pending').map((c) => c.id);
+    if (selectedCommissions.size === pendingIds.length && pendingIds.length > 0) {
+      setSelectedCommissions(new Set());
+    } else {
+      setSelectedCommissions(new Set(pendingIds));
+    }
+  };
+
+  // === GAP FIX #8: Apply preset date range ===
+  const applyPreset = (preset: string) => {
+    if (preset === 'all') {
+      setStartDate('');
+      setEndDate('');
+    } else {
+      const { start, end } = getPresetDates(preset);
+      setStartDate(start);
+      setEndDate(end);
+    }
+  };
+
+  // === GAP FIX #11: CSV Export handlers ===
+  const handleExportCSV = () => {
+    if (tab === 'customer') {
+      exportToCSV(customerData, [
+        { key: 'farm_name', header: 'Customer' },
+        { key: 'total_revenue', header: 'Revenue', format: fmtCSV },
+        { key: 'total_profit', header: 'Profit', format: fmtCSV },
+        { key: 'margin_pct', header: 'Margin %', format: (v) => `${Number(v).toFixed(1)}%` },
+        { key: 'order_count', header: 'Orders' },
+      ], 'customer_profitability');
+      toast('success', 'Customer report exported');
+    } else if (tab === 'product') {
+      exportToCSV(productData, [
+        { key: 'product_name', header: 'Product' },
+        { key: 'total_revenue', header: 'Revenue', format: fmtCSV },
+        { key: 'total_profit', header: 'Profit', format: fmtCSV },
+        { key: 'units_sold', header: 'Units Sold' },
+        { key: 'margin_pct', header: 'Margin %', format: (v) => `${Number(v).toFixed(1)}%` },
+      ], 'product_profitability');
+      toast('success', 'Product report exported');
+    } else if (tab === 'commission') {
+      exportToCSV(commissionData, [
+        { key: 'order_date', header: 'Date', format: fmtDateCSV },
+        { key: 'recipient', header: 'Recipient' },
+        { key: 'commission_amount', header: 'Commission', format: fmtCSV },
+        { key: 'split_percentage', header: 'Split %', format: (v) => `${v}%` },
+        { key: 'order_profit', header: 'Order Profit', format: fmtCSV },
+        { key: 'status', header: 'Status' },
+        { key: 'paid_date', header: 'Paid Date', format: fmtDateCSV },
+      ], 'commissions');
+      toast('success', 'Commission report exported');
+    } else if (tab === 'revenue') {
+      exportToCSV(revenueData, [
+        { key: 'month', header: 'Month' },
+        { key: 'revenue', header: 'Revenue', format: fmtCSV },
+        { key: 'profit', header: 'Profit', format: fmtCSV },
+        { key: 'orders', header: 'Orders' },
+      ], 'revenue_summary');
+      toast('success', 'Revenue report exported');
+    }
+  };
+
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
 
@@ -146,6 +309,11 @@ export default function Reports() {
     { key: 'commission', label: 'Commissions' },
     { key: 'revenue', label: 'Revenue Summary' },
   ];
+
+  // Compute unpaid commission total
+  const unpaidTotal = commissionData
+    .filter((c) => c.status === 'pending')
+    .reduce((sum, c) => sum + c.commission_amount, 0);
 
   const customerCols: Column<CustomerProfit>[] = [
     { key: 'farm_name', header: 'Customer', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.farm_name}</span> },
@@ -164,11 +332,32 @@ export default function Reports() {
   ];
 
   const commissionCols: Column<CommissionRow>[] = [
+    ...(isAdmin ? [{
+      key: '_select' as keyof CommissionRow,
+      header: (
+        <input
+          type="checkbox"
+          checked={selectedCommissions.size > 0 && selectedCommissions.size === commissionData.filter((c) => c.status === 'pending').length}
+          onChange={toggleSelectAll}
+          className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
+        />
+      ) as unknown as string,
+      render: (r: CommissionRow) => r.status === 'pending' ? (
+        <input
+          type="checkbox"
+          checked={selectedCommissions.has(r.id)}
+          onChange={() => toggleCommissionSelect(r.id)}
+          className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
+        />
+      ) : null,
+    } as Column<CommissionRow>] : []),
     { key: 'order_date', header: 'Date', sortable: true, render: (r) => new Date(r.order_date).toLocaleDateString() },
+    { key: 'recipient', header: 'Recipient', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.recipient}</span> },
     { key: 'commission_amount', header: 'Commission', sortable: true, render: (r) => <span className="font-mono font-medium">{fmt(r.commission_amount)}</span> },
     { key: 'split_percentage', header: 'Split %', sortable: true, render: (r) => `${r.split_percentage}%` },
     { key: 'order_profit', header: 'Order Profit', sortable: true, render: (r) => <span className="font-mono">{fmt(r.order_profit)}</span> },
     { key: 'status', header: 'Status', render: (r) => <Badge variant={statusToBadgeVariant[r.status] || 'default'}>{r.status}</Badge> },
+    { key: 'paid_date', header: 'Paid', sortable: true, render: (r) => r.paid_date ? new Date(r.paid_date).toLocaleDateString() : '-' },
   ];
 
   const revenueCols: Column<RevenueSummary>[] = [
@@ -182,6 +371,7 @@ export default function Reports() {
     <div className="space-y-6">
       <SplitHeading title="Reports" accent="& Analytics" />
 
+      {/* Tab bar */}
       <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
         {tabs.map((t) => (
           <button
@@ -197,6 +387,85 @@ export default function Reports() {
           </button>
         ))}
       </div>
+
+      {/* === GAP FIX #8: Date range filters === */}
+      <Card>
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="block text-xs font-medium text-secondary mb-1">Start Date</label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-secondary mb-1">End Date</label>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            />
+          </div>
+          <div className="flex gap-1.5">
+            {[
+              { key: 'all', label: 'All Time' },
+              { key: 'this_season', label: 'This Season' },
+              { key: 'last_season', label: 'Last Season' },
+              { key: 'ytd', label: 'YTD' },
+              { key: 'last30', label: 'Last 30 Days' },
+              { key: 'last90', label: 'Last 90 Days' },
+            ].map((preset) => (
+              <button
+                key={preset.key}
+                onClick={() => applyPreset(preset.key)}
+                className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 hover:bg-crx-green-tint hover:border-crx-green hover:text-crx-green transition-colors"
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="ml-auto">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Download className="w-4 h-4" />}
+              showChevron={false}
+              onClick={handleExportCSV}
+            >
+              Export CSV
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      {/* === GAP FIX #9: Commission summary bar === */}
+      {tab === 'commission' && (
+        <div className="flex items-center justify-between bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-amber-800">
+              <span className="font-semibold">Unpaid commissions:</span> {fmt(unpaidTotal)}
+            </span>
+            {selectedCommissions.size > 0 && (
+              <span className="text-sm text-secondary">
+                {selectedCommissions.size} selected
+              </span>
+            )}
+          </div>
+          {isAdmin && selectedCommissions.size > 0 && (
+            <Button
+              size="sm"
+              icon={<CheckCircle2 className="w-4 h-4" />}
+              onClick={handleMarkPaid}
+              loading={markingPaid}
+            >
+              Mark as Paid
+            </Button>
+          )}
+        </div>
+      )}
 
       <Card padding={false}>
         <div className="p-5">

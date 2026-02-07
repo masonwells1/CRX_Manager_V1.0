@@ -7,6 +7,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
 import type { Delivery, DeliveryItem, Customer, CustomerAddress, Profile } from '../types';
 
 export default function DeliveryDetail() {
@@ -132,6 +133,22 @@ export default function DeliveryDetail() {
               updated_at: new Date().toISOString(),
             })
             .eq('id', inv.id);
+
+          // === GAP FIX #3: Also decrement prebooked quantity on delivery ===
+          const { data: invRefresh } = await supabase
+            .from('inventory')
+            .select('id, quantity_prebooked')
+            .eq('id', inv.id)
+            .maybeSingle();
+
+          if (invRefresh) {
+            await supabase
+              .from('inventory')
+              .update({
+                quantity_prebooked: Math.max(0, (Number(invRefresh.quantity_prebooked) || 0) - Number(item.quantity)),
+              })
+              .eq('id', invRefresh.id);
+          }
         }
       }
 
@@ -156,6 +173,17 @@ export default function DeliveryDetail() {
       }
 
       toast('success', 'Delivery completed');
+      // === GAP FIX #5: Log activity for delivery completion ===
+      if (profile) {
+        await logActivity(
+          'delivery_completed',
+          `Delivery ${delivery.delivery_number} completed for ${customer?.farm_name || 'customer'}. Signed by: ${signedBy}`,
+          profile.id,
+          'delivery',
+          delivery.id,
+          delivery.customer_id
+        );
+      }
       fetchDelivery();
     } catch (error) {
       console.error('Error completing delivery:', error);

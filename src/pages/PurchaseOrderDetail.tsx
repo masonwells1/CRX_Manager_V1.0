@@ -9,12 +9,13 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
 import type { PurchaseOrder, PurchaseOrderItem } from '../types';
 
 export default function PurchaseOrderDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const { toast } = useToast();
   const [po, setPo] = useState<PurchaseOrder | null>(null);
   const [items, setItems] = useState<PurchaseOrderItem[]>([]);
@@ -71,13 +72,89 @@ export default function PurchaseOrderDetail() {
         .from('purchase_order_items')
         .update({ quantity_received: newReceived })
         .eq('id', item.id);
-      if (error) hasError = true;
+      if (error) { hasError = true; continue; }
+
+      // === GAP FIX #4: Update inventory when receiving PO items ===
+      const { data: inv } = await supabase
+        .from('inventory')
+        .select('id, quantity_available, quantity_on_order')
+        .eq('product_id', item.product_id)
+        .eq('location', 'Main Warehouse')
+        .maybeSingle();
+
+      if (inv) {
+        await supabase
+          .from('inventory')
+          .update({
+            quantity_available: (Number(inv.quantity_available) || 0) + qty,
+            quantity_on_order: Math.max(0, (Number(inv.quantity_on_order) || 0) - qty),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', inv.id);
+      } else {
+        await supabase.from('inventory').insert({
+          product_id: item.product_id,
+          location: 'Main Warehouse',
+          quantity_available: qty,
+          quantity_on_order: 0,
+          quantity_prebooked: 0,
+          unit_size: item.unit_size,
+        });
+      }
+
+      // Create inventory transaction audit record
+      if (profile) {
+        await supabase.from('inventory_transactions').insert({
+          product_id: item.product_id,
+          transaction_type: 'received',
+          quantity: qty,
+          to_location: 'Main Warehouse',
+          purchase_order_id: id,
+          performed_by: profile.id,
+          notes: `Received ${qty} units via PO ${po?.po_number || ''}`,
+        });
+      }
+    }
+
+    // Auto-update PO status based on received quantities
+    if (!hasError && po) {
+      const { data: updatedItems } = await supabase
+        .from('purchase_order_items')
+        .select('quantity_ordered, quantity_received')
+        .eq('purchase_order_id', id!);
+
+      if (updatedItems) {
+        const allReceived = updatedItems.every(
+          (i: any) => Number(i.quantity_received) >= Number(i.quantity_ordered)
+        );
+        const someReceived = updatedItems.some(
+          (i: any) => Number(i.quantity_received) > 0
+        );
+        const newStatus = allReceived ? 'fully_received' : someReceived ? 'partially_received' : po.status;
+
+        if (newStatus !== po.status) {
+          await supabase
+            .from('purchase_orders')
+            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .eq('id', id!);
+        }
+      }
     }
 
     if (hasError) {
       toast('error', 'Some items failed to update');
     } else {
-      toast('success', 'Items received successfully');
+      // === GAP FIX #5: Log activity ===
+      if (profile) {
+        await logActivity(
+          'po_received',
+          `Items received on PO ${po?.po_number || ''} — inventory updated`,
+          profile.id,
+          'purchase_order',
+          id
+        );
+      }
+      toast('success', 'Items received and inventory updated');
       setReceiveOpen(false);
       fetchPO();
     }
