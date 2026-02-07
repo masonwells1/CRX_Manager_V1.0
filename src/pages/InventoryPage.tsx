@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Package, ArrowDownToLine, Pencil, Plus } from 'lucide-react';
+import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -14,6 +14,9 @@ interface InventoryRow extends Inventory {
   product_name: string;
   total_on_floor: number;
   net_position: number;
+  reorder_point: number;
+  min_stock_level: number;
+  is_low_stock: boolean;
 }
 
 export default function InventoryPage() {
@@ -52,11 +55,16 @@ export default function InventoryPage() {
 
     const rows = ((data || []) as Array<Inventory & { product: { product_name: string } | null }>).map((item) => {
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
+      const reorderPoint = Number((item as any).reorder_point) || 0;
+      const minStockLevel = Number((item as any).min_stock_level) || 0;
       return {
         ...item,
         product_name: item.product?.product_name || 'Unknown',
         total_on_floor: totalOnFloor,
         net_position: item.quantity_available - item.quantity_prebooked,
+        reorder_point: reorderPoint,
+        min_stock_level: minStockLevel,
+        is_low_stock: reorderPoint > 0 && item.quantity_available <= reorderPoint,
       };
     });
 
@@ -204,7 +212,16 @@ export default function InventoryPage() {
       key: 'product_name',
       header: 'Product',
       sortable: true,
-      render: (row) => <span className="font-medium text-nav-dark">{row.product_name}</span>,
+      render: (row) => (
+        <div className="flex items-center gap-2">
+          {row.is_low_stock && (
+            <span title={`Low stock! Below reorder point (${row.reorder_point})`}>
+              <AlertTriangle className="w-4 h-4 text-amber-500" />
+            </span>
+          )}
+          <span className="font-medium text-nav-dark">{row.product_name}</span>
+        </div>
+      ),
     },
     { key: 'quantity_available', header: 'Available', sortable: true },
     { key: 'quantity_prebooked', header: 'Pre-booked', sortable: true },
@@ -267,6 +284,27 @@ export default function InventoryPage() {
           <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
             Add Inventory
           </Button>
+        </div>
+      )}
+
+      {/* GAP FIX #10: Low stock alerts banner */}
+      {inventory.filter((i) => i.is_low_stock).length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+          <div>
+            <p className="text-sm font-semibold text-amber-800">
+              Low Stock Alert — {inventory.filter((i) => i.is_low_stock).length} item(s) below reorder point
+            </p>
+            <div className="mt-1 flex flex-wrap gap-2">
+              {inventory
+                .filter((i) => i.is_low_stock)
+                .map((i) => (
+                  <span key={i.id} className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                    {i.product_name}: {i.quantity_available} avail (min {i.reorder_point})
+                  </span>
+                ))}
+            </div>
+          </div>
         </div>
       )}
 

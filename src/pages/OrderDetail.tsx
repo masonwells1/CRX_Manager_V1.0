@@ -1,19 +1,42 @@
+/**
+ * OrderDetail.tsx — View and edit orders after creation
+ * GAP FIX #13: Edit Orders After Creation
+ * Also shows payment/balance info (Gap #2 tie-in)
+ */
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Truck } from 'lucide-react';
+import { ArrowLeft, Truck, Pencil, Save, X, Trash2 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import Input from '../components/ui/Input';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import Modal from '../components/ui/Modal';
+import { useToast } from '../components/ui/Toast';
+import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
 import type { Order, OrderItem, Customer } from '../types';
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { toast } = useToast();
+  const { role, profile } = useAuth();
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Edit mode state
+  const [editing, setEditing] = useState(false);
+  const [editItems, setEditItems] = useState<OrderItem[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  // Status change
+  const [statusModalOpen, setStatusModalOpen] = useState(false);
+  const [newStatus, setNewStatus] = useState('');
+
+  const isAdmin = role === 'admin';
 
   useEffect(() => {
     if (id) fetchOrder();
@@ -40,9 +63,95 @@ export default function OrderDetail() {
         .select('*')
         .eq('order_id', id!)
         .order('section_name');
-      setItems((itemsData || []) as OrderItem[]);
+      const itemsList = (itemsData || []) as OrderItem[];
+      setItems(itemsList);
+      setEditItems(itemsList.map((i) => ({ ...i })));
     }
     setLoading(false);
+  };
+
+  const handleSaveEdits = async () => {
+    setSaving(true);
+
+    // Update each item
+    for (const item of editItems) {
+      await supabase
+        .from('order_items')
+        .update({
+          price_per_unit: item.price_per_unit,
+          total_units_needed: item.total_units_needed,
+          total_price: item.price_per_unit * item.total_units_needed,
+          quantity_remaining: item.total_units_needed - item.quantity_delivered,
+        })
+        .eq('id', item.id);
+    }
+
+    // Recalculate order totals
+    const totalPrice = editItems.reduce((s, i) => s + i.price_per_unit * i.total_units_needed, 0);
+    const totalCost = editItems.reduce((s, i) => s + (i.current_cost || 0) * i.total_units_needed, 0);
+    const totalProfit = totalPrice - totalCost;
+    const marginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
+
+    await supabase
+      .from('orders')
+      .update({
+        total_price: totalPrice,
+        total_cost: totalCost,
+        total_profit: totalProfit,
+        total_margin_pct: marginPct,
+        balance_due: totalPrice - (order?.total_paid || 0),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id!);
+
+    if (profile) {
+      await logActivity(
+        'order_updated',
+        `Order ${order?.order_number} edited. New total: ${fmt(totalPrice)}`,
+        profile.id,
+        'order',
+        id,
+        order?.customer_id
+      );
+    }
+
+    toast('success', 'Order updated');
+    setEditing(false);
+    setSaving(false);
+    fetchOrder();
+  };
+
+  const handleStatusChange = async () => {
+    if (!newStatus || !order) return;
+    await supabase
+      .from('orders')
+      .update({ status: newStatus, updated_at: new Date().toISOString() })
+      .eq('id', id!);
+
+    if (profile) {
+      await logActivity(
+        'order_status_changed',
+        `Order ${order.order_number} status changed to ${newStatus.replace('_', ' ')}`,
+        profile.id,
+        'order',
+        id,
+        order.customer_id
+      );
+    }
+
+    toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
+    setStatusModalOpen(false);
+    fetchOrder();
+  };
+
+  const handleDeleteItem = async (itemId: string) => {
+    setEditItems((prev) => prev.filter((i) => i.id !== itemId));
+  };
+
+  const updateEditItem = (itemId: string, field: string, value: number) => {
+    setEditItems((prev) =>
+      prev.map((i) => (i.id === itemId ? { ...i, [field]: value } : i))
+    );
   };
 
   const fmt = (n: number) =>
@@ -69,7 +178,10 @@ export default function OrderDetail() {
     );
   }
 
-  const sections = [...new Set(items.map((i) => i.section_name || 'General'))];
+  const sections = [...new Set((editing ? editItems : items).map((i) => i.section_name || 'General'))];
+  const displayItems = editing ? editItems : items;
+  const totalPaid = Number(order.total_paid) || 0;
+  const balanceDue = Number(order.balance_due) ?? (order.total_price - totalPaid);
 
   return (
     <div className="space-y-4">
@@ -81,12 +193,37 @@ export default function OrderDetail() {
           <ArrowLeft className="w-4 h-4" />
           Back to Orders
         </button>
-        <Button
-          icon={<Truck className="w-4 h-4" />}
-          onClick={() => navigate(`/deliveries/new?order=${order.id}`)}
-        >
-          Schedule Delivery
-        </Button>
+        <div className="flex gap-2">
+          {editing ? (
+            <>
+              <Button variant="ghost" icon={<X className="w-4 h-4" />} showChevron={false} onClick={() => { setEditing(false); setEditItems(items.map((i) => ({ ...i }))); }}>
+                Cancel
+              </Button>
+              <Button icon={<Save className="w-4 h-4" />} onClick={handleSaveEdits} loading={saving}>
+                Save Changes
+              </Button>
+            </>
+          ) : (
+            <>
+              {isAdmin && (
+                <Button
+                  variant="secondary"
+                  icon={<Pencil className="w-4 h-4" />}
+                  showChevron={false}
+                  onClick={() => setEditing(true)}
+                >
+                  Edit Order
+                </Button>
+              )}
+              <Button
+                icon={<Truck className="w-4 h-4" />}
+                onClick={() => navigate(`/deliveries/new?order=${order.id}`)}
+              >
+                Schedule Delivery
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       <Card>
@@ -100,6 +237,14 @@ export default function OrderDetail() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {isAdmin && (
+              <button
+                onClick={() => { setNewStatus(order.status); setStatusModalOpen(true); }}
+                className="text-xs text-secondary hover:text-crx-green underline"
+              >
+                Change Status
+              </button>
+            )}
             <Badge variant={statusToBadgeVariant[order.status] || 'default'} size="md">
               {order.status.replace('_', ' ')}
             </Badge>
@@ -127,6 +272,29 @@ export default function OrderDetail() {
             </p>
           </div>
         </div>
+
+        {/* Payment summary row */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mt-4 pt-4 border-t border-gray-100">
+          <div>
+            <p className="text-xs text-secondary">Amount Paid</p>
+            <p className="text-sm font-medium text-crx-green">{fmt(totalPaid)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-secondary">Balance Due</p>
+            <p className={`text-sm font-semibold ${balanceDue > 0 ? 'text-red-600' : 'text-crx-green'}`}>
+              {fmt(Math.max(0, balanceDue))}
+            </p>
+          </div>
+          <div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate('/payments')}
+            >
+              View Payments →
+            </Button>
+          </div>
+        </div>
       </Card>
 
       {sections.map((section) => (
@@ -143,25 +311,51 @@ export default function OrderDetail() {
                     <th className="px-4 py-3 text-left font-medium text-secondary">Delivered</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary">Remaining</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary w-40">Progress</th>
+                    {editing && <th className="px-4 py-3 w-10"></th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {items
+                  {displayItems
                     .filter((i) => (i.section_name || 'General') === section)
                     .map((item) => {
+                      const units = editing ? item.total_units_needed : item.total_units_needed;
+                      const ppu = editing ? item.price_per_unit : item.price_per_unit;
                       const pct =
-                        item.total_units_needed > 0
-                          ? Math.round((item.quantity_delivered / item.total_units_needed) * 100)
+                        units > 0
+                          ? Math.round((item.quantity_delivered / units) * 100)
                           : 0;
                       return (
                         <tr key={item.id} className="border-b border-gray-50">
                           <td className="px-4 py-3 font-medium text-nav-dark">
                             {item.product_name}
                           </td>
-                          <td className="px-4 py-3 font-mono">{fmt(item.price_per_unit)}</td>
-                          <td className="px-4 py-3">{item.total_units_needed}</td>
+                          <td className="px-4 py-3 font-mono">
+                            {editing ? (
+                              <input
+                                type="number"
+                                value={ppu}
+                                onChange={(e) => updateEditItem(item.id, 'price_per_unit', Number(e.target.value))}
+                                className="w-24 px-2 py-1 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                                step="0.01"
+                              />
+                            ) : (
+                              fmt(ppu)
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {editing ? (
+                              <input
+                                type="number"
+                                value={units}
+                                onChange={(e) => updateEditItem(item.id, 'total_units_needed', Number(e.target.value))}
+                                className="w-20 px-2 py-1 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                              />
+                            ) : (
+                              units
+                            )}
+                          </td>
                           <td className="px-4 py-3">{item.quantity_delivered}</td>
-                          <td className="px-4 py-3">{item.quantity_remaining}</td>
+                          <td className="px-4 py-3">{units - item.quantity_delivered}</td>
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
@@ -173,15 +367,57 @@ export default function OrderDetail() {
                               <span className="text-xs text-secondary w-8">{pct}%</span>
                             </div>
                           </td>
+                          {editing && (
+                            <td className="px-4 py-3">
+                              <button
+                                onClick={() => handleDeleteItem(item.id)}
+                                className="text-red-400 hover:text-red-600"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       );
                     })}
                 </tbody>
+                {editing && (
+                  <tfoot>
+                    <tr className="border-t border-gray-200">
+                      <td colSpan={2} className="px-4 py-3 font-medium text-nav-dark">
+                        New Total:
+                      </td>
+                      <td colSpan={5} className="px-4 py-3 font-semibold text-nav-dark">
+                        {fmt(editItems.reduce((s, i) => s + i.price_per_unit * i.total_units_needed, 0))}
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
           </div>
         </Card>
       ))}
+
+      {/* Status Change Modal */}
+      <Modal open={statusModalOpen} onClose={() => setStatusModalOpen(false)} title="Change Order Status">
+        <div className="space-y-4">
+          <select
+            value={newStatus}
+            onChange={(e) => setNewStatus(e.target.value)}
+            className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+          >
+            <option value="confirmed">Confirmed</option>
+            <option value="partially_fulfilled">Partially Fulfilled</option>
+            <option value="fulfilled">Fulfilled</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setStatusModalOpen(false)}>Cancel</Button>
+            <Button onClick={handleStatusChange}>Update Status</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

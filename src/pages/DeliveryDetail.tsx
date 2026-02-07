@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Phone, MapPin, CheckCircle2, Package } from 'lucide-react';
+import { ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -8,6 +8,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
+import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import type { Delivery, DeliveryItem, Customer, CustomerAddress, Profile } from '../types';
 
 export default function DeliveryDetail() {
@@ -347,9 +348,40 @@ export default function DeliveryDetail() {
             </h2>
             <p className="text-sm text-secondary mt-1">{customer?.farm_name}</p>
           </div>
-          <Badge variant={statusToBadgeVariant[delivery.status] || 'default'} size="md">
-            {delivery.status.replace('_', ' ')}
-          </Badge>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Download className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() =>
+                downloadDeliveryPdf({
+                  delivery_number: delivery.delivery_number,
+                  order_number: (delivery as any).order_number || delivery.order_id || '-',
+                  customer_name: customer?.farm_name || 'Customer',
+                  customer_address: address
+                    ? [address.address_line, address.city, address.state, address.zip].filter(Boolean).join(', ')
+                    : customer?.billing_address || undefined,
+                  driver_name: driver?.full_name || 'Unassigned',
+                  scheduled_date: delivery.scheduled_date,
+                  completed_at: delivery.completed_at || undefined,
+                  status: delivery.status,
+                  signed_by: delivery.signed_by || undefined,
+                  delivery_notes: delivery.delivery_notes || undefined,
+                  items: items.map((i) => ({
+                    product_name: i.product_name,
+                    quantity: i.quantity,
+                    unit_size: i.unit_size || '-',
+                  })),
+                })
+              }
+            >
+              Receipt PDF
+            </Button>
+            <Badge variant={statusToBadgeVariant[delivery.status] || 'default'} size="md">
+              {delivery.status.replace('_', ' ')}
+            </Badge>
+          </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
           <div>

@@ -37,11 +37,12 @@ export default function CustomerDetail() {
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<'info' | 'quotes' | 'orders' | 'deliveries'>('info');
+  const [tab, setTab] = useState<'info' | 'quotes' | 'orders' | 'deliveries' | 'history'>('info');
 
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [orders, setOrders] = useState<(Order & { fulfillment_pct: number })[]>([]);
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name: string })[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
   const [tabLoading, setTabLoading] = useState(false);
 
   useEffect(() => {
@@ -123,6 +124,33 @@ export default function CustomerDetail() {
         driver_name: d.driver?.full_name || 'Unassigned',
       }));
       setDeliveries(rows);
+    } else if (selectedTab === 'history') {
+      // GAP FIX #15: Fetch purchase history — all products this customer has ordered
+      const { data: orderIds } = await supabase
+        .from('orders')
+        .select('id')
+        .eq('customer_id', id);
+      if (orderIds && orderIds.length > 0) {
+        const { data: allItems } = await supabase
+          .from('order_items')
+          .select('product_name, price_per_unit, total_units_needed, total_price, quantity_delivered, section_name, order_id')
+          .in('order_id', orderIds.map((o: any) => o.id));
+        // Aggregate by product
+        const productMap: Record<string, { product_name: string; total_units: number; total_spent: number; total_delivered: number; order_count: number }> = {};
+        (allItems || []).forEach((item: any) => {
+          const key = item.product_name;
+          if (!productMap[key]) {
+            productMap[key] = { product_name: key, total_units: 0, total_spent: 0, total_delivered: 0, order_count: 0 };
+          }
+          productMap[key].total_units += Number(item.total_units_needed) || 0;
+          productMap[key].total_spent += Number(item.total_price) || 0;
+          productMap[key].total_delivered += Number(item.quantity_delivered) || 0;
+          productMap[key].order_count += 1;
+        });
+        setHistory(Object.values(productMap).sort((a, b) => b.total_spent - a.total_spent));
+      } else {
+        setHistory([]);
+      }
     }
     setTabLoading(false);
   };
@@ -206,7 +234,7 @@ export default function CustomerDetail() {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
   }
 
-  const tabs = ['info', 'quotes', 'orders', 'deliveries'] as const;
+  const tabs = ['info', 'quotes', 'orders', 'deliveries', 'history'] as const;
 
   return (
     <div className="space-y-4">
@@ -516,6 +544,65 @@ export default function CustomerDetail() {
                     </tr>
                   ))}
                 </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* GAP FIX #15: Purchase History Tab */}
+      {tab === 'history' && !isNew && (
+        <Card padding={false}>
+          <div className="p-5">
+            <CardHeader title="Purchase" accent="History" />
+            <p className="text-xs text-secondary mt-1">Products ordered by this customer, aggregated across all orders</p>
+          </div>
+          {tabLoading ? (
+            <div className="px-5 pb-5 space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : history.length === 0 ? (
+            <div className="px-5 pb-5">
+              <p className="text-sm text-secondary">No purchase history yet.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-t border-b border-gray-100">
+                    <th className="px-5 py-3 text-left font-medium text-secondary">Product</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Times Ordered</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Total Units</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Units Delivered</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Total Spent</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((h, idx) => (
+                    <tr key={idx} className="border-b border-gray-50">
+                      <td className="px-5 py-3 font-medium text-nav-dark">{h.product_name}</td>
+                      <td className="px-4 py-3">{h.order_count}</td>
+                      <td className="px-4 py-3">{h.total_units.toLocaleString()}</td>
+                      <td className="px-4 py-3">{h.total_delivered.toLocaleString()}</td>
+                      <td className="px-4 py-3 font-mono text-crx-green">
+                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(h.total_spent)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t border-gray-200 bg-gray-50">
+                    <td className="px-5 py-3 font-semibold text-nav-dark">Total</td>
+                    <td className="px-4 py-3 font-semibold">{history.reduce((s: number, h: any) => s + h.order_count, 0)}</td>
+                    <td className="px-4 py-3 font-semibold">{history.reduce((s: number, h: any) => s + h.total_units, 0).toLocaleString()}</td>
+                    <td className="px-4 py-3 font-semibold">{history.reduce((s: number, h: any) => s + h.total_delivered, 0).toLocaleString()}</td>
+                    <td className="px-4 py-3 font-semibold font-mono text-crx-green">
+                      {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(history.reduce((s: number, h: any) => s + h.total_spent, 0))}
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}

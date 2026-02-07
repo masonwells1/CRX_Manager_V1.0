@@ -30,6 +30,7 @@ const Reports = lazy(() => import('./pages/Reports'));
 const TeamBoard = lazy(() => import('./pages/TeamBoard'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const Payments = lazy(() => import('./pages/Payments'));
 const BlendTickets = lazy(() => import('./pages/BlendTickets').then(m => ({ default: m.BlendTickets })));
 const BlendTicketDetail = lazy(() => import('./pages/BlendTicketDetail').then(m => ({ default: m.BlendTicketDetail })));
 
@@ -85,6 +86,7 @@ export default function App() {
                 <Route path="purchase-orders/:id" element={<PurchaseOrderDetail />} />
                 <Route path="brand-vs-generic" element={<BrandVsGeneric />} />
                 <Route path="reports" element={<Reports />} />
+                <Route path="payments" element={<Payments />} />
                 <Route path="team-board" element={<TeamBoard />} />
                 <Route path="notifications" element={<Notifications />} />
                 <Route path="settings" element={<ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute>} />

@@ -16,6 +16,7 @@ import {
   LogOut,
   X,
   Image,
+  DollarSign,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
@@ -40,6 +41,7 @@ const navItems: NavItem[] = [
   { path: '/purchase-orders', label: 'Supplier POs', icon: <ShoppingCart className="w-5 h-5" />, roles: ['admin'] },
   { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
   { path: '/reports', label: 'Reports', icon: <BarChart3 className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
+  { path: '/payments', label: 'Payments', icon: <DollarSign className="w-5 h-5" />, roles: ['admin'] },
   { path: '/team-board', label: 'Team Board', icon: <MessageSquare className="w-5 h-5" /> },
   { path: '/notifications', label: 'Notifications', icon: <Bell className="w-5 h-5" /> },
   { path: '/settings', label: 'Settings', icon: <Settings className="w-5 h-5" />, roles: ['admin'] },

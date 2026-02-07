@@ -10,6 +10,7 @@ import {
   Search,
   ChevronDown,
   ChevronUp,
+  Download,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -20,6 +21,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
+import { downloadQuotePdf } from '../lib/quotePdf';
 import type {
   Quote,
   QuoteSection,
@@ -559,6 +561,41 @@ export default function QuoteBuilder() {
     setSaving(false);
   };
 
+  // === GAP FIX #1: Download Quote as PDF ===
+  const handleDownloadPdf = () => {
+    downloadQuotePdf({
+      quote_number: quoteNumber,
+      customer_name: selectedCustomer?.farm_name || 'Customer',
+      customer_email: selectedCustomer?.email || undefined,
+      customer_phone: selectedCustomer?.phone || undefined,
+      customer_address: selectedCustomer?.billing_address || undefined,
+      sales_rep_name: profile?.full_name || 'Sales Rep',
+      created_at: new Date().toISOString(),
+      expires_at: undefined,
+      valid_days: validDays,
+      tier,
+      header_notes: headerNotes || undefined,
+      footer_notes: footerNotes || undefined,
+      sections: sections.map((sec) => ({
+        section_name: sec.section_name,
+        section_notes: sec.section_notes || undefined,
+        items: sec.items
+          .filter((i) => i.product_id)
+          .map((i) => ({
+            product_name: i.product?.product_name || '',
+            actual_rate: i.actual_rate,
+            rate_unit: i.rate_unit,
+            acres: i.acres,
+            total_units_needed: i.total_units_needed,
+            price_per_unit: i.price_per_unit,
+            total_price: i.total_price,
+          })),
+      })),
+      totals,
+    });
+    toast('success', 'PDF downloaded');
+  };
+
   const handleSendQuote = async () => {
     setSending(true);
     setConfirmSendOpen(false);
@@ -835,6 +872,14 @@ export default function QuoteBuilder() {
             loading={saving}
           >
             Save Draft
+          </Button>
+          <Button
+            variant="secondary"
+            icon={<Download className="w-4 h-4" />}
+            showChevron={false}
+            onClick={handleDownloadPdf}
+          >
+            Download PDF
           </Button>
           <Button
             variant="primary"

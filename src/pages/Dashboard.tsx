@@ -10,6 +10,7 @@ import {
   Plus,
   ChevronRight,
   Clock,
+  AlertTriangle,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -45,6 +46,9 @@ interface DashboardData {
     farm_name: string;
     total: number;
   }>;
+  monthlyRevenue: Array<{ month: string; revenue: number; profit: number }>;
+  lowStockCount: number;
+  openArBalance: number;
 }
 
 export default function Dashboard() {
@@ -63,6 +67,9 @@ export default function Dashboard() {
     upcomingDeliveries: [],
     recentActivity: [],
     topCustomers: [],
+    monthlyRevenue: [],
+    lowStockCount: 0,
+    openArBalance: 0,
   });
 
   useEffect(() => {
@@ -131,6 +138,41 @@ export default function Dashboard() {
         .sort((a, b) => b.total - a.total)
         .slice(0, 5);
 
+      // GAP FIX #21: Monthly revenue breakdown
+      const monthlyMap: Record<string, { revenue: number; profit: number }> = {};
+      for (const ord of orders) {
+        const d = new Date((ord as any).order_date || (ord as any).created_at);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        if (!monthlyMap[key]) monthlyMap[key] = { revenue: 0, profit: 0 };
+        monthlyMap[key].revenue += ord.total_price || 0;
+        monthlyMap[key].profit += ord.total_profit || 0;
+      }
+      const monthlyRevenue = Object.entries(monthlyMap)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .slice(-12)
+        .map(([month, vals]) => ({
+          month,
+          ...vals,
+        }));
+
+      // GAP FIX #10: Low stock count
+      const { data: lowStockData } = await supabase
+        .from('inventory')
+        .select('id, quantity_available, reorder_point')
+        .gt('reorder_point', 0);
+      const lowStockCount = (lowStockData || []).filter(
+        (i: any) => Number(i.quantity_available) <= Number(i.reorder_point)
+      ).length;
+
+      // GAP FIX #2: Open AR balance
+      const { data: arOrders } = await supabase
+        .from('orders')
+        .select('balance_due');
+      const openArBalance = (arOrders || []).reduce(
+        (s: number, o: any) => s + Math.max(0, Number(o.balance_due) || 0),
+        0
+      );
+
       setData({
         totalRevenue,
         totalProfit,
@@ -142,6 +184,9 @@ export default function Dashboard() {
         upcomingDeliveries: (deliveriesRes.data as unknown as DashboardData['upcomingDeliveries']) || [],
         recentActivity: activityRes.data || [],
         topCustomers,
+        monthlyRevenue,
+        lowStockCount,
+        openArBalance,
       });
     } catch (err) {
       console.error('Dashboard load error:', err);
@@ -307,6 +352,64 @@ export default function Dashboard() {
           )}
         </Card>
       </div>
+
+      {/* GAP FIX #10 + #2: Alerts row */}
+      {!isDriver && (data.lowStockCount > 0 || data.openArBalance > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {data.lowStockCount > 0 && (
+            <div
+              onClick={() => navigate('/inventory')}
+              className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-amber-100 transition-colors"
+            >
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+              <div>
+                <p className="text-sm font-semibold text-amber-800">Low Stock Alert</p>
+                <p className="text-xs text-amber-600">{data.lowStockCount} item(s) below reorder point</p>
+              </div>
+            </div>
+          )}
+          {data.openArBalance > 0 && (
+            <div
+              onClick={() => navigate('/payments')}
+              className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-red-100 transition-colors"
+            >
+              <DollarSign className="w-5 h-5 text-red-600" />
+              <div>
+                <p className="text-sm font-semibold text-red-800">Outstanding A/R</p>
+                <p className="text-xs text-red-600">{fmt(data.openArBalance)} unpaid balance</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* GAP FIX #21: Monthly Revenue Chart */}
+      {!isDriver && data.monthlyRevenue.length > 1 && (
+        <Card padding={false}>
+          <div className="p-5">
+            <CardHeader title="Monthly" accent="Revenue" />
+          </div>
+          <div className="px-5 pb-5">
+            <div className="flex items-end gap-1 h-40">
+              {data.monthlyRevenue.map((m) => {
+                const maxRevenue = Math.max(...data.monthlyRevenue.map((r) => r.revenue), 1);
+                const heightPct = (m.revenue / maxRevenue) * 100;
+                const monthLabel = new Date(m.month + '-15').toLocaleString('default', { month: 'short' });
+                return (
+                  <div key={m.month} className="flex-1 flex flex-col items-center gap-1" title={`${monthLabel}: ${fmt(m.revenue)}`}>
+                    <span className="text-[10px] text-secondary">{fmt(m.revenue).replace('.00', '')}</span>
+                    <div
+                      className="w-full bg-crx-green rounded-t-md transition-all hover:bg-crx-green-dark"
+                      style={{ height: `${Math.max(heightPct, 2)}%` }}
+                    />
+                    <span className="text-[10px] text-secondary">{monthLabel}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {!isDriver && data.topCustomers.length > 0 && (
         <Card padding={false}>
