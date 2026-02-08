@@ -163,6 +163,12 @@ export default function NewDelivery() {
       return;
     }
 
+    // Guard: Ensure profile is loaded
+    if (!profile) {
+      toast('error', 'Please wait for profile to load');
+      return;
+    }
+
     setSaving(true);
 
     const order = orders.find((o) => o.id === selectedOrderId);
@@ -190,7 +196,7 @@ export default function NewDelivery() {
         scheduled_time: scheduledTime || null,
         delivery_notes: deliveryNotes || null,
         status: 'scheduled',
-        created_by: profile!.id,
+        created_by: profile.id,
       })
       .select('id')
       .maybeSingle();

@@ -125,10 +125,11 @@ export default function TeamBoard() {
         creator:profiles!team_notes_created_by_fkey(full_name),
         assignee:profiles!team_notes_assigned_to_fkey(full_name)
       `)
+      .is('deleted_at', null)
       .order('is_pinned', { ascending: false })
       .order('created_at', { ascending: false });
 
-    if (notesData) {
+    if (notesData && notesData.length > 0) {
       // Batch fetch all tags in one query instead of per-note
       const noteIds = notesData.map((n: any) => n.id);
       const { data: allTagLinks } = await supabase
@@ -179,6 +180,8 @@ export default function TeamBoard() {
       }));
 
       setNotes(notesWithExtras as ExtendedTeamNote[]);
+    } else {
+      setNotes([]);
     }
     setLoading(false);
   };
@@ -209,13 +212,16 @@ export default function TeamBoard() {
     if (data && data.length > 0) {
       // Fetch note titles for context
       const noteIds = [...new Set(data.map((a: any) => a.note_id).filter(Boolean))];
-      const { data: noteData } = await supabase
-        .from('team_notes')
-        .select('id, title')
-        .in('id', noteIds);
-
       const titleMap: Record<string, string> = {};
-      (noteData || []).forEach((n: any) => { titleMap[n.id] = n.title; });
+
+      if (noteIds.length > 0) {
+        const { data: noteData } = await supabase
+          .from('team_notes')
+          .select('id, title')
+          .in('id', noteIds);
+
+        (noteData || []).forEach((n: any) => { titleMap[n.id] = n.title; });
+      }
 
       const enriched = data.map((a: any) => ({
         ...a,
@@ -230,7 +236,26 @@ export default function TeamBoard() {
   };
 
   const openNoteDetail = async (noteId: string) => {
-    const note = notes.find(n => n.id === noteId);
+    let note = notes.find(n => n.id === noteId);
+
+    // If not found in local state (e.g., page just loaded), fetch it directly
+    if (!note) {
+      const { data } = await supabase
+        .from('team_notes')
+        .select(`
+          *,
+          creator:profiles!team_notes_created_by_fkey(full_name),
+          assignee:profiles!team_notes_assigned_to_fkey(full_name)
+        `)
+        .eq('id', noteId)
+        .is('deleted_at', null)
+        .maybeSingle();
+
+      if (data) {
+        note = data as ExtendedTeamNote;
+      }
+    }
+
     if (note) {
       setSelectedNote(note);
       setDetailModalOpen(true);
@@ -266,6 +291,13 @@ export default function TeamBoard() {
 
   const handleSave = async () => {
     if (!title.trim()) return;
+
+    // Guard: Ensure profile is loaded before creating/updating notes
+    if (!profile) {
+      toast('error', 'Please wait for profile to load');
+      return;
+    }
+
     setSaving(true);
 
     if (editingNote) {
@@ -297,7 +329,7 @@ export default function TeamBoard() {
         priority,
         assigned_to: assignedTo || null,
         due_date: dueDate || null,
-        created_by: profile!.id,
+        created_by: profile.id,
       });
       if (error) {
         toast('error', 'Failed to add note');
@@ -312,37 +344,42 @@ export default function TeamBoard() {
   };
 
   const handleDelete = async (noteId: string) => {
-    // Soft delete: set a deleted_at timestamp instead of hard deleting
-    // Falls back to hard delete if column doesn't exist
-    const { error: softError } = await supabase
+    // Guard: Ensure profile is loaded
+    if (!profile) {
+      toast('error', 'Please wait for profile to load');
+      return;
+    }
+
+    // Soft delete: set deleted_at timestamp for audit trail
+    const { error } = await supabase
       .from('team_notes')
-      .update({ is_completed: true, content: `[DELETED] ${notes.find(n => n.id === noteId)?.content || ''}` })
+      .update({
+        deleted_at: new Date().toISOString(),
+        deleted_by: profile.id,
+      })
       .eq('id', noteId);
 
-    if (softError) {
-      // Hard delete fallback
-      const { error } = await supabase.from('team_notes').delete().eq('id', noteId);
-      if (error) {
-        toast('error', 'Failed to delete note');
-      } else {
-        toast('success', 'Note deleted');
-        fetchNotes();
-      }
+    if (error) {
+      toast('error', 'Failed to delete note');
     } else {
-      // Actually delete after marking
-      await supabase.from('team_notes').delete().eq('id', noteId);
-      toast('success', 'Note deleted (logged in activity history)');
+      toast('success', 'Note deleted');
       fetchNotes();
     }
     setDeleteConfirmId(null);
   };
 
   const toggleComplete = async (note: TeamNote) => {
+    // Guard: Ensure profile is loaded
+    if (!profile) {
+      toast('error', 'Please wait for profile to load');
+      return;
+    }
+
     const { error } = await supabase
       .from('team_notes')
       .update({
         is_completed: !note.is_completed,
-        completed_by: !note.is_completed ? profile!.id : null,
+        completed_by: !note.is_completed ? profile.id : null,
         completed_at: !note.is_completed ? new Date().toISOString() : null,
       })
       .eq('id', note.id);

@@ -108,6 +108,12 @@ export default function NewPurchaseOrder() {
       return;
     }
 
+    // Guard: Ensure profile is loaded
+    if (!profile) {
+      toast('error', 'Please wait for profile to load');
+      return;
+    }
+
     setSaving(true);
 
     const year = new Date().getFullYear();
@@ -127,7 +133,7 @@ export default function NewPurchaseOrder() {
         expected_delivery_date: expectedDate || null,
         total_cost: totalCost,
         notes: notes || null,
-        created_by: profile!.id,
+        created_by: profile.id,
       })
       .select('id')
       .maybeSingle();

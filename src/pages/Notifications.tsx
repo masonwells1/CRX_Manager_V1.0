@@ -20,10 +20,16 @@ export default function Notifications() {
   }, [profile]);
 
   const fetchNotifications = async () => {
+    // Guard: Ensure profile is loaded
+    if (!profile) {
+      setLoading(false);
+      return;
+    }
+
     const { data } = await supabase
       .from('notifications')
       .select('*')
-      .eq('user_id', profile!.id)
+      .eq('user_id', profile.id)
       .order('created_at', { ascending: false });
     setNotifications((data || []) as NotificationType[]);
     setLoading(false);
@@ -52,10 +58,13 @@ export default function Notifications() {
   };
 
   const markAllRead = async () => {
+    // Guard: Ensure profile is loaded
+    if (!profile) return;
+
     await supabase
       .from('notifications')
       .update({ is_read: true })
-      .eq('user_id', profile!.id)
+      .eq('user_id', profile.id)
       .eq('is_read', false);
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
   };
