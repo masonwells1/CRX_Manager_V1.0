@@ -19,6 +19,7 @@ import { SkeletonCard } from '../components/ui/Skeleton';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
 
 interface DashboardData {
   totalRevenue: number;
@@ -193,6 +194,9 @@ export default function Dashboard() {
       toast('error', 'Failed to load dashboard data. Please refresh.');
     }
     setLoading(false);
+
+    // GAP FIX #17: Run automated notification checks (low stock, expiring quotes)
+    runPeriodicNotificationChecks();
   };
 
   const fmt = (n: number) =>
@@ -383,33 +387,116 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* GAP FIX #21: Monthly Revenue Chart */}
-      {!isDriver && data.monthlyRevenue.length > 1 && (
-        <Card padding={false}>
-          <div className="p-5">
-            <CardHeader title="Monthly" accent="Revenue" />
-          </div>
-          <div className="px-5 pb-5">
-            <div className="flex items-end gap-1 h-40">
-              {data.monthlyRevenue.map((m) => {
-                const maxRevenue = Math.max(...data.monthlyRevenue.map((r) => r.revenue), 1);
-                const heightPct = (m.revenue / maxRevenue) * 100;
-                const monthLabel = new Date(m.month + '-15').toLocaleString('default', { month: 'short' });
-                return (
-                  <div key={m.month} className="flex-1 flex flex-col items-center gap-1" title={`${monthLabel}: ${fmt(m.revenue)}`}>
-                    <span className="text-[10px] text-secondary">{fmt(m.revenue).replace('.00', '')}</span>
-                    <div
-                      className="w-full bg-crx-green rounded-t-md transition-all hover:bg-crx-green-dark"
-                      style={{ height: `${Math.max(heightPct, 2)}%` }}
-                    />
-                    <span className="text-[10px] text-secondary">{monthLabel}</span>
-                  </div>
-                );
-              })}
+      {/* GAP FIX #21: Monthly Revenue & Profit Chart — Interactive SVG */}
+      {!isDriver && data.monthlyRevenue.length > 1 && (() => {
+        const maxVal = Math.max(...data.monthlyRevenue.map((r) => r.revenue), 1);
+        const chartH = 200;
+        const barW = Math.min(40, (600 / data.monthlyRevenue.length) - 8);
+        const chartW = data.monthlyRevenue.length * (barW + 8) + 40;
+
+        return (
+          <Card padding={false}>
+            <div className="p-5">
+              <CardHeader title="Monthly" accent="Revenue & Profit" />
+              <div className="flex gap-4 mt-2 mb-4">
+                <span className="flex items-center gap-1.5 text-xs text-secondary">
+                  <span className="w-3 h-3 rounded bg-crx-green inline-block" /> Revenue
+                </span>
+                <span className="flex items-center gap-1.5 text-xs text-secondary">
+                  <span className="w-3 h-3 rounded bg-emerald-300 inline-block" /> Profit
+                </span>
+              </div>
             </div>
-          </div>
-        </Card>
-      )}
+            <div className="px-5 pb-5 overflow-x-auto">
+              <svg width={chartW} height={chartH + 50} className="min-w-full">
+                {/* Grid lines */}
+                {[0, 0.25, 0.5, 0.75, 1].map((pct) => (
+                  <g key={pct}>
+                    <line
+                      x1={35} y1={chartH * (1 - pct) + 10}
+                      x2={chartW} y2={chartH * (1 - pct) + 10}
+                      stroke="#f0f0f0" strokeWidth={1}
+                    />
+                    <text x={0} y={chartH * (1 - pct) + 14} fontSize={10} fill="#9ca3af">
+                      {fmt(maxVal * pct).replace('.00', '')}
+                    </text>
+                  </g>
+                ))}
+
+                {/* Bars */}
+                {data.monthlyRevenue.map((m, i) => {
+                  const x = 40 + i * (barW + 8);
+                  const revH = (m.revenue / maxVal) * chartH;
+                  const profH = (m.profit / maxVal) * chartH;
+                  const monthLabel = new Date(m.month + '-15').toLocaleString('default', { month: 'short' });
+                  const yearLabel = m.month.substring(0, 4);
+
+                  return (
+                    <g key={m.month}>
+                      {/* Revenue bar */}
+                      <rect
+                        x={x} y={chartH - revH + 10}
+                        width={barW} height={revH}
+                        rx={4} fill="#28A26A"
+                        opacity={0.85}
+                      >
+                        <title>{`${monthLabel} ${yearLabel}\nRevenue: ${fmt(m.revenue)}\nProfit: ${fmt(m.profit)}`}</title>
+                      </rect>
+                      {/* Profit overlay bar */}
+                      <rect
+                        x={x + 2} y={chartH - profH + 10}
+                        width={barW - 4} height={profH}
+                        rx={3} fill="#6ee7b7"
+                        opacity={0.7}
+                      >
+                        <title>{`${monthLabel} ${yearLabel}\nRevenue: ${fmt(m.revenue)}\nProfit: ${fmt(m.profit)}`}</title>
+                      </rect>
+                      {/* Month label */}
+                      <text
+                        x={x + barW / 2} y={chartH + 28}
+                        textAnchor="middle" fontSize={10} fill="#6b7280"
+                      >
+                        {monthLabel}
+                      </text>
+                      {/* Year label (only show on Jan or first item) */}
+                      {(i === 0 || m.month.endsWith('-01')) && (
+                        <text
+                          x={x + barW / 2} y={chartH + 42}
+                          textAnchor="middle" fontSize={9} fill="#9ca3af"
+                        >
+                          {yearLabel}
+                        </text>
+                      )}
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+
+            {/* Summary row below chart */}
+            <div className="px-5 pb-5 grid grid-cols-3 gap-4 border-t border-gray-100 pt-4">
+              <div>
+                <p className="text-xs text-secondary">Total Revenue (shown)</p>
+                <p className="text-lg font-semibold font-heading text-nav-dark">
+                  {fmt(data.monthlyRevenue.reduce((s, m) => s + m.revenue, 0))}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-secondary">Total Profit (shown)</p>
+                <p className="text-lg font-semibold font-heading text-crx-green">
+                  {fmt(data.monthlyRevenue.reduce((s, m) => s + m.profit, 0))}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-secondary">Avg Monthly Revenue</p>
+                <p className="text-lg font-semibold font-heading text-nav-dark">
+                  {fmt(data.monthlyRevenue.reduce((s, m) => s + m.revenue, 0) / data.monthlyRevenue.length)}
+                </p>
+              </div>
+            </div>
+          </Card>
+        );
+      })()}
 
       {!isDriver && data.topCustomers.length > 0 && (
         <Card padding={false}>
@@ -425,20 +512,32 @@ export default function Dashboard() {
             />
           </div>
           <div className="px-5 pb-5 space-y-2">
-            {data.topCustomers.map((c, idx) => (
-              <div
-                key={idx}
-                className="flex items-center justify-between p-3 rounded-lg hover:bg-crx-green-tint transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-xs font-semibold text-secondary">
-                    {idx + 1}
+            {data.topCustomers.map((c, idx) => {
+              const maxRevenue = data.topCustomers[0]?.total || 1;
+              const widthPct = (c.total / maxRevenue) * 100;
+              return (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between p-3 rounded-lg hover:bg-crx-green-tint transition-colors"
+                >
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className="w-7 h-7 rounded-full bg-gray-100 flex items-center justify-center text-xs font-semibold text-secondary shrink-0">
+                      {idx + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium text-nav-dark block truncate">{c.farm_name}</span>
+                      <div className="w-full bg-gray-100 rounded-full h-1.5 mt-1">
+                        <div
+                          className="bg-crx-green rounded-full h-1.5 transition-all"
+                          style={{ width: `${widthPct}%` }}
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <span className="text-sm font-medium text-nav-dark">{c.farm_name}</span>
+                  <span className="text-sm font-mono text-nav-dark ml-3 shrink-0">{fmt(c.total)}</span>
                 </div>
-                <span className="text-sm font-mono text-nav-dark">{fmt(c.total)}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
       )}

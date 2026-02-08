@@ -27,6 +27,7 @@ const NewPurchaseOrder = lazy(() => import('./pages/NewPurchaseOrder'));
 const PurchaseOrderDetail = lazy(() => import('./pages/PurchaseOrderDetail'));
 const BrandVsGeneric = lazy(() => import('./pages/BrandVsGeneric'));
 const Reports = lazy(() => import('./pages/Reports'));
+const CropPrograms = lazy(() => import('./pages/CropPrograms'));
 const TeamBoard = lazy(() => import('./pages/TeamBoard'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
@@ -86,6 +87,7 @@ export default function App() {
                 <Route path="purchase-orders/:id" element={<PurchaseOrderDetail />} />
                 <Route path="brand-vs-generic" element={<BrandVsGeneric />} />
                 <Route path="reports" element={<Reports />} />
+                <Route path="crop-programs" element={<CropPrograms />} />
                 <Route path="payments" element={<Payments />} />
                 <Route path="team-board" element={<TeamBoard />} />
                 <Route path="notifications" element={<Notifications />} />

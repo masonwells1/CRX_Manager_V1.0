@@ -7,6 +7,7 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import type { Order, OrderItem, Customer, CustomerAddress, Profile } from '../types';
 
 interface DeliveryItemDraft {
@@ -220,6 +221,13 @@ export default function NewDelivery() {
     }
 
     toast('success', `Delivery ${deliveryNumber} scheduled`);
+
+    // GAP FIX #17: Notify the assigned driver
+    if (selectedDriverId) {
+      const custName = customer?.farm_name || 'customer';
+      await notifyDriverAssigned(selectedDriverId, deliveryNumber, custName, scheduledDate, delData.id);
+    }
+
     navigate(`/deliveries/${delData.id}`);
   };
 
