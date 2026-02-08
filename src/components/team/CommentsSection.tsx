@@ -43,13 +43,6 @@ export default function CommentsSection({ noteId, noteTitle }: CommentsSectionPr
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
 
-  useEffect(() => {
-    fetchComments();
-    fetchProfiles();
-  }, [noteId]);
-
-  useRealtimeComments(noteId, fetchComments);
-
   const fetchProfiles = async () => {
     const { data } = await supabase
       .from('profiles')
@@ -69,6 +62,13 @@ export default function CommentsSection({ noteId, noteTitle }: CommentsSectionPr
     setComments((data || []) as Comment[]);
     setLoading(false);
   };
+
+  useEffect(() => {
+    fetchComments();
+    fetchProfiles();
+  }, [noteId]);
+
+  useRealtimeComments(noteId, fetchComments);
 
   const extractMentions = (text: string): string[] => {
     const mentionPattern = /@(\w+)/g;
