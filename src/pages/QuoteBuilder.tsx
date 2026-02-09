@@ -163,13 +163,20 @@ export default function QuoteBuilder() {
   };
 
   const generateQuoteNumber = async () => {
-    const year = new Date().getFullYear();
-    const { count } = await supabase
-      .from('quotes')
-      .select('*', { count: 'exact', head: true })
-      .like('quote_number', `Q-${year}-%`);
-    const next = (count || 0) + 1;
-    setQuoteNumber(`Q-${year}-${String(next).padStart(4, '0')}`);
+    // Use server-side sequence to prevent race conditions
+    const { data, error } = await supabase.rpc('generate_quote_number');
+    if (error || !data) {
+      // Fallback for backward compatibility
+      const year = new Date().getFullYear();
+      const { count } = await supabase
+        .from('quotes')
+        .select('*', { count: 'exact', head: true })
+        .like('quote_number', `Q-${year}-%`);
+      const next = (count || 0) + 1;
+      setQuoteNumber(`Q-${year}-${String(next).padStart(4, '0')}`);
+    } else {
+      setQuoteNumber(data as string);
+    }
   };
 
   const fetchQuote = async (quoteId: string) => {
@@ -672,152 +679,29 @@ export default function QuoteBuilder() {
     setConverting(true);
     setConfirmConvertOpen(false);
 
+    // Save the quote first (sets status to 'accepted')
     const savedId = await saveQuote('accepted');
     if (!savedId) {
       setConverting(false);
       return;
     }
 
-    const year = new Date().getFullYear();
-    const { count } = await supabase
-      .from('orders')
-      .select('*', { count: 'exact', head: true })
-      .like('order_number', `ORD-${year}-%`);
-    const orderNum = `ORD-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+    try {
+      // Atomic RPC: order creation + items + inventory prebooking + commissions
+      const { data, error } = await supabase.rpc('convert_quote_to_order', {
+        p_quote_id: savedId,
+        p_performed_by: profile!.id,
+      });
 
-    const { data: orderData, error: orderError } = await supabase
-      .from('orders')
-      .insert([
-        {
-          order_number: orderNum,
-          quote_id: savedId,
-          customer_id: customerId,
-          status: 'confirmed',
-          commission_split: commissionSplit,
-          total_price: totals.totalPrice,
-          total_cost: totals.totalCost,
-          total_profit: totals.totalProfit,
-          total_margin_pct: totals.totalMarginPct,
-          order_date: new Date().toISOString().split('T')[0],
-        },
-      ])
-      .select()
-      .maybeSingle();
+      if (error) throw error;
 
-    if (orderError || !orderData) {
-      toast('error', orderError?.message || 'Failed to create order');
-      setConverting(false);
-      return;
+      const result = data as { status: string; order_id?: string; order_number?: string };
+      toast('success', `Order ${result.order_number || ''} created`);
+      navigate(`/orders/${result.order_id}`);
+    } catch (error: any) {
+      console.error('Error converting to order:', error);
+      toast('error', error.message || 'Failed to create order');
     }
-
-    const orderItems = sections.flatMap((sec) =>
-      sec.items
-        .filter((item) => item.product_id)
-        .map((item) => {
-          const prod = item.product || products.find((p) => p.id === item.product_id);
-          return {
-            order_id: orderData.id,
-            product_id: item.product_id,
-            quote_item_id: item.id || null,
-            section_name: sec.section_name,
-            product_name: prod?.product_name || '',
-            price_per_unit: item.price_per_unit,
-            cost_per_unit: item.current_cost,
-            actual_rate: item.actual_rate,
-            rate_unit: item.rate_unit,
-            acres: item.acres,
-            total_units_needed: item.total_units_needed || 0,
-            unit_size: item.unit_size,
-            total_price: item.total_price,
-            profit: item.profit,
-            net_margin: item.net_margin,
-            quantity_delivered: 0,
-            quantity_remaining: item.total_units_needed || 0,
-          };
-        })
-    );
-
-    if (orderItems.length > 0) {
-      await supabase.from('order_items').insert(orderItems);
-    }
-
-    // === Pre-book inventory for each order item (with upsert) ===
-    for (const item of orderItems) {
-      if (!item.product_id || !item.total_units_needed) continue;
-
-      const { data: inv } = await supabase
-        .from('inventory')
-        .select('id, quantity_prebooked')
-        .eq('product_id', item.product_id)
-        .eq('location', 'Main Warehouse')
-        .maybeSingle();
-
-      if (inv) {
-        await supabase
-          .from('inventory')
-          .update({
-            quantity_prebooked: (Number(inv.quantity_prebooked) || 0) + Number(item.total_units_needed),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', inv.id);
-      } else {
-        await supabase.from('inventory').insert({
-          product_id: item.product_id,
-          location: 'Main Warehouse',
-          quantity_available: 0,
-          quantity_prebooked: Number(item.total_units_needed),
-          quantity_on_order: 0,
-          unit_size: item.unit_size || null,
-        });
-      }
-
-      if (profile) {
-        await supabase.from('inventory_transactions').insert({
-          product_id: item.product_id,
-          transaction_type: 'booked',
-          quantity: Number(item.total_units_needed),
-          to_location: 'Main Warehouse',
-          order_id: orderData.id,
-          performed_by: profile.id,
-          notes: `Pre-booked for order ${orderNum}`,
-        });
-      }
-    }
-
-    // Create commission records from the commission split
-    if (commissionSplit.splits && commissionSplit.splits.length > 0) {
-      const commissionRecords = commissionSplit.splits
-        .filter((s) => s.recipient && s.percentage > 0)
-        .map((s) => ({
-          order_id: orderData.id,
-          customer_id: customerId,
-          recipient: s.recipient,
-          split_percentage: s.percentage,
-          commission_amount: totals.totalProfit * (s.percentage / 100),
-          order_profit: totals.totalProfit,
-          order_date: new Date().toISOString().split('T')[0],
-          status: 'pending' as const,
-        }));
-
-      if (commissionRecords.length > 0) {
-        await supabase.from('commissions').insert(commissionRecords);
-      }
-    }
-
-    // === GAP FIX #5: Log activity for order creation ===
-    if (profile) {
-      await logActivity(
-        'order_created',
-        `Order ${orderNum} created from quote ${quoteNumber} for ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
-        profile.id,
-        'order',
-        orderData.id,
-        customerId
-      );
-    }
-
-    toast('success', `Order ${orderNum} created`);
-    navigate(`/orders/${orderData.id}`);
     setConverting(false);
   };
 

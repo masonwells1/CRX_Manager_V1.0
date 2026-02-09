@@ -14,6 +14,15 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // T1-005: Block in production — this function is for dev/staging only
+    const env = Deno.env.get("ENVIRONMENT") || Deno.env.get("DENO_ENV") || "";
+    if (env === "production") {
+      return new Response(JSON.stringify({ error: "This function is disabled in production" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     // Require a secret header to prevent unauthorized access
     const expected = Deno.env.get("SEED_ADMIN_SECRET");
     const provided = req.headers.get("x-seed-secret");

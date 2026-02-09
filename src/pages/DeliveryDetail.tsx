@@ -7,7 +7,6 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import { logActivity } from '../lib/activityLogger';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import type { Delivery, DeliveryItem, Customer, CustomerAddress, Profile } from '../types';
 
@@ -70,118 +69,20 @@ export default function DeliveryDetail() {
     setCompleting(true);
 
     try {
-      // Step 1: Mark the delivery itself as completed
-      const { error: delError } = await supabase
-        .from('deliveries')
-        .update({
-          status: 'completed',
-          completed_at: new Date().toISOString(),
-          signed_by: signedBy,
-        })
-        .eq('id', id!);
+      // Atomic RPC: delivery status + order_items + inventory + audit trail in one transaction
+      const { error } = await supabase.rpc('complete_delivery', {
+        p_delivery_id: id!,
+        p_signed_by: signedBy,
+        p_performed_by: profile.id,
+      });
 
-      if (delError) throw delError;
-
-      // Step 2: For each item in this delivery, update the matching order_item
-      // and reduce inventory
-      for (const item of items) {
-        // 2a: Get the current order_item so we can update its delivered/remaining counts
-        const { data: orderItem } = await supabase
-          .from('order_items')
-          .select('quantity_delivered, quantity_remaining')
-          .eq('id', item.order_item_id)
-          .maybeSingle();
-
-        if (orderItem) {
-          const newDelivered = (Number(orderItem.quantity_delivered) || 0) + Number(item.quantity);
-          const newRemaining = (Number(orderItem.quantity_remaining) || 0) - Number(item.quantity);
-
-          await supabase
-            .from('order_items')
-            .update({
-              quantity_delivered: newDelivered,
-              quantity_remaining: newRemaining,
-            })
-            .eq('id', item.order_item_id);
-        }
-
-        // 2b: Create an inventory_transaction record (audit trail)
-        await supabase.from('inventory_transactions').insert({
-          product_id: item.product_id,
-          transaction_type: 'delivered',
-          quantity: Number(item.quantity),
-          to_location: null,
-          from_location: 'Main Warehouse',
-          order_id: delivery.order_id,
-          delivery_id: delivery.id,
-          performed_by: profile.id,
-          notes: `Delivery ${delivery.delivery_number} completed. Signed by: ${signedBy}`,
-        });
-
-        // 2c: Reduce available inventory and prebooked for this product
-        const { data: inv } = await supabase
-          .from('inventory')
-          .select('id, quantity_available, quantity_prebooked')
-          .eq('product_id', item.product_id)
-          .eq('location', 'Main Warehouse')
-          .maybeSingle();
-
-        if (inv) {
-          await supabase
-            .from('inventory')
-            .update({
-              quantity_available: (Number(inv.quantity_available) || 0) - Number(item.quantity),
-              quantity_prebooked: (Number(inv.quantity_prebooked) || 0) - Number(item.quantity),
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', inv.id);
-        } else {
-          await supabase.from('inventory').insert({
-            product_id: item.product_id,
-            location: 'Main Warehouse',
-            quantity_available: -Number(item.quantity),
-            quantity_prebooked: 0,
-            quantity_on_order: 0,
-          });
-        }
-      }
-
-      // Step 3: Check if the entire order is now fully delivered
-      const { data: allOrderItems } = await supabase
-        .from('order_items')
-        .select('quantity_remaining')
-        .eq('order_id', delivery.order_id);
-
-      if (allOrderItems) {
-        const allFullyDelivered = allOrderItems.every(
-          (oi: any) => Number(oi.quantity_remaining) <= 0
-        );
-
-        await supabase
-          .from('orders')
-          .update({
-            status: allFullyDelivered ? 'fulfilled' : 'partially_fulfilled',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', delivery.order_id);
-      }
+      if (error) throw error;
 
       toast('success', 'Delivery completed');
-      // === GAP FIX #5: Log activity for delivery completion ===
-      if (profile) {
-        await logActivity(
-          'delivery_completed',
-          `Delivery ${delivery.delivery_number} completed for ${customer?.farm_name || 'customer'}. Signed by: ${signedBy}`,
-          profile.id,
-          'delivery',
-          delivery.id,
-          delivery.customer_id
-        );
-      }
       fetchDelivery();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error completing delivery:', error);
-      toast('error', 'Failed to complete delivery');
+      toast('error', error.message || 'Failed to complete delivery');
     }
     setCompleting(false);
   };

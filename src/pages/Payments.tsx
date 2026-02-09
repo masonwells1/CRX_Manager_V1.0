@@ -16,7 +16,6 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import { logActivity } from '../lib/activityLogger';
 import { exportToCSV } from '../lib/csvExport';
 
 interface OrderWithBalance {
@@ -110,62 +109,35 @@ export default function Payments() {
       toast('error', 'Select an order and enter a valid amount');
       return;
     }
+    if (!profile) return;
     setSaving(true);
 
-    const amount = Number(payAmount);
+    try {
+      // Atomic RPC: payment + order balance update in one transaction
+      const { error } = await supabase.rpc('record_payment', {
+        p_order_id: payOrderId,
+        p_amount: Number(payAmount),
+        p_payment_method: payMethod,
+        p_reference_number: payRef || null,
+        p_notes: payNotes || null,
+        p_recorded_by: profile.id,
+      });
 
-    // Insert payment record
-    const { error } = await supabase.from('payments').insert({
-      order_id: payOrderId,
-      amount,
-      payment_method: payMethod,
-      payment_date: new Date().toISOString().split('T')[0],
-      reference_number: payRef || null,
-      notes: payNotes || null,
-      recorded_by: profile?.id || null,
-    });
+      if (error) throw error;
 
-    if (error) {
-      toast('error', error.message);
-      setSaving(false);
-      return;
+      toast('success', `Payment of ${fmt(Number(payAmount))} recorded`);
+      setPayOpen(false);
+      setPayOrderId('');
+      setPayAmount('');
+      setPayRef('');
+      setPayNotes('');
+      setPayMethod('check');
+      fetchData();
+    } catch (error: any) {
+      console.error('Error recording payment:', error);
+      toast('error', error.message || 'Failed to record payment');
     }
-
-    // Update order totals
-    const order = arData.find((o) => o.id === payOrderId);
-    if (order) {
-      const newPaid = order.total_paid + amount;
-      const newBalance = order.total_price - newPaid;
-      await supabase
-        .from('orders')
-        .update({
-          total_paid: newPaid,
-          balance_due: Math.max(0, newBalance),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', payOrderId);
-
-      if (profile) {
-        await logActivity(
-          'payment_received',
-          `Payment of ${fmt(amount)} recorded on ${order.order_number} for ${order.farm_name}. Balance: ${fmt(Math.max(0, newBalance))}`,
-          profile.id,
-          'order',
-          payOrderId,
-          order.customer_id
-        );
-      }
-    }
-
-    toast('success', `Payment of ${fmt(amount)} recorded`);
-    setPayOpen(false);
-    setPayOrderId('');
-    setPayAmount('');
-    setPayRef('');
-    setPayNotes('');
-    setPayMethod('check');
     setSaving(false);
-    fetchData();
   };
 
   const fmt = (n: number) =>

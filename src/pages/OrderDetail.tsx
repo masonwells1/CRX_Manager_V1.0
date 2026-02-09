@@ -14,7 +14,6 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import { logActivity } from '../lib/activityLogger';
 import type { Order, OrderItem, Customer } from '../types';
 
 export default function OrderDetail() {
@@ -71,157 +70,62 @@ export default function OrderDetail() {
   };
 
   const handleSaveEdits = async () => {
+    if (!profile) return;
     setSaving(true);
 
-    // Update each item and adjust prebooked inventory for quantity changes
-    for (const item of editItems) {
-      const originalItem = items.find((i) => i.id === item.id);
-      const originalQty = originalItem ? Number(originalItem.total_units_needed) : 0;
-      const newQty = Number(item.total_units_needed);
-      const qtyDelta = newQty - originalQty;
+    try {
+      // Atomic RPC: item updates + inventory adjustments + order total recalculation
+      const itemsPayload = editItems.map((item) => ({
+        id: item.id,
+        price_per_unit: item.price_per_unit,
+        total_units_needed: item.total_units_needed,
+      }));
 
-      await supabase
-        .from('order_items')
-        .update({
-          price_per_unit: item.price_per_unit,
-          total_units_needed: item.total_units_needed,
-          total_price: item.price_per_unit * item.total_units_needed,
-          quantity_remaining: item.total_units_needed - item.quantity_delivered,
-        })
-        .eq('id', item.id);
+      const { error } = await supabase.rpc('update_order_items', {
+        p_order_id: id!,
+        p_items: itemsPayload,
+        p_performed_by: profile.id,
+      });
 
-      if (qtyDelta !== 0 && item.product_id) {
-        const { data: inv } = await supabase
-          .from('inventory')
-          .select('id, quantity_prebooked')
-          .eq('product_id', item.product_id)
-          .eq('location', 'Main Warehouse')
-          .maybeSingle();
+      if (error) throw error;
 
-        if (inv) {
-          await supabase
-            .from('inventory')
-            .update({
-              quantity_prebooked: (Number(inv.quantity_prebooked) || 0) + qtyDelta,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', inv.id);
-        }
-
-        if (profile) {
-          await supabase.from('inventory_transactions').insert({
-            product_id: item.product_id,
-            transaction_type: 'adjusted',
-            quantity: qtyDelta,
-            to_location: 'Main Warehouse',
-            order_id: id,
-            performed_by: profile.id,
-            notes: `Order ${order?.order_number} edited: quantity changed from ${originalQty} to ${newQty}`,
-          });
-        }
-      }
+      toast('success', 'Order updated');
+      setEditing(false);
+      fetchOrder();
+    } catch (error: any) {
+      console.error('Error saving edits:', error);
+      toast('error', error.message || 'Failed to save edits');
     }
-
-    // Recalculate order totals
-    const totalPrice = editItems.reduce((s, i) => s + i.price_per_unit * i.total_units_needed, 0);
-    const totalCost = editItems.reduce((s, i) => s + (i.current_cost || 0) * i.total_units_needed, 0);
-    const totalProfit = totalPrice - totalCost;
-    const marginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
-
-    await supabase
-      .from('orders')
-      .update({
-        total_price: totalPrice,
-        total_cost: totalCost,
-        total_profit: totalProfit,
-        total_margin_pct: marginPct,
-        balance_due: totalPrice - (order?.total_paid || 0),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id!);
-
-    if (profile) {
-      await logActivity(
-        'order_updated',
-        `Order ${order?.order_number} edited. New total: ${fmt(totalPrice)}`,
-        profile.id,
-        'order',
-        id,
-        order?.customer_id
-      );
-    }
-
-    toast('success', 'Order updated');
-    setEditing(false);
     setSaving(false);
-    fetchOrder();
   };
 
   const handleStatusChange = async () => {
-    if (!newStatus || !order) return;
+    if (!newStatus || !order || !profile) return;
 
-    await supabase
-      .from('orders')
-      .update({ status: newStatus, updated_at: new Date().toISOString() })
-      .eq('id', id!);
-
-    if (newStatus === 'cancelled' && order.status !== 'cancelled') {
-      const { data: orderItems } = await supabase
-        .from('order_items')
-        .select('product_id, total_units_needed, quantity_delivered')
-        .eq('order_id', id!);
-
-      if (orderItems) {
-        for (const item of orderItems) {
-          const undeliveredQty = Number(item.total_units_needed) - Number(item.quantity_delivered || 0);
-          if (undeliveredQty <= 0) continue;
-
-          const { data: inv } = await supabase
-            .from('inventory')
-            .select('id, quantity_prebooked')
-            .eq('product_id', item.product_id)
-            .eq('location', 'Main Warehouse')
-            .maybeSingle();
-
-          if (inv) {
-            await supabase
-              .from('inventory')
-              .update({
-                quantity_prebooked: (Number(inv.quantity_prebooked) || 0) - undeliveredQty,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', inv.id);
-          }
-
-          if (profile) {
-            await supabase.from('inventory_transactions').insert({
-              product_id: item.product_id,
-              transaction_type: 'adjusted',
-              quantity: -undeliveredQty,
-              to_location: 'Main Warehouse',
-              order_id: id,
-              performed_by: profile.id,
-              notes: `Released ${undeliveredQty} units — order ${order.order_number} cancelled`,
-            });
-          }
-        }
+    try {
+      if (newStatus === 'cancelled' && order.status !== 'cancelled') {
+        // Atomic RPC: cancellation + inventory release
+        const { error } = await supabase.rpc('cancel_order', {
+          p_order_id: id!,
+          p_performed_by: profile.id,
+        });
+        if (error) throw error;
+      } else {
+        // Simple status change (no inventory impact)
+        const { error } = await supabase
+          .from('orders')
+          .update({ status: newStatus, updated_at: new Date().toISOString() })
+          .eq('id', id!);
+        if (error) throw error;
       }
-    }
 
-    if (profile) {
-      await logActivity(
-        'order_status_changed',
-        `Order ${order.order_number} status changed to ${newStatus.replace('_', ' ')}`,
-        profile.id,
-        'order',
-        id,
-        order.customer_id
-      );
+      toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
+      setStatusModalOpen(false);
+      fetchOrder();
+    } catch (error: any) {
+      console.error('Error changing status:', error);
+      toast('error', error.message || 'Failed to change status');
     }
-
-    toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
-    setStatusModalOpen(false);
-    fetchOrder();
   };
 
   const handleDeleteItem = async (itemId: string) => {

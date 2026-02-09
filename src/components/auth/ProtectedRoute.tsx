@@ -23,6 +23,11 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
     return <Navigate to="/login" replace />;
   }
 
+  // T1-004: Deactivated users must be blocked even with valid JWT
+  if (profile && !profile.is_active) {
+    return <Navigate to="/login" replace />;
+  }
+
   if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
     return <Navigate to="/" replace />;
   }
