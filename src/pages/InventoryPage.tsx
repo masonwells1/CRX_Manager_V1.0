@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, X, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -386,6 +386,28 @@ export default function InventoryPage() {
     }
   };
 
+  const handleDelete = async (inventoryId: string) => {
+    if (!confirm('Are you sure you want to delete this inventory item? This action cannot be undone.')) {
+      return;
+    }
+
+    const target = inventory.find((i) => i.id === inventoryId);
+    if (!target) return;
+
+    const { error } = await supabase
+      .from('inventory')
+      .delete()
+      .eq('id', inventoryId);
+
+    if (error) {
+      console.error('Failed to delete inventory:', error);
+      toast('error', 'Failed to delete inventory item');
+    } else {
+      toast('success', 'Inventory item deleted');
+      fetchInventory();
+    }
+  };
+
   const filtered = inventory.filter((i) => {
     if (locationFilter && i.location !== locationFilter) return false;
     return true;
@@ -477,6 +499,13 @@ export default function InventoryPage() {
                   title="Manual Adjustment"
                 >
                   <Pencil className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDelete(row.id); }}
+                  className="p-1.5 rounded hover:bg-red-50 text-red-600"
+                  title="Delete Inventory Item"
+                >
+                  <Trash2 className="w-4 h-4" />
                 </button>
               </div>
             ),
