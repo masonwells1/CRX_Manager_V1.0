@@ -1,56 +1,81 @@
 import { useEffect, useState } from 'react';
-import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle } from 'lucide-react';
+import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, X, ChevronDown, ChevronUp } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Modal from '../components/ui/Modal';
 import Input from '../components/ui/Input';
+import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import type { Inventory, Product } from '../types';
+import type { Inventory, Product, InventoryHold, Customer, Profile, QuoteItem } from '../types';
 
 interface InventoryRow extends Inventory {
   product_name: string;
   total_on_floor: number;
-  net_position: number;
+  planned_qty: number;
+  free_qty: number;
+  delivered_ytd: number;
   reorder_point: number;
   min_stock_level: number;
   is_low_stock: boolean;
+}
+
+interface HoldWithRelations extends InventoryHold {
+  product_name: string;
+  customer_name: string | null;
+  creator_name: string;
 }
 
 export default function InventoryPage() {
   const { role, profile } = useAuth();
   const { toast } = useToast();
   const [inventory, setInventory] = useState<InventoryRow[]>([]);
+  const [holds, setHolds] = useState<HoldWithRelations[]>([]);
   const [loading, setLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState('');
   const [locations, setLocations] = useState<string[]>([]);
+
+  // Existing modals
   const [receiveOpen, setReceiveOpen] = useState(false);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+
+  // New hold modal
+  const [holdOpen, setHoldOpen] = useState(false);
+  const [holdProductId, setHoldProductId] = useState('');
+  const [holdQty, setHoldQty] = useState('');
+  const [holdCustomerId, setHoldCustomerId] = useState('');
+  const [holdNotes, setHoldNotes] = useState('');
+  const [holdExpires, setHoldExpires] = useState('');
+  const [holdWarning, setHoldWarning] = useState('');
+
   const [selectedId, setSelectedId] = useState('');
   const [receiveQty, setReceiveQty] = useState('');
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustNote, setAdjustNote] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [addProductId, setAddProductId] = useState('');
   const [addLocation, setAddLocation] = useState('Main Warehouse');
   const [addQty, setAddQty] = useState('');
   const [addUnitSize, setAddUnitSize] = useState('');
   const [adding, setAdding] = useState(false);
   const [productSearch, setProductSearch] = useState('');
+  const [holdsExpanded, setHoldsExpanded] = useState(true);
 
   const isAdmin = role === 'admin';
 
   useEffect(() => {
     fetchInventory();
+    fetchHolds();
   }, []);
 
   const fetchInventory = async () => {
     const { data, error } = await supabase
       .from('inventory')
-      .select('*, product:products(product_name)')
+      .select('*, product:products(product_name, reorder_point, min_stock_level)')
       .order('product_id');
 
     if (error) {
@@ -60,15 +85,64 @@ export default function InventoryPage() {
       return;
     }
 
-    const rows = ((data || []) as Array<Inventory & { product: { product_name: string } | null }>).map((item) => {
+    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string; reorder_point: number; min_stock_level: number } | null }>;
+
+    // Fetch planned quantities from holds
+    const { data: holdsData } = await supabase
+      .from('inventory_holds')
+      .select('product_id, quantity')
+      .eq('is_active', true)
+      .or(`expires_at.is.null,expires_at.gte.${new Date().toISOString().split('T')[0]}`);
+
+    const holdsByProduct = (holdsData || []).reduce((acc, h) => {
+      acc[h.product_id] = (acc[h.product_id] || 0) + Number(h.quantity);
+      return acc;
+    }, {} as Record<string, number>);
+
+    // Fetch planned quantities from planned quotes
+    const { data: quoteItemsData } = await supabase
+      .from('quote_items')
+      .select('product_id, total_units_needed, quote:quotes!inner(is_planned, status)')
+      .eq('quote.is_planned', true)
+      .in('quote.status', ['draft', 'sent', 'revised']);
+
+    const plannedByProduct = (quoteItemsData || []).reduce((acc, qi) => {
+      acc[qi.product_id] = (acc[qi.product_id] || 0) + Number(qi.total_units_needed || 0);
+      return acc;
+    }, {} as Record<string, number>);
+
+    // Fetch delivered YTD (current crop season: July 1 - June 30)
+    const now = new Date();
+    const seasonStart = now.getMonth() >= 6
+      ? new Date(now.getFullYear(), 6, 1)
+      : new Date(now.getFullYear() - 1, 6, 1);
+
+    const { data: deliveredData } = await supabase
+      .from('inventory_transactions')
+      .select('product_id, quantity')
+      .eq('transaction_type', 'delivered')
+      .gte('created_at', seasonStart.toISOString());
+
+    const deliveredByProduct = (deliveredData || []).reduce((acc, t) => {
+      acc[t.product_id] = (acc[t.product_id] || 0) + Number(t.quantity);
+      return acc;
+    }, {} as Record<string, number>);
+
+    const rows = rawRows.map((item) => {
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
-      const reorderPoint = Number((item as any).reorder_point) || 0;
-      const minStockLevel = Number((item as any).min_stock_level) || 0;
+      const plannedQty = (holdsByProduct[item.product_id] || 0) + (plannedByProduct[item.product_id] || 0);
+      const freeQty = item.quantity_available - plannedQty;
+      const deliveredYtd = deliveredByProduct[item.product_id] || 0;
+      const reorderPoint = item.product?.reorder_point || 0;
+      const minStockLevel = item.product?.min_stock_level || 0;
+
       return {
         ...item,
         product_name: item.product?.product_name || 'Unknown',
         total_on_floor: totalOnFloor,
-        net_position: item.quantity_available - item.quantity_prebooked,
+        planned_qty: plannedQty,
+        free_qty: freeQty,
+        delivered_ytd: deliveredYtd,
         reorder_point: reorderPoint,
         min_stock_level: minStockLevel,
         is_low_stock: reorderPoint > 0 && item.quantity_available <= reorderPoint,
@@ -79,6 +153,34 @@ export default function InventoryPage() {
     setLocations(locs.sort());
     setInventory(rows);
     setLoading(false);
+  };
+
+  const fetchHolds = async () => {
+    const { data, error } = await supabase
+      .from('inventory_holds')
+      .select(`
+        *,
+        product:products(product_name),
+        customer:customers(farm_name),
+        creator:profiles!inventory_holds_created_by_fkey(full_name)
+      `)
+      .eq('is_active', true)
+      .or(`expires_at.is.null,expires_at.gte.${new Date().toISOString().split('T')[0]}`)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Failed to load holds:', error.message);
+      return;
+    }
+
+    const holdRows = (data || []).map((h: any) => ({
+      ...h,
+      product_name: h.product?.product_name || 'Unknown',
+      customer_name: h.customer?.farm_name || null,
+      creator_name: h.creator?.full_name || 'Unknown',
+    })) as HoldWithRelations[];
+
+    setHolds(holdRows);
   };
 
   const fetchProducts = async () => {
@@ -95,6 +197,19 @@ export default function InventoryPage() {
     setProducts((data || []) as Product[]);
   };
 
+  const fetchCustomers = async () => {
+    const { data, error } = await supabase
+      .from('customers')
+      .select('id, farm_name')
+      .eq('is_active', true)
+      .order('farm_name');
+    if (error) {
+      console.error('Failed to load customers:', error.message);
+      return;
+    }
+    setCustomers((data || []) as Customer[]);
+  };
+
   const openAddModal = () => {
     fetchProducts();
     setAddProductId('');
@@ -103,6 +218,76 @@ export default function InventoryPage() {
     setAddUnitSize('');
     setProductSearch('');
     setAddOpen(true);
+  };
+
+  const openHoldModal = () => {
+    fetchProducts();
+    fetchCustomers();
+    setHoldProductId('');
+    setHoldQty('');
+    setHoldCustomerId('');
+    setHoldNotes('');
+    setHoldExpires('');
+    setHoldWarning('');
+    setProductSearch('');
+    setHoldOpen(true);
+  };
+
+  const handleCreateHold = async () => {
+    if (!holdProductId) {
+      toast('error', 'Please select a product');
+      return;
+    }
+    const qty = parseFloat(holdQty);
+    if (!qty || qty <= 0) {
+      toast('error', 'Please enter a valid quantity');
+      return;
+    }
+    if (!profile) return;
+
+    // Check if this would make Free negative
+    const invItem = inventory.find(i => i.product_id === holdProductId);
+    if (invItem) {
+      const newFree = invItem.free_qty - qty;
+      if (newFree < 0) {
+        setHoldWarning(`Warning: This hold will make Free inventory negative (${newFree.toFixed(1)}). Only ${invItem.free_qty.toFixed(1)} units available.`);
+        return;
+      }
+    }
+
+    const { error } = await supabase.from('inventory_holds').insert({
+      product_id: holdProductId,
+      customer_id: holdCustomerId || null,
+      quantity: qty,
+      hold_type: 'manual',
+      notes: holdNotes || null,
+      created_by: profile.id,
+      expires_at: holdExpires || null,
+    });
+
+    if (error) {
+      toast('error', error.message || 'Failed to create hold');
+    } else {
+      toast('success', 'Hold created successfully');
+      setHoldOpen(false);
+      fetchInventory();
+      fetchHolds();
+    }
+  };
+
+  const handleReleaseHold = async (holdId: string) => {
+    const { error } = await supabase
+      .from('inventory_holds')
+      .update({ is_active: false })
+      .eq('id', holdId);
+
+    if (error) {
+      toast('error', 'Failed to release hold');
+    } else {
+      toast('success', 'Hold released');
+      fetchInventory();
+      fetchHolds();
+    }
   };
 
   const handleAdd = async () => {
@@ -140,16 +325,6 @@ export default function InventoryPage() {
     setAdding(false);
   };
 
-  const filtered = inventory.filter((i) => {
-    if (locationFilter && i.location !== locationFilter) return false;
-    return true;
-  });
-
-  const totalAvailable = inventory.reduce((s, i) => s + i.quantity_available, 0);
-  const totalPrebooked = inventory.reduce((s, i) => s + i.quantity_prebooked, 0);
-  const totalOnOrder = inventory.reduce((s, i) => s + i.quantity_on_order, 0);
-  const totalOnFloor = totalAvailable + totalPrebooked;
-
   const handleReceive = async () => {
     const qty = parseInt(receiveQty);
     if (!qty || qty <= 0) return;
@@ -165,7 +340,6 @@ export default function InventoryPage() {
     if (error) {
       toast('error', 'Failed to receive shipment');
     } else {
-      // Create audit trail record
       await supabase.from('inventory_transactions').insert({
         product_id: target.product_id,
         transaction_type: 'received',
@@ -196,7 +370,6 @@ export default function InventoryPage() {
     if (error) {
       toast('error', 'Failed to adjust inventory');
     } else {
-      // Create audit trail record (includes the reason/note the user typed)
       await supabase.from('inventory_transactions').insert({
         product_id: target.product_id,
         transaction_type: 'adjusted',
@@ -213,7 +386,19 @@ export default function InventoryPage() {
     }
   };
 
-  const netColor = (n: number) => {
+  const filtered = inventory.filter((i) => {
+    if (locationFilter && i.location !== locationFilter) return false;
+    return true;
+  });
+
+  const totalOnOrder = inventory.reduce((s, i) => s + i.quantity_on_order, 0);
+  const totalOnFloor = inventory.reduce((s, i) => s + i.total_on_floor, 0);
+  const totalFree = inventory.reduce((s, i) => s + i.free_qty, 0);
+  const totalPlanned = inventory.reduce((s, i) => s + i.planned_qty, 0);
+  const totalCommitted = inventory.reduce((s, i) => s + i.quantity_prebooked, 0);
+  const totalDeliveredYTD = inventory.reduce((s, i) => s + i.delivered_ytd, 0);
+
+  const freeColor = (n: number) => {
     if (n > 10) return 'text-emerald-600';
     if (n > 0) return 'text-amber-600';
     return 'text-red-600';
@@ -235,18 +420,47 @@ export default function InventoryPage() {
         </div>
       ),
     },
-    { key: 'quantity_available', header: 'Available', sortable: true },
-    { key: 'quantity_prebooked', header: 'Pre-booked', sortable: true },
-    { key: 'quantity_on_order', header: 'On Order', sortable: true },
-    { key: 'total_on_floor', header: 'Total on Floor', sortable: true },
     {
-      key: 'net_position',
-      header: 'Net Position',
+      key: 'quantity_on_order',
+      header: 'On Order',
       sortable: true,
       render: (row) => (
-        <span className={`font-semibold ${netColor(row.net_position)}`}>
-          {row.net_position}
+        <span className="text-teal-600 font-medium">{row.quantity_on_order}</span>
+      ),
+    },
+    { key: 'total_on_floor', header: 'Total on Floor', sortable: true },
+    {
+      key: 'free_qty',
+      header: 'Free',
+      sortable: true,
+      render: (row) => (
+        <span className={`font-semibold ${freeColor(row.free_qty)}`}>
+          {row.free_qty.toFixed(1)}
         </span>
+      ),
+    },
+    {
+      key: 'planned_qty',
+      header: 'Planned',
+      sortable: true,
+      render: (row) => (
+        <span className="text-amber-600 font-medium">{row.planned_qty.toFixed(1)}</span>
+      ),
+    },
+    {
+      key: 'quantity_prebooked',
+      header: 'Committed',
+      sortable: true,
+      render: (row) => (
+        <span className="text-orange-600 font-medium">{row.quantity_prebooked}</span>
+      ),
+    },
+    {
+      key: 'delivered_ytd',
+      header: 'Delivered YTD',
+      sortable: true,
+      render: (row) => (
+        <span className="text-gray-500">{row.delivered_ytd.toFixed(1)}</span>
       ),
     },
     { key: 'location', header: 'Location', sortable: true },
@@ -279,10 +493,12 @@ export default function InventoryPage() {
   ];
 
   const summaryCards = [
-    { label: 'Total on Floor', value: totalOnFloor, color: 'bg-blue-50 text-blue-600' },
-    { label: 'Available', value: totalAvailable, color: 'bg-emerald-50 text-emerald-600' },
-    { label: 'Pre-booked', value: totalPrebooked, color: 'bg-amber-50 text-amber-600' },
-    { label: 'On Order', value: totalOnOrder, color: 'bg-teal-50 text-teal-600' },
+    { label: 'On Order', value: totalOnOrder, color: 'bg-teal-50 text-teal-600', icon: Package },
+    { label: 'Total on Floor', value: totalOnFloor, color: 'bg-blue-50 text-blue-600', icon: Package },
+    { label: 'Free', value: totalFree, color: 'bg-emerald-50 text-emerald-600', icon: Package },
+    { label: 'Planned', value: totalPlanned, color: 'bg-amber-50 text-amber-600', icon: Package },
+    { label: 'Committed', value: totalCommitted, color: 'bg-orange-50 text-orange-600', icon: Package },
+    { label: 'Delivered YTD', value: totalDeliveredYTD, color: 'bg-gray-50 text-gray-600', icon: Package },
   ];
 
   const filteredProducts = products.filter((p) =>
@@ -292,14 +508,16 @@ export default function InventoryPage() {
   return (
     <div className="space-y-4">
       {isAdmin && (
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Button icon={<Plus className="w-4 h-4" />} onClick={openHoldModal} variant="secondary">
+            Create Hold
+          </Button>
           <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
             Add Inventory
           </Button>
         </div>
       )}
 
-      {/* GAP FIX #10: Low stock alerts banner */}
       {inventory.filter((i) => i.is_low_stock).length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
@@ -320,15 +538,15 @@ export default function InventoryPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {summaryCards.map((c) => (
           <Card key={c.label}>
             <div className={`w-10 h-10 rounded-lg ${c.color} flex items-center justify-center mb-3`}>
-              <Package className="w-5 h-5" />
+              <c.icon className="w-5 h-5" />
             </div>
             <p className="text-xs text-secondary">{c.label}</p>
             <p className="text-2xl font-semibold font-heading text-nav-dark">
-              {c.value.toLocaleString()}
+              {c.value.toLocaleString(undefined, { maximumFractionDigits: 1 })}
             </p>
           </Card>
         ))}
@@ -361,6 +579,162 @@ export default function InventoryPage() {
         </div>
       </Card>
 
+      {/* Active Holds Panel */}
+      {holds.length > 0 && (
+        <Card>
+          <button
+            onClick={() => setHoldsExpanded(!holdsExpanded)}
+            className="w-full flex items-center justify-between text-left"
+          >
+            <h3 className="text-lg font-semibold text-nav-dark">
+              Active Holds ({holds.length} {holds.length === 1 ? 'hold' : 'holds'})
+            </h3>
+            {holdsExpanded ? <ChevronUp className="w-5 h-5 text-secondary" /> : <ChevronDown className="w-5 h-5 text-secondary" />}
+          </button>
+
+          {holdsExpanded && (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="text-left py-2 px-3 font-medium text-secondary">Product</th>
+                    <th className="text-left py-2 px-3 font-medium text-secondary">Qty</th>
+                    <th className="text-left py-2 px-3 font-medium text-secondary">Customer</th>
+                    <th className="text-left py-2 px-3 font-medium text-secondary">Type</th>
+                    <th className="text-left py-2 px-3 font-medium text-secondary">Notes</th>
+                    <th className="text-left py-2 px-3 font-medium text-secondary">Expires</th>
+                    <th className="text-left py-2 px-3 font-medium text-secondary">Created By</th>
+                    {isAdmin && <th className="text-left py-2 px-3 font-medium text-secondary">Action</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {holds.map((hold) => (
+                    <tr key={hold.id} className="border-b border-gray-100 last:border-0">
+                      <td className="py-3 px-3 font-medium text-nav-dark">{hold.product_name}</td>
+                      <td className="py-3 px-3 text-amber-600 font-medium">{hold.quantity}</td>
+                      <td className="py-3 px-3 text-secondary">{hold.customer_name || '—'}</td>
+                      <td className="py-3 px-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          hold.hold_type === 'manual' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'
+                        }`}>
+                          {hold.hold_type === 'manual' ? 'Manual' : 'Program'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 text-secondary text-xs max-w-xs truncate">{hold.notes || '—'}</td>
+                      <td className="py-3 px-3 text-secondary text-xs">
+                        {hold.expires_at ? new Date(hold.expires_at).toLocaleDateString() : 'No expiration'}
+                      </td>
+                      <td className="py-3 px-3 text-secondary text-xs">{hold.creator_name}</td>
+                      {isAdmin && (
+                        <td className="py-3 px-3">
+                          <button
+                            onClick={() => handleReleaseHold(hold.id)}
+                            className="text-xs text-red-600 hover:text-red-700 font-medium"
+                          >
+                            Release
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Create Hold Modal */}
+      <Modal open={holdOpen} onClose={() => setHoldOpen(false)} title="Create" accent="Hold">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-1">Product</label>
+            <input
+              type="text"
+              value={productSearch}
+              onChange={(e) => setProductSearch(e.target.value)}
+              placeholder="Search products..."
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-2"
+            />
+            <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
+              {filteredProducts.length === 0 ? (
+                <p className="px-3 py-4 text-sm text-secondary text-center">No products found</p>
+              ) : (
+                filteredProducts.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      setHoldProductId(p.id);
+                      setHoldWarning('');
+                    }}
+                    className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0 ${
+                      holdProductId === p.id ? 'bg-crx-green/10 text-crx-green font-medium' : 'text-nav-dark'
+                    }`}
+                  >
+                    <span>{p.product_name}</span>
+                    {p.sku && <span className="text-secondary ml-2">({p.sku})</span>}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          <Input
+            label="Quantity"
+            type="number"
+            min="0"
+            step="0.1"
+            value={holdQty}
+            onChange={(e) => {
+              setHoldQty(e.target.value);
+              setHoldWarning('');
+            }}
+          />
+
+          {holdWarning && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+              <p className="text-xs text-amber-800">{holdWarning}</p>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-secondary mb-1">Customer (Optional)</label>
+            <select
+              value={holdCustomerId}
+              onChange={(e) => setHoldCustomerId(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            >
+              <option value="">No customer</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>{c.farm_name}</option>
+              ))}
+            </select>
+          </div>
+
+          <Input
+            label="Notes (Optional)"
+            value={holdNotes}
+            onChange={(e) => setHoldNotes(e.target.value)}
+            placeholder="e.g., Holding for spring burndown"
+          />
+
+          <Input
+            label="Expiration Date (Optional)"
+            type="date"
+            value={holdExpires}
+            onChange={(e) => setHoldExpires(e.target.value)}
+          />
+
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setHoldOpen(false)}>Cancel</Button>
+            <Button onClick={handleCreateHold}>Create Hold</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Add Inventory Modal */}
       <Modal open={addOpen} onClose={() => setAddOpen(false)} title="Add" accent="Inventory">
         <div className="space-y-4">
           <div>
@@ -423,6 +797,7 @@ export default function InventoryPage() {
         </div>
       </Modal>
 
+      {/* Receive Modal */}
       <Modal open={receiveOpen} onClose={() => setReceiveOpen(false)} title="Receive" accent="Shipment">
         <div className="space-y-4">
           <Input
@@ -439,6 +814,7 @@ export default function InventoryPage() {
         </div>
       </Modal>
 
+      {/* Adjust Modal */}
       <Modal open={adjustOpen} onClose={() => setAdjustOpen(false)} title="Manual" accent="Adjustment">
         <div className="space-y-4">
           <Input

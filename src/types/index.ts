@@ -107,6 +107,7 @@ export interface Quote {
   created_by: string;
   tier: number;
   status: QuoteStatus;
+  is_planned: boolean;
   commission_split: CommissionSplit | null;
   total_price: number;
   total_cost: number;
@@ -205,6 +206,26 @@ export interface Inventory {
   last_counted_at: string | null;
   updated_at: string;
   product?: Product;
+}
+
+export type InventoryHoldType = 'manual' | 'crop_program';
+
+export interface InventoryHold {
+  id: string;
+  product_id: string;
+  customer_id: string | null;
+  quantity: number;
+  hold_type: InventoryHoldType;
+  source_id: string | null;
+  notes: string | null;
+  created_by: string;
+  expires_at: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  product?: Product;
+  customer?: Customer;
+  creator?: Profile;
 }
 
 export type DeliveryStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
