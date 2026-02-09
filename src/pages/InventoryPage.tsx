@@ -75,7 +75,7 @@ export default function InventoryPage() {
   const fetchInventory = async () => {
     const { data, error } = await supabase
       .from('inventory')
-      .select('*, product:products(product_name, reorder_point, min_stock_level)')
+      .select('*, product:products(product_name)')
       .order('product_id');
 
     if (error) {
@@ -85,7 +85,7 @@ export default function InventoryPage() {
       return;
     }
 
-    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string; reorder_point: number; min_stock_level: number } | null }>;
+    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string } | null }>;
 
     // Fetch planned quantities from holds
     const { data: holdsData } = await supabase
@@ -133,8 +133,8 @@ export default function InventoryPage() {
       const plannedQty = (holdsByProduct[item.product_id] || 0) + (plannedByProduct[item.product_id] || 0);
       const freeQty = item.quantity_available - plannedQty;
       const deliveredYtd = deliveredByProduct[item.product_id] || 0;
-      const reorderPoint = item.product?.reorder_point || 0;
-      const minStockLevel = item.product?.min_stock_level || 0;
+      const reorderPoint = 0;
+      const minStockLevel = 0;
 
       return {
         ...item,
@@ -145,7 +145,7 @@ export default function InventoryPage() {
         delivered_ytd: deliveredYtd,
         reorder_point: reorderPoint,
         min_stock_level: minStockLevel,
-        is_low_stock: reorderPoint > 0 && item.quantity_available <= reorderPoint,
+        is_low_stock: false,
       };
     });
 
@@ -410,14 +410,7 @@ export default function InventoryPage() {
       header: 'Product',
       sortable: true,
       render: (row) => (
-        <div className="flex items-center gap-2">
-          {row.is_low_stock && (
-            <span title={`Low stock! Below reorder point (${row.reorder_point})`}>
-              <AlertTriangle className="w-4 h-4 text-amber-500" />
-            </span>
-          )}
-          <span className="font-medium text-nav-dark">{row.product_name}</span>
-        </div>
+        <span className="font-medium text-nav-dark">{row.product_name}</span>
       ),
     },
     {
@@ -518,25 +511,6 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {inventory.filter((i) => i.is_low_stock).length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
-          <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
-          <div>
-            <p className="text-sm font-semibold text-amber-800">
-              Low Stock Alert — {inventory.filter((i) => i.is_low_stock).length} item(s) below reorder point
-            </p>
-            <div className="mt-1 flex flex-wrap gap-2">
-              {inventory
-                .filter((i) => i.is_low_stock)
-                .map((i) => (
-                  <span key={i.id} className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
-                    {i.product_name}: {i.quantity_available} avail (min {i.reorder_point})
-                  </span>
-                ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {summaryCards.map((c) => (
