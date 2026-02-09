@@ -87,81 +87,136 @@ export default function InventoryPage() {
 
     const rawRows = (data || []) as Array<Inventory & { product: { product_name: string } | null }>;
 
-    // Fetch planned quantities from holds
-    const { data: holdsData } = await supabase
+    const holdsFetch = supabase
       .from('inventory_holds')
       .select('product_id, quantity')
       .eq('is_active', true)
       .or(`expires_at.is.null,expires_at.gte.${new Date().toISOString().split('T')[0]}`);
 
-    const holdsByProduct = (holdsData || []).reduce((acc, h) => {
-      acc[h.product_id] = (acc[h.product_id] || 0) + Number(h.quantity);
-      return acc;
-    }, {} as Record<string, number>);
-
-    // Fetch on order quantities from purchase orders
-    const { data: poItemsData } = await supabase
+    const poFetch = supabase
       .from('purchase_order_items')
       .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
       .in('purchase_orders.status', ['draft', 'submitted', 'partially_received']);
 
-    const onOrderByProduct = (poItemsData || []).reduce((acc, poi: any) => {
-      const remaining = Number(poi.quantity_ordered) - Number(poi.quantity_received);
-      acc[poi.product_id] = (acc[poi.product_id] || 0) + remaining;
-      return acc;
-    }, {} as Record<string, number>);
-
-    // Fetch planned quantities from planned quotes
-    const { data: quoteItemsData } = await supabase
+    const quoteFetch = supabase
       .from('quote_items')
       .select('product_id, total_units_needed, quote:quotes!inner(is_planned, status)')
       .eq('quote.is_planned', true)
       .in('quote.status', ['draft', 'sent', 'revised']);
 
-    const plannedByProduct = (quoteItemsData || []).reduce((acc, qi) => {
-      acc[qi.product_id] = (acc[qi.product_id] || 0) + Number(qi.total_units_needed || 0);
-      return acc;
-    }, {} as Record<string, number>);
-
-    // Fetch delivered YTD (current crop season: July 1 - June 30)
     const now = new Date();
     const seasonStart = now.getMonth() >= 6
       ? new Date(now.getFullYear(), 6, 1)
       : new Date(now.getFullYear() - 1, 6, 1);
 
-    const { data: deliveredData } = await supabase
+    const deliveredFetch = supabase
       .from('inventory_transactions')
       .select('product_id, quantity')
       .eq('transaction_type', 'delivered')
       .gte('created_at', seasonStart.toISOString());
 
-    const deliveredByProduct = (deliveredData || []).reduce((acc, t) => {
+    const [holdsRes, poRes, quoteRes, deliveredRes] = await Promise.all([
+      holdsFetch, poFetch, quoteFetch, deliveredFetch,
+    ]);
+
+    const holdsByProduct = (holdsRes.data || []).reduce((acc, h) => {
+      acc[h.product_id] = (acc[h.product_id] || 0) + Number(h.quantity);
+      return acc;
+    }, {} as Record<string, number>);
+
+    const onOrderByProduct = (poRes.data || []).reduce((acc, poi: any) => {
+      const remaining = Number(poi.quantity_ordered) - Number(poi.quantity_received);
+      acc[poi.product_id] = (acc[poi.product_id] || 0) + remaining;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const plannedByProduct = (quoteRes.data || []).reduce((acc, qi) => {
+      acc[qi.product_id] = (acc[qi.product_id] || 0) + Number(qi.total_units_needed || 0);
+      return acc;
+    }, {} as Record<string, number>);
+
+    const deliveredByProduct = (deliveredRes.data || []).reduce((acc, t) => {
       acc[t.product_id] = (acc[t.product_id] || 0) + Number(t.quantity);
       return acc;
     }, {} as Record<string, number>);
 
-    const rows = rawRows.map((item) => {
+    const inventoryProductIds = new Set(rawRows.map((r) => r.product_id));
+
+    const missingProductIds = Object.keys(onOrderByProduct).filter(
+      (pid) => !inventoryProductIds.has(pid)
+    );
+
+    let missingProducts: Array<{ id: string; product_name: string }> = [];
+    if (missingProductIds.length > 0) {
+      const { data: mpData } = await supabase
+        .from('products')
+        .select('id, product_name')
+        .in('id', missingProductIds);
+      missingProducts = (mpData || []) as Array<{ id: string; product_name: string }>;
+    }
+
+    const buildRow = (
+      item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string },
+      isVirtual: boolean
+    ): InventoryRow => {
       const onOrderQty = onOrderByProduct[item.product_id] || 0;
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
       const plannedQty = (holdsByProduct[item.product_id] || 0) + (plannedByProduct[item.product_id] || 0);
       const freeQty = item.quantity_available - plannedQty;
       const deliveredYtd = deliveredByProduct[item.product_id] || 0;
-      const reorderPoint = 0;
-      const minStockLevel = 0;
 
       return {
-        ...item,
+        id: item.id,
+        product_id: item.product_id,
+        quantity_available: item.quantity_available,
+        quantity_prebooked: item.quantity_prebooked,
         quantity_on_order: onOrderQty,
-        product_name: item.product?.product_name || 'Unknown',
+        location: item.location,
+        unit_size: item.unit_size,
+        last_counted_at: null,
+        updated_at: '',
+        product_name: item.product_name,
         total_on_floor: totalOnFloor,
         planned_qty: plannedQty,
         free_qty: freeQty,
         delivered_ytd: deliveredYtd,
-        reorder_point: reorderPoint,
-        min_stock_level: minStockLevel,
+        reorder_point: 0,
+        min_stock_level: 0,
         is_low_stock: false,
-      };
-    });
+      } as InventoryRow;
+    };
+
+    const existingRows = rawRows.map((item) =>
+      buildRow(
+        {
+          id: item.id,
+          product_id: item.product_id,
+          quantity_available: item.quantity_available,
+          quantity_prebooked: item.quantity_prebooked,
+          location: item.location,
+          unit_size: item.unit_size,
+          product_name: item.product?.product_name || 'Unknown',
+        },
+        false
+      )
+    );
+
+    const virtualRows = missingProducts.map((mp) =>
+      buildRow(
+        {
+          id: `virtual-${mp.id}`,
+          product_id: mp.id,
+          quantity_available: 0,
+          quantity_prebooked: 0,
+          location: '',
+          unit_size: null,
+          product_name: mp.product_name,
+        },
+        true
+      )
+    );
+
+    const rows = [...existingRows, ...virtualRows];
 
     const locs = [...new Set(rows.map((r) => r.location).filter(Boolean))];
     setLocations(locs.sort());
