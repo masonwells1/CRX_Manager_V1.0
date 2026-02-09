@@ -31,12 +31,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = async (userId: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', userId)
       .maybeSingle();
-    setProfile(data);
+    if (error) {
+      console.error('Failed to fetch profile:', error.message);
+      setProfile(null);
+      return;
+    }
+    setProfile(data ?? null);
   };
 
   useEffect(() => {
@@ -50,13 +55,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setLoading(true);
       setSession(s);
       if (s?.user) {
         (async () => {
-          await fetchProfile(s.user.id);
+          try {
+            await fetchProfile(s.user.id);
+          } finally {
+            setLoading(false);
+          }
         })();
       } else {
         setProfile(null);
+        setLoading(false);
       }
     });
 

@@ -14,14 +14,40 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // Require a secret header to prevent unauthorized access
+    const expected = Deno.env.get("SEED_ADMIN_SECRET");
+    const provided = req.headers.get("x-seed-secret");
+    if (!expected || !provided || provided !== expected) {
+      return new Response(JSON.stringify({ error: "Forbidden" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (req.method !== "POST") {
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
+    // Read credentials from request body instead of hardcoding them
+    const { email, password, full_name } = await req.json().catch(() => ({}));
+    if (!email || !password) {
+      return new Response(JSON.stringify({ error: "email and password required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers();
     const adminExists = existingUsers?.users?.some(
-      (u) => u.email === "admin@croprx.com"
+      (u) => u.email === email
     );
 
     if (adminExists) {
@@ -32,11 +58,11 @@ Deno.serve(async (req: Request) => {
     }
 
     const { data, error } = await supabaseAdmin.auth.admin.createUser({
-      email: "admin@croprx.com",
-      password: "admin123",
+      email,
+      password,
       email_confirm: true,
       user_metadata: {
-        full_name: "Admin User",
+        full_name: full_name || "Admin User",
         role: "admin",
       },
     });

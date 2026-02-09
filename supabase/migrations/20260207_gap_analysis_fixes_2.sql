@@ -13,17 +13,11 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- ─── Ensure payments table has proper RLS ───────────────────
-DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'payments' AND policyname = 'payments_select'
-  ) THEN
-    ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
-    CREATE POLICY payments_select ON payments FOR SELECT USING (true);
-    CREATE POLICY payments_insert ON payments FOR INSERT WITH CHECK (true);
-    CREATE POLICY payments_update ON payments FOR UPDATE USING (true);
-  END IF;
-END $$;
+-- ─── Payment RLS policies section REMOVED ───────────────────
+-- This section was removed to prevent conflicts with the strict
+-- RLS policies defined in 20260207_gap_analysis_fixes.sql
+-- See migration 20260209000002_fix_payment_rls_policies.sql for
+-- the authoritative payment security policies.
 
 -- ─── Add reorder_point to inventory if not already present ──
 -- (should exist from migration #1 but safe to check)

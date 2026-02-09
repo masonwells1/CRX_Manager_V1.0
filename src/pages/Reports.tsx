@@ -121,7 +121,13 @@ export default function Reports() {
       .select('total_price, total_profit, total_margin_pct, customer:customers(farm_name)');
     if (startDate) query = query.gte('order_date', startDate);
     if (endDate) query = query.lte('order_date', endDate);
-    const { data } = await query;
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Failed to load customer profitability:', error.message);
+      toast('error', 'Failed to load customer profitability. Please try again.');
+      return;
+    }
 
     const grouped: Record<string, CustomerProfit> = {};
     ((data || []) as Array<{ total_price: number; total_profit: number; total_margin_pct: number; customer: { farm_name: string }[] | null }>).forEach((o) => {
@@ -148,7 +154,13 @@ export default function Reports() {
       .select('product_name, total_price, profit, total_units_needed, order:orders!inner(order_date)');
     if (startDate) query = query.gte('order.order_date', startDate);
     if (endDate) query = query.lte('order.order_date', endDate);
-    const { data } = await query;
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Failed to load product profitability:', error.message);
+      toast('error', 'Failed to load product profitability. Please try again.');
+      return;
+    }
 
     const grouped: Record<string, ProductProfit> = {};
     ((data || []) as Array<{ product_name: string; total_price: number; profit: number; total_units_needed: number }>).forEach((i) => {
@@ -175,7 +187,12 @@ export default function Reports() {
     }
     if (startDate) query = query.gte('order_date', startDate);
     if (endDate) query = query.lte('order_date', endDate);
-    const { data } = await query;
+    const { data, error } = await query;
+    if (error) {
+      console.error('Failed to load commissions:', error.message);
+      toast('error', 'Failed to load commissions. Please try again.');
+      return;
+    }
     setCommissionData((data || []) as CommissionRow[]);
     setSelectedCommissions(new Set());
   };
@@ -187,7 +204,13 @@ export default function Reports() {
       .order('order_date');
     if (startDate) query = query.gte('order_date', startDate);
     if (endDate) query = query.lte('order_date', endDate);
-    const { data } = await query;
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Failed to load revenue data:', error.message);
+      toast('error', 'Failed to load revenue data. Please try again.');
+      return;
+    }
 
     const grouped: Record<string, RevenueSummary> = {};
     ((data || []) as Array<{ order_date: string; total_price: number; total_profit: number }>).forEach((o) => {

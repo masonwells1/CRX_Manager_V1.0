@@ -111,14 +111,19 @@ export default function TeamBoard() {
   });
 
   const fetchProfiles = async () => {
-    const { data } = await supabase.from('profiles').select('*').eq('is_active', true).order('full_name');
+    const { data, error } = await supabase.from('profiles').select('*').eq('is_active', true).order('full_name');
+    if (error) {
+      console.error('Failed to load profiles:', error.message);
+      toast('error', 'Failed to load team members. Please try again.');
+      return;
+    }
     setProfiles((data || []) as Profile[]);
   };
 
   const fetchNotes = async () => {
     // Optimized: Fetch notes with completion info in a single query
     // Note: completed_by FK may be auto-named, so we use the column reference
-    const { data: notesData } = await supabase
+    const { data: notesData, error: notesError } = await supabase
       .from('team_notes')
       .select(`
         *,
@@ -128,6 +133,13 @@ export default function TeamBoard() {
       .is('deleted_at', null)
       .order('is_pinned', { ascending: false })
       .order('created_at', { ascending: false });
+
+    if (notesError) {
+      console.error('Failed to load notes:', notesError.message);
+      toast('error', 'Failed to load notes. Please try again.');
+      setLoading(false);
+      return;
+    }
 
     if (notesData && notesData.length > 0) {
       // Batch fetch all tags in one query instead of per-note
@@ -207,7 +219,14 @@ export default function TeamBoard() {
       query = query.eq('action_type', activityAction);
     }
 
-    const { data } = await query;
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('Failed to load activity log:', error.message);
+      toast('error', 'Failed to load activity log. Please try again.');
+      setActivityLoading(false);
+      return;
+    }
 
     if (data && data.length > 0) {
       // Fetch note titles for context

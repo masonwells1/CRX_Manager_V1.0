@@ -48,10 +48,17 @@ export default function InventoryPage() {
   }, []);
 
   const fetchInventory = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('inventory')
       .select('*, product:products(product_name)')
       .order('product_id');
+
+    if (error) {
+      console.error('Failed to load inventory:', error.message);
+      toast('error', 'Failed to load inventory. Please try again.');
+      setLoading(false);
+      return;
+    }
 
     const rows = ((data || []) as Array<Inventory & { product: { product_name: string } | null }>).map((item) => {
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
@@ -75,11 +82,16 @@ export default function InventoryPage() {
   };
 
   const fetchProducts = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('products')
       .select('*')
       .eq('is_active', true)
       .order('product_name');
+    if (error) {
+      console.error('Failed to load products:', error.message);
+      toast('error', 'Failed to load products. Please try again.');
+      return;
+    }
     setProducts((data || []) as Product[]);
   };
 
