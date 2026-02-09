@@ -54,7 +54,7 @@ export default function InventoryPage() {
   const [selectedId, setSelectedId] = useState('');
   const [receiveQty, setReceiveQty] = useState('');
   const [receivePOItemId, setReceivePOItemId] = useState('');
-  const [availablePOs, setAvailablePOs] = useState<Array<{id: string; po_number: string; ordered: number; received: number}>>([]);
+  const [availablePOs, setAvailablePOs] = useState<Array<{id: string; po_number: string; ordered: number; received: number; unit_cost: number; purchase_order_id: string; product_id: string; unit_size: string | null}>>([]);
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustNote, setAdjustNote] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
@@ -164,7 +164,7 @@ export default function InventoryPage() {
       const onOrderQty = onOrderByProduct[item.product_id] || 0;
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
       const plannedQty = (holdsByProduct[item.product_id] || 0) + (plannedByProduct[item.product_id] || 0);
-      const freeQty = item.quantity_available - plannedQty;
+      const freeQty = item.quantity_available - plannedQty - item.quantity_prebooked;
       const deliveredYtd = deliveredByProduct[item.product_id] || 0;
 
       return {
@@ -388,6 +388,16 @@ export default function InventoryPage() {
     if (error) {
       toast('error', error.message || 'Failed to add inventory');
     } else {
+      if (qty > 0 && profile) {
+        await supabase.from('inventory_transactions').insert({
+          product_id: addProductId,
+          transaction_type: 'adjusted',
+          quantity: qty,
+          to_location: addLocation || 'Main Warehouse',
+          performed_by: profile.id,
+          notes: `Initial inventory record created with ${qty} units`,
+        });
+      }
       toast('success', 'Inventory record added');
       setAddOpen(false);
       fetchInventory();
@@ -405,7 +415,7 @@ export default function InventoryPage() {
 
     const { data, error } = await supabase
       .from('purchase_order_items')
-      .select('id, quantity_ordered, quantity_received, purchase_orders!inner(po_number, status)')
+      .select('id, quantity_ordered, quantity_received, unit_cost, unit_size, product_id, purchase_order_id, purchase_orders!inner(po_number, status)')
       .eq('product_id', target.product_id)
       .in('purchase_orders.status', ['draft', 'submitted', 'partially_received']);
 
@@ -415,6 +425,10 @@ export default function InventoryPage() {
         po_number: item.purchase_orders.po_number,
         ordered: item.quantity_ordered,
         received: item.quantity_received || 0,
+        unit_cost: item.unit_cost || 0,
+        purchase_order_id: item.purchase_order_id,
+        product_id: item.product_id,
+        unit_size: item.unit_size,
       }));
       setAvailablePOs(pos);
     } else {
@@ -451,53 +465,88 @@ export default function InventoryPage() {
       return;
     }
 
-    const { error: invError } = await supabase
-      .from('inventory')
-      .update({
-        quantity_available: target.quantity_available + qty,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', selectedId);
-
-    if (invError) {
-      toast('error', 'Failed to update inventory');
-      return;
-    }
-
     const { error: poError } = await supabase
       .from('purchase_order_items')
-      .update({
-        quantity_received: newReceived,
-      })
+      .update({ quantity_received: newReceived })
       .eq('id', receivePOItemId);
 
     if (poError) {
-      toast('error', 'Failed to update purchase order');
+      toast('error', 'Failed to update purchase order item');
       return;
     }
 
-    const { data: poItemData } = await supabase
+    const isVirtualRow = target.id.startsWith('virtual-');
+
+    if (isVirtualRow) {
+      const { error: insertError } = await supabase.from('inventory').insert({
+        product_id: target.product_id,
+        location: 'Main Warehouse',
+        quantity_available: qty,
+        quantity_on_order: 0,
+        quantity_prebooked: 0,
+        unit_size: selectedPO.unit_size || null,
+      });
+
+      if (insertError) {
+        toast('error', 'Failed to create inventory record');
+        return;
+      }
+    } else {
+      const newOnOrder = (target.quantity_on_order || 0) - qty;
+      const { error: invError } = await supabase
+        .from('inventory')
+        .update({
+          quantity_available: target.quantity_available + qty,
+          quantity_on_order: newOnOrder,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', selectedId);
+
+      if (invError) {
+        toast('error', 'Failed to update inventory');
+        return;
+      }
+    }
+
+    const { data: allItems } = await supabase
       .from('purchase_order_items')
-      .select('purchase_order_id')
-      .eq('id', receivePOItemId)
-      .single();
+      .select('quantity_ordered, quantity_received')
+      .eq('purchase_order_id', selectedPO.purchase_order_id);
 
-    if (poItemData) {
-      const { data: allItems } = await supabase
-        .from('purchase_order_items')
-        .select('quantity_ordered, quantity_received')
-        .eq('purchase_order_id', poItemData.purchase_order_id);
+    if (allItems) {
+      const allFullyReceived = allItems.every((item: any) => (item.quantity_received || 0) >= item.quantity_ordered);
+      const anyReceived = allItems.some((item: any) => (item.quantity_received || 0) > 0);
+      const newStatus = allFullyReceived ? 'fully_received' : (anyReceived ? 'partially_received' : 'submitted');
 
-      if (allItems) {
-        const allReceived = allItems.every((item: any) => (item.quantity_received || 0) >= item.quantity_ordered);
-        const anyReceived = allItems.some((item: any) => (item.quantity_received || 0) > 0);
+      await supabase
+        .from('purchase_orders')
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', selectedPO.purchase_order_id);
+    }
 
-        const newStatus = allReceived ? 'received' : (anyReceived ? 'partially_received' : 'submitted');
+    if (selectedPO.unit_cost > 0) {
+      const { data: currentProduct } = await supabase
+        .from('products')
+        .select('id, current_cost')
+        .eq('id', target.product_id)
+        .maybeSingle();
 
+      if (currentProduct && Number(currentProduct.current_cost) !== selectedPO.unit_cost) {
         await supabase
-          .from('purchase_orders')
-          .update({ status: newStatus })
-          .eq('id', poItemData.purchase_order_id);
+          .from('products')
+          .update({
+            current_cost: selectedPO.unit_cost,
+            cost_updated_date: new Date().toISOString(),
+          })
+          .eq('id', target.product_id);
+
+        await supabase.from('cost_history').insert({
+          product_id: target.product_id,
+          changed_by: profile.id,
+          old_cost: currentProduct.current_cost,
+          new_cost: selectedPO.unit_cost,
+          change_note: `Auto-updated from PO ${selectedPO.po_number} receiving`,
+        });
       }
     }
 
@@ -506,6 +555,7 @@ export default function InventoryPage() {
       transaction_type: 'received',
       quantity: qty,
       to_location: target.location || 'Main Warehouse',
+      purchase_order_id: selectedPO.purchase_order_id,
       performed_by: profile.id,
       notes: `Received ${qty} units from PO ${selectedPO.po_number}`,
     });
@@ -549,12 +599,41 @@ export default function InventoryPage() {
   };
 
   const handleDelete = async (inventoryId: string) => {
-    if (!confirm('Are you sure you want to delete this inventory item? This action cannot be undone.')) {
+    const target = inventory.find((i) => i.id === inventoryId);
+    if (!target) return;
+
+    const { data: activeHolds } = await supabase
+      .from('inventory_holds')
+      .select('id')
+      .eq('product_id', target.product_id)
+      .eq('is_active', true)
+      .limit(1);
+
+    if (activeHolds && activeHolds.length > 0) {
+      toast('error', 'Cannot delete: this product has active inventory holds. Release holds first.');
       return;
     }
 
-    const target = inventory.find((i) => i.id === inventoryId);
-    if (!target) return;
+    if (target.quantity_prebooked > 0) {
+      toast('error', 'Cannot delete: this product has committed (prebooked) inventory from orders.');
+      return;
+    }
+
+    const { data: pendingDeliveries } = await supabase
+      .from('delivery_items')
+      .select('id, delivery:deliveries!inner(status)')
+      .eq('product_id', target.product_id)
+      .in('delivery.status', ['scheduled', 'in_progress'])
+      .limit(1);
+
+    if (pendingDeliveries && pendingDeliveries.length > 0) {
+      toast('error', 'Cannot delete: this product has pending deliveries.');
+      return;
+    }
+
+    if (!confirm('Are you sure you want to delete this inventory item? This action cannot be undone.')) {
+      return;
+    }
 
     const { error } = await supabase
       .from('inventory')
@@ -582,9 +661,10 @@ export default function InventoryPage() {
   const totalCommitted = inventory.reduce((s, i) => s + i.quantity_prebooked, 0);
   const totalDeliveredYTD = inventory.reduce((s, i) => s + i.delivered_ytd, 0);
 
-  const freeColor = (n: number) => {
+  const netPositionColor = (n: number) => {
     if (n > 10) return 'text-emerald-600';
     if (n > 0) return 'text-amber-600';
+    if (n === 0) return 'text-gray-500';
     return 'text-red-600';
   };
 
@@ -608,10 +688,10 @@ export default function InventoryPage() {
     { key: 'total_on_floor', header: 'Total on Floor', sortable: true },
     {
       key: 'free_qty',
-      header: 'Free',
+      header: 'Net Position',
       sortable: true,
       render: (row) => (
-        <span className={`font-semibold ${freeColor(row.free_qty)}`}>
+        <span className={`font-semibold ${netPositionColor(row.free_qty)}`}>
           {row.free_qty.toFixed(1)}
         </span>
       ),
@@ -679,7 +759,7 @@ export default function InventoryPage() {
   const summaryCards = [
     { label: 'On Order', value: totalOnOrder, color: 'bg-teal-50 text-teal-600', icon: Package },
     { label: 'Total on Floor', value: totalOnFloor, color: 'bg-blue-50 text-blue-600', icon: Package },
-    { label: 'Free', value: totalFree, color: 'bg-emerald-50 text-emerald-600', icon: Package },
+    { label: 'Net Position', value: totalFree, color: totalFree >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600', icon: Package },
     { label: 'Planned', value: totalPlanned, color: 'bg-amber-50 text-amber-600', icon: Package },
     { label: 'Committed', value: totalCommitted, color: 'bg-orange-50 text-orange-600', icon: Package },
     { label: 'Delivered YTD', value: totalDeliveredYTD, color: 'bg-gray-50 text-gray-600', icon: Package },

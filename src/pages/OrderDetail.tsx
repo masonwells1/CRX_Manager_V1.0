@@ -73,8 +73,13 @@ export default function OrderDetail() {
   const handleSaveEdits = async () => {
     setSaving(true);
 
-    // Update each item
+    // Update each item and adjust prebooked inventory for quantity changes
     for (const item of editItems) {
+      const originalItem = items.find((i) => i.id === item.id);
+      const originalQty = originalItem ? Number(originalItem.total_units_needed) : 0;
+      const newQty = Number(item.total_units_needed);
+      const qtyDelta = newQty - originalQty;
+
       await supabase
         .from('order_items')
         .update({
@@ -84,6 +89,37 @@ export default function OrderDetail() {
           quantity_remaining: item.total_units_needed - item.quantity_delivered,
         })
         .eq('id', item.id);
+
+      if (qtyDelta !== 0 && item.product_id) {
+        const { data: inv } = await supabase
+          .from('inventory')
+          .select('id, quantity_prebooked')
+          .eq('product_id', item.product_id)
+          .eq('location', 'Main Warehouse')
+          .maybeSingle();
+
+        if (inv) {
+          await supabase
+            .from('inventory')
+            .update({
+              quantity_prebooked: (Number(inv.quantity_prebooked) || 0) + qtyDelta,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', inv.id);
+        }
+
+        if (profile) {
+          await supabase.from('inventory_transactions').insert({
+            product_id: item.product_id,
+            transaction_type: 'adjusted',
+            quantity: qtyDelta,
+            to_location: 'Main Warehouse',
+            order_id: id,
+            performed_by: profile.id,
+            notes: `Order ${order?.order_number} edited: quantity changed from ${originalQty} to ${newQty}`,
+          });
+        }
+      }
     }
 
     // Recalculate order totals
@@ -123,10 +159,54 @@ export default function OrderDetail() {
 
   const handleStatusChange = async () => {
     if (!newStatus || !order) return;
+
     await supabase
       .from('orders')
       .update({ status: newStatus, updated_at: new Date().toISOString() })
       .eq('id', id!);
+
+    if (newStatus === 'cancelled' && order.status !== 'cancelled') {
+      const { data: orderItems } = await supabase
+        .from('order_items')
+        .select('product_id, total_units_needed, quantity_delivered')
+        .eq('order_id', id!);
+
+      if (orderItems) {
+        for (const item of orderItems) {
+          const undeliveredQty = Number(item.total_units_needed) - Number(item.quantity_delivered || 0);
+          if (undeliveredQty <= 0) continue;
+
+          const { data: inv } = await supabase
+            .from('inventory')
+            .select('id, quantity_prebooked')
+            .eq('product_id', item.product_id)
+            .eq('location', 'Main Warehouse')
+            .maybeSingle();
+
+          if (inv) {
+            await supabase
+              .from('inventory')
+              .update({
+                quantity_prebooked: (Number(inv.quantity_prebooked) || 0) - undeliveredQty,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', inv.id);
+          }
+
+          if (profile) {
+            await supabase.from('inventory_transactions').insert({
+              product_id: item.product_id,
+              transaction_type: 'adjusted',
+              quantity: -undeliveredQty,
+              to_location: 'Main Warehouse',
+              order_id: id,
+              performed_by: profile.id,
+              notes: `Released ${undeliveredQty} units — order ${order.order_number} cancelled`,
+            });
+          }
+        }
+      }
+    }
 
     if (profile) {
       await logActivity(

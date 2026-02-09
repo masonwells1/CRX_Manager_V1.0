@@ -332,11 +332,7 @@ export default function PurchaseOrderDetail() {
         </button>
         {isAdmin && (
           <div className="flex items-center gap-2">
-            {po.status !== 'fully_received' && po.status !== 'cancelled' && (
-              <Button icon={<PackageCheck className="w-4 h-4" />} onClick={openReceiveModal}>
-                Receive Items
-              </Button>
-            )}
+            {/* Receiving is done from the Inventory Management page */}
             <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
               Edit
             </Button>

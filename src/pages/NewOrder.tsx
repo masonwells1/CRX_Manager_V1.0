@@ -193,6 +193,48 @@ export default function NewOrder() {
 
       if (itemsError) throw itemsError;
 
+      for (const item of orderItems) {
+        if (!item.product_id || !item.total_units_needed) continue;
+
+        const { data: inv } = await supabase
+          .from('inventory')
+          .select('id, quantity_prebooked')
+          .eq('product_id', item.product_id)
+          .eq('location', 'Main Warehouse')
+          .maybeSingle();
+
+        if (inv) {
+          await supabase
+            .from('inventory')
+            .update({
+              quantity_prebooked: (Number(inv.quantity_prebooked) || 0) + Number(item.total_units_needed),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', inv.id);
+        } else {
+          await supabase.from('inventory').insert({
+            product_id: item.product_id,
+            location: 'Main Warehouse',
+            quantity_available: 0,
+            quantity_prebooked: Number(item.total_units_needed),
+            quantity_on_order: 0,
+            unit_size: item.unit_size || null,
+          });
+        }
+
+        if (profile) {
+          await supabase.from('inventory_transactions').insert({
+            product_id: item.product_id,
+            transaction_type: 'booked',
+            quantity: Number(item.total_units_needed),
+            to_location: 'Main Warehouse',
+            order_id: order.id,
+            performed_by: profile.id,
+            notes: `Pre-booked for order ${orderNumber}`,
+          });
+        }
+      }
+
       toast({ title: 'Order created successfully', variant: 'success' });
       navigate(`/orders/${order.id}`);
     } catch (err) {

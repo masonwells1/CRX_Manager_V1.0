@@ -100,7 +100,7 @@ export default function DeliveryDetail() {
             .from('order_items')
             .update({
               quantity_delivered: newDelivered,
-              quantity_remaining: Math.max(0, newRemaining),
+              quantity_remaining: newRemaining,
             })
             .eq('id', item.order_item_id);
         }
@@ -118,10 +118,10 @@ export default function DeliveryDetail() {
           notes: `Delivery ${delivery.delivery_number} completed. Signed by: ${signedBy}`,
         });
 
-        // 2c: Reduce available inventory for this product
+        // 2c: Reduce available inventory and prebooked for this product
         const { data: inv } = await supabase
           .from('inventory')
-          .select('id, quantity_available')
+          .select('id, quantity_available, quantity_prebooked')
           .eq('product_id', item.product_id)
           .eq('location', 'Main Warehouse')
           .maybeSingle();
@@ -130,26 +130,19 @@ export default function DeliveryDetail() {
           await supabase
             .from('inventory')
             .update({
-              quantity_available: Math.max(0, (Number(inv.quantity_available) || 0) - Number(item.quantity)),
+              quantity_available: (Number(inv.quantity_available) || 0) - Number(item.quantity),
+              quantity_prebooked: (Number(inv.quantity_prebooked) || 0) - Number(item.quantity),
               updated_at: new Date().toISOString(),
             })
             .eq('id', inv.id);
-
-          // === GAP FIX #3: Also decrement prebooked quantity on delivery ===
-          const { data: invRefresh } = await supabase
-            .from('inventory')
-            .select('id, quantity_prebooked')
-            .eq('id', inv.id)
-            .maybeSingle();
-
-          if (invRefresh) {
-            await supabase
-              .from('inventory')
-              .update({
-                quantity_prebooked: Math.max(0, (Number(invRefresh.quantity_prebooked) || 0) - Number(item.quantity)),
-              })
-              .eq('id', invRefresh.id);
-          }
+        } else {
+          await supabase.from('inventory').insert({
+            product_id: item.product_id,
+            location: 'Main Warehouse',
+            quantity_available: -Number(item.quantity),
+            quantity_prebooked: 0,
+            quantity_on_order: 0,
+          });
         }
       }
 

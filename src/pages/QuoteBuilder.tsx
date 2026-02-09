@@ -741,8 +741,10 @@ export default function QuoteBuilder() {
       await supabase.from('order_items').insert(orderItems);
     }
 
-    // === GAP FIX #3: Pre-book inventory for each order item ===
+    // === Pre-book inventory for each order item (with upsert) ===
     for (const item of orderItems) {
+      if (!item.product_id || !item.total_units_needed) continue;
+
       const { data: inv } = await supabase
         .from('inventory')
         .select('id, quantity_prebooked')
@@ -758,6 +760,15 @@ export default function QuoteBuilder() {
             updated_at: new Date().toISOString(),
           })
           .eq('id', inv.id);
+      } else {
+        await supabase.from('inventory').insert({
+          product_id: item.product_id,
+          location: 'Main Warehouse',
+          quantity_available: 0,
+          quantity_prebooked: Number(item.total_units_needed),
+          quantity_on_order: 0,
+          unit_size: item.unit_size || null,
+        });
       }
 
       if (profile) {
