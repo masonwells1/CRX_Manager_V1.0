@@ -314,12 +314,11 @@ export default function InventoryPage() {
     }
     if (!profile) return;
 
-    // Check if this would make Free negative
     const invItem = inventory.find(i => i.product_id === holdProductId);
-    if (invItem) {
+    if (invItem && invItem.free_qty < qty) {
       const newFree = invItem.free_qty - qty;
-      if (newFree < 0) {
-        setHoldWarning(`Warning: This hold will make Free inventory negative (${newFree.toFixed(1)}). Only ${invItem.free_qty.toFixed(1)} units available.`);
+      if (!holdWarning) {
+        setHoldWarning(`Warning: This hold will make Free inventory negative (${newFree.toFixed(1)}). Only ${invItem.free_qty.toFixed(1)} units currently available. Click Create Hold again to proceed anyway.`);
         return;
       }
     }
