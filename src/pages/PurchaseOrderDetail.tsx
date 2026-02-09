@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, PackageCheck } from 'lucide-react';
+import { ArrowLeft, PackageCheck, Pencil, Trash2 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import Input from '../components/ui/Input';
+import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
-import type { PurchaseOrder, PurchaseOrderItem } from '../types';
+import type { PurchaseOrder, PurchaseOrderItem, POStatus } from '../types';
 
 export default function PurchaseOrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -23,6 +24,23 @@ export default function PurchaseOrderDetail() {
   const [receiveOpen, setReceiveOpen] = useState(false);
   const [receiveQtys, setReceiveQtys] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [editForm, setEditForm] = useState({
+    vendor: '',
+    status: 'draft' as POStatus,
+    submitted_date: '',
+    expected_delivery_date: '',
+    notes: '',
+  });
+  const [editItems, setEditItems] = useState<Array<{
+    id: string;
+    product_id: string;
+    product_name: string;
+    quantity_ordered: string;
+    unit_cost: string;
+    quantity_received: number;
+  }>>([]);
 
   const isAdmin = role === 'admin';
 
@@ -161,6 +179,126 @@ export default function PurchaseOrderDetail() {
     setSaving(false);
   };
 
+  const openEditModal = () => {
+    if (!po) return;
+    setEditForm({
+      vendor: po.vendor,
+      status: po.status,
+      submitted_date: po.submitted_date || '',
+      expected_delivery_date: po.expected_delivery_date || '',
+      notes: po.notes || '',
+    });
+    setEditItems(items.map(item => ({
+      id: item.id,
+      product_id: item.product_id,
+      product_name: (item.product as unknown as { product_name: string })?.product_name || 'Unknown',
+      quantity_ordered: String(item.quantity_ordered),
+      unit_cost: String(item.unit_cost),
+      quantity_received: item.quantity_received,
+    })));
+    setEditOpen(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!po) return;
+    setSaving(true);
+
+    const totalCost = editItems.reduce(
+      (sum, item) => sum + (parseFloat(item.quantity_ordered) * parseFloat(item.unit_cost)),
+      0
+    );
+
+    const { error: poError } = await supabase
+      .from('purchase_orders')
+      .update({
+        vendor: editForm.vendor,
+        status: editForm.status,
+        submitted_date: editForm.submitted_date || null,
+        expected_delivery_date: editForm.expected_delivery_date || null,
+        notes: editForm.notes || null,
+        total_cost: totalCost,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id!);
+
+    if (poError) {
+      toast('error', 'Failed to update purchase order');
+      setSaving(false);
+      return;
+    }
+
+    for (const item of editItems) {
+      const { error: itemError } = await supabase
+        .from('purchase_order_items')
+        .update({
+          quantity_ordered: parseFloat(item.quantity_ordered),
+          unit_cost: parseFloat(item.unit_cost),
+        })
+        .eq('id', item.id);
+
+      if (itemError) {
+        toast('error', `Failed to update item: ${item.product_name}`);
+        setSaving(false);
+        return;
+      }
+    }
+
+    if (profile) {
+      await logActivity(
+        'po_updated',
+        `PO ${po.po_number} updated`,
+        profile.id,
+        'purchase_order',
+        id
+      );
+    }
+
+    toast('success', 'Purchase order updated');
+    setEditOpen(false);
+    fetchPO();
+    setSaving(false);
+  };
+
+  const handleDelete = async () => {
+    if (!po) return;
+    setSaving(true);
+
+    const { error: itemsError } = await supabase
+      .from('purchase_order_items')
+      .delete()
+      .eq('purchase_order_id', id!);
+
+    if (itemsError) {
+      toast('error', 'Failed to delete purchase order items');
+      setSaving(false);
+      return;
+    }
+
+    const { error: poError } = await supabase
+      .from('purchase_orders')
+      .delete()
+      .eq('id', id!);
+
+    if (poError) {
+      toast('error', 'Failed to delete purchase order');
+      setSaving(false);
+      return;
+    }
+
+    if (profile) {
+      await logActivity(
+        'po_deleted',
+        `PO ${po.po_number} deleted`,
+        profile.id,
+        'purchase_order',
+        id
+      );
+    }
+
+    toast('success', 'Purchase order deleted');
+    navigate('/purchase-orders');
+  };
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -192,10 +330,22 @@ export default function PurchaseOrderDetail() {
           <ArrowLeft className="w-4 h-4" />
           Back to Purchase Orders
         </button>
-        {isAdmin && po.status !== 'fully_received' && po.status !== 'cancelled' && (
-          <Button icon={<PackageCheck className="w-4 h-4" />} onClick={openReceiveModal}>
-            Receive Items
-          </Button>
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            {po.status !== 'fully_received' && po.status !== 'cancelled' && (
+              <Button icon={<PackageCheck className="w-4 h-4" />} onClick={openReceiveModal}>
+                Receive Items
+              </Button>
+            )}
+            <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
+              Edit
+            </Button>
+            {(po.status === 'draft' || po.status === 'submitted') && (
+              <Button variant="danger" icon={<Trash2 className="w-4 h-4" />} onClick={() => setDeleteOpen(true)}>
+                Delete
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
@@ -315,6 +465,126 @@ export default function PurchaseOrderDetail() {
             </Button>
             <Button onClick={handleReceive} loading={saving}>
               Receive
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Purchase" accent="Order">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Vendor</label>
+            <Input
+              value={editForm.vendor}
+              onChange={(e) => setEditForm(prev => ({ ...prev, vendor: e.target.value }))}
+              placeholder="Vendor name"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Status</label>
+            <Select
+              value={editForm.status}
+              onChange={(e) => setEditForm(prev => ({ ...prev, status: e.target.value as POStatus }))}
+            >
+              <option value="draft">Draft</option>
+              <option value="submitted">Submitted</option>
+              <option value="partially_received">Partially Received</option>
+              <option value="fully_received">Fully Received</option>
+              <option value="cancelled">Cancelled</option>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-nav-dark mb-1">Submitted Date</label>
+              <Input
+                type="date"
+                value={editForm.submitted_date}
+                onChange={(e) => setEditForm(prev => ({ ...prev, submitted_date: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-nav-dark mb-1">Expected Delivery</label>
+              <Input
+                type="date"
+                value={editForm.expected_delivery_date}
+                onChange={(e) => setEditForm(prev => ({ ...prev, expected_delivery_date: e.target.value }))}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Notes</label>
+            <Input
+              value={editForm.notes}
+              onChange={(e) => setEditForm(prev => ({ ...prev, notes: e.target.value }))}
+              placeholder="Additional notes"
+            />
+          </div>
+
+          <div className="border-t pt-4">
+            <h4 className="text-sm font-medium text-nav-dark mb-3">Line Items</h4>
+            <div className="space-y-3">
+              {editItems.map((item, idx) => (
+                <div key={item.id} className="grid grid-cols-[1fr,100px,100px] gap-2 items-start">
+                  <div>
+                    <p className="text-sm font-medium text-nav-dark">{item.product_name}</p>
+                    <p className="text-xs text-secondary">Received: {item.quantity_received}</p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-secondary mb-1">Qty</label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={item.quantity_ordered}
+                      onChange={(e) => {
+                        const newItems = [...editItems];
+                        newItems[idx].quantity_ordered = e.target.value;
+                        setEditItems(newItems);
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-secondary mb-1">Cost</label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={item.unit_cost}
+                      onChange={(e) => {
+                        const newItems = [...editItems];
+                        newItems[idx].unit_cost = e.target.value;
+                        setEditItems(newItems);
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setEditOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveEdit} loading={saving}>
+              Save Changes
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={deleteOpen} onClose={() => setDeleteOpen(false)} title="Delete Purchase" accent="Order">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Are you sure you want to delete <span className="font-medium text-nav-dark">{po.po_number}</span>?
+            This action cannot be undone.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setDeleteOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={handleDelete} loading={saving}>
+              Delete
             </Button>
           </div>
         </div>
