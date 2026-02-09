@@ -53,6 +53,8 @@ export default function InventoryPage() {
 
   const [selectedId, setSelectedId] = useState('');
   const [receiveQty, setReceiveQty] = useState('');
+  const [receivePOItemId, setReceivePOItemId] = useState('');
+  const [availablePOs, setAvailablePOs] = useState<Array<{id: string; po_number: string; ordered: number; received: number}>>([]);
   const [adjustQty, setAdjustQty] = useState('');
   const [adjustNote, setAdjustNote] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
@@ -393,34 +395,126 @@ export default function InventoryPage() {
     setAdding(false);
   };
 
+  const openReceiveModal = async (inventoryId: string) => {
+    const target = inventory.find((i) => i.id === inventoryId);
+    if (!target) return;
+
+    setSelectedId(inventoryId);
+    setReceiveQty('');
+    setReceivePOItemId('');
+
+    const { data, error } = await supabase
+      .from('purchase_order_items')
+      .select('id, quantity_ordered, quantity_received, purchase_orders!inner(po_number, status)')
+      .eq('product_id', target.product_id)
+      .in('purchase_orders.status', ['draft', 'submitted', 'partially_received']);
+
+    if (!error && data) {
+      const pos = data.map((item: any) => ({
+        id: item.id,
+        po_number: item.purchase_orders.po_number,
+        ordered: item.quantity_ordered,
+        received: item.quantity_received || 0,
+      }));
+      setAvailablePOs(pos);
+    } else {
+      setAvailablePOs([]);
+    }
+
+    setReceiveOpen(true);
+  };
+
   const handleReceive = async () => {
     const qty = parseInt(receiveQty);
-    if (!qty || qty <= 0) return;
+    if (!qty || qty <= 0) {
+      toast('error', 'Please enter a valid quantity');
+      return;
+    }
+
     const target = inventory.find((i) => i.id === selectedId);
     if (!target || !profile) return;
-    const { error } = await supabase
+
+    if (!receivePOItemId) {
+      toast('error', 'Please select a purchase order');
+      return;
+    }
+
+    const selectedPO = availablePOs.find(po => po.id === receivePOItemId);
+    if (!selectedPO) {
+      toast('error', 'Invalid purchase order selection');
+      return;
+    }
+
+    const newReceived = selectedPO.received + qty;
+    if (newReceived > selectedPO.ordered) {
+      toast('error', `Cannot receive more than ordered. Ordered: ${selectedPO.ordered}, Already received: ${selectedPO.received}`);
+      return;
+    }
+
+    const { error: invError } = await supabase
       .from('inventory')
       .update({
         quantity_available: target.quantity_available + qty,
         updated_at: new Date().toISOString(),
       })
       .eq('id', selectedId);
-    if (error) {
-      toast('error', 'Failed to receive shipment');
-    } else {
-      await supabase.from('inventory_transactions').insert({
-        product_id: target.product_id,
-        transaction_type: 'received',
-        quantity: qty,
-        to_location: target.location || 'Main Warehouse',
-        performed_by: profile.id,
-        notes: `Received ${qty} units`,
-      });
-      toast('success', `Received ${qty} units`);
-      setReceiveOpen(false);
-      setReceiveQty('');
-      fetchInventory();
+
+    if (invError) {
+      toast('error', 'Failed to update inventory');
+      return;
     }
+
+    const { error: poError } = await supabase
+      .from('purchase_order_items')
+      .update({
+        quantity_received: newReceived,
+      })
+      .eq('id', receivePOItemId);
+
+    if (poError) {
+      toast('error', 'Failed to update purchase order');
+      return;
+    }
+
+    const { data: poItemData } = await supabase
+      .from('purchase_order_items')
+      .select('purchase_order_id')
+      .eq('id', receivePOItemId)
+      .single();
+
+    if (poItemData) {
+      const { data: allItems } = await supabase
+        .from('purchase_order_items')
+        .select('quantity_ordered, quantity_received')
+        .eq('purchase_order_id', poItemData.purchase_order_id);
+
+      if (allItems) {
+        const allReceived = allItems.every((item: any) => (item.quantity_received || 0) >= item.quantity_ordered);
+        const anyReceived = allItems.some((item: any) => (item.quantity_received || 0) > 0);
+
+        const newStatus = allReceived ? 'received' : (anyReceived ? 'partially_received' : 'submitted');
+
+        await supabase
+          .from('purchase_orders')
+          .update({ status: newStatus })
+          .eq('id', poItemData.purchase_order_id);
+      }
+    }
+
+    await supabase.from('inventory_transactions').insert({
+      product_id: target.product_id,
+      transaction_type: 'received',
+      quantity: qty,
+      to_location: target.location || 'Main Warehouse',
+      performed_by: profile.id,
+      notes: `Received ${qty} units from PO ${selectedPO.po_number}`,
+    });
+
+    toast('success', `Received ${qty} units`);
+    setReceiveOpen(false);
+    setReceiveQty('');
+    setReceivePOItemId('');
+    fetchInventory();
   };
 
   const handleAdjust = async () => {
@@ -555,7 +649,7 @@ export default function InventoryPage() {
             render: (row: InventoryRow) => (
               <div className="flex gap-1">
                 <button
-                  onClick={(e) => { e.stopPropagation(); setSelectedId(row.id); setReceiveOpen(true); }}
+                  onClick={(e) => { e.stopPropagation(); openReceiveModal(row.id); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Receive Shipment"
                 >
@@ -871,16 +965,39 @@ export default function InventoryPage() {
       {/* Receive Modal */}
       <Modal open={receiveOpen} onClose={() => setReceiveOpen(false)} title="Receive" accent="Shipment">
         <div className="space-y-4">
-          <Input
-            label="Quantity Received"
-            type="number"
-            min="1"
-            value={receiveQty}
-            onChange={(e) => setReceiveQty(e.target.value)}
-          />
+          {availablePOs.length === 0 ? (
+            <div className="text-amber-600 text-sm bg-amber-50 p-3 rounded">
+              No open purchase orders found for this product. Create a purchase order first.
+            </div>
+          ) : (
+            <>
+              <Select
+                label="Purchase Order"
+                value={receivePOItemId}
+                onChange={(e) => setReceivePOItemId(e.target.value)}
+                required
+              >
+                <option value="">Select a PO...</option>
+                {availablePOs.map((po) => (
+                  <option key={po.id} value={po.id}>
+                    {po.po_number} - Ordered: {po.ordered}, Received: {po.received}, Remaining: {po.ordered - po.received}
+                  </option>
+                ))}
+              </Select>
+              <Input
+                label="Quantity Received"
+                type="number"
+                min="1"
+                value={receiveQty}
+                onChange={(e) => setReceiveQty(e.target.value)}
+              />
+            </>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setReceiveOpen(false)}>Cancel</Button>
-            <Button onClick={handleReceive}>Receive</Button>
+            {availablePOs.length > 0 && (
+              <Button onClick={handleReceive}>Receive</Button>
+            )}
           </div>
         </div>
       </Modal>
