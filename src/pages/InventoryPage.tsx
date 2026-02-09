@@ -465,106 +465,102 @@ export default function InventoryPage() {
       return;
     }
 
-    const { error: poError } = await supabase
-      .from('purchase_order_items')
-      .update({ quantity_received: newReceived })
-      .eq('id', receivePOItemId);
+    try {
+      const { error: poError } = await supabase
+        .from('purchase_order_items')
+        .update({ quantity_received: newReceived })
+        .eq('id', receivePOItemId);
 
-    if (poError) {
-      toast('error', 'Failed to update purchase order item');
-      return;
-    }
+      if (poError) throw poError;
 
-    const isVirtualRow = target.id.startsWith('virtual-');
+      const isVirtualRow = target.id.startsWith('virtual-');
 
-    if (isVirtualRow) {
-      const { error: insertError } = await supabase.from('inventory').insert({
+      if (isVirtualRow) {
+        const { error: insertError } = await supabase.from('inventory').insert({
+          product_id: target.product_id,
+          location: 'Main Warehouse',
+          quantity_available: qty,
+          quantity_on_order: 0,
+          quantity_prebooked: 0,
+          unit_size: selectedPO.unit_size || null,
+        });
+
+        if (insertError) throw insertError;
+      } else {
+        const newOnOrder = Math.max(0, (target.quantity_on_order || 0) - qty);
+        const { error: invError } = await supabase
+          .from('inventory')
+          .update({
+            quantity_available: target.quantity_available + qty,
+            quantity_on_order: newOnOrder,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', selectedId);
+
+        if (invError) throw invError;
+      }
+
+      const { data: allItems } = await supabase
+        .from('purchase_order_items')
+        .select('quantity_ordered, quantity_received')
+        .eq('purchase_order_id', selectedPO.purchase_order_id);
+
+      if (allItems) {
+        const allFullyReceived = allItems.every((item: any) => (item.quantity_received || 0) >= item.quantity_ordered);
+        const anyReceived = allItems.some((item: any) => (item.quantity_received || 0) > 0);
+        const newStatus = allFullyReceived ? 'fully_received' : (anyReceived ? 'partially_received' : 'submitted');
+
+        await supabase
+          .from('purchase_orders')
+          .update({ status: newStatus, updated_at: new Date().toISOString() })
+          .eq('id', selectedPO.purchase_order_id);
+      }
+
+      if (selectedPO.unit_cost && selectedPO.unit_cost > 0) {
+        const { data: currentProduct } = await supabase
+          .from('products')
+          .select('id, current_cost')
+          .eq('id', target.product_id)
+          .maybeSingle();
+
+        if (currentProduct && Number(currentProduct.current_cost || 0) !== Number(selectedPO.unit_cost)) {
+          await supabase
+            .from('products')
+            .update({
+              current_cost: selectedPO.unit_cost,
+              cost_updated_date: new Date().toISOString(),
+            })
+            .eq('id', target.product_id);
+
+          await supabase.from('cost_history').insert({
+            product_id: target.product_id,
+            changed_by: profile.id,
+            old_cost: currentProduct.current_cost || 0,
+            new_cost: selectedPO.unit_cost,
+            change_note: `Auto-updated from PO ${selectedPO.po_number} receiving`,
+          });
+        }
+      }
+
+      await supabase.from('inventory_transactions').insert({
         product_id: target.product_id,
-        location: 'Main Warehouse',
-        quantity_available: qty,
-        quantity_on_order: 0,
-        quantity_prebooked: 0,
-        unit_size: selectedPO.unit_size || null,
+        transaction_type: 'received',
+        quantity: qty,
+        to_location: target.location || 'Main Warehouse',
+        purchase_order_id: selectedPO.purchase_order_id,
+        performed_by: profile.id,
+        notes: `Received ${qty} units from PO ${selectedPO.po_number}`,
       });
 
-      if (insertError) {
-        toast('error', 'Failed to create inventory record');
-        return;
-      }
-    } else {
-      const newOnOrder = (target.quantity_on_order || 0) - qty;
-      const { error: invError } = await supabase
-        .from('inventory')
-        .update({
-          quantity_available: target.quantity_available + qty,
-          quantity_on_order: newOnOrder,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', selectedId);
-
-      if (invError) {
-        toast('error', 'Failed to update inventory');
-        return;
-      }
+      toast('success', `Received ${qty} units`);
+      setReceiveOpen(false);
+      setReceiveQty('');
+      setReceivePOItemId('');
+      fetchInventory();
+    } catch (error) {
+      console.error('Error receiving inventory:', error);
+      toast('error', 'Failed to receive inventory: ' + (error as any).message);
     }
-
-    const { data: allItems } = await supabase
-      .from('purchase_order_items')
-      .select('quantity_ordered, quantity_received')
-      .eq('purchase_order_id', selectedPO.purchase_order_id);
-
-    if (allItems) {
-      const allFullyReceived = allItems.every((item: any) => (item.quantity_received || 0) >= item.quantity_ordered);
-      const anyReceived = allItems.some((item: any) => (item.quantity_received || 0) > 0);
-      const newStatus = allFullyReceived ? 'fully_received' : (anyReceived ? 'partially_received' : 'submitted');
-
-      await supabase
-        .from('purchase_orders')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', selectedPO.purchase_order_id);
-    }
-
-    if (selectedPO.unit_cost > 0) {
-      const { data: currentProduct } = await supabase
-        .from('products')
-        .select('id, current_cost')
-        .eq('id', target.product_id)
-        .maybeSingle();
-
-      if (currentProduct && Number(currentProduct.current_cost) !== selectedPO.unit_cost) {
-        await supabase
-          .from('products')
-          .update({
-            current_cost: selectedPO.unit_cost,
-            cost_updated_date: new Date().toISOString(),
-          })
-          .eq('id', target.product_id);
-
-        await supabase.from('cost_history').insert({
-          product_id: target.product_id,
-          changed_by: profile.id,
-          old_cost: currentProduct.current_cost,
-          new_cost: selectedPO.unit_cost,
-          change_note: `Auto-updated from PO ${selectedPO.po_number} receiving`,
-        });
-      }
-    }
-
-    await supabase.from('inventory_transactions').insert({
-      product_id: target.product_id,
-      transaction_type: 'received',
-      quantity: qty,
-      to_location: target.location || 'Main Warehouse',
-      purchase_order_id: selectedPO.purchase_order_id,
-      performed_by: profile.id,
-      notes: `Received ${qty} units from PO ${selectedPO.po_number}`,
-    });
-
-    toast('success', `Received ${qty} units`);
-    setReceiveOpen(false);
-    setReceiveQty('');
-    setReceivePOItemId('');
-    fetchInventory();
   };
 
   const handleAdjust = async () => {
