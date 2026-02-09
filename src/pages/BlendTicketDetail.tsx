@@ -81,7 +81,20 @@ export function BlendTicketDetail() {
       if (productsResult.error) throw productsResult.error;
 
       setTicket(ticketResult.data);
-      setImages(imagesResult.data || []);
+
+      const fetchedImages = imagesResult.data || [];
+      const imagesWithSignedUrls = await Promise.all(
+        fetchedImages.map(async (img: any) => {
+          if (img.storage_path) {
+            const { data } = await supabase.storage
+              .from('blend-ticket-images')
+              .createSignedUrl(img.storage_path, 3600);
+            return { ...img, image_url: data?.signedUrl || img.image_url };
+          }
+          return img;
+        })
+      );
+      setImages(imagesWithSignedUrls);
       setProducts(productsResult.data || []);
       setAllProducts(allProductsResult.data || []);
       setCustomers(customersResult.data || []);
@@ -106,7 +119,7 @@ export function BlendTicketDetail() {
 
     setSaving(true);
     try {
-      await supabase
+      const { error: ticketErr, data: ticketData } = await supabase
         .from('blend_tickets')
         .update({
           customer_id: formData.customer_id || null,
@@ -117,10 +130,13 @@ export function BlendTicketDetail() {
           notes: formData.notes || null,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', ticket.id);
+        .eq('id', ticket.id)
+        .select();
+      if (ticketErr) throw ticketErr;
+      if (!ticketData || ticketData.length === 0) throw new Error('Ticket update failed: no rows affected.');
 
       for (const product of products) {
-        await supabase
+        const { error: prodErr } = await supabase
           .from('blend_ticket_products')
           .update({
             product_id: product.product_id || null,
@@ -130,7 +146,9 @@ export function BlendTicketDetail() {
             lot_number: product.lot_number || null,
             manually_corrected: true,
           })
-          .eq('id', product.id);
+          .eq('id', product.id)
+          .select();
+        if (prodErr) throw prodErr;
       }
 
       await loadTicketData();
@@ -145,14 +163,17 @@ export function BlendTicketDetail() {
     if (!ticket || !profile) return;
 
     try {
-      await supabase
+      const { error, data } = await supabase
         .from('blend_tickets')
         .update({
           review_status: 'approved',
           reviewed_by: profile.id,
           reviewed_at: new Date().toISOString(),
         })
-        .eq('id', ticket.id);
+        .eq('id', ticket.id)
+        .select();
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error('Approve failed: no rows affected.');
 
       navigate('/blend-tickets');
     } catch (error) {
@@ -164,14 +185,17 @@ export function BlendTicketDetail() {
     if (!ticket || !profile) return;
 
     try {
-      await supabase
+      const { error, data } = await supabase
         .from('blend_tickets')
         .update({
           review_status: 'rejected',
           reviewed_by: profile.id,
           reviewed_at: new Date().toISOString(),
         })
-        .eq('id', ticket.id);
+        .eq('id', ticket.id)
+        .select();
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error('Reject failed: no rows affected.');
 
       navigate('/blend-tickets');
     } catch (error) {

@@ -234,15 +234,18 @@ export default function Reports() {
     setMarkingPaid(true);
     const today = new Date().toISOString().split('T')[0];
     
-    const { error } = await supabase
+    const { error, data } = await supabase
       .from('commissions')
       .update({ status: 'paid', paid_date: today })
-      .in('id', Array.from(selectedCommissions));
+      .in('id', Array.from(selectedCommissions))
+      .select();
 
     if (error) {
       toast('error', 'Failed to update commissions');
+    } else if (!data || data.length === 0) {
+      toast('error', 'No commissions were updated. You may not have permission.');
     } else {
-      toast('success', `${selectedCommissions.size} commission(s) marked as paid`);
+      toast('success', `${data.length} commission(s) marked as paid`);
       fetchCommissions();
     }
     setMarkingPaid(false);

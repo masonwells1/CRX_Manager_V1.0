@@ -71,6 +71,16 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
+      if (selectedFile.size > 5 * 1024 * 1024) {
+        toast('error', 'File too large. Maximum size is 5MB.');
+        e.target.value = '';
+        return;
+      }
+      if (!selectedFile.name.toLowerCase().endsWith('.csv') && selectedFile.type !== 'text/csv') {
+        toast('error', 'Invalid file type. Please upload a CSV file.');
+        e.target.value = '';
+        return;
+      }
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);

@@ -112,11 +112,13 @@ export default function OrderDetail() {
         if (error) throw error;
       } else {
         // Simple status change (no inventory impact)
-        const { error } = await supabase
+        const result = await supabase
           .from('orders')
           .update({ status: newStatus, updated_at: new Date().toISOString() })
-          .eq('id', id!);
-        if (error) throw error;
+          .eq('id', id!)
+          .select();
+        if (result.error) throw result.error;
+        if (!result.data || result.data.length === 0) throw new Error('Update failed: no rows affected. You may not have permission.');
       }
 
       toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);

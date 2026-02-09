@@ -139,7 +139,7 @@ export default function PurchaseOrderDetail() {
       0
     );
 
-    const { error: poError } = await supabase
+    const { error: poError, data: poData } = await supabase
       .from('purchase_orders')
       .update({
         vendor: editForm.vendor,
@@ -150,25 +150,37 @@ export default function PurchaseOrderDetail() {
         total_cost: totalCost,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', id!);
+      .eq('id', id!)
+      .select();
 
     if (poError) {
       toast('error', 'Failed to update purchase order');
       setSaving(false);
       return;
     }
+    if (!poData || poData.length === 0) {
+      toast('error', 'Update failed: no rows affected. You may not have permission.');
+      setSaving(false);
+      return;
+    }
 
     for (const item of editItems) {
-      const { error: itemError } = await supabase
+      const { error: itemError, data: itemData } = await supabase
         .from('purchase_order_items')
         .update({
           quantity_ordered: parseFloat(item.quantity_ordered),
           unit_cost: parseFloat(item.unit_cost),
         })
-        .eq('id', item.id);
+        .eq('id', item.id)
+        .select();
 
       if (itemError) {
         toast('error', `Failed to update item: ${item.product_name}`);
+        setSaving(false);
+        return;
+      }
+      if (!itemData || itemData.length === 0) {
+        toast('error', `Update failed for item: ${item.product_name}. No rows affected.`);
         setSaving(false);
         return;
       }
@@ -205,13 +217,19 @@ export default function PurchaseOrderDetail() {
       return;
     }
 
-    const { error: poError } = await supabase
+    const { error: poError, data: poData } = await supabase
       .from('purchase_orders')
       .delete()
-      .eq('id', id!);
+      .eq('id', id!)
+      .select();
 
     if (poError) {
       toast('error', 'Failed to delete purchase order');
+      setSaving(false);
+      return;
+    }
+    if (!poData || poData.length === 0) {
+      toast('error', 'Delete failed: no rows affected. You may not have permission.');
       setSaving(false);
       return;
     }

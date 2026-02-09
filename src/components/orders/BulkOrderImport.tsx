@@ -65,6 +65,17 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
+      if (selectedFile.size > 5 * 1024 * 1024) {
+        toast('error', 'File too large. Maximum size is 5MB.');
+        e.target.value = '';
+        return;
+      }
+      const name = selectedFile.name.toLowerCase();
+      if (!name.endsWith('.csv') && !name.endsWith('.pdf') && selectedFile.type !== 'text/csv' && selectedFile.type !== 'application/pdf') {
+        toast('error', 'Invalid file type. Please upload a CSV or PDF file.');
+        e.target.value = '';
+        return;
+      }
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);

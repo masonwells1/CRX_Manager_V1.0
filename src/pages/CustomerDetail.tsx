@@ -175,12 +175,18 @@ export default function CustomerDetail() {
         navigate(`/customers/${data.id}`, { replace: true });
       }
     } else {
-      const { error } = await supabase
+      const { error, data: updatedRows } = await supabase
         .from('customers')
         .update({ ...customer, updated_at: new Date().toISOString() })
-        .eq('id', id);
+        .eq('id', id)
+        .select();
       if (error) {
         toast('error', error.message);
+        setSaving(false);
+        return;
+      }
+      if (!updatedRows || updatedRows.length === 0) {
+        toast('error', 'Update failed: no rows affected. You may not have permission.');
         setSaving(false);
         return;
       }

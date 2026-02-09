@@ -156,14 +156,14 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
 
         if (uploadError) throw uploadError;
 
-        const { data: urlData } = supabase.storage
+        const { data: urlData } = await supabase.storage
           .from('blend-ticket-images')
-          .getPublicUrl(filePath);
+          .createSignedUrl(filePath, 60 * 60 * 24 * 365);
 
         await supabase.from('blend_ticket_images').insert({
           blend_ticket_id: ticket.id,
           storage_path: filePath,
-          image_url: urlData.publicUrl,
+          image_url: urlData?.signedUrl || filePath,
           file_size: image.file.size,
           mime_type: image.file.type,
           upload_order: i + 1,

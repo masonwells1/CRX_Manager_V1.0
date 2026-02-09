@@ -20,14 +20,15 @@ Deno.serve(async (req: Request) => {
       instructions: [
         "1. Go to Supabase Dashboard > Storage",
         "2. Create a new bucket named: blend-ticket-images",
-        "3. Set it as public bucket for read access",
+        "3. Set it as PRIVATE bucket (not public)",
         "4. Configure max file size: 10MB",
         "5. Allowed MIME types: image/jpeg, image/png",
-        "6. Enable RLS policies for authenticated uploads"
+        "6. Enable RLS policies for authenticated uploads",
+        "7. Use signed URLs to access images (handled by the app)"
       ],
       bucketName: "blend-ticket-images",
       bucketConfig: {
-        public: true,
+        public: false,
         fileSizeLimit: 10485760,
         allowedMimeTypes: ["image/jpeg", "image/png", "image/jpg"]
       }

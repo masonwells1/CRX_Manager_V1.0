@@ -105,7 +105,14 @@ export function useOCRProcessor(enabled: boolean = true) {
       let combinedText = '';
       for (const image of images) {
         try {
-          const response = await fetch(image.image_url);
+          let imageUrl = image.image_url;
+          if (image.storage_path) {
+            const { data: signedData } = await supabase.storage
+              .from('blend-ticket-images')
+              .createSignedUrl(image.storage_path, 3600);
+            if (signedData?.signedUrl) imageUrl = signedData.signedUrl;
+          }
+          const response = await fetch(imageUrl);
           const blob = await response.blob();
           const result = await workerRef.current.recognize(blob);
           combinedText += result.data.text + '\n\n';
