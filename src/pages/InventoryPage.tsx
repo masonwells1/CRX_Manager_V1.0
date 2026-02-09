@@ -99,6 +99,18 @@ export default function InventoryPage() {
       return acc;
     }, {} as Record<string, number>);
 
+    // Fetch on order quantities from purchase orders
+    const { data: poItemsData } = await supabase
+      .from('purchase_order_items')
+      .select('product_id, quantity_ordered, quantity_received, purchase_order:purchase_orders!inner(status)')
+      .in('purchase_order.status', ['submitted', 'partially_received']);
+
+    const onOrderByProduct = (poItemsData || []).reduce((acc, poi: any) => {
+      const remaining = Number(poi.quantity_ordered) - Number(poi.quantity_received);
+      acc[poi.product_id] = (acc[poi.product_id] || 0) + remaining;
+      return acc;
+    }, {} as Record<string, number>);
+
     // Fetch planned quantities from planned quotes
     const { data: quoteItemsData } = await supabase
       .from('quote_items')
@@ -129,6 +141,7 @@ export default function InventoryPage() {
     }, {} as Record<string, number>);
 
     const rows = rawRows.map((item) => {
+      const onOrderQty = onOrderByProduct[item.product_id] || 0;
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
       const plannedQty = (holdsByProduct[item.product_id] || 0) + (plannedByProduct[item.product_id] || 0);
       const freeQty = item.quantity_available - plannedQty;
@@ -138,6 +151,7 @@ export default function InventoryPage() {
 
       return {
         ...item,
+        quantity_on_order: onOrderQty,
         product_name: item.product?.product_name || 'Unknown',
         total_on_floor: totalOnFloor,
         planned_qty: plannedQty,
