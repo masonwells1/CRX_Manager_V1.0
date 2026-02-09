@@ -13,6 +13,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { supabase } from '../lib/db';
 import type { Order, OrderItem, Customer } from '../types';
 
@@ -74,17 +75,19 @@ export default function OrderDetail() {
     setSaving(true);
 
     try {
-      // Atomic RPC: item updates + inventory adjustments + order total recalculation
+      // Atomic RPC with idempotency: item updates + inventory adjustments + order total recalculation
       const itemsPayload = editItems.map((item) => ({
         id: item.id,
         price_per_unit: item.price_per_unit,
         total_units_needed: item.total_units_needed,
       }));
 
+      const idemKey = generateIdempotencyKey('update_order_items', profile.id);
       const { error } = await supabase.rpc('update_order_items', {
         p_order_id: id!,
         p_items: itemsPayload,
         p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) throw error;

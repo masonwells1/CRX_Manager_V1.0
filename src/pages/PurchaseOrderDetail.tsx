@@ -11,6 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus } from '../types';
 
 export default function PurchaseOrderDetail() {
@@ -95,9 +96,11 @@ export default function PurchaseOrderDetail() {
 
     setSaving(true);
     try {
+      const idemKey = generateIdempotencyKey('receive_po_items', profile.id);
       const { error } = await supabase.rpc('receive_po_items', {
         p_items: itemsPayload,
         p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
       toast('success', 'Items received and inventory updated');

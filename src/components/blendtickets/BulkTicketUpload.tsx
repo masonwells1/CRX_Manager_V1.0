@@ -5,6 +5,7 @@ import Card from '../ui/Card';
 import Input from '../ui/Input';
 import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
+import { compressImage } from '../../lib/imageCompression';
 import type { Customer } from '../../types';
 
 interface ImageFile {
@@ -146,13 +147,14 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
 
       for (let i = 0; i < images.length; i++) {
         const image = images[i];
-        const fileExt = image.file.name.split('.').pop();
+        const compressedFile = await compressImage(image.file);
+        const fileExt = compressedFile.name.split('.').pop();
         const fileName = `${i + 1}.${fileExt}`;
         const filePath = `${folderPath}/${fileName}`;
 
         const { error: uploadError } = await supabase.storage
           .from('blend-ticket-images')
-          .upload(filePath, image.file);
+          .upload(filePath, compressedFile);
 
         if (uploadError) throw uploadError;
 
@@ -164,8 +166,8 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
           blend_ticket_id: ticket.id,
           storage_path: filePath,
           image_url: urlData?.signedUrl || filePath,
-          file_size: image.file.size,
-          mime_type: image.file.type,
+          file_size: compressedFile.size,
+          mime_type: compressedFile.type,
           upload_order: i + 1,
         });
 

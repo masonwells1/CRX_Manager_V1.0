@@ -13,6 +13,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
@@ -113,7 +114,8 @@ export default function Payments() {
     setSaving(true);
 
     try {
-      // Atomic RPC: payment + order balance update in one transaction
+      // Atomic RPC with idempotency: payment + order balance update in one transaction
+      const idemKey = generateIdempotencyKey('record_payment', profile.id);
       const { error } = await supabase.rpc('record_payment', {
         p_order_id: payOrderId,
         p_amount: Number(payAmount),
@@ -121,6 +123,7 @@ export default function Payments() {
         p_reference_number: payRef || null,
         p_notes: payNotes || null,
         p_recorded_by: profile.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) throw error;

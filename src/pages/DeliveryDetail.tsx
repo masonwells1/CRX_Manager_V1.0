@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download } from 'lucide-react';
+import { ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -8,6 +8,8 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { queueAction } from '../lib/offlineQueue';
 import type { Delivery, DeliveryItem, Customer, CustomerAddress, Profile } from '../types';
 
 export default function DeliveryDetail() {
@@ -23,6 +25,7 @@ export default function DeliveryDetail() {
   const [loading, setLoading] = useState(true);
   const [signedBy, setSignedBy] = useState('');
   const [completing, setCompleting] = useState(false);
+  const isOnline = useOnlineStatus();
 
   const isDriver = role === 'driver';
 
@@ -68,13 +71,32 @@ export default function DeliveryDetail() {
     if (!delivery || !profile) return;
     setCompleting(true);
 
+    const rpcParams = {
+      p_delivery_id: id!,
+      p_signed_by: signedBy,
+      p_performed_by: profile.id,
+    };
+
+    // If offline, queue the action for later sync
+    if (!isOnline) {
+      try {
+        await queueAction({
+          operation: 'complete_delivery',
+          params: rpcParams,
+          createdAt: new Date().toISOString(),
+          retryCount: 0,
+        });
+        toast('success', 'Delivery saved offline — will sync when you reconnect');
+      } catch (err) {
+        toast('error', 'Failed to save offline. Please try again.');
+      }
+      setCompleting(false);
+      return;
+    }
+
     try {
       // Atomic RPC: delivery status + order_items + inventory + audit trail in one transaction
-      const { error } = await supabase.rpc('complete_delivery', {
-        p_delivery_id: id!,
-        p_signed_by: signedBy,
-        p_performed_by: profile.id,
-      });
+      const { error } = await supabase.rpc('complete_delivery', rpcParams);
 
       if (error) throw error;
 
@@ -209,13 +231,20 @@ export default function DeliveryDetail() {
               <p className="text-xs text-gray-500">
                 Signature capture will be added in a future update.
               </p>
+              {!isOnline && (
+                <div className="flex items-center gap-2 p-3 bg-yellow-900/30 border border-yellow-700 rounded-lg text-yellow-300 text-sm">
+                  <WifiOff className="h-4 w-4 flex-shrink-0" />
+                  <span>You are offline. Delivery will be saved locally and synced when you reconnect.</span>
+                </div>
+              )}
               <button
                 onClick={handleComplete}
                 disabled={completing}
                 className="w-full py-4 bg-crx-green text-white text-lg font-semibold rounded-xl active:bg-crx-green-hover disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
               >
+                {!isOnline && <WifiOff className="w-5 h-5" />}
                 <CheckCircle2 className="w-6 h-6" />
-                {completing ? 'Completing...' : 'Complete Delivery'}
+                {completing ? 'Saving...' : isOnline ? 'Complete Delivery' : 'Save Offline'}
               </button>
             </div>
           )}

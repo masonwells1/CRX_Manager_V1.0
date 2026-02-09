@@ -9,6 +9,7 @@ import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Inventory, Product, InventoryHold, Customer, Profile, QuoteItem } from '../types';
 
 interface InventoryRow extends Inventory {
@@ -465,9 +466,11 @@ export default function InventoryPage() {
     }
 
     try {
+      const idemKey = generateIdempotencyKey('receive_po_items', profile.id);
       const { error } = await supabase.rpc('receive_po_items', {
         p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
         p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
 
