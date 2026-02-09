@@ -103,7 +103,7 @@ export default function InventoryPage() {
     const { data: poItemsData } = await supabase
       .from('purchase_order_items')
       .select('product_id, quantity_ordered, quantity_received, purchase_order:purchase_orders!inner(status)')
-      .in('purchase_order.status', ['submitted', 'partially_received']);
+      .in('purchase_order.status', ['draft', 'submitted', 'partially_received']);
 
     const onOrderByProduct = (poItemsData || []).reduce((acc, poi: any) => {
       const remaining = Number(poi.quantity_ordered) - Number(poi.quantity_received);
