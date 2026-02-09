@@ -30,6 +30,10 @@ interface ParsedProduct {
   suggested_rate?: string;
   rate_per_acre?: number;
   rate_unit?: string;
+  product_form?: string;
+  inventory_unit?: string;
+  container_unit?: string;
+  container_type?: string;
   notes?: string;
 }
 
@@ -57,6 +61,10 @@ const FIELD_MAPPINGS: Record<string, string[]> = {
   suggested_rate: ['suggested_rate', 'rate', 'application_rate', 'use_rate'],
   rate_per_acre: ['rate_per_acre', 'acre_rate', 'per_acre', 'application_per_acre'],
   rate_unit: ['rate_unit', 'unit', 'rate_uom'],
+  product_form: ['product_form', 'form', 'type_liquid_dry', 'liquid_or_dry'],
+  inventory_unit: ['inventory_unit', 'inv_unit', 'pricing_unit'],
+  container_unit: ['container_unit', 'pkg_unit', 'package_unit'],
+  container_type: ['container_type', 'package_type', 'pkg_type'],
   notes: ['notes', 'description', 'comments', 'note'],
 };
 

@@ -25,6 +25,7 @@ interface PdfQuoteItem {
   rate_unit: string;
   acres: number;
   total_units_needed: number;
+  inventory_unit?: string;
   price_per_unit: number;
   total_price: number;
 }
@@ -153,7 +154,7 @@ export function generateQuotePdf(data: PdfQuoteData): jsPDF {
       item.product_name,
       `${item.actual_rate} ${item.rate_unit}`,
       item.acres.toLocaleString(),
-      item.total_units_needed.toLocaleString(),
+      `${item.total_units_needed.toLocaleString()}${item.inventory_unit ? ' ' + item.inventory_unit : ''}`,
       fmt(item.price_per_unit),
       fmt(item.total_price),
     ]);
@@ -161,7 +162,7 @@ export function generateQuotePdf(data: PdfQuoteData): jsPDF {
     autoTable(doc, {
       startY: y,
       margin: { left: margin, right: margin },
-      head: [['Product', 'Rate', 'Acres', 'Units', 'Price/Unit', 'Total']],
+      head: [['Product', 'Rate', 'Acres', 'Qty', 'Price/Unit', 'Total']],
       body: rows,
       theme: 'plain',
       styles: { fontSize: 9, cellPadding: 5, textColor: CHARCOAL },

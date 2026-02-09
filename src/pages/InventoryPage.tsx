@@ -14,6 +14,9 @@ import type { Inventory, Product, InventoryHold, Customer, Profile, QuoteItem } 
 
 interface InventoryRow extends Inventory {
   product_name: string;
+  inventory_unit: string | null;
+  container_size: number | null;
+  container_type: string | null;
   total_on_floor: number;
   planned_qty: number;
   free_qty: number;
@@ -78,7 +81,7 @@ export default function InventoryPage() {
   const fetchInventory = async () => {
     const { data, error } = await supabase
       .from('inventory')
-      .select('*, product:products(product_name)')
+      .select('*, product:products(product_name, inventory_unit, container_size, container_type)')
       .order('product_id');
 
     if (error) {
@@ -88,7 +91,7 @@ export default function InventoryPage() {
       return;
     }
 
-    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string } | null }>;
+    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string; inventory_unit: string | null; container_size: number | null; container_type: string | null } | null }>;
 
     const holdsFetch = supabase
       .from('inventory_holds')
@@ -159,7 +162,7 @@ export default function InventoryPage() {
     }
 
     const buildRow = (
-      item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string },
+      item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string; inventory_unit?: string | null; container_size?: number | null; container_type?: string | null },
       isVirtual: boolean
     ): InventoryRow => {
       const onOrderQty = onOrderByProduct[item.product_id] || 0;
@@ -179,6 +182,9 @@ export default function InventoryPage() {
         last_counted_at: null,
         updated_at: '',
         product_name: item.product_name,
+        inventory_unit: item.inventory_unit || null,
+        container_size: item.container_size || null,
+        container_type: item.container_type || null,
         total_on_floor: totalOnFloor,
         planned_qty: plannedQty,
         free_qty: freeQty,
@@ -199,6 +205,9 @@ export default function InventoryPage() {
           location: item.location,
           unit_size: item.unit_size,
           product_name: item.product?.product_name || 'Unknown',
+          inventory_unit: item.product?.inventory_unit || null,
+          container_size: item.product?.container_size || null,
+          container_type: item.product?.container_type || null,
         },
         false
       )
@@ -593,6 +602,14 @@ export default function InventoryPage() {
       sortable: true,
       render: (row) => (
         <span className="font-medium text-nav-dark">{row.product_name}</span>
+      ),
+    },
+    {
+      key: 'inventory_unit',
+      header: 'Unit',
+      sortable: true,
+      render: (row) => (
+        <span className="text-secondary text-xs">{row.inventory_unit || row.unit_size || '-'}</span>
       ),
     },
     {

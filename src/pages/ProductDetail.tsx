@@ -8,7 +8,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import type { Product, CostHistory } from '../types';
+import type { Product, CostHistory, UnitConversion } from '../types';
 
 export default function ProductDetail() {
   const { id } = useParams();
@@ -27,6 +27,10 @@ export default function ProductDetail() {
     container_size: undefined,
     unit_size: '',
     epa_registration: '',
+    product_form: null,
+    inventory_unit: null,
+    container_unit: null,
+    container_type: null,
     current_cost: undefined,
     tier1_price: undefined,
     tier2_price: undefined,
@@ -38,6 +42,7 @@ export default function ProductDetail() {
     is_active: true,
   });
   const [costHistory, setCostHistory] = useState<CostHistory[]>([]);
+  const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [costModal, setCostModal] = useState(false);
@@ -50,6 +55,12 @@ export default function ProductDetail() {
       fetchCostHistory();
     }
   }, [id]);
+
+  useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data }) => {
+      setUnitConversions((data || []) as UnitConversion[]);
+    });
+  }, []);
 
   const fetchProduct = async () => {
     const { data } = await supabase.from('products').select('*').eq('id', id).maybeSingle();
@@ -188,6 +199,85 @@ export default function ProductDetail() {
               <Input label="Container Size" type="number" value={product.container_size ?? ''} onChange={(e) => update('container_size', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
               <Input label="Unit Size" value={product.unit_size || ''} onChange={(e) => update('unit_size', e.target.value)} disabled={!isAdmin} />
               <Input label="EPA Registration" value={product.epa_registration || ''} onChange={(e) => update('epa_registration', e.target.value)} disabled={!isAdmin} placeholder="e.g., 34704-69" />
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">Product Form</label>
+                <select
+                  value={product.product_form || ''}
+                  onChange={(e) => {
+                    const form = e.target.value || null;
+                    update('product_form', form);
+                    // Clear unit fields if form changes to prevent mismatches
+                    if (form !== product.product_form) {
+                      setProduct((p) => ({ ...p, product_form: form as Product['product_form'], inventory_unit: null, container_unit: null }));
+                    }
+                  }}
+                  disabled={!isAdmin}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                >
+                  <option value="">-- Select --</option>
+                  <option value="liquid">Liquid</option>
+                  <option value="dry">Dry</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">Inventory Unit</label>
+                <select
+                  value={product.inventory_unit || ''}
+                  onChange={(e) => update('inventory_unit', e.target.value || null)}
+                  disabled={!isAdmin}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                >
+                  <option value="">-- Select --</option>
+                  {unitConversions
+                    .filter((uc) => {
+                      const form = product.product_form;
+                      if (!form) return true;
+                      return uc.unit_type === form || uc.unit_type === 'both';
+                    })
+                    .map((uc) => (
+                      <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                    ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">Container Unit</label>
+                <select
+                  value={product.container_unit || ''}
+                  onChange={(e) => update('container_unit', e.target.value || null)}
+                  disabled={!isAdmin}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                >
+                  <option value="">-- Select --</option>
+                  {unitConversions
+                    .filter((uc) => {
+                      const form = product.product_form;
+                      if (!form) return true;
+                      return uc.unit_type === form || uc.unit_type === 'both';
+                    })
+                    .map((uc) => (
+                      <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                    ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">Container Type</label>
+                <select
+                  value={product.container_type || ''}
+                  onChange={(e) => update('container_type', e.target.value || null)}
+                  disabled={!isAdmin}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                >
+                  <option value="">-- Select --</option>
+                  <option value="Jug">Jug</option>
+                  <option value="Drum">Drum</option>
+                  <option value="Pallet">Pallet</option>
+                  <option value="Mini-Bulk">Mini-Bulk</option>
+                  <option value="Shuttle">Shuttle</option>
+                  <option value="Bag">Bag</option>
+                  <option value="Tote">Tote</option>
+                  <option value="Ea">Ea</option>
+                </select>
+              </div>
               <Input label="Suggested Rate" value={product.suggested_rate || ''} onChange={(e) => update('suggested_rate', e.target.value)} disabled={!isAdmin} />
               <Input label="Rate Per Acre" type="number" value={product.rate_per_acre ?? ''} onChange={(e) => update('rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
               <Input label="Rate Unit" value={product.rate_unit || ''} onChange={(e) => update('rate_unit', e.target.value)} disabled={!isAdmin} />
@@ -209,7 +299,7 @@ export default function ProductDetail() {
               <CardHeader title="Pricing" accent="& Margins" />
               <div className="p-3 mb-4 bg-blue-50 border border-blue-100 rounded-lg">
                 <p className="text-xs text-secondary mb-2">
-                  <span className="font-medium">Auto-Calculate:</span> Set a <span className="font-semibold">Net Margin %</span> for any tier, and prices will automatically recalculate whenever cost changes.
+                  <span className="font-medium">All prices are per inventory unit</span> (e.g., per gallon, per pound). Set a <span className="font-semibold">Net Margin %</span> for any tier, and prices will automatically recalculate whenever cost changes.
                 </p>
                 <div className="text-xs text-gray-600 space-y-1">
                   <p><span className="font-medium">Net Margin</span> = Profit % of price (e.g., 20% net → $100 price on $80 cost)</p>

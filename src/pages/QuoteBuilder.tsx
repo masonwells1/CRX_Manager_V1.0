@@ -288,26 +288,35 @@ export default function QuoteBuilder() {
       if (!product) return item;
 
       const pricePerUnit = getTierPrice(product, tierNum);
-      const containerSize = product.container_size || 1;
-      const factorOz = getConversionFactor(item.rate_unit);
       const actualRate = item.actual_rate || 0;
       const acres = item.acres || 0;
 
-      const ozPerAcre = actualRate;
-      const denominator = containerSize * factorOz;
-      const pricePerAcre = denominator > 0 ? pricePerUnit * (ozPerAcre / denominator) : 0;
-      const totalUnitsNeeded = denominator > 0 ? (acres * ozPerAcre) / denominator : 0;
-      const totalPrice = pricePerUnit * totalUnitsNeeded;
-      const profit = (pricePerUnit - (product.current_cost || 0)) * totalUnitsNeeded;
+      // Convert application rate to oz using the rate_unit's conversion factor
+      const rateUnitFactorOz = getConversionFactor(item.rate_unit);
+      const rateInOz = actualRate * rateUnitFactorOz;
+      const ozPerAcre = rateInOz;
+
+      // Convert oz to inventory units using the product's inventory_unit factor
+      const inventoryUnitFactorOz = getConversionFactor(product.inventory_unit);
+      const totalInventoryUnits = inventoryUnitFactorOz > 0
+        ? (acres * rateInOz) / inventoryUnitFactorOz
+        : 0;
+
+      // Price is per inventory unit
+      const pricePerAcre = inventoryUnitFactorOz > 0
+        ? pricePerUnit * (rateInOz / inventoryUnitFactorOz)
+        : 0;
+      const totalPrice = pricePerUnit * totalInventoryUnits;
+      const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
       const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
 
       return {
         ...item,
         price_per_unit: pricePerUnit,
         current_cost: product.current_cost || 0,
-        oz_per_acre: ozPerAcre,
+        oz_per_acre: Math.round(ozPerAcre * 100) / 100,
         price_per_acre: Math.round(pricePerAcre * 100) / 100,
-        total_units_needed: Math.round(totalUnitsNeeded * 100) / 100,
+        total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
         total_price: Math.round(totalPrice * 100) / 100,
         profit: Math.round(profit * 100) / 100,
         net_margin: Math.round(netMargin * 10000) / 10000,
@@ -362,7 +371,7 @@ export default function QuoteBuilder() {
               current_cost: product.current_cost || 0,
               suggested_rate: product.suggested_rate || null,
               rate_unit: product.rate_unit || null,
-              unit_size: product.unit_size || null,
+              unit_size: product.inventory_unit || product.unit_size || null,
             };
             return recalcItem(updated, tier);
           }),
@@ -1035,17 +1044,28 @@ export default function QuoteBuilder() {
                               />
                             </td>
                             <td className="px-3 py-2">
-                              <input
-                                type="text"
+                              <select
                                 value={item.rate_unit || ''}
                                 onChange={(e) =>
                                   updateItem(sec._key, item._key, {
                                     rate_unit: e.target.value || null,
                                   })
                                 }
-                                className="w-16 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
-                                placeholder="oz"
-                              />
+                                className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
+                              >
+                                <option value="">--</option>
+                                {unitConversions
+                                  .filter((uc) => {
+                                    const form = prod?.product_form;
+                                    if (!form) return true;
+                                    return uc.unit_type === form || uc.unit_type === 'both';
+                                  })
+                                  .map((uc) => (
+                                    <option key={uc.id} value={uc.unit}>
+                                      {uc.unit}
+                                    </option>
+                                  ))}
+                              </select>
                             </td>
                             <td className="px-3 py-2">
                               <input

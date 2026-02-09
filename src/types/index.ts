@@ -1,4 +1,7 @@
 export type UserRole = 'admin' | 'sales_rep' | 'driver';
+export type ProductForm = 'liquid' | 'dry';
+export type ContainerType = 'Jug' | 'Drum' | 'Pallet' | 'Mini-Bulk' | 'Shuttle' | 'Bag' | 'Tote' | 'Ea';
+export type UnitType = 'liquid' | 'dry' | 'both';
 
 export interface Profile {
   id: string;
@@ -21,6 +24,10 @@ export interface Product {
   container_size: number | null;
   unit_size: string | null;
   epa_registration: string | null;
+  product_form: ProductForm | null;
+  inventory_unit: string | null;
+  container_unit: string | null;
+  container_type: ContainerType | null;
   current_cost: number | null;
   cost_updated_date: string | null;
   tier1_price: number | null;
@@ -383,6 +390,7 @@ export interface UnitConversion {
   id: string;
   unit: string;
   factor_oz: number;
+  unit_type: UnitType;
   notes: string | null;
 }
 
