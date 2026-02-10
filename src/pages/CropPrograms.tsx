@@ -74,11 +74,18 @@ export default function CropPrograms() {
   }, []);
 
   const fetchPrograms = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('app_settings')
       .select('*')
       .eq('setting_key', 'crop_programs')
       .maybeSingle();
+
+    if (error) {
+      console.error('Failed to load crop programs:', error.message);
+      toast('error', 'Failed to load crop programs.');
+      setLoading(false);
+      return;
+    }
 
     if (data?.setting_value) {
       try {
@@ -92,11 +99,14 @@ export default function CropPrograms() {
   };
 
   const fetchProducts = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('products')
       .select('*')
       .eq('is_active', true)
       .order('product_name');
+    if (error) {
+      console.error('Failed to load products for crop programs:', error.message);
+    }
     setProducts((data || []) as Product[]);
   };
 

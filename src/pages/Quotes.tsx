@@ -67,10 +67,16 @@ export default function Quotes() {
   }, []);
 
   const fetchQuotes = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('quotes')
       .select('*, customer:customers(farm_name)')
       .order('created_at', { ascending: false });
+    if (error) {
+      console.error('Failed to load quotes:', error.message);
+      toast('error', 'Failed to load quotes. Please try again.');
+      setLoading(false);
+      return;
+    }
     setQuotes((data || []) as Quote[]);
     setLoading(false);
   };
@@ -134,7 +140,7 @@ export default function Quotes() {
       header: '',
       render: (row) => (
         <button
-          onClick={(e) => handleDuplicate((row as unknown as Quote).id, e)}
+          onClick={(e) => handleDuplicate(row.id, e)}
           className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
           title="Duplicate this quote"
         >
@@ -167,13 +173,13 @@ export default function Quotes() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable
-            data={filtered as unknown as Record<string, unknown>[]}
-            columns={columns as unknown as Column<Record<string, unknown>>[]}
+          <DataTable<Quote>
+            data={filtered}
+            columns={columns}
             searchable
             searchPlaceholder="Search by quote # or customer..."
             searchKeys={['quote_number']}
-            onRowClick={(row) => navigate(`/quotes/${(row as unknown as Quote).id}`)}
+            onRowClick={(row) => navigate(`/quotes/${row.id}`)}
             emptyTitle="No quotes yet"
             emptyDescription="Create your first quote to get started"
             emptyAction={

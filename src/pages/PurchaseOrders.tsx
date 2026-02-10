@@ -5,6 +5,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import type { PurchaseOrder } from '../types';
@@ -12,6 +13,7 @@ import type { PurchaseOrder } from '../types';
 export default function PurchaseOrders() {
   const { role } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -23,10 +25,16 @@ export default function PurchaseOrders() {
   }, []);
 
   const fetchPOs = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('purchase_orders')
       .select('*')
       .order('created_at', { ascending: false });
+    if (error) {
+      console.error('Failed to load purchase orders:', error.message);
+      toast('error', 'Failed to load purchase orders. Please try again.');
+      setLoading(false);
+      return;
+    }
     setPos((data || []) as PurchaseOrder[]);
     setLoading(false);
   };
@@ -93,15 +101,13 @@ export default function PurchaseOrders() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable
-            data={filtered as unknown as Record<string, unknown>[]}
-            columns={columns as unknown as Column<Record<string, unknown>>[]}
+          <DataTable<PurchaseOrder>
+            data={filtered}
+            columns={columns}
             searchable
             searchPlaceholder="Search purchase orders..."
             searchKeys={['po_number', 'vendor']}
-            onRowClick={(row) =>
-              navigate(`/purchase-orders/${(row as unknown as PurchaseOrder).id}`)
-            }
+            onRowClick={(row) => navigate(`/purchase-orders/${row.id}`)}
             emptyTitle="No purchase orders"
             emptyDescription="Create a PO to order products from vendors"
             emptyAction={

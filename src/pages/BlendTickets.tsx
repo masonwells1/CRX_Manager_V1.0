@@ -16,7 +16,7 @@ import { usePageMeta } from '../hooks/usePageMeta';
 import type { BlendTicket, Customer } from '../types';
 
 export function BlendTickets() {
-  usePageMeta({ title: 'Blend Tickets' });
+  usePageMeta();
   const { profile } = useAuth();
   const [tickets, setTickets] = useState<BlendTicket[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -113,7 +113,7 @@ export function BlendTickets() {
   const columns = [
     {
       key: 'ticket_number',
-      label: 'Ticket #',
+      header: 'Ticket #',
       render: (ticket: BlendTicket) => (
         <Link
           to={`/blend-tickets/${ticket.id}`}
@@ -125,14 +125,14 @@ export function BlendTickets() {
     },
     {
       key: 'customer',
-      label: 'Customer',
+      header: 'Customer',
       render: (ticket: BlendTicket) => (
         <span>{ticket.customer?.farm_name || '-'}</span>
       ),
     },
     {
       key: 'ticket_date',
-      label: 'Date',
+      header: 'Date',
       render: (ticket: BlendTicket) => (
         <span>
           {ticket.ticket_date
@@ -143,24 +143,24 @@ export function BlendTickets() {
     },
     {
       key: 'driver_name',
-      label: 'Driver',
+      header: 'Driver',
       render: (ticket: BlendTicket) => (
         <span>{ticket.driver_name || '-'}</span>
       ),
     },
     {
       key: 'status',
-      label: 'Status',
+      header: 'Status',
       render: (ticket: BlendTicket) => getStatusBadge(ticket.status),
     },
     {
       key: 'review_status',
-      label: 'Review',
+      header: 'Review',
       render: (ticket: BlendTicket) => getReviewBadge(ticket.review_status),
     },
     {
       key: 'ocr_confidence_score',
-      label: 'Confidence',
+      header: 'Confidence',
       render: (ticket: BlendTicket) => (
         <div className="flex items-center gap-2">
           <div className="flex-1 bg-gray-200 rounded-full h-2 max-w-[80px]">
@@ -183,7 +183,7 @@ export function BlendTickets() {
     },
     {
       key: 'uploaded_by',
-      label: 'Uploaded By',
+      header: 'Uploaded By',
       render: (ticket: BlendTicket) => (
         <span className="text-sm">{ticket.uploader?.full_name || '-'}</span>
       ),

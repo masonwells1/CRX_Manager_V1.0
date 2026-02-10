@@ -6,11 +6,13 @@ import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import BulkCustomerImport from '../components/customers/BulkCustomerImport';
+import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import type { Customer } from '../types';
 
 export default function Customers() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [tierFilter, setTierFilter] = useState('');
@@ -21,10 +23,16 @@ export default function Customers() {
   }, []);
 
   const fetchCustomers = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('customers')
       .select('*')
       .order('farm_name');
+    if (error) {
+      console.error('Failed to load customers:', error.message);
+      toast('error', 'Failed to load customers. Please try again.');
+      setLoading(false);
+      return;
+    }
     setCustomers((data || []) as Customer[]);
     setLoading(false);
   };
@@ -93,13 +101,13 @@ export default function Customers() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable
-            data={filtered as unknown as Record<string, unknown>[]}
-            columns={columns as unknown as Column<Record<string, unknown>>[]}
+          <DataTable<Customer>
+            data={filtered}
+            columns={columns}
             searchable
             searchPlaceholder="Search customers..."
             searchKeys={['farm_name', 'contact_name', 'phone', 'email']}
-            onRowClick={(row) => navigate(`/customers/${(row as unknown as Customer).id}`)}
+            onRowClick={(row) => navigate(`/customers/${row.id}`)}
             emptyTitle="No customers yet"
             emptyDescription="Add your first customer to start quoting"
             emptyAction={

@@ -5,6 +5,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import type { Delivery, Profile } from '../types';
@@ -18,6 +19,7 @@ interface DeliveryRow extends Delivery {
 export default function Deliveries() {
   const { role } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -43,10 +45,17 @@ export default function Deliveries() {
   };
 
   const fetchDeliveries = async () => {
-    const { data: delData } = await supabase
+    const { data: delData, error: delError } = await supabase
       .from('deliveries')
       .select('*, customer:customers(farm_name), driver:profiles!deliveries_assigned_driver_fkey(full_name)')
       .order('scheduled_date', { ascending: false });
+
+    if (delError) {
+      console.error('Failed to load deliveries:', delError.message);
+      toast('error', 'Failed to load deliveries. Please try again.');
+      setLoading(false);
+      return;
+    }
 
     const { data: itemCounts } = await supabase
       .from('delivery_items')
@@ -130,13 +139,13 @@ export default function Deliveries() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable
-            data={filtered as unknown as Record<string, unknown>[]}
-            columns={columns as unknown as Column<Record<string, unknown>>[]}
+          <DataTable<DeliveryRow>
+            data={filtered}
+            columns={columns}
             searchable
             searchPlaceholder="Search deliveries..."
             searchKeys={['delivery_number', 'customer_name', 'driver_name']}
-            onRowClick={(row) => navigate(`/deliveries/${(row as unknown as DeliveryRow).id}`)}
+            onRowClick={(row) => navigate(`/deliveries/${row.id}`)}
             emptyTitle="No deliveries"
             emptyDescription="Schedule a delivery from an order"
             loading={loading}

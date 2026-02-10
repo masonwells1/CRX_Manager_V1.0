@@ -7,6 +7,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import BulkPricingImport from '../components/products/BulkPricingImport';
 import BulkProductImport from '../components/products/BulkProductImport';
+import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import type { Product } from '../types';
@@ -14,6 +15,7 @@ import type { Product } from '../types';
 export default function Products() {
   const { role } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -28,10 +30,16 @@ export default function Products() {
   }, []);
 
   const fetchProducts = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('products')
       .select('*')
       .order('product_name');
+    if (error) {
+      console.error('Failed to load products:', error.message);
+      toast('error', 'Failed to load products. Please try again.');
+      setLoading(false);
+      return;
+    }
     const prods = (data || []) as Product[];
     setProducts(prods);
 
@@ -145,13 +153,13 @@ export default function Products() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable
-            data={filtered as unknown as Record<string, unknown>[]}
-            columns={columns as unknown as Column<Record<string, unknown>>[]}
+          <DataTable<Product>
+            data={filtered}
+            columns={columns}
             searchable
             searchPlaceholder="Search products..."
             searchKeys={['product_name', 'sku', 'category', 'vendor']}
-            onRowClick={(row) => navigate(`/products/${(row as unknown as Product).id}`)}
+            onRowClick={(row) => navigate(`/products/${row.id}`)}
             emptyTitle="No products yet"
             emptyDescription="Add your first product to get started"
             emptyAction={

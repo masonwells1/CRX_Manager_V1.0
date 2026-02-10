@@ -71,10 +71,17 @@ export default function Payments() {
     setLoading(true);
 
     // Fetch orders with customer names
-    const { data: orders } = await supabase
+    const { data: orders, error: ordersError } = await supabase
       .from('orders')
       .select('id, order_number, customer_id, total_price, total_paid, balance_due, order_date, status, customer:customers(farm_name)')
       .order('order_date', { ascending: false });
+
+    if (ordersError) {
+      console.error('Failed to load orders for payments:', ordersError.message);
+      toast('error', 'Failed to load payment data. Please try again.');
+      setLoading(false);
+      return;
+    }
 
     const mapped = ((orders || []) as any[]).map((o) => ({
       id: o.id,
@@ -90,11 +97,15 @@ export default function Payments() {
     setArData(mapped);
 
     // Fetch payment history
-    const { data: payData } = await supabase
+    const { data: payData, error: payError } = await supabase
       .from('payments')
       .select('*, order:orders(order_number, customer:customers(farm_name))')
       .order('payment_date', { ascending: false })
       .limit(200);
+
+    if (payError) {
+      console.error('Failed to load payments:', payError.message);
+    }
 
     const payMapped = ((payData || []) as any[]).map((p) => ({
       ...p,
@@ -322,7 +333,7 @@ export default function Payments() {
           columns={arColumns}
           data={filteredAr}
           loading={loading}
-          emptyMessage="No orders found"
+          emptyTitle="No orders found"
         />
       )}
       {tab === 'history' && (
@@ -330,7 +341,7 @@ export default function Payments() {
           columns={payColumns}
           data={filteredPayments}
           loading={loading}
-          emptyMessage="No payments recorded yet"
+          emptyTitle="No payments recorded yet"
         />
       )}
 

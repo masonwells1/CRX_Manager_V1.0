@@ -6,6 +6,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import BulkOrderImport from '../components/orders/BulkOrderImport';
+import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import type { Order } from '../types';
 
@@ -15,6 +16,7 @@ interface OrderWithFulfillment extends Order {
 
 export default function Orders() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [orders, setOrders] = useState<OrderWithFulfillment[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -25,14 +27,25 @@ export default function Orders() {
   }, []);
 
   const fetchOrders = async () => {
-    const { data: ordersData } = await supabase
+    const { data: ordersData, error: ordersError } = await supabase
       .from('orders')
       .select('*, customer:customers(farm_name)')
       .order('order_date', { ascending: false });
 
-    const { data: itemsData } = await supabase
+    if (ordersError) {
+      console.error('Failed to load orders:', ordersError.message);
+      toast('error', 'Failed to load orders. Please try again.');
+      setLoading(false);
+      return;
+    }
+
+    const { data: itemsData, error: itemsError } = await supabase
       .from('order_items')
       .select('order_id, total_units_needed, quantity_delivered');
+
+    if (itemsError) {
+      console.error('Failed to load order items:', itemsError.message);
+    }
 
     const itemsByOrder: Record<string, { needed: number; delivered: number }> = {};
     (itemsData || []).forEach((item) => {
@@ -134,13 +147,13 @@ export default function Orders() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable
-            data={filtered as unknown as Record<string, unknown>[]}
-            columns={columns as unknown as Column<Record<string, unknown>>[]}
+          <DataTable<OrderWithFulfillment>
+            data={filtered}
+            columns={columns}
             searchable
             searchPlaceholder="Search orders..."
             searchKeys={['order_number']}
-            onRowClick={(row) => navigate(`/orders/${(row as unknown as OrderWithFulfillment).id}`)}
+            onRowClick={(row) => navigate(`/orders/${row.id}`)}
             emptyTitle="No orders yet"
             emptyDescription="Orders are created from accepted quotes"
             loading={loading}
