@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, DollarSign } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import type { Product, CostHistory, UnitConversion } from '../types';
 
@@ -49,10 +51,22 @@ export default function ProductDetail() {
   const [newCost, setNewCost] = useState('');
   const [costNote, setCostNote] = useState('');
 
+  // Track dirty state for unsaved changes warning
+  const [isDirty, setIsDirty] = useState(false);
+  const initialLoadDone = useRef(false);
+  const blocker = useUnsavedChanges(isDirty);
+
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [product]);
+
   useEffect(() => {
     if (!isNew && id) {
       fetchProduct();
       fetchCostHistory();
+    } else {
+      setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
   }, [id]);
 
@@ -66,6 +80,7 @@ export default function ProductDetail() {
     const { data } = await supabase.from('products').select('*').eq('id', id).maybeSingle();
     if (data) setProduct(data);
     setLoading(false);
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
   };
 
   const fetchCostHistory = async () => {
@@ -83,12 +98,47 @@ export default function ProductDetail() {
       toast('error', 'Product name is required');
       return;
     }
+
+    // Cost must be non-negative
+    if (product.current_cost != null && product.current_cost < 0) {
+      toast('error', 'Cost cannot be negative');
+      return;
+    }
+
+    // Tier prices must be non-negative
+    if (product.tier1_price != null && product.tier1_price < 0) {
+      toast('error', 'Tier 1 price cannot be negative');
+      return;
+    }
+    if (product.tier2_price != null && product.tier2_price < 0) {
+      toast('error', 'Tier 2 price cannot be negative');
+      return;
+    }
+    if (product.tier3_price != null && product.tier3_price < 0) {
+      toast('error', 'Tier 3 price cannot be negative');
+      return;
+    }
+
+    // Container size must be positive if set
+    if (product.container_size != null && product.container_size <= 0) {
+      toast('error', 'Container size must be greater than 0');
+      return;
+    }
+
+    // Warn (but allow) if price < cost (negative margin)
+    const cost = product.current_cost ?? 0;
+    const prices = [product.tier1_price, product.tier2_price, product.tier3_price].filter((p): p is number => p != null && p > 0);
+    if (cost > 0 && prices.some((p) => p < cost)) {
+      toast('warning', 'Warning: One or more tier prices are below cost (negative margin)');
+    }
+
     setSaving(true);
     if (isNew) {
       const { error } = await supabase.from('products').insert([product]);
       if (error) {
         toast('error', error.message);
       } else {
+        setIsDirty(false);
         toast('success', 'Product created');
         navigate('/products');
       }
@@ -130,6 +180,7 @@ export default function ProductDetail() {
       if (error) {
         toast('error', error.message);
       } else {
+        setIsDirty(false);
         toast('success', 'Product updated');
         if (pricingChanged) fetchCostHistory();
       }
@@ -191,7 +242,7 @@ export default function ProductDetail() {
           <Card>
             <CardHeader title="Product" accent="Information" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Product Name" value={product.product_name || ''} onChange={(e) => update('product_name', e.target.value)} disabled={!isAdmin} />
+              <Input label="Product Name" required value={product.product_name || ''} onChange={(e) => update('product_name', e.target.value)} disabled={!isAdmin} />
               <Input label="SKU" value={product.sku || ''} onChange={(e) => update('sku', e.target.value)} disabled={!isAdmin} />
               <Input label="Category" value={product.category || ''} onChange={(e) => update('category', e.target.value)} disabled={!isAdmin} />
               <Input label="Vendor" value={product.vendor || ''} onChange={(e) => update('vendor', e.target.value)} disabled={!isAdmin} />
@@ -405,6 +456,12 @@ export default function ProductDetail() {
           </div>
         </div>
       </Modal>
+
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
     </div>
   );
 }

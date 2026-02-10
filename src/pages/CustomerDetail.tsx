@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Plus, Trash2 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import type { Customer, CustomerAddress, Quote, Order, Delivery } from '../types';
 
@@ -44,11 +46,26 @@ export default function CustomerDetail() {
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name: string })[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const [tabLoading, setTabLoading] = useState(false);
+  const [emailError, setEmailError] = useState('');
+  const [phoneError, setPhoneError] = useState('');
+
+  // Track dirty state for unsaved changes warning
+  const [isDirty, setIsDirty] = useState(false);
+  const initialLoadDone = useRef(false);
+  const blocker = useUnsavedChanges(isDirty);
+
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [customer, addresses]);
 
   useEffect(() => {
     if (!isNew && id) {
       fetchCustomer();
       fetchAddresses();
+    } else {
+      // New customer — mark ready immediately
+      setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
   }, [id]);
 
@@ -62,6 +79,7 @@ export default function CustomerDetail() {
     const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
     if (data) setCustomer(data);
     setLoading(false);
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
   };
 
   const fetchAddresses = async () => {
@@ -160,6 +178,39 @@ export default function CustomerDetail() {
       toast('error', 'Farm name is required');
       return;
     }
+
+    // Email format validation
+    if (customer.email) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(customer.email)) {
+        setEmailError('Invalid email format');
+        toast('error', 'Please enter a valid email address');
+        return;
+      }
+    }
+    setEmailError('');
+
+    // Phone format validation (digits, dashes, spaces, parens, plus)
+    if (customer.phone) {
+      const phoneRegex = /^[+\d\s()-]{7,20}$/;
+      if (!phoneRegex.test(customer.phone)) {
+        setPhoneError('Invalid phone format');
+        toast('error', 'Please enter a valid phone number');
+        return;
+      }
+    }
+    setPhoneError('');
+
+    // Acreage must be non-negative
+    const acreFields: Array<keyof Customer> = ['total_acres', 'corn_acres', 'soybean_acres', 'other_acres'];
+    for (const field of acreFields) {
+      const val = customer[field];
+      if (val != null && typeof val === 'number' && val < 0) {
+        toast('error', `${field.replace(/_/g, ' ')} cannot be negative`);
+        return;
+      }
+    }
+
     setSaving(true);
     if (isNew) {
       const { data, error } = await supabase.from('customers').insert([customer]).select().maybeSingle();
@@ -171,6 +222,7 @@ export default function CustomerDetail() {
             await supabase.from('customer_addresses').insert([{ ...addr, customer_id: data.id }]);
           }
         }
+        setIsDirty(false);
         toast('success', 'Customer created');
         navigate(`/customers/${data.id}`, { replace: true });
       }
@@ -225,6 +277,7 @@ export default function CustomerDetail() {
         }
       }
 
+      setIsDirty(false);
       toast('success', 'Customer updated');
       fetchAddresses();
     }
@@ -276,10 +329,10 @@ export default function CustomerDetail() {
           <Card>
             <CardHeader title="Contact" accent="Information" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Farm Name" value={customer.farm_name || ''} onChange={(e) => update('farm_name', e.target.value)} />
+              <Input label="Farm Name" required value={customer.farm_name || ''} onChange={(e) => update('farm_name', e.target.value)} />
               <Input label="Contact Name" value={customer.contact_name || ''} onChange={(e) => update('contact_name', e.target.value)} />
-              <Input label="Phone" value={customer.phone || ''} onChange={(e) => update('phone', e.target.value)} />
-              <Input label="Email" type="email" value={customer.email || ''} onChange={(e) => update('email', e.target.value)} />
+              <Input label="Phone" value={customer.phone || ''} onChange={(e) => { update('phone', e.target.value); setPhoneError(''); }} error={phoneError} />
+              <Input label="Email" type="email" value={customer.email || ''} onChange={(e) => { update('email', e.target.value); setEmailError(''); }} error={emailError} />
               <Input label="Billing Address" value={customer.billing_address || ''} onChange={(e) => update('billing_address', e.target.value)} />
               <div>
                 <label className="block text-sm font-medium text-secondary mb-1">Pricing Tier</label>
@@ -614,6 +667,12 @@ export default function CustomerDetail() {
           )}
         </Card>
       )}
+
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
     </div>
   );
 }

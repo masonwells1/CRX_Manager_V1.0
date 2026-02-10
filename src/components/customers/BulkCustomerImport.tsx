@@ -83,15 +83,48 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
     return null;
   };
 
+  const MAX_ROWS = 500;
+
+  /** Parse a single CSV line respecting quoted fields (handles commas inside quotes) */
+  const parseCSVLine = (line: string): string[] => {
+    const result: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else if (ch === '"') {
+          inQuotes = false;
+        } else {
+          current += ch;
+        }
+      } else {
+        if (ch === '"') {
+          inQuotes = true;
+        } else if (ch === ',') {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += ch;
+        }
+      }
+    }
+    result.push(current.trim());
+    return result;
+  };
+
   const parseCSV = (text: string): { headers: string[]; rows: string[][] } => {
     const lines = text.trim().split('\n');
     if (lines.length < 2) return { headers: [], rows: [] };
 
-    const headers = lines[0].split(',').map((h) => h.trim());
+    const headers = parseCSVLine(lines[0]);
     const rows: string[][] = [];
 
     for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(',').map((c) => c.trim());
+      const cols = parseCSVLine(lines[i]);
       if (cols.length > 0 && cols[0]) {
         rows.push(cols);
       }
@@ -110,6 +143,12 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
 
       if (rows.length === 0) {
         toast('error', 'No valid data found in file');
+        setParsing(false);
+        return;
+      }
+
+      if (rows.length > MAX_ROWS) {
+        toast('error', `File has ${rows.length} rows. Maximum is ${MAX_ROWS}. Please split your file into smaller batches.`);
         setParsing(false);
         return;
       }
@@ -166,6 +205,19 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
             data: rowData,
           });
           return;
+        }
+
+        // Validate email format if provided
+        if (customer.email) {
+          const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          if (!emailRegex.test(customer.email)) {
+            invalid.push({
+              row: idx + 2,
+              error: `Invalid email: ${customer.email}`,
+              data: rowData,
+            });
+            return;
+          }
         }
 
         // Set default tier if not provided

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -16,9 +16,11 @@ import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { downloadQuotePdf } from '../lib/quotePdf';
@@ -142,12 +144,26 @@ export default function QuoteBuilder() {
   const [productQuery, setProductQuery] = useState('');
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
 
+  // Track dirty state for unsaved changes warning
+  const [isDirty, setIsDirty] = useState(false);
+  const initialLoadDone = useRef(false);
+  const blocker = useUnsavedChanges(isDirty);
+
+  // Mark dirty whenever user changes form data (after initial load)
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [customerId, tier, validDays, headerNotes, footerNotes, sections]);
+
   useEffect(() => {
     fetchReferenceData();
     if (isEditing && id) {
       fetchQuote(id);
     } else {
-      generateQuoteNumber();
+      generateQuoteNumber().then(() => {
+        // Allow a tick for state to settle before tracking changes
+        setTimeout(() => { initialLoadDone.current = true; }, 0);
+      });
     }
   }, [id]);
 
@@ -243,6 +259,8 @@ export default function QuoteBuilder() {
 
     setSections(localSections.length > 0 ? localSections : [makeEmptySection(1)]);
     setLoading(false);
+    // Allow a tick for state to settle before tracking changes
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
   };
 
   const selectedCustomer = useMemo(
@@ -462,6 +480,25 @@ export default function QuoteBuilder() {
     }
     if (!profile) return null;
 
+    // Validation: warn about empty sections
+    const emptySections = sections.filter((sec) => sec.items.length === 0 || sec.items.every((i) => !i.product_id));
+    if (emptySections.length > 0) {
+      toast('error', `Section "${emptySections[0].section_name}" has no products. Add items or remove the section.`);
+      return null;
+    }
+
+    // Validation: warn about items with zero quantity or price
+    for (const sec of sections) {
+      for (const item of sec.items) {
+        if (!item.product_id) continue;
+        if ((item.acres ?? 0) === 0 && (item.actual_rate ?? 0) === 0) {
+          const prod = item.product || products.find((p) => p.id === item.product_id);
+          toast('error', `"${prod?.product_name || 'An item'}" in "${sec.section_name}" has no rate or acres set.`);
+          return null;
+        }
+      }
+    }
+
     const quotePayload = {
       quote_number: quoteNumber,
       customer_id: customerId,
@@ -560,6 +597,7 @@ export default function QuoteBuilder() {
     setSaving(true);
     const result = await saveQuote('draft');
     if (result) {
+      setIsDirty(false);
       toast('success', 'Quote saved as draft');
       // === GAP FIX #5: Log activity for quote created/updated ===
       if (profile) {
@@ -679,6 +717,7 @@ export default function QuoteBuilder() {
       }
 
       setStatus('sent');
+      setIsDirty(false);
       toast('success', 'Quote sent successfully');
     }
     setSending(false);
@@ -1316,6 +1355,12 @@ export default function QuoteBuilder() {
           </div>
         </div>
       </Modal>
+
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
     </div>
   );
 }

@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Minus, Plus } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import type { Order, OrderItem, Customer, CustomerAddress, Profile } from '../types';
@@ -44,9 +46,20 @@ export default function NewDelivery() {
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
 
+  // Track dirty state for unsaved changes warning
+  const [isDirty, setIsDirty] = useState(false);
+  const initialLoadDone = useRef(false);
+  const blocker = useUnsavedChanges(isDirty);
+
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [selectedOrderId, selectedAddressId, selectedDriverId, scheduledDate, scheduledTime, deliveryNotes, deliveryItems]);
+
   useEffect(() => {
     fetchOrders();
     fetchDrivers();
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
   }, []);
 
   useEffect(() => {
@@ -163,6 +176,12 @@ export default function NewDelivery() {
       return;
     }
 
+    // Warn if scheduled date is in the past
+    const today = new Date().toISOString().split('T')[0];
+    if (scheduledDate < today) {
+      toast('warning', 'Scheduled date is in the past — delivery will be created anyway');
+    }
+
     // Guard: Ensure profile is loaded
     if (!profile) {
       toast('error', 'Please wait for profile to load');
@@ -226,6 +245,7 @@ export default function NewDelivery() {
       return;
     }
 
+    setIsDirty(false);
     toast('success', `Delivery ${deliveryNumber} scheduled`);
 
     // GAP FIX #17: Notify the assigned driver
@@ -417,6 +437,12 @@ export default function NewDelivery() {
           {saving ? 'Scheduling...' : 'Schedule Delivery'}
         </Button>
       </div>
+
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
     </div>
   );
 }

@@ -55,10 +55,13 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
     }
   };
 
+  const MAX_IMAGES = 20;
+  const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
   const handleFiles = (files: File[]) => {
     const validFiles = files.filter(file => {
-      if (!file.type.startsWith('image/')) {
-        setError('Only image files are allowed');
+      if (!ALLOWED_TYPES.includes(file.type)) {
+        setError('Only JPEG, PNG, and WebP images are allowed');
         return false;
       }
       if (file.size > 10 * 1024 * 1024) {
@@ -67,6 +70,11 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
       }
       return true;
     });
+
+    if (images.length + validFiles.length > MAX_IMAGES) {
+      setError(`Maximum ${MAX_IMAGES} images per upload. You have ${images.length} selected and tried to add ${validFiles.length} more.`);
+      return;
+    }
 
     const newImages: ImageFile[] = validFiles.map(file => ({
       file,
@@ -282,7 +290,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
             ref={fileInputRef}
             type="file"
             multiple
-            accept="image/*"
+            accept="image/jpeg,image/png,image/webp"
             onChange={handleFileSelect}
             className="hidden"
             disabled={isUploading}
@@ -293,7 +301,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
             Drop images here or click to upload
           </p>
           <p className="text-sm text-gray-500 mb-4">
-            Support for JPG, PNG files up to 10MB each
+            JPEG, PNG, WebP up to 10MB each (max {MAX_IMAGES} images)
           </p>
           <Button
             onClick={() => fileInputRef.current?.click()}

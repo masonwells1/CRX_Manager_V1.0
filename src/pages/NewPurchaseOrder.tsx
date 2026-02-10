@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, Trash2, Save } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import type { Product } from '../types';
 
@@ -39,8 +41,19 @@ export default function NewPurchaseOrder() {
   const [productSearchOpen, setProductSearchOpen] = useState<string | null>(null);
   const [productQuery, setProductQuery] = useState('');
 
+  // Track dirty state for unsaved changes warning
+  const [isDirty, setIsDirty] = useState(false);
+  const initialLoadDone = useRef(false);
+  const blocker = useUnsavedChanges(isDirty);
+
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [vendor, expectedDate, notes, items]);
+
   useEffect(() => {
     fetchProducts();
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
   }, []);
 
   const fetchProducts = async () => {
@@ -108,6 +121,13 @@ export default function NewPurchaseOrder() {
       return;
     }
 
+    // Warn about items with zero cost
+    const zeroCostItems = validItems.filter((i) => i.unit_cost === 0);
+    if (zeroCostItems.length > 0) {
+      const prod = products.find((p) => p.id === zeroCostItems[0].product_id);
+      toast('warning', `"${prod?.product_name || 'An item'}" has $0 unit cost — verify this is intentional`);
+    }
+
     // Guard: Ensure profile is loaded
     if (!profile) {
       toast('error', 'Please wait for profile to load');
@@ -163,6 +183,7 @@ export default function NewPurchaseOrder() {
       toast('success', `Purchase order ${poNumber} created`);
     }
 
+    setIsDirty(false);
     navigate(`/purchase-orders/${poData.id}`);
     setSaving(false);
   };
@@ -430,6 +451,12 @@ export default function NewPurchaseOrder() {
           </div>
         </div>
       )}
+
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
     </div>
   );
 }
