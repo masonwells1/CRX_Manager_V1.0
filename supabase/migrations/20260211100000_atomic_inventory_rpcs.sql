@@ -188,13 +188,13 @@ BEGIN
     END IF;
 
     -- Insert order item
+    -- Note: order_items table has no sort_order or notes columns
     INSERT INTO order_items (
       order_id, product_id, product_name,
       price_per_unit, cost_per_unit,
       total_units_needed, unit_size,
       total_price, profit, net_margin,
-      quantity_delivered, quantity_remaining,
-      notes, sort_order
+      quantity_delivered, quantity_remaining
     ) VALUES (
       v_order_id,
       (v_item->>'product_id')::uuid,
@@ -212,9 +212,7 @@ BEGIN
         ELSE 0
       END,
       0,
-      (v_item->>'quantity')::numeric,
-      v_item->>'notes',
-      COALESCE((v_item->>'sort_order')::int, 0)
+      (v_item->>'quantity')::numeric
     );
 
     -- Atomic prebook — no read-then-write

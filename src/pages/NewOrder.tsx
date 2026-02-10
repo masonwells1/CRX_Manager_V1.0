@@ -154,15 +154,13 @@ export default function NewOrder() {
 
     try {
       const idemKey = generateIdempotencyKey('create_direct_order', profile.id);
-      const rpcItems = validItems.map((item, idx) => ({
+      const rpcItems = validItems.map((item) => ({
         product_id: item.product_id,
         product_name: item.product_name,
         quantity: item.quantity,
         price_per_unit: item.price_per_unit,
         unit_cost: item.unit_cost,
         unit_size: item.unit_size,
-        notes: item.notes,
-        sort_order: idx + 1,
       }));
 
       const { data, error } = await supabase.rpc('create_direct_order', {
