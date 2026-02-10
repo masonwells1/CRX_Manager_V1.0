@@ -122,19 +122,35 @@ export default function SettingsPage() {
     }
     setCreatingUser(true);
     try {
-      const { data, error } = await supabase.functions.invoke('create-user', {
-        body: {
-          email: newEmail,
-          password: newPassword,
-          full_name: newName,
-          role: newRole,
-          phone: newPhone || null,
-        },
-      });
-      if (error) {
-        toast('error', error.message || 'Failed to create user');
-      } else if (data?.error) {
-        toast('error', data.error);
+      const session = (await supabase.auth.getSession()).data.session;
+      if (!session) {
+        toast('error', 'You are not logged in. Please sign in again.');
+        setCreatingUser(false);
+        return;
+      }
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-user`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            email: newEmail,
+            password: newPassword,
+            full_name: newName,
+            role: newRole,
+            phone: newPhone || null,
+          }),
+        }
+      );
+
+      const data = await response.json();
+      if (!response.ok || data?.error) {
+        toast('error', data?.error || `Request failed (${response.status})`);
       } else {
         toast('success', 'User created successfully');
         setUserModalOpen(false);
@@ -145,8 +161,8 @@ export default function SettingsPage() {
         setNewPhone('');
         fetchUsers();
       }
-    } catch {
-      toast('error', 'Failed to create user');
+    } catch (err) {
+      toast('error', err instanceof Error ? err.message : 'Failed to create user');
     }
     setCreatingUser(false);
   };
