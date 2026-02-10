@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Upload } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -8,6 +8,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import BulkPOImport from '../components/purchase-orders/BulkPOImport';
 import type { PurchaseOrder } from '../types';
 
 export default function PurchaseOrders() {
@@ -17,6 +18,7 @@ export default function PurchaseOrders() {
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
+  const [importOpen, setImportOpen] = useState(false);
 
   const isAdmin = role === 'admin';
 
@@ -92,7 +94,15 @@ export default function PurchaseOrders() {
   return (
     <div className="space-y-4">
       {isAdmin && (
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="secondary"
+            icon={<Upload className="w-4 h-4" />}
+            showChevron={false}
+            onClick={() => setImportOpen(true)}
+          >
+            Import from PDF
+          </Button>
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/purchase-orders/new')}>
             New PO
           </Button>
@@ -135,6 +145,12 @@ export default function PurchaseOrders() {
           />
         </div>
       </Card>
+
+      <BulkPOImport
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onSuccess={() => { setImportOpen(false); fetchPOs(); }}
+      />
     </div>
   );
 }
