@@ -24,6 +24,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { downloadQuotePdf } from '../lib/quotePdf';
+import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import type {
   Quote,
   QuoteSection,
@@ -123,10 +124,7 @@ export default function QuoteBuilder() {
   const [headerNotes, setHeaderNotes] = useState('');
   const [footerNotes, setFooterNotes] = useState('');
   const [commissionSplit, setCommissionSplit] = useState<CommissionSplit>({
-    splits: [
-      { recipient: 'Mason Wells', percentage: 50 },
-      { recipient: 'Chance Tuttle', percentage: 50 },
-    ],
+    splits: [{ recipient: '', percentage: 100 }],
   });
   const [quoteNumber, setQuoteNumber] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
@@ -894,20 +892,11 @@ export default function QuoteBuilder() {
             value={validDays}
             onChange={(e) => setValidDays(parseInt(e.target.value) || 15)}
           />
-          <div>
-            <label className="block text-sm font-medium text-secondary mb-1">
-              Commission Split
-            </label>
-            <div className="flex flex-wrap gap-1.5">
-              {commissionSplit.splits.map((s, i) => (
-                <span
-                  key={i}
-                  className="inline-flex items-center px-2 py-1 text-xs bg-crx-green-light text-crx-green rounded-full font-medium"
-                >
-                  {s.recipient}: {s.percentage}%
-                </span>
-              ))}
-            </div>
+          <div className="sm:col-span-2 lg:col-span-4">
+            <CommissionSplitEditor
+              value={commissionSplit}
+              onChange={setCommissionSplit}
+            />
           </div>
         </div>
         <div className="mt-4">
