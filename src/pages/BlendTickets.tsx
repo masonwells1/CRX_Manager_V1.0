@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle } from 'lucide-react';
+import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus } from 'lucide-react';
 import { supabase } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useOCRProcessor } from '../hooks/useOCRProcessor';
@@ -11,6 +11,7 @@ import Input from '../components/ui/Input';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
 import { BulkTicketUpload } from '../components/blendtickets/BulkTicketUpload';
+import { ManualTicketCreate } from '../components/blendtickets/ManualTicketCreate';
 import DataTable from '../components/ui/DataTable';
 import { usePageMeta } from '../hooks/usePageMeta';
 import type { BlendTicket, Customer } from '../types';
@@ -22,6 +23,7 @@ export function BlendTickets() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
+  const [showManualCreate, setShowManualCreate] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [reviewFilter, setReviewFilter] = useState<string>('all');
@@ -218,7 +220,22 @@ export function BlendTickets() {
               Processing tickets...
             </div>
           )}
-          <Button onClick={() => setShowUpload(!showUpload)}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setShowManualCreate(!showManualCreate);
+              if (!showManualCreate) setShowUpload(false);
+            }}
+          >
+            <Plus className="h-4 w-4" />
+            {showManualCreate ? 'Hide Manual' : 'Create Manual'}
+          </Button>
+          <Button
+            onClick={() => {
+              setShowUpload(!showUpload);
+              if (!showUpload) setShowManualCreate(false);
+            }}
+          >
             <Upload className="h-4 w-4" />
             {showUpload ? 'Hide Upload' : 'Upload Tickets'}
           </Button>
@@ -230,6 +247,16 @@ export function BlendTickets() {
           customers={customers}
           onUploadComplete={() => {
             setShowUpload(false);
+            loadData();
+          }}
+        />
+      )}
+
+      {showManualCreate && (
+        <ManualTicketCreate
+          customers={customers}
+          onComplete={() => {
+            setShowManualCreate(false);
             loadData();
           }}
         />

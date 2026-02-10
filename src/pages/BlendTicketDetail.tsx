@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon } from 'lucide-react';
+import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle } from 'lucide-react';
 import { supabase } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/ui/Button';
@@ -9,6 +9,7 @@ import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import Skeleton from '../components/ui/Skeleton';
 import { usePageMeta } from '../hooks/usePageMeta';
+import { validateBlendMath } from '../lib/blendMathValidator';
 import type { BlendTicket, BlendTicketProduct, BlendTicketImage, Customer, Product } from '../types';
 
 export function BlendTicketDetail() {
@@ -25,13 +26,24 @@ export function BlendTicketDetail() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+  const [warnings, setWarnings] = useState<string[]>([]);
 
   const [formData, setFormData] = useState({
     customer_id: '',
     ticket_date: '',
+    ticket_time: '',
+    job_number: '',
+    invoice_number: '',
     driver_name: '',
-    tank_number: '',
     applicator_name: '',
+    mixer_name: '',
+    tank_number: '',
+    vehicle_info: '',
+    field_names: '',
+    total_acres: '',
+    application_rate: '',
+    total_volume: '',
+    total_volume_unit: '',
     notes: '',
   });
 
@@ -40,6 +52,22 @@ export function BlendTicketDetail() {
       loadTicketData();
     }
   }, [id]);
+
+  useEffect(() => {
+    const ticketData = {
+      total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
+      total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
+      total_volume_unit: formData.total_volume_unit || null,
+    };
+    const productData = products.map(p => ({
+      product_name: p.product_name,
+      quantity: p.quantity,
+      unit: p.unit,
+      rate_per_acre: p.rate_per_acre,
+      rate_per_acre_unit: p.rate_per_acre_unit,
+    }));
+    setWarnings(validateBlendMath(ticketData, productData));
+  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
 
   async function loadTicketData() {
     try {
@@ -102,9 +130,19 @@ export function BlendTicketDetail() {
       setFormData({
         customer_id: ticketResult.data.customer_id || '',
         ticket_date: ticketResult.data.ticket_date || '',
+        ticket_time: ticketResult.data.ticket_time || '',
+        job_number: ticketResult.data.job_number || '',
+        invoice_number: ticketResult.data.invoice_number || '',
         driver_name: ticketResult.data.driver_name || '',
-        tank_number: ticketResult.data.tank_number || '',
         applicator_name: ticketResult.data.applicator_name || '',
+        mixer_name: ticketResult.data.mixer_name || '',
+        tank_number: ticketResult.data.tank_number || '',
+        vehicle_info: ticketResult.data.vehicle_info || '',
+        field_names: ticketResult.data.field_names || '',
+        total_acres: ticketResult.data.total_acres?.toString() || '',
+        application_rate: ticketResult.data.application_rate || '',
+        total_volume: ticketResult.data.total_volume?.toString() || '',
+        total_volume_unit: ticketResult.data.total_volume_unit || '',
         notes: ticketResult.data.notes || '',
       });
     } catch (error) {
@@ -124,9 +162,19 @@ export function BlendTicketDetail() {
         .update({
           customer_id: formData.customer_id || null,
           ticket_date: formData.ticket_date || null,
+          ticket_time: formData.ticket_time || null,
+          job_number: formData.job_number || null,
+          invoice_number: formData.invoice_number || null,
           driver_name: formData.driver_name || null,
-          tank_number: formData.tank_number || null,
           applicator_name: formData.applicator_name || null,
+          mixer_name: formData.mixer_name || null,
+          tank_number: formData.tank_number || null,
+          vehicle_info: formData.vehicle_info || null,
+          field_names: formData.field_names || null,
+          total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
+          application_rate: formData.application_rate || null,
+          total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
+          total_volume_unit: formData.total_volume_unit || null,
           notes: formData.notes || null,
           updated_at: new Date().toISOString(),
         })
@@ -144,6 +192,8 @@ export function BlendTicketDetail() {
             quantity: product.quantity,
             unit: product.unit || null,
             lot_number: product.lot_number || null,
+            rate_per_acre: product.rate_per_acre || null,
+            rate_per_acre_unit: product.rate_per_acre_unit || null,
             manually_corrected: true,
           })
           .eq('id', product.id)
@@ -219,6 +269,8 @@ export function BlendTicketDetail() {
       quantity: 0,
       unit: null,
       lot_number: null,
+      rate_per_acre: null,
+      rate_per_acre_unit: null,
       sequence_order: products.length + 1,
       confidence_score: 0,
       manually_corrected: true,
@@ -358,8 +410,8 @@ export function BlendTicketDetail() {
         <Card className="p-6">
           <h2 className="text-lg font-semibold mb-4">Ticket Information</h2>
 
-          <div className="space-y-4">
-            <div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Customer
               </label>
@@ -390,6 +442,42 @@ export function BlendTicketDetail() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
+                Ticket Time
+              </label>
+              <Input
+                type="text"
+                value={formData.ticket_time}
+                onChange={(e) => setFormData({ ...formData, ticket_time: e.target.value })}
+                placeholder="e.g. 2:30 PM"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Job #
+              </label>
+              <Input
+                type="text"
+                value={formData.job_number}
+                onChange={(e) => setFormData({ ...formData, job_number: e.target.value })}
+                placeholder="Job / work order number"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Invoice #
+              </label>
+              <Input
+                type="text"
+                value={formData.invoice_number}
+                onChange={(e) => setFormData({ ...formData, invoice_number: e.target.value })}
+                placeholder="Invoice reference"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 Driver Name
               </label>
               <Input
@@ -397,18 +485,6 @@ export function BlendTicketDetail() {
                 value={formData.driver_name}
                 onChange={(e) => setFormData({ ...formData, driver_name: e.target.value })}
                 placeholder="Enter driver name"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Tank Number
-              </label>
-              <Input
-                type="text"
-                value={formData.tank_number}
-                onChange={(e) => setFormData({ ...formData, tank_number: e.target.value })}
-                placeholder="Enter tank number"
               />
             </div>
 
@@ -425,6 +501,101 @@ export function BlendTicketDetail() {
             </div>
 
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Mixer Name
+              </label>
+              <Input
+                type="text"
+                value={formData.mixer_name}
+                onChange={(e) => setFormData({ ...formData, mixer_name: e.target.value })}
+                placeholder="Person who mixed the blend"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Tank #
+              </label>
+              <Input
+                type="text"
+                value={formData.tank_number}
+                onChange={(e) => setFormData({ ...formData, tank_number: e.target.value })}
+                placeholder="Enter tank number"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Vehicle
+              </label>
+              <Input
+                type="text"
+                value={formData.vehicle_info}
+                onChange={(e) => setFormData({ ...formData, vehicle_info: e.target.value })}
+                placeholder="Vehicle / rig description"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Field Names / Locations
+              </label>
+              <Input
+                type="text"
+                value={formData.field_names}
+                onChange={(e) => setFormData({ ...formData, field_names: e.target.value })}
+                placeholder="Comma-separated field names"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Total Acres
+              </label>
+              <Input
+                type="number"
+                step="0.01"
+                value={formData.total_acres}
+                onChange={(e) => setFormData({ ...formData, total_acres: e.target.value })}
+                placeholder="0"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Application Rate
+              </label>
+              <Input
+                type="text"
+                value={formData.application_rate}
+                onChange={(e) => setFormData({ ...formData, application_rate: e.target.value })}
+                placeholder="e.g. 10 gal/acre"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Total Volume
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={formData.total_volume}
+                  onChange={(e) => setFormData({ ...formData, total_volume: e.target.value })}
+                  placeholder="0"
+                />
+                <Input
+                  type="text"
+                  value={formData.total_volume_unit}
+                  onChange={(e) => setFormData({ ...formData, total_volume_unit: e.target.value })}
+                  placeholder="gal"
+                  className="w-24"
+                />
+              </div>
+            </div>
+
+            <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Notes
               </label>
@@ -452,7 +623,7 @@ export function BlendTicketDetail() {
         <div className="space-y-4">
           {products.map((product, index) => (
             <div key={product.id} className="grid grid-cols-12 gap-3 items-start p-4 bg-gray-50 rounded-lg">
-              <div className="col-span-4">
+              <div className="col-span-12 md:col-span-3">
                 <label className="block text-xs font-medium text-gray-700 mb-1">
                   Product
                 </label>
@@ -476,9 +647,9 @@ export function BlendTicketDetail() {
                 </select>
               </div>
 
-              <div className="col-span-2">
+              <div className="col-span-4 md:col-span-1">
                 <label className="block text-xs font-medium text-gray-700 mb-1">
-                  Quantity
+                  Qty
                 </label>
                 <Input
                   type="number"
@@ -488,7 +659,7 @@ export function BlendTicketDetail() {
                 />
               </div>
 
-              <div className="col-span-2">
+              <div className="col-span-4 md:col-span-1">
                 <label className="block text-xs font-medium text-gray-700 mb-1">
                   Unit
                 </label>
@@ -496,11 +667,35 @@ export function BlendTicketDetail() {
                   type="text"
                   value={product.unit || ''}
                   onChange={(e) => updateProduct(index, 'unit', e.target.value)}
-                  placeholder="gal, lb, oz"
+                  placeholder="gal"
                 />
               </div>
 
-              <div className="col-span-3">
+              <div className="col-span-4 md:col-span-2">
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Rate/Acre
+                </label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={product.rate_per_acre ?? ''}
+                  onChange={(e) => updateProduct(index, 'rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)}
+                />
+              </div>
+
+              <div className="col-span-4 md:col-span-1">
+                <label className="block text-xs font-medium text-gray-700 mb-1">
+                  Rate Unit
+                </label>
+                <Input
+                  type="text"
+                  value={product.rate_per_acre_unit || ''}
+                  onChange={(e) => updateProduct(index, 'rate_per_acre_unit', e.target.value)}
+                  placeholder="oz/ac"
+                />
+              </div>
+
+              <div className="col-span-6 md:col-span-3">
                 <label className="block text-xs font-medium text-gray-700 mb-1">
                   Lot Number
                 </label>
@@ -512,7 +707,7 @@ export function BlendTicketDetail() {
                 />
               </div>
 
-              <div className="col-span-1 flex items-end">
+              <div className="col-span-2 md:col-span-1 flex items-end">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -539,6 +734,18 @@ export function BlendTicketDetail() {
           )}
         </div>
       </Card>
+
+      {warnings.length > 0 && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-1">
+          <div className="flex items-center gap-2 text-yellow-800 font-medium text-sm">
+            <AlertCircle className="h-4 w-4" />
+            Math Validation Warnings
+          </div>
+          {warnings.map((w, i) => (
+            <p key={i} className="text-sm text-yellow-700 ml-6">- {w}</p>
+          ))}
+        </div>
+      )}
 
       <div className="flex justify-end gap-3">
         <Button variant="secondary" onClick={() => navigate('/blend-tickets')}>

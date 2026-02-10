@@ -426,6 +426,16 @@ export interface BlendTicket {
   applicator_name: string | null;
   signature_detected: boolean;
   notes: string | null;
+  job_number: string | null;
+  invoice_number: string | null;
+  ticket_time: string | null;
+  vehicle_info: string | null;
+  mixer_name: string | null;
+  field_names: string | null;
+  total_acres: number | null;
+  application_rate: string | null;
+  total_volume: number | null;
+  total_volume_unit: string | null;
   created_at: string;
   updated_at: string;
   uploader?: Profile;
@@ -446,6 +456,8 @@ export interface BlendTicketProduct {
   sequence_order: number;
   confidence_score: number;
   manually_corrected: boolean;
+  rate_per_acre: number | null;
+  rate_per_acre_unit: string | null;
   created_at: string;
   product?: Product;
 }
