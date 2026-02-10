@@ -4,13 +4,14 @@ import { ArrowLeft, Save, Plus, Trash2 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
-import type { Customer, CustomerAddress, Quote, Order, Delivery } from '../types';
+import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery } from '../types';
 
 export default function CustomerDetail() {
   const { id } = useParams();
@@ -34,7 +35,7 @@ export default function CustomerDetail() {
     payment_terms: '',
     notes: '',
     is_active: true,
-    default_commission_split: { splits: [{ recipient: 'Mason Wells', percentage: 50 }, { recipient: 'Chance Tuttle', percentage: 50 }] },
+    default_commission_split: { splits: [{ recipient: '', percentage: 100 }] },
   });
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   const [loading, setLoading] = useState(!isNew);
@@ -402,6 +403,18 @@ export default function CustomerDetail() {
                 ))}
               </div>
             )}
+          </Card>
+
+          <Card>
+            <CardHeader title="Default" accent="Commission Split" />
+            <CommissionSplitEditor
+              value={(customer.default_commission_split as CommissionSplit) || { splits: [{ recipient: '', percentage: 100 }] }}
+              onChange={(val) => update('default_commission_split', val)}
+              label=""
+            />
+            <p className="text-xs text-secondary mt-2">
+              This default split is applied to new quotes for this customer.
+            </p>
           </Card>
 
           <Card>
