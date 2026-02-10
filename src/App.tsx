@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { createBrowserRouter, RouterProvider, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './components/ui/Toast';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -45,6 +45,67 @@ function PageLoader() {
   );
 }
 
+// Root layout that wraps all routes with providers
+function RootLayout() {
+  return (
+    <AuthProvider>
+      <ToastProvider>
+        <ErrorBoundary>
+          <Suspense fallback={<PageLoader />}>
+            <Outlet />
+          </Suspense>
+        </ErrorBoundary>
+      </ToastProvider>
+    </AuthProvider>
+  );
+}
+
+const router = createBrowserRouter([
+  {
+    element: <RootLayout />,
+    children: [
+      { path: 'login', element: <LoginPage /> },
+      {
+        element: (
+          <ProtectedRoute>
+            <AppLayout />
+          </ProtectedRoute>
+        ),
+        children: [
+          { index: true, element: <Dashboard /> },
+          { path: 'products', element: <Products /> },
+          { path: 'products/:id', element: <ProductDetail /> },
+          { path: 'customers', element: <Customers /> },
+          { path: 'customers/:id', element: <CustomerDetail /> },
+          { path: 'quotes', element: <Quotes /> },
+          { path: 'quotes/new', element: <QuoteBuilder /> },
+          { path: 'quotes/:id', element: <QuoteBuilder /> },
+          { path: 'orders', element: <Orders /> },
+          { path: 'orders/new', element: <NewOrder /> },
+          { path: 'orders/:id', element: <OrderDetail /> },
+          { path: 'inventory', element: <InventoryPage /> },
+          { path: 'deliveries', element: <Deliveries /> },
+          { path: 'deliveries/new', element: <NewDelivery /> },
+          { path: 'deliveries/:id', element: <DeliveryDetail /> },
+          { path: 'blend-tickets', element: <BlendTickets /> },
+          { path: 'blend-tickets/:id', element: <BlendTicketDetail /> },
+          { path: 'purchase-orders', element: <PurchaseOrders /> },
+          { path: 'purchase-orders/new', element: <NewPurchaseOrder /> },
+          { path: 'purchase-orders/:id', element: <PurchaseOrderDetail /> },
+          { path: 'brand-vs-generic', element: <BrandVsGeneric /> },
+          { path: 'reports', element: <Reports /> },
+          { path: 'crop-programs', element: <CropPrograms /> },
+          { path: 'payments', element: <Payments /> },
+          { path: 'team-board', element: <TeamBoard /> },
+          { path: 'notifications', element: <Notifications /> },
+          { path: 'settings', element: <ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute> },
+        ],
+      },
+      { path: '*', element: <Navigate to="/" replace /> },
+    ],
+  },
+]);
+
 export default function App() {
   const envCheck = checkEnvVars();
 
@@ -52,55 +113,5 @@ export default function App() {
     return <EnvErrorScreen missing={envCheck.missing} />;
   }
 
-  return (
-    <BrowserRouter>
-      <AuthProvider>
-        <ToastProvider>
-          <ErrorBoundary>
-          <Suspense fallback={<PageLoader />}>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route
-                element={
-                  <ProtectedRoute>
-                    <AppLayout />
-                  </ProtectedRoute>
-                }
-              >
-                <Route index element={<Dashboard />} />
-                <Route path="products" element={<Products />} />
-                <Route path="products/:id" element={<ProductDetail />} />
-                <Route path="customers" element={<Customers />} />
-                <Route path="customers/:id" element={<CustomerDetail />} />
-                <Route path="quotes" element={<Quotes />} />
-                <Route path="quotes/new" element={<QuoteBuilder />} />
-                <Route path="quotes/:id" element={<QuoteBuilder />} />
-                <Route path="orders" element={<Orders />} />
-                <Route path="orders/new" element={<NewOrder />} />
-                <Route path="orders/:id" element={<OrderDetail />} />
-                <Route path="inventory" element={<InventoryPage />} />
-                <Route path="deliveries" element={<Deliveries />} />
-                <Route path="deliveries/new" element={<NewDelivery />} />
-                <Route path="deliveries/:id" element={<DeliveryDetail />} />
-                <Route path="blend-tickets" element={<BlendTickets />} />
-                <Route path="blend-tickets/:id" element={<BlendTicketDetail />} />
-                <Route path="purchase-orders" element={<PurchaseOrders />} />
-                <Route path="purchase-orders/new" element={<NewPurchaseOrder />} />
-                <Route path="purchase-orders/:id" element={<PurchaseOrderDetail />} />
-                <Route path="brand-vs-generic" element={<BrandVsGeneric />} />
-                <Route path="reports" element={<Reports />} />
-                <Route path="crop-programs" element={<CropPrograms />} />
-                <Route path="payments" element={<Payments />} />
-                <Route path="team-board" element={<TeamBoard />} />
-                <Route path="notifications" element={<Notifications />} />
-                <Route path="settings" element={<ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute>} />
-              </Route>
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Suspense>
-          </ErrorBoundary>
-        </ToastProvider>
-      </AuthProvider>
-    </BrowserRouter>
-  );
+  return <RouterProvider router={router} />;
 }
