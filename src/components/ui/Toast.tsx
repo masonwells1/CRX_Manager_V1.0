@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
-import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { CheckCircle2, AlertCircle, AlertTriangle, Info, X } from 'lucide-react';
 
-type ToastType = 'success' | 'error' | 'info';
+type ToastType = 'success' | 'error' | 'info' | 'warning';
 
 interface Toast {
   id: number;
@@ -23,12 +23,14 @@ const icons: Record<ToastType, ReactNode> = {
   success: <CheckCircle2 className="w-5 h-5 text-emerald-500" />,
   error: <AlertCircle className="w-5 h-5 text-red-500" />,
   info: <Info className="w-5 h-5 text-blue-500" />,
+  warning: <AlertTriangle className="w-5 h-5 text-amber-500" />,
 };
 
 const bgClasses: Record<ToastType, string> = {
   success: 'border-emerald-200 bg-emerald-50',
   error: 'border-red-200 bg-red-50',
   info: 'border-blue-200 bg-blue-50',
+  warning: 'border-amber-200 bg-amber-50',
 };
 
 let nextId = 0;
