@@ -14,6 +14,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Product, Customer } from '../types';
 
 interface LocalItem {
@@ -144,102 +145,44 @@ export default function NewOrder() {
       return;
     }
 
+    if (!profile) {
+      toast('error', 'Please wait for profile to load');
+      return;
+    }
+
     setSaving(true);
 
     try {
-      const totalPrice = validItems.reduce(
-        (sum, item) => sum + item.quantity * item.price_per_unit,
-        0
-      );
-      const totalCost = validItems.reduce(
-        (sum, item) => sum + item.quantity * item.unit_cost,
-        0
-      );
-      const totalProfit = totalPrice - totalCost;
-      const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
-
-      const { data: order, error: orderError } = await supabase
-        .from('orders')
-        .insert({
-          order_number: orderNumber,
-          customer_id: customerId,
-          status: 'confirmed',
-          total_price: totalPrice,
-          total_cost: totalCost,
-          total_profit: totalProfit,
-          total_margin_pct: totalMarginPct,
-          order_date: orderDate,
-          notes,
-        })
-        .select()
-        .single();
-
-      if (orderError) throw orderError;
-
-      const orderItems = validItems.map((item, idx) => ({
-        order_id: order.id,
+      const idemKey = generateIdempotencyKey('create_direct_order', profile.id);
+      const rpcItems = validItems.map((item, idx) => ({
         product_id: item.product_id,
         product_name: item.product_name,
+        quantity: item.quantity,
         price_per_unit: item.price_per_unit,
         unit_cost: item.unit_cost,
-        total_units_needed: item.quantity,
         unit_size: item.unit_size,
         notes: item.notes,
         sort_order: idx + 1,
-        quantity_delivered: 0,
       }));
 
-      const { error: itemsError } = await supabase.from('order_items').insert(orderItems);
+      const { data, error } = await supabase.rpc('create_direct_order', {
+        p_order_number: orderNumber,
+        p_customer_id: customerId,
+        p_order_date: orderDate,
+        p_notes: notes || null,
+        p_items: rpcItems,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
 
-      if (itemsError) throw itemsError;
+      if (error) throw error;
 
-      for (const item of orderItems) {
-        if (!item.product_id || !item.total_units_needed) continue;
-
-        const { data: inv } = await supabase
-          .from('inventory')
-          .select('id, quantity_prebooked')
-          .eq('product_id', item.product_id)
-          .eq('location', 'Main Warehouse')
-          .maybeSingle();
-
-        if (inv) {
-          await supabase
-            .from('inventory')
-            .update({
-              quantity_prebooked: (Number(inv.quantity_prebooked) || 0) + Number(item.total_units_needed),
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', inv.id);
-        } else {
-          await supabase.from('inventory').insert({
-            product_id: item.product_id,
-            location: 'Main Warehouse',
-            quantity_available: 0,
-            quantity_prebooked: Number(item.total_units_needed),
-            quantity_on_order: 0,
-            unit_size: item.unit_size || null,
-          });
-        }
-
-        if (profile) {
-          await supabase.from('inventory_transactions').insert({
-            product_id: item.product_id,
-            transaction_type: 'booked',
-            quantity: Number(item.total_units_needed),
-            to_location: 'Main Warehouse',
-            order_id: order.id,
-            performed_by: profile.id,
-            notes: `Pre-booked for order ${orderNumber}`,
-          });
-        }
-      }
-
+      const orderId = (data as any)?.order_id;
       toast('success', 'Order created successfully');
-      navigate(`/orders/${order.id}`);
+      navigate(`/orders/${orderId}`);
     } catch (err) {
       console.error('Error creating order:', err);
-      toast('error', 'Failed to create order');
+      toast('error', 'Failed to create order: ' + (err as any).message);
     } finally {
       setSaving(false);
     }

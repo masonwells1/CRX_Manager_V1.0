@@ -502,32 +502,31 @@ export default function InventoryPage() {
 
   const handleAdjust = async () => {
     const qty = parseInt(adjustQty);
-    if (isNaN(qty)) return;
-    const target = inventory.find((i) => i.id === selectedId);
-    if (!target || !profile) return;
-    const { error } = await supabase
-      .from('inventory')
-      .update({
-        quantity_available: target.quantity_available + qty,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', selectedId);
-    if (error) {
-      toast('error', 'Failed to adjust inventory');
-    } else {
-      await supabase.from('inventory_transactions').insert({
-        product_id: target.product_id,
-        transaction_type: 'adjusted',
-        quantity: qty,
-        to_location: target.location || 'Main Warehouse',
-        performed_by: profile.id,
-        notes: adjustNote || `Manual adjustment of ${qty} units`,
+    if (isNaN(qty) || qty === 0) {
+      toast('error', 'Please enter a non-zero adjustment quantity');
+      return;
+    }
+    if (!profile) return;
+
+    try {
+      const idemKey = generateIdempotencyKey('adjust_inventory', profile.id);
+      const { error } = await supabase.rpc('adjust_inventory', {
+        p_inventory_id: selectedId,
+        p_delta: qty,
+        p_reason: adjustNote || null,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
       });
+      if (error) throw error;
+
       toast('success', `Adjusted by ${qty} units`);
       setAdjustOpen(false);
       setAdjustQty('');
       setAdjustNote('');
       fetchInventory();
+    } catch (error) {
+      console.error('Error adjusting inventory:', error);
+      toast('error', 'Failed to adjust inventory: ' + (error as any).message);
     }
   };
 
@@ -566,6 +565,18 @@ export default function InventoryPage() {
 
     if (!confirm('Are you sure you want to delete this inventory item? This action cannot be undone.')) {
       return;
+    }
+
+    // Audit trail: log the deletion before removing the row
+    if (profile) {
+      await supabase.from('inventory_transactions').insert({
+        product_id: target.product_id,
+        transaction_type: 'adjusted',
+        quantity: -(target.quantity_available || 0),
+        to_location: target.location || 'Main Warehouse',
+        performed_by: profile.id,
+        notes: `Inventory record deleted (had ${target.quantity_available} available)`,
+      });
     }
 
     const { error } = await supabase
