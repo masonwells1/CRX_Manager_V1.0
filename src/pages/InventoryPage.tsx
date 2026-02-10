@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, X, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
+import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -10,7 +10,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import type { Inventory, Product, InventoryHold, Customer, Profile, QuoteItem } from '../types';
+import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
 interface InventoryRow extends Inventory {
   product_name: string;
@@ -91,7 +91,7 @@ export default function InventoryPage() {
       return;
     }
 
-    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string; inventory_unit: string | null; container_size: number | null; container_type: string | null } | null }>;
+    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string; inventory_unit: string | null; container_size: number | null; container_type: string | null } | null; reorder_point: number; min_stock_level: number }>;
 
     const holdsFetch = supabase
       .from('inventory_holds')
@@ -162,14 +162,16 @@ export default function InventoryPage() {
     }
 
     const buildRow = (
-      item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string; inventory_unit?: string | null; container_size?: number | null; container_type?: string | null },
-      isVirtual: boolean
+      item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string; inventory_unit?: string | null; container_size?: number | null; container_type?: string | null; reorder_point: number; min_stock_level: number },
+      _isVirtual: boolean
     ): InventoryRow => {
       const onOrderQty = onOrderByProduct[item.product_id] || 0;
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
       const plannedQty = (holdsByProduct[item.product_id] || 0) + (plannedByProduct[item.product_id] || 0);
       const freeQty = item.quantity_available - plannedQty - item.quantity_prebooked;
       const deliveredYtd = deliveredByProduct[item.product_id] || 0;
+      const reorderPt = item.reorder_point || 0;
+      const minStock = item.min_stock_level || 0;
 
       return {
         id: item.id,
@@ -189,9 +191,9 @@ export default function InventoryPage() {
         planned_qty: plannedQty,
         free_qty: freeQty,
         delivered_ytd: deliveredYtd,
-        reorder_point: 0,
-        min_stock_level: 0,
-        is_low_stock: false,
+        reorder_point: reorderPt,
+        min_stock_level: minStock,
+        is_low_stock: reorderPt > 0 && item.quantity_available <= reorderPt,
       } as InventoryRow;
     };
 
@@ -208,6 +210,8 @@ export default function InventoryPage() {
           inventory_unit: item.product?.inventory_unit || null,
           container_size: item.product?.container_size || null,
           container_type: item.product?.container_type || null,
+          reorder_point: item.reorder_point || 0,
+          min_stock_level: item.min_stock_level || 0,
         },
         false
       )
@@ -223,6 +227,8 @@ export default function InventoryPage() {
           location: '',
           unit_size: null,
           product_name: mp.product_name,
+          reorder_point: 0,
+          min_stock_level: 0,
         },
         true
       )
@@ -991,14 +997,12 @@ export default function InventoryPage() {
                 value={receivePOItemId}
                 onChange={(e) => setReceivePOItemId(e.target.value)}
                 required
-              >
-                <option value="">Select a PO...</option>
-                {availablePOs.map((po) => (
-                  <option key={po.id} value={po.id}>
-                    {po.po_number} - Ordered: {po.ordered}, Received: {po.received}, Remaining: {po.ordered - po.received}
-                  </option>
-                ))}
-              </Select>
+                placeholder="Select a PO..."
+                options={availablePOs.map((po) => ({
+                  value: po.id,
+                  label: `${po.po_number} - Ordered: ${po.ordered}, Received: ${po.received}, Remaining: ${po.ordered - po.received}`,
+                }))}
+              />
               <Input
                 label="Quantity Received"
                 type="number"

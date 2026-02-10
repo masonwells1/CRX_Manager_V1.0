@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -86,7 +86,7 @@ export default function NewOrder() {
 
   const removeItem = (key: string) => {
     if (items.length === 1) {
-      toast({ title: 'Cannot remove last item', variant: 'error' });
+      toast('error', 'Cannot remove last item');
       return;
     }
     setItems(items.filter((item) => item._key !== key));
@@ -129,18 +129,18 @@ export default function NewOrder() {
 
   const handleSave = async () => {
     if (!customerId) {
-      toast({ title: 'Please select a customer', variant: 'error' });
+      toast('error', 'Please select a customer');
       return;
     }
 
     if (!orderNumber.trim()) {
-      toast({ title: 'Please enter an order number', variant: 'error' });
+      toast('error', 'Please enter an order number');
       return;
     }
 
     const validItems = items.filter((item) => item.product_id && item.quantity > 0);
     if (validItems.length === 0) {
-      toast({ title: 'Please add at least one item with quantity', variant: 'error' });
+      toast('error', 'Please add at least one item with quantity');
       return;
     }
 
@@ -235,11 +235,11 @@ export default function NewOrder() {
         }
       }
 
-      toast({ title: 'Order created successfully', variant: 'success' });
+      toast('success', 'Order created successfully');
       navigate(`/orders/${order.id}`);
     } catch (err) {
       console.error('Error creating order:', err);
-      toast({ title: 'Failed to create order', variant: 'error' });
+      toast('error', 'Failed to create order');
     } finally {
       setSaving(false);
     }
@@ -479,14 +479,13 @@ export default function NewOrder() {
         open={showProductModal}
         onClose={() => setShowProductModal(false)}
         title="Select Product"
-        size="lg"
+        size="large"
       >
         <div className="space-y-4">
           <Input
             value={productSearch}
             onChange={(e) => setProductSearch(e.target.value)}
             placeholder="Search products..."
-            icon={<Search className="w-4 h-4" />}
           />
 
           <div className="max-h-96 overflow-y-auto space-y-2">

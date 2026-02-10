@@ -31,7 +31,7 @@ interface CommentsSectionProps {
   noteTitle: string;
 }
 
-export default function CommentsSection({ noteId, noteTitle }: CommentsSectionProps) {
+export default function CommentsSection({ noteId }: CommentsSectionProps) {
   const { profile } = useAuth();
   const { toast } = useToast();
   const [comments, setComments] = useState<Comment[]>([]);

@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import {
   Plus, CheckSquare, Square, Pin, PinOff, Clock, Pencil, Trash2,
   MessageCircle, Activity, LayoutGrid, User, History, ListChecks,
-  AlertTriangle, ChevronDown, ChevronUp, Calendar, Timer, Filter as FilterIcon,
+  AlertTriangle, Timer,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -490,7 +490,7 @@ export default function TeamBoard() {
   };
 
   const notesByType = (type: NoteType) => applyFilters(notes).filter((n) => n.note_type === type);
-  const getName = (p: TeamNote['creator']) => (p as unknown as { full_name: string })?.full_name || '';
+  const getName = (p: TeamNote['creator'] | { full_name: string } | null | undefined) => (p as unknown as { full_name: string })?.full_name || '';
 
   const formatDate = (d: string) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const formatDateTime = (d: string) => new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });

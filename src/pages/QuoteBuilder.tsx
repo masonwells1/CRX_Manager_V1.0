@@ -637,15 +637,20 @@ export default function QuoteBuilder() {
           .filter((i) => i.product_id)
           .map((i) => ({
             product_name: i.product?.product_name || '',
-            actual_rate: i.actual_rate,
-            rate_unit: i.rate_unit,
-            acres: i.acres,
-            total_units_needed: i.total_units_needed,
+            actual_rate: i.actual_rate || 0,
+            rate_unit: i.rate_unit || '',
+            acres: i.acres || 0,
+            total_units_needed: i.total_units_needed || 0,
             price_per_unit: i.price_per_unit,
             total_price: i.total_price,
           })),
       })),
-      totals,
+      totals: {
+        totalPrice: totals.totalPrice,
+        totalCost: totals.totalCost,
+        totalProfit: totals.totalProfit,
+        avgMargin: totals.totalMarginPct,
+      },
     });
     toast('success', 'PDF downloaded');
   };

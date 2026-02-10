@@ -82,7 +82,7 @@ export default function Dashboard() {
     try {
       const [ordersRes, quotesRes, inventoryRes, deliveriesRes, activityRes] =
         await Promise.all([
-          supabase.from('orders').select('customer_id, total_price, total_profit, total_margin_pct, status'),
+          supabase.from('orders').select('customer_id, total_price, total_profit, total_margin_pct, status, order_date, created_at'),
           supabase.from('quotes').select('status, total_price'),
           supabase.from('inventory').select('quantity_available, quantity_prebooked'),
           supabase

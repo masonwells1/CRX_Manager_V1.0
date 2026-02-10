@@ -28,8 +28,6 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
     fetchActivities();
   }, [noteId]);
 
-  useRealtimeActivity(noteId, fetchActivities);
-
   const fetchActivities = async () => {
     let query = supabase
       .from('note_activity_log')
@@ -45,6 +43,8 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
     setActivities((data || []) as ActivityEntry[]);
     setLoading(false);
   };
+
+  useRealtimeActivity(noteId, fetchActivities);
 
   const getActionIcon = (actionType: string) => {
     switch (actionType) {

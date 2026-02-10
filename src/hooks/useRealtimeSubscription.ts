@@ -23,7 +23,6 @@ export function useRealtimeSubscription(config: SubscriptionConfig) {
       channel = supabase.channel(channelName);
 
       const eventType = config.event || '*';
-      const filterString = config.filter ? `${config.table}:${config.filter}` : config.table;
 
       channel
         .on(

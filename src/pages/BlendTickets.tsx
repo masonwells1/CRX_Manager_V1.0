@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Upload, Filter, Search, CheckCircle, Clock, AlertCircle, XCircle } from 'lucide-react';
+import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle } from 'lucide-react';
 import { supabase } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useOCRProcessor } from '../hooks/useOCRProcessor';
@@ -17,7 +17,7 @@ import type { BlendTicket, Customer } from '../types';
 
 export function BlendTickets() {
   usePageMeta();
-  const { profile } = useAuth();
+  useAuth();
   const [tickets, setTickets] = useState<BlendTicket[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,7 +89,7 @@ export function BlendTickets() {
     const Icon = config.icon;
 
     return (
-      <Badge variant={config.variant} className="flex items-center gap-1">
+      <Badge variant={config.variant}>
         <Icon className="h-3 w-3" />
         {status.replace('_', ' ')}
       </Badge>
@@ -301,8 +301,8 @@ export function BlendTickets() {
           />
         ) : (
           <DataTable
-            columns={columns}
-            data={filteredTickets}
+            columns={columns as any}
+            data={filteredTickets as any}
           />
         )}
       </Card>

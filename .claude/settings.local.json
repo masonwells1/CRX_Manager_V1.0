@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(tree:*)",
+      "Bash(dir:*)",
+      "Bash(ls -la \"C:\\\\CRX_Manager_V1.0\\\\src\\\\pages\"\" | grep \".tsx \")",
+      "Bash(npx tsc:*)",
+      "Bash(npm install)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run build:*)",
+      "Bash(echo:*)",
+      "Bash(git add:*)",
+      "Bash(git rebase:*)",
+      "Bash(GIT_EDITOR=true git rebase:*)"
+    ]
+  }
+}

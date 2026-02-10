@@ -5,9 +5,9 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-const CRX_GREEN = [40, 162, 106];
-const CHARCOAL = [46, 46, 46];
-const GRAY = [78, 78, 78];
+const CRX_GREEN: [number, number, number] = [40, 162, 106];
+const CHARCOAL: [number, number, number] = [46, 46, 46];
+const GRAY: [number, number, number] = [78, 78, 78];
 
 interface PdfDeliveryItem {
   product_name: string;

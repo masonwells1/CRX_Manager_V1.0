@@ -10,7 +10,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Plus, Copy, Pencil, Trash2, Sprout, Save, X, ChevronDown, ChevronUp } from 'lucide-react';
-import Card, { CardHeader } from '../components/ui/Card';
+import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';

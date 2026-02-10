@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { createWorker } from 'tesseract.js';
 import { supabase } from '../lib/db';
 import { parseOCRText, fuzzyMatchProduct, fuzzyMatchCustomer } from '../lib/ocrParser';
-import type { Product, Customer } from '../types';
 
 const POLL_INTERVAL = 30000;
 

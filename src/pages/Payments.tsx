@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from 'react';
 import { DollarSign, Plus, Search } from 'lucide-react';
-import Card, { CardHeader } from '../components/ui/Card';
+import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
@@ -20,6 +20,7 @@ import { supabase } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
 
 interface OrderWithBalance {
+  [k: string]: unknown;
   id: string;
   order_number: string;
   customer_id: string;
@@ -32,6 +33,7 @@ interface OrderWithBalance {
 }
 
 interface Payment {
+  [k: string]: unknown;
   id: string;
   order_id: string;
   amount: number;
@@ -237,24 +239,27 @@ export default function Payments() {
             onClick={() =>
               exportToCSV(
                 tab === 'ar'
-                  ? filteredAr.map((r) => ({
-                      Order: r.order_number,
-                      Customer: r.farm_name,
-                      Date: r.order_date,
-                      Total: r.total_price,
-                      Paid: r.total_paid,
-                      Balance: r.balance_due,
-                    }))
-                  : filteredPayments.map((r) => ({
-                      Date: r.payment_date,
-                      Order: r.order_number,
-                      Customer: r.farm_name,
-                      Amount: r.amount,
-                      Method: r.payment_method,
-                      Ref: r.reference_number,
-                      Notes: r.notes,
-                    })),
-                tab === 'ar' ? 'accounts_receivable.csv' : 'payment_history.csv'
+                  ? (filteredAr as unknown as Record<string, unknown>[])
+                  : (filteredPayments as unknown as Record<string, unknown>[]),
+                tab === 'ar'
+                  ? [
+                      { key: 'order_number', header: 'Order' },
+                      { key: 'farm_name', header: 'Customer' },
+                      { key: 'order_date', header: 'Date' },
+                      { key: 'total_price', header: 'Total' },
+                      { key: 'total_paid', header: 'Paid' },
+                      { key: 'balance_due', header: 'Balance' },
+                    ]
+                  : [
+                      { key: 'payment_date', header: 'Date' },
+                      { key: 'order_number', header: 'Order' },
+                      { key: 'farm_name', header: 'Customer' },
+                      { key: 'amount', header: 'Amount' },
+                      { key: 'payment_method', header: 'Method' },
+                      { key: 'reference_number', header: 'Ref' },
+                      { key: 'notes', header: 'Notes' },
+                    ],
+                tab === 'ar' ? 'accounts_receivable' : 'payment_history'
               )
             }
           >

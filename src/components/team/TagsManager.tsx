@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Tag, Plus, X, Edit2, Check } from 'lucide-react';
+import { Tag, Plus, X, Check } from 'lucide-react';
 import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
-import Badge from '../ui/Badge';
 
 interface NoteTag {
   id: string;

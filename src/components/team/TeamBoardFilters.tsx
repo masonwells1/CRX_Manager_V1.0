@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Search, Filter, X, Tag, User, AlertCircle } from 'lucide-react';
 import { supabase } from '../../lib/db';
-import Badge from '../ui/Badge';
 
 interface NoteTag {
   id: string;
@@ -154,7 +153,6 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
                         backgroundColor: `${tag.color}15`,
                         color: tag.color,
                         border: `1px solid ${tag.color}30`,
-                        ringColor: tag.color,
                       }}
                     >
                       {tag.name}

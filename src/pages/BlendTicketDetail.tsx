@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon } from 'lucide-react';
 import { supabase } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
@@ -15,7 +15,7 @@ export function BlendTicketDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { profile } = useAuth();
-  usePageMeta({ title: 'Blend Ticket Detail' });
+  usePageMeta();
 
   const [ticket, setTicket] = useState<BlendTicket | null>(null);
   const [images, setImages] = useState<BlendTicketImage[]>([]);
@@ -541,16 +541,16 @@ export function BlendTicketDetail() {
       </Card>
 
       <div className="flex justify-end gap-3">
-        <Button variant="outline" onClick={() => navigate('/blend-tickets')}>
+        <Button variant="secondary" onClick={() => navigate('/blend-tickets')}>
           Cancel
         </Button>
         {ticket.review_status === 'unreviewed' && (
           <>
-            <Button variant="outline" onClick={handleReject} className="text-red-600 hover:text-red-700">
+            <Button variant="secondary" onClick={handleReject} className="text-red-600 hover:text-red-700">
               <X className="h-4 w-4" />
               Reject
             </Button>
-            <Button variant="outline" onClick={handleApprove} className="text-green-600 hover:text-green-700">
+            <Button variant="secondary" onClick={handleApprove} className="text-green-600 hover:text-green-700">
               <Check className="h-4 w-4" />
               Approve
             </Button>

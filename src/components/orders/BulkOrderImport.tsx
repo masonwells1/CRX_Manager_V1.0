@@ -160,11 +160,10 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
 
     let match;
     while ((match = datePattern.exec(fullText)) !== null) {
-      const [, date, productName, epaReg, quantity, cost, total] = match;
+      const [, , productName, epaReg, quantity, cost] = match;
 
       const cleanQuantity = parseFloat(quantity.replace(/,/g, ''));
       const cleanCost = parseFloat(cost.replace(/,/g, ''));
-      const cleanTotal = parseFloat(total.replace(/,/g, ''));
 
       if (!isNaN(cleanQuantity) && !isNaN(cleanCost) && cleanQuantity > 0) {
         items.push({
@@ -298,11 +297,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         parsedOrders = parsePDFInvoice(text);
 
         if (parsedOrders.length === 0) {
-          toast({
-            title: 'Could not parse PDF',
-            description: 'Unable to extract invoice data from PDF',
-            variant: 'error'
-          });
+          toast('error', 'Could not parse PDF. Unable to extract invoice data.');
           setParsing(false);
           return;
         }
@@ -313,11 +308,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         invalid = result.invalid;
 
         if (parsedOrders.length === 0 && invalid.length === 0) {
-          toast({
-            title: 'Invalid file format',
-            description: 'Please check the CSV column headers',
-            variant: 'error'
-          });
+          toast('error', 'Invalid file format. Please check the CSV column headers.');
           setParsing(false);
           return;
         }
@@ -326,7 +317,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
       setValidation({ valid: parsedOrders, invalid });
     } catch (error) {
       console.error('Error parsing file:', error);
-      toast({ title: 'Error parsing file', variant: 'error' });
+      toast('error', 'Error parsing file');
     } finally {
       setParsing(false);
     }
@@ -419,10 +410,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     setUploading(false);
 
     if (successCount > 0) {
-      toast({
-        title: `Imported ${successCount} order${successCount !== 1 ? 's' : ''}`,
-        variant: 'success',
-      });
+      toast('success', `Imported ${successCount} order${successCount !== 1 ? 's' : ''}`);
       onSuccess();
     }
   };
@@ -435,7 +423,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
   };
 
   return (
-    <Modal open={open} onClose={handleClose} title="Import Orders" size="lg">
+    <Modal open={open} onClose={handleClose} title="Import Orders" size="large">
       <div className="space-y-4">
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex items-start gap-3">

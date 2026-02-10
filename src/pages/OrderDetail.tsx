@@ -8,7 +8,6 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Truck, Pencil, Save, X, Trash2 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import Input from '../components/ui/Input';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';

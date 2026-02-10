@@ -13,6 +13,7 @@ import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 type TabKey = 'customer' | 'product' | 'commission' | 'revenue';
 
 interface CustomerProfit {
+  [k: string]: unknown;
   farm_name: string;
   total_revenue: number;
   total_profit: number;
@@ -21,6 +22,7 @@ interface CustomerProfit {
 }
 
 interface ProductProfit {
+  [k: string]: unknown;
   product_name: string;
   total_revenue: number;
   total_profit: number;
@@ -29,6 +31,7 @@ interface ProductProfit {
 }
 
 interface CommissionRow {
+  [k: string]: unknown;
   id: string;
   recipient: string;
   order_id: string;
@@ -41,6 +44,7 @@ interface CommissionRow {
 }
 
 interface RevenueSummary {
+  [k: string]: unknown;
   month: string;
   revenue: number;
   profit: number;

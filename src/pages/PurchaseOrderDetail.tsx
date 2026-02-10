@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, PackageCheck, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash2 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -69,15 +69,6 @@ export default function PurchaseOrderDetail() {
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
-
-  const openReceiveModal = () => {
-    const initial: Record<string, string> = {};
-    items.forEach((item) => {
-      initial[item.id] = '0';
-    });
-    setReceiveQtys(initial);
-    setReceiveOpen(true);
-  };
 
   const handleReceive = async () => {
     if (!profile) return;
@@ -433,13 +424,14 @@ export default function PurchaseOrderDetail() {
             <Select
               value={editForm.status}
               onChange={(e) => setEditForm(prev => ({ ...prev, status: e.target.value as POStatus }))}
-            >
-              <option value="draft">Draft</option>
-              <option value="submitted">Submitted</option>
-              <option value="partially_received">Partially Received</option>
-              <option value="fully_received">Fully Received</option>
-              <option value="cancelled">Cancelled</option>
-            </Select>
+              options={[
+                { value: 'draft', label: 'Draft' },
+                { value: 'submitted', label: 'Submitted' },
+                { value: 'partially_received', label: 'Partially Received' },
+                { value: 'fully_received', label: 'Fully Received' },
+                { value: 'cancelled', label: 'Cancelled' },
+              ]}
+            />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>

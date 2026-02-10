@@ -292,7 +292,7 @@ export default function DeliveryDetail() {
                   signed_by: delivery.signed_by || undefined,
                   delivery_notes: delivery.delivery_notes || undefined,
                   items: items.map((i) => ({
-                    product_name: i.product_name,
+                    product_name: (i as any).product_name,
                     quantity: i.quantity,
                     unit_size: i.unit_size || '-',
                   })),

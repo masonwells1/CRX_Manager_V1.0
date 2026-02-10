@@ -8,10 +8,10 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 // Brand colours
-const CRX_GREEN = [40, 162, 106]; // #28A26A
-const CHARCOAL = [46, 46, 46]; // #2E2E2E
-const GRAY = [78, 78, 78]; // #4E4E4E
-const LIGHT_BG = [245, 250, 247]; // very light green tint
+const CRX_GREEN: [number, number, number] = [40, 162, 106]; // #28A26A
+const CHARCOAL: [number, number, number] = [46, 46, 46]; // #2E2E2E
+const GRAY: [number, number, number] = [78, 78, 78]; // #4E4E4E
+const LIGHT_BG: [number, number, number] = [245, 250, 247]; // very light green tint
 
 interface PdfQuoteSection {
   section_name: string;

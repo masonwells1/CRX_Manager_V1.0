@@ -175,6 +175,8 @@ export interface Order {
   total_profit: number;
   total_margin_pct: number;
   order_date: string;
+  total_paid: number;
+  balance_due: number;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -210,6 +212,8 @@ export interface Inventory {
   quantity_prebooked: number;
   quantity_on_order: number;
   unit_size: string | null;
+  reorder_point: number;
+  min_stock_level: number;
   last_counted_at: string | null;
   updated_at: string;
   product?: Product;
@@ -310,6 +314,8 @@ export interface Commission {
   order_profit: number;
   order_date: string;
   status: 'pending' | 'paid';
+  paid_date: string | null;
+  paid_note: string | null;
   created_at: string;
 }
 
@@ -329,6 +335,8 @@ export interface TeamNote {
   created_by: string;
   assigned_to: string | null;
   is_pinned: boolean;
+  deleted_at: string | null;
+  deleted_by: string | null;
   created_at: string;
   updated_at: string;
   creator?: Profile;
@@ -340,6 +348,8 @@ export interface TeamNoteComment {
   note_id: string;
   content: string;
   created_by: string;
+  deleted_at: string | null;
+  deleted_by: string | null;
   created_at: string;
   creator?: Profile;
 }

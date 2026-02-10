@@ -382,7 +382,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
 
         <div className="flex justify-end gap-3">
           <Button
-            variant="outline"
+            variant="secondary"
             onClick={() => {
               images.forEach(img => URL.revokeObjectURL(img.preview));
               setImages([]);
