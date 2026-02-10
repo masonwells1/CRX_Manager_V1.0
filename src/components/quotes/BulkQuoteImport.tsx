@@ -218,7 +218,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
 
     try {
       const { data: customers } = await supabase.from('customers').select('id, farm_name');
-      const { data: products } = await supabase.from('products').select('id, product_name, product_code');
+      const { data: products } = await supabase.from('products').select('id, product_name, sku');
 
       if (!customers || !products) {
         toast('error', 'Failed to load reference data');
@@ -232,7 +232,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       const productMap = new Map(
         products.flatMap((p) => [
           [p.product_name.toLowerCase().trim(), p.id],
-          p.product_code ? [p.product_code.toLowerCase().trim(), p.id] : null,
+          p.sku ? [p.sku.toLowerCase().trim(), p.id] : null,
         ].filter(Boolean) as [string, string][])
       );
 
