@@ -7,7 +7,7 @@
 - **Backend:** Supabase (PostgreSQL + Auth + Edge Functions + Realtime + Storage)
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
 - **PDF Generation:** jsPDF (client-side)
-- **OCR:** Tesseract.js (client-side, background polling)
+- **OCR:** Google Vision AI (server-side Edge Function, with client-side fallback polling)
 - **Routing:** React Router v6 (lazy-loaded pages)
 
 ### User Roles
@@ -387,9 +387,44 @@ For each table, verify:
 - Without this, edge function calls will fail with CORS errors in production
 
 ### Known Limitations
-- OCR processing is client-side (Tesseract.js) - can be slow on large images
+- OCR processing uses Google Vision AI via Edge Function (requires GOOGLE_VISION_API_KEY secret)
 - PDF generation is client-side - no server-side rendering
 - No email sending capability (notifications are in-app only)
 - Bulk imports process sequentially, not in parallel
 - No audit trail for RLS policy violations (silent failures)
 - `idempotency_keys` table exists in live DB with public ALL access - investigate origin
+
+---
+
+## AI Dev Memory / Quick Reference
+
+### Code Patterns
+- Bulk imports use a 3-state modal pattern: file selection -> validation/review -> results
+- Bulk import components live in `src/components/{domain}/Bulk*.tsx`
+- PDF text extraction uses `pdfjs-dist` (already installed), see `BulkOrderImport.tsx` for reference
+- Product fuzzy matching via `fuzzyMatchProduct()` in `src/lib/ocrParser.ts` (0.7 threshold)
+- `calculateSimilarity` in `ocrParser.ts` is NOT exported (private helper)
+- PO number format: `PO-{YEAR}-{sequential 4-digit}` via count query
+- Activity logging via `logActivity()` from `src/lib/activityLogger.ts`
+- Product search modal pattern reused from `NewPurchaseOrder.tsx:400-453`
+- Modal component accepts `size="large"` prop
+- Commission split editor: `src/components/ui/CommissionSplitEditor.tsx`
+- Blend math validator: `src/lib/blendMathValidator.ts`
+- Manual ticket creation: `src/components/blendtickets/ManualTicketCreate.tsx`
+- Admin user edit via `admin_update_profile` RPC (SECURITY DEFINER)
+
+### Build & Type Checking
+- `npx tsc --noEmit` for type checking (no tsconfig issues)
+- `npx vite build` for full build verification
+- Product type has `is_active`, `current_cost`, `unit_size`, `sku`, `vendor` fields
+
+### Key Files
+- Types: `src/types/index.ts`
+- DB client: `src/lib/db.ts`
+- Auth context: `src/contexts/AuthContext.ts` (provides `profile`, `role`)
+- OCR Edge Function: `supabase/functions/process-blend-ticket/index.ts`
+- User creation Edge Function: `supabase/functions/create-user/index.ts`
+
+### Supabase Secrets Required
+- `ALLOWED_ORIGIN` - CORS origin for production
+- `GOOGLE_VISION_API_KEY` - Google Cloud Vision API key for OCR
