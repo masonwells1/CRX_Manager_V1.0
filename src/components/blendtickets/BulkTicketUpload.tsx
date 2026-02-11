@@ -190,6 +190,14 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
         max_retries: 3,
       });
 
+      // Trigger server-side OCR processing via Edge Function (non-blocking)
+      supabase.functions.invoke('process-blend-ticket', {
+        body: { blend_ticket_id: ticket.id },
+      }).catch((err) => {
+        // Non-fatal: the fallback polling in useOCRProcessor will pick it up
+        console.warn('Edge Function trigger failed, will retry via polling:', err);
+      });
+
       images.forEach(img => URL.revokeObjectURL(img.preview));
       setImages([]);
       setSelectedCustomerId('');
