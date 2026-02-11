@@ -1,6 +1,6 @@
 # CRX Manager V1.0 - Project Context
 
-**Last Updated:** 2026-02-06
+**Last Updated:** 2026-02-11
 **Version:** 1.0
 **Test User:** mason@croprxsolutions.com
 
@@ -556,66 +556,73 @@ All variables prefixed with `VITE_` to be accessible in frontend.
 
 ---
 
-## 6. What is Missing / What is Next
+## 6. What Has Been Completed & What is Next
 
-### Top 5 Production Readiness Gaps:
+### Completed Hardening (Tier 1-3)
 
-1. **Testing Coverage**
-   - Only 3 E2E tests exist (auth, customers, permissions)
-   - No tests for quotes, orders, deliveries, inventory
-   - No unit tests for calculations (pricing, margins, rates)
-   - Need comprehensive test suite before production
+All security and performance hardening work has been completed across three tiers:
 
-2. **Error Handling & User Feedback**
-   - Some errors fail silently
-   - Need better validation messages
-   - Need loading states on all async operations
-   - Need offline detection and graceful degradation
+#### Tier 1: Security Audit Fixes (commit c45f370)
+- Atomic RPC functions for critical multi-table operations (quote-to-order conversion, delivery completion, inventory receiving)
+- Database constraints and check constraints added
+- Auth hardening (session validation improvements)
+- RLS policy audit and fixes on all 25 tables
+- Performance indexes on all foreign key columns
 
-3. **Performance Optimization**
-   - Bundle size warning (chunks > 500KB)
-   - Need code splitting for routes
-   - Need pagination for large data sets (currently loading all records)
-   - Need to implement proper caching strategy
-   - Database queries could use optimization (some N+1 query patterns)
+#### Tier 2: Additional Security & Performance (commit a41156e)
+- File upload validation (type checking, size limits) for blend ticket images
+- Signed URL generation for Supabase Storage (no public URLs)
+- RLS mutation result checking via `checkMutationResult()` utility in `src/lib/db.ts`
+- Silent RLS failure detection on all update/delete operations
 
-4. **Security Hardening**
-   - Need to audit all RLS policies (some may be too permissive)
-   - Need rate limiting on API calls
-   - Need CORS configuration review
-   - Need to implement audit logging for sensitive operations
-   - Need to validate all file uploads (blend tickets, signatures)
+#### Tier 3: Production Hardening (commit f7a0aa2)
+- **T3-001 Offline Support:** IndexedDB-based offline queue (`src/lib/offlineQueue.ts`, `src/lib/offlineSync.ts`), online status hook (`src/hooks/useOnlineStatus.ts`), auto-sync when connection returns
+- **T3-003 Idempotency Keys:** Key generator (`src/lib/idempotency.ts`) for critical operations to prevent double-submissions
+- **T3-004 Image Compression:** Client-side image compression (`src/lib/imageCompression.ts`) before Supabase upload -- max 1920px, JPEG quality 0.8, max 1MB
+- **T3-005 Activity & Notification Triggers:** Automated activity logging (`src/lib/activityLogger.ts`), notification triggers (`src/lib/notificationTriggers.ts`) including low-stock alerts, quote expiration checks, delivery assignment notifications
 
-5. **Mobile/Responsive Design**
+### NOT YET STARTED
+
+#### T3-002: Comprehensive Test Coverage (10-15 day effort)
+**This is the next major task.** Currently only 3 E2E test files exist:
+- `tests/e2e/auth.spec.ts` (login/logout)
+- `tests/e2e/customers.spec.ts` (customer CRUD)
+- `tests/e2e/permissions.spec.ts` (role-based access)
+
+Still needed:
+- Unit tests for pricing/margin calculations
+- Unit tests for rate-per-acre calculations
+- E2E tests for quote builder workflow
+- E2E tests for order creation and fulfillment
+- E2E tests for delivery workflow (schedule, assign, complete, signature)
+- E2E tests for inventory transactions
+- E2E tests for purchase order workflow
+- E2E tests for bulk CSV imports
+- E2E tests for blend ticket upload and OCR processing
+
+### Remaining Production Readiness Gaps (Not Part of Tiers)
+
+These items from the original gap analysis are still relevant:
+
+1. **Performance Optimization**
+   - Code splitting is implemented (lazy routes in App.tsx) but bundle could be further optimized
+   - Need pagination for large data sets (currently loads all records on some pages)
+   - Some N+1 query patterns remain
+
+2. **Mobile/Responsive Design**
    - App is desktop-first
-   - Delivery management for drivers needs better mobile experience
+   - Driver delivery management needs better mobile experience
    - Signature capture works on mobile but UI could be improved
-   - Need to test thoroughly on tablets (target device for drivers)
 
-### Additional Nice-to-Haves:
+3. **Email Notifications** -- Only in-app notifications exist currently
 
-6. **Email Notifications**
-   - Currently only in-app notifications
-   - Need to send emails when quotes are ready, orders are confirmed, deliveries scheduled
+4. **Advanced Reporting** -- Current reports are basic, need customizable date ranges and charts
 
-7. **Advanced Reporting**
-   - Current reports are basic
-   - Need customizable date ranges
-   - Need export to Excel/CSV
-   - Need charts and visualizations
+5. **Inventory Alerts** -- Low-stock notification triggers exist (T3-005) but no automatic PO creation
 
-8. **Inventory Alerts**
-   - No low-stock warnings
-   - No automatic PO creation when inventory is low
-   - No forecasting based on historical orders
+6. **Customer Portal** -- Customers cannot log in to view their own quotes/orders
 
-9. **Customer Portal**
-   - Customers currently can't log in to view their quotes/orders
-   - Would need separate role and UI
-
-10. **Multi-company Support**
-    - Currently designed for single company
-    - If Crop RX Solutions wants to license this to other distributors, needs tenant isolation
+7. **Multi-company Support** -- Single-tenant only
 
 ---
 
@@ -764,7 +771,7 @@ A: Yes, but you MUST create a migration using `mcp__supabase__apply_migration`. 
 A: You need a Supabase account, create a project, run migrations, create test user (mason@croprxsolutions.com), then run `npm run test:e2e`. See TESTING.md for details.
 
 **Q: Is this production-ready?**
-A: No. See section 6 above for gaps. Main issues: limited testing, performance not optimized, error handling incomplete, security needs hardening.
+A: Getting close. Security hardening (Tier 1-3) is complete. Main remaining gap is comprehensive test coverage (T3-002, not started). See section 6 for full details.
 
 **Q: Can this scale to 10,000 customers?**
 A: Probably yes for customers, but you'll need pagination, caching, and database optimization. Current version loads all records into memory.

@@ -1,162 +1,128 @@
 # CRX Manager V1.0
 
-A comprehensive business management system for handling customers, products, orders, quotes, and more.
+Business management system for **Crop RX Solutions**, an agricultural product distributor. Manages the full workflow from quoting to delivery: customer management, product catalog with 3-tier pricing, quote builder, order fulfillment, delivery scheduling with digital signatures, inventory tracking, purchase orders, blend tickets, team collaboration, and reporting.
 
-## 🚀 Quick Start
+## Tech Stack
+
+- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS
+- **Backend:** Supabase (PostgreSQL, Auth, Storage, Realtime, Edge Functions)
+- **Testing:** Playwright (E2E)
+- **Deployment:** Vercel
+- **Other:** jsPDF, Tesseract.js, signature_pad, Lucide React
+
+## Quick Start
 
 ### Prerequisites
-- Node.js 18+ installed
-- Supabase account with project set up
-- Git installed
+- Node.js 18+
+- Supabase project with migrations applied
+- Git
 
-### Setup in 5 Minutes
+### Setup
 
-1. **Clone and install:**
-   ```bash
-   git clone [YOUR_REPO_URL]
-   cd CRX_Manager_V1.0
-   npm install
-   ```
-
-2. **Configure environment:**
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your Supabase credentials
-   ```
-
-3. **Start development server:**
-   ```bash
-   npm run dev
-   ```
-
-4. **Open browser:**
-   - Navigate to http://localhost:5173/
-
-## 📚 Documentation
-
-- **[TESTING.md](./TESTING.md)** - Complete testing guide (no coding experience needed)
-- **[DEPLOYMENT.md](./DEPLOYMENT.md)** - How to deploy to production
-- **[VERIFICATION.md](./VERIFICATION.md)** - Setup verification and known issues
-
-## 🧪 Testing
-
-Run the complete test suite:
 ```bash
-npm run test:e2e
+git clone https://github.com/masonwells1/CRX_Manager_V1.0.git
+cd CRX_Manager_V1.0
+npm install
+cp .env.example .env
+# Edit .env with your Supabase URL and anon key
+npm run dev
 ```
 
-Interactive test interface:
-```bash
-npm run test:e2e:ui
-```
+Open http://localhost:5173 in your browser.
 
-See [TESTING.md](./TESTING.md) for detailed instructions.
+### Environment Variables
 
-## 🔧 Available Commands
+| Variable | Description |
+|----------|-------------|
+| `VITE_SUPABASE_URL` | Your Supabase project URL |
+| `VITE_SUPABASE_ANON_KEY` | Your Supabase anonymous/public key |
 
-### Development
-```bash
-npm run dev          # Start dev server
-npm run build        # Build for production
-npm run preview      # Preview production build
-npm run typecheck    # Check TypeScript errors
-```
+All variables must start with `VITE_` to be accessible in the app. See `.env.example`.
 
-### Testing
-```bash
-npm run test:e2e          # Run E2E tests
-npm run test:e2e:ui       # Interactive test UI
-npm run test:e2e:report   # View test report
-```
+## Commands
 
-## 🏗️ Tech Stack
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start development server (port 5173) |
+| `npm run build` | Build for production |
+| `npm run preview` | Preview production build locally |
+| `npm run typecheck` | Check TypeScript errors |
+| `npm run lint` | Run ESLint |
+| `npm run test:e2e` | Run Playwright E2E tests |
+| `npm run test:e2e:ui` | Interactive Playwright test UI |
+| `npm run test:e2e:headed` | Watch tests run in browser |
+| `npm run test:e2e:report` | View HTML test report |
 
-- **Frontend:** React 18, TypeScript, Vite
-- **Styling:** Tailwind CSS
-- **Database:** Supabase (PostgreSQL)
-- **Authentication:** Supabase Auth
-- **Testing:** Playwright
-- **Icons:** Lucide React
+## User Roles
 
-## 📦 Features
+| Role | Access |
+|------|--------|
+| **admin** | Full access to everything |
+| **sales_rep** | Own assigned customers, quotes, orders, products (read-only) |
+| **driver** | Own assigned deliveries, customer addresses (read-only) |
 
-- Customer Management
-- Product Catalog
-- Order Processing
-- Quote Builder
-- Inventory Tracking
-- Purchase Orders
-- Delivery Management
-- Blend Tickets System
-- Team Collaboration
-- Real-time Notifications
-- Brand vs Generic Comparison
-- Reports & Analytics
+## Features
 
-## 🔐 Environment Variables
+- Customer management with tiered pricing
+- Product catalog (598+ products, 3-tier pricing, EPA registration)
+- Quote builder with sections, margin calculations, PDF generation
+- Order management with fulfillment tracking
+- Delivery scheduling with driver assignment and digital signatures
+- Inventory tracking with transaction audit trail
+- Purchase orders to vendors
+- Blend ticket system with OCR processing
+- Team collaboration board (notes, todos, announcements)
+- Real-time notifications via Supabase Realtime
+- Bulk CSV import for customers, products, quotes, orders, blend tickets
+- Brand vs generic product comparison
+- Commission tracking with split percentages
+- Reports and analytics with PDF export
+- Offline support for critical operations
+- Idempotency keys for critical writes
 
-Required environment variables (see `.env.example`):
+## Database
 
-```env
-VITE_SUPABASE_URL=your-supabase-url
-VITE_SUPABASE_ANON_KEY=your-anon-key
-```
+25 tables in Supabase PostgreSQL with Row Level Security (RLS) on all tables. See:
+- `SCHEMA_QUICK_REFERENCE.sql` -- complete schema
+- `DATABASE_RELATIONSHIPS.md` -- entity relationships
+- `supabase/migrations/` -- all migration files
 
-**Note:** All variables must start with `VITE_` to be accessible in the app.
+## Deployment
 
-## 🚢 Deployment
+Deployed to **Vercel** (private staging). Configuration in `vercel.json`.
 
-This project is configured for easy deployment to:
-- Netlify (recommended)
-- Vercel
+Build settings:
+- **Framework:** Vite
+- **Build command:** `npm run build`
+- **Output directory:** `dist`
 
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for complete instructions.
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for full instructions.
 
-### Quick Deploy to Netlify
+## Documentation
 
-1. Push code to GitHub
-2. Connect repository to Netlify
-3. Configure build settings:
-   - Build command: `npm run build`
-   - Publish directory: `dist`
-4. Add environment variables
-5. Deploy!
+| File | Contents |
+|------|----------|
+| [CONTEXT.md](./CONTEXT.md) | Full business context, features, data model, assumptions |
+| [CLAUDE.md](./CLAUDE.md) | Claude Code project instructions |
+| [DATABASE_RELATIONSHIPS.md](./DATABASE_RELATIONSHIPS.md) | Entity relationship diagrams |
+| [SCHEMA_QUICK_REFERENCE.sql](./SCHEMA_QUICK_REFERENCE.sql) | Complete SQL schema |
+| [TESTING.md](./TESTING.md) | Testing guide (beginner-friendly) |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Deployment instructions |
+| [VERIFICATION.md](./VERIFICATION.md) | Setup verification and known issues |
+| [TEST_CHECKLIST.md](./TEST_CHECKLIST.md) | Pre-deployment checklist |
 
-## 🐛 Troubleshooting
+## Current State
 
-### App shows "Configuration Error"
-- Ensure `.env` file exists with valid Supabase credentials
-- Restart dev server after adding environment variables
+- Security hardening (Tier 1-3): **Complete**
+- Deployed to Vercel: **Yes** (private staging)
+- Test coverage: **Minimal** (3 E2E test files)
+- Next milestone: Comprehensive test coverage (T3-002)
 
-### Tests fail
-- Verify test user exists in database (mason@croprxsolutions.com)
-- Check `.env` has correct Supabase credentials
-- See [TESTING.md](./TESTING.md) troubleshooting section
-
-### Build fails
-- Run `npm install` to ensure all dependencies are installed
-- Check for TypeScript errors: `npm run typecheck`
-
-## 📝 Contributing
-
-1. Create a feature branch
-2. Make your changes
-3. Run tests: `npm run test:e2e`
-4. Build to verify: `npm run build`
-5. Submit pull request
-
-## 📄 License
+## License
 
 Private - All rights reserved
-
-## 🆘 Support
-
-For issues or questions:
-1. Check [TESTING.md](./TESTING.md) and [DEPLOYMENT.md](./DEPLOYMENT.md)
-2. Review [VERIFICATION.md](./VERIFICATION.md) for known issues
-3. Contact your development team
 
 ---
 
 **Version:** 1.0
-**Last Updated:** 2026-02-06
+**Last Updated:** 2026-02-11

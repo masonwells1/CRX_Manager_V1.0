@@ -1,4 +1,32 @@
-# CRX Manager V1.0 - AI Dev/QA Reference
+# CLAUDE.md - CRX Manager V1.0 Project Instructions
+
+## Project Identity
+- **Name:** CRX Manager V1.0 (Crop RX Solutions)
+- **Repo:** https://github.com/masonwells1/CRX_Manager_V1.0
+- **What it does:** Agricultural product distribution management system -- quotes, orders, deliveries, inventory, purchase orders, team collaboration, blend tickets, reports
+- **Who it's for:** Crop RX Solutions (admin, sales reps, drivers)
+- **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
+
+## Current State (as of 2026-02-11)
+- **Tier 1-3 hardening:** COMPLETE (security, performance, offline support, idempotency, image compression, activity triggers)
+- **Deployed to:** Vercel (private preview/staging)
+- **Test coverage:** Minimal -- only 3 E2E test files (auth, customers, permissions)
+- **Next task:** T3-002 comprehensive test coverage (10-15 day effort)
+- **See CONTEXT.md** for full business context and data model details
+
+## Architecture Rules -- Follow These
+1. **Database changes MUST use migrations** -- create files in `supabase/migrations/`, never modify tables directly
+2. **All tables MUST have RLS policies** -- no exceptions
+3. **Use `checkMutationResult()`** after every `.update()` or `.delete()` call to catch silent RLS failures
+4. **Lazy-load all pages** -- follow the pattern in `App.tsx` with `lazy()` and `Suspense`
+5. **Use Lucide React icons** -- do not install other icon packages
+6. **Tailwind CSS only** -- no other CSS frameworks. Brand color is `crx-green` (#28A26A)
+7. **Keep types in `src/types/index.ts`** -- all shared interfaces go there
+8. **Use the Supabase client from `src/lib/db.ts`** -- never create additional clients
+9. **Activity logging:** Call `logActivity()` from `src/lib/activityLogger.ts` for important user actions
+10. **Idempotency:** Use `generateIdempotencyKey()` for critical write operations (order creation, delivery completion, etc.)
+
+---
 
 ## Application Architecture
 
@@ -6,9 +34,23 @@
 - **Frontend:** React 18 + TypeScript + Vite
 - **Backend:** Supabase (PostgreSQL + Auth + Edge Functions + Realtime + Storage)
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
-- **PDF Generation:** jsPDF (client-side)
-- **OCR:** Google Vision AI (server-side Edge Function, with client-side fallback polling)
-- **Routing:** React Router v6 (lazy-loaded pages)
+- **Testing:** Playwright (E2E only, tests in `tests/e2e/`)
+- **Deployment:** Vercel (private preview/staging), configured via `vercel.json`
+- **PDF Generation:** jsPDF + jspdf-autotable (client-side)
+- **OCR:** Tesseract.js + PDF.js (client-side), Google Vision AI (server-side Edge Function)
+- **Signatures:** signature_pad
+- **Icons:** Lucide React (do not install other icon libraries)
+
+### Key Commands
+```bash
+npm run dev          # Start dev server (http://localhost:5173)
+npm run build        # Production build
+npm run preview      # Preview production build
+npm run typecheck    # TypeScript error check
+npm run lint         # ESLint
+npm run test:e2e     # Run Playwright E2E tests
+npm run test:e2e:ui  # Interactive Playwright UI
+```
 
 ### User Roles
 1. **admin** - Full CRUD on all tables. Manages users, products, costs, inventory, purchase orders, commissions.
@@ -18,24 +60,46 @@
 ### Project Structure
 ```
 src/
-  pages/           # 26 page components
+  App.tsx              # Routes (lazy-loaded), auth provider, error boundary
+  main.tsx             # Entry point
+  contexts/
+    AuthContext.tsx     # Auth state (login, logout, session, role)
+  lib/
+    db.ts              # Supabase client + checkMutationResult() utility
+    activityLogger.ts  # Activity feed + notification helpers
+    notificationTriggers.ts  # Automated notification checks
+    idempotency.ts     # Idempotency key generator
+    offlineQueue.ts    # IndexedDB offline queue
+    offlineSync.ts     # Auto-sync on reconnect
+    imageCompression.ts # Client-side image compression
+    quotePdf.ts        # Quote PDF generation
+    deliveryPdf.ts     # Delivery receipt PDF generation
+    csvExport.ts       # CSV export utility
+    ocrParser.ts       # OCR text parsing for blend tickets
+  hooks/
+    useOnlineStatus.ts     # Online/offline detection
+    useRealtimeSubscription.ts # Supabase realtime wrapper
+    usePageMeta.ts         # Page title/meta
+    useOCRProcessor.ts     # OCR processing hook
+  pages/               # 26 page components (lazy-loaded from App.tsx)
   components/
-    auth/          # LoginPage, ProtectedRoute
-    layout/        # AppLayout, Sidebar, TopBar
-    ui/            # Badge, Button, Card, DataTable, Modal, Input, Select, Skeleton, Toast, etc.
-    blendtickets/  # BulkTicketUpload
-    customers/     # BulkCustomerImport
-    orders/        # BulkOrderImport
-    products/      # BulkProductImport, BulkPricingImport
-    quotes/        # BulkQuoteImport
-    team/          # ActivityFeed, CommentsSection, NotificationsPanel, TagsManager, TeamBoardFilters
-  contexts/        # AuthContext (session, profile, role, signIn, signOut)
-  hooks/           # useRealtimeSubscription, useOCRProcessor, usePageMeta
-  lib/             # db, activityLogger, csvExport, deliveryPdf, quotePdf, ocrParser, notificationTriggers
-  types/           # index.ts - all TypeScript interfaces
+    auth/              # LoginPage, ProtectedRoute
+    layout/            # AppLayout, Sidebar, TopBar
+    ui/                # Badge, Button, Card, DataTable, Modal, Input, Select, Skeleton, Toast, etc.
+    blendtickets/      # BulkTicketUpload
+    customers/         # BulkCustomerImport
+    orders/            # BulkOrderImport
+    products/          # BulkProductImport, BulkPricingImport
+    quotes/            # BulkQuoteImport
+    team/              # ActivityFeed, CommentsSection, NotificationsPanel, TagsManager, TeamBoardFilters
+  types/
+    index.ts           # All TypeScript interfaces and types
+  assets/              # Logo images
 supabase/
-  migrations/      # SQL migrations in chronological order
-  functions/       # Edge functions: create-user, seed-admin, setup-blend-tickets-storage
+  migrations/          # All database migrations (SQL, chronological order)
+  functions/           # Edge Functions: create-user, seed-admin, setup-blend-tickets-storage
+tests/
+  e2e/                 # Playwright E2E tests (auth, customers, permissions)
 ```
 
 ### Pages (26 total)
@@ -201,7 +265,8 @@ Used for:
 - `note_activity_log` - Live activity on notes
 
 ### Storage Buckets
-- **blend-ticket-images** - Public bucket for OCR ticket images (10MB limit, JPEG/PNG only)
+- **blend-ticket-images** - Private bucket for blend ticket images (RLS-protected)
+- **Admin user:** mason@croprxsolutions.com (UUID: 22c1fc50-4d2a-4baa-8ff8-341c0c7edd4f)
 
 ---
 
@@ -269,6 +334,7 @@ Used for:
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
+See `.env.example` for template. Never commit `.env`.
 
 ### Edge Function Secrets (Supabase)
 ```
@@ -277,6 +343,33 @@ SUPABASE_ANON_KEY     # Auto-set by Supabase
 SUPABASE_SERVICE_ROLE_KEY  # Auto-set by Supabase
 ALLOWED_ORIGIN        # REQUIRED for production CORS (e.g. https://your-domain.com)
 SEED_ADMIN_SECRET     # Required for seed-admin function only
+```
+
+---
+
+## Common Patterns
+
+### Adding a new page
+1. Create page component in `src/pages/`
+2. Add lazy import in `src/App.tsx`
+3. Add Route inside the protected route block
+4. Add navigation link in `src/components/layout/AppLayout.tsx`
+
+### Adding a database column
+1. Create migration file in `supabase/migrations/` with timestamp prefix
+2. Update TypeScript interface in `src/types/index.ts`
+3. Update any affected components
+
+### Supabase queries
+```typescript
+import { supabase, checkMutationResult } from '../lib/db';
+
+// Read
+const { data, error } = await supabase.from('customers').select('*');
+
+// Write (always check result)
+const result = await supabase.from('customers').update({ farm_name: 'New Name' }).eq('id', customerId).select();
+checkMutationResult(result, 'Update customer');
 ```
 
 ---
@@ -303,13 +396,6 @@ Test every feature as each role:
 | Settings | Full | No access | No access |
 | User Management | Full | No access | No access |
 
-### CRUD Verification
-For each table, verify:
-1. **Create** - Insert succeeds for authorized roles, fails for unauthorized
-2. **Read** - Only authorized rows visible per RLS
-3. **Update** - Only authorized rows modifiable
-4. **Delete** - Only admin can delete (where applicable)
-
 ### Workflow End-to-End Tests
 
 **Quote to Delivery:**
@@ -331,28 +417,15 @@ For each table, verify:
 5. Verify inventory levels updated
 6. Verify cost_history created if cost changed
 
-**Blend Ticket OCR:**
-1. Upload ticket images
-2. OCR processing queued and executed
-3. Products extracted with confidence scores
-4. Manual review and correction
-5. Approve ticket
-
 ### Edge Case Testing
 - Negative inventory (receive more than expected)
 - Expired quotes (auto-expire logic)
 - Zero-quantity orders
 - Commission splits that don't sum to 100%
 - Concurrent hold creation exceeding available inventory
-- Virtual inventory rows (products on order but no inventory record)
 - Bulk imports with invalid data
 - PDF generation with very long product names
 - Delivery for cancelled order
-
-### Realtime Testing
-- Open team board in two browser tabs, verify notes sync
-- Create notification in one session, verify it appears in another
-- Add comment to note, verify it appears live
 
 ---
 
@@ -392,7 +465,6 @@ For each table, verify:
 - No email sending capability (notifications are in-app only)
 - Bulk imports process sequentially, not in parallel
 - No audit trail for RLS policy violations (silent failures)
-- `idempotency_keys` table exists in live DB with public ALL access - investigate origin
 
 ---
 
@@ -403,7 +475,6 @@ For each table, verify:
 - Bulk import components live in `src/components/{domain}/Bulk*.tsx`
 - PDF text extraction uses `pdfjs-dist` (already installed), see `BulkOrderImport.tsx` for reference
 - Product fuzzy matching via `fuzzyMatchProduct()` in `src/lib/ocrParser.ts` (0.7 threshold)
-- `calculateSimilarity` in `ocrParser.ts` is NOT exported (private helper)
 - PO number format: `PO-{YEAR}-{sequential 4-digit}` via count query
 - Activity logging via `logActivity()` from `src/lib/activityLogger.ts`
 - Product search modal pattern reused from `NewPurchaseOrder.tsx:400-453`
@@ -421,10 +492,19 @@ For each table, verify:
 ### Key Files
 - Types: `src/types/index.ts`
 - DB client: `src/lib/db.ts`
-- Auth context: `src/contexts/AuthContext.ts` (provides `profile`, `role`)
+- Auth context: `src/contexts/AuthContext.tsx` (provides `profile`, `role`)
 - OCR Edge Function: `supabase/functions/process-blend-ticket/index.ts`
 - User creation Edge Function: `supabase/functions/create-user/index.ts`
 
 ### Supabase Secrets Required
 - `ALLOWED_ORIGIN` - CORS origin for production
 - `GOOGLE_VISION_API_KEY` - Google Cloud Vision API key for OCR
+
+## Documentation Index
+- `CONTEXT.md` -- Full business context, features, data model, assumptions (READ THIS FIRST for deep understanding)
+- `DATABASE_RELATIONSHIPS.md` -- Entity relationship diagrams and FK details
+- `SCHEMA_QUICK_REFERENCE.sql` -- Complete SQL schema for all 25 tables
+- `TESTING.md` -- Testing guide (beginner-friendly)
+- `DEPLOYMENT.md` -- Deployment to Vercel/Netlify
+- `VERIFICATION.md` -- Setup verification and known issues
+- `TEST_CHECKLIST.md` -- Pre-deployment checklist

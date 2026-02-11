@@ -1,5 +1,26 @@
-For all designs I ask you to make, have them be beautiful, not cookie cutter. Make webpages that are fully featured and worthy for production.
+This is CRX Manager V1.0, an agricultural product distribution management system for Crop RX Solutions.
 
-By default, this template supports JSX syntax with Tailwind CSS classes, React hooks, and Lucide React for icons. Do not install other packages for UI themes, icons, etc unless absolutely necessary or I request them.
+Stack: React 18, TypeScript, Vite, Tailwind CSS, Supabase (PostgreSQL, Auth, Storage, Realtime).
+Deployed to Vercel. Tests with Playwright.
 
-Use icons from lucide-react for logos.
+Design rules:
+- Make pages beautiful and production-worthy, not cookie cutter
+- Use Tailwind CSS for styling. Brand green: #28A26A (available as `crx-green` in tailwind config)
+- Use Lucide React for all icons. Do not install other UI or icon packages
+- All pages must be lazy-loaded (follow pattern in src/App.tsx)
+
+Database rules:
+- Supabase client is in src/lib/db.ts -- use this singleton, never create another client
+- RLS is enabled on ALL tables. Never disable it. All new tables MUST have RLS policies
+- After .update() or .delete() calls, use checkMutationResult() from src/lib/db.ts
+- Schema changes must go through migration files in supabase/migrations/
+
+Code conventions:
+- TypeScript types go in src/types/index.ts
+- Activity logging via logActivity() in src/lib/activityLogger.ts
+- Idempotency keys via generateIdempotencyKey() in src/lib/idempotency.ts
+- Image compression via compressImage() in src/lib/imageCompression.ts
+
+For full context: read CONTEXT.md (business context), DATABASE_RELATIONSHIPS.md (entity relationships), SCHEMA_QUICK_REFERENCE.sql (all 25 tables).
+
+Current state: Tier 1-3 hardening complete. Deployed to Vercel staging. Next task: comprehensive test coverage.
