@@ -198,6 +198,7 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search tags..."
+            aria-label="Search tags"
             className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-3"
           />
 
@@ -245,7 +246,7 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
                 onChange={(e) => setNewTagName(e.target.value)}
                 placeholder="Tag name"
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                onKeyPress={(e) => e.key === 'Enter' && createTag()}
+                onKeyDown={(e) => e.key === 'Enter' && createTag()}
               />
               <div className="flex items-center gap-2">
                 <span className="text-sm text-secondary">Color:</span>

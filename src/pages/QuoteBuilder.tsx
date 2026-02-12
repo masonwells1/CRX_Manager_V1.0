@@ -1091,6 +1091,7 @@ export default function QuoteBuilder() {
                                       : null,
                                   })
                                 }
+                                aria-label="Actual rate"
                                 className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                                 step="any"
                                 min={0}
@@ -1104,6 +1105,7 @@ export default function QuoteBuilder() {
                                     rate_unit: e.target.value || null,
                                   })
                                 }
+                                aria-label="Rate unit"
                                 className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                               >
                                 <option value="">--</option>
@@ -1131,6 +1133,7 @@ export default function QuoteBuilder() {
                                       : null,
                                   })
                                 }
+                                aria-label="Acres"
                                 className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                                 step="any"
                                 min={0}

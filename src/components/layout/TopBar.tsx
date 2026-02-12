@@ -14,6 +14,7 @@ export default function TopBar({ onMenuClick, title, accent }: TopBarProps) {
         <div className="flex items-center gap-3">
           <button
             onClick={onMenuClick}
+            aria-label="Open navigation menu"
             className="lg:hidden p-2 rounded-lg text-secondary hover:bg-white hover:shadow-sm transition-all"
           >
             <Menu className="w-5 h-5" />

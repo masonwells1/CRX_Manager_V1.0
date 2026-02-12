@@ -369,6 +369,7 @@ export default function Reports() {
           type="checkbox"
           checked={selectedCommissions.size > 0 && selectedCommissions.size === commissionData.filter((c) => c.status === 'pending').length}
           onChange={toggleSelectAll}
+          aria-label="Select all pending commissions"
           className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
         />
       ) as unknown as string,
@@ -377,6 +378,7 @@ export default function Reports() {
           type="checkbox"
           checked={selectedCommissions.has(r.id)}
           onChange={() => toggleCommissionSelect(r.id)}
+          aria-label={`Select commission for ${r.recipient}`}
           className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
         />
       ) : null,

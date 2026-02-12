@@ -92,6 +92,7 @@ export default function CommissionSplitEditor({
                     value={split.recipient}
                     onChange={(e) => updateSplit(i, 'recipient', e.target.value)}
                     placeholder="Enter recipient name"
+                    aria-label={`Recipient name for split ${i + 1}`}
                     className={inputClass}
                     autoFocus
                   />
@@ -107,6 +108,7 @@ export default function CommissionSplitEditor({
                 <select
                   value={split.recipient}
                   onChange={(e) => handleRecipientSelect(i, e.target.value)}
+                  aria-label={`Recipient for split ${i + 1}`}
                   className={selectClass}
                 >
                   <option value="">Select recipient...</option>
@@ -124,6 +126,7 @@ export default function CommissionSplitEditor({
                   value={split.percentage || ''}
                   onChange={(e) => updateSplit(i, 'percentage', e.target.value)}
                   placeholder="0"
+                  aria-label={`Commission percentage for split ${i + 1}`}
                   min="0"
                   max="100"
                   step="any"
@@ -135,6 +138,7 @@ export default function CommissionSplitEditor({
                 <button
                   type="button"
                   onClick={() => removeSplit(i)}
+                  aria-label={`Remove split ${i + 1}`}
                   className="p-2 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
                 >
                   <Trash2 className="w-4 h-4" />

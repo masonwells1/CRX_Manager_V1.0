@@ -89,6 +89,7 @@ export default function DataTable<T extends Record<string, any>>({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={searchPlaceholder}
+                aria-label={searchPlaceholder}
                 className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg
                   focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green
                   transition-colors"
@@ -124,6 +125,7 @@ export default function DataTable<T extends Record<string, any>>({
                     {col.sortable ? (
                       <button
                         onClick={() => toggleSort(col.key)}
+                        aria-label={`Sort by ${col.header}${sortKey === col.key ? (sortDir === 'asc' ? ', sorted ascending' : ', sorted descending') : ''}`}
                         className="inline-flex items-center gap-1 hover:text-nav-dark transition-colors"
                       >
                         {col.header}
@@ -149,9 +151,12 @@ export default function DataTable<T extends Record<string, any>>({
                 <tr
                   key={idx}
                   onClick={() => onRowClick?.(row)}
+                  onKeyDown={onRowClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(row); } } : undefined}
+                  tabIndex={onRowClick ? 0 : undefined}
+                  role={onRowClick ? 'button' : undefined}
                   className={`
                     border-b border-gray-50 transition-colors
-                    ${onRowClick ? 'cursor-pointer hover:bg-crx-green-tint' : ''}
+                    ${onRowClick ? 'cursor-pointer hover:bg-crx-green-tint focus:outline-none focus:ring-2 focus:ring-crx-green/30' : ''}
                   `}
                 >
                   {columns.map((col) => (

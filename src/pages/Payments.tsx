@@ -326,6 +326,7 @@ export default function Payments() {
           <input
             type="text"
             placeholder="Search..."
+            aria-label="Search payments"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-9 pr-3 py-1.5 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"

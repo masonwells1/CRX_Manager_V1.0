@@ -97,6 +97,7 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
             value={filters.search}
             onChange={(e) => updateFilter('search', e.target.value)}
             placeholder="Search notes..."
+            aria-label="Search notes"
             className="w-full pl-10 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
           />
         </div>

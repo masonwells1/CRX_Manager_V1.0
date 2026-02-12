@@ -80,10 +80,12 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   return (
     <>
       {mobileOpen && (
-        <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={onClose} />
+        <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={onClose} aria-hidden="true" />
       )}
 
       <aside
+        role="navigation"
+        aria-label="Main navigation"
         className={`
           fixed top-0 left-0 h-full w-64 bg-nav-dark z-50
           flex flex-col
@@ -94,7 +96,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       >
         <div className="flex items-center justify-between px-5 py-5 border-b border-white/10">
           <img src={logoWhite} alt="Crop RX Solutions" className="h-10 w-auto" />
-          <button onClick={onClose} className="lg:hidden text-gray-400 hover:text-white p-1">
+          <button onClick={onClose} aria-label="Close navigation menu" className="lg:hidden text-gray-400 hover:text-white p-1">
             <X className="w-5 h-5" />
           </button>
         </div>

@@ -284,6 +284,7 @@ export function BlendTickets() {
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
+                aria-label="Filter by status"
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="all">All Statuses</option>
@@ -299,6 +300,7 @@ export function BlendTickets() {
               <select
                 value={reviewFilter}
                 onChange={(e) => setReviewFilter(e.target.value)}
+                aria-label="Filter by review status"
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
                 <option value="all">All Reviews</option>

@@ -156,6 +156,7 @@ export default function Deliveries() {
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label="Filter by delivery status"
                   className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Statuses</option>
@@ -167,6 +168,7 @@ export default function Deliveries() {
                 <select
                   value={driverFilter}
                   onChange={(e) => setDriverFilter(e.target.value)}
+                  aria-label="Filter by driver"
                   className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">All Drivers</option>
@@ -178,6 +180,7 @@ export default function Deliveries() {
                   type="date"
                   value={dateFilter}
                   onChange={(e) => setDateFilter(e.target.value)}
+                  aria-label="Filter by delivery date"
                   className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               </>
