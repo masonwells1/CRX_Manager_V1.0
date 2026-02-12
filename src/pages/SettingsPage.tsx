@@ -9,11 +9,12 @@ import Modal from '../components/ui/Modal';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
+import { supabase, checkMutationResult } from '../lib/db';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 export default function SettingsPage() {
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -74,43 +75,45 @@ export default function SettingsPage() {
   };
 
   const saveSetting = async (key: string, value: string) => {
-    const { data: existing } = await supabase
+    const result = await supabase
       .from('app_settings')
-      .select('id')
-      .eq('setting_key', key)
-      .maybeSingle();
-
-    if (existing) {
-      await supabase
-        .from('app_settings')
-        .update({ setting_value: value, updated_at: new Date().toISOString() })
-        .eq('setting_key', key);
-    } else {
-      await supabase
-        .from('app_settings')
-        .insert({ setting_key: key, setting_value: value });
-    }
+      .upsert(
+        { setting_key: key, setting_value: value, updated_at: new Date().toISOString() },
+        { onConflict: 'setting_key' }
+      )
+      .select();
+    checkMutationResult(result, `Save setting: ${key}`);
   };
 
   const saveCompanyInfo = async () => {
     setSavingCompany(true);
-    await Promise.all([
-      saveSetting('company_name', companyName),
-      saveSetting('company_phone', companyPhone),
-      saveSetting('company_email', companyEmail),
-      saveSetting('company_address', companyAddress),
-    ]);
-    toast('success', 'Company info saved');
+    try {
+      await Promise.all([
+        saveSetting('company_name', companyName),
+        saveSetting('company_phone', companyPhone),
+        saveSetting('company_email', companyEmail),
+        saveSetting('company_address', companyAddress),
+      ]);
+      toast('success', 'Company info saved');
+      if (profile) logActivity('settings_updated', 'Company info updated', profile.id);
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to save company info');
+    }
     setSavingCompany(false);
   };
 
   const saveDefaults = async () => {
     setSavingDefaults(true);
-    await Promise.all([
-      saveSetting('default_quote_valid_days', defaultValidDays),
-      saveSetting('default_tier', defaultTier),
-    ]);
-    toast('success', 'Default settings saved');
+    try {
+      await Promise.all([
+        saveSetting('default_quote_valid_days', defaultValidDays),
+        saveSetting('default_tier', defaultTier),
+      ]);
+      toast('success', 'Default settings saved');
+      if (profile) logActivity('settings_updated', 'Default settings updated', profile.id);
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to save default settings');
+    }
     setSavingDefaults(false);
   };
 
@@ -153,6 +156,7 @@ export default function SettingsPage() {
         toast('error', data?.error || `Request failed (${response.status})`);
       } else {
         toast('success', 'User created successfully');
+        if (profile) logActivity('user_created', `User ${newName} (${newRole}) created`, profile.id);
         setUserModalOpen(false);
         setNewEmail('');
         setNewName('');
@@ -178,6 +182,7 @@ export default function SettingsPage() {
 
   const handleEditUser = async () => {
     if (!editingUser) return;
+    if (editIsActive === false && !confirm('Deactivate this user? They will be locked out.')) return;
     setSavingUser(true);
     try {
       const { data, error } = await supabase.rpc('admin_update_profile', {
@@ -193,6 +198,7 @@ export default function SettingsPage() {
         toast('error', data.error);
       } else {
         toast('success', 'User updated successfully');
+        if (profile) logActivity('user_updated', `User ${editName} updated (role: ${editRole}, active: ${editIsActive})`, profile.id);
         setEditModalOpen(false);
         setEditingUser(null);
         fetchUsers();

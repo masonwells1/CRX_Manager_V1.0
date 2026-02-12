@@ -18,7 +18,7 @@ import Badge from '../components/ui/Badge';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import type { Product } from '../types';
 
@@ -120,10 +120,12 @@ export default function CropPrograms() {
     const value = JSON.stringify(updated);
 
     if (existing) {
-      await supabase
+      const updateResult = await supabase
         .from('app_settings')
         .update({ setting_value: value, updated_by: profile?.id, updated_at: new Date().toISOString() })
-        .eq('id', existing.id);
+        .eq('id', existing.id)
+        .select();
+      checkMutationResult(updateResult, 'Update crop programs setting');
     } else {
       await supabase.from('app_settings').insert({
         setting_key: 'crop_programs',

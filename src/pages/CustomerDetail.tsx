@@ -213,74 +213,56 @@ export default function CustomerDetail() {
     }
 
     setSaving(true);
-    if (isNew) {
-      const { data, error } = await supabase.from('customers').insert([customer]).select().maybeSingle();
+    try {
+      const customerPayload = {
+        farm_name: customer.farm_name,
+        contact_name: customer.contact_name,
+        phone: customer.phone,
+        email: customer.email,
+        billing_address: customer.billing_address,
+        assigned_tier: customer.assigned_tier,
+        assigned_sales_rep: customer.assigned_sales_rep,
+        total_acres: customer.total_acres,
+        corn_acres: customer.corn_acres,
+        soybean_acres: customer.soybean_acres,
+        other_acres: customer.other_acres,
+        payment_terms: customer.payment_terms,
+        default_commission_split: customer.default_commission_split,
+        notes: customer.notes,
+        is_active: customer.is_active,
+      };
+
+      const addressesPayload = addresses.map((addr) => ({
+        label: addr.label,
+        address_line: addr.address_line,
+        city: addr.city,
+        state: addr.state,
+        zip: addr.zip,
+        delivery_notes: addr.delivery_notes,
+        is_default: addr.is_default,
+      }));
+
+      const { data, error } = await supabase.rpc('save_customer', {
+        p_customer_id: isNew ? null : id,
+        p_customer_payload: customerPayload,
+        p_addresses: addressesPayload,
+        p_performed_by: profile!.id,
+      });
+
       if (error) {
         toast('error', error.message);
-      } else if (data) {
-        for (const addr of addresses) {
-          if (addr.label || addr.address_line) {
-            await supabase.from('customer_addresses').insert([{ ...addr, customer_id: data.id }]);
-          }
-        }
+      } else {
         setIsDirty(false);
-        toast('success', 'Customer created');
-        navigate(`/customers/${data.id}`, { replace: true });
-      }
-    } else {
-      const { error, data: updatedRows } = await supabase
-        .from('customers')
-        .update({ ...customer, updated_at: new Date().toISOString() })
-        .eq('id', id)
-        .select();
-      if (error) {
-        toast('error', error.message);
-        setSaving(false);
-        return;
-      }
-      if (!updatedRows || updatedRows.length === 0) {
-        toast('error', 'Update failed: no rows affected. You may not have permission.');
-        setSaving(false);
-        return;
-      }
-
-      const existingIds = addresses.filter((a) => a.id).map((a) => a.id!);
-
-      const { data: currentAddrs } = await supabase
-        .from('customer_addresses')
-        .select('id')
-        .eq('customer_id', id);
-      const currentIds = (currentAddrs || []).map((a) => a.id);
-      const toDelete = currentIds.filter((cid) => !existingIds.includes(cid));
-
-      for (const delId of toDelete) {
-        await supabase.from('customer_addresses').delete().eq('id', delId);
-      }
-
-      for (const addr of addresses) {
-        if (addr.id) {
-          await supabase
-            .from('customer_addresses')
-            .update({
-              label: addr.label,
-              address_line: addr.address_line,
-              city: addr.city,
-              state: addr.state,
-              zip: addr.zip,
-              delivery_notes: addr.delivery_notes,
-              is_default: addr.is_default,
-            })
-            .eq('id', addr.id);
-        } else if (addr.label || addr.address_line) {
-          await supabase
-            .from('customer_addresses')
-            .insert([{ ...addr, customer_id: id }]);
+        if (isNew) {
+          toast('success', 'Customer created');
+          navigate(`/customers/${data}`, { replace: true });
+        } else {
+          toast('success', 'Customer updated');
+          fetchAddresses();
         }
       }
-
-      setIsDirty(false);
-      toast('success', 'Customer updated');
-      fetchAddresses();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to save customer');
     }
     setSaving(false);
   };

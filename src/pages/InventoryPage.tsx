@@ -8,7 +8,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
@@ -362,17 +362,19 @@ export default function InventoryPage() {
   };
 
   const handleReleaseHold = async (holdId: string) => {
-    const { error } = await supabase
-      .from('inventory_holds')
-      .update({ is_active: false })
-      .eq('id', holdId);
+    try {
+      const releaseResult = await supabase
+        .from('inventory_holds')
+        .update({ is_active: false })
+        .eq('id', holdId)
+        .select();
+      checkMutationResult(releaseResult, 'Release inventory hold');
 
-    if (error) {
-      toast('error', 'Failed to release hold');
-    } else {
       toast('success', 'Hold released');
       fetchInventory();
       fetchHolds();
+    } catch (error: any) {
+      toast('error', error.message || 'Failed to release hold');
     }
   };
 
@@ -579,17 +581,19 @@ export default function InventoryPage() {
       });
     }
 
-    const { error } = await supabase
-      .from('inventory')
-      .delete()
-      .eq('id', inventoryId);
+    try {
+      const deleteResult = await supabase
+        .from('inventory')
+        .delete()
+        .eq('id', inventoryId)
+        .select();
+      checkMutationResult(deleteResult, 'Delete inventory item');
 
-    if (error) {
-      console.error('Failed to delete inventory:', error);
-      toast('error', 'Failed to delete inventory item');
-    } else {
       toast('success', 'Inventory item deleted');
       fetchInventory();
+    } catch (error: any) {
+      console.error('Failed to delete inventory:', error);
+      toast('error', error.message || 'Failed to delete inventory item');
     }
   };
 

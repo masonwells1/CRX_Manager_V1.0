@@ -21,8 +21,9 @@ import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
+import { notifyLargeOrder } from '../lib/notificationTriggers';
 import { downloadQuotePdf } from '../lib/quotePdf';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import type {
@@ -335,7 +336,7 @@ export default function QuoteBuilder() {
         total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
         total_price: Math.round(totalPrice * 100) / 100,
         profit: Math.round(profit * 100) / 100,
-        net_margin: Math.round(netMargin * 10000) / 10000,
+        net_margin: Math.round(netMargin * 100 * 100) / 100, // Store as percentage (e.g. 20.00 = 20%)
       };
     },
     [products, getTierPrice, getConversionFactor]
@@ -497,6 +498,45 @@ export default function QuoteBuilder() {
       }
     }
 
+    // S2-1: Validate rate_unit is set for all items with a rate
+    for (const sec of sections) {
+      for (const item of sec.items) {
+        if (!item.product_id) continue;
+        if ((item.actual_rate ?? 0) > 0 && !item.rate_unit) {
+          toast('error', 'Please select a rate unit for all items with a rate');
+          return null;
+        }
+      }
+    }
+
+    // S2-2: Validate rate and acres are both set when either is provided
+    for (const sec of sections) {
+      for (const item of sec.items) {
+        if (!item.product_id) continue;
+        const hasRate = (item.actual_rate ?? 0) > 0;
+        const hasAcres = (item.acres ?? 0) > 0;
+        if (hasRate && !hasAcres) {
+          const prod = item.product || products.find((p) => p.id === item.product_id);
+          toast('error', `"${prod?.product_name || 'An item'}" in "${sec.section_name}" has a rate but no acres. Both are required.`);
+          return null;
+        }
+        if (hasAcres && !hasRate) {
+          const prod = item.product || products.find((p) => p.id === item.product_id);
+          toast('error', `"${prod?.product_name || 'An item'}" in "${sec.section_name}" has acres but no rate. Both are required.`);
+          return null;
+        }
+      }
+    }
+
+    // S2-3: Validate commission splits sum to 100%
+    if (commissionSplit.splits.length > 0) {
+      const splitTotal = commissionSplit.splits.reduce((sum, s) => sum + (s.percentage || 0), 0);
+      if (Math.abs(splitTotal - 100) > 0.01) {
+        toast('error', `Commission splits must total 100% (currently ${splitTotal.toFixed(1)}%)`);
+        return null;
+      }
+    }
+
     const quotePayload = {
       quote_number: quoteNumber,
       customer_id: customerId,
@@ -517,78 +557,55 @@ export default function QuoteBuilder() {
       ...(newStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
     };
 
-    let savedQuoteId = quoteId;
+    // Build sections JSON for the atomic RPC
+    const sectionsPayload = sections.map((sec) => ({
+      section_name: sec.section_name,
+      sort_order: sec.sort_order,
+      section_notes: sec.section_notes || null,
+      items: sec.items
+        .filter((item) => item.product_id)
+        .map((item) => ({
+          product_id: item.product_id,
+          sort_order: item.sort_order,
+          notes: item.notes || null,
+          price_per_unit: item.price_per_unit,
+          current_cost: item.current_cost,
+          suggested_rate: item.suggested_rate,
+          actual_rate: item.actual_rate,
+          rate_unit: item.rate_unit,
+          oz_per_acre: item.oz_per_acre,
+          price_per_acre: item.price_per_acre,
+          acres: item.acres,
+          total_units_needed: item.total_units_needed,
+          unit_size: item.unit_size,
+          profit: item.profit,
+          total_price: item.total_price,
+          net_margin: item.net_margin,
+        })),
+    }));
 
-    if (quoteId && isEditing) {
-      const { error } = await supabase
-        .from('quotes')
-        .update({ ...quotePayload, updated_at: new Date().toISOString() })
-        .eq('id', quoteId);
+    try {
+      const { data, error } = await supabase.rpc('save_quote', {
+        p_quote_id: (quoteId && isEditing) ? quoteId : null,
+        p_quote_payload: quotePayload,
+        p_sections: sectionsPayload,
+        p_performed_by: profile.id,
+      });
+
       if (error) {
-        toast('error', error.message);
+        toast('error', error.message || 'Failed to save quote');
         return null;
       }
 
-      await supabase.from('quote_items').delete().eq('quote_id', quoteId);
-      await supabase.from('quote_sections').delete().eq('quote_id', quoteId);
-    } else {
-      const { data, error } = await supabase
-        .from('quotes')
-        .insert([quotePayload])
-        .select()
-        .maybeSingle();
-      if (error || !data) {
-        toast('error', error?.message || 'Failed to create quote');
-        return null;
+      const savedQuoteId = data?.quote_id || quoteId;
+      if (!quoteId || !isEditing) {
+        setQuoteId(savedQuoteId);
       }
-      savedQuoteId = data.id;
-      setQuoteId(data.id);
+      return savedQuoteId;
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to save quote');
+      return null;
     }
-
-    for (const sec of sections) {
-      const { data: secData } = await supabase
-        .from('quote_sections')
-        .insert([
-          {
-            quote_id: savedQuoteId,
-            section_name: sec.section_name,
-            sort_order: sec.sort_order,
-            section_notes: sec.section_notes,
-          },
-        ])
-        .select()
-        .maybeSingle();
-
-      if (secData) {
-        const itemRows = sec.items
-          .filter((item) => item.product_id)
-          .map((item) => ({
-            quote_id: savedQuoteId,
-            section_id: secData.id,
-            product_id: item.product_id,
-            sort_order: item.sort_order,
-            notes: item.notes,
-            price_per_unit: item.price_per_unit,
-            current_cost: item.current_cost,
-            suggested_rate: item.suggested_rate,
-            actual_rate: item.actual_rate,
-            rate_unit: item.rate_unit,
-            oz_per_acre: item.oz_per_acre,
-            price_per_acre: item.price_per_acre,
-            acres: item.acres,
-            total_units_needed: item.total_units_needed,
-            unit_size: item.unit_size,
-            profit: item.profit,
-            total_price: item.total_price,
-            net_margin: item.net_margin,
-          }));
-        if (itemRows.length > 0) {
-          await supabase.from('quote_items').insert(itemRows);
-        }
-      }
-    }
-
-    return savedQuoteId;
   };
 
   const handleSaveDraft = async () => {
@@ -748,6 +765,7 @@ export default function QuoteBuilder() {
 
       const result = data as { status: string; order_id?: string; order_number?: string };
       toast('success', `Order ${result.order_number || ''} created`);
+      notifyLargeOrder(result.order_id!, result.order_number || '', selectedCustomer?.farm_name || 'customer', totals.totalPrice);
       navigate(`/orders/${result.order_id}`);
     } catch (error: any) {
       console.error('Error converting to order:', error);
@@ -775,7 +793,7 @@ export default function QuoteBuilder() {
       minimumFractionDigits: 2,
     }).format(n);
 
-  const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+  const pct = (n: number) => `${n.toFixed(1)}%`; // net_margin is already stored as percentage
 
   if (loading) {
     return (
@@ -891,6 +909,7 @@ export default function QuoteBuilder() {
             type="number"
             value={validDays}
             onChange={(e) => setValidDays(parseInt(e.target.value) || 15)}
+            min={0}
           />
           <div className="sm:col-span-2 lg:col-span-4">
             <CommissionSplitEditor
@@ -1074,6 +1093,7 @@ export default function QuoteBuilder() {
                                 }
                                 className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                                 step="any"
+                                min={0}
                               />
                             </td>
                             <td className="px-3 py-2">
@@ -1113,6 +1133,7 @@ export default function QuoteBuilder() {
                                 }
                                 className="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                                 step="any"
+                                min={0}
                               />
                             </td>
                             <td className="px-3 py-2 font-mono text-secondary">

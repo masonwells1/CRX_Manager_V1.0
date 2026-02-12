@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Bell, Check, Trash2, X } from 'lucide-react';
-import { supabase } from '../../lib/db';
+import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useRealtimeNotifications } from '../../hooks/useRealtimeSubscription';
 import { useNavigate } from 'react-router-dom';
@@ -64,32 +64,47 @@ export default function NotificationsPanel() {
   useRealtimeNotifications(profile?.id || '', fetchNotifications);
 
   const markAsRead = async (notificationId: string) => {
-    await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('id', notificationId);
-
+    try {
+      const result = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('id', notificationId)
+        .select();
+      checkMutationResult(result, 'Mark notification as read');
+    } catch (err) {
+      console.error('Failed to mark notification as read:', err);
+    }
     fetchNotifications();
   };
 
   const markAllAsRead = async () => {
     if (!profile) return;
 
-    await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('user_id', profile.id)
-      .eq('is_read', false);
-
+    try {
+      const result = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('user_id', profile.id)
+        .eq('is_read', false)
+        .select();
+      checkMutationResult(result, 'Mark all notifications as read');
+    } catch (err) {
+      console.error('Failed to mark all notifications as read:', err);
+    }
     fetchNotifications();
   };
 
   const deleteNotification = async (notificationId: string) => {
-    await supabase
-      .from('notifications')
-      .delete()
-      .eq('id', notificationId);
-
+    try {
+      const result = await supabase
+        .from('notifications')
+        .delete()
+        .eq('id', notificationId)
+        .select();
+      checkMutationResult(result, 'Delete notification');
+    } catch (err) {
+      console.error('Failed to delete notification:', err);
+    }
     fetchNotifications();
   };
 

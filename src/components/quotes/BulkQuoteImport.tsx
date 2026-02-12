@@ -217,8 +217,14 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
     let failCount = 0;
 
     try {
-      const { data: customers } = await supabase.from('customers').select('id, farm_name');
-      const { data: products } = await supabase.from('products').select('id, product_name, sku');
+      const [custRes, prodRes, convRes] = await Promise.all([
+        supabase.from('customers').select('id, farm_name'),
+        supabase.from('products').select('id, product_name, sku'),
+        supabase.from('unit_conversions').select('*'),
+      ]);
+      const customers = custRes.data;
+      const products = prodRes.data;
+      const unitConversions = convRes.data || [];
 
       if (!customers || !products) {
         toast('error', 'Failed to load reference data');
@@ -315,7 +321,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
 
               const { data: product } = await supabase
                 .from('products')
-                .select('current_cost')
+                .select('current_cost, inventory_unit')
                 .eq('id', productId)
                 .single();
 
@@ -323,7 +329,15 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               const price_per_unit = item.price_per_unit || 0;
               const acres = item.acres || 0;
               const oz_per_acre = item.oz_per_acre || 0;
-              const total_units_needed = acres && oz_per_acre ? (acres * oz_per_acre) / 16 : 0;
+
+              // Look up the conversion factor for the product's inventory_unit (e.g. Lb=16, Gallon=128)
+              // Falls back to 16 (oz-per-lb) if no inventory_unit or no matching conversion found
+              const inventoryUnit = product?.inventory_unit;
+              const conv = inventoryUnit
+                ? unitConversions.find((c: { unit: string; factor_oz: number }) => c.unit.toLowerCase() === inventoryUnit.toLowerCase())
+                : null;
+              const conversionFactor = conv ? conv.factor_oz : 16;
+              const total_units_needed = acres && oz_per_acre ? (acres * oz_per_acre) / conversionFactor : 0;
               const total_price = price_per_unit * total_units_needed;
               const total_cost = current_cost * total_units_needed;
               const profit = total_price - total_cost;

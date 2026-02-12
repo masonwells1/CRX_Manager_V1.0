@@ -8,6 +8,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
+import { logActivity } from '../lib/activityLogger';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
 import type { Delivery, DeliveryItem, Customer, CustomerAddress, Profile } from '../types';
@@ -69,6 +70,7 @@ export default function DeliveryDetail() {
       return;
     }
     if (!delivery || !profile) return;
+    if (!confirm('Complete this delivery? This will update inventory and cannot be undone.')) return;
     setCompleting(true);
 
     const rpcParams = {
@@ -101,6 +103,7 @@ export default function DeliveryDetail() {
       if (error) throw error;
 
       toast('success', 'Delivery completed');
+      logActivity('delivery_completed', `Delivery ${delivery.delivery_number} completed`, profile.id, 'delivery', delivery.id, delivery.customer_id);
       fetchDelivery();
     } catch (error: any) {
       console.error('Error completing delivery:', error);

@@ -11,7 +11,7 @@ import Modal from '../components/ui/Modal';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { useRealtimeNotes } from '../hooks/useRealtimeSubscription';
 import TeamBoardFilters, { FilterState } from '../components/team/TeamBoardFilters';
 import CommentsSection from '../components/team/CommentsSection';
@@ -320,25 +320,27 @@ export default function TeamBoard() {
     setSaving(true);
 
     if (editingNote) {
-      const { error } = await supabase
-        .from('team_notes')
-        .update({
-          title,
-          content: content || null,
-          note_type: noteType,
-          priority,
-          assigned_to: assignedTo || null,
-          due_date: dueDate || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', editingNote.id);
-      if (error) {
-        toast('error', 'Failed to update note');
-      } else {
+      try {
+        const result = await supabase
+          .from('team_notes')
+          .update({
+            title,
+            content: content || null,
+            note_type: noteType,
+            priority,
+            assigned_to: assignedTo || null,
+            due_date: dueDate || null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', editingNote.id)
+          .select();
+        checkMutationResult(result, 'Update note');
         toast('success', 'Note updated');
         setModalOpen(false);
         resetForm();
         fetchNotes();
+      } catch (err: any) {
+        toast('error', err.message || 'Failed to update note');
       }
     } else {
       const { error } = await supabase.from('team_notes').insert({
@@ -370,19 +372,20 @@ export default function TeamBoard() {
     }
 
     // Soft delete: set deleted_at timestamp for audit trail
-    const { error } = await supabase
-      .from('team_notes')
-      .update({
-        deleted_at: new Date().toISOString(),
-        deleted_by: profile.id,
-      })
-      .eq('id', noteId);
-
-    if (error) {
-      toast('error', 'Failed to delete note');
-    } else {
+    try {
+      const result = await supabase
+        .from('team_notes')
+        .update({
+          deleted_at: new Date().toISOString(),
+          deleted_by: profile.id,
+        })
+        .eq('id', noteId)
+        .select();
+      checkMutationResult(result, 'Delete note');
       toast('success', 'Note deleted');
       fetchNotes();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to delete note');
     }
     setDeleteConfirmId(null);
   };
@@ -394,23 +397,35 @@ export default function TeamBoard() {
       return;
     }
 
-    const { error } = await supabase
-      .from('team_notes')
-      .update({
-        is_completed: !note.is_completed,
-        completed_by: !note.is_completed ? profile.id : null,
-        completed_at: !note.is_completed ? new Date().toISOString() : null,
-      })
-      .eq('id', note.id);
-    if (!error) fetchNotes();
+    try {
+      const result = await supabase
+        .from('team_notes')
+        .update({
+          is_completed: !note.is_completed,
+          completed_by: !note.is_completed ? profile.id : null,
+          completed_at: !note.is_completed ? new Date().toISOString() : null,
+        })
+        .eq('id', note.id)
+        .select();
+      checkMutationResult(result, 'Toggle note completion');
+      fetchNotes();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to update note');
+    }
   };
 
   const togglePin = async (note: TeamNote) => {
-    const { error } = await supabase
-      .from('team_notes')
-      .update({ is_pinned: !note.is_pinned })
-      .eq('id', note.id);
-    if (!error) fetchNotes();
+    try {
+      const result = await supabase
+        .from('team_notes')
+        .update({ is_pinned: !note.is_pinned })
+        .eq('id', note.id)
+        .select();
+      checkMutationResult(result, 'Toggle note pin');
+      fetchNotes();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to update note');
+    }
   };
 
   const canEdit = (note: TeamNote) => isAdmin || note.created_by === profile?.id;

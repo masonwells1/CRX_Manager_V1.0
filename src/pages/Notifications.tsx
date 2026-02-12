@@ -6,7 +6,7 @@ import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import type { Notification as NotificationType } from '../types';
 
 export default function Notifications() {
@@ -37,10 +37,12 @@ export default function Notifications() {
 
   const markAsRead = async (notification: NotificationType) => {
     if (!notification.is_read) {
-      await supabase
+      const readResult = await supabase
         .from('notifications')
         .update({ is_read: true })
-        .eq('id', notification.id);
+        .eq('id', notification.id)
+        .select();
+      checkMutationResult(readResult, 'Mark notification as read');
       setNotifications((prev) =>
         prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
       );
@@ -61,11 +63,13 @@ export default function Notifications() {
     // Guard: Ensure profile is loaded
     if (!profile) return;
 
-    await supabase
+    const markAllResult = await supabase
       .from('notifications')
       .update({ is_read: true })
       .eq('user_id', profile.id)
-      .eq('is_read', false);
+      .eq('is_read', false)
+      .select();
+    checkMutationResult(markAllResult, 'Mark all notifications as read');
     setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
   };
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Tag, Plus, X, Check } from 'lucide-react';
-import { supabase } from '../../lib/db';
+import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 
@@ -117,17 +117,18 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
   };
 
   const removeTagFromNote = async (tagId: string) => {
-    const { error } = await supabase
-      .from('team_note_tags')
-      .delete()
-      .eq('note_id', noteId)
-      .eq('tag_id', tagId);
-
-    if (error) {
-      toast('error', 'Failed to remove tag');
-    } else {
+    try {
+      const result = await supabase
+        .from('team_note_tags')
+        .delete()
+        .eq('note_id', noteId)
+        .eq('tag_id', tagId)
+        .select();
+      checkMutationResult(result, 'Remove tag from note');
       fetchNoteTags();
       if (onTagsChange) onTagsChange();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to remove tag');
     }
   };
 

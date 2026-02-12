@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { MessageCircle, Send, Reply, Edit2, Trash2, X } from 'lucide-react';
-import { supabase } from '../../lib/db';
+import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useRealtimeComments } from '../../hooks/useRealtimeSubscription';
@@ -119,35 +119,37 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
     setSending(true);
     const mentions = extractMentions(editContent);
 
-    const { error } = await supabase
-      .from('team_note_comments')
-      .update({
-        content: editContent.trim(),
-        mentions,
-      })
-      .eq('id', commentId);
-
-    if (error) {
-      toast('error', 'Failed to update comment');
-    } else {
+    try {
+      const result = await supabase
+        .from('team_note_comments')
+        .update({
+          content: editContent.trim(),
+          mentions,
+        })
+        .eq('id', commentId)
+        .select();
+      checkMutationResult(result, 'Update comment');
       setEditingId(null);
       setEditContent('');
       fetchComments();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to update comment');
     }
     setSending(false);
   };
 
   const handleDeleteComment = async (commentId: string) => {
-    const { error } = await supabase
-      .from('team_note_comments')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('id', commentId);
-
-    if (error) {
-      toast('error', 'Failed to delete comment');
-    } else {
+    try {
+      const result = await supabase
+        .from('team_note_comments')
+        .update({ deleted_at: new Date().toISOString() })
+        .eq('id', commentId)
+        .select();
+      checkMutationResult(result, 'Delete comment');
       toast('success', 'Comment deleted');
       fetchComments();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to delete comment');
     }
   };
 

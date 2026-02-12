@@ -9,6 +9,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import type { Order, OrderItem, Customer, CustomerAddress, Profile } from '../types';
 
@@ -197,11 +198,13 @@ export default function NewDelivery() {
       return;
     }
 
-    const { count } = await supabase
-      .from('deliveries')
-      .select('*', { count: 'exact', head: true });
-    const nextNum = (count || 0) + 1;
-    const deliveryNumber = `DEL-${String(nextNum).padStart(5, '0')}`;
+    const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_delivery_number');
+    if (rpcError || !rpcNumber) {
+      toast('error', rpcError?.message || 'Failed to generate delivery number');
+      setSaving(false);
+      return;
+    }
+    const deliveryNumber = rpcNumber as string;
 
     const { data: delData, error: delError } = await supabase
       .from('deliveries')
@@ -247,6 +250,7 @@ export default function NewDelivery() {
 
     setIsDirty(false);
     toast('success', `Delivery ${deliveryNumber} scheduled`);
+    logActivity('delivery_created', `Delivery ${deliveryNumber} created for order ${order.order_number}`, profile.id, 'delivery', delData.id, order.customer_id);
 
     // GAP FIX #17: Notify the assigned driver
     if (selectedDriverId) {

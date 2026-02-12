@@ -7,7 +7,8 @@ import Button from '../components/ui/Button';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 
 type TabKey = 'customer' | 'product' | 'commission' | 'revenue';
@@ -238,19 +239,18 @@ export default function Reports() {
     setMarkingPaid(true);
     const today = new Date().toISOString().split('T')[0];
     
-    const { error, data } = await supabase
-      .from('commissions')
-      .update({ status: 'paid', paid_date: today })
-      .in('id', Array.from(selectedCommissions))
-      .select();
-
-    if (error) {
-      toast('error', 'Failed to update commissions');
-    } else if (!data || data.length === 0) {
-      toast('error', 'No commissions were updated. You may not have permission.');
-    } else {
-      toast('success', `${data.length} commission(s) marked as paid`);
+    try {
+      const result = await supabase
+        .from('commissions')
+        .update({ status: 'paid', paid_date: today })
+        .in('id', Array.from(selectedCommissions))
+        .select();
+      checkMutationResult(result, 'Mark commissions as paid');
+      toast('success', `${result.data!.length} commission(s) marked as paid`);
+      if (profile) logActivity('commissions_paid', `${result.data!.length} commission(s) marked as paid`, profile.id);
       fetchCommissions();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to update commissions');
     }
     setMarkingPaid(false);
   };

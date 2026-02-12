@@ -9,7 +9,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus } from '../types';
@@ -125,121 +125,61 @@ export default function PurchaseOrderDetail() {
   };
 
   const handleSaveEdit = async () => {
-    if (!po) return;
+    if (!po || !profile) return;
     setSaving(true);
 
-    const totalCost = editItems.reduce(
-      (sum, item) => sum + (parseFloat(item.quantity_ordered) * parseFloat(item.unit_cost)),
-      0
-    );
+    try {
+      const itemsPayload = editItems.map((item) => ({
+        product_id: item.product_id,
+        product_name: item.product_name,
+        unit_size: item.unit_size,
+        quantity_ordered: parseFloat(item.quantity_ordered),
+        unit_cost: parseFloat(item.unit_cost),
+        quantity_received: item.quantity_received || 0,
+      }));
 
-    const { error: poError, data: poData } = await supabase
-      .from('purchase_orders')
-      .update({
-        vendor: editForm.vendor,
-        status: editForm.status,
-        submitted_date: editForm.submitted_date || null,
-        expected_delivery_date: editForm.expected_delivery_date || null,
-        notes: editForm.notes || null,
-        total_cost: totalCost,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id!)
-      .select();
+      const { data, error } = await supabase.rpc('save_purchase_order', {
+        p_po_id: id,
+        p_po_payload: {
+          vendor: editForm.vendor,
+          status: editForm.status,
+          submitted_date: editForm.submitted_date || null,
+          expected_delivery_date: editForm.expected_delivery_date || null,
+          notes: editForm.notes || null,
+        },
+        p_items: itemsPayload,
+        p_performed_by: profile.id,
+      });
 
-    if (poError) {
-      toast('error', 'Failed to update purchase order');
-      setSaving(false);
-      return;
+      if (error) throw error;
+
+      toast('success', 'Purchase order updated');
+      setEditOpen(false);
+      fetchPO();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to update purchase order');
     }
-    if (!poData || poData.length === 0) {
-      toast('error', 'Update failed: no rows affected. You may not have permission.');
-      setSaving(false);
-      return;
-    }
-
-    for (const item of editItems) {
-      const { error: itemError, data: itemData } = await supabase
-        .from('purchase_order_items')
-        .update({
-          quantity_ordered: parseFloat(item.quantity_ordered),
-          unit_cost: parseFloat(item.unit_cost),
-        })
-        .eq('id', item.id)
-        .select();
-
-      if (itemError) {
-        toast('error', `Failed to update item: ${item.product_name}`);
-        setSaving(false);
-        return;
-      }
-      if (!itemData || itemData.length === 0) {
-        toast('error', `Update failed for item: ${item.product_name}. No rows affected.`);
-        setSaving(false);
-        return;
-      }
-    }
-
-    if (profile) {
-      await logActivity(
-        'po_updated',
-        `PO ${po.po_number} updated`,
-        profile.id,
-        'purchase_order',
-        id
-      );
-    }
-
-    toast('success', 'Purchase order updated');
-    setEditOpen(false);
-    fetchPO();
     setSaving(false);
   };
 
   const handleDelete = async () => {
-    if (!po) return;
+    if (!po || !profile) return;
     setSaving(true);
 
-    const { error: itemsError } = await supabase
-      .from('purchase_order_items')
-      .delete()
-      .eq('purchase_order_id', id!);
+    try {
+      const { data, error } = await supabase.rpc('delete_purchase_order', {
+        p_po_id: id,
+        p_performed_by: profile.id,
+      });
 
-    if (itemsError) {
-      toast('error', 'Failed to delete purchase order items');
-      setSaving(false);
-      return;
+      if (error) throw error;
+
+      toast('success', 'Purchase order deleted');
+      navigate('/purchase-orders');
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to delete purchase order');
     }
-
-    const { error: poError, data: poData } = await supabase
-      .from('purchase_orders')
-      .delete()
-      .eq('id', id!)
-      .select();
-
-    if (poError) {
-      toast('error', 'Failed to delete purchase order');
-      setSaving(false);
-      return;
-    }
-    if (!poData || poData.length === 0) {
-      toast('error', 'Delete failed: no rows affected. You may not have permission.');
-      setSaving(false);
-      return;
-    }
-
-    if (profile) {
-      await logActivity(
-        'po_deleted',
-        `PO ${po.po_number} deleted`,
-        profile.id,
-        'purchase_order',
-        id
-      );
-    }
-
-    toast('success', 'Purchase order deleted');
-    navigate('/purchase-orders');
+    setSaving(false);
   };
 
   if (loading) {

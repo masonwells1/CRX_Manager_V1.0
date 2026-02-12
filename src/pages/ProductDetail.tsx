@@ -9,7 +9,8 @@ import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
+import { supabase, checkMutationResult } from '../lib/db';
 import type { Product, CostHistory, UnitConversion } from '../types';
 
 export default function ProductDetail() {
@@ -140,6 +141,7 @@ export default function ProductDetail() {
       } else {
         setIsDirty(false);
         toast('success', 'Product created');
+        logActivity('product_created', `Product ${product.product_name} created`, profile!.id, 'product');
         navigate('/products');
       }
     } else {
@@ -173,16 +175,19 @@ export default function ProductDetail() {
         });
       }
 
-      const { error } = await supabase
-        .from('products')
-        .update({ ...product, updated_at: new Date().toISOString() })
-        .eq('id', id);
-      if (error) {
-        toast('error', error.message);
-      } else {
+      try {
+        const result = await supabase
+          .from('products')
+          .update({ ...product, updated_at: new Date().toISOString() })
+          .eq('id', id)
+          .select();
+        checkMutationResult(result, 'Update product');
         setIsDirty(false);
         toast('success', 'Product updated');
+        logActivity('product_updated', `Product ${product.product_name} updated`, profile!.id, 'product', id);
         if (pricingChanged) fetchCostHistory();
+      } catch (err: any) {
+        toast('error', err.message || 'Failed to update product');
       }
     }
     setSaving(false);
@@ -207,16 +212,23 @@ export default function ProductDetail() {
       },
     ]);
     if (!error) {
-      await supabase
-        .from('products')
-        .update({ current_cost: cost, cost_updated_date: new Date().toISOString(), updated_at: new Date().toISOString() })
-        .eq('id', id);
-      setProduct((p) => ({ ...p, current_cost: cost }));
-      fetchCostHistory();
-      setCostModal(false);
-      setNewCost('');
-      setCostNote('');
-      toast('success', 'Cost updated');
+      try {
+        const result = await supabase
+          .from('products')
+          .update({ current_cost: cost, cost_updated_date: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('id', id)
+          .select();
+        checkMutationResult(result, 'Update product cost');
+        setProduct((p) => ({ ...p, current_cost: cost }));
+        fetchCostHistory();
+        setCostModal(false);
+        setNewCost('');
+        setCostNote('');
+        toast('success', 'Cost updated');
+        logActivity('product_cost_updated', `Product cost updated to $${cost}`, profile!.id, 'product', id);
+      } catch (err: any) {
+        toast('error', err.message || 'Failed to update product cost');
+      }
     }
   };
 

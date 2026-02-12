@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle } from 'lucide-react';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
@@ -9,6 +10,7 @@ import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import Skeleton from '../components/ui/Skeleton';
 import { usePageMeta } from '../hooks/usePageMeta';
+import { useToast } from '../components/ui/Toast';
 import { validateBlendMath } from '../lib/blendMathValidator';
 import type { BlendTicket, BlendTicketProduct, BlendTicketImage, Customer, Product } from '../types';
 
@@ -17,6 +19,7 @@ export function BlendTicketDetail() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   usePageMeta();
+  const { toast } = useToast();
 
   const [ticket, setTicket] = useState<BlendTicket | null>(null);
   const [images, setImages] = useState<BlendTicketImage[]>([]);
@@ -157,53 +160,48 @@ export function BlendTicketDetail() {
 
     setSaving(true);
     try {
-      const { error: ticketErr, data: ticketData } = await supabase
-        .from('blend_tickets')
-        .update({
-          customer_id: formData.customer_id || null,
-          ticket_date: formData.ticket_date || null,
-          ticket_time: formData.ticket_time || null,
-          job_number: formData.job_number || null,
-          invoice_number: formData.invoice_number || null,
-          driver_name: formData.driver_name || null,
-          applicator_name: formData.applicator_name || null,
-          mixer_name: formData.mixer_name || null,
-          tank_number: formData.tank_number || null,
-          vehicle_info: formData.vehicle_info || null,
-          field_names: formData.field_names || null,
-          total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
-          application_rate: formData.application_rate || null,
-          total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
-          total_volume_unit: formData.total_volume_unit || null,
-          notes: formData.notes || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', ticket.id)
-        .select();
-      if (ticketErr) throw ticketErr;
-      if (!ticketData || ticketData.length === 0) throw new Error('Ticket update failed: no rows affected.');
+      const ticketPayload = {
+        customer_id: formData.customer_id || null,
+        ticket_date: formData.ticket_date || null,
+        ticket_time: formData.ticket_time || null,
+        job_number: formData.job_number || null,
+        invoice_number: formData.invoice_number || null,
+        driver_name: formData.driver_name || null,
+        applicator_name: formData.applicator_name || null,
+        mixer_name: formData.mixer_name || null,
+        tank_number: formData.tank_number || null,
+        vehicle_info: formData.vehicle_info || null,
+        field_names: formData.field_names || null,
+        total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
+        application_rate: formData.application_rate || null,
+        total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
+        total_volume_unit: formData.total_volume_unit || null,
+        notes: formData.notes || null,
+      };
 
-      for (const product of products) {
-        const { error: prodErr } = await supabase
-          .from('blend_ticket_products')
-          .update({
-            product_id: product.product_id || null,
-            product_name: product.product_name,
-            quantity: product.quantity,
-            unit: product.unit || null,
-            lot_number: product.lot_number || null,
-            rate_per_acre: product.rate_per_acre || null,
-            rate_per_acre_unit: product.rate_per_acre_unit || null,
-            manually_corrected: true,
-          })
-          .eq('id', product.id)
-          .select();
-        if (prodErr) throw prodErr;
-      }
+      const productsPayload = products.map(p => ({
+        id: p.id,
+        product_id: p.product_id,
+        product_name: p.product_name,
+        quantity: p.quantity,
+        unit: p.unit,
+        lot_number: p.lot_number,
+        rate_per_acre: p.rate_per_acre,
+        rate_per_acre_unit: p.rate_per_acre_unit,
+      }));
+
+      const { error } = await supabase.rpc('save_blend_ticket', {
+        p_ticket_id: ticket.id,
+        p_ticket_payload: ticketPayload,
+        p_products: productsPayload,
+        p_performed_by: profile!.id,
+      });
+      if (error) throw error;
 
       await loadTicketData();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving ticket:', error);
+      toast('error', error.message || 'Operation failed');
     } finally {
       setSaving(false);
     }
@@ -211,9 +209,10 @@ export function BlendTicketDetail() {
 
   async function handleApprove() {
     if (!ticket || !profile) return;
+    if (!confirm('Approve this blend ticket?')) return;
 
     try {
-      const { error, data } = await supabase
+      const approveResult = await supabase
         .from('blend_tickets')
         .update({
           review_status: 'approved',
@@ -222,20 +221,22 @@ export function BlendTicketDetail() {
         })
         .eq('id', ticket.id)
         .select();
-      if (error) throw error;
-      if (!data || data.length === 0) throw new Error('Approve failed: no rows affected.');
+      checkMutationResult(approveResult, 'Approve blend ticket');
+      logActivity('blend_ticket_approved', `Blend ticket ${ticket.ticket_number} approved`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
 
       navigate('/blend-tickets');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error approving ticket:', error);
+      toast('error', error.message || 'Operation failed');
     }
   }
 
   async function handleReject() {
     if (!ticket || !profile) return;
+    if (!confirm('Reject this blend ticket?')) return;
 
     try {
-      const { error, data } = await supabase
+      const rejectResult = await supabase
         .from('blend_tickets')
         .update({
           review_status: 'rejected',
@@ -244,12 +245,13 @@ export function BlendTicketDetail() {
         })
         .eq('id', ticket.id)
         .select();
-      if (error) throw error;
-      if (!data || data.length === 0) throw new Error('Reject failed: no rows affected.');
+      checkMutationResult(rejectResult, 'Reject blend ticket');
+      logActivity('blend_ticket_rejected', `Blend ticket ${ticket.ticket_number} rejected`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
 
       navigate('/blend-tickets');
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error rejecting ticket:', error);
+      toast('error', error.message || 'Operation failed');
     }
   }
 
@@ -288,12 +290,15 @@ export function BlendTicketDetail() {
   }
 
   async function removeProduct(index: number) {
+    if (!confirm('Remove this product from the ticket?')) return;
     const product = products[index];
 
-    await supabase
+    const deleteResult = await supabase
       .from('blend_ticket_products')
       .delete()
-      .eq('id', product.id);
+      .eq('id', product.id)
+      .select();
+    checkMutationResult(deleteResult, 'Delete blend ticket product');
 
     setProducts(products.filter((_, i) => i !== index));
   }

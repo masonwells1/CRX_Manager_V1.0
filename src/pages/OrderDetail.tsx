@@ -13,7 +13,9 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import { supabase } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
+import { notifyOrderStatusChange } from '../lib/notificationTriggers';
+import { supabase, checkMutationResult } from '../lib/db';
 import type { Order, OrderItem, Customer } from '../types';
 
 export default function OrderDetail() {
@@ -114,16 +116,17 @@ export default function OrderDetail() {
         if (error) throw error;
       } else {
         // Simple status change (no inventory impact)
-        const result = await supabase
+        const statusResult = await supabase
           .from('orders')
           .update({ status: newStatus, updated_at: new Date().toISOString() })
           .eq('id', id!)
           .select();
-        if (result.error) throw result.error;
-        if (!result.data || result.data.length === 0) throw new Error('Update failed: no rows affected. You may not have permission.');
+        checkMutationResult(statusResult, 'Update order status');
       }
 
       toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
+      logActivity('order_status_changed', `Order ${order.order_number} status changed to ${newStatus}`, profile.id, 'order', order.id, order.customer_id);
+      notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by);
       setStatusModalOpen(false);
       fetchOrder();
     } catch (error: any) {

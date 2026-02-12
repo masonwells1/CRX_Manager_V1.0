@@ -136,12 +136,13 @@ export default function NewPurchaseOrder() {
 
     setSaving(true);
 
-    const year = new Date().getFullYear();
-    const { count } = await supabase
-      .from('purchase_orders')
-      .select('*', { count: 'exact', head: true })
-      .like('po_number', `PO-${year}-%`);
-    const poNumber = `PO-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+    const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_po_number');
+    if (rpcError || !rpcNumber) {
+      toast('error', rpcError?.message || 'Failed to generate PO number');
+      setSaving(false);
+      return;
+    }
+    const poNumber = rpcNumber as string;
 
     const { data: poData, error: poError } = await supabase
       .from('purchase_orders')

@@ -3,7 +3,7 @@ import { Upload, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { supabase } from '../../lib/db';
+import { supabase, checkMutationResult } from '../../lib/db';
 
 interface BulkPricingImportProps {
   open: boolean;
@@ -166,14 +166,13 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
       if (row.tier2_price !== undefined) updates.tier2_price = row.tier2_price;
       if (row.tier3_price !== undefined) updates.tier3_price = row.tier3_price;
 
-      const { error } = await supabase
-        .from('products')
-        .update(updates)
-        .eq('id', product.id);
-
-      if (error) {
-        failed++;
-      } else {
+      try {
+        const result = await supabase
+          .from('products')
+          .update(updates)
+          .eq('id', product.id)
+          .select();
+        checkMutationResult(result, 'Update product pricing');
         success++;
 
         if (row.cost !== undefined && row.cost !== product.current_cost) {
@@ -190,6 +189,8 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
             change_note: 'Bulk pricing update',
           });
         }
+      } catch {
+        failed++;
       }
     }
 
