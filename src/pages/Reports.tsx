@@ -188,7 +188,7 @@ export default function Reports() {
   const fetchCommissions = async () => {
     let query = supabase.from('commissions').select('*').order('order_date', { ascending: false });
     if (!isAdmin && profile) {
-      query = query.eq('recipient', profile.full_name);
+      query = query.eq('recipient_user_id', profile.id);
     }
     if (startDate) query = query.gte('order_date', startDate);
     if (endDate) query = query.lte('order_date', endDate);

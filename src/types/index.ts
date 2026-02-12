@@ -271,6 +271,7 @@ export interface DeliveryItem {
   order_item_id: string;
   product_id: string;
   quantity: number;
+  quantity_delivered: number;
   unit_size: string | null;
   notes: string | null;
   product?: Product;
@@ -309,6 +310,7 @@ export interface Commission {
   order_id: string;
   customer_id: string;
   recipient: string;
+  recipient_user_id: string | null;
   split_percentage: number;
   commission_amount: number;
   order_profit: number;

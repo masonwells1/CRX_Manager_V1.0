@@ -753,6 +753,59 @@ export default function InventoryPage() {
         ))}
       </div>
 
+      {/* S5-3: Low Stock Alerts */}
+      {(() => {
+        const lowStockItems = inventory.filter((i) => i.is_low_stock);
+        if (lowStockItems.length === 0) return null;
+        return (
+          <Card>
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center">
+                <AlertTriangle className="w-4 h-4 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-nav-dark">
+                Low Stock Alerts ({lowStockItems.length})
+              </h3>
+            </div>
+            <div className="space-y-2">
+              {lowStockItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between p-3 bg-red-50 border border-red-100 rounded-lg"
+                >
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-nav-dark truncate">{item.product_name}</p>
+                    <p className="text-xs text-secondary">
+                      {item.location || 'No location'} &middot; Unit: {item.inventory_unit || item.unit_size || '-'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-6 text-sm">
+                    <div className="text-center">
+                      <p className="text-xs text-secondary">Available</p>
+                      <p className="font-semibold text-red-600">{item.quantity_available}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-secondary">Reorder Pt</p>
+                      <p className="font-semibold text-nav-dark">{item.reorder_point}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-secondary">On Order</p>
+                      <p className="font-semibold text-teal-600">{item.quantity_on_order}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-xs text-secondary">Shortfall</p>
+                      <p className="font-semibold text-red-600">
+                        {Math.max(0, item.reorder_point - item.quantity_available - item.quantity_on_order)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        );
+      })()}
+
       <Card padding={false}>
         <div className="p-5">
           <DataTable

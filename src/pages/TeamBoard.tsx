@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import {
   Plus, CheckSquare, Square, Pin, PinOff, Clock, Pencil, Trash2,
   MessageCircle, Activity, LayoutGrid, User, History, ListChecks,
@@ -10,8 +10,10 @@ import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { useRealtimeNotes } from '../hooks/useRealtimeSubscription';
 import TeamBoardFilters, { FilterState } from '../components/team/TeamBoardFilters';
 import CommentsSection from '../components/team/CommentsSection';
@@ -67,6 +69,9 @@ export default function TeamBoard() {
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'comments' | 'activity'>('comments');
   const [viewTab, setViewTab] = useState<ViewTab>('board');
+  const [isNoteDirty, setIsNoteDirty] = useState(false);
+  const modalInitialized = useRef(false);
+  const blocker = useUnsavedChanges(modalOpen && isNoteDirty);
 
   // Global activity state
   const [globalActivities, setGlobalActivities] = useState<GlobalActivity[]>([]);
@@ -282,6 +287,11 @@ export default function TeamBoard() {
     }
   };
 
+  // Track dirty state for note modal form
+  useEffect(() => {
+    if (modalInitialized.current) setIsNoteDirty(true);
+  }, [title, content, noteType, priority, assignedTo, dueDate]);
+
   const resetForm = () => {
     setTitle('');
     setContent('');
@@ -290,11 +300,14 @@ export default function TeamBoard() {
     setAssignedTo('');
     setDueDate('');
     setEditingNote(null);
+    setIsNoteDirty(false);
+    modalInitialized.current = false;
   };
 
   const openAddModal = () => {
     resetForm();
     setModalOpen(true);
+    requestAnimationFrame(() => { modalInitialized.current = true; });
   };
 
   const openEditModal = (note: TeamNote) => {
@@ -306,6 +319,7 @@ export default function TeamBoard() {
     setAssignedTo(note.assigned_to || '');
     setDueDate(note.due_date || '');
     setModalOpen(true);
+    requestAnimationFrame(() => { modalInitialized.current = true; });
   };
 
   const handleSave = async () => {
@@ -1345,6 +1359,12 @@ export default function TeamBoard() {
           </div>
         </div>
       </Modal>
+
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
     </div>
   );
 }

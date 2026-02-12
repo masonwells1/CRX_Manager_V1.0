@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle } from 'lucide-react';
 import { supabase, checkMutationResult } from '../lib/db';
@@ -9,8 +9,10 @@ import Card from '../components/ui/Card';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import Skeleton from '../components/ui/Skeleton';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { validateBlendMath } from '../lib/blendMathValidator';
 import type { BlendTicket, BlendTicketProduct, BlendTicketImage, Customer, Product } from '../types';
 
@@ -30,6 +32,9 @@ export function BlendTicketDetail() {
   const [saving, setSaving] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [isDirty, setIsDirty] = useState(false);
+  const initialLoadDone = useRef(false);
+  const blocker = useUnsavedChanges(isDirty);
 
   const [formData, setFormData] = useState({
     customer_id: '',
@@ -148,12 +153,19 @@ export function BlendTicketDetail() {
         total_volume_unit: ticketResult.data.total_volume_unit || '',
         notes: ticketResult.data.notes || '',
       });
+      // Mark initial load complete so future changes trigger isDirty
+      requestAnimationFrame(() => { initialLoadDone.current = true; });
     } catch (error) {
       console.error('Error loading ticket:', error);
     } finally {
       setLoading(false);
     }
   }
+
+  // Track dirty state from form changes
+  useEffect(() => {
+    if (initialLoadDone.current) setIsDirty(true);
+  }, [formData, products]);
 
   async function handleSave() {
     if (!ticket) return;
@@ -198,6 +210,7 @@ export function BlendTicketDetail() {
       });
       if (error) throw error;
 
+      setIsDirty(false);
       await loadTicketData();
     } catch (error: any) {
       console.error('Error saving ticket:', error);
@@ -773,6 +786,12 @@ export function BlendTicketDetail() {
           {saving ? 'Saving...' : 'Save Changes'}
         </Button>
       </div>
+
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
     </div>
   );
 }
