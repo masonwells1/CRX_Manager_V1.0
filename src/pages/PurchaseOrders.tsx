@@ -30,7 +30,8 @@ export default function PurchaseOrders() {
     const { data, error } = await supabase
       .from('purchase_orders')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(500);
     if (error) {
       console.error('Failed to load purchase orders:', error.message);
       toast('error', 'Failed to load purchase orders. Please try again.');

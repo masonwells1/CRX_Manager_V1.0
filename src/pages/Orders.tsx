@@ -30,7 +30,8 @@ export default function Orders() {
     const { data: ordersData, error: ordersError } = await supabase
       .from('orders')
       .select('*, customer:customers(farm_name)')
-      .order('order_date', { ascending: false });
+      .order('order_date', { ascending: false })
+      .limit(500);
 
     if (ordersError) {
       console.error('Failed to load orders:', ordersError.message);
@@ -41,7 +42,8 @@ export default function Orders() {
 
     const { data: itemsData, error: itemsError } = await supabase
       .from('order_items')
-      .select('order_id, total_units_needed, quantity_delivered');
+      .select('order_id, total_units_needed, quantity_delivered')
+      .limit(2000);
 
     if (itemsError) {
       console.error('Failed to load order items:', itemsError.message);

@@ -33,7 +33,8 @@ export default function Products() {
     const { data, error } = await supabase
       .from('products')
       .select('*')
-      .order('product_name');
+      .order('product_name')
+      .limit(500);
     if (error) {
       console.error('Failed to load products:', error.message);
       toast('error', 'Failed to load products. Please try again.');

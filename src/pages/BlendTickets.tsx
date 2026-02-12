@@ -46,12 +46,14 @@ export function BlendTickets() {
             customer:customers(id, farm_name),
             images:blend_ticket_images(count)
           `)
-          .order('created_at', { ascending: false }),
+          .order('created_at', { ascending: false })
+          .limit(500),
         supabase
           .from('customers')
           .select('*')
           .eq('is_active', true)
           .order('farm_name')
+          .limit(500)
       ]);
 
       if (ticketsResult.error) throw ticketsResult.error;

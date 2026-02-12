@@ -280,7 +280,7 @@ export default function DeliveryDetail() {
               size="sm"
               icon={<Download className="w-4 h-4" />}
               showChevron={false}
-              onClick={() =>
+              onClick={async () =>
                 downloadDeliveryPdf({
                   delivery_number: delivery.delivery_number,
                   order_number: (delivery as any).order_number || delivery.order_id || '-',

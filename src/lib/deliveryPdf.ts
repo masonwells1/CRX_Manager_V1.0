@@ -2,8 +2,8 @@
  * deliveryPdf.ts — generates a professional Crop RX delivery receipt PDF
  * GAP FIX #12: Delivery Receipt PDF
  */
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+// jsPDF and autoTable are dynamically imported inside each function
+// to keep them out of the main bundle (~500KB each)
 
 const CRX_GREEN: [number, number, number] = [40, 162, 106];
 const CHARCOAL: [number, number, number] = [46, 46, 46];
@@ -31,7 +31,10 @@ interface PdfDeliveryData {
 
 const fmt = (n: number) => n.toLocaleString();
 
-export function generateDeliveryPdf(data: PdfDeliveryData): jsPDF {
+export async function generateDeliveryPdf(data: PdfDeliveryData) {
+  const { default: jsPDF } = await import('jspdf');
+  const { default: autoTable } = await import('jspdf-autotable');
+
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 40;
@@ -137,7 +140,7 @@ export function generateDeliveryPdf(data: PdfDeliveryData): jsPDF {
   return doc;
 }
 
-export function downloadDeliveryPdf(data: PdfDeliveryData) {
-  const doc = generateDeliveryPdf(data);
+export async function downloadDeliveryPdf(data: PdfDeliveryData) {
+  const doc = await generateDeliveryPdf(data);
   doc.save(`${data.delivery_number}_receipt.pdf`);
 }

@@ -80,114 +80,48 @@ export default function Dashboard() {
   const fetchDashboard = async () => {
     setLoading(true);
     try {
-      const [ordersRes, quotesRes, inventoryRes, deliveriesRes, activityRes] =
-        await Promise.all([
-          supabase.from('orders').select('customer_id, total_price, total_profit, total_margin_pct, status, order_date, created_at'),
-          supabase.from('quotes').select('status, total_price'),
-          supabase.from('inventory').select('quantity_available, quantity_prebooked'),
-          supabase
-            .from('deliveries')
-            .select('id, delivery_number, scheduled_date, status, customer:customers(farm_name), driver:profiles!deliveries_assigned_driver_fkey(full_name)')
-            .in('status', ['scheduled', 'in_progress'])
-            .order('scheduled_date', { ascending: true })
-            .limit(5),
-          supabase
-            .from('activity_feed')
-            .select('id, event_type, description, created_at')
-            .order('created_at', { ascending: false })
-            .limit(10),
-        ]);
+      const { data: rpc, error } = await supabase.rpc('dashboard_summary');
+      if (error) throw error;
 
-      const orders = ordersRes.data || [];
-      const quotes = quotesRes.data || [];
-      const inv = inventoryRes.data || [];
-
-      const totalRevenue = orders.reduce((s, o) => s + (o.total_price || 0), 0);
-      const totalProfit = orders.reduce((s, o) => s + (o.total_profit || 0), 0);
-      const overallMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
-
-      const draft = quotes.filter((q) => q.status === 'draft').length;
-      const sent = quotes.filter((q) => q.status === 'sent').length;
-      const accepted = quotes.filter((q) => q.status === 'accepted').length;
-      const quotePipelineValue = quotes
-        .filter((q) => ['draft', 'sent'].includes(q.status))
-        .reduce((s, q) => s + (q.total_price || 0), 0);
-
-      const inventoryAvailable = inv.reduce((s, i) => s + (i.quantity_available || 0), 0);
-      const inventoryPrebooked = inv.reduce((s, i) => s + (i.quantity_prebooked || 0), 0);
-
-      const customerRevenue: Record<string, { farm_name: string; total: number }> = {};
-      for (const ord of orders) {
-        const cid = (ord as Record<string, unknown>).customer_id as string;
-        if (!cid) continue;
-        if (!customerRevenue[cid]) customerRevenue[cid] = { farm_name: '', total: 0 };
-        customerRevenue[cid].total += ord.total_price || 0;
-      }
-
-      if (Object.keys(customerRevenue).length > 0) {
-        const { data: custNames } = await supabase
-          .from('customers')
-          .select('id, farm_name')
-          .in('id', Object.keys(customerRevenue));
-        (custNames || []).forEach((c) => {
-          if (customerRevenue[c.id]) customerRevenue[c.id].farm_name = c.farm_name;
-        });
-      }
-
-      const topCustomers = Object.values(customerRevenue)
-        .filter((c) => c.farm_name)
-        .sort((a, b) => b.total - a.total)
-        .slice(0, 5);
-
-      // GAP FIX #21: Monthly revenue breakdown
-      const monthlyMap: Record<string, { revenue: number; profit: number }> = {};
-      for (const ord of orders) {
-        const d = new Date((ord as any).order_date || (ord as any).created_at);
-        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        if (!monthlyMap[key]) monthlyMap[key] = { revenue: 0, profit: 0 };
-        monthlyMap[key].revenue += ord.total_price || 0;
-        monthlyMap[key].profit += ord.total_profit || 0;
-      }
-      const monthlyRevenue = Object.entries(monthlyMap)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .slice(-12)
-        .map(([month, vals]) => ({
-          month,
-          ...vals,
-        }));
-
-      // GAP FIX #10: Low stock count
-      const { data: lowStockData } = await supabase
-        .from('inventory')
-        .select('id, quantity_available, reorder_point')
-        .gt('reorder_point', 0);
-      const lowStockCount = (lowStockData || []).filter(
-        (i: any) => Number(i.quantity_available) <= Number(i.reorder_point)
-      ).length;
-
-      // GAP FIX #2: Open AR balance
-      const { data: arOrders } = await supabase
-        .from('orders')
-        .select('balance_due');
-      const openArBalance = (arOrders || []).reduce(
-        (s: number, o: any) => s + Math.max(0, Number(o.balance_due) || 0),
-        0
-      );
+      const d = rpc as Record<string, any>;
 
       setData({
-        totalRevenue,
-        totalProfit,
-        overallMargin,
-        quoteCounts: { draft, sent, accepted },
-        quotePipelineValue,
-        inventoryAvailable,
-        inventoryPrebooked,
-        upcomingDeliveries: (deliveriesRes.data as unknown as DashboardData['upcomingDeliveries']) || [],
-        recentActivity: activityRes.data || [],
-        topCustomers,
-        monthlyRevenue,
-        lowStockCount,
-        openArBalance,
+        totalRevenue: Number(d.total_revenue) || 0,
+        totalProfit: Number(d.total_profit) || 0,
+        overallMargin: Number(d.overall_margin) || 0,
+        quoteCounts: {
+          draft: Number(d.quote_counts?.draft) || 0,
+          sent: Number(d.quote_counts?.sent) || 0,
+          accepted: Number(d.quote_counts?.accepted) || 0,
+        },
+        quotePipelineValue: Number(d.quote_pipeline_value) || 0,
+        inventoryAvailable: Number(d.inventory_available) || 0,
+        inventoryPrebooked: Number(d.inventory_prebooked) || 0,
+        upcomingDeliveries: (d.upcoming_deliveries || []).map((del: any) => ({
+          id: del.id,
+          delivery_number: del.delivery_number,
+          scheduled_date: del.scheduled_date,
+          status: del.status,
+          customer: del.customer || null,
+          driver: del.driver || null,
+        })),
+        recentActivity: (d.recent_activity || []).map((act: any) => ({
+          id: act.id,
+          event_type: act.event_type,
+          description: act.description,
+          created_at: act.created_at,
+        })),
+        topCustomers: (d.top_customers || []).map((c: any) => ({
+          farm_name: c.farm_name,
+          total: Number(c.total) || 0,
+        })),
+        monthlyRevenue: (d.monthly_revenue || []).map((m: any) => ({
+          month: m.month,
+          revenue: Number(m.revenue) || 0,
+          profit: Number(m.profit) || 0,
+        })),
+        lowStockCount: Number(d.low_stock_count) || 0,
+        openArBalance: Number(d.open_ar_balance) || 0,
       });
     } catch (err) {
       console.error('Dashboard load error:', err);

@@ -26,7 +26,8 @@ export default function Customers() {
     const { data, error } = await supabase
       .from('customers')
       .select('*')
-      .order('farm_name');
+      .order('farm_name')
+      .limit(500);
     if (error) {
       console.error('Failed to load customers:', error.message);
       toast('error', 'Failed to load customers. Please try again.');

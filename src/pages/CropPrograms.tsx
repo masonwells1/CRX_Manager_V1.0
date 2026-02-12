@@ -103,7 +103,8 @@ export default function CropPrograms() {
       .from('products')
       .select('*')
       .eq('is_active', true)
-      .order('product_name');
+      .order('product_name')
+      .limit(500);
     if (error) {
       console.error('Failed to load products for crop programs:', error.message);
     }

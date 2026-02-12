@@ -4,8 +4,8 @@
  *
  * GAP FIX #1: Quote PDF Generation
  */
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
+// jsPDF and autoTable are dynamically imported inside each function
+// to keep them out of the main bundle (~500KB each)
 
 // Brand colours
 const CRX_GREEN: [number, number, number] = [40, 162, 106]; // #28A26A
@@ -55,7 +55,10 @@ interface PdfQuoteData {
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
-export function generateQuotePdf(data: PdfQuoteData): jsPDF {
+export async function generateQuotePdf(data: PdfQuoteData) {
+  const { default: jsPDF } = await import('jspdf');
+  const { default: autoTable } = await import('jspdf-autotable');
+
   const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 40;
@@ -252,13 +255,13 @@ export function generateQuotePdf(data: PdfQuoteData): jsPDF {
 }
 
 /** Convenience: generate + immediately download */
-export function downloadQuotePdf(data: PdfQuoteData) {
-  const doc = generateQuotePdf(data);
+export async function downloadQuotePdf(data: PdfQuoteData) {
+  const doc = await generateQuotePdf(data);
   doc.save(`${data.quote_number}.pdf`);
 }
 
 /** Convenience: generate + return as Blob for email attachment etc. */
-export function getQuotePdfBlob(data: PdfQuoteData): Blob {
-  const doc = generateQuotePdf(data);
+export async function getQuotePdfBlob(data: PdfQuoteData): Promise<Blob> {
+  const doc = await generateQuotePdf(data);
   return doc.output('blob');
 }

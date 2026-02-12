@@ -76,7 +76,8 @@ export default function Payments() {
     const { data: orders, error: ordersError } = await supabase
       .from('orders')
       .select('id, order_number, customer_id, total_price, total_paid, balance_due, order_date, status, customer:customers(farm_name)')
-      .order('order_date', { ascending: false });
+      .order('order_date', { ascending: false })
+      .limit(500);
 
     if (ordersError) {
       console.error('Failed to load orders for payments:', ordersError.message);

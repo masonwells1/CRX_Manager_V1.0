@@ -30,7 +30,8 @@ export default function Notifications() {
       .from('notifications')
       .select('*')
       .eq('user_id', profile.id)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(200);
     setNotifications((data || []) as NotificationType[]);
     setLoading(false);
   };

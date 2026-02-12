@@ -48,7 +48,8 @@ export default function Deliveries() {
     const { data: delData, error: delError } = await supabase
       .from('deliveries')
       .select('*, customer:customers(farm_name), driver:profiles!deliveries_assigned_driver_fkey(full_name)')
-      .order('scheduled_date', { ascending: false });
+      .order('scheduled_date', { ascending: false })
+      .limit(500);
 
     if (delError) {
       console.error('Failed to load deliveries:', delError.message);
@@ -59,7 +60,8 @@ export default function Deliveries() {
 
     const { data: itemCounts } = await supabase
       .from('delivery_items')
-      .select('delivery_id');
+      .select('delivery_id')
+      .limit(2000);
 
     const countMap: Record<string, number> = {};
     (itemCounts || []).forEach((item) => {

@@ -47,7 +47,8 @@ export default function Quotes() {
     const { data, error } = await supabase
       .from('quotes')
       .select('*, customer:customers(farm_name)')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(500);
     if (error) {
       console.error('Failed to load quotes:', error.message);
       toast('error', 'Failed to load quotes. Please try again.');

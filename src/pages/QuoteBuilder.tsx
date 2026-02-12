@@ -631,8 +631,8 @@ export default function QuoteBuilder() {
   };
 
   // === GAP FIX #1: Download Quote as PDF ===
-  const handleDownloadPdf = () => {
-    downloadQuotePdf({
+  const handleDownloadPdf = async () => {
+    await downloadQuotePdf({
       quote_number: quoteNumber,
       customer_name: selectedCustomer?.farm_name || 'Customer',
       customer_email: selectedCustomer?.email || undefined,
