@@ -503,6 +503,147 @@ export interface OCRProcessingQueue {
   updated_at: string;
 }
 
+// Phase 2: Billing / Invoices
+
+export type InvoiceType = 'chemical_sale' | 'field_application' | 'misc_charge';
+export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'voided' | 'cancelled';
+
+export interface Invoice {
+  id: string;
+  invoice_number: string;
+  order_id: string | null;
+  blend_ticket_id: string | null;
+  customer_id: string;
+  invoice_type: InvoiceType;
+  status: InvoiceStatus;
+  season: number;
+  salesman_id: string | null;
+  created_by: string;
+
+  // Financial (stored in cents)
+  total_amount_cents: number;
+  paid_amount_cents: number;
+  prepay_applied_cents: number;
+  balance_cents: number; // generated column
+
+  // Posting workflow
+  posted_by: string | null;
+  posted_at: string | null;
+  voided_by: string | null;
+  voided_at: string | null;
+  void_reason: string | null;
+
+  // Metadata
+  invoice_date: string;
+  due_date: string | null;
+  purchase_order_ref: string | null;
+  header_notes: string | null;
+  footer_notes: string | null;
+  parent_invoice_id: string | null;
+
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+
+  // Relations
+  customer?: Customer;
+  order?: Order;
+  salesman?: Profile;
+  items?: InvoiceItem[];
+}
+
+export interface InvoiceItem {
+  id: string;
+  invoice_id: string;
+  order_item_id: string | null;
+  product_id: string | null;
+  description: string;
+  quantity: number;
+  unit_price_cents: number;
+  extended_cents: number;
+  cost_cents: number;
+  sort_order: number;
+  rate_per_acre: number | null;
+  acres: number | null;
+  unit_size: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  product?: Product;
+}
+
+export interface AllocationSet {
+  id: string;
+  entity_type: 'order' | 'invoice';
+  entity_id: string;
+  version: number;
+  created_by: string | null;
+  is_active: boolean;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface OrderLineAllocation {
+  id: string;
+  allocation_set_id: string;
+  order_item_id: string;
+  bill_to_customer_id: string;
+  split_percentage: number;
+  amount_cents: number;
+  created_at: string;
+  customer?: Customer;
+}
+
+export interface InvoiceLineAllocation {
+  id: string;
+  allocation_set_id: string;
+  invoice_item_id: string;
+  bill_to_customer_id: string;
+  split_percentage: number;
+  amount_cents: number;
+  split_invoice_id: string | null;
+  created_at: string;
+  customer?: Customer;
+}
+
+export interface PrepayCredit {
+  id: string;
+  customer_id: string;
+  season: number;
+  original_amount_cents: number;
+  balance_cents: number;
+  payment_method: string | null;
+  reference_number: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  customer?: Customer;
+}
+
+export interface PrepayApplication {
+  id: string;
+  prepay_credit_id: string;
+  invoice_id: string;
+  applied_amount_cents: number;
+  applied_by: string | null;
+  applied_at: string;
+}
+
+export interface FinancialAuditEntry {
+  id: string;
+  operation_type: string;
+  entity_type: string;
+  entity_id: string;
+  actor_user_id: string;
+  actor_role: string | null;
+  old_values: Record<string, unknown> | null;
+  new_values: Record<string, unknown> | null;
+  total_impact_cents: number | null;
+  description: string | null;
+  created_at: string;
+}
+
 // Phase 1: Fields
 
 export interface Field {

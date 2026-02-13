@@ -19,6 +19,7 @@ import {
   DollarSign,
   Sprout,
   MapPin,
+  Receipt,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
@@ -38,6 +39,7 @@ const navItems: NavItem[] = [
   { path: '/fields', label: 'Fields', icon: <MapPin className="w-5 h-5" /> },
   { path: '/quotes', label: 'Quotes', icon: <FileText className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
   { path: '/orders', label: 'Orders', icon: <ClipboardList className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
+  { path: '/invoices', label: 'Invoices', icon: <Receipt className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
   { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-5 h-5" /> },
   { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-5 h-5" /> },
   { path: '/blend-tickets', label: 'Blend Tickets', icon: <Image className="w-5 h-5" /> },
