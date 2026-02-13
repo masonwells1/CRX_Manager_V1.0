@@ -418,6 +418,8 @@ export interface UnitConversion {
 
 export type BlendTicketStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'needs_review';
 export type BlendTicketReviewStatus = 'unreviewed' | 'approved' | 'rejected';
+export type BlendTicketOrderLinkStatus = 'unlinked' | 'linked';
+export type BlendTicketPaymentStatus = 'unbilled' | 'billed' | 'prepaid' | 'no_charge';
 export type OCRQueueStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 export interface BlendTicket {
@@ -450,11 +452,18 @@ export interface BlendTicket {
   total_volume_unit: string | null;
   season: number | null;
   deleted_at: string | null;
+  // Phase 3: Order linkage
+  field_id: string | null;
+  salesman_id: string | null;
+  order_link_status: BlendTicketOrderLinkStatus;
+  payment_status: BlendTicketPaymentStatus;
   created_at: string;
   updated_at: string;
   uploader?: Profile;
   reviewer?: Profile;
   customer?: Customer;
+  field?: Field;
+  salesman?: Profile;
   images?: BlendTicketImage[];
   products?: BlendTicketProduct[];
 }
@@ -487,6 +496,21 @@ export interface BlendTicketImage {
   width: number | null;
   height: number | null;
   created_at: string;
+}
+
+// Phase 3: Blend Ticket ↔ Order Linkage
+export interface BlendTicketToOrderItem {
+  id: string;
+  blend_ticket_id: string;
+  order_item_id: string;
+  order_id: string;
+  quantity_applied: number | null;
+  notes: string | null;
+  created_at: string;
+  created_by: string;
+  // Joined relations
+  order?: Order;
+  order_item?: OrderItem;
 }
 
 export interface OCRProcessingQueue {

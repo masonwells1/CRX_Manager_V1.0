@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart } from 'lucide-react';
 import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
@@ -8,13 +8,14 @@ import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
+import Modal from '../components/ui/Modal';
 import Skeleton from '../components/ui/Skeleton';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { validateBlendMath } from '../lib/blendMathValidator';
-import type { BlendTicket, BlendTicketProduct, BlendTicketImage, Customer, Product } from '../types';
+import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field } from '../types';
 
 export function BlendTicketDetail() {
   const { id } = useParams<{ id: string }>();
@@ -35,6 +36,18 @@ export function BlendTicketDetail() {
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
+
+  // Phase 3: Order linkage state
+  const [fields, setFields] = useState<Field[]>([]);
+  const [linkedOrders, setLinkedOrders] = useState<BlendTicketToOrderItem[]>([]);
+  const [showLinkModal, setShowLinkModal] = useState(false);
+  const [showCreateOrderModal, setShowCreateOrderModal] = useState(false);
+  const [availableOrders, setAvailableOrders] = useState<(Order & { items?: OrderItem[] })[]>([]);
+  const [selectedOrderId, setSelectedOrderId] = useState('');
+  const [linking, setLinking] = useState(false);
+  const [newOrderNumber, setNewOrderNumber] = useState('');
+  const [newOrderDate, setNewOrderDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newOrderNotes, setNewOrderNotes] = useState('');
 
   const [formData, setFormData] = useState({
     customer_id: '',
@@ -79,14 +92,16 @@ export function BlendTicketDetail() {
 
   async function loadTicketData() {
     try {
-      const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult] = await Promise.all([
+      const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult, fieldsResult, linkedResult] = await Promise.all([
         supabase
           .from('blend_tickets')
           .select(`
             *,
             uploader:profiles!blend_tickets_uploaded_by_fkey(id, full_name),
             reviewer:profiles!blend_tickets_reviewed_by_fkey(id, full_name),
-            customer:customers(id, farm_name)
+            customer:customers(id, farm_name),
+            field:fields(id, field_name),
+            salesman:profiles!blend_tickets_salesman_id_fkey(id, full_name)
           `)
           .eq('id', id)
           .single(),
@@ -109,7 +124,15 @@ export function BlendTicketDetail() {
           .from('customers')
           .select('*')
           .eq('is_active', true)
-          .order('farm_name')
+          .order('farm_name'),
+        supabase
+          .from('fields')
+          .select('id, field_name, customer_id')
+          .order('field_name'),
+        supabase
+          .from('blend_ticket_to_order_items')
+          .select('*, order:orders(id, order_number, status, customer_id, total_price)')
+          .eq('blend_ticket_id', id!)
       ]);
 
       if (ticketResult.error) throw ticketResult.error;
@@ -134,6 +157,8 @@ export function BlendTicketDetail() {
       setProducts(productsResult.data || []);
       setAllProducts(allProductsResult.data || []);
       setCustomers(customersResult.data || []);
+      setFields(fieldsResult.data || []);
+      setLinkedOrders(linkedResult.data || []);
 
       setFormData({
         customer_id: ticketResult.data.customer_id || '',
@@ -315,6 +340,97 @@ export function BlendTicketDetail() {
 
     setProducts(products.filter((_, i) => i !== index));
   }
+
+  // Phase 3: Order linkage handlers
+  async function openLinkModal() {
+    if (!ticket?.customer_id) {
+      toast('error', 'Please assign a customer before linking to an order');
+      return;
+    }
+    // Load orders for the same customer
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*, items:order_items(*)')
+      .eq('customer_id', ticket.customer_id)
+      .is('deleted_at', null)
+      .in('status', ['confirmed', 'partially_fulfilled'])
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) {
+      toast('error', 'Failed to load orders');
+      return;
+    }
+    setAvailableOrders(data || []);
+    setSelectedOrderId('');
+    setShowLinkModal(true);
+  }
+
+  async function handleLinkToOrder() {
+    if (!ticket || !selectedOrderId || !profile) return;
+    setLinking(true);
+    try {
+      const { data, error } = await supabase.rpc('link_blend_ticket_to_order', {
+        p_blend_ticket_id: ticket.id,
+        p_order_id: selectedOrderId,
+        p_performed_by: profile.id,
+      });
+      if (error) throw error;
+      const result = data as any;
+      if (!result.success) throw new Error(result.error);
+      toast('success', `Linked to order ${result.order_number} (${result.items_linked} items matched)`);
+      setShowLinkModal(false);
+      await loadTicketData();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to link');
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  async function handleUnlink() {
+    if (!ticket || !profile) return;
+    if (!confirm('Unlink this blend ticket from its order? The order itself will not be deleted.')) return;
+    try {
+      const { data, error } = await supabase.rpc('unlink_blend_ticket_from_order', {
+        p_blend_ticket_id: ticket.id,
+        p_performed_by: profile.id,
+      });
+      if (error) throw error;
+      const result = data as any;
+      if (!result.success) throw new Error(result.error);
+      toast('success', 'Blend ticket unlinked from order');
+      await loadTicketData();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to unlink');
+    }
+  }
+
+  async function handleCreateOrder() {
+    if (!ticket || !profile || !newOrderNumber.trim()) return;
+    setLinking(true);
+    try {
+      const { data, error } = await supabase.rpc('create_order_from_blend_ticket', {
+        p_blend_ticket_id: ticket.id,
+        p_order_number: newOrderNumber.trim(),
+        p_order_date: newOrderDate,
+        p_notes: newOrderNotes || null,
+        p_performed_by: profile.id,
+      });
+      if (error) throw error;
+      const result = data as any;
+      if (!result.success) throw new Error(result.error);
+      toast('success', `Order ${result.order_number} created with ${result.items_created} items`);
+      setShowCreateOrderModal(false);
+      navigate(`/orders/${result.order_id}`);
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to create order');
+    } finally {
+      setLinking(false);
+    }
+  }
+
+  // Filter fields by customer
+  const customerFields = fields.filter(f => !ticket?.customer_id || (f as any).customer_id === ticket.customer_id);
 
   if (loading) {
     return (
@@ -752,6 +868,176 @@ export function BlendTicketDetail() {
           )}
         </div>
       </Card>
+
+      {/* Phase 3: Order Linkage Section */}
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <Link2 className="h-5 w-5" />
+            Order Linkage
+          </h2>
+          <div className="flex items-center gap-2">
+            <Badge variant={ticket.order_link_status === 'linked' ? 'success' : 'default'}>
+              {ticket.order_link_status === 'linked' ? 'Linked' : 'Unlinked'}
+            </Badge>
+            <Badge variant={
+              ticket.payment_status === 'billed' ? 'success' :
+              ticket.payment_status === 'prepaid' ? 'info' :
+              ticket.payment_status === 'no_charge' ? 'warning' : 'default'
+            }>
+              {ticket.payment_status.replace('_', ' ')}
+            </Badge>
+          </div>
+        </div>
+
+        {ticket.order_link_status === 'linked' && linkedOrders.length > 0 ? (
+          <div className="space-y-3">
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <p className="text-sm text-green-800 font-medium mb-2">Linked Order</p>
+              {(() => {
+                const order = (linkedOrders[0] as any)?.order;
+                return order ? (
+                  <div className="flex items-center justify-between">
+                    <button
+                      onClick={() => navigate(`/orders/${order.id}`)}
+                      className="text-crx-green hover:underline font-medium"
+                    >
+                      {order.order_number}
+                    </button>
+                    <span className="text-sm text-gray-600">
+                      {linkedOrders.length} item(s) mapped
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">Order details unavailable</p>
+                );
+              })()}
+            </div>
+            <Button variant="secondary" size="sm" onClick={handleUnlink} className="text-red-600">
+              <Unlink className="h-4 w-4" />
+              Unlink from Order
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-500">
+              This blend ticket is not linked to any order. Link it to an existing order or create a new one.
+            </p>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={openLinkModal}>
+                <Link2 className="h-4 w-4" />
+                Link to Existing Order
+              </Button>
+              <Button size="sm" onClick={() => {
+                if (!ticket.customer_id) {
+                  toast('error', 'Please assign a customer first');
+                  return;
+                }
+                setNewOrderNumber('');
+                setNewOrderDate(new Date().toISOString().split('T')[0]);
+                setNewOrderNotes('');
+                setShowCreateOrderModal(true);
+              }}>
+                <ShoppingCart className="h-4 w-4" />
+                Create Order from Ticket
+              </Button>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Link to Order Modal */}
+      <Modal open={showLinkModal} onClose={() => setShowLinkModal(false)} title="Link to Existing Order" size="large">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Select an order for customer <strong>{ticket.customer?.farm_name}</strong> to link this blend ticket to.
+            Products will be auto-matched by product ID.
+          </p>
+          {availableOrders.length === 0 ? (
+            <p className="text-sm text-gray-500 py-4 text-center">
+              No open orders found for this customer. Create an order first or use "Create Order from Ticket".
+            </p>
+          ) : (
+            <div className="max-h-80 overflow-y-auto space-y-2">
+              {availableOrders.map((order) => (
+                <label
+                  key={order.id}
+                  className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 transition-colors ${
+                    selectedOrderId === order.id ? 'border-crx-green bg-crx-green-light' : 'border-gray-200'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="order"
+                    value={order.id}
+                    checked={selectedOrderId === order.id}
+                    onChange={() => setSelectedOrderId(order.id)}
+                    className="text-crx-green focus:ring-crx-green"
+                  />
+                  <div className="flex-1">
+                    <p className="font-medium text-nav-dark">{order.order_number}</p>
+                    <p className="text-xs text-gray-500">
+                      {new Date(order.order_date).toLocaleDateString()} · {order.status} · ${order.total_price.toFixed(2)}
+                      {order.items && ` · ${order.items.length} items`}
+                    </p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowLinkModal(false)}>Cancel</Button>
+            <Button onClick={handleLinkToOrder} disabled={!selectedOrderId || linking} loading={linking}>
+              <Link2 className="h-4 w-4" />
+              Link to Order
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Create Order from Blend Ticket Modal */}
+      <Modal open={showCreateOrderModal} onClose={() => setShowCreateOrderModal(false)} title="Create Order from Blend Ticket">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            A new order will be created for <strong>{ticket.customer?.farm_name}</strong> using
+            the {products.length} product(s) from this blend ticket. Tier pricing will be applied automatically.
+          </p>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Order Number *</label>
+            <Input
+              type="text"
+              value={newOrderNumber}
+              onChange={(e) => setNewOrderNumber(e.target.value)}
+              placeholder="e.g., ORD-2026-001"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Order Date</label>
+            <Input
+              type="date"
+              value={newOrderDate}
+              onChange={(e) => setNewOrderDate(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label>
+            <textarea
+              value={newOrderNotes}
+              onChange={(e) => setNewOrderNotes(e.target.value)}
+              rows={2}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              placeholder="Order notes..."
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowCreateOrderModal(false)}>Cancel</Button>
+            <Button onClick={handleCreateOrder} disabled={!newOrderNumber.trim() || linking} loading={linking}>
+              <ShoppingCart className="h-4 w-4" />
+              Create Order
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {warnings.length > 0 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-1">

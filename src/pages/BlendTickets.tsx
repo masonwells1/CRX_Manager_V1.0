@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus } from 'lucide-react';
+import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus, Link2, LinkIcon } from 'lucide-react';
 import { supabase } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useOCRProcessor } from '../hooks/useOCRProcessor';
@@ -27,6 +27,8 @@ export function BlendTickets() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [reviewFilter, setReviewFilter] = useState<string>('all');
+  const [linkFilter, setLinkFilter] = useState<string>('all');
+  const [paymentFilter, setPaymentFilter] = useState<string>('all');
 
   const { isProcessing, processedCount } = useOCRProcessor(true);
 
@@ -44,6 +46,8 @@ export function BlendTickets() {
             uploader:profiles!blend_tickets_uploaded_by_fkey(id, full_name, email),
             reviewer:profiles!blend_tickets_reviewed_by_fkey(id, full_name, email),
             customer:customers(id, farm_name),
+            field:fields(id, field_name),
+            salesman:profiles!blend_tickets_salesman_id_fkey(id, full_name),
             images:blend_ticket_images(count)
           `)
           .order('created_at', { ascending: false })
@@ -76,8 +80,10 @@ export function BlendTickets() {
 
     const matchesStatus = statusFilter === 'all' || ticket.status === statusFilter;
     const matchesReview = reviewFilter === 'all' || ticket.review_status === reviewFilter;
+    const matchesLink = linkFilter === 'all' || ticket.order_link_status === linkFilter;
+    const matchesPayment = paymentFilter === 'all' || ticket.payment_status === paymentFilter;
 
-    return matchesSearch && matchesStatus && matchesReview;
+    return matchesSearch && matchesStatus && matchesReview && matchesLink && matchesPayment;
   });
 
   function getStatusBadge(status: string) {
@@ -161,6 +167,33 @@ export function BlendTickets() {
       key: 'review_status',
       header: 'Review',
       render: (ticket: BlendTicket) => getReviewBadge(ticket.review_status),
+    },
+    {
+      key: 'order_link_status',
+      header: 'Order Link',
+      render: (ticket: BlendTicket) => (
+        <Badge variant={ticket.order_link_status === 'linked' ? 'success' : 'default'}>
+          {ticket.order_link_status === 'linked' ? (
+            <><LinkIcon className="h-3 w-3" /> Linked</>
+          ) : (
+            'Unlinked'
+          )}
+        </Badge>
+      ),
+    },
+    {
+      key: 'payment_status',
+      header: 'Payment',
+      render: (ticket: BlendTicket) => {
+        const map: Record<string, { variant: 'default' | 'success' | 'info' | 'warning'; label: string }> = {
+          unbilled: { variant: 'default', label: 'Unbilled' },
+          billed: { variant: 'success', label: 'Billed' },
+          prepaid: { variant: 'info', label: 'Prepaid' },
+          no_charge: { variant: 'warning', label: 'No Charge' },
+        };
+        const cfg = map[ticket.payment_status] || map.unbilled;
+        return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+      },
     },
     {
       key: 'ocr_confidence_score',
@@ -307,6 +340,34 @@ export function BlendTickets() {
                 <option value="unreviewed">Unreviewed</option>
                 <option value="approved">Approved</option>
                 <option value="rejected">Rejected</option>
+              </select>
+            </div>
+
+            <div className="w-48">
+              <select
+                value={linkFilter}
+                onChange={(e) => setLinkFilter(e.target.value)}
+                aria-label="Filter by order link status"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Link Status</option>
+                <option value="unlinked">Unlinked</option>
+                <option value="linked">Linked</option>
+              </select>
+            </div>
+
+            <div className="w-48">
+              <select
+                value={paymentFilter}
+                onChange={(e) => setPaymentFilter(e.target.value)}
+                aria-label="Filter by payment status"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="all">All Payments</option>
+                <option value="unbilled">Unbilled</option>
+                <option value="billed">Billed</option>
+                <option value="prepaid">Prepaid</option>
+                <option value="no_charge">No Charge</option>
               </select>
             </div>
           </div>

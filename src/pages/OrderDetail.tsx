@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Truck, Pencil, Save, X, Trash2 } from 'lucide-react';
+import { ArrowLeft, Truck, Pencil, Save, X, Trash2, FileText } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -27,6 +27,9 @@ export default function OrderDetail() {
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Related blend tickets
+  const [relatedTickets, setRelatedTickets] = useState<any[]>([]);
 
   // Edit mode state
   const [editing, setEditing] = useState(false);
@@ -67,6 +70,20 @@ export default function OrderDetail() {
       const itemsList = (itemsData || []) as OrderItem[];
       setItems(itemsList);
       setEditItems(itemsList.map((i) => ({ ...i })));
+
+      // Load related blend tickets
+      const { data: btLinks } = await supabase
+        .from('blend_ticket_to_order_items')
+        .select('blend_ticket_id, blend_ticket:blend_tickets(id, ticket_number, ticket_date, order_link_status, payment_status)')
+        .eq('order_id', id!);
+      // Deduplicate by blend_ticket_id
+      const uniqueTickets = new Map<string, any>();
+      (btLinks || []).forEach((link: any) => {
+        if (link.blend_ticket && !uniqueTickets.has(link.blend_ticket_id)) {
+          uniqueTickets.set(link.blend_ticket_id, link.blend_ticket);
+        }
+      });
+      setRelatedTickets(Array.from(uniqueTickets.values()));
     }
     setLoading(false);
   };
@@ -389,6 +406,36 @@ export default function OrderDetail() {
           </div>
         </Card>
       ))}
+
+      {/* Related Blend Tickets */}
+      {relatedTickets.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <FileText className="w-5 h-5 text-crx-green" />
+            <h3 className="font-semibold text-nav-dark">Related Blend Tickets</h3>
+          </div>
+          <div className="space-y-2">
+            {relatedTickets.map((bt: any) => (
+              <div key={bt.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                <button
+                  onClick={() => navigate(`/blend-tickets/${bt.id}`)}
+                  className="text-crx-green hover:underline font-medium text-sm"
+                >
+                  {bt.ticket_number}
+                </button>
+                <div className="flex items-center gap-2">
+                  {bt.ticket_date && (
+                    <span className="text-xs text-gray-500">{new Date(bt.ticket_date).toLocaleDateString()}</span>
+                  )}
+                  <Badge variant={bt.payment_status === 'billed' ? 'success' : bt.payment_status === 'prepaid' ? 'info' : 'default'}>
+                    {(bt.payment_status || 'unbilled').replace('_', ' ')}
+                  </Badge>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Status Change Modal */}
       <Modal open={statusModalOpen} onClose={() => setStatusModalOpen(false)} title="Change Order Status">
