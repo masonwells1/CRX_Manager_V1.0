@@ -513,6 +513,41 @@ export interface BlendTicketToOrderItem {
   order_item?: OrderItem;
 }
 
+// Phase 4A: Saved Blend Recipes
+export type RecipeType = 'crop_specific' | 'generic';
+
+export interface BlendRecipe {
+  id: string;
+  name: string;
+  description: string | null;
+  recipe_type: RecipeType;
+  crop_type: string | null;
+  timing: string | null;
+  created_by: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  // Joined
+  creator?: Profile;
+  items?: BlendRecipeItem[];
+}
+
+export interface BlendRecipeItem {
+  id: string;
+  recipe_id: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit: string;
+  rate_per_acre: number | null;
+  sort_order: number;
+  notes: string | null;
+  created_at: string;
+  // Joined
+  product?: Product;
+}
+
 export interface OCRProcessingQueue {
   id: string;
   blend_ticket_id: string;

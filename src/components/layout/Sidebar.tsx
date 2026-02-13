@@ -20,6 +20,7 @@ import {
   Sprout,
   MapPin,
   Receipt,
+  Beaker,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
@@ -43,6 +44,7 @@ const navItems: NavItem[] = [
   { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-5 h-5" /> },
   { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-5 h-5" /> },
   { path: '/blend-tickets', label: 'Blend Tickets', icon: <Image className="w-5 h-5" /> },
+  { path: '/recipes', label: 'Blend Recipes', icon: <Beaker className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
   { path: '/purchase-orders', label: 'Supplier POs', icon: <ShoppingCart className="w-5 h-5" />, roles: ['admin'] },
   { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
   { path: '/reports', label: 'Reports', icon: <BarChart3 className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },

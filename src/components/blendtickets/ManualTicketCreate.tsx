@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, Save, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Save, AlertCircle, Beaker } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Input from '../ui/Input';
@@ -7,7 +7,7 @@ import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { logActivity } from '../../lib/activityLogger';
 import { validateBlendMath } from '../../lib/blendMathValidator';
-import type { Customer, Product } from '../../types';
+import type { Customer, Product, BlendRecipe, BlendRecipeItem } from '../../types';
 
 interface ManualTicketCreateProps {
   customers: Customer[];
@@ -49,6 +49,8 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
   const [products, setProducts] = useState<ManualProduct[]>([]);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
+  const [recipes, setRecipes] = useState<(BlendRecipe & { items: BlendRecipeItem[] })[]>([]);
+  const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -62,7 +64,41 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       .then(({ data }) => {
         if (data) setAllProducts(data);
       });
+
+    // Fetch active blend recipes with their items
+    supabase
+      .from('blend_recipes')
+      .select('*, items:blend_recipe_items(*)')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('name')
+      .then(({ data }) => {
+        if (data) setRecipes(data as any);
+      });
   }, []);
+
+  function applyRecipe(recipeId: string) {
+    setSelectedRecipeId(recipeId);
+    if (!recipeId) return;
+
+    const recipe = recipes.find((r) => r.id === recipeId);
+    if (!recipe || !recipe.items) return;
+
+    const recipeProducts: ManualProduct[] = recipe.items
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((item) => ({
+        tempId: crypto.randomUUID(),
+        product_id: item.product_id,
+        product_name: item.product_name,
+        quantity: item.quantity,
+        unit: item.unit,
+        rate_per_acre: item.rate_per_acre,
+        rate_per_acre_unit: '',
+        lot_number: '',
+      }));
+
+    setProducts(recipeProducts);
+  }
 
   useEffect(() => {
     const ticketData = {
@@ -371,6 +407,34 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
           </div>
         </div>
       </Card>
+
+      {/* Recipe Quick-Fill */}
+      {recipes.length > 0 && (
+        <Card className="p-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Beaker className="h-5 w-5 text-crx-green" />
+            <h2 className="text-lg font-semibold">Apply Saved Recipe</h2>
+          </div>
+          <p className="text-sm text-gray-500 mb-3">
+            Select a saved blend recipe to pre-fill the products list below.
+          </p>
+          <select
+            value={selectedRecipeId}
+            onChange={(e) => applyRecipe(e.target.value)}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="">-- Choose a recipe --</option>
+            {recipes.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+                {r.crop_type ? ` (${r.crop_type})` : ''}
+                {r.timing ? ` - ${r.timing}` : ''}
+                {` — ${r.items?.length || 0} products`}
+              </option>
+            ))}
+          </select>
+        </Card>
+      )}
 
       <Card className="p-6">
         <div className="flex items-center justify-between mb-4">
