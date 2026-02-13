@@ -80,6 +80,7 @@ export interface Customer {
   billing_address: string | null;
   assigned_tier: number;
   assigned_sales_rep: string | null;
+  parent_customer_id: string | null;
   total_acres: number | null;
   corn_acres: number | null;
   soybean_acres: number | null;
@@ -90,6 +91,7 @@ export interface Customer {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  parent_customer?: Customer;
 }
 
 export interface CustomerAddress {
@@ -124,6 +126,9 @@ export interface Quote {
   expires_at: string | null;
   header_notes: string | null;
   footer_notes: string | null;
+  season: number | null;
+  salesman_id: string | null;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
   sent_at: string | null;
@@ -177,6 +182,9 @@ export interface Order {
   order_date: string;
   total_paid: number;
   balance_due: number;
+  season: number | null;
+  salesman_id: string | null;
+  deleted_at: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -256,6 +264,8 @@ export interface Delivery {
   signature_url: string | null;
   signed_by: string | null;
   receipt_pdf_url: string | null;
+  season: number | null;
+  deleted_at: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -438,6 +448,8 @@ export interface BlendTicket {
   application_rate: string | null;
   total_volume: number | null;
   total_volume_unit: string | null;
+  season: number | null;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
   uploader?: Profile;
@@ -489,4 +501,40 @@ export interface OCRProcessingQueue {
   max_retries: number;
   created_at: string;
   updated_at: string;
+}
+
+// Phase 1: Fields
+
+export interface Field {
+  id: string;
+  customer_id: string;
+  field_name: string;
+  legal_description: string | null;
+  county: string | null;
+  state: string | null;
+  total_acres: number | null;
+  fsa_farm_number: string | null;
+  fsa_tract_number: string | null;
+  fsa_field_number: string | null;
+  crop_type: string | null;
+  soil_type: string | null;
+  irrigation: boolean;
+  notes: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  customer?: Customer;
+  billing_defaults?: FieldBillingDefault[];
+}
+
+export interface FieldBillingDefault {
+  id: string;
+  field_id: string;
+  customer_id: string;
+  split_pct: number;
+  is_primary: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  customer?: Customer;
 }

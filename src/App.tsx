@@ -33,6 +33,8 @@ const TeamBoard = lazy(() => import('./pages/TeamBoard'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const Payments = lazy(() => import('./pages/Payments'));
+const Fields = lazy(() => import('./pages/Fields'));
+const FieldDetail = lazy(() => import('./pages/FieldDetail'));
 const BlendTickets = lazy(() => import('./pages/BlendTickets').then(m => ({ default: m.BlendTickets })));
 const BlendTicketDetail = lazy(() => import('./pages/BlendTicketDetail').then(m => ({ default: m.BlendTicketDetail })));
 
@@ -77,6 +79,8 @@ const router = createBrowserRouter([
           { path: 'products/:id', element: <ProductDetail /> },
           { path: 'customers', element: <Customers /> },
           { path: 'customers/:id', element: <CustomerDetail /> },
+          { path: 'fields', element: <Fields /> },
+          { path: 'fields/:id', element: <FieldDetail /> },
           { path: 'quotes', element: <Quotes /> },
           { path: 'quotes/new', element: <QuoteBuilder /> },
           { path: 'quotes/:id', element: <QuoteBuilder /> },

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Save, Plus, Trash2, Search, MapPin } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,7 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
-import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery } from '../types';
+import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, Field } from '../types';
 
 export default function CustomerDetail() {
   const { id } = useParams();
@@ -40,15 +40,22 @@ export default function CustomerDetail() {
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<'info' | 'quotes' | 'orders' | 'deliveries' | 'history'>('info');
+  const [tab, setTab] = useState<'info' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'history'>('info');
 
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [orders, setOrders] = useState<(Order & { fulfillment_pct: number })[]>([]);
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name: string })[]>([]);
+  const [fields, setFields] = useState<(Field & { customer_name: string })[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const [tabLoading, setTabLoading] = useState(false);
   const [emailError, setEmailError] = useState('');
   const [phoneError, setPhoneError] = useState('');
+
+  // Parent customer search
+  const [allCustomers, setAllCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  const [parentSearch, setParentSearch] = useState('');
+  const [showParentDropdown, setShowParentDropdown] = useState(false);
+  const [parentName, setParentName] = useState('');
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -61,6 +68,10 @@ export default function CustomerDetail() {
   }, [customer, addresses]);
 
   useEffect(() => {
+    // Fetch all customers for parent selector
+    supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500)
+      .then(({ data }) => setAllCustomers((data || []) as { id: string; farm_name: string }[]));
+
     if (!isNew && id) {
       fetchCustomer();
       fetchAddresses();
@@ -78,7 +89,18 @@ export default function CustomerDetail() {
 
   const fetchCustomer = async () => {
     const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
-    if (data) setCustomer(data);
+    if (data) {
+      setCustomer(data);
+      // Fetch parent customer name if set
+      if (data.parent_customer_id) {
+        const { data: parent } = await supabase
+          .from('customers')
+          .select('farm_name')
+          .eq('id', data.parent_customer_id)
+          .maybeSingle();
+        if (parent) setParentName(parent.farm_name);
+      }
+    }
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
   };
@@ -90,7 +112,18 @@ export default function CustomerDetail() {
 
   const fetchTabData = async (selectedTab: string) => {
     setTabLoading(true);
-    if (selectedTab === 'quotes') {
+    if (selectedTab === 'fields') {
+      const { data } = await supabase
+        .from('fields')
+        .select('*, customer:customers!fields_customer_id_fkey(farm_name)')
+        .eq('customer_id', id)
+        .order('field_name');
+      const rows = ((data || []) as Array<Field & { customer: { farm_name: string } | null }>).map((f) => ({
+        ...f,
+        customer_name: f.customer?.farm_name || '',
+      }));
+      setFields(rows);
+    } else if (selectedTab === 'quotes') {
       const { data } = await supabase
         .from('quotes')
         .select('*')
@@ -222,6 +255,7 @@ export default function CustomerDetail() {
         billing_address: customer.billing_address,
         assigned_tier: customer.assigned_tier,
         assigned_sales_rep: customer.assigned_sales_rep,
+        parent_customer_id: customer.parent_customer_id || null,
         total_acres: customer.total_acres,
         corn_acres: customer.corn_acres,
         soybean_acres: customer.soybean_acres,
@@ -276,7 +310,7 @@ export default function CustomerDetail() {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
   }
 
-  const tabs = ['info', 'quotes', 'orders', 'deliveries', 'history'] as const;
+  const tabs = ['info', 'fields', 'quotes', 'orders', 'deliveries', 'history'] as const;
 
   return (
     <div className="space-y-4">
@@ -330,6 +364,61 @@ export default function CustomerDetail() {
                 </select>
               </div>
               <Input label="Payment Terms" value={customer.payment_terms || ''} onChange={(e) => update('payment_terms', e.target.value)} />
+
+              {/* Parent Customer (Farm Group) selector */}
+              <div className="relative">
+                <label className="block text-sm font-medium text-secondary mb-1">Parent Customer</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    value={showParentDropdown ? parentSearch : parentName}
+                    onChange={(e) => {
+                      setParentSearch(e.target.value);
+                      setShowParentDropdown(true);
+                    }}
+                    onFocus={() => {
+                      setParentSearch('');
+                      setShowParentDropdown(true);
+                    }}
+                    onBlur={() => setTimeout(() => setShowParentDropdown(false), 200)}
+                    placeholder="Search parent customer..."
+                    className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  />
+                </div>
+                {customer.parent_customer_id && (
+                  <button
+                    type="button"
+                    onClick={() => { update('parent_customer_id', null); setParentName(''); }}
+                    className="absolute right-2 top-8 text-xs text-gray-400 hover:text-red-500"
+                  >
+                    Clear
+                  </button>
+                )}
+                {showParentDropdown && (
+                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                    {allCustomers
+                      .filter((c) => c.id !== id && c.farm_name.toLowerCase().includes(parentSearch.toLowerCase()))
+                      .slice(0, 20)
+                      .map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            update('parent_customer_id', c.id);
+                            setParentName(c.farm_name);
+                            setShowParentDropdown(false);
+                          }}
+                          className="w-full text-left px-4 py-2 text-sm hover:bg-crx-green-tint transition-colors"
+                        >
+                          {c.farm_name}
+                        </button>
+                      ))}
+                  </div>
+                )}
+                <p className="text-xs text-secondary mt-1">Link this customer to a parent farm group</p>
+              </div>
             </div>
           </Card>
 
@@ -416,6 +505,79 @@ export default function CustomerDetail() {
             </Button>
           </div>
         </div>
+      )}
+
+      {tab === 'fields' && !isNew && (
+        <Card padding={false}>
+          <div className="p-5">
+            <CardHeader
+              title="Customer"
+              accent="Fields"
+              action={
+                <Button variant="ghost" size="sm" icon={<Plus className="w-3 h-3" />} showChevron={false} onClick={() => navigate('/fields/new')}>
+                  Add Field
+                </Button>
+              }
+            />
+          </div>
+          {tabLoading ? (
+            <div className="px-5 pb-5 space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : fields.length === 0 ? (
+            <div className="px-5 pb-5">
+              <p className="text-sm text-secondary">No fields for this customer yet.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-t border-b border-gray-100">
+                    <th className="px-5 py-3 text-left font-medium text-secondary">Field Name</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Acres</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Crop</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">County</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Legal Desc.</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fields.map((f) => (
+                    <tr
+                      key={f.id}
+                      onClick={() => navigate(`/fields/${f.id}`)}
+                      className="border-b border-gray-50 hover:bg-crx-green-tint cursor-pointer transition-colors"
+                    >
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-crx-green flex-shrink-0" />
+                          <span className="font-medium text-nav-dark">{f.field_name}</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">{f.total_acres?.toLocaleString() || '-'}</td>
+                      <td className="px-4 py-3">
+                        {f.crop_type ? (
+                          <Badge variant="info">{f.crop_type}</Badge>
+                        ) : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-secondary">{f.county || '-'}</td>
+                      <td className="px-4 py-3 text-secondary text-xs truncate max-w-[200px]">
+                        {f.legal_description || '-'}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant={f.is_active ? 'success' : 'default'}>
+                          {f.is_active ? 'Active' : 'Inactive'}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
       )}
 
       {tab === 'quotes' && !isNew && (
