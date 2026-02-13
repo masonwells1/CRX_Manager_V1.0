@@ -106,6 +106,8 @@ export interface CustomerAddress {
   zip: string | null;
   delivery_notes: string | null;
   is_default: boolean;
+  latitude: number | null;
+  longitude: number | null;
   created_at: string;
 }
 
@@ -723,6 +725,8 @@ export interface Field {
   irrigation: boolean;
   notes: string | null;
   is_active: boolean;
+  centroid_geojson?: string | null;
+  boundary_geojson?: string | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;

@@ -12,6 +12,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, Field } from '../types';
+import MapContainer from '../components/map/MapContainer';
+import FieldMarkers from '../components/map/FieldMarkers';
 
 export default function CustomerDetail() {
   const { id } = useParams();
@@ -113,14 +115,10 @@ export default function CustomerDetail() {
   const fetchTabData = async (selectedTab: string) => {
     setTabLoading(true);
     if (selectedTab === 'fields') {
-      const { data } = await supabase
-        .from('fields')
-        .select('*, customer:customers!fields_customer_id_fkey(farm_name)')
-        .eq('customer_id', id)
-        .order('field_name');
-      const rows = ((data || []) as Array<Field & { customer: { farm_name: string } | null }>).map((f) => ({
+      const { data } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
+      const rows = ((data || []) as any[]).map((f: any) => ({
         ...f,
-        customer_name: f.customer?.farm_name || '',
+        customer_name: f.customer_name || '',
       }));
       setFields(rows);
     } else if (selectedTab === 'quotes') {
@@ -508,76 +506,91 @@ export default function CustomerDetail() {
       )}
 
       {tab === 'fields' && !isNew && (
-        <Card padding={false}>
-          <div className="p-5">
-            <CardHeader
-              title="Customer"
-              accent="Fields"
-              action={
-                <Button variant="ghost" size="sm" icon={<Plus className="w-3 h-3" />} showChevron={false} onClick={() => navigate('/fields/new')}>
-                  Add Field
-                </Button>
-              }
-            />
-          </div>
-          {tabLoading ? (
-            <div className="px-5 pb-5 space-y-3">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
-              ))}
-            </div>
-          ) : fields.length === 0 ? (
-            <div className="px-5 pb-5">
-              <p className="text-sm text-secondary">No fields for this customer yet.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-t border-b border-gray-100">
-                    <th className="px-5 py-3 text-left font-medium text-secondary">Field Name</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Acres</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Crop</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">County</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Legal Desc.</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fields.map((f) => (
-                    <tr
-                      key={f.id}
-                      onClick={() => navigate(`/fields/${f.id}`)}
-                      className="border-b border-gray-50 hover:bg-crx-green-tint cursor-pointer transition-colors"
-                    >
-                      <td className="px-5 py-3">
-                        <div className="flex items-center gap-2">
-                          <MapPin className="w-4 h-4 text-crx-green flex-shrink-0" />
-                          <span className="font-medium text-nav-dark">{f.field_name}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">{f.total_acres?.toLocaleString() || '-'}</td>
-                      <td className="px-4 py-3">
-                        {f.crop_type ? (
-                          <Badge variant="info">{f.crop_type}</Badge>
-                        ) : '-'}
-                      </td>
-                      <td className="px-4 py-3 text-secondary">{f.county || '-'}</td>
-                      <td className="px-4 py-3 text-secondary text-xs truncate max-w-[200px]">
-                        {f.legal_description || '-'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge variant={f.is_active ? 'success' : 'default'}>
-                          {f.is_active ? 'Active' : 'Inactive'}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+        <>
+          {/* Mini map showing this customer's fields */}
+          {!tabLoading && fields.some((f) => f.centroid_geojson) && (
+            <Card>
+              <CardHeader title="Field" accent="Locations" />
+              <MapContainer className="h-[250px] w-full rounded-lg overflow-hidden">
+                <FieldMarkers
+                  fields={fields as any}
+                  onFieldClick={(fieldId) => navigate(`/fields/${fieldId}`)}
+                />
+              </MapContainer>
+            </Card>
           )}
-        </Card>
+
+          <Card padding={false}>
+            <div className="p-5">
+              <CardHeader
+                title="Customer"
+                accent="Fields"
+                action={
+                  <Button variant="ghost" size="sm" icon={<Plus className="w-3 h-3" />} showChevron={false} onClick={() => navigate('/fields/new')}>
+                    Add Field
+                  </Button>
+                }
+              />
+            </div>
+            {tabLoading ? (
+              <div className="px-5 pb-5 space-y-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
+                ))}
+              </div>
+            ) : fields.length === 0 ? (
+              <div className="px-5 pb-5">
+                <p className="text-sm text-secondary">No fields for this customer yet.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-t border-b border-gray-100">
+                      <th className="px-5 py-3 text-left font-medium text-secondary">Field Name</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">Acres</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">Crop</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">County</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">Legal Desc.</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fields.map((f) => (
+                      <tr
+                        key={f.id}
+                        onClick={() => navigate(`/fields/${f.id}`)}
+                        className="border-b border-gray-50 hover:bg-crx-green-tint cursor-pointer transition-colors"
+                      >
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-2">
+                            <MapPin className="w-4 h-4 text-crx-green flex-shrink-0" />
+                            <span className="font-medium text-nav-dark">{f.field_name}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">{f.total_acres?.toLocaleString() || '-'}</td>
+                        <td className="px-4 py-3">
+                          {f.crop_type ? (
+                            <Badge variant="info">{f.crop_type}</Badge>
+                          ) : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-secondary">{f.county || '-'}</td>
+                        <td className="px-4 py-3 text-secondary text-xs truncate max-w-[200px]">
+                          {f.legal_description || '-'}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant={f.is_active ? 'success' : 'default'}>
+                            {f.is_active ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </>
       )}
 
       {tab === 'quotes' && !isNew && (

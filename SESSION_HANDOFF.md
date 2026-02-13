@@ -1,16 +1,16 @@
 # Session Handoff — CRX Manager V1.0
 **Date:** 2026-02-13
-**Last Commit:** `f5eb90a` (pushed to `origin/main`)
+**Last Commit:** Phase 4B Mapbox integration (not yet committed)
 
 ---
 
 ## Current State — Everything Up to Date
 
-### All Code: COMMITTED & PUSHED
-- **Latest commit:** `f5eb90a` — Update all documentation for Phases 4A-7 (40+ tables, 34 pages)
+### All Code: NEEDS COMMIT & PUSH
+- **Previous commit:** `f5eb90a` — Update all documentation for Phases 4A-7
 - **Branch:** `main`
-- **Remote:** `origin/main` is up to date
-- **No uncommitted changes** (only `.claude/settings.local.json` which is gitignored effectively)
+- **Uncommitted changes:** Phase 4B Mapbox map integration (new files + modified files)
+- **Action needed:** Commit and push all Phase 4B changes
 
 ### Completed Phases
 | Phase | Status | Commit |
@@ -20,7 +20,7 @@
 | Phase 2: Billing Architecture | ✅ Complete | Included in Phase 4A-7 batch |
 | Phase 3: Blend Ticket-Order Link | ✅ Complete | Included in Phase 4A-7 batch |
 | Phase 4A: Blend Recipes | ✅ Complete | `c31bc6d` |
-| Phase 4B: Mapbox Maps | ⏳ **NEXT TASK** (plan ready, needs API key) |
+| Phase 4B: Mapbox Maps | ✅ Complete | Needs commit |
 | Phase 5: Warehouses & Cycle Counts | ✅ Complete | `c31bc6d` |
 | Phase 6: Returns / RMA | ✅ Complete | `7b2b719` |
 | Phase 7: Reporting, Compliance, Rebates | ✅ Complete | `dcd4dbb` |
@@ -39,51 +39,30 @@ All 5 docs below were updated to reflect 40+ tables, 34 pages, and all Phase 4A-
 
 ---
 
-## NEXT TASK: Phase 4B — Mapbox Map Integration
+## COMPLETED: Phase 4B — Mapbox Map Integration
 
-### Decision Made
-- **Provider chosen:** Mapbox GL JS (over Google Maps)
-- **Reasoning:** Cheaper (50K free loads/month), simpler setup, GeoJSON drawing tools match PostGIS directly, more mature React library
-
-### Plan Ready (detailed below)
-A full implementation plan was designed and approved. Here's what to build:
-
-### What Mason Needs to Do First
-1. **Create a free Mapbox account** at https://account.mapbox.com/auth/signup/
-2. **Copy the default public token** (starts with `pk.`)
-3. **Share the token** so it can be added to `.env` as `VITE_MAPBOX_TOKEN`
-
-### Implementation Steps
-1. **Install packages:** `npm install mapbox-gl react-map-gl @mapbox/mapbox-gl-draw @turf/area` and `npm install -D @types/mapbox__mapbox-gl-draw`
-2. **Update `.env.example`** — Add `VITE_MAPBOX_TOKEN=` placeholder
-3. **Update `vite.config.ts`** — Add `'vendor-mapbox': ['mapbox-gl', 'react-map-gl']` to manualChunks
-4. **Update `src/types/index.ts`** — Add `centroid` and `boundary` fields to `Field` interface (these columns already exist in DB but aren't in the TypeScript type)
-5. **Create 3 new components:**
-   - `src/components/map/MapContainer.tsx` — Reusable Mapbox satellite map wrapper
-   - `src/components/map/DrawControl.tsx` — Polygon drawing tool (uses `useControl` hook)
-   - `src/components/map/FieldMarkers.tsx` — Field pin markers with click-to-navigate
-6. **Modify `src/pages/FieldDetail.tsx`** — Add "Field Location" card with map + draw control for boundary editing
-7. **Modify `src/pages/Fields.tsx`** — Add map/list view toggle button
-8. **Modify `src/pages/CustomerDetail.tsx`** — Add mini-map in Fields tab showing customer's fields
-9. **Create migration** — Add `latitude`/`longitude` columns to `customer_addresses` (for future delivery mapping)
-10. **Update documentation** — Mark Phase 4B complete in CLAUDE.md, CONTEXT.md
-
-### Database Notes
-- PostGIS is already enabled
-- `fields.centroid` (`geography(POINT, 4326)`) already exists but is always NULL
-- `fields.boundary` (`geography(POLYGON, 4326)`) already exists but is always NULL
-- Drawing tool outputs GeoJSON → store directly in these PostGIS columns
-- Auto-calculate centroid from boundary using Turf.js
+### What Was Built
+- **Satellite maps** using Mapbox GL JS (`satellite-streets-v12` style)
+- **Field boundary drawing** on FieldDetail page with `@mapbox/mapbox-gl-draw`
+- **Auto-acreage calculation** from drawn polygons using `@turf/area`
+- **Auto-centroid calculation** using `@turf/centroid`
+- **Map/list toggle** on Fields page — switch between table view and satellite map with markers
+- **Customer mini-map** on CustomerDetail Fields tab — shows this customer's field locations
+- **Field markers** with hover popups (name, acres, crop, customer)
+- **3 reusable map components:** `MapContainer`, `DrawControl`, `FieldMarkers`
+- **3 Supabase RPCs:** `get_fields_with_geojson`, `get_field_geojson`, `save_field_geometry`
+- **Graceful fallback** if no Mapbox token configured (shows message, not crash)
 
 ### Key Technical Details
-- Satellite style: `mapbox://styles/mapbox/satellite-streets-v12`
-- Map pages are already lazy-loaded in `App.tsx` — no new routes needed
-- Bundle impact: ~300KB gzipped, isolated in `vendor-mapbox` chunk
-- Graceful fallback if no token configured (show message, not crash)
+- `react-map-gl` v8 uses subpath imports: `react-map-gl/mapbox` (NOT bare `react-map-gl`)
+- PostGIS functions are in `extensions` schema — RPCs need `SET search_path = public, extensions`
+- Bundle: `vendor-mapbox` chunk is ~464KB gzipped (loaded only on map pages via code splitting)
+- Mapbox token stored in `.env` as `VITE_MAPBOX_TOKEN`
+- Migration: `20260214000000_phase4b_mapbox_integration.sql` (applied to Supabase)
 
 ---
 
-## After Phase 4B — Remaining Work
+## NEXT TASK — Remaining Work
 
 ### T3-002: Comprehensive Test Coverage (10-15 day effort)
 Currently only 3 E2E test files exist. Need tests for all 34 pages.
@@ -119,4 +98,4 @@ npm run test:e2e     # Playwright tests
 
 ---
 
-**To resume:** Read this file, then read `CLAUDE.md` for full project context. The Phase 4B plan above is ready to implement once the Mapbox token is provided.
+**To resume:** Read this file, then read `CLAUDE.md` for full project context. Phase 4B is complete — next up is committing changes and then T3-002 test coverage.

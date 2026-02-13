@@ -12,8 +12,8 @@
 - **Phases 4A-7:** COMPLETE (invoicing, fields, blend recipes, warehouses, cycle counts, returns/RMA, AR aging, compliance, rebates)
 - **Deployed to:** Vercel (private preview/staging)
 - **Test coverage:** Minimal -- only 3 E2E test files (auth, customers, permissions)
+- **Phase 4B:** COMPLETE (Mapbox satellite maps: field boundary drawing, acreage auto-calc, map/list toggle, customer field mini-maps)
 - **Next task:** T3-002 comprehensive test coverage (10-15 day effort)
-- **Skipped:** Phase 4B (Mapbox map integration) -- requires API key and npm package install from user
 - **See CONTEXT.md** for full business context and data model details
 
 ## Architecture Rules -- Follow These
@@ -38,6 +38,7 @@
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
 - **Testing:** Playwright (E2E only, tests in `tests/e2e/`)
 - **Deployment:** Vercel (private preview/staging), configured via `vercel.json`
+- **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid
 - **PDF Generation:** jsPDF + jspdf-autotable (client-side)
 - **OCR:** Tesseract.js + PDF.js (client-side), Google Vision AI (server-side Edge Function)
 - **Signatures:** signature_pad
@@ -90,6 +91,7 @@ src/
     auth/              # LoginPage, ProtectedRoute
     layout/            # AppLayout, Sidebar, TopBar
     ui/                # Badge, Button, Card, DataTable, Modal, Input, Select, Skeleton, Toast, etc.
+    map/               # MapContainer, DrawControl, FieldMarkers (Mapbox satellite maps)
     blendtickets/      # BulkTicketUpload
     customers/         # BulkCustomerImport
     orders/            # BulkOrderImport
@@ -135,8 +137,8 @@ tests/
 | `/crop-programs` | CropPrograms | Seasonal crop program management |
 | `/invoices` | Invoices | Invoice management with posting workflow |
 | `/invoices/:id` | InvoiceDetail | Invoice detail with items, allocations, payments |
-| `/fields` | Fields | Farm field management (geospatial, FSA numbers) |
-| `/fields/:id` | FieldDetail | Field detail with billing defaults |
+| `/fields` | Fields | Farm field management with map/list toggle (geospatial, FSA numbers) |
+| `/fields/:id` | FieldDetail | Field detail with satellite map, boundary drawing, auto-acreage |
 | `/recipes` | BlendRecipes | Saved blend recipe management (create, duplicate, edit) |
 | `/cycle-counts` | CycleCounts | Inventory cycle counting with variance tracking |
 | `/returns` | Returns | Returns/RMA workflow (request → approve → receive → credit) |
@@ -237,8 +239,11 @@ tests/
 get_ar_aging(p_as_of_date date)           -- AR aging buckets by customer (current, 30, 60, 90, 120+ days)
 get_customer_statement(p_customer_id, p_start_date, p_end_date) -- Chronological transactions with running balance
 get_season_comparison(p_season_a, p_season_b) -- YoY revenue, profit, orders, active customers
+get_fields_with_geojson(p_customer_id uuid DEFAULT NULL) -- Fields with centroid/boundary as GeoJSON text (for map markers)
+get_field_geojson(p_field_id uuid)        -- Single field's centroid/boundary as GeoJSON text
+save_field_geometry(p_field_id, p_centroid_geojson, p_boundary_geojson) -- Save PostGIS geo data from GeoJSON strings
 ```
-All three are `SECURITY DEFINER STABLE`.
+AR/statement/season RPCs are `SECURITY DEFINER STABLE`. Geo RPCs use `SET search_path = public, extensions` for PostGIS access.
 
 ### Helper Functions (SQL)
 ```sql
@@ -330,6 +335,7 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix. Key migrat
 21. `20260213000000` - Inventory enhancements (warehouses, cycle_counts, cycle_count_items, inventory warehouse_id FK)
 22. `20260213100000` - Returns/RMA system (returns, return_items, inventory restocking support)
 23. `20260213200000` - Reporting, compliance & rebates (applicator_licenses, rebate_programs, rebate_claims, AR aging/statement/season RPCs, products is_rup & signal_word)
+24. `20260214000000` - Phase 4B Mapbox integration (customer_addresses lat/lng, get_fields_with_geojson, get_field_geojson, save_field_geometry RPCs)
 
 ### Edge Functions
 - **create-user** - Admin-only: creates a new auth user with role metadata
@@ -437,6 +443,7 @@ Used for:
 ```
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
+VITE_MAPBOX_TOKEN=pk.your-mapbox-token  # Required for satellite maps (free at mapbox.com)
 ```
 See `.env.example` for template. Never commit `.env`.
 

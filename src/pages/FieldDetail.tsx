@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Plus, Trash2, MapPin, Search } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -6,10 +6,15 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import MapContainer from '../components/map/MapContainer';
+import DrawControl from '../components/map/DrawControl';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
+import area from '@turf/area';
+import turfCentroid from '@turf/centroid';
+import type { Feature, Polygon } from 'geojson';
 import type { Field, FieldBillingDefault, Customer } from '../types';
 
 interface BillingSplit {
@@ -47,6 +52,11 @@ export default function FieldDetail() {
   const [billingSplits, setBillingSplits] = useState<BillingSplit[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
+
+  // Map / geo state
+  const [boundaryGeoJSON, setBoundaryGeoJSON] = useState<Feature<Polygon> | null>(null);
+  const [mapCenter, setMapCenter] = useState<[number, number] | undefined>(undefined);
+  const [mapZoom, setMapZoom] = useState<number | undefined>(undefined);
 
   // Customer search for the owner dropdown
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -98,6 +108,34 @@ export default function FieldDetail() {
       setField(data);
       const cust = data.customer as { farm_name: string } | null;
       setOwnerName(cust?.farm_name || '');
+
+      // Fetch GeoJSON for map display
+      const { data: geoData } = await supabase.rpc('get_field_geojson', { p_field_id: id });
+      if (geoData && geoData.length > 0) {
+        const geo = geoData[0];
+        if (geo.boundary_geojson) {
+          try {
+            const parsed = JSON.parse(geo.boundary_geojson);
+            setBoundaryGeoJSON({ type: 'Feature', properties: {}, geometry: parsed });
+            // Center map on centroid if available
+            if (geo.centroid_geojson) {
+              const centroid = JSON.parse(geo.centroid_geojson);
+              if (centroid?.coordinates) {
+                setMapCenter([centroid.coordinates[0], centroid.coordinates[1]]);
+                setMapZoom(15);
+              }
+            }
+          } catch { /* invalid geojson */ }
+        } else if (geo.centroid_geojson) {
+          try {
+            const centroid = JSON.parse(geo.centroid_geojson);
+            if (centroid?.coordinates) {
+              setMapCenter([centroid.coordinates[0], centroid.coordinates[1]]);
+              setMapZoom(14);
+            }
+          } catch { /* invalid geojson */ }
+        }
+      }
 
       // Fetch billing defaults
       const { data: defaults } = await supabase
@@ -213,6 +251,21 @@ export default function FieldDetail() {
       if (error) {
         toast('error', error.message);
       } else {
+        const savedFieldId = isNew ? data : id;
+
+        // Save geometry if a boundary was drawn
+        if (boundaryGeoJSON && savedFieldId) {
+          const centroidResult = turfCentroid(boundaryGeoJSON);
+          const centroidGeoJSON = JSON.stringify(centroidResult.geometry);
+          const boundaryGeoJSONStr = JSON.stringify(boundaryGeoJSON.geometry);
+
+          await supabase.rpc('save_field_geometry', {
+            p_field_id: savedFieldId,
+            p_centroid_geojson: centroidGeoJSON,
+            p_boundary_geojson: boundaryGeoJSONStr,
+          });
+        }
+
         setIsDirty(false);
         if (isNew) {
           toast('success', 'Field created');
@@ -226,6 +279,36 @@ export default function FieldDetail() {
     }
     setSaving(false);
   };
+
+  // Handle polygon drawn/updated on map
+  const handleBoundaryChange = useCallback((feature: any) => {
+    if (feature?.geometry?.type === 'Polygon') {
+      const polygon: Feature<Polygon> = {
+        type: 'Feature',
+        properties: {},
+        geometry: feature.geometry,
+      };
+      setBoundaryGeoJSON(polygon);
+
+      // Calculate acreage from polygon (turf/area returns sq meters)
+      const sqMeters = area(polygon);
+      const acres = Math.round((sqMeters / 4046.8564224) * 100) / 100;
+
+      // Auto-fill total_acres if empty or user hasn't manually set it
+      if (!field.total_acres) {
+        update('total_acres', acres);
+      }
+
+      // Calculate centroid for marker display
+      const centroidResult = turfCentroid(polygon);
+      const [lng, lat] = centroidResult.geometry.coordinates;
+      setMapCenter([lng, lat]);
+    }
+  }, [field.total_acres]);
+
+  const handleBoundaryDelete = useCallback(() => {
+    setBoundaryGeoJSON(null);
+  }, []);
 
   const filteredCustomers = customers.filter((c) =>
     c.farm_name.toLowerCase().includes(customerSearch.toLowerCase())
@@ -335,6 +418,36 @@ export default function FieldDetail() {
               onChange={(e) => update('total_acres', e.target.value ? parseFloat(e.target.value) : null)}
             />
           </div>
+        </Card>
+
+        {/* Field Location Map */}
+        <Card>
+          <CardHeader title="Field" accent="Location" />
+          <p className="text-xs text-secondary mb-3">
+            {boundaryGeoJSON
+              ? 'Click the polygon to edit, or use the trash icon to remove it.'
+              : 'Use the polygon tool (top-left of map) to draw this field\'s boundary.'}
+          </p>
+          <MapContainer
+            center={mapCenter}
+            zoom={mapZoom}
+            className="h-[400px] w-full rounded-lg overflow-hidden"
+          >
+            <DrawControl
+              onDrawCreate={handleBoundaryChange}
+              onDrawUpdate={handleBoundaryChange}
+              onDrawDelete={handleBoundaryDelete}
+              initialGeoJSON={boundaryGeoJSON}
+            />
+          </MapContainer>
+          {boundaryGeoJSON && (
+            <p className="text-xs text-secondary mt-2">
+              Calculated area: {(() => {
+                const sqMeters = area(boundaryGeoJSON);
+                return (sqMeters / 4046.8564224).toFixed(2);
+              })()} acres
+            </p>
+          )}
         </Card>
 
         {/* Crop & Soil */}
