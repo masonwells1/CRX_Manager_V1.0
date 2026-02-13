@@ -94,6 +94,56 @@ After automated tests pass, manually verify these critical flows:
 - [ ] Regular users cannot access restricted pages
 - [ ] Users can only see their own data
 
+### Invoicing
+- [ ] Create invoice from order
+- [ ] Post invoice (status changes to posted)
+- [ ] View invoice detail with line items
+- [ ] Apply payment allocation to invoice
+
+### Fields
+- [ ] Create field for customer
+- [ ] Edit field details (acres, FSA numbers)
+- [ ] View fields from customer detail
+
+### Blend Recipes
+- [ ] Create new blend recipe with products
+- [ ] Edit recipe ingredients
+- [ ] Duplicate existing recipe
+- [ ] Search and filter recipes
+
+### Cycle Counts
+- [ ] Start new cycle count for warehouse
+- [ ] Enter counted quantities
+- [ ] View variance calculations
+- [ ] Complete cycle count
+
+### Returns / RMA
+- [ ] Create return request against order
+- [ ] Approve return (admin)
+- [ ] Receive returned items
+- [ ] Issue credit for return
+- [ ] Verify inventory restocking (if applicable)
+
+### AR Aging
+- [ ] View AR aging buckets (current, 30, 60, 90, 120+ days)
+- [ ] Click customer to view statement
+- [ ] Export aging report to CSV
+- [ ] View season comparison
+
+### Compliance
+- [ ] Add applicator license for customer
+- [ ] Edit license details
+- [ ] View expired/expiring license alerts
+- [ ] View RUP product list
+- [ ] Set product as RUP with signal word
+
+### Rebates
+- [ ] Create rebate program
+- [ ] Create rebate claim
+- [ ] Submit claim
+- [ ] Approve claim (admin)
+- [ ] Mark claim as paid (admin)
+
 ---
 
 ## 🎯 Quick Commands Reference

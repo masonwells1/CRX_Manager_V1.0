@@ -6,7 +6,7 @@
 ## Executive Summary
 
 ✅ **Authentication**: Already using Supabase Auth with proper patterns
-✅ **Row Level Security**: Enabled on all 25 tables with comprehensive policies
+✅ **Row Level Security**: Enabled on all 40+ tables with comprehensive policies
 ✅ **Schema**: Complete with proper relationships and indexes
 ✅ **Security**: Role-based access control (admin, sales_rep, driver)
 
@@ -34,7 +34,7 @@ The application correctly uses Supabase Auth:
 
 ---
 
-## 2. Database Schema (25 Tables)
+## 2. Database Schema (40+ Tables)
 
 ### Core Tables
 
@@ -105,6 +105,62 @@ The application correctly uses Supabase Auth:
 | Table | Purpose | Key Relationships |
 |-------|---------|-------------------|
 | **app_settings** | Global app configuration | FK: updated_by → profiles |
+
+### Billing / Invoicing
+
+| Table | Purpose | Key Relationships |
+|-------|---------|-------------------|
+| **invoices** | Invoice headers with posting workflow | FK: order_id → orders, customer_id → customers, created_by → profiles |
+| **invoice_items** | Invoice line items | FK: invoice_id → invoices, order_item_id → order_items, product_id → products |
+| **allocation_sets** | Payment allocation groups | FK: payment_id → payments |
+| **order_line_allocations** | Payment allocated to order items | FK: set_id → allocation_sets, order_item_id → order_items |
+| **invoice_line_allocations** | Payment allocated to invoice items | FK: set_id → allocation_sets, invoice_line_id → invoice_items |
+| **prepay_credits** | Prepayment credit tracking | FK: customer_id → customers, source_payment_id → payments |
+| **prepay_applications** | Prepay credit applications | FK: credit_id → prepay_credits, invoice_id → invoices |
+| **financial_audit_log** | Immutable financial change trail | FK: performed_by → profiles |
+
+### Farm Fields
+
+| Table | Purpose | Key Relationships |
+|-------|---------|-------------------|
+| **fields** | Farm field records | FK: customer_id → customers |
+| **field_billing_defaults** | Per-field billing splits | FK: field_id → fields, customer_id → customers |
+
+### Blend Recipes
+
+| Table | Purpose | Key Relationships |
+|-------|---------|-------------------|
+| **blend_recipes** | Saved blend formulas | FK: created_by → profiles |
+| **blend_recipe_items** | Recipe ingredients | FK: recipe_id → blend_recipes, product_id → products |
+| **blend_ticket_to_order_item** | Ticket-order linkage | FK: ticket_id → blend_tickets, order_item_id → order_items |
+
+### Warehouses & Cycle Counts
+
+| Table | Purpose | Key Relationships |
+|-------|---------|-------------------|
+| **warehouses** | Storage locations | - |
+| **cycle_counts** | Count sessions | FK: warehouse_id → warehouses, counted_by → profiles |
+| **cycle_count_items** | Individual count lines | FK: cycle_count_id → cycle_counts, product_id → products |
+
+### Returns / RMA
+
+| Table | Purpose | Key Relationships |
+|-------|---------|-------------------|
+| **returns** | Return/RMA headers | FK: order_id → orders, customer_id → customers, requested_by → profiles |
+| **return_items** | Return line items | FK: return_id → returns, order_item_id → order_items, product_id → products |
+
+### Compliance
+
+| Table | Purpose | Key Relationships |
+|-------|---------|-------------------|
+| **applicator_licenses** | Pesticide license tracking | FK: customer_id → customers |
+
+### Rebates
+
+| Table | Purpose | Key Relationships |
+|-------|---------|-------------------|
+| **rebate_programs** | Manufacturer rebate programs | FK: product_id → products, created_by → profiles |
+| **rebate_claims** | Claims against programs | FK: program_id → rebate_programs, order_id → orders, customer_id → customers |
 
 ---
 
@@ -187,8 +243,56 @@ All functions use:
 - ✅ UPDATE: Own notifications only (user_id = self)
 - ✅ DELETE: None
 
-#### All Other Tables
+#### All Other Original Tables
 Similar restrictive policies based on role and ownership checks.
+
+#### invoices, invoice_items, allocation_sets, order/invoice_line_allocations
+- ✅ SELECT: Admin OR sales_rep
+- ✅ INSERT: Admin OR sales_rep
+- ✅ UPDATE: Admin only (invoice_items: Admin; allocations: none)
+- ✅ DELETE: Admin only (allocations: Admin)
+
+#### financial_audit_log
+- ✅ SELECT: Admin only
+- ✅ INSERT: All authenticated (immutable)
+- ✅ UPDATE: None (immutable)
+- ✅ DELETE: None (immutable)
+
+#### fields, field_billing_defaults
+- ✅ SELECT: Admin OR sales_rep (assigned customer)
+- ✅ INSERT: Admin OR sales_rep
+- ✅ UPDATE: Admin OR sales_rep
+- ✅ DELETE: Admin (fields); Admin/Sales Rep (billing defaults)
+
+#### blend_recipes, blend_recipe_items
+- ✅ SELECT: All authenticated
+- ✅ INSERT: Admin OR sales_rep
+- ✅ UPDATE: Admin OR sales_rep
+- ✅ DELETE: Admin (recipes); Admin/Sales Rep (items)
+
+#### warehouses, cycle_counts, cycle_count_items
+- ✅ SELECT: All authenticated (warehouses); Admin (counts)
+- ✅ INSERT: Admin only
+- ✅ UPDATE: Admin only
+- ✅ DELETE: Admin only
+
+#### returns, return_items
+- ✅ SELECT: Admin OR sales_rep
+- ✅ INSERT: Admin OR sales_rep
+- ✅ UPDATE: Admin only
+- ✅ DELETE: Admin only
+
+#### applicator_licenses
+- ✅ SELECT: Admin OR sales_rep
+- ✅ INSERT: Admin only
+- ✅ UPDATE: Admin only
+- ✅ DELETE: Admin only
+
+#### rebate_programs, rebate_claims
+- ✅ SELECT: Admin only
+- ✅ INSERT: Admin only
+- ✅ UPDATE: Admin only
+- ✅ DELETE: Admin only
 
 ### Security Improvements Applied
 
@@ -288,7 +392,7 @@ CREATE TRIGGER on_auth_user_created
 - [x] Proper session management in React context
 
 ### ✅ Row Level Security
-- [x] RLS enabled on all 25 tables
+- [x] RLS enabled on all 40+ tables
 - [x] No tables with missing RLS
 - [x] All policies use `auth.uid()` for user identification
 - [x] Policies wrapped in subqueries for performance
@@ -362,7 +466,18 @@ SELECT is_driver();     -- Should return true/false
 
 ---
 
-## 10. Summary
+## 10. RPC Functions
+
+### RPC Functions (Phase 7)
+- `get_ar_aging(p_as_of_date)` -- AR aging buckets by customer
+- `get_customer_statement(p_customer_id, p_start_date, p_end_date)` -- Customer transaction history with running balance
+- `get_season_comparison(p_season_a, p_season_b)` -- Year-over-year metrics comparison
+
+All three are `SECURITY DEFINER STABLE`.
+
+---
+
+## 11. Summary
 
 ### Current State: **PRODUCTION READY ✓**
 
@@ -391,11 +506,18 @@ The application is **already using Supabase Auth patterns correctly**. No migrat
 
 ---
 
-## 11. SQL Reference (Complete Schema)
+## 12. SQL Reference (Complete Schema)
 
 See attached migration files:
 - `supabase/migrations/20260206172436_create_full_schema_v2.sql` - Initial schema
 - `supabase/migrations/20260206174345_fix_security_and_performance_issues.sql` - Security fixes
 - `supabase/migrations/20260206174743_add_profile_trigger_and_admin_user.sql` - Profile trigger
+- `supabase/migrations/20260213000000_phase1_fields_foundation.sql` - Farm fields & field billing defaults
+- `supabase/migrations/20260213100000_phase2_billing_architecture.sql` - Invoices, allocations, prepay credits, financial audit log
+- `supabase/migrations/20260213120000_phase3_blend_ticket_order_linkage.sql` - Blend ticket to order item linkage
+- `supabase/migrations/20260213140000_phase4a_blend_recipes.sql` - Blend recipes & recipe items
+- `supabase/migrations/20260213160000_phase5_inventory_enhancements.sql` - Warehouses, cycle counts
+- `supabase/migrations/20260213180000_phase6_returns_rma.sql` - Returns & return items
+- `supabase/migrations/20260213200000_phase7_reporting_compliance_rebates.sql` - Applicator licenses, rebate programs, rebate claims, RPC functions
 
 All migrations are **idempotent** and safe to re-run.

@@ -6,7 +6,7 @@
 -- ==========================================
 
 -- ==========================================
--- TABLE STRUCTURE (25 tables)
+-- TABLE STRUCTURE (40+ tables)
 -- ==========================================
 
 -- Authentication & Users
@@ -46,6 +46,9 @@ CREATE TABLE products (
   rate_per_acre numeric,
   rate_unit text,
   notes text,
+  epa_registration text,
+  is_rup boolean NOT NULL DEFAULT false,
+  signal_word text CHECK (signal_word IS NULL OR signal_word IN ('Danger', 'Warning', 'Caution')),
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
@@ -381,6 +384,289 @@ CREATE TABLE app_settings (
 );
 
 -- ==========================================
+-- PHASE 4A-7 TABLES
+-- ==========================================
+
+-- Payments
+CREATE TABLE payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES orders(id),
+  customer_id uuid NOT NULL REFERENCES customers(id),
+  amount numeric NOT NULL DEFAULT 0,
+  payment_method text,
+  reference_number text,
+  payment_date date NOT NULL DEFAULT CURRENT_DATE,
+  notes text,
+  created_by uuid NOT NULL REFERENCES profiles(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Farm Fields
+CREATE TABLE fields (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_id uuid NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  field_name text NOT NULL,
+  county text,
+  acres numeric,
+  fsa_farm_number text,
+  fsa_tract_number text,
+  fsa_field_number text,
+  crop_type text,
+  soil_type text,
+  notes text,
+  created_by uuid NOT NULL REFERENCES profiles(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE field_billing_defaults (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  field_id uuid NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
+  customer_id uuid NOT NULL REFERENCES customers(id),
+  split_pct numeric NOT NULL DEFAULT 100,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Invoicing
+CREATE TABLE invoices (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  invoice_number text NOT NULL UNIQUE,
+  order_id uuid NOT NULL REFERENCES orders(id),
+  customer_id uuid NOT NULL REFERENCES customers(id),
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'posted', 'void')),
+  subtotal_cents bigint NOT NULL DEFAULT 0,
+  tax_cents bigint NOT NULL DEFAULT 0,
+  total_cents bigint NOT NULL DEFAULT 0,
+  balance_cents bigint NOT NULL DEFAULT 0,
+  due_date date,
+  notes text,
+  posted_at timestamptz,
+  created_by uuid NOT NULL REFERENCES profiles(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE invoice_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  invoice_id uuid NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+  order_item_id uuid REFERENCES order_items(id),
+  product_id uuid NOT NULL REFERENCES products(id),
+  description text,
+  quantity numeric NOT NULL DEFAULT 0,
+  unit_price_cents bigint NOT NULL DEFAULT 0,
+  line_total_cents bigint NOT NULL DEFAULT 0
+);
+
+CREATE TABLE allocation_sets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  payment_id uuid NOT NULL REFERENCES payments(id),
+  allocated_at timestamptz NOT NULL DEFAULT now(),
+  notes text
+);
+
+CREATE TABLE order_line_allocations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  set_id uuid NOT NULL REFERENCES allocation_sets(id) ON DELETE CASCADE,
+  order_item_id uuid NOT NULL REFERENCES order_items(id),
+  allocated_cents bigint NOT NULL DEFAULT 0
+);
+
+CREATE TABLE invoice_line_allocations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  set_id uuid NOT NULL REFERENCES allocation_sets(id) ON DELETE CASCADE,
+  invoice_line_id uuid NOT NULL REFERENCES invoice_items(id),
+  allocated_cents bigint NOT NULL DEFAULT 0
+);
+
+CREATE TABLE prepay_credits (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_id uuid NOT NULL REFERENCES customers(id),
+  source_payment_id uuid NOT NULL REFERENCES payments(id),
+  original_amount_cents bigint NOT NULL DEFAULT 0,
+  remaining_cents bigint NOT NULL DEFAULT 0,
+  notes text,
+  created_by uuid NOT NULL REFERENCES profiles(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE prepay_applications (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  credit_id uuid NOT NULL REFERENCES prepay_credits(id),
+  invoice_id uuid NOT NULL REFERENCES invoices(id),
+  applied_cents bigint NOT NULL DEFAULT 0,
+  applied_by uuid NOT NULL REFERENCES profiles(id),
+  applied_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE financial_audit_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  entity_type text NOT NULL,
+  entity_id uuid NOT NULL,
+  action text NOT NULL,
+  old_data jsonb,
+  new_data jsonb,
+  performed_by uuid NOT NULL REFERENCES profiles(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Blend Recipes
+CREATE TABLE blend_recipes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  recipe_name text NOT NULL,
+  recipe_number text NOT NULL UNIQUE,
+  category text,
+  total_cost numeric NOT NULL DEFAULT 0,
+  total_weight numeric NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
+  notes text,
+  created_by uuid NOT NULL REFERENCES profiles(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE blend_recipe_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  recipe_id uuid NOT NULL REFERENCES blend_recipes(id) ON DELETE CASCADE,
+  product_id uuid NOT NULL REFERENCES products(id),
+  quantity numeric NOT NULL DEFAULT 0,
+  unit text,
+  sort_order integer NOT NULL DEFAULT 0,
+  notes text
+);
+
+CREATE TABLE blend_ticket_to_order_item (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_id uuid NOT NULL REFERENCES blend_tickets(id),
+  order_item_id uuid NOT NULL REFERENCES order_items(id),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Warehouses & Cycle Counts
+CREATE TABLE warehouses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  warehouse_name text NOT NULL,
+  code text NOT NULL UNIQUE,
+  address text,
+  is_active boolean NOT NULL DEFAULT true,
+  is_default boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE cycle_counts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  count_number text NOT NULL UNIQUE,
+  warehouse_id uuid NOT NULL REFERENCES warehouses(id),
+  status text NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress', 'completed', 'cancelled')),
+  counted_by uuid NOT NULL REFERENCES profiles(id),
+  completed_at timestamptz,
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE cycle_count_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  cycle_count_id uuid NOT NULL REFERENCES cycle_counts(id) ON DELETE CASCADE,
+  product_id uuid NOT NULL REFERENCES products(id),
+  expected_qty numeric NOT NULL DEFAULT 0,
+  counted_qty numeric,
+  variance numeric,
+  variance_pct numeric,
+  resolved boolean NOT NULL DEFAULT false,
+  notes text
+);
+
+-- Returns / RMA
+CREATE TABLE returns (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  return_number text NOT NULL UNIQUE,
+  order_id uuid NOT NULL REFERENCES orders(id),
+  customer_id uuid NOT NULL REFERENCES customers(id),
+  status text NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'approved', 'received', 'credited', 'rejected')),
+  return_type text NOT NULL DEFAULT 'credit' CHECK (return_type IN ('refund', 'credit', 'exchange')),
+  reason_category text CHECK (reason_category IN ('damaged', 'wrong_product', 'quality', 'overshipment', 'other')),
+  requested_by uuid NOT NULL REFERENCES profiles(id),
+  approved_by uuid REFERENCES profiles(id),
+  credit_amount numeric NOT NULL DEFAULT 0,
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE return_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  return_id uuid NOT NULL REFERENCES returns(id) ON DELETE CASCADE,
+  order_item_id uuid REFERENCES order_items(id),
+  product_id uuid NOT NULL REFERENCES products(id),
+  quantity numeric NOT NULL DEFAULT 0,
+  unit_price numeric NOT NULL DEFAULT 0,
+  restocked boolean NOT NULL DEFAULT false,
+  sort_order integer NOT NULL DEFAULT 0,
+  notes text
+);
+
+-- Compliance
+CREATE TABLE applicator_licenses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_id uuid NOT NULL REFERENCES customers(id),
+  license_number text NOT NULL,
+  license_type text NOT NULL CHECK (license_type IN ('private', 'commercial', 'public')),
+  holder_name text NOT NULL,
+  state text,
+  issued_date date,
+  expiry_date date NOT NULL,
+  certification_categories text[],
+  is_active boolean NOT NULL DEFAULT true,
+  notes text,
+  created_by uuid NOT NULL REFERENCES profiles(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Rebates
+CREATE TABLE rebate_programs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  program_name text NOT NULL,
+  manufacturer text NOT NULL,
+  season text,
+  product_id uuid REFERENCES products(id),
+  rebate_type text NOT NULL CHECK (rebate_type IN ('per_unit', 'percentage', 'volume_tier', 'flat')),
+  rebate_amount numeric NOT NULL DEFAULT 0,
+  rebate_pct numeric,
+  min_volume numeric,
+  max_volume numeric,
+  start_date date,
+  end_date date,
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'expired', 'closed')),
+  notes text,
+  created_by uuid NOT NULL REFERENCES profiles(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE rebate_claims (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  program_id uuid NOT NULL REFERENCES rebate_programs(id),
+  order_id uuid REFERENCES orders(id),
+  customer_id uuid REFERENCES customers(id),
+  product_id uuid REFERENCES products(id),
+  claim_number text NOT NULL UNIQUE,
+  quantity numeric NOT NULL DEFAULT 0,
+  claim_amount_cents bigint NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'submitted', 'approved', 'paid', 'rejected')),
+  submitted_date date,
+  approved_date date,
+  paid_date date,
+  paid_amount_cents bigint,
+  manufacturer_ref text,
+  notes text,
+  created_by uuid NOT NULL REFERENCES profiles(id),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- ==========================================
 -- RLS HELPER FUNCTIONS
 -- ==========================================
 
@@ -430,6 +716,25 @@ CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW
   EXECUTE FUNCTION public.handle_new_user();
+
+-- ==========================================
+-- RPC FUNCTIONS (Phase 7)
+-- ==========================================
+
+-- AR Aging Buckets
+-- get_ar_aging(p_as_of_date date) -> RETURNS TABLE(customer_id, farm_name, current_amount, days_30, days_60, days_90, over_90, total_outstanding)
+-- Aggregates outstanding balances from posted invoices and uninvoiced orders
+
+-- Customer Statement
+-- get_customer_statement(p_customer_id uuid, p_start_date date, p_end_date date) -> RETURNS TABLE(transaction_date, transaction_type, reference_number, description, amount_cents, running_balance)
+-- Chronological transaction history with running balance window function
+
+-- Season Comparison
+-- get_season_comparison(p_season_a integer, p_season_b integer) -> RETURNS TABLE(metric, season_a_val, season_b_val, change_pct)
+-- Year-over-year comparison (Revenue, Profit, Orders, Active Customers)
+-- Season = July 1 of (year-1) to June 30 of year
+
+-- All three are SECURITY DEFINER STABLE
 
 -- ==========================================
 -- SAMPLE RLS POLICIES (Consolidated Pattern)

@@ -1,7 +1,7 @@
 # CRX Manager V1.0 - Project Context
 
-**Last Updated:** 2026-02-11
-**Version:** 1.0
+**Last Updated:** 2026-02-13
+**Version:** 1.7 (Phases 4A-7 complete)
 **Test User:** mason@croprxsolutions.com
 
 ---
@@ -18,6 +18,10 @@ This application solves the operational challenges for **Crop RX Solutions**, an
 - **Team Communication**: Sales reps, drivers, and admin staff had no shared system for notes, tasks, and handoffs
 - **Commission Tracking**: Manual calculation of split commissions between multiple sales reps
 - **Delivery Management**: Drivers had no digital system for scheduled deliveries, signatures, or proof of delivery
+- **Invoicing & AR**: No automated invoice generation or accounts receivable aging
+- **Compliance**: No tracking for restricted-use pesticide (RUP) applicator licenses
+- **Rebates**: No system for tracking manufacturer rebate programs and claims
+- **Returns**: No RMA (Return Merchandise Authorization) workflow
 
 ### Business Context:
 Crop RX Solutions serves farmers who need agricultural chemicals delivered to their farms. The company:
@@ -101,6 +105,7 @@ driver        → Deliveries (assigned only), Customer addresses (read-only)
 - Cost history tracking (tracks every price change over 2 years)
 - Rate per acre calculations
 - EPA registration numbers for chemicals
+- **Restricted Use Product (RUP)** flag and signal word tracking (Danger/Warning/Caution)
 - Active/inactive product status
 - **Bulk CSV import** for products and pricing updates
 
@@ -207,6 +212,67 @@ driver        → Deliveries (assigned only), Customer addresses (read-only)
 - Validation and error reporting
 - Preview before import
 
+### Invoicing & Billing (Phase 2)
+- Create invoices from orders (manual or batch)
+- Invoice lifecycle: draft → posted → void
+- Line-item detail with unit pricing in cents (bigint)
+- Payment allocation to specific invoices and order lines
+- Prepayment credit tracking and application
+- **Financial audit log** — immutable trail of all billing changes
+
+### Farm Fields (Phase 1)
+- Track fields per customer (field name, county, acres, FSA numbers)
+- Crop type and soil type tracking
+- **Billing defaults** per field (split percentages between customers)
+- Link from customer detail page
+
+### Blend Recipes (Phase 4A)
+- Saved blend recipe templates (reusable formulas)
+- Recipe items with product, quantity, unit
+- Duplicate and edit existing recipes
+- Category and status management
+- Total cost and weight calculations
+
+### Warehouse & Cycle Counts (Phase 5)
+- Multiple warehouse locations (name, code, address)
+- Default warehouse flag
+- **Cycle count sessions** — count products in a warehouse
+- Expected vs. actual quantity with variance tracking
+- Variance percentage and resolution status
+- Count number auto-generation
+
+### Returns / RMA (Phase 6)
+- Return lifecycle: requested → approved → received → credited → rejected
+- Return types: refund, credit, exchange
+- Reason categories: damaged, wrong_product, quality, overshipment, other
+- Return items linked to original order items
+- Optional inventory restocking on receipt
+- Credit memo creation with payment record
+- Return number auto-generation
+
+### AR Aging & Statements (Phase 7)
+- **AR aging buckets** — Current, 30, 60, 90, 120+ days outstanding
+- Handles both invoiced and uninvoiced orders
+- **Customer statements** — chronological transaction history with running balance
+- **Season comparison** — year-over-year metrics (revenue, profit, orders, active customers)
+- Season defined as July 1 to June 30
+- CSV export for all reports
+
+### Compliance (Phase 7)
+- **Applicator license tracking** — license number, type, holder, state, expiry
+- License types: private, commercial, public
+- Certification categories tracking
+- Expiry alerts (expired and expiring-soon)
+- **RUP product list** — all restricted-use products with signal word badges
+
+### Manufacturer Rebates (Phase 7)
+- **Rebate programs** — manufacturer, product, rebate type, amounts, date range
+- Rebate types: per_unit, percentage, volume_tier, flat
+- **Rebate claims** — linked to programs, optional customer/order/product
+- Claim lifecycle: pending → submitted → approved → paid → rejected
+- Claim number auto-generation
+- Summary cards for active programs and pending claims
+
 ---
 
 ## 4. Architecture (Simple Overview)
@@ -268,7 +334,7 @@ All variables prefixed with `VITE_` to be accessible in frontend.
 
 ---
 
-## 5. Data Model (All 25 Tables)
+## 5. Data Model (40+ Tables)
 
 ### Authentication & Users
 
@@ -291,8 +357,10 @@ All variables prefixed with `VITE_` to be accessible in frontend.
 - `tier1_price_per_acre`, `tier2_price_per_acre`, `tier3_price_per_acre`
 - `suggested_rate`, `rate_per_acre`, `rate_unit`
 - `epa_registration` (for chemicals)
+- `is_rup` (restricted use product flag)
+- `signal_word` (Danger, Warning, or Caution)
 - `is_active`
-- **Relationships:** Used by quote_items, order_items, inventory, purchase_order_items, delivery_items
+- **Relationships:** Used by quote_items, order_items, inventory, purchase_order_items, delivery_items, blend_recipe_items, return_items, rebate_programs
 
 **cost_history** → Audit trail for price changes
 - `product_id` → products
@@ -480,6 +548,154 @@ All variables prefixed with `VITE_` to be accessible in frontend.
 - `status` (pending | paid)
 - **Purpose:** Track who gets paid what for each order
 
+**payments** → Payment records against orders
+- `order_id` → orders
+- `customer_id` → customers
+- `amount`, `payment_method`, `reference_number`
+- `payment_date`
+- **Purpose:** Track payments and reduce order balance_due
+
+---
+
+### Billing / Invoices
+
+**invoices** → Invoice headers
+- `invoice_number` (unique), `order_id` → orders, `customer_id` → customers
+- `status` (draft | posted | void)
+- `subtotal_cents`, `tax_cents`, `total_cents`, `balance_cents` (all bigint)
+- `due_date`, `posted_at`
+- **Relationships:** Has many invoice_items, invoice_line_allocations, prepay_applications
+
+**invoice_items** → Invoice line items
+- `invoice_id` → invoices, `order_item_id` → order_items, `product_id` → products
+- `quantity`, `unit_price_cents`, `line_total_cents`
+
+**allocation_sets** → Payment allocation groups
+- `payment_id` → payments, `allocated_at`
+- **Purpose:** Group payment allocations together
+
+**order_line_allocations** → Payment portions applied to order items
+- `set_id` → allocation_sets, `order_item_id` → order_items
+- `allocated_cents`
+
+**invoice_line_allocations** → Payment portions applied to invoice items
+- `set_id` → allocation_sets, `invoice_line_id` → invoice_items
+- `allocated_cents`
+
+**prepay_credits** → Prepayment balances
+- `customer_id` → customers, `source_payment_id` → payments
+- `original_amount_cents`, `remaining_cents`
+- **Purpose:** Track prepayment credits that can be applied to future invoices
+
+**prepay_applications** → Prepay credit usage
+- `credit_id` → prepay_credits, `invoice_id` → invoices
+- `applied_cents`, `applied_by` → profiles
+
+**financial_audit_log** → Immutable audit trail
+- `entity_type`, `entity_id`, `action`, `old_data` (jsonb), `new_data` (jsonb)
+- `performed_by` → profiles
+- **Purpose:** Permanent record of all financial changes (inserts only, no updates or deletes)
+
+---
+
+### Farm Fields
+
+**fields** → Farm field records
+- `customer_id` → customers
+- `field_name`, `county`, `acres`, `fsa_farm_number`, `fsa_tract_number`, `fsa_field_number`
+- `crop_type`, `soil_type`, `notes`
+- **Relationships:** Has many field_billing_defaults
+
+**field_billing_defaults** → Per-field billing splits
+- `field_id` → fields, `customer_id` → customers
+- `split_pct`
+- **Purpose:** Define how billing is split between customers for shared fields
+
+---
+
+### Blend Recipes
+
+**blend_recipes** → Saved blend formulas
+- `recipe_name`, `recipe_number` (unique), `category`, `status` (active | inactive)
+- `total_cost`, `total_weight`, `notes`
+- `created_by` → profiles
+- **Relationships:** Has many blend_recipe_items
+
+**blend_recipe_items** → Recipe ingredients
+- `recipe_id` → blend_recipes, `product_id` → products
+- `quantity`, `unit`, `sort_order`, `notes`
+
+**blend_ticket_to_order_item** → Links blend tickets to order items
+- `ticket_id` → blend_tickets, `order_item_id` → order_items
+- **Purpose:** Connect blend ticket processing to specific order line items
+
+---
+
+### Warehouses & Cycle Counts
+
+**warehouses** → Storage locations
+- `warehouse_name`, `code` (unique), `address`, `is_active`, `is_default`
+
+**cycle_counts** → Count sessions
+- `count_number` (unique), `warehouse_id` → warehouses
+- `status` (in_progress | completed | cancelled)
+- `counted_by` → profiles, `completed_at`, `notes`
+- **Relationships:** Has many cycle_count_items
+
+**cycle_count_items** → Individual count lines
+- `cycle_count_id` → cycle_counts, `product_id` → products
+- `expected_qty`, `counted_qty`, `variance`, `variance_pct`
+- `resolved` (boolean), `notes`
+
+---
+
+### Returns / RMA
+
+**returns** → Return headers
+- `return_number` (unique), `order_id` → orders, `customer_id` → customers
+- `status` (requested | approved | received | credited | rejected)
+- `return_type` (refund | credit | exchange)
+- `reason_category` (damaged | wrong_product | quality | overshipment | other)
+- `requested_by` → profiles, `approved_by` → profiles
+- `credit_amount`, `notes`
+- **Relationships:** Has many return_items
+
+**return_items** → Return line items
+- `return_id` → returns, `order_item_id` → order_items, `product_id` → products
+- `quantity`, `unit_price`, `restocked` (boolean), `sort_order`, `notes`
+
+---
+
+### Compliance
+
+**applicator_licenses** → Pesticide applicator license tracking
+- `customer_id` → customers
+- `license_number`, `license_type` (private | commercial | public)
+- `holder_name`, `state`, `issued_date`, `expiry_date`
+- `certification_categories` (text array)
+- `is_active`, `notes`
+- **Purpose:** Track applicator certifications for RUP product sales compliance
+
+---
+
+### Rebates
+
+**rebate_programs** → Manufacturer rebate programs
+- `program_name`, `manufacturer`, `season`, `product_id` → products
+- `rebate_type` (per_unit | percentage | volume_tier | flat)
+- `rebate_amount`, `rebate_pct`, `min_volume`, `max_volume`
+- `start_date`, `end_date`, `status` (active | expired | closed)
+- `notes`, `created_by` → profiles
+- **Relationships:** Has many rebate_claims
+
+**rebate_claims** → Claims against rebate programs
+- `program_id` → rebate_programs
+- `order_id` → orders (optional), `customer_id` → customers (optional), `product_id` → products (optional)
+- `claim_number` (unique), `quantity`, `claim_amount_cents` (bigint)
+- `status` (pending | submitted | approved | paid | rejected)
+- `submitted_date`, `approved_date`, `paid_date`, `paid_amount_cents`
+- `manufacturer_ref`, `notes`, `created_by` → profiles
+
 ---
 
 ### Team Collaboration
@@ -581,6 +797,52 @@ All security and performance hardening work has been completed across three tier
 - **T3-004 Image Compression:** Client-side image compression (`src/lib/imageCompression.ts`) before Supabase upload -- max 1920px, JPEG quality 0.8, max 1MB
 - **T3-005 Activity & Notification Triggers:** Automated activity logging (`src/lib/activityLogger.ts`), notification triggers (`src/lib/notificationTriggers.ts`) including low-stock alerts, quote expiration checks, delivery assignment notifications
 
+#### Feature Phases 4A-7 (Completed 2026-02-13)
+
+**Phase 1: Farm Fields Foundation**
+- Fields table with customer FK, county, acres, FSA numbers
+- Field billing defaults for split billing
+- Fields page and FieldDetail page
+
+**Phase 2: Billing Architecture**
+- Full invoicing system (invoices, invoice_items)
+- Payment allocation framework (allocation_sets, order/invoice line allocations)
+- Prepayment credit tracking and application
+- Immutable financial audit log
+- Invoices and InvoiceDetail pages
+
+**Phase 3: Blend Ticket-Order Linkage**
+- blend_ticket_to_order_item linking table
+
+**Phase 4A: Blend Recipes**
+- Saved blend recipe templates
+- Recipe items with product references
+- BlendRecipes page with create, edit, duplicate
+
+**Phase 5: Inventory Enhancements**
+- Warehouses table for multiple locations
+- Cycle count system (sessions + items)
+- Variance tracking and resolution
+- CycleCounts page
+
+**Phase 6: Returns / RMA**
+- Returns and return_items tables
+- Full RMA workflow (request → approve → receive → credit)
+- Optional inventory restocking
+- Returns page
+
+**Phase 7: Reporting, Compliance & Rebates**
+- AR aging RPC function with aging buckets
+- Customer statement RPC with running balance
+- Season comparison RPC for YoY metrics
+- Applicator license tracking for compliance
+- RUP product flags on products table
+- Rebate programs and claims management
+- AR Aging, Compliance, and Rebates pages
+
+**Phase 4B: Mapbox Map Integration (SKIPPED)**
+- Requires third-party API key and npm package install from user
+
 ### NOT YET STARTED
 
 #### T3-002: Comprehensive Test Coverage (10-15 day effort)
@@ -616,13 +878,15 @@ These items from the original gap analysis are still relevant:
 
 3. **Email Notifications** -- Only in-app notifications exist currently
 
-4. **Advanced Reporting** -- Current reports are basic, need customizable date ranges and charts
+4. **Advanced Reporting** -- AR aging, statements, and season comparison added (Phase 7); additional custom reports may be needed
 
 5. **Inventory Alerts** -- Low-stock notification triggers exist (T3-005) but no automatic PO creation
 
 6. **Customer Portal** -- Customers cannot log in to view their own quotes/orders
 
 7. **Multi-company Support** -- Single-tenant only
+
+8. **Map Integration** -- Phase 4B (Mapbox field mapping) was skipped; requires API key from user
 
 ---
 
@@ -726,13 +990,22 @@ These items from the original gap analysis are still relevant:
 - `src/lib/db.ts` - Supabase client singleton
 - `supabase/migrations/` - All database migrations
 
-### Pages (Main Features)
+### Pages (Main Features — 34 pages total)
 - `src/pages/QuoteBuilder.tsx` - Quote creation
 - `src/pages/Orders.tsx` - Order list
 - `src/pages/OrderDetail.tsx` - Order details
 - `src/pages/Deliveries.tsx` - Delivery schedule
 - `src/pages/InventoryPage.tsx` - Inventory management
 - `src/pages/TeamBoard.tsx` - Team collaboration
+- `src/pages/Invoices.tsx` - Invoice management
+- `src/pages/InvoiceDetail.tsx` - Invoice detail
+- `src/pages/Fields.tsx` - Farm field management
+- `src/pages/BlendRecipes.tsx` - Saved blend recipes
+- `src/pages/CycleCounts.tsx` - Inventory cycle counting
+- `src/pages/Returns.tsx` - Returns/RMA workflow
+- `src/pages/ARaging.tsx` - AR aging, statements, season comparison
+- `src/pages/Compliance.tsx` - Applicator licenses, RUP products
+- `src/pages/Rebates.tsx` - Rebate programs and claims
 
 ### Edge Functions
 - `supabase/functions/create-user/index.ts` - Admin user creation
@@ -758,8 +1031,8 @@ These items from the original gap analysis are still relevant:
 
 ## Common Questions
 
-**Q: Why are there 25 tables?**
-A: Agricultural distribution is complex. We need to track products, customers, quotes, orders, inventory, deliveries, commissions, and team collaboration. Each entity has child tables for flexibility (e.g., customer_addresses, quote_sections, etc.).
+**Q: Why are there 40+ tables?**
+A: Agricultural distribution is complex. We need to track products, customers, quotes, orders, inventory, deliveries, commissions, invoicing, compliance, rebates, returns, and team collaboration. Each entity has child tables for flexibility (e.g., customer_addresses, quote_sections, invoice_items, etc.).
 
 **Q: Why use Supabase instead of building a custom API?**
 A: Supabase provides auth, database, storage, and real-time out of the box. For an MVP, it's faster and more secure than building everything from scratch. RLS policies provide database-level security.
@@ -771,7 +1044,7 @@ A: Yes, but you MUST create a migration using `mcp__supabase__apply_migration`. 
 A: You need a Supabase account, create a project, run migrations, create test user (mason@croprxsolutions.com), then run `npm run test:e2e`. See TESTING.md for details.
 
 **Q: Is this production-ready?**
-A: Getting close. Security hardening (Tier 1-3) is complete. Main remaining gap is comprehensive test coverage (T3-002, not started). See section 6 for full details.
+A: Getting close. Security hardening (Tier 1-3) is complete. Feature Phases 4A-7 are complete (invoicing, fields, recipes, cycle counts, returns, AR aging, compliance, rebates). Main remaining gap is comprehensive test coverage (T3-002, not started). See section 6 for full details.
 
 **Q: Can this scale to 10,000 customers?**
 A: Probably yes for customers, but you'll need pagination, caching, and database optimization. Current version loads all records into memory.

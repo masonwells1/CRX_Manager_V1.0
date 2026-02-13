@@ -29,7 +29,12 @@
          ├──→ inventory_transactions.performed_by
          ├──→ team_notes.created_by / assigned_to / completed_by
          ├──→ notifications.user_id
-         └──→ activity_feed.performed_by
+         ├──→ activity_feed.performed_by
+         ├──→ financial_audit_log.performed_by
+         ├──→ blend_recipes.created_by
+         ├──→ cycle_counts.counted_by
+         ├──→ returns.requested_by / approved_by
+         └──→ rebate_programs.created_by
 
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           PRODUCT CATALOG                               │
@@ -44,7 +49,13 @@
          │    ├─ inventory_transactions.product_id
          │    ├─ purchase_order_items.product_id
          │    ├─ delivery_items.product_id
-         │    └─ ingredient_map.generic_product_id
+         │    ├─ ingredient_map.generic_product_id
+         │    ├─ invoice_items.product_id
+         │    ├─ blend_recipe_items.product_id
+         │    ├─ return_items.product_id
+         │    ├─ rebate_programs.product_id
+         │    ├─ rebate_claims.product_id
+         │    └─ cycle_count_items.product_id
          │
          └──→ Audit trail:
               └─ cost_history (tracks price changes over 2 years)
@@ -63,7 +74,13 @@
          ├──→ 1:many orders
          ├──→ 1:many deliveries
          ├──→ 1:many commissions
-         └──→ 1:many activity_feed entries
+         ├──→ 1:many activity_feed entries
+         ├──→ 1:many fields (farm fields / parcels)
+         ├──→ 1:many applicator_licenses
+         ├──→ 1:many returns
+         ├──→ 1:many invoices
+         ├──→ 1:many rebate_claims
+         └──→ 1:many prepay_credits
 
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                           QUOTE WORKFLOW                                │
@@ -108,7 +125,10 @@
          │                            └──→ order_item_id → order_items
          │
          ├──→ 1:many commissions (calculated per order)
-         └──→ 1:many inventory_transactions (stock movements)
+         ├──→ 1:many inventory_transactions (stock movements)
+         ├──→ 1:many invoices (billing records)
+         ├──→ 1:many returns (product returns)
+         └──→ 1:many rebate_claims (rebate tracking)
 
     Order Status Flow:
     confirmed → partially_fulfilled → fulfilled / cancelled
@@ -143,6 +163,145 @@
 
     PO Status Flow:
     draft → submitted → partially_received → fully_received / cancelled
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    BILLING & INVOICES                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    invoices (invoice_number, order_id, customer_id, status, balance_cents)
+         │
+         ├──→ order_id → orders
+         ├──→ customer_id → customers
+         ├──→ status: 'draft' | 'posted' | 'void'
+         │
+         └──→ 1:many invoice_items
+                    │
+                    ├──→ invoice_id → invoices
+                    ├──→ order_item_id → order_items
+                    └──→ product_id → products
+
+    allocation_sets (payment_id)
+         │
+         ├──→ payment_id → payments
+         │
+         ├──→ 1:many order_line_allocations
+         │              │
+         │              ├──→ set_id → allocation_sets
+         │              └──→ order_item_id → order_items
+         │
+         └──→ 1:many invoice_line_allocations
+                    │
+                    ├──→ set_id → allocation_sets
+                    └──→ invoice_line_id → invoice_items
+
+    prepay_credits (customer_id, source_payment_id)
+         │
+         ├──→ customer_id → customers
+         ├──→ source_payment_id → payments
+         │
+         └──→ 1:many prepay_applications
+                    │
+                    ├──→ credit_id → prepay_credits
+                    └──→ invoice_id → invoices
+
+    financial_audit_log (performed_by)
+         │
+         └──→ performed_by → profiles
+
+    Invoice Status Flow:
+    draft → posted → void
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        FARM FIELDS                                      │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    fields (customer_id)
+         │
+         ├──→ customer_id → customers
+         │
+         └──→ 1:many field_billing_defaults
+                    │
+                    ├──→ field_id → fields
+                    └──→ customer_id → customers
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      BLEND RECIPES                                      │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    blend_recipes (created_by)
+         │
+         ├──→ created_by → profiles
+         │
+         └──→ 1:many blend_recipe_items
+                    │
+                    ├──→ recipe_id → blend_recipes
+                    └──→ product_id → products
+
+    blend_ticket_to_order_item (ticket_id, order_item_id)
+         │
+         ├──→ ticket_id → blend_tickets
+         └──→ order_item_id → order_items
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                  WAREHOUSES & CYCLE COUNTS                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    warehouses (standalone - name, location, etc.)
+         │
+         └──→ 1:many cycle_counts
+                    │
+                    ├──→ warehouse_id → warehouses
+                    ├──→ counted_by → profiles
+                    │
+                    └──→ 1:many cycle_count_items
+                               │
+                               ├──→ cycle_count_id → cycle_counts
+                               └──→ product_id → products
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          RETURNS                                        │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    returns (order_id, customer_id, requested_by, approved_by)
+         │
+         ├──→ order_id → orders
+         ├──→ customer_id → customers
+         ├──→ requested_by → profiles
+         ├──→ approved_by → profiles
+         │
+         └──→ 1:many return_items
+                    │
+                    ├──→ return_id → returns
+                    ├──→ order_item_id → order_items
+                    ├──→ product_id → products
+                    │
+                    └──→ If restocked → inventory_transactions
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        COMPLIANCE                                       │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    applicator_licenses (customer_id)
+         │
+         └──→ customer_id → customers
+              - Tracks license numbers, categories, expiry dates
+              - Tied to products.is_rup for RUP compliance tracking
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          REBATES                                        │
+└─────────────────────────────────────────────────────────────────────────┘
+
+    rebate_programs (product_id, created_by)
+         │
+         ├──→ product_id → products
+         ├──→ created_by → profiles
+         │
+         └──→ 1:many rebate_claims
+                    │
+                    ├──→ program_id → rebate_programs
+                    ├──→ order_id → orders
+                    ├──→ customer_id → customers
+                    └──→ product_id → products
 
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    TEAM COLLABORATION                                   │
@@ -193,7 +352,7 @@
 
 ### Primary Flows
 
-1. **Quote → Order → Delivery**
+1. **Quote -> Order -> Delivery**
    ```
    customers → quotes → quote_sections → quote_items → products
                   ↓
@@ -212,6 +371,30 @@
    profiles (sales_rep) → customers → quotes → orders
    profiles (driver) → deliveries
    profiles (admin) → everything
+   ```
+
+4. **Invoice & Payment Flow**
+   ```
+   orders → invoices → invoice_items
+   payments → allocation_sets → order_line_allocations
+                              → invoice_line_allocations
+   prepay_credits → prepay_applications → invoices
+   ```
+
+5. **Return Flow**
+   ```
+   orders → returns → return_items → inventory_transactions (if restocked)
+   ```
+
+6. **Compliance Flow**
+   ```
+   customers → applicator_licenses
+   products.is_rup → compliance tracking
+   ```
+
+7. **Rebate Flow**
+   ```
+   rebate_programs → rebate_claims → payments
    ```
 
 ### Polymorphic References
@@ -237,6 +420,11 @@ These allow linking to any entity type (quote, order, delivery, etc.) for activi
 - team_note_comments → team_notes
 - cost_history → products
 - profiles → auth.users
+- invoice_items → invoices
+- blend_recipe_items → blend_recipes
+- cycle_count_items → cycle_counts
+- return_items → returns
+- field_billing_defaults → fields
 
 ### ON DELETE SET NULL / NO ACTION (Preserve records)
 - customers.assigned_sales_rep (FK to profiles)
@@ -318,3 +506,34 @@ idx_po_items_product (product_id)
 3. PO submitted to vendor
 4. Stock received → `inventory_transactions` record created
 5. Inventory updated → `inventory.quantity_available` increased
+
+### Invoicing & Payment Allocation
+1. Order fulfilled → `invoices` record created (status: draft)
+2. Invoice posted → `invoice_items` link to `order_items` and `products`
+3. Customer pays → `payments` record created
+4. Payment allocated → `allocation_sets` groups line-level allocations
+5. `order_line_allocations` apply payment to specific order items
+6. `invoice_line_allocations` apply payment to specific invoice lines
+7. All financial changes logged in `financial_audit_log`
+
+### Prepay Credits
+1. Customer makes advance payment → `prepay_credits` created (links to `payments`)
+2. Invoice posted → `prepay_applications` deducts from credit balance
+3. Credit applied reduces `invoices.balance_cents`
+
+### Processing a Return
+1. Sales rep requests return → `returns` record created (links to `orders`, `customers`)
+2. Admin approves → `returns.approved_by` set
+3. Items specified → `return_items` link to `order_items` and `products`
+4. If restocked → `inventory_transactions` record created (type: 'returned')
+
+### Cycle Count
+1. Admin initiates count → `cycle_counts` record created (links to `warehouses`)
+2. Counter assigned → `cycle_counts.counted_by` set
+3. Items counted → `cycle_count_items` link to `products` with counted quantities
+4. Variances resolved → `inventory_transactions` for adjustments
+
+### Rebate Claim
+1. Admin creates `rebate_programs` (links to `products`)
+2. Qualifying orders trigger `rebate_claims` (links to `orders`, `customers`, `products`)
+3. Approved claims generate `payments` to customers
