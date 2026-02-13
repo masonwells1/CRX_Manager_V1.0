@@ -7,11 +7,13 @@
 - **Who it's for:** Crop RX Solutions (admin, sales reps, drivers)
 - **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
 
-## Current State (as of 2026-02-11)
+## Current State (as of 2026-02-13)
 - **Tier 1-3 hardening:** COMPLETE (security, performance, offline support, idempotency, image compression, activity triggers)
+- **Phases 4A-7:** COMPLETE (invoicing, fields, blend recipes, warehouses, cycle counts, returns/RMA, AR aging, compliance, rebates)
 - **Deployed to:** Vercel (private preview/staging)
 - **Test coverage:** Minimal -- only 3 E2E test files (auth, customers, permissions)
 - **Next task:** T3-002 comprehensive test coverage (10-15 day effort)
+- **Skipped:** Phase 4B (Mapbox map integration) -- requires API key and npm package install from user
 - **See CONTEXT.md** for full business context and data model details
 
 ## Architecture Rules -- Follow These
@@ -76,12 +78,14 @@ src/
     deliveryPdf.ts     # Delivery receipt PDF generation
     csvExport.ts       # CSV export utility
     ocrParser.ts       # OCR text parsing for blend tickets
+    blendMathValidator.ts # Blend recipe math validation
+    quoteCalc.ts       # Quote calculation helpers
   hooks/
     useOnlineStatus.ts     # Online/offline detection
     useRealtimeSubscription.ts # Supabase realtime wrapper
     usePageMeta.ts         # Page title/meta
     useOCRProcessor.ts     # OCR processing hook
-  pages/               # 26 page components (lazy-loaded from App.tsx)
+  pages/               # 34 page components (lazy-loaded from App.tsx)
   components/
     auth/              # LoginPage, ProtectedRoute
     layout/            # AppLayout, Sidebar, TopBar
@@ -102,7 +106,7 @@ tests/
   e2e/                 # Playwright E2E tests (auth, customers, permissions)
 ```
 
-### Pages (26 total)
+### Pages (34 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -129,7 +133,17 @@ tests/
 | `/brand-vs-generic` | BrandVsGeneric | Ingredient mapping: branded vs generic |
 | `/reports` | Reports | Customer profitability, product profitability, commissions, monthly revenue. CSV export. |
 | `/crop-programs` | CropPrograms | Seasonal crop program management |
+| `/invoices` | Invoices | Invoice management with posting workflow |
+| `/invoices/:id` | InvoiceDetail | Invoice detail with items, allocations, payments |
+| `/fields` | Fields | Farm field management (geospatial, FSA numbers) |
+| `/fields/:id` | FieldDetail | Field detail with billing defaults |
+| `/recipes` | BlendRecipes | Saved blend recipe management (create, duplicate, edit) |
+| `/cycle-counts` | CycleCounts | Inventory cycle counting with variance tracking |
+| `/returns` | Returns | Returns/RMA workflow (request → approve → receive → credit) |
 | `/payments` | Payments | Payment tracking and AR balance |
+| `/ar-aging` | ARaging | AR aging buckets, customer statements, season comparison |
+| `/compliance` | Compliance | Applicator license tracking, RUP product list |
+| `/rebates` | Rebates | Manufacturer rebate programs and claim management |
 | `/team-board` | TeamBoard | Kanban board: notes/todos/announcements, comments, real-time |
 | `/notifications` | Notifications | User notification center |
 | `/settings` | SettingsPage | Admin only: company settings, user management |
@@ -138,14 +152,16 @@ tests/
 
 ## Supabase Backend Reference
 
-### Database Tables (28 total)
+### Database Tables (40+ total)
 
 **Core Business:**
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active)
 - `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-3, acreage, commission_split jsonb)
 - `customer_addresses` - Multiple addresses per customer (label, address, delivery_notes, is_default)
-- `products` - Product master (product_name, sku, category, vendor, tier1/2/3 pricing, rates)
+- `products` - Product master (product_name, sku, category, vendor, tier1/2/3 pricing, rates, is_rup, signal_word)
 - `cost_history` - Cost change audit log (product_id, old/new costs and prices, change_note)
+- `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, crop_type, soil_type)
+- `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
 
 **Quotes & Orders:**
 - `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at)
@@ -180,10 +196,49 @@ tests/
 - `activity_feed` - Auto-generated event log (event_type, description, related_entity_type/id)
 - `notifications` - Per-user notifications (user_id, title, message, notification_type, is_read)
 
+**Billing / Invoices:**
+- `invoices` - Invoice headers (invoice_number, order_id, customer_id, status: draft/posted/void, balance_cents bigint, due_date)
+- `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, line_total_cents)
+- `allocation_sets` - Payment-to-invoice allocation groups (payment_id, allocated_at)
+- `order_line_allocations` - Payment portions applied to order items
+- `invoice_line_allocations` - Payment portions applied to invoice items
+- `prepay_credits` - Prepayment credits (customer_id, original_amount_cents, remaining_cents, source_payment_id)
+- `prepay_applications` - Prepay credit applications to invoices (credit_id, invoice_id, applied_cents)
+- `financial_audit_log` - Immutable audit trail (entity_type, entity_id, action, old_data/new_data jsonb, performed_by)
+
+**Blend Recipes:**
+- `blend_recipes` - Saved blend recipe templates (recipe_name, recipe_number, category, total_cost, total_weight, status)
+- `blend_recipe_items` - Recipe ingredients (recipe_id, product_id, quantity, unit, sort_order)
+- `blend_ticket_to_order_item` - Links blend tickets to order items (ticket_id, order_item_id)
+
+**Warehouses & Cycle Counts:**
+- `warehouses` - Storage locations (warehouse_name, code, address, is_active, is_default)
+- `cycle_counts` - Count sessions (count_number, warehouse_id, status: in_progress/completed/cancelled, counted_by)
+- `cycle_count_items` - Individual count lines (cycle_count_id, product_id, expected_qty, counted_qty, variance, variance_pct, resolved)
+
+**Returns:**
+- `returns` - Return/RMA headers (return_number, order_id, customer_id, status: requested/approved/received/credited/rejected, return_type, reason_category)
+- `return_items` - Return line items (return_id, order_item_id, product_id, quantity, unit_price, restocked, sort_order)
+
+**Compliance:**
+- `applicator_licenses` - Applicator license tracking (customer_id, license_number, license_type: private/commercial/public, holder_name, state, expiry_date, certification_categories text[])
+
+**Rebates:**
+- `rebate_programs` - Manufacturer rebate programs (program_name, manufacturer, season, product_id, rebate_type, rebate_amount, start_date, end_date, status)
+- `rebate_claims` - Rebate claims (program_id, claim_number, quantity, claim_amount_cents, status: pending/submitted/approved/paid/rejected)
+
 **Config:**
 - `app_settings` - Key-value settings (setting_key, setting_value)
 - `ingredient_map` - Brand to generic product mapping
 - `unit_conversions` - Unit conversion factors (unit, factor_oz)
+
+### RPC Functions (SQL)
+```sql
+get_ar_aging(p_as_of_date date)           -- AR aging buckets by customer (current, 30, 60, 90, 120+ days)
+get_customer_statement(p_customer_id, p_start_date, p_end_date) -- Chronological transactions with running balance
+get_season_comparison(p_season_a, p_season_b) -- YoY revenue, profit, orders, active customers
+```
+All three are `SECURITY DEFINER STABLE`.
 
 ### Helper Functions (SQL)
 ```sql
@@ -228,6 +283,27 @@ All three are `SECURITY DEFINER STABLE`.
 | blend_tickets | All authenticated | Own uploaded_by | Own uploaded_by / Admin | - |
 | ingredient_map | All authenticated | Admin | Admin | Admin |
 | unit_conversions | All authenticated | Admin | Admin | - |
+| invoices | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| invoice_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| allocation_sets | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| order_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| invoice_line_allocations | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| prepay_credits | Admin / Sales Rep | Admin / Sales Rep | Admin | - |
+| prepay_applications | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| financial_audit_log | Admin | All authenticated | - | - |
+| blend_recipes | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| blend_recipe_items | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| blend_ticket_to_order_item | All authenticated | Admin / Sales Rep | - | Admin |
+| warehouses | All authenticated | Admin | Admin | Admin |
+| cycle_counts | Admin | Admin | Admin | Admin |
+| cycle_count_items | Admin | Admin | Admin | Admin |
+| fields | Admin / Sales Rep (assigned customer) | Admin / Sales Rep | Admin / Sales Rep | Admin |
+| field_billing_defaults | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| returns | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| return_items | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
+| applicator_licenses | Admin / Sales Rep | Admin | Admin | Admin |
+| rebate_programs | Admin | Admin | Admin | Admin |
+| rebate_claims | Admin | Admin | Admin | Admin |
 
 ### Migration History
 Migrations are in `supabase/migrations/` ordered by timestamp prefix. Key migrations:
@@ -248,6 +324,12 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix. Key migrat
 15. `20260209040325` - Fix payment RLS policies
 16. `20260209143537` - Inventory overhaul (holds, is_planned)
 17. `20260210_fix_rls_critical_issues` - Sales rep INSERT permissions for orders/deliveries/inventory_transactions, profiles SELECT for all, notifications INSERT for all
+18. `20260211190000` - Billing & invoicing system (invoices, invoice_items, allocation_sets, prepay_credits, financial_audit_log)
+19. `20260212000000` - Fields & geospatial (fields, field_billing_defaults)
+20. `20260212100000` - Blend recipes system (blend_recipes, blend_recipe_items, blend_ticket_to_order_item)
+21. `20260213000000` - Inventory enhancements (warehouses, cycle_counts, cycle_count_items, inventory warehouse_id FK)
+22. `20260213100000` - Returns/RMA system (returns, return_items, inventory restocking support)
+23. `20260213200000` - Reporting, compliance & rebates (applicator_licenses, rebate_programs, rebate_claims, AR aging/statement/season RPCs, products is_rup & signal_word)
 
 ### Edge Functions
 - **create-user** - Admin-only: creates a new auth user with role metadata
@@ -320,10 +402,32 @@ Used for:
 - Price per acre calculated from rate and tier price
 - Quotes inherit customer tier but can be overridden
 
+### Invoice Lifecycle
+`draft` -> `posted` -> `void`
+- Created from orders (manual or auto-generate)
+- Posted invoices lock amounts and start AR aging
+- balance_cents tracks remaining balance after payments/credits
+- Prepay credits can be applied to reduce invoice balance
+- All financial changes logged to `financial_audit_log`
+
+### Return/RMA Lifecycle
+`requested` -> `approved` -> `received` -> `credited` -> `rejected`
+- Created against an order with item selection
+- Reason categories: damaged, wrong_product, quality, overshipment, other
+- Return types: refund, credit, exchange
+- Receiving triggers optional inventory restocking
+- Credit creates payment record against original order
+
+### Rebate Claim Lifecycle
+`pending` -> `submitted` -> `approved` -> `paid` -> `rejected`
+- Claims linked to rebate programs, optionally to customer/order/product
+- Claim numbers auto-generated: `RC-{year}-{sequential 4-digit}`
+- Amounts stored as cents (bigint) for precision
+
 ### Season Dates
 - Season runs **July 1 to June 30**
 - Delivered YTD calculated from season start
-- Used in inventory calculations and reports
+- Used in inventory calculations, reports, and season comparison
 
 ---
 
@@ -392,6 +496,14 @@ Test every feature as each role:
 | Blend Tickets | Full | Upload/review | No access |
 | Commissions | Full | Own only | No access |
 | Payments | Full | Read/Create | No access |
+| Invoices | Full | Read/Create | No access |
+| Fields | Full | Own customer fields | No access |
+| Blend Recipes | Full | Create/Edit | No access |
+| Cycle Counts | Full | No access | No access |
+| Returns/RMA | Full | Create/Read | No access |
+| AR Aging | Full | No access | No access |
+| Compliance | Full | Read only | No access |
+| Rebates | Full | No access | No access |
 | Team Board | Full | Full (own notes) | Full (own notes) |
 | Settings | Full | No access | No access |
 | User Management | Full | No access | No access |
@@ -483,6 +595,15 @@ Test every feature as each role:
 - Blend math validator: `src/lib/blendMathValidator.ts`
 - Manual ticket creation: `src/components/blendtickets/ManualTicketCreate.tsx`
 - Admin user edit via `admin_update_profile` RPC (SECURITY DEFINER)
+- Invoice number format: `INV-{YYYY}-{sequential 4-digit}` via count query
+- Return number format: `RMA-{YYYY}-{sequential 4-digit}` via count query
+- Claim number format: `RC-{YYYY}-{sequential 4-digit}` via count query
+- Cycle count number format: `CC-{YYYY}-{sequential 4-digit}` via count query
+- AR aging uses Supabase RPC `get_ar_aging()` — handles both invoiced and uninvoiced orders
+- Customer statement uses RPC `get_customer_statement()` — running balance via window function
+- Season comparison uses RPC `get_season_comparison()` — YoY metrics (July 1-June 30 seasons)
+- Financial audit log: immutable append-only table, logged via `financial_audit_log` inserts
+- Tab-based page layout pattern used in: ARaging (3 tabs), Compliance (2 tabs), Rebates (2 tabs), InventoryPage, BlendRecipes
 
 ### Build & Type Checking
 - `npx tsc --noEmit` for type checking (no tsconfig issues)
@@ -503,7 +624,7 @@ Test every feature as each role:
 ## Documentation Index
 - `CONTEXT.md` -- Full business context, features, data model, assumptions (READ THIS FIRST for deep understanding)
 - `DATABASE_RELATIONSHIPS.md` -- Entity relationship diagrams and FK details
-- `SCHEMA_QUICK_REFERENCE.sql` -- Complete SQL schema for all 25 tables
+- `SCHEMA_QUICK_REFERENCE.sql` -- Complete SQL schema (may be outdated -- check migrations for latest)
 - `TESTING.md` -- Testing guide (beginner-friendly)
 - `DEPLOYMENT.md` -- Deployment to Vercel/Netlify
 - `VERIFICATION.md` -- Setup verification and known issues
