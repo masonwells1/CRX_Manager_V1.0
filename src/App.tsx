@@ -42,6 +42,9 @@ const InvoiceDetail = lazy(() => import('./pages/InvoiceDetail'));
 const BlendRecipes = lazy(() => import('./pages/BlendRecipes'));
 const CycleCounts = lazy(() => import('./pages/CycleCounts'));
 const Returns = lazy(() => import('./pages/Returns'));
+const ARaging = lazy(() => import('./pages/ARaging'));
+const Compliance = lazy(() => import('./pages/Compliance'));
+const Rebates = lazy(() => import('./pages/Rebates'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -110,6 +113,9 @@ const router = createBrowserRouter([
           { path: 'reports', element: <Reports /> },
           { path: 'crop-programs', element: <CropPrograms /> },
           { path: 'payments', element: <Payments /> },
+          { path: 'ar-aging', element: <ARaging /> },
+          { path: 'compliance', element: <Compliance /> },
+          { path: 'rebates', element: <Rebates /> },
           { path: 'team-board', element: <TeamBoard /> },
           { path: 'notifications', element: <Notifications /> },
           { path: 'settings', element: <ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute> },

@@ -24,6 +24,8 @@ export interface Product {
   container_size: number | null;
   unit_size: string | null;
   epa_registration: string | null;
+  is_rup: boolean;
+  signal_word: 'Danger' | 'Warning' | 'Caution' | null;
   product_form: ProductForm | null;
   inventory_unit: string | null;
   container_unit: string | null;
@@ -843,4 +845,105 @@ export interface ReturnItem {
   created_at: string;
   // Joined
   product?: Product;
+}
+
+// Phase 7: Compliance, Rebates, AR Aging
+
+export type LicenseType = 'private' | 'commercial' | 'public';
+
+export interface ApplicatorLicense {
+  id: string;
+  customer_id: string;
+  license_number: string;
+  license_type: LicenseType;
+  holder_name: string;
+  state: string;
+  issued_date: string | null;
+  expiry_date: string;
+  certification_categories: string[] | null;
+  is_active: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined
+  customer?: Customer;
+}
+
+export type RebateType = 'per_unit' | 'percentage' | 'volume_tier' | 'flat';
+export type RebateProgramStatus = 'active' | 'expired' | 'closed';
+export type RebateClaimStatus = 'pending' | 'submitted' | 'approved' | 'paid' | 'rejected';
+
+export interface RebateProgram {
+  id: string;
+  program_name: string;
+  manufacturer: string;
+  season: number;
+  product_id: string | null;
+  rebate_type: RebateType;
+  rebate_amount: number;
+  rebate_pct: number | null;
+  min_volume: number | null;
+  max_volume: number | null;
+  start_date: string;
+  end_date: string;
+  status: RebateProgramStatus;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined
+  product?: Product;
+}
+
+export interface RebateClaim {
+  id: string;
+  program_id: string;
+  order_id: string | null;
+  customer_id: string | null;
+  product_id: string | null;
+  claim_number: string;
+  quantity: number;
+  claim_amount_cents: number;
+  status: RebateClaimStatus;
+  submitted_date: string | null;
+  approved_date: string | null;
+  paid_date: string | null;
+  paid_amount_cents: number | null;
+  manufacturer_ref: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined
+  program?: RebateProgram;
+  order?: Order;
+  customer?: Customer;
+  product?: Product;
+}
+
+export interface ARAgingRow {
+  customer_id: string;
+  farm_name: string;
+  current_amount: number;
+  days_30: number;
+  days_60: number;
+  days_90: number;
+  over_90: number;
+  total_outstanding: number;
+}
+
+export interface CustomerStatementRow {
+  transaction_date: string;
+  transaction_type: string;
+  reference_number: string;
+  description: string;
+  amount_cents: number;
+  running_balance: number;
+}
+
+export interface SeasonComparisonRow {
+  metric: string;
+  season_a_val: number;
+  season_b_val: number;
+  change_pct: number | null;
 }

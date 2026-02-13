@@ -23,6 +23,9 @@ import {
   Beaker,
   ClipboardCheck,
   RotateCcw,
+  ShieldCheck,
+  BadgeDollarSign,
+  Clock,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
@@ -54,6 +57,9 @@ const navItems: NavItem[] = [
   { path: '/reports', label: 'Reports', icon: <BarChart3 className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
   { path: '/crop-programs', label: 'Crop Programs', icon: <Sprout className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
   { path: '/payments', label: 'Payments', icon: <DollarSign className="w-5 h-5" />, roles: ['admin'] },
+  { path: '/ar-aging', label: 'AR Aging', icon: <Clock className="w-5 h-5" />, roles: ['admin'] },
+  { path: '/compliance', label: 'Compliance', icon: <ShieldCheck className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
+  { path: '/rebates', label: 'Rebates', icon: <BadgeDollarSign className="w-5 h-5" />, roles: ['admin'] },
   { path: '/team-board', label: 'Team Board', icon: <MessageSquare className="w-5 h-5" /> },
   { path: '/notifications', label: 'Notifications', icon: <Bell className="w-5 h-5" /> },
   { path: '/settings', label: 'Settings', icon: <Settings className="w-5 h-5" />, roles: ['admin'] },
