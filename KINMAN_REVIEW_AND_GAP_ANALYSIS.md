@@ -1,21 +1,35 @@
-# CRX Manager — Customized Feature Implementation Plan
+# CRX Manager — Complete Feature Plan & Architecture Review
 
-> ⚠️ **STATUS: DRAFT — DO NOT IMPLEMENT**
-> This document is a PLANNING DRAFT. The user is still adding context and refining details.
-> **NO agent should write code, create migrations, or modify any files based on this plan.**
+> **STATUS: PLANNING DOCUMENT — DO NOT IMPLEMENT WITHOUT EXPLICIT APPROVAL**
+> No agent should write code, create migrations, or modify any files based on this plan.
 > When ready, the user will explicitly say "implement Phase X" in a new session.
-> The canonical copy lives at: `C:\Users\pc\CRX_Manager_V1.0\CUSTOM_FEATURE_PLAN.md`
+>
+> **Created:** February 2026
+> **Last Updated:** February 12, 2026
+> **Source:** CheMan by DataSmart video walkthrough (15:57, 191 screenshots), gap analysis (G1-G17), Phase 1-7 plan, ideal platform analysis, and cross-review with ChatGPT architectural analysis
+> **Companion doc:** `CRX_MANAGER_ARCHITECTURE_REVIEW.md` (full detailed reference)
 
 ---
 
-# PART A: KinMan by DataSmart — Complete Software Overview
+## Table of Contents
+
+**PART A:** [CheMan by DataSmart — Complete Software Overview](#part-a-cheman-by-datasmart--complete-software-overview)
+**PART B:** [Gap Analysis — CheMan vs. CRX Manager](#part-b-gap-analysis--cheman-vs-crx-manager-current-plan)
+**PART C:** [Critical Architecture Decisions (Lock In Before Any Code)](#part-c-critical-architecture-decisions-lock-in-before-any-code)
+**PART D:** [Rewritten Phase Sequencing & Implementation Plan](#part-d-rewritten-phase-sequencing--implementation-plan)
+**PART E:** [Technical Risks, Red Flags & Pre-Implementation Checklist](#part-e-technical-risks-red-flags--pre-implementation-checklist)
+**PART F:** [Ideal Platform Vision & Competitive Advantage](#part-f-ideal-platform-vision--competitive-advantage)
+
+---
+
+# PART A: CheMan by DataSmart — Complete Software Overview
 
 > **Source:** 15:57 video walkthrough recorded by user (Feb 2026), 191 screenshots, full audio transcript.
 > **Purpose:** Document the existing software the user currently relies on, so we can compare against CRX Manager and build the best possible replacement.
 
-## 1. What KinMan Is
+## 1. What CheMan Is
 
-KinMan by DataSmart is a **web-based agricultural chemical management and billing platform** (accessed at `login.chem-man.com`). The user describes it as having excellent layout, search, and billing functionality, but lacking in inventory management and some modern features — which is why CRX Manager is being built.
+CheMan by DataSmart is a **web-based agricultural chemical management and billing platform** (accessed at `login.chem-man.com`). The user describes it as having excellent layout, search, and billing functionality, but lacking in inventory management and some modern features — which is why CRX Manager is being built.
 
 **What the user loves about it:**
 - Everything visible on one screen (no jumping between windows)
@@ -32,7 +46,7 @@ KinMan by DataSmart is a **web-based agricultural chemical management and billin
 
 ## 2. Navigation Structure
 
-KinMan uses a **horizontal top navigation bar** with these main sections:
+CheMan uses a **horizontal top navigation bar** with these main sections:
 
 | Tab | Purpose |
 |-----|---------|
@@ -72,7 +86,7 @@ Below the top nav, a **left sidebar** appears contextually with sub-options for 
 
 ### 3B. Billing System
 
-KinMan has **THREE types of billing:**
+CheMan has **THREE types of billing:**
 
 #### Type 1: Chemical Sales (Product-Only)
 - Path: Billing → Enter Unposted Chemical Sale → Add
@@ -131,7 +145,7 @@ This is a two-step review process the user explicitly wants in CRX Manager:
 
 ### 3D. Inventory Management
 
-**Current KinMan inventory (what the user says is WEAK):**
+**Current CheMan inventory (what the user says is WEAK):**
 - Enter Unposted Inventory Additions/Deductions
 - Fields: Product, reference/shipment number, vendor, quantity, unit cost
 - Unit cost tracking maintains cost average (for commission calculations)
@@ -142,7 +156,7 @@ This is a two-step review process the user explicitly wants in CRX Manager:
 
 ### 3E. Job Scheduling & Work Orders
 
-This is the **most feature-rich module** in KinMan and what the user loves most.
+This is the **most feature-rich module** in CheMan and what the user loves most.
 
 **Creating a Scheduled Job:**
 1. Start new Job Schedule (auto-generates job number, e.g., #230499)
@@ -154,7 +168,7 @@ This is the **most feature-rich module** in KinMan and what the user loves most.
    - Acreage auto-populated (can be adjusted)
 3. **Chemicals / Charges** section:
    - Add products with rate per acre
-   - Total gallons calculated automatically from (rate × acres)
+   - Total gallons calculated automatically from (rate x acres)
    - Can use **pre-blended recipe programs** (saved blends applied with one click)
    - Multiple products per job
 4. **Loader Worksheet Setup**:
@@ -232,7 +246,7 @@ This is the **most feature-rich module** in KinMan and what the user loves most.
 
 ### 3I. Reporting Engine
 
-KinMan has an extensive reports menu with **16+ report types:**
+CheMan has an extensive reports menu with **16+ report types:**
 
 | Report | Purpose |
 |--------|---------|
@@ -311,15 +325,15 @@ Enter Other Charge → Customer, Description, Amount → Save (Unposted)
    - Starting blends/orders from map view is the #1 most important workflow
    - Uses Google Maps + Mapbox for the mapping layer
 
-> ⚠️ **IMPORTANT UPDATE**: The user originally said field mapping was "want eventually." After further discussion, they clarified it is their **FAVORITE and most important feature** of KinMan. This should be re-prioritized.
+> **IMPORTANT UPDATE**: The user originally said field mapping was "want eventually." After further discussion, they clarified it is their **FAVORITE and most important feature** of CheMan. This should be re-prioritized.
 
 ## 6. User's Feature Priorities for CRX Manager (UPDATED from Q&A)
 
 Based on the video walkthrough and extensive follow-up questions:
 
-| Feature from KinMan | Priority for CRX | Notes |
+| Feature from CheMan | Priority for CRX | Notes |
 |---------------------|-------------------|-------|
-| **Google Maps field selection → start orders/blends** | **🔴 #1 FAVORITE** | User's most important feature — start blends from map |
+| **Google Maps field selection → start orders/blends** | **#1 FAVORITE** | User's most important feature — start blends from map |
 | Customer billing splits (landlord %) | **CRITICAL** | Used constantly, 500+ fields, must have |
 | Unposted → Posted review workflow | **CRITICAL** | Same 2-step process wanted |
 | Farm/field setup with splits + acreage | **CRITICAL** | Foundation for billing splits and map feature |
@@ -339,391 +353,652 @@ Based on the video walkthrough and extensive follow-up questions:
 
 ---
 
-# PART B: Gap Analysis — KinMan vs. CRX Manager Current Plan
+# PART B: Gap Analysis — CheMan vs. CRX Manager Current Plan
 
-## Features KinMan Has That Are NOT Yet in CRX Manager Plan
+## Features CheMan Has That Are NOT Yet in CRX Manager Plan
 
-| # | KinMan Feature | Status in CRX Plan | Recommendation |
+| # | CheMan Feature | Status in CRX Plan | Recommendation |
 |---|---------------|-------------------|----------------|
-| G1 | **Google Maps field selection → start blends/orders from map** | ❌ NOT PLANNED | **🔴 USER'S #1 FAVORITE — must prioritize** |
-| G2 | **Customer billing splits** (split invoice across multiple customers by %) | ❌ NOT PLANNED | **Must add — user says CRITICAL** |
-| G3 | **Unposted → Posted invoice workflow** (2-step admin review) | ❌ NOT PLANNED (invoices go draft→sent→paid) | **Must add — user explicitly wants this** |
-| G4 | **Farm/field setup** (500+ fields, acreage, crop, customer split %) | ❌ NOT PLANNED | **Foundation for G1 and G2 — must add** |
-| G5 | **Saved blend recipes / programs** (one-click apply a saved chemical mix) | ❌ NOT PLANNED | **User wants this — add to plan** |
-| G6 | **Miscellaneous / other charges** (hauling, delivery, service fees) | ❌ NOT PLANNED | **User confirmed 3 billing types needed** |
-| G7 | **Customer statements + AR aging reports** | ❌ NOT PLANNED | **Daily use — add to reporting** |
-| G8 | **Season program planning / committed acres / booking** | ❌ NOT PLANNED | **Add to plan** |
-| G9 | **Apply payment to specific invoices** (choose which invoices to pay) | ⚠️ PARTIALLY (record_invoice_payment exists but no invoice selection UI) | **Enhance payment UI** |
-| G10 | **Job scheduling / work orders / dispatching** | ❌ NOT PLANNED | Eventually (after map feature) |
-| G11 | **Vehicle/equipment tracking + per-vehicle reports** | ❌ NOT PLANNED | Eventually |
-| G12 | **Applicator profiles with login accounts** | ⚠️ PARTIAL (drivers exist but no applicator-specific features) | Eventually |
-| G13 | **Loader worksheet / tank load calculations** | ❌ NOT PLANNED | **User says NOT NEEDED** |
-| G14 | **EPA compliance fields** (weather auto-pull, start/end time, applicator) | ⚠️ PARTIAL (blend tickets have some fields) | Enhance later |
-| G15 | **Printable applicator/loader reports from jobs** | ❌ NOT PLANNED | Eventually with job scheduling |
-| G16 | **Customer balance listing report** | ⚠️ PARTIAL (dashboard shows some data) | Add to reporting |
-| G17 | **Posted payments & credits listing** | ❌ NOT PLANNED | Add to Phase 3 reporting |
+| G1 | **Google Maps field selection → start blends/orders from map** | NOT PLANNED | **USER'S #1 FAVORITE — must prioritize** |
+| G2 | **Customer billing splits** (split invoice across multiple customers by %) | NOT PLANNED | **Must add — user says CRITICAL** |
+| G3 | **Unposted → Posted invoice workflow** (2-step admin review) | NOT PLANNED (invoices go draft→sent→paid) | **Must add — user explicitly wants this** |
+| G4 | **Farm/field setup** (500+ fields, acreage, crop, customer split %) | NOT PLANNED | **Foundation for G1 and G2 — must add** |
+| G5 | **Saved blend recipes / programs** (one-click apply a saved chemical mix) | NOT PLANNED | **User wants this — add to plan** |
+| G6 | **Miscellaneous / other charges** (hauling, delivery, service fees) | NOT PLANNED | **User confirmed 3 billing types needed** |
+| G7 | **Customer statements + AR aging reports** | NOT PLANNED | **Daily use — add to reporting** |
+| G8 | **Season program planning / committed acres / booking** | NOT PLANNED | **Add to plan** |
+| G9 | **Apply payment to specific invoices** (choose which invoices to pay) | PARTIALLY (record_invoice_payment exists but no invoice selection UI) | **Enhance payment UI** |
+| G10 | **Job scheduling / work orders / dispatching** | NOT PLANNED | Eventually (after map feature) |
+| G11 | **Vehicle/equipment tracking + per-vehicle reports** | NOT PLANNED | Eventually |
+| G12 | **Applicator profiles with login accounts** | PARTIAL (drivers exist but no applicator-specific features) | Eventually |
+| G13 | **Loader worksheet / tank load calculations** | NOT PLANNED | **User says NOT NEEDED** |
+| G14 | **EPA compliance fields** (weather auto-pull, start/end time, applicator) | PARTIAL (blend tickets have some fields) | Enhance later |
+| G15 | **Printable applicator/loader reports from jobs** | NOT PLANNED | Eventually with job scheduling |
+| G16 | **Customer balance listing report** | PARTIAL (dashboard shows some data) | Add to reporting |
+| G17 | **Posted payments & credits listing** | NOT PLANNED | Add to Phase 3 reporting |
 
-## CRITICAL Gaps That Must Be Added to the CRX Plan
+## Gap Priority Re-Assessment (from Architecture Review)
 
-### 🔴 Gap G1: Google Maps Field Selection → Start Blends/Orders from Map
-**Impact:** User's **#1 FAVORITE feature** of KinMan. This is the workflow they use most and love most. Fields are displayed on a Google Maps/Mapbox satellite view with boundaries. User clicks fields on the map to select them, then starts building a blend ticket or order directly from that selection.
+The architecture review re-ordered gap priorities based on dependency analysis:
 
-**What's needed:**
-- Google Maps or Mapbox integration with satellite imagery
-- Field boundaries drawn as polygons on the map
-- Click-to-select fields (highlight selected fields)
-- Right panel showing selected fields with acreage, crop, customer splits
-- "Create Blend Ticket" / "Create Order" button from selection
-- Selected fields auto-populate into the new blend/order
-- Full map view of all 500+ fields across service area
-- Individual field zoom views
+| Gap | Description | User Priority | **Build Order** | Notes |
+|-----|------------|---------------|-----------------|-------|
+| **G4** | Farm/field setup with splits + acreage | CRITICAL | **Build 1st** | Data backbone — must exist before G1, G2, or anything referencing fields |
+| **G2** | Customer billing splits | CRITICAL | **Build 2nd** | Touches every downstream system. If this data model is wrong, everything breaks |
+| **G3** | Unposted → Posted invoice workflow | CRITICAL | **Build 3rd** | Needs full approval pipeline, batch operations, audit logging, ability to void |
+| **G6** | Miscellaneous charges | CRITICAL | **Build 4th** | Can't fully replace CheMan without all 3 billing types |
+| **G1** | Google Maps field selection → start blends/orders | #1 FAVORITE | **Build 5th** | User's favorite but depends on G4 + G2 being solid first. Build the data model before the UI |
+| **G5** | Saved blend recipes / programs | IMPORTANT | **Build 6th** | Productivity feature, not a blocker. System works without it (just slower) |
+| **G7** | Customer statements + AR aging | CRITICAL | **Build 7th** | Reporting/read-only. Build after the write-side (invoices, payments, splits) is solid |
+| **G8** | Season program planning / booking | IMPORTANT | **Build 8th** | Seasonal workflow. 2026 planning likely done in CheMan already. Build before fall 2026 for 2027 planning cycle |
 
-**Dependencies:** Requires Gap G4 (farm/field setup) to be built first.
+**Recommended build order:**
+```
+G4 (Farm/field data foundation)
+  → G2 (Billing splits architecture)
+    → G3 (Unposted → Posted workflow)
+      → G6 (Misc charges — completes 3 billing types)
+        → G1 (Maps UI — data model now supports it)
+          → G5 (Saved recipes — productivity booster)
+            → G7 (AR aging / statements — reporting layer)
+              → G8 (Season planning — seasonal, you have time)
+```
 
-### Gap G2: Customer Billing Splits
-**Impact:** This is foundational to how the user does business. Every farm can have multiple owners (landlords/tenants) with percentage splits. When a job is done or product is sold, the invoice is automatically split across those entities. Both tenants and landlords are customers. Billing can be separate invoices per person OR combined — user chooses per situation.
+## Missing Gaps Not in Original Analysis (G1-G17)
 
-**What's needed:**
-- `field_customer_splits` table: field_id, customer_id, split_percentage
-- On orders/invoices: ability to split line items across multiple customers by percentage
-- Auto-calculation of split dollar amounts
-- Option to generate separate invoices per split OR one combined invoice
-- Reporting by split customer
-- 500+ fields with varying split configurations
+The gap analysis missed these features that CheMan provides or that are architecturally necessary:
 
-### Gap G3: Unposted → Posted Invoice Workflow
-**Impact:** The user explicitly said they want the same 2-step review process. Currently our invoice plan goes `draft→sent→paid` with no "unposted" review gate.
+### Missing Gap A: Customer Grouping / Parent-Child Hierarchy
+CheMan Part A Section 3A describes: "Customer grouping — Landlords can be grouped under a parent entity (e.g., all 'State Farm' landlords together)." Current customer model is flat. Need `parent_customer_id` or `customer_groups` table for group-level reporting and billing.
 
-**What's needed:**
-- Add `unposted` status to invoice workflow (before `sent`)
-- "Post Current" batch action to move invoices from unposted → posted (which makes them live on the account)
-- Unposted invoices list page with batch post capability
-- Nothing hits customer balance until posted
-- Applies to ALL invoice types (chemical sales, field application, misc charges)
+### Missing Gap B: Salesman / Commission Tracking on Invoices
+CheMan Part A Section 3B: every chemical sale has "Assign salesman (for commission tracking)." No `salesman_id` exists on orders/invoices in the current plan. If salespeople earn commission, this must be baked into the invoice data model from the start.
 
-### Gap G4: Farm/Field Setup with Customer Splits
-**Impact:** This is the **data foundation** for billing splits (G2) AND the map feature (G1). Every field has acreage, crop type, location, and ownership percentages. 500+ fields in the system.
+### Missing Gap C: Prepay Credit Application Workflow
+CheMan Part A Section 3C describes: customer prepays → credit sits on account → admin later applies credit against specific invoices. The current plan mentions prepay exists but doesn't detail the **application workflow**. Need a `prepay_applications` junction table and UI for allocating prepay credits against specific invoices.
 
-**What's needed:**
-- `fields` table: name/ID, acreage, crop_type, location (lat/lng), boundary polygon (GeoJSON), primary_customer_id
-- `field_customer_splits`: field_id, customer_id, percentage
-- Field management page (list + detail + map view)
-- Link fields to blend tickets, orders, and invoices
-- Crop rotation tracking (crop can change year to year)
+### Missing Gap D: Multi-Location Warehouse Support
+CheMan mentions inventory with "warehouse" fields. Phase 2 cycle counting references a `location` field, but no `warehouses` or `locations` reference table is defined. If chemicals are stored at multiple physical locations, the data model needs this from day one.
 
-### Gap G5: Saved Blend Recipes / Programs
-**Impact:** User said "Yes, definitely" — they reuse the same blends often. Recipes can be crop-specific (e.g., "corn pre-emerge") or generic.
+### Missing Gap E: Receiving Workflow for Inbound Inventory
+The current plan has inventory tracking and cycle counting but no **inbound receiving** workflow. When a supplier truck arrives with product, how does it get into the system? Need:
+- Receiving against purchase orders
+- Quantity verification (ordered vs. received)
+- Cost basis update (weighted average)
+- Discrepancy flagging
 
-**What's needed:**
-- `blend_recipes` table: name, description, crop_type (optional), application_timing (optional), created_by
-- `blend_recipe_items` table: recipe_id, product_id, rate_per_acre, default_unit
-- UI on blend ticket creation: "Apply Recipe" button → select recipe → auto-populates products
-- Recipe management page (CRUD)
-- Filter recipes by crop type and timing
-
-### Gap G6: Miscellaneous Charges
-**Impact:** User bills for chemical sales, field spraying, AND delivery/hauling fees. Current plan only handles chemical product orders.
-
-**What's needed:**
-- Ability to create invoices for non-product charges (service fees, hauling, delivery)
-- Either a separate "Other Charges" entry or a flexible line-item type on invoices (type: product / service / fee)
-- These also go through the unposted → posted workflow
-
-### Gap G7: Customer Statements + AR Aging Reports
-**Impact:** Daily use for account management. Need to send statements showing all invoices/payments and track how overdue balances are.
-
-**What's needed:**
-- Customer statement generation (all invoices + payments for a date range)
-- AR aging buckets (current, 30-day, 60-day, 90-day, 120+ day)
-- Printable/PDF/emailable statements
-- Aging summary dashboard widget
-
-### Gap G8: Season Program Planning / Committed Acres / Booking
-**Impact:** Pre-season planning is a key workflow — committing acres and product before the season starts.
-
-**What's needed:**
-- Season/program planning entity (pre-season commitments)
-- Committed acres tracking per customer per product
-- Booking system (reserve product for planned applications)
-- Convert bookings to orders/blend tickets when executed
+### Missing Gap F: Manufacturer Rebate Tracking
+Operations this size typically earn volume rebates from manufacturers (e.g., buy $500K of Roundup, Bayer owes a rebate). The system should track purchase volumes against rebate tier thresholds and project rebate earnings. Currently tracked in spreadsheets — should be in-app.
 
 ---
 
-# PART C: Feature Implementation Plan (Updated)
+# PART C: Critical Architecture Decisions (Lock In Before Any Code)
 
-> The sections below are the UPDATED implementation phases, incorporating all KinMan learnings.
+> These decisions affect every table and every RPC. Get them right now or pay for it in rework later.
 
-## Context
+## C1. Money: Store as Integer Cents (`bigint`), Not Decimals
 
-The FEATURE_AUDIT_PROMPT.md contains a 7-phase, 52-feature roadmap. The user reviewed all 7 phases and gave specific feedback on what they actually need vs what was proposed. This plan incorporates that feedback into a customized, sequenced implementation plan.
+```sql
+-- CORRECT: integer cents
+amount_cents bigint NOT NULL  -- $1,499.85 stored as 149985
 
-**Relationship to FINAL_ACTION_PLAN.md:** The bug fix sprints (S0-S5) remain the FIRST priority. This feature plan begins AFTER those fixes are complete.
+-- WRONG: decimal dollars
+amount numeric(12,2)  -- works 95% of the time, fails on split math edge cases
+```
 
-**Key user clarifications gathered:**
-- Blend ticket prepay: User wants flexibility — may apply prepay dollars at end of month. Has existing software to screenshot for reference (TODO: user to share screenshots).
-- Manufacturer finance: Manufacturer bills customer directly; CRX tracks it but doesn't collect that money.
-- Returns: Both drivers AND admin/sales can initiate.
+**Why:** When you split $4,500.00 three ways and multiply by 0.3333, decimal math can produce tiny rounding artifacts that compound across 500+ fields. Integer cents with largest-remainder rounding eliminates this entirely. Convert to dollars only for display in the UI.
 
-**KinMan walkthrough analysis (Feb 12, 2026):**
-- Full 15:57 video reviewed (191 screenshots + audio transcript)
-- 5 CRITICAL gaps identified (billing splits, unposted workflow, saved recipes, misc charges, farm/field setup)
-- 10 additional features cataloged for future phases
-- User confirmed priorities via Q&A
+## C2. Percentages: Store as `numeric(9,6)`
 
-**Open items still to resolve:**
-- [ ] ~~User wants to share screenshots of existing software~~ ✅ DONE (video walkthrough analyzed)
-- [ ] Integrate 5 critical gaps (G1-G5) into the phase plan below
-- [ ] User may have more context to add to specific phases
-- [ ] Plan needs final user approval before any implementation begins
+```sql
+split_percentage numeric(9,6) NOT NULL  -- 33.333333%
+```
 
----
+**Why:** `numeric` is exact (no floating-point surprises). 6 decimal places handles any reasonable split precision.
 
-## Phase Summary (Modified from Original)
+## C3. Splits: Store at Line-Item Level (Not Invoice Header)
 
-| Phase | Focus | What Changed | Est. Days |
-|-------|-------|-------------|-----------|
-| 1 | Blend Ticket ↔ Order Linkage | **NEW** — not in original. Solves prepaid/planned/unplanned billing | 3-4 |
-| 2 | Inventory Cycle Counting | Stripped to cycle counting ONLY (skip lot tracking, forecasting, etc.) | 3-4 |
-| 3 | Financial: Invoices + Finance Programs + Stripe Arch | Added line-item finance source tracking + Stripe ACH columns | 8-10 |
-| 4 | Returns/RMA Only | Removed fleet, calendar, routes, time windows, driver metrics | 4-5 |
-| 5 | Sales & Customer Experience | Kept as-is | 5-8 |
-| 6 | Compliance: Licenses Only | Removed SDS document management | 3-4 |
-| 7 | Advanced (Future) | Removed barcode/QR + vendor scorecard | Future |
-| **TOTAL** | | | **26-35 days** |
+Splits must be on `invoice_items` and `order_items`, not on the invoice/order header. This is because different line items on the same invoice can have different split configurations (e.g., landlord pays for chemical, tenant pays for application fee).
 
----
+Header-level splits are a **convenience shortcut** that applies the same percentages to all lines — but the authoritative data lives at the line level.
 
-## PHASE 1: Blend Ticket ↔ Order Billing Linkage
+## C4. Split History: Use Allocation Set Versioning
 
-### Problem
-Blend tickets (field application records) are completely disconnected from orders, invoices, and inventory. The user has 3 real-world scenarios:
-1. **Pre-paid** — Customer already paid via an order; blend ticket just documents what was applied
-2. **Planned job** — Product is on a quote/order but not yet billed; blend ticket confirms the work
-3. **Out of the blue** — Product applied with no existing order; need to create one retroactively
+Every time someone edits a split, create a new allocation set (immutable append-only). The latest set is "active." All previous sets are permanent history. This gives you a tamper-proof audit trail for financial records.
 
-### Database Changes
+## C5. Season / Crop Year on All Operational Tables
 
-**Migration file:** `supabase/migrations/YYYYMMDDHHMMSS_blend_ticket_billing_linkage.sql`
+```sql
+season integer NOT NULL DEFAULT 2026  -- or crop_year
+```
 
-New columns on `blend_tickets`:
-- `order_id uuid REFERENCES orders(id)` — FK to linked order (null if unlinked)
-- `billing_status text DEFAULT 'unbilled'` — values: `unbilled`, `linked`, `billed`, `prepaid`, `no_charge`
-- `billing_notes text`
+Add this column to: `orders`, `invoices`, `blend_tickets`, `fields` (for crop rotation), `payments`, `inventory_transactions`. This enables season-over-season reporting and clean end-of-year closeouts. Retrofitting this later across every table is miserable.
 
-New junction table `blend_ticket_order_items`:
-- Maps each `blend_ticket_product` to an `order_item` with `quantity_applied`
-- Handles cases where one blend ticket spans multiple orders or vice versa
+## C6. Customer Hierarchy
 
-Indexes on `blend_tickets(order_id)`, `blend_tickets(billing_status)`, junction table FKs.
-RLS: same pattern as blend_tickets (admin full, sales_rep read/update).
+```sql
+parent_customer_id uuid REFERENCES customers(id)  -- for customer groups
+```
 
-### New RPCs (2)
-1. **`link_blend_ticket_to_order(p_blend_ticket_id, p_order_id, p_product_mappings, p_billing_status, p_performed_by)`** — Atomic: sets order_id + billing_status + inserts junction mappings
-2. **`create_order_from_blend_ticket(p_blend_ticket_id, p_customer_id, p_tier, p_performed_by)`** — Creates order retroactively from blend ticket products using tier pricing, links automatically
+Add to `customers` table. Enables "Wells Family Group" containing Mason, Clayton, Chad, and Wells Family Trust. Essential for group-level reporting and billing.
 
-### Modified RPC (1)
-- `save_blend_ticket` — Add `order_id` and `billing_status` to accepted parameters
+## C7. Salesman Tracking on Financial Records
 
-### UI Changes
-- **BlendTicketDetail.tsx**: New "Billing" section with:
-  - Billing status badge (color-coded)
-  - "Link to Order" button → modal with order dropdown + product-to-order-item mapping
-  - "Create Order from Ticket" button → confirmation modal → calls RPC → navigates to new order
-  - "Unlink" button (admin only)
-- **BlendTickets.tsx**: Billing status filter dropdown (All / Unbilled / Linked / Billed / Prepaid)
-- **OrderDetail.tsx**: New "Blend Tickets" tab showing linked tickets
-- **Dashboard.tsx**: "Unbilled Blend Tickets" alert widget
+```sql
+salesman_id uuid REFERENCES profiles(id)
+```
 
-### Types to Add (`src/types/index.ts`)
-- `BillingStatus` type union
-- `BlendTicketOrderItem` interface
-- Update `BlendTicket` interface with `order_id`, `billing_status`, `billing_notes`, optional `order`
+Add to `orders`, `invoices`, `quotes`. If you pay salespeople commission, this must be in the data model from day one — not bolted on after you've created thousands of records without it.
 
-### Verification
-- [ ] Link a blend ticket to an existing prepaid order → status shows "prepaid"
-- [ ] Link a blend ticket to an unpaid order → status shows "linked"
-- [ ] Create order from an unlinked blend ticket → order created with correct products/prices
-- [ ] Dashboard shows count of unbilled blend tickets
-- [ ] `npm run build` passes
+## C8. Soft Deletes on All Financial Tables
 
----
+```sql
+deleted_at timestamptz  -- NULL means active, timestamp means soft-deleted
+```
 
-## PHASE 2: Inventory Cycle Counting
+Never hard-delete invoices, payments, orders, or blend tickets. Use `void` / `cancelled` statuses for workflow, and `deleted_at` as the ultimate safety net.
 
-### Problem
-No way to verify physical inventory matches system records. User wants weekly or bi-weekly physical counts.
+## C9. Mapping: Use Mapbox GL JS (NOT Google Maps)
 
-### Database Changes
+**Reasons:**
+- Google's Maps JavaScript Drawing library was **deprecated August 2025** and is scheduled to become unavailable ~May 2026. If you build polygon editing on Google's DrawingManager, you'll face a forced rewrite within months.
+- Mapbox renders with WebGL — handles 500+ polygons significantly better than Google Maps' SVG/DOM rendering.
+- `react-map-gl` by Uber is an excellent, well-maintained React wrapper.
+- Mapbox free tier (50K map loads/month) is generous enough for an internal app.
 
-**Migration file:** `supabase/migrations/YYYYMMDDHHMMSS_cycle_counting.sql`
+**Alternative:** MapLibre GL JS (open-source fork of Mapbox, zero cost) if you're willing to source your own satellite tile layer. Mapbox is recommended because its built-in satellite imagery is essential for identifying fields.
 
-New tables:
-- `cycle_counts` — header (count_number UNIQUE, location, status: draft→in_progress→pending_approval→approved→cancelled, count_date, counted_by, approved_by)
-- `cycle_count_items` — per-product lines (product_id, system_quantity snapshot, counted_quantity input, variance + variance_pct as generated columns, notes)
+## C10. Geospatial: Enable PostGIS in Supabase
 
-RLS: admin full access, sales_rep can create/update own counts.
+```sql
+CREATE EXTENSION IF NOT EXISTS postgis;
+```
 
-### New RPCs (3)
-1. **`create_cycle_count(p_location, p_product_ids, p_created_by)`** — Snapshots current `inventory.quantity_available` into count items
-2. **`approve_cycle_count(p_count_id, p_approved_by)`** — For each item with non-zero variance: creates `inventory_transaction` (type='adjusted', reason='cycle_count'), updates `inventory.quantity_available`
-3. **`next_cycle_count_number()`** — Sequence: CC-YYYY-NNNN
+Use `geography(POLYGON, 4326)` for field boundaries and `geography(POINT, 4326)` for centroids. Add GIST spatial indexes. Compute acreage via `ST_Area()`. Serve GeoJSON to the frontend via `ST_AsGeoJSON()`.
 
-### UI Changes
-- **InventoryPage.tsx**: "Start Cycle Count" button → modal (select location, optionally filter products)
-- **New page: CycleCountDetail.tsx** (`/inventory/cycle-count/:id`)
-  - Table: product name, system qty, counted qty (editable input), variance, variance %, notes
-  - Color coding: green (0), yellow (<5%), red (>5% or >10%)
-  - Workflow buttons: Start Counting → Submit for Approval → Approve (admin)
-  - Summary: total items counted, items with variance, total $ variance
-- **New route in App.tsx**: `/inventory/cycle-count/:id`
+## C11. All Financial Math in Postgres RPCs (Never in React)
 
-### Verification
-- [ ] Create count → system quantities snapshotted correctly
-- [ ] Enter counted quantities → variances calculated
-- [ ] Approve count → inventory adjusted, transactions logged
-- [ ] `npm run build` passes
+The database is the single source of truth for:
+- Split calculations (largest-remainder rounding)
+- Invoice totals
+- Payment application
+- Inventory adjustments
+- Balance calculations
+
+React can *display* calculated values but must never compute authoritative financial totals. This prevents frontend bugs from corrupting financial data.
+
+## C12. Immutable, Append-Only Patterns for Financial Events
+
+Inventory movements, invoice revisions, split changes, payment applications, and credit adjustments should be **append-only** (insert new rows, never update/delete old ones). This preserves a complete audit trail.
 
 ---
 
-## PHASE 3: Financial Foundation
+# PART D: Rewritten Phase Sequencing & Implementation Plan
 
-### Problem
-No invoices, no line-item finance tracking, no way to distinguish manufacturer-financed vs cash vs dealer-financed products.
+> The original Phase 1-7 plan has a structural problem: it builds billing linkage (Phase 1) and inventory counting (Phase 2) BEFORE the farm/field data model, billing splits, or unposted→posted workflow exist. This guarantees rework. The sequencing below fixes this.
 
-### 3A. Invoice System
+## Updated Tech Stack
 
-**Migration file:** `supabase/migrations/YYYYMMDDHHMMSS_invoice_system.sql`
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 18, TypeScript, Vite, Tailwind CSS |
+| Backend | Supabase (Postgres + Auth + Storage + Edge Functions) |
+| Deployment | Vercel |
+| Mapping | Mapbox GL JS (recommended) or MapLibre GL JS |
+| Geospatial DB | PostGIS extension in Supabase |
+| Payments (future) | Stripe ACH |
+| Notifications (future) | Twilio SMS, email via Edge Functions |
 
-New tables:
-- `invoices` — header (invoice_number UNIQUE, order_id, customer_id, status: draft→sent→partially_paid→paid→void→overdue, due_date, amount, amount_paid, balance_due, stripe_payment_link, stripe_payment_intent_id)
-- `invoice_items` — line items (invoice_id, order_item_id, product_id, quantity, unit_price, total, finance_program_id, payment_source)
+## Rewritten Phase Sequence
 
-New columns on `customers`: `credit_limit numeric`, `credit_hold boolean DEFAULT false`
+```
+Phase 0: Bug fix sprints S0-S5 (already planned — do these FIRST)
+    |
+Phase 1 (NEW): Farm/Field Data Foundation                          [~5-7 days]
+    - fields table with PostGIS boundary support
+    - field_customer_splits (default billing splits per field)
+    - customer hierarchy (parent_customer_id)
+    - field management UI (list + detail view)
+    - Enable PostGIS extension
+    - This is G4 + Missing Gap A
+    |
+Phase 2 (NEW): Billing Architecture                                [~12-18 days]
+    - Invoice system with line-item structure
+    - Billing splits at line-item level with allocation set versioning
+    - Unposted → Posted workflow with batch operations + audit trail
+    - Miscellaneous charges support (3 billing types: chemical, application, misc)
+    - Salesman tracking on orders/invoices
+    - Prepay ledger and credit application workflow
+    - Payment application to specific invoices
+    - This is G2 + G3 + G6 + Missing Gaps B, C
+    |
+Phase 3 (MOVED): Blend Ticket <> Order Linkage                     [~3-4 days]
+    - Original Phase 1, but now references fields + splits correctly
+    - Blend ticket billing status (split into order_link_status + payment_status)
+    - Junction table mapping blend ticket products to order items
+    - RPCs for linking and creating orders from blend tickets
+    |
+Phase 4 (NEW): Saved Recipes + Maps                                [~8-12 days]
+    - Blend recipes/programs (G5) — quick to build, high productivity value
+    - Mapbox GL JS integration with satellite imagery
+    - Field boundary display, click-to-select, selected fields panel
+    - "Create Blend Ticket from Map Selection" workflow
+    - This is G5 + G1
+    |
+Phase 5 (MOVED): Inventory Enhancements                            [~5-7 days]
+    - Cycle counting (original Phase 2)
+    - Receiving workflow (Missing Gap E)
+    - Multi-location warehouse support (Missing Gap D)
+    - Reorder point alerts
+    |
+Phase 6 (MOVED): Returns / RMA                                     [~4-5 days]
+    - Original Phase 4, depends on Phase 2 for credit handling
+    |
+Phase 7: Reporting, Sales, Compliance                               [~10-15 days]
+    - AR aging + customer statements (G7)
+    - Season program planning (G8)
+    - Sales pipeline, follow-ups, dashboards (original Phase 5)
+    - Compliance: RUP tracking, applicator licenses (original Phase 6)
+    - Manufacturer rebate tracking (Missing Gap F)
+    - Season-over-season comparison reports
+    |
+Phase 8 (FUTURE): Customer Portal, Mobile, Integrations
+    - Customer self-service portal (read-only access to invoices, application records)
+    - PWA / offline mobile capability
+    - QuickBooks integration
+    - SMS notifications (Twilio)
+    - Weather data API integration
+    - Precision ag platform import/export
+```
 
-New RPCs:
-- `create_invoice_from_order(p_order_id, p_performed_by)` — generates invoice + items from order
-- `record_invoice_payment(p_invoice_id, p_amount, p_method, p_ref, p_notes, p_performed_by)` — records payment, updates invoice + order balances
-- `next_invoice_number()` — INV-YYYY-NNNN
+### Why This Order
 
-New pages:
-- `Invoices.tsx` (`/invoices`) — list with status/aging filters
-- `InvoiceDetail.tsx` (`/invoices/:id`) — view, PDF generation, email (future)
+| Phase | Why It's Here |
+|-------|--------------|
+| 1 (Fields) | Everything references fields — splits, maps, blend tickets, invoices. Build the foundation first. |
+| 2 (Billing) | The billing engine is the core of the business. Splits, posting, payments, and invoicing must be solid before anything depends on them. |
+| 3 (Blend Linkage) | Now that fields and billing exist, blend tickets can correctly reference them. No rework needed. |
+| 4 (Recipes + Maps) | Recipes are quick and improve daily workflow. Maps require the field data model from Phase 1. Both are now safe to build. |
+| 5 (Inventory) | Independent of billing workflow. Can slide without blocking other features. |
+| 6 (Returns) | Depends on invoice/credit system from Phase 2. |
+| 7 (Reporting) | Reporting reads from data created in Phases 1-6. Build last so you have data to report on. |
 
-Sidebar: Add "Invoices" (Receipt icon, admin role)
+### Realistic Timeline Estimate
 
-### 3B. Line-Item Finance Source Tracking
+The original plan estimated 26-35 days total. That is **significantly underestimated**. A more realistic timeline:
 
-**User's requirement:** "Each line item almost needs an option to select where it is financed against."
-**Key clarification:** Manufacturer bills customer directly — CRX tracks it but doesn't collect that money.
+| Phase | Estimated Days | Cumulative |
+|-------|---------------|------------|
+| Phase 0 (Bug fixes) | 5-10 | 5-10 |
+| Phase 1 (Fields) | 5-7 | 10-17 |
+| Phase 2 (Billing) | 12-18 | 22-35 |
+| Phase 3 (Blend Linkage) | 3-4 | 25-39 |
+| Phase 4 (Recipes + Maps) | 8-12 | 33-51 |
+| Phase 5 (Inventory) | 5-7 | 38-58 |
+| Phase 6 (Returns) | 4-5 | 42-63 |
+| Phase 7 (Reporting + Compliance) | 10-15 | 52-78 |
+| **TOTAL** | **52-78 days** | |
 
-New reference table `finance_programs`:
-- `program_name`, `program_type` (manufacturer / dealer / cash), `manufacturer` name, `interest_rate`, `term_days`, `start_date`, `end_date`, `is_active`
+At part-time pace (building with Claude while running the business), expect **3-6 months** for Phases 0-7. **Do NOT cancel CheMan** until CRX Manager has run in parallel for at least one full billing cycle with real data.
 
-New columns on `order_items`:
-- `finance_program_id uuid REFERENCES finance_programs(id)`
-- `payment_source text DEFAULT 'cash'` — values: `cash`, `manufacturer_finance`, `dealer_finance`
+## Billing Splits Architecture (G2) — Detailed Design
 
-These columns also added to `quote_items` so the finance source carries from quote → order → invoice.
+This is the biggest architectural decision in the entire application.
 
-UI changes:
-- **SettingsPage.tsx**: New "Finance Programs" section — CRUD for programs (e.g., "Bayer Flex", "Syngenta Early Pay", "CRX Dealer Finance", "Cash")
-- **QuoteBuilder.tsx**: Per line item, "Payment Source" dropdown + "Finance Program" dropdown (when not cash)
-- **NewOrder.tsx / OrderDetail.tsx**: Same per-item finance dropdowns
-- **Reports.tsx**: New "Finance Programs" tab — receivables by source, grouped by program, with totals
+### Schema (3 Core Tables + 1 Versioning Table)
 
-### 3C. Stripe ACH Architecture (Columns Only)
+#### Table 1: `field_billing_defaults` — Default splits per field
 
-Add to `payments` table: expand payment_method CHECK to include 'stripe_ach'.
-Add to `invoices`: `stripe_payment_link`, `stripe_payment_intent_id` columns.
-**No Stripe code written now** — just the column infrastructure so invoices can hold payment links in the future.
+```sql
+CREATE TABLE field_billing_defaults (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    field_id uuid NOT NULL REFERENCES fields(id) ON DELETE CASCADE,
+    customer_id uuid NOT NULL REFERENCES customers(id),
+    split_percentage numeric(9,6) NOT NULL CHECK (split_percentage > 0 AND split_percentage <= 100),
+    is_active boolean DEFAULT true,
+    effective_date date NOT NULL DEFAULT CURRENT_DATE,
+    created_at timestamptz DEFAULT now(),
+    UNIQUE(field_id, customer_id, effective_date)
+);
+```
 
-### Verification
-- [ ] Create invoice from order → items + totals correct
-- [ ] Set line items to different payment sources → tracks correctly
-- [ ] Finance Programs report shows breakdown by source
-- [ ] Credit limit enforcement blocks orders for over-limit customers
-- [ ] `npm run build` passes
+**Purpose:** "Field L19 is normally split Mason 33.333333%, Clayton 33.333333%, Chad 33.333334%." The `effective_date` handles ownership changes mid-season without losing history.
+
+#### Table 2: `allocation_sets` — Versioning for split history
+
+```sql
+CREATE TABLE allocation_sets (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_type text NOT NULL CHECK (entity_type IN ('order', 'invoice')),
+    entity_id uuid NOT NULL,
+    version integer NOT NULL DEFAULT 1,
+    created_by uuid REFERENCES auth.users(id),
+    created_at timestamptz DEFAULT now(),
+    is_active boolean DEFAULT true,
+    notes text,
+    UNIQUE(entity_type, entity_id, version)
+);
+```
+
+**Purpose:** Every time splits are edited, a new allocation set is created. The latest `is_active = true` set is authoritative. All previous sets are permanent audit history.
+
+#### Table 3: `order_line_allocations` — Splits on order line items
+
+```sql
+CREATE TABLE order_line_allocations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    allocation_set_id uuid NOT NULL REFERENCES allocation_sets(id) ON DELETE CASCADE,
+    order_item_id uuid NOT NULL REFERENCES order_items(id),
+    bill_to_customer_id uuid NOT NULL REFERENCES customers(id),
+    split_percentage numeric(9,6) NOT NULL,
+    amount_cents bigint NOT NULL,
+    created_at timestamptz DEFAULT now()
+);
+```
+
+#### Table 4: `invoice_line_allocations` — Splits on invoice line items
+
+```sql
+CREATE TABLE invoice_line_allocations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    allocation_set_id uuid NOT NULL REFERENCES allocation_sets(id) ON DELETE CASCADE,
+    invoice_item_id uuid NOT NULL REFERENCES invoice_items(id),
+    bill_to_customer_id uuid NOT NULL REFERENCES customers(id),
+    split_percentage numeric(9,6) NOT NULL,
+    amount_cents bigint NOT NULL,
+    split_invoice_id uuid REFERENCES invoices(id),
+    created_at timestamptz DEFAULT now()
+);
+```
+
+### Rounding Logic (MUST be implemented in Postgres RPC)
+
+```sql
+-- Largest-remainder rounding for billing splits
+-- Ensures split amounts sum EXACTLY to line total (no penny discrepancies)
+
+-- Example: $4,500.00 (450000 cents) split 3 ways (33.333333% each)
+-- Step 1: Calculate raw amounts
+--   Mason:   450000 x 0.33333333 = 149999.9985 -> floor = 149999
+--   Clayton: 450000 x 0.33333333 = 149999.9985 -> floor = 149999
+--   Chad:    450000 x 0.33333333 = 149999.9985 -> floor = 149999
+-- Step 2: Sum of floors = 449997, total = 450000, remainder = 3
+-- Step 3: Distribute remainder to splits with largest fractional parts (1 cent each to top 3)
+--   Mason:   149999 + 1 = 150000 ($1,500.00)
+--   Clayton: 149999 + 1 = 150000 ($1,500.00)
+--   Chad:    149999 + 1 = 150000 ($1,500.00)
+-- Step 4: Verify: 150000 + 150000 + 150000 = 450000
+```
+
+**CRITICAL CONSTRAINT:** For each `(allocation_set_id, line_item_id)`: `SUM(amount_cents)` MUST equal the line item's `extended_cents`. Enforce via deferred constraint trigger.
+
+### Billing Splits Workflow
+
+1. Admin selects Field L19 for a job/order
+2. System auto-loads splits from `field_billing_defaults` -> Mason 33.33%, Clayton 33.33%, Chad 33.34%
+3. Admin can **accept defaults** OR **override** for this specific order
+4. Splits saved to `order_line_allocations` via an `allocation_set`
+5. When order becomes invoice, splits copy to `invoice_line_allocations`
+6. Admin can choose: **one combined invoice** or click **"Generate Split Invoices"** to create separate invoices per split customer
+7. If splits are edited later, a **new allocation set** is created (old one preserved as history)
+
+### Scaling Note (500+ Fields)
+
+Do NOT store 500 field-level split rows on a single invoice. Instead:
+- Store field-level detail on the **blend ticket / work order** (operational record)
+- Aggregate to **bill-to customer** level per invoice line when generating the invoice
+- Keep a drill-down link from invoice -> originating blend ticket -> field details
+
+## Field Mapping Architecture (G1) — Detailed Design
+
+### PostGIS Schema for Fields
+
+```sql
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+CREATE TABLE fields (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name text NOT NULL,
+    acreage numeric(10,2),
+    crop_type text,
+    season integer NOT NULL DEFAULT 2026,
+    primary_customer_id uuid REFERENCES customers(id),
+    centroid geography(POINT, 4326),
+    boundary geography(POLYGON, 4326),
+    county text,
+    state text DEFAULT 'IL',
+    section text,
+    soil_type text,
+    created_at timestamptz DEFAULT now(),
+    updated_at timestamptz DEFAULT now(),
+    deleted_at timestamptz
+);
+
+CREATE INDEX idx_fields_boundary ON fields USING GIST (boundary);
+CREATE INDEX idx_fields_centroid ON fields USING GIST (centroid);
+```
+
+### How to Get 500+ Field Boundaries Into the System
+
+1. **Export from CheMan** — Ask DataSmart if they can export field boundaries as GeoJSON, KML, or Shapefile. Fastest path.
+2. **Import from precision ag platforms** — Climate FieldView, Granular, John Deere Operations Center, or AgLeader likely have boundaries.
+3. **Import from USDA CLU data** — USDA FSA publishes Common Land Unit boundaries.
+4. **Draw in browser** — Mapbox GL Draw for corrections. Last resort for 500 fields.
+
+**Recommendation:** Pursue options 1-3 simultaneously. Start the data export conversation with DataSmart NOW.
+
+### Mapping React Component Architecture
+
+```
+<MapPage>
+  +-- <MapContainer>              (react-map-gl wrapper, Mapbox GL JS)
+  |   +-- <FieldPolygonLayer>     (renders all field boundaries)
+  |   +-- <FieldLabelLayer>       (field name labels at centroids)
+  |   +-- <SelectedHighlight>     (highlight color on selected fields)
+  |   +-- <DrawControl>           (@mapbox/mapbox-gl-draw for editing)
+  +-- <FieldSearchPanel>          (search/filter by customer, field name, crop type)
+  +-- <SelectedFieldsPanel>       (shows selected fields + acreage + splits)
+      +-- <CreateBlendButton>     ("Create Blend Ticket" -> navigates with fields pre-populated)
+```
+
+### Performance with 500+ Polygons
+
+- Load all **centroids** (points) on initial map render — lightweight, fast
+- Load full **polygon boundaries** only when zoomed in past threshold (zoom level 12+)
+- Use Mapbox's vector tile rendering — WebGL handles 500+ polygons smoothly
+- Consider clustering centroids at low zoom levels
 
 ---
 
-## PHASE 4: Returns / RMA (Only)
+# PART E: Technical Risks, Red Flags & Pre-Implementation Checklist
 
-### Removed from Original Phase 4
-~~Delivery calendar~~, ~~fleet management~~, ~~load planning~~, ~~time windows~~, ~~driver metrics~~, ~~route optimization~~
+## Technical Risks & Architectural Concerns
 
-### What's Built
-Returns system where BOTH admin/sales AND drivers can initiate returns.
+### CRITICAL
 
-**Migration file:** `supabase/migrations/YYYYMMDDHHMMSS_returns_system.sql`
+**E1. Billing Split Architecture is Underspecified in Original Plan**
+The original plan defines `field_customer_splits` with field_id/customer_id/percentage. This is insufficient because:
+- Splits aren't always at the field level (can be overridden per order/invoice)
+- Different line items can split differently
+- No versioning/audit trail for split changes
+**Fix:** Use the 3-table + allocation set architecture from Part D.
 
-New tables:
-- `returns` — header (return_number UNIQUE, customer_id, order_id, delivery_id, reason CHECK, status: pending→approved→received→restocked→credited→rejected, processed_by_driver, driver_signature_url, driver_notes, photos)
-- `return_items` — per-product (product_id, order_item_id, quantity, unit_price, condition: sellable/damaged/expired, restock boolean, lot_number)
-- `return_images` — driver photos (storage_path, image_url, caption, uploaded_by)
+**E2. No Immutable Audit Trail for Financial Operations**
+General `logActivity()` is insufficient for financial operations. Need a dedicated, append-only `financial_audit_log` table with no UPDATE or DELETE allowed (enforced by RLS).
 
-New RPCs:
-- `process_return(p_return_id, p_approved_by)` — Atomic: restocks inventory (if item.restock=true) + credits customer account (reduces order.balance_due)
-- `next_return_number()` — RMA-YYYY-NNNN
+**E3. `billing_status` on Blend Tickets Conflates Two Concepts**
+Original plan: `billing_status` with values `unbilled`, `linked`, `billed`, `prepaid`, `no_charge`. This mixes relationship status with payment status. A blend ticket can be linked to an order AND prepaid simultaneously.
+**Fix:** Split into two columns:
+```sql
+order_link_status text DEFAULT 'unlinked' CHECK (order_link_status IN ('unlinked', 'linked'))
+payment_status text DEFAULT 'unbilled' CHECK (payment_status IN ('unbilled', 'billed', 'prepaid', 'no_charge'))
+```
 
-New storage bucket: `return-images` (same pattern as blend-ticket-images)
+### IMPORTANT
 
-New pages:
-- `Returns.tsx` (`/returns`) — list with status filter
-- `ReturnDetail.tsx` (`/returns/:id`, `/returns/new`) — create from order, per-item quantities + condition, driver photo upload (uses existing `imageCompression.ts`), signature capture (uses existing `signature_pad`), admin approve/reject
+**E4. RPC Design is Too Coarse** — Several RPCs bundle multiple operations. Handle edge cases with explicit parameters.
 
-Sidebar: Add "Returns" (RotateCcw icon, admin + sales_rep roles)
+**E5. No Soft Delete Strategy** — Add `deleted_at timestamptz` to all financial tables. Never hard-delete financial records.
 
-Driver view: Drivers can create returns from their delivery view, upload photos, capture signature.
+**E6. Sequence Number Race Conditions** — `next_invoice_number()` style RPCs must use Postgres sequences or `SELECT ... FOR UPDATE` to prevent duplicates.
 
-### Verification
-- [ ] Admin creates return from order → items populated
-- [ ] Driver creates return with photos + signature
-- [ ] Approve return → inventory restocked + customer credited
-- [ ] `npm run build` passes
+**E7. RLS Complexity with Billing Splits** — One invoice can reference 3 customers via splits. Verify RLS policies don't accidentally hide split data. Test early.
+
+**E8. All Financial Calculations Must Be in Postgres** — React can display but never compute authoritative totals.
+
+## Red Flags That Will Cause Problems If Not Addressed Now
+
+1. **No Data Migration Strategy from CheMan** — 500+ fields, years of customer records, payment history, billing data. Contact DataSmart NOW about data export options (CSV, database dump, API).
+
+2. **No Parallel-Run / Reconciliation Plan** — Run both systems simultaneously for at least one full billing cycle. Verify matching invoices, balances, and statements.
+
+3. **No Multi-Year / Season Concept in Data Model** — Add `season` / `crop_year` to all operational and financial tables NOW.
+
+4. **Maps Feature Must Use Mapbox (Not Google)** — Google's Drawing library is deprecated (Aug 2025) and may be removed ~May 2026.
+
+5. **Invoice Split Math Not Enforced at Database Level** — Use deferred constraint triggers to enforce `SUM(split_amount_cents) = line_total_cents`.
+
+6. **No Backup/Recovery Plan for Financial Data** — Verify Supabase backup configuration. Consider point-in-time recovery.
+
+7. **The 26-35 Day Timeline Estimate is Unrealistic** — Realistic: 52-78 days focused, or 3-6 months part-time. Do NOT cancel CheMan based on 35-day timeline.
+
+8. **Permissions Are Too Loose** — Critical operations (posting invoices, voiding, adjusting inventory, editing splits) should require admin role.
+
+9. **No Offline / Weak-Signal Strategy** — Rural Illinois and Indiana have spotty cell coverage. PWA with offline data caching should move up if field staff will use the app during spray season.
+
+## Pre-Implementation Checklist
+
+Before writing ANY implementation code (after bug fix sprints complete):
+
+### Must Do Now
+- [ ] Enable PostGIS extension in Supabase project
+- [ ] Contact DataSmart about CheMan data export (customers, fields, boundaries, billing history)
+- [ ] Add `season integer` column to all existing operational/financial tables via migration
+- [ ] Add `parent_customer_id` to customers table via migration
+- [ ] Add `salesman_id` to orders and quotes tables via migration
+- [ ] Add `deleted_at timestamptz` to all financial tables that don't have it
+- [ ] Verify Supabase backup configuration (daily backups, point-in-time recovery)
+- [ ] Create a Mapbox account and obtain API key
+
+### Must Decide Now
+- [ ] Mapbox GL JS vs MapLibre GL JS (recommendation: Mapbox for satellite imagery)
+- [ ] How to get field boundary data (CheMan export? Precision ag platform? USDA CLU? Manual drawing?)
+- [ ] Accounting integration target (QuickBooks Online? Xero? Manual for now?)
+- [ ] When to start parallel-run testing (recommendation: as soon as Phase 2 billing is functional)
+
+### Must NOT Do Now
+- [ ] Do NOT cancel CheMan subscription
+- [ ] Do NOT build maps UI before field data model and billing splits are complete
+- [ ] Do NOT implement Stripe integration until invoice system is proven with manual payments
+- [ ] Do NOT build customer portal until core billing, splits, and application records are solid
 
 ---
 
-## PHASE 5: Sales & Customer Experience (As-Is from FEATURE_AUDIT_PROMPT.md)
+# PART F: Ideal Platform Vision & Competitive Advantage
 
-No user changes. Implement:
-1. Sales pipeline kanban view on Quotes page
-2. Follow-up reminders (`follow_ups` table, dashboard widget)
-3. Role-specific dashboards (admin / sales rep / driver variants)
-4. Season-over-season comparison report tab
-5. Margin analysis report tab
-6. Scheduled report delivery (Edge Function + `scheduled_reports` table)
+> This section describes what a best-in-class 2026 ag chemical management platform would include — beyond just replicating CheMan.
 
----
+## Ideal Platform Feature Set
 
-## PHASE 6: Compliance — Applicator Licenses Only
+### Day-to-Day Operations
+- Visual dispatch board (calendar + map hybrid) showing all daily jobs
+- Smart scheduling with constraint awareness (equipment capacity, applicator certifications, product compatibility, weather)
+- Auto-generated mixing/loading worksheets based on tank size + spray rate + field acreage
+- Real-time job tracking (applicators tap Start/Complete in the field)
+- Tank cleanout tracking (what was last in each tank, required cleanout before switching product families)
 
-### Removed
-~~SDS/COA document management~~ (user: "not important to me")
+### Billing & Accounting
+- Three billing pipelines (chemical sales, field application, misc charges) through unified posting workflow
+- Billing split engine at line-item level with allocation set versioning
+- Prepay ledger as first-class concept (deposits, applications against invoices, balance tracking, end-of-season reconciliation)
+- Finance program per-line-item tracking (manufacturer finance, dealer finance, cash)
+- Manufacturer rebate tier tracking (purchase volumes against rebate thresholds)
+- Automatic late fee / interest calculation (configurable per customer)
+- Smart statement generation with email delivery
 
-### What's Built
-1. **RUP tracking** — `is_restricted_use`, `signal_word` columns on products, red badge display
-2. **Applicator licenses** — `applicator_licenses` table on CustomerDetail (license number, state, type, categories, expiration, verification, document upload)
-3. **RUP enforcement** — Block orders with RUP products if customer has no valid license (admin override available)
-4. **EPA reporting** — Restricted-use sales log report tab, CSV export
+### Customer Management
+- Customer hierarchy (parent groups containing related entities)
+- Communication log (phone calls, emails, meetings logged against customer record)
+- Customer profitability analysis (revenue minus COGS minus application cost per customer)
+- Customer self-service portal (invoices, statements, application records, online payment)
 
-New storage: `license-documents` bucket for uploaded license images/PDFs.
+### Inventory & Supply Chain
+- Real-time multi-location inventory
+- Weighted average cost calculation on receiving
+- Receiving workflow with PO matching and discrepancy flagging
+- Lot tracking for restricted-use products (full chain of custody)
+- Reorder point alerts
+- Supplier price comparison (historical pricing by supplier by product)
 
----
+### Compliance & Regulatory
+- Automatic EPA record generation from completed jobs
+- Weather data auto-pull at job start (temperature, wind, humidity)
+- RUP enforcement (license verification before allowing RUP orders/applications)
+- Dicamba / sensitive crop buffer zone awareness
+- State reporting format exports (Illinois pesticide use reporting)
+- License expiration dashboard + proactive alerts (90/60/30 days)
 
-## PHASE 7: Advanced Features (Future — No Implementation)
+### Field & Mapping
+- Interactive satellite map with all 500+ fields
+- Click-to-select -> start blend ticket workflow
+- Application history per field (every product applied, every date, every rate)
+- Crop rotation tracking (corn 2025 -> beans 2026)
+- Soil type storage and label rate adjustment awareness
+- Neighbor / sensitive area tracking (organic farms, schools, waterways)
+- Field-level profitability analysis
 
-### Kept for Future
-- Customer self-service portal
-- QuickBooks integration
-- SMS notifications (Twilio)
-- Approval chains
-- PWA / mobile optimization
-- Data visualization (Recharts)
-- Audit trail improvements
+### Reporting & Analytics
+- Morning operational dashboard (today's jobs, weather, unbilled work, low inventory, past-due balances)
+- AR aging with drill-down (current / 30 / 60 / 90 / 120+)
+- Revenue and margin by customer, product, field, time period
+- Salesman commission reporting
+- Vehicle utilization (acres per sprayer per day/week/season)
+- Season-over-season comparison
+- Manufacturer rebate tier progress
 
-### Removed per User Request
-- ~~Barcode / QR scanning~~
-- ~~Vendor scorecard~~
+### Mobile & Field Use
+- Applicator mobile view (assigned jobs, start/complete, actual acres, photos, signatures)
+- Offline capability (cached jobs, queued uploads, sync when connected)
+- GPS-tagged photo documentation (auto-stamped with coordinates, timestamp, job ID)
+- Navigation integration (tap field -> opens directions)
+- Driver delivery view (route, signature capture, return initiation)
+
+### Integrations
+- QuickBooks / Xero (two-way invoice + payment sync)
+- Weather data API (current conditions + forecast for scheduling)
+- Precision ag platforms (import field boundaries from John Deere, Climate FieldView, etc.)
+- Stripe ACH (payment links on invoices, auto-reconciliation)
+- SMS notifications via Twilio (job dispatch, customer application notifications, invoice reminders)
+- Email with open tracking
+
+## Competitive Advantage Features
+
+These features would differentiate CRX Manager from legacy software (CheMan, AgWorks, Agvance, Kahler):
+
+### Tier 1: Game-Changers
+- **Customer Self-Service Portal** — Customers log in to view invoices, payment history, application records, and make online payments.
+- **Automatic Job-Complete Notifications** — When a field is sprayed, the customer gets a text/email with details.
+- **Seasonal Program Builder** — Build complete season programs with committed acres and predictable revenue.
+
+### Tier 2: Strong Differentiators
+- **Manufacturer Rebate Tier Tracking** — Real-time tracking of purchase volumes against rebate tier thresholds.
+- **Integrated Field Scouting Notes** — Scout observations tied to field records, visible when building blend tickets.
+- **Supplier Price Comparison** — Historical pricing by supplier by product, visible at purchase time.
+- **"What If" Scenario Pricing** — Model costs in real-time during customer calls.
+
+### Tier 3: Polish & Professionalism
+- **Morning Dashboard** — Comprehensive operational briefing for each day.
+- **Activity Timeline on Every Record** — Chronological feed eliminating the need to check 5 different pages.
+- **Proactive License Expiration Alerts** — Automated alerts at 90/60/30 days.
+
+## Modern SaaS Patterns to Add
+
+- **Notification System** — In-app bell with unread count, email notifications, daily digest option
+- **Saved Views / Custom Filters** — One-click bookmarks for frequently used filter combinations
+- **Keyboard Shortcuts** — N (new), S (save), -> (next record), Esc (cancel) for power users
+- **Bulk Operations** — Select 20 unposted invoices -> "Post All", Select 15 fields -> "Create Blend Ticket"
+- **Activity Feed / Timeline** — On every customer, order, and field record
+- **Scheduled Automations** — Weekly email digests, monthly auto-generated statements
 
 ---
 
@@ -744,41 +1019,46 @@ New storage: `license-documents` bucket for uploaded license images/PDFs.
 
 | RPC | Change | Phase |
 |-----|--------|-------|
-| `save_blend_ticket` | Accept order_id + billing_status params | 1 |
-| `convert_quote_to_order` | Carry payment_source + finance_program_id from quote_items to order_items | 3 |
-| `create_direct_order` | Accept payment_source + finance_program_id per item | 3 |
-| `record_payment` | Add optional invoice_id param, update invoice balance | 3 |
+| `save_blend_ticket` | Accept order_id + billing_status params | 3 |
+| `convert_quote_to_order` | Carry payment_source + finance_program_id from quote_items to order_items | 2 |
+| `create_direct_order` | Accept payment_source + finance_program_id per item | 2 |
+| `record_payment` | Add optional invoice_id param, update invoice balance | 2 |
 
 ## New RPCs to Create
 
 | RPC | Purpose | Phase |
 |-----|---------|-------|
-| `link_blend_ticket_to_order` | Link blend ticket to order + map products | 1 |
-| `create_order_from_blend_ticket` | Create order retroactively from blend ticket | 1 |
-| `create_cycle_count` | Snapshot inventory into count items | 2 |
-| `approve_cycle_count` | Approve count + adjust inventory | 2 |
-| `create_invoice_from_order` | Generate invoice from order | 3 |
-| `record_invoice_payment` | Record payment against invoice | 3 |
-| `process_return` | Approve return → restock + credit | 4 |
-| `next_cycle_count_number` | CC-YYYY-NNNN | 2 |
-| `next_invoice_number` | INV-YYYY-NNNN | 3 |
-| `next_return_number` | RMA-YYYY-NNNN | 4 |
+| `link_blend_ticket_to_order` | Link blend ticket to order + map products | 3 |
+| `create_order_from_blend_ticket` | Create order retroactively from blend ticket | 3 |
+| `create_cycle_count` | Snapshot inventory into count items | 5 |
+| `approve_cycle_count` | Approve count + adjust inventory | 5 |
+| `create_invoice_from_order` | Generate invoice from order | 2 |
+| `record_invoice_payment` | Record payment against invoice | 2 |
+| `process_return` | Approve return -> restock + credit | 6 |
+| `calculate_billing_splits` | Largest-remainder rounding for splits | 2 |
+| `next_cycle_count_number` | CC-YYYY-NNNN | 5 |
+| `next_invoice_number` | INV-YYYY-NNNN | 2 |
+| `next_return_number` | RMA-YYYY-NNNN | 6 |
 
 ## Dependency Order
 ```
 FINAL_ACTION_PLAN Sprints 0-5 (bug fixes — do these FIRST)
-    ↓
-Phase 1: Blend Ticket Linkage (3-4 days)
-    ↓
-Phase 2: Cycle Counting (3-4 days)
-    ↓
-Phase 3: Financial (8-10 days) — depends on Phase 1 for blend ticket billing flow
-    ↓
-Phase 4: Returns (4-5 days) — depends on Phase 3 for credit handling
-    ↓
-Phase 5: Sales (5-8 days)
-    ↓
-Phase 6: Compliance (3-4 days)
+    |
+Phase 1: Farm/Field Foundation (5-7 days) — G4 + Missing Gap A
+    |
+Phase 2: Billing Architecture (12-18 days) — G2 + G3 + G6 + Missing Gaps B, C
+    |
+Phase 3: Blend Ticket Linkage (3-4 days) — depends on Phase 1+2
+    |
+Phase 4: Recipes + Maps (8-12 days) — G5 + G1, depends on Phase 1
+    |
+Phase 5: Inventory Enhancements (5-7 days) — Missing Gaps D, E
+    |
+Phase 6: Returns/RMA (4-5 days) — depends on Phase 2 for credit handling
+    |
+Phase 7: Reporting + Sales + Compliance (10-15 days) — G7 + G8 + Missing Gap F
+    |
+Phase 8 (FUTURE): Customer Portal, Mobile, Integrations
 ```
 
 ## How to Test End-to-End
@@ -792,6 +1072,8 @@ After each phase:
 
 ---
 
-> ⚠️ **REMINDER: This is a DRAFT. DO NOT IMPLEMENT.**
-> The user is still refining this plan and has more context to add.
-> No code changes, no migrations, no file modifications until the user explicitly approves and requests implementation of a specific phase.
+> **END OF DOCUMENT**
+>
+> This document should be read by any implementing agent (Claude Code, Cursor, etc.) before starting work on any phase. The companion `CRX_MANAGER_ARCHITECTURE_REVIEW.md` contains additional detailed reference material.
+>
+> **REMINDER: This is a PLANNING DOCUMENT. DO NOT IMPLEMENT without explicit user approval per phase.**
