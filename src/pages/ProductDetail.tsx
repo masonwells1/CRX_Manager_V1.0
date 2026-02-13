@@ -30,6 +30,8 @@ export default function ProductDetail() {
     container_size: undefined,
     unit_size: '',
     epa_registration: '',
+    is_rup: false,
+    signal_word: null,
     product_form: null,
     inventory_unit: null,
     container_unit: null,
@@ -262,6 +264,32 @@ export default function ProductDetail() {
               <Input label="Container Size" type="number" value={product.container_size ?? ''} onChange={(e) => update('container_size', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
               <Input label="Unit Size" value={product.unit_size || ''} onChange={(e) => update('unit_size', e.target.value)} disabled={!isAdmin} />
               <Input label="EPA Registration" value={product.epa_registration || ''} onChange={(e) => update('epa_registration', e.target.value)} disabled={!isAdmin} placeholder="e.g., 34704-69" />
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={product.is_rup || false}
+                    onChange={(e) => update('is_rup', e.target.checked)}
+                    disabled={!isAdmin}
+                    className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
+                  />
+                  <span className="text-sm font-medium text-nav-dark">Restricted Use (RUP)</span>
+                </label>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">Signal Word</label>
+                <select
+                  value={product.signal_word || ''}
+                  onChange={(e) => update('signal_word', e.target.value || null)}
+                  disabled={!isAdmin}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                >
+                  <option value="">None</option>
+                  <option value="Danger">Danger</option>
+                  <option value="Warning">Warning</option>
+                  <option value="Caution">Caution</option>
+                </select>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-secondary mb-1">Product Form</label>
                 <select
