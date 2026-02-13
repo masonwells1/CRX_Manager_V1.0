@@ -790,3 +790,57 @@ export interface CycleCountItem {
   // Joined
   product?: Product;
 }
+
+// Phase 6: Returns / RMA
+
+export type ReturnStatus = 'requested' | 'approved' | 'received' | 'credited' | 'rejected' | 'cancelled';
+export type ReturnReason = 'defective' | 'damaged' | 'wrong_product' | 'overstock' | 'expired' | 'other';
+export type ReturnItemCondition = 'unopened' | 'opened' | 'damaged' | 'expired';
+
+export interface Return {
+  id: string;
+  return_number: string;
+  order_id: string | null;
+  customer_id: string;
+  status: ReturnStatus;
+  reason: ReturnReason;
+  reason_notes: string | null;
+  requested_by: string;
+  approved_by: string | null;
+  received_by: string | null;
+  total_credit_cents: number;
+  credit_invoice_id: string | null;
+  requested_at: string;
+  approved_at: string | null;
+  received_at: string | null;
+  credited_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  // Joined
+  customer?: Customer;
+  order?: Order;
+  requester?: Profile;
+  items?: ReturnItem[];
+}
+
+export interface ReturnItem {
+  id: string;
+  return_id: string;
+  order_item_id: string | null;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit: string;
+  unit_price_cents: number;
+  extended_cents: number;
+  condition: ReturnItemCondition;
+  restock: boolean;
+  restocked: boolean;
+  sort_order: number;
+  notes: string | null;
+  created_at: string;
+  // Joined
+  product?: Product;
+}
