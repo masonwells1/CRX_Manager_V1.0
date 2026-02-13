@@ -40,6 +40,7 @@ const BlendTicketDetail = lazy(() => import('./pages/BlendTicketDetail').then(m 
 const Invoices = lazy(() => import('./pages/Invoices'));
 const InvoiceDetail = lazy(() => import('./pages/InvoiceDetail'));
 const BlendRecipes = lazy(() => import('./pages/BlendRecipes'));
+const CycleCounts = lazy(() => import('./pages/CycleCounts'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -99,6 +100,7 @@ const router = createBrowserRouter([
           { path: 'blend-tickets', element: <BlendTickets /> },
           { path: 'blend-tickets/:id', element: <BlendTicketDetail /> },
           { path: 'recipes', element: <BlendRecipes /> },
+          { path: 'cycle-counts', element: <CycleCounts /> },
           { path: 'purchase-orders', element: <PurchaseOrders /> },
           { path: 'purchase-orders/new', element: <NewPurchaseOrder /> },
           { path: 'purchase-orders/:id', element: <PurchaseOrderDetail /> },

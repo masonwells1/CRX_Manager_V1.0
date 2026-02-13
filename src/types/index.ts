@@ -738,3 +738,55 @@ export interface FieldBillingDefault {
   updated_at: string;
   customer?: Customer;
 }
+
+// Phase 5: Inventory Enhancements
+
+export interface Warehouse {
+  id: string;
+  name: string;
+  code: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  is_active: boolean;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type CycleCountStatus = 'in_progress' | 'completed' | 'cancelled';
+
+export interface CycleCount {
+  id: string;
+  count_number: string;
+  warehouse: string;
+  status: CycleCountStatus;
+  initiated_by: string;
+  completed_by: string | null;
+  notes: string | null;
+  started_at: string;
+  completed_at: string | null;
+  created_at: string;
+  // Joined
+  initiator?: Profile;
+  completer?: Profile;
+  items?: CycleCountItem[];
+}
+
+export interface CycleCountItem {
+  id: string;
+  cycle_count_id: string;
+  product_id: string;
+  inventory_id: string | null;
+  expected_qty: number;
+  counted_qty: number | null;
+  variance: number | null;
+  variance_pct: number | null;
+  is_counted: boolean;
+  counted_by: string | null;
+  counted_at: string | null;
+  notes: string | null;
+  created_at: string;
+  // Joined
+  product?: Product;
+}

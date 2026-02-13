@@ -21,6 +21,7 @@ import {
   MapPin,
   Receipt,
   Beaker,
+  ClipboardCheck,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
@@ -42,6 +43,7 @@ const navItems: NavItem[] = [
   { path: '/orders', label: 'Orders', icon: <ClipboardList className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
   { path: '/invoices', label: 'Invoices', icon: <Receipt className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
   { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-5 h-5" /> },
+  { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-5 h-5" />, roles: ['admin'] },
   { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-5 h-5" /> },
   { path: '/blend-tickets', label: 'Blend Tickets', icon: <Image className="w-5 h-5" /> },
   { path: '/recipes', label: 'Blend Recipes', icon: <Beaker className="w-5 h-5" />, roles: ['admin', 'sales_rep'] },
