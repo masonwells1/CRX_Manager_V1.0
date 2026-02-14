@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, CheckCircle2, FileText } from 'lucide-react';
+import { Download, CheckCircle2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -134,7 +134,7 @@ export default function Reports() {
 
   // Load product options on mount (for chemical history filter)
   useEffect(() => {
-    supabase.from('products').select('id, product_name').is('deleted_at', null).order('product_name').limit(500)
+    supabase.from('products').select('id, product_name').eq('is_active', true).order('product_name').limit(500)
       .then(({ data: rows }) => {
         setProductOptions((rows || []).map((r) => ({ id: r.id, name: r.product_name })));
       });
@@ -309,7 +309,7 @@ export default function Reports() {
     const { data, error } = await supabase
       .from('products')
       .select('product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, current_cost, product_form, container_type, container_size, unit_size')
-      .is('deleted_at', null)
+      .eq('is_active', true)
       .order('product_name')
       .limit(500);
     if (error) { toast('error', 'Failed to load price list.'); return; }

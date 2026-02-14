@@ -126,7 +126,7 @@ export default function JobDetail() {
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('vehicles').select('*').eq('status', 'active').order('vehicle_name'),
       supabase.from('profiles').select('*').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
-      supabase.from('blend_recipes').select('*').eq('is_active', true).order('recipe_name'),
+      supabase.from('blend_recipes').select('*').eq('is_active', true).order('name'),
     ]);
     setCustomers((custResult.data || []) as Customer[]);
     setAllFields((fieldResult.data || []) as Field[]);
@@ -194,15 +194,15 @@ export default function JobDetail() {
       }))
     );
 
-    if (j.applied_info && j.applied_info.length > 0) {
-      const ai = j.applied_info[0];
+    const aiData = Array.isArray(j.applied_info) ? j.applied_info[0] : j.applied_info;
+    if (aiData) {
       setAppliedInfo({
-        wind_speed: ai.wind_speed?.toString() || '',
-        wind_direction: ai.wind_direction || '',
-        temperature: ai.temperature?.toString() || '',
-        humidity: ai.humidity?.toString() || '',
-        actual_gallons_applied: ai.actual_gallons_applied?.toString() || '',
-        notes: ai.notes || '',
+        wind_speed: aiData.wind_speed?.toString() || '',
+        wind_direction: aiData.wind_direction || '',
+        temperature: aiData.temperature?.toString() || '',
+        humidity: aiData.humidity?.toString() || '',
+        actual_gallons_applied: aiData.actual_gallons_applied?.toString() || '',
+        notes: aiData.notes || '',
       });
     }
 
@@ -327,6 +327,7 @@ export default function JobDetail() {
       const result = data as any;
       if (profile) logActivity('job_invoiced', `Job ${jobNumber} → Invoice ${result.invoice_number}`, profile.id);
       toast('success', `Invoice ${result.invoice_number} created`);
+      setIsDirty(false);
       navigate(`/invoices/${result.invoice_id}`);
     } catch (err: any) {
       toast('error', err.message || 'Failed to transfer to invoice');
@@ -751,7 +752,7 @@ export default function JobDetail() {
           >
             <option value="">Select recipe...</option>
             {recipes.map((r) => (
-              <option key={r.id} value={r.id}>{r.recipe_name}</option>
+              <option key={r.id} value={r.id}>{r.name}</option>
             ))}
           </select>
           <div className="flex justify-end gap-2 pt-2">

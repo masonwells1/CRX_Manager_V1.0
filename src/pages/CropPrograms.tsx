@@ -44,7 +44,13 @@ interface CropProgram {
 }
 
 const CROP_TYPES = ['Corn', 'Soybeans', 'Wheat', 'Cotton', 'Hay/Forage', 'Other'];
-const SEASONS = ['2025', '2026', '2027'];
+function getSeasonChoices(): string[] {
+  const now = new Date();
+  // Season year = crop year ending June 30. If we're in Jul-Dec, current season is next calendar year.
+  const base = now.getMonth() >= 6 ? now.getFullYear() + 1 : now.getFullYear();
+  return [String(base - 1), String(base), String(base + 1)];
+}
+const SEASONS = getSeasonChoices();
 const SECTION_PRESETS = ['Pre-Emerge', 'Post-Emerge', 'Burndown', 'Fungicide', 'Insecticide', 'Fertilizer', 'Seed Treatment', 'Other'];
 
 export default function CropPrograms() {
@@ -62,7 +68,7 @@ export default function CropPrograms() {
   const [formName, setFormName] = useState('');
   const [formDesc, setFormDesc] = useState('');
   const [formCrop, setFormCrop] = useState('Corn');
-  const [formSeason, setFormSeason] = useState('2026');
+  const [formSeason, setFormSeason] = useState(SEASONS[1]);
   const [formItems, setFormItems] = useState<ProgramItem[]>([]);
   const [saving, setSaving] = useState(false);
 
@@ -142,7 +148,7 @@ export default function CropPrograms() {
     setFormName('');
     setFormDesc('');
     setFormCrop('Corn');
-    setFormSeason('2026');
+    setFormSeason(SEASONS[1]);
     setFormItems([{ product_id: '', product_name: '', rate: 0, rate_unit: 'oz/acre', section_name: 'Pre-Emerge', notes: '' }]);
     setModalOpen(true);
   };
