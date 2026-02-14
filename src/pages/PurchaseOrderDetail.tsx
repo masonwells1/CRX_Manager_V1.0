@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeft, PackageCheck, Pencil, Trash2 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -215,7 +215,11 @@ export default function PurchaseOrderDetail() {
         </button>
         {isAdmin && (
           <div className="flex items-center gap-2">
-            {/* Receiving is done from the Inventory Management page */}
+            {(po.status === 'submitted' || po.status === 'partially_received') && (
+              <Button icon={<PackageCheck className="w-4 h-4" />} onClick={() => setReceiveOpen(true)}>
+                Receive Items
+              </Button>
+            )}
             <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
               Edit
             </Button>
