@@ -51,19 +51,20 @@ export default function MapContainer({
   }
 
   return (
-    <Map
-      {...viewState}
-      onMove={(evt) => setViewState(evt.viewState)}
-      mapboxAccessToken={MAPBOX_TOKEN}
-      mapStyle={SATELLITE_STYLE}
-      style={{ width: '100%', height: '100%' }}
-      className={className}
-      interactive={interactive}
-      onLoad={handleLoad as any}
-      attributionControl={false}
-    >
-      {interactive && <NavigationControl position="top-right" />}
-      {children}
-    </Map>
+    <div className={className}>
+      <Map
+        {...viewState}
+        onMove={(evt) => setViewState(evt.viewState)}
+        mapboxAccessToken={MAPBOX_TOKEN}
+        mapStyle={SATELLITE_STYLE}
+        style={{ width: '100%', height: '100%' }}
+        interactive={interactive}
+        onLoad={handleLoad as any}
+        attributionControl={false}
+      >
+        {interactive && <NavigationControl position="top-right" />}
+        {children}
+      </Map>
+    </div>
   );
 }
