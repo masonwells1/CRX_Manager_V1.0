@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText,
+  ArrowLeft, Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -12,6 +12,8 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import type { Invoice, InvoiceItem, InvoiceStatus, Product, Customer } from '../types';
+import { downloadInvoicePdf, type InvoicePdfData } from '../lib/invoicePdf';
+import WriteOffModal from '../components/invoices/WriteOffModal';
 
 interface LineItem {
   id?: string;
@@ -79,6 +81,12 @@ export default function InvoiceDetail() {
   const [productSearch, setProductSearch] = useState('');
   const [productResults, setProductResults] = useState<Product[]>([]);
   const [showProductModal, setShowProductModal] = useState(false);
+
+  // Print PDF
+  const [printing, setPrinting] = useState(false);
+
+  // Write-off modal
+  const [showWriteOff, setShowWriteOff] = useState(false);
 
   // Void modal
   const [showVoidModal, setShowVoidModal] = useState(false);
@@ -338,6 +346,45 @@ export default function InvoiceDetail() {
     }
   };
 
+  // Print invoice PDF
+  const handlePrint = async () => {
+    setPrinting(true);
+    try {
+      const pdfData: InvoicePdfData = {
+        invoice_number: invoice.invoice_number || 'DRAFT',
+        invoice_date: invoice.invoice_date || new Date().toISOString().split('T')[0],
+        due_date: invoice.due_date || undefined,
+        invoice_type: invoice.invoice_type || 'chemical_sale',
+        status: invoice.status || 'draft',
+        customer_name: customerName,
+        salesman_name: salespeople.find((s) => s.id === invoice.salesman_id)?.full_name,
+        purchase_order_ref: invoice.purchase_order_ref || undefined,
+        header_notes: invoice.header_notes || undefined,
+        footer_notes: invoice.footer_notes || undefined,
+        items: items.map((it) => ({
+          description: it.description,
+          product_name: it.product_name,
+          quantity: it.quantity,
+          unit_size: it.unit_size || undefined,
+          unit_price_cents: it.unit_price_cents,
+          extended_cents: it.extended_cents,
+          rate_per_acre: it.rate_per_acre,
+          acres: it.acres,
+        })),
+        total_amount_cents: items.reduce((s, i) => s + i.extended_cents, 0),
+        total_cost_cents: items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0),
+        paid_amount_cents: invoice.paid_amount_cents || 0,
+        prepay_applied_cents: invoice.prepay_applied_cents || 0,
+        balance_cents: invoice.balance_cents || 0,
+      };
+      await downloadInvoicePdf(pdfData);
+      toast('success', 'Invoice PDF downloaded');
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to generate PDF');
+    }
+    setPrinting(false);
+  };
+
   const totalCents = items.reduce((s, i) => s + i.extended_cents, 0);
   const totalCostCents = items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0);
   const editable = isNew || ['draft', 'unposted'].includes(invoice.status || '');
@@ -393,6 +440,17 @@ export default function InvoiceDetail() {
               Post
             </Button>
           )}
+          {!isNew && (
+            <Button
+              variant="secondary"
+              icon={<Printer className="w-4 h-4" />}
+              onClick={handlePrint}
+              loading={printing}
+              showChevron={false}
+            >
+              Print
+            </Button>
+          )}
           {!isNew && invoice.status === 'posted' && isAdmin && (
             <>
               <Button
@@ -404,6 +462,14 @@ export default function InvoiceDetail() {
                 }}
               >
                 Record Payment
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowWriteOff(true)}
+                showChevron={false}
+              >
+                Write Off
               </Button>
               <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => setShowVoidModal(true)}>
                 Void
@@ -793,6 +859,16 @@ export default function InvoiceDetail() {
           </div>
         </div>
       </Modal>
+
+      {/* Write-Off Modal */}
+      <WriteOffModal
+        open={showWriteOff}
+        onClose={() => setShowWriteOff(false)}
+        invoiceId={id || ''}
+        invoiceNumber={invoice.invoice_number || ''}
+        balanceCents={invoice.balance_cents || 0}
+        onSuccess={() => fetchInvoice(id!)}
+      />
     </div>
   );
 }

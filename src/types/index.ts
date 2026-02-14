@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'sales_rep' | 'driver';
+export type UserRole = 'admin' | 'sales_rep' | 'driver' | 'applicator';
 export type ProductForm = 'liquid' | 'dry';
 export type ContainerType = 'Jug' | 'Drum' | 'Pallet' | 'Mini-Bulk' | 'Shuttle' | 'Bag' | 'Tote' | 'Ea';
 export type UnitType = 'liquid' | 'dry' | 'both';
@@ -950,4 +950,330 @@ export interface SeasonComparisonRow {
   season_a_val: number;
   season_b_val: number;
   change_pct: number | null;
+}
+
+// Sprint 7: Vehicles
+
+export type VehicleType = 'ground' | 'air';
+export type VehicleStatus = 'active' | 'inactive' | 'maintenance';
+
+export interface Vehicle {
+  id: string;
+  vehicle_name: string;
+  vehicle_type: VehicleType;
+  category: string | null;
+  capacity_gallons: number | null;
+  capacity_unit: string | null;
+  registration: string | null;
+  status: VehicleStatus;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Sprint 7: Application Records
+
+export interface ApplicationProduct {
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit: string;
+  rate_per_acre: number | null;
+  rate_unit: string | null;
+  epa_registration: string | null;
+  is_rup: boolean;
+}
+
+export interface WeatherConditions {
+  wind_speed: number | null;
+  wind_direction: string | null;
+  temperature: number | null;
+  humidity: number | null;
+}
+
+export interface ApplicationRecord {
+  id: string;
+  record_number: string;
+  source_type: 'job' | 'blend_ticket';
+  source_id: string;
+  customer_id: string;
+  applicator_id: string | null;
+  field_id: string | null;
+  application_date: string;
+  application_time: string | null;
+  product_data: ApplicationProduct[];
+  total_acres: number | null;
+  total_volume: number | null;
+  total_volume_unit: string | null;
+  vehicle_id: string | null;
+  weather_conditions: WeatherConditions | null;
+  notes: string | null;
+  season: number | null;
+  invoice_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined
+  customer?: Customer;
+  applicator?: Profile;
+  field?: Field;
+  vehicle?: Vehicle;
+}
+
+// Sprint 8: Job Scheduling
+
+export type JobStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'invoiced';
+
+export interface Job {
+  id: string;
+  job_number: string;
+  customer_id: string;
+  status: JobStatus;
+  job_date: string;
+  scheduled_time: string | null;
+  applicator_id: string | null;
+  vehicle_id: string | null;
+  recipe_id: string | null;
+  notes: string | null;
+  tags: string[] | null;
+  batch_id: string | null;
+  season: number | null;
+  total_acres: number | null;
+  total_cost_cents: number;
+  total_price_cents: number;
+  invoice_id: string | null;
+  created_by: string | null;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined
+  customer?: Customer;
+  applicator?: Profile;
+  vehicle?: Vehicle;
+  recipe?: BlendRecipe;
+  job_fields?: JobField[];
+  job_chemicals?: JobChemical[];
+  applied_info?: JobAppliedInfo;
+}
+
+export interface JobField {
+  id: string;
+  job_id: string;
+  field_id: string;
+  acres_to_treat: number | null;
+  sort_order: number;
+  // Joined
+  field?: Field;
+}
+
+export interface JobChemical {
+  id: string;
+  job_id: string;
+  product_id: string;
+  quantity: number;
+  unit: string | null;
+  rate_per_acre: number | null;
+  rate_unit: string | null;
+  cost_per_unit_cents: number;
+  price_per_unit_cents: number;
+  sort_order: number;
+  // Joined
+  product?: Product;
+}
+
+export interface JobAppliedInfo {
+  id: string;
+  job_id: string;
+  actual_start_time: string | null;
+  actual_end_time: string | null;
+  wind_speed: number | null;
+  wind_direction: string | null;
+  temperature: number | null;
+  humidity: number | null;
+  actual_gallons_applied: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Sprint 9: Report Row Types
+
+export interface LogbookRow {
+  [k: string]: unknown;
+  record_id: string;
+  record_number: string;
+  application_date: string;
+  application_time: string | null;
+  customer_name: string;
+  applicator_name: string | null;
+  field_name: string | null;
+  field_legal_description: string | null;
+  total_acres: number | null;
+  total_volume: number | null;
+  total_volume_unit: string | null;
+  vehicle_name: string | null;
+  vehicle_type: string | null;
+  vehicle_registration: string | null;
+  weather_conditions: WeatherConditions | null;
+  product_data: ApplicationProduct[];
+  invoice_number: string | null;
+  season: number | null;
+  source_type: string;
+  created_at: string;
+}
+
+export interface FAALogbookRow extends LogbookRow {
+  applicator_license: string | null;
+  faa_certificate: string | null;
+  field_county: string | null;
+  field_state: string | null;
+  vehicle_category: string | null;
+}
+
+export interface PnLRow {
+  [k: string]: unknown;
+  line_item: string;
+  amount: number;
+  pct_of_revenue: number;
+}
+
+export interface GrossSalesRow {
+  [k: string]: unknown;
+  group_name: string;
+  total_revenue: number;
+  total_cost: number;
+  gross_profit: number;
+  margin_pct: number;
+  units_sold: number;
+  order_count: number;
+}
+
+export interface CustomerBalanceRow {
+  [k: string]: unknown;
+  customer_id: string;
+  farm_name: string;
+  total_invoiced: number;
+  total_paid: number;
+  prepay_applied: number;
+  outstanding_balance: number;
+  invoice_count: number;
+  oldest_unpaid_date: string | null;
+}
+
+export interface ChemicalHistoryRow {
+  [k: string]: unknown;
+  transaction_date: string;
+  transaction_type: string;
+  reference_number: string;
+  customer_name: string | null;
+  quantity: number;
+  unit: string | null;
+  unit_price: number;
+  total_amount: number;
+  notes: string | null;
+}
+
+export interface CommissionBalanceRow {
+  [k: string]: unknown;
+  recipient_id: string | null;
+  recipient_name: string;
+  total_earned: number;
+  total_paid: number;
+  outstanding_balance: number;
+  pending_count: number;
+  paid_count: number;
+}
+
+export interface InventoryCostRow {
+  [k: string]: unknown;
+  product_id: string;
+  product_name: string;
+  sku: string | null;
+  category: string | null;
+  vendor: string | null;
+  quantity_available: number;
+  quantity_prebooked: number;
+  net_available: number;
+  unit_cost: number;
+  total_cost_value: number;
+  reorder_point: number;
+  below_reorder: boolean;
+}
+
+// Sprint 10: Accounting & Commission Payment Types
+
+export interface AccountingPeriod {
+  id: string;
+  period_start: string;
+  period_end: string;
+  status: 'open' | 'closed';
+  closed_by: string | null;
+  closed_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommissionPayment {
+  id: string;
+  payment_number: string;
+  recipient_id: string;
+  total_amount: number;
+  status: 'unposted' | 'posted';
+  payment_method: string | null;
+  reference_number: string | null;
+  payment_date: string;
+  posted_by: string | null;
+  posted_at: string | null;
+  notes: string | null;
+  season: number | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommissionPaymentItem {
+  id: string;
+  commission_payment_id: string;
+  commission_id: string;
+  amount: number;
+  created_at: string;
+}
+
+// Sprint 11: Financial Workflow Types
+
+export interface WriteOff {
+  id: string;
+  invoice_id: string;
+  customer_id: string;
+  amount_cents: number;
+  reason: string;
+  approved_by: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface FinanceCharge {
+  id: string;
+  customer_id: string;
+  invoice_id: string | null;
+  amount_cents: number;
+  charge_rate: number;
+  base_amount_cents: number;
+  period_start: string;
+  period_end: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface CustomerTransactionRow {
+  [k: string]: unknown;
+  transaction_date: string;
+  transaction_type: string;
+  reference_number: string | null;
+  description: string | null;
+  debit_cents: number;
+  credit_cents: number;
+  running_balance_cents: number;
 }

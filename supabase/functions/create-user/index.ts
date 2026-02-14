@@ -67,6 +67,17 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    const validRoles = ["admin", "sales_rep", "driver", "applicator"];
+    if (role && !validRoles.includes(role)) {
+      return new Response(
+        JSON.stringify({ error: `Invalid role: ${role}. Must be one of: ${validRoles.join(", ")}` }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
     const { data: newUser, error: createError } =
       await adminClient.auth.admin.createUser({
         email,

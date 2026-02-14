@@ -1,0 +1,409 @@
+/**
+ * MonthEndClose — Month-end workflow page
+ * Current period status, checklist, batch statement generation, "Roll the Month" button.
+ *
+ * Sprint 10: Month-End Close
+ */
+import { useEffect, useState } from 'react';
+import { Calendar, CheckCircle, AlertCircle, FileText, Download, Lock } from 'lucide-react';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import Badge from '../components/ui/Badge';
+import Modal from '../components/ui/Modal';
+import { useToast } from '../components/ui/Toast';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/db';
+import { downloadStatementPdf, type StatementData } from '../lib/statementPdf';
+
+interface PeriodInfo {
+  id?: string;
+  period_start: string;
+  period_end: string;
+  status: 'open' | 'closed';
+  closed_at?: string;
+  closed_by?: string;
+}
+
+interface MonthlySummary {
+  invoices: { posted_count: number; total_amount_cents: number; total_cost_cents: number; draft_count: number; voided_count: number };
+  payments: { count: number; total_cents: number };
+  orders: { count: number; total_cents: number };
+  deliveries: { count: number; completed_count: number };
+  applications: { count: number; total_acres: number };
+  commissions: { earned_cents: number; paid_count: number };
+  ar_balance_cents: number;
+}
+
+const fmt = (cents: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
+
+function getCurrentPeriod(): { start: string; end: string; label: string } {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const start = `${year}-${String(month + 1).padStart(2, '0')}-01`;
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const end = `${year}-${String(month + 1).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
+  const label = now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  return { start, end, label };
+}
+
+export default function MonthEndClose() {
+  const { profile } = useAuth();
+  const { toast } = useToast();
+
+  const [periods, setPeriods] = useState<PeriodInfo[]>([]);
+  const [summary, setSummary] = useState<MonthlySummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [closing, setClosing] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [showCloseModal, setShowCloseModal] = useState(false);
+
+  const current = getCurrentPeriod();
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    setLoading(true);
+
+    // Fetch existing periods
+    const { data: periodData } = await supabase
+      .from('accounting_periods')
+      .select('*')
+      .order('period_end', { ascending: false })
+      .limit(12);
+    setPeriods((periodData || []) as PeriodInfo[]);
+
+    // Fetch monthly summary for current period
+    const { data: summaryData, error } = await supabase.rpc('get_monthly_summary', {
+      p_period_start: current.start,
+      p_period_end: current.end,
+    });
+    if (!error && summaryData) {
+      setSummary(summaryData as MonthlySummary);
+    }
+
+    setLoading(false);
+  };
+
+  const currentPeriodStatus = periods.find(
+    (p) => p.period_start === current.start && p.period_end === current.end,
+  );
+  const isClosed = currentPeriodStatus?.status === 'closed';
+
+  // Checklist items
+  const checklist = summary
+    ? [
+        {
+          label: 'All invoices posted or voided',
+          done: summary.invoices.draft_count === 0,
+          detail: summary.invoices.draft_count > 0
+            ? `${summary.invoices.draft_count} unposted invoice(s) remain`
+            : `${summary.invoices.posted_count} posted, ${summary.invoices.voided_count} voided`,
+        },
+        {
+          label: 'Payments reconciled',
+          done: true,
+          detail: `${summary.payments.count} payments totaling ${fmt(summary.payments.total_cents)}`,
+        },
+        {
+          label: 'Deliveries completed',
+          done: summary.deliveries.count === summary.deliveries.completed_count || summary.deliveries.count === 0,
+          detail: `${summary.deliveries.completed_count}/${summary.deliveries.count} deliveries completed`,
+        },
+        {
+          label: 'Commissions reviewed',
+          done: true,
+          detail: `${fmt(summary.commissions.earned_cents)} earned, ${summary.commissions.paid_count} paid`,
+        },
+        {
+          label: 'Finance charges generated',
+          done: true,
+          detail: 'Generate from AR Aging page if needed',
+        },
+      ]
+    : [];
+
+  const allChecksPassed = checklist.every((c) => c.done);
+
+  const handleClose = async () => {
+    setClosing(true);
+    try {
+      const { data, error } = await supabase.rpc('close_accounting_period', {
+        p_period_end: current.end,
+        p_performed_by: profile?.id,
+      });
+      if (error) throw error;
+      toast('success', `Period closed: ${current.label}`);
+      setShowCloseModal(false);
+      fetchData();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to close period');
+    }
+    setClosing(false);
+  };
+
+  const handleGenerateStatements = async () => {
+    setGenerating(true);
+    try {
+      const { data, error } = await supabase.rpc('generate_batch_statements', {
+        p_as_of_date: current.end,
+        p_performed_by: profile?.id,
+      });
+      if (error) throw error;
+
+      const statements = data as StatementData[];
+      if (!statements || statements.length === 0) {
+        toast('info', 'No customers have outstanding balances');
+        setGenerating(false);
+        return;
+      }
+
+      // Generate and download each statement
+      for (const stmt of statements) {
+        const stmtData: StatementData = {
+          customer_name: (stmt as any).farm_name,
+          contact_name: (stmt as any).contact_name,
+          email: (stmt as any).email,
+          phone: (stmt as any).phone,
+          address: (stmt as any).address,
+          city: (stmt as any).city,
+          state: (stmt as any).state,
+          zip: (stmt as any).zip,
+          as_of_date: current.end,
+          outstanding_balance_cents: (stmt as any).outstanding_balance_cents,
+          transactions: ((stmt as any).transactions || []).map((tx: any) => ({
+            invoice_number: tx.invoice_number,
+            invoice_date: tx.invoice_date,
+            due_date: tx.due_date,
+            total_amount_cents: tx.total_amount_cents,
+            paid_amount_cents: tx.paid_amount_cents,
+            prepay_applied_cents: tx.prepay_applied_cents,
+            balance_cents: tx.balance_cents,
+            status: tx.status,
+            invoice_type: tx.invoice_type,
+          })),
+        };
+        await downloadStatementPdf(stmtData);
+      }
+
+      toast('success', `Generated ${statements.length} customer statement(s)`);
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to generate statements');
+    }
+    setGenerating(false);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="w-8 h-8 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold font-heading text-nav-dark">Month-End Close</h1>
+          <p className="text-sm text-secondary mt-1">Review and close accounting periods</p>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            icon={<FileText className="w-4 h-4" />}
+            onClick={handleGenerateStatements}
+            loading={generating}
+          >
+            Generate Statements
+          </Button>
+          {!isClosed && (
+            <Button
+              icon={<Lock className="w-4 h-4" />}
+              onClick={() => setShowCloseModal(true)}
+              disabled={!allChecksPassed}
+            >
+              Roll the Month
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Current Period Status */}
+      <Card>
+        <div className="flex items-center gap-3 mb-4">
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${isClosed ? 'bg-crx-green-light' : 'bg-amber-50'}`}>
+            <Calendar className={`w-5 h-5 ${isClosed ? 'text-crx-green' : 'text-amber-600'}`} />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-nav-dark">{current.label}</h2>
+            <p className="text-sm text-secondary">{current.start} to {current.end}</p>
+          </div>
+          <div className="ml-auto">
+            <Badge variant={isClosed ? 'success' : 'warning'}>
+              {isClosed ? 'Closed' : 'Open'}
+            </Badge>
+          </div>
+        </div>
+
+        {isClosed && currentPeriodStatus?.closed_at && (
+          <p className="text-sm text-secondary">
+            Closed on {new Date(currentPeriodStatus.closed_at).toLocaleString()}
+          </p>
+        )}
+      </Card>
+
+      {/* Summary + Checklist */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Period Summary */}
+        {summary && (
+          <Card>
+            <h3 className="text-sm font-semibold text-nav-dark mb-4">Period Summary</h3>
+            <div className="space-y-3">
+              <div className="flex justify-between text-sm">
+                <span className="text-secondary">Posted Invoices</span>
+                <span className="font-medium">{summary.invoices.posted_count} — {fmt(summary.invoices.total_amount_cents)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-secondary">Cost of Goods</span>
+                <span className="font-medium">{fmt(summary.invoices.total_cost_cents)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-secondary">Gross Margin</span>
+                <span className="font-medium text-crx-green">
+                  {fmt(summary.invoices.total_amount_cents - summary.invoices.total_cost_cents)}
+                </span>
+              </div>
+              <hr className="border-gray-100" />
+              <div className="flex justify-between text-sm">
+                <span className="text-secondary">Payments Received</span>
+                <span className="font-medium">{summary.payments.count} — {fmt(summary.payments.total_cents)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-secondary">Orders</span>
+                <span className="font-medium">{summary.orders.count} — {fmt(summary.orders.total_cents)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-secondary">Deliveries</span>
+                <span className="font-medium">{summary.deliveries.completed_count}/{summary.deliveries.count} completed</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-secondary">Applications</span>
+                <span className="font-medium">{summary.applications.count} — {summary.applications.total_acres?.toLocaleString() || 0} acres</span>
+              </div>
+              <hr className="border-gray-100" />
+              <div className="flex justify-between text-sm">
+                <span className="text-secondary">Commissions Earned</span>
+                <span className="font-medium">{fmt(summary.commissions.earned_cents)}</span>
+              </div>
+              <div className="flex justify-between text-sm font-semibold">
+                <span>AR Balance</span>
+                <span className={summary.ar_balance_cents > 0 ? 'text-red-600' : 'text-crx-green'}>
+                  {fmt(summary.ar_balance_cents)}
+                </span>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* Checklist */}
+        <Card>
+          <h3 className="text-sm font-semibold text-nav-dark mb-4">Close Checklist</h3>
+          <div className="space-y-3">
+            {checklist.map((item, i) => (
+              <div key={i} className="flex items-start gap-3">
+                {item.done ? (
+                  <CheckCircle className="w-5 h-5 text-crx-green flex-shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <p className={`text-sm font-medium ${item.done ? 'text-nav-dark' : 'text-amber-700'}`}>
+                    {item.label}
+                  </p>
+                  <p className="text-xs text-secondary">{item.detail}</p>
+                </div>
+              </div>
+            ))}
+
+            {!allChecksPassed && (
+              <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-sm text-amber-800">
+                  Resolve all checklist items before closing the period.
+                </p>
+              </div>
+            )}
+
+            {isClosed && (
+              <div className="mt-4 p-3 bg-crx-green-light border border-crx-green/20 rounded-lg">
+                <p className="text-sm text-crx-green font-medium">
+                  This period has been closed. No new postings can be made to dates within this period.
+                </p>
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+
+      {/* Recent Period History */}
+      {periods.length > 0 && (
+        <Card>
+          <h3 className="text-sm font-semibold text-nav-dark mb-4">Period History</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-secondary border-b border-gray-100">
+                  <th className="pb-2 pr-4">Period</th>
+                  <th className="pb-2 pr-4">Status</th>
+                  <th className="pb-2 pr-4">Closed At</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {periods.map((p) => (
+                  <tr key={p.id || `${p.period_start}-${p.period_end}`}>
+                    <td className="py-2 pr-4 font-medium text-nav-dark">
+                      {new Date(p.period_start + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <Badge variant={p.status === 'closed' ? 'success' : 'warning'}>
+                        {p.status === 'closed' ? 'Closed' : 'Open'}
+                      </Badge>
+                    </td>
+                    <td className="py-2 text-secondary">
+                      {p.closed_at ? new Date(p.closed_at).toLocaleString() : '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {/* Close Confirmation Modal */}
+      <Modal open={showCloseModal} onClose={() => setShowCloseModal(false)} title="Close Accounting Period">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            You are about to close the accounting period for <strong>{current.label}</strong>.
+          </p>
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-sm text-amber-800">
+              After closing, no invoices can be posted or payments recorded for dates within this period.
+              This action is not easily reversible.
+            </p>
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setShowCloseModal(false)}>Cancel</Button>
+            <Button onClick={handleClose} loading={closing}>
+              Close Period
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}

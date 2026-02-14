@@ -354,6 +354,7 @@ export default function SettingsPage() {
               <option value="admin">Admin</option>
               <option value="sales_rep">Sales Rep</option>
               <option value="driver">Driver</option>
+              <option value="applicator">Applicator</option>
             </select>
           </div>
           <Input label="Phone" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} />
@@ -380,6 +381,7 @@ export default function SettingsPage() {
               <option value="admin">Admin</option>
               <option value="sales_rep">Sales Rep</option>
               <option value="driver">Driver</option>
+              <option value="applicator">Applicator</option>
             </select>
           </div>
           <Input label="Phone" value={editPhone} onChange={(e) => setEditPhone(e.target.value)} />

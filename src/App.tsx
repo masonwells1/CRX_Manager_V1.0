@@ -45,6 +45,15 @@ const Returns = lazy(() => import('./pages/Returns'));
 const ARaging = lazy(() => import('./pages/ARaging'));
 const Compliance = lazy(() => import('./pages/Compliance'));
 const Rebates = lazy(() => import('./pages/Rebates'));
+const Vehicles = lazy(() => import('./pages/Vehicles'));
+const VehicleDetail = lazy(() => import('./pages/VehicleDetail'));
+const ApplicationRecords = lazy(() => import('./pages/ApplicationRecords'));
+const Jobs = lazy(() => import('./pages/Jobs'));
+const JobDetail = lazy(() => import('./pages/JobDetail'));
+const MonthEndClose = lazy(() => import('./pages/MonthEndClose'));
+const CommissionPayments = lazy(() => import('./pages/CommissionPayments'));
+const CustomerTransactionReview = lazy(() => import('./pages/CustomerTransactionReview'));
+const PrepaymentManager = lazy(() => import('./pages/PrepaymentManager'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -116,6 +125,15 @@ const router = createBrowserRouter([
           { path: 'ar-aging', element: <ARaging /> },
           { path: 'compliance', element: <Compliance /> },
           { path: 'rebates', element: <Rebates /> },
+          { path: 'vehicles', element: <Vehicles /> },
+          { path: 'vehicles/:id', element: <VehicleDetail /> },
+          { path: 'application-records', element: <ApplicationRecords /> },
+          { path: 'jobs', element: <Jobs /> },
+          { path: 'jobs/:id', element: <JobDetail /> },
+          { path: 'month-end', element: <ProtectedRoute allowedRoles={['admin']}><MonthEndClose /></ProtectedRoute> },
+          { path: 'commission-payments', element: <ProtectedRoute allowedRoles={['admin']}><CommissionPayments /></ProtectedRoute> },
+          { path: 'customer-transactions', element: <ProtectedRoute allowedRoles={['admin']}><CustomerTransactionReview /></ProtectedRoute> },
+          { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><PrepaymentManager /></ProtectedRoute> },
           { path: 'team-board', element: <TeamBoard /> },
           { path: 'notifications', element: <Notifications /> },
           { path: 'settings', element: <ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute> },

@@ -5,7 +5,7 @@
  * to show aging buckets and generate printable customer statements.
  */
 import { useEffect, useState } from 'react';
-import { DollarSign, FileText, TrendingDown, TrendingUp, ArrowLeft } from 'lucide-react';
+import { DollarSign, FileText, TrendingDown, TrendingUp, ArrowLeft, Zap } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -13,14 +13,17 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
+import { useAuth } from '../contexts/AuthContext';
 import type { ARAgingRow, CustomerStatementRow, SeasonComparisonRow } from '../types';
 
 type TabKey = 'aging' | 'statement' | 'season';
 
 export default function ARaging() {
   const { toast } = useToast();
+  const { profile } = useAuth();
   const [tab, setTab] = useState<TabKey>('aging');
   const [loading, setLoading] = useState(true);
+  const [generatingCharges, setGeneratingCharges] = useState(false);
 
   // Aging
   const [agingData, setAgingData] = useState<ARAgingRow[]>([]);
@@ -296,12 +299,43 @@ export default function ARaging() {
     setLoading(false);
   };
 
+  const handleGenerateFinanceCharges = async () => {
+    setGeneratingCharges(true);
+    try {
+      const { data, error } = await supabase.rpc('generate_finance_charges', {
+        p_as_of_date: asOfDate,
+        p_performed_by: profile?.id,
+      });
+      if (error) throw error;
+      const result = data as { charges_generated: number; details: any[] };
+      if (result.charges_generated === 0) {
+        toast('info', 'No finance charges to generate — no overdue balances with finance charge rates configured');
+      } else {
+        toast('success', `Generated ${result.charges_generated} finance charge invoice(s)`);
+      }
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to generate finance charges');
+    }
+    setGeneratingCharges(false);
+  };
+
   const seasonOptions = Array.from({ length: 5 }, (_, i) => currentSeason - i);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold font-heading text-nav-dark">AR Aging & Statements</h1>
+        {profile?.role === 'admin' && (
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Zap className="w-4 h-4" />}
+            onClick={handleGenerateFinanceCharges}
+            loading={generatingCharges}
+          >
+            Finance Charges
+          </Button>
+        )}
       </div>
 
       {/* Tabs */}

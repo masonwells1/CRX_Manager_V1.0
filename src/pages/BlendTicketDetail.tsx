@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart } from 'lucide-react';
+import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck } from 'lucide-react';
 import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
@@ -426,6 +426,28 @@ export function BlendTicketDetail() {
       toast('error', err.message || 'Failed to create order');
     } finally {
       setLinking(false);
+    }
+  }
+
+  const [creatingAppRecord, setCreatingAppRecord] = useState(false);
+
+  async function handleCreateApplicationRecord() {
+    if (!ticket || !profile) return;
+    if (!confirm('Create an application record from this approved blend ticket? This action cannot be undone.')) return;
+
+    setCreatingAppRecord(true);
+    try {
+      const { data, error } = await supabase.rpc('create_application_record_from_blend_ticket', {
+        p_blend_ticket_id: ticket.id,
+        p_performed_by: profile.id,
+      });
+      if (error) throw error;
+      logActivity('application_record_created', `Application record created from blend ticket ${ticket.ticket_number}`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
+      toast('success', 'Application record created successfully');
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to create application record');
+    } finally {
+      setCreatingAppRecord(false);
     }
   }
 
@@ -1066,6 +1088,12 @@ export function BlendTicketDetail() {
               Approve
             </Button>
           </>
+        )}
+        {ticket.review_status === 'approved' && (
+          <Button variant="secondary" onClick={handleCreateApplicationRecord} loading={creatingAppRecord}>
+            <ClipboardCheck className="h-4 w-4" />
+            Create App Record
+          </Button>
         )}
         <Button onClick={handleSave} disabled={saving}>
           <Save className="h-4 w-4" />

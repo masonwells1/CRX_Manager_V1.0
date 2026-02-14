@@ -260,6 +260,8 @@ export default function CustomerDetail() {
         other_acres: customer.other_acres,
         payment_terms: customer.payment_terms,
         default_commission_split: customer.default_commission_split,
+        credit_limit_cents: customer.credit_limit_cents || 0,
+        finance_charge_rate: customer.finance_charge_rate || 0,
         notes: customer.notes,
         is_active: customer.is_active,
       };
@@ -362,6 +364,22 @@ export default function CustomerDetail() {
                 </select>
               </div>
               <Input label="Payment Terms" value={customer.payment_terms || ''} onChange={(e) => update('payment_terms', e.target.value)} />
+              <Input
+                label="Credit Limit ($)"
+                type="number"
+                min={0}
+                step={100}
+                value={customer.credit_limit_cents != null ? (customer.credit_limit_cents as number) / 100 : ''}
+                onChange={(e) => update('credit_limit_cents', e.target.value ? Math.round(parseFloat(e.target.value) * 100) : 0)}
+              />
+              <Input
+                label="Finance Charge Rate (%)"
+                type="number"
+                min={0}
+                step={0.5}
+                value={customer.finance_charge_rate ?? ''}
+                onChange={(e) => update('finance_charge_rate', e.target.value ? parseFloat(e.target.value) : 0)}
+              />
 
               {/* Parent Customer (Farm Group) selector */}
               <div className="relative">
