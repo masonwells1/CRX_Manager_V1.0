@@ -36,6 +36,8 @@ export default function PrepaymentManager() {
   const [applying, setApplying] = useState<string | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [confirmCustomer, setConfirmCustomer] = useState<CustomerPrepay | null>(null);
+  const [showBatchConfirm, setShowBatchConfirm] = useState(false);
+  const [batchApplying, setBatchApplying] = useState(false);
 
   useEffect(() => {
     fetchCustomers();
@@ -111,6 +113,30 @@ export default function PrepaymentManager() {
     setApplying(null);
   };
 
+  const confirmBatchApply = async () => {
+    setShowBatchConfirm(false);
+    setBatchApplying(true);
+    try {
+      const { data, error } = await supabase.rpc('batch_apply_all_prepayments', {
+        p_performed_by: profile?.id,
+      });
+      if (error) throw error;
+      const result = data as { total_customers: number; total_applied_cents: number; details: any[] };
+      if (result.total_customers === 0) {
+        toast('info', 'No prepayments could be applied (no customers with both prepay credits and unpaid invoices)');
+      } else {
+        toast(
+          'success',
+          `Applied ${fmt(result.total_applied_cents)} across ${result.total_customers} customer(s)`,
+        );
+      }
+      fetchCustomers();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to apply batch prepayments');
+    }
+    setBatchApplying(false);
+  };
+
   const totalPrepay = customers.reduce((s, c) => s + c.prepay_balance_cents, 0);
   const totalUnpaid = customers.reduce((s, c) => s + c.unpaid_balance_cents, 0);
 
@@ -171,6 +197,17 @@ export default function PrepaymentManager() {
           <p className="text-sm text-secondary mt-1">Apply prepay credits to outstanding invoices</p>
         </div>
         <div className="flex gap-2">
+          {customers.some((c) => c.unpaid_invoice_count > 0) && profile?.role === 'admin' && (
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<Zap className="w-4 h-4" />}
+              onClick={() => setShowBatchConfirm(true)}
+              loading={batchApplying}
+            >
+              Apply All Prepayments
+            </Button>
+          )}
           <Button
             variant="secondary"
             size="sm"
@@ -255,7 +292,38 @@ export default function PrepaymentManager() {
         </div>
       </Card>
 
-      {/* Confirmation Modal */}
+      {/* Batch Apply All Confirmation */}
+      <Modal open={showBatchConfirm} onClose={() => setShowBatchConfirm(false)} title="Apply All Prepayments">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Apply prepay credits for <strong>all {customers.filter((c) => c.unpaid_invoice_count > 0).length}</strong> customer(s) with
+            both prepay balances and unpaid invoices? Credits will be applied to the oldest invoices first.
+          </p>
+          <div className="bg-gray-50 p-3 rounded-lg space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-secondary">Total Prepay Credits</span>
+              <span className="font-medium text-crx-green">{fmt(totalPrepay)}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-secondary">Total Unpaid Invoices</span>
+              <span className="font-medium text-red-600">{fmt(totalUnpaid)}</span>
+            </div>
+            <hr />
+            <div className="flex justify-between text-sm font-semibold">
+              <span>Estimated Apply</span>
+              <span>{fmt(Math.min(totalPrepay, totalUnpaid))}</span>
+            </div>
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setShowBatchConfirm(false)}>Cancel</Button>
+            <Button onClick={confirmBatchApply} icon={<Zap className="w-4 h-4" />} loading={batchApplying}>
+              Apply All
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Per-Customer Confirmation Modal */}
       <Modal open={showConfirm} onClose={() => setShowConfirm(false)} title="Apply Prepayments">
         {confirmCustomer && (
           <div className="space-y-4">

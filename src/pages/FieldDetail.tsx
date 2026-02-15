@@ -23,6 +23,8 @@ interface BillingSplit {
   split_pct: number;
   is_primary: boolean;
   notes: string;
+  price_override_cents: number | null;
+  pricing_note: string;
 }
 
 export default function FieldDetail() {
@@ -152,6 +154,8 @@ export default function FieldDetail() {
             split_pct: Number(d.split_pct),
             is_primary: d.is_primary,
             notes: d.notes || '',
+            price_override_cents: d.price_override_cents ?? null,
+            pricing_note: d.pricing_note || '',
           }))
         );
       }
@@ -171,7 +175,7 @@ export default function FieldDetail() {
     }
     setBillingSplits((prev) => [
       ...prev,
-      { customer_id: customerId, customer_name: customerName, split_pct: 0, is_primary: prev.length === 0, notes: '' },
+      { customer_id: customerId, customer_name: customerName, split_pct: 0, is_primary: prev.length === 0, notes: '', price_override_cents: null, pricing_note: '' },
     ]);
     setSplitCustomerSearch('');
     setShowSplitDropdown(false);
@@ -239,6 +243,8 @@ export default function FieldDetail() {
         split_pct: s.split_pct,
         is_primary: s.is_primary,
         notes: s.notes || null,
+        price_override_cents: s.price_override_cents || null,
+        pricing_note: s.pricing_note || null,
       }));
 
       const { data, error } = await supabase.rpc('save_field', {
@@ -537,52 +543,86 @@ export default function FieldDetail() {
           />
           <p className="text-xs text-secondary mb-4">
             Define how costs for this field are split between customers. Splits must total 100%.
+            Optionally set a per-grower price override ($/acre) for independent pricing.
           </p>
 
           {billingSplits.length > 0 && (
             <div className="space-y-3 mb-4">
               {billingSplits.map((split, idx) => (
-                <div key={split.customer_id} className="flex items-center gap-3 p-3 border border-gray-100 rounded-lg">
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-nav-dark">{split.customer_name}</span>
-                    {split.is_primary && (
-                      <Badge variant="success" className="ml-2">Primary</Badge>
+                <div key={split.customer_id} className="p-3 border border-gray-100 rounded-lg space-y-2">
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium text-nav-dark">{split.customer_name}</span>
+                      {split.is_primary && (
+                        <Badge variant="success" className="ml-2">Primary</Badge>
+                      )}
+                    </div>
+                    <div className="w-28">
+                      <div className="relative">
+                        <input
+                          type="number"
+                          value={split.split_pct}
+                          onChange={(e) => updateSplit(idx, 'split_pct', parseFloat(e.target.value) || 0)}
+                          min={0}
+                          max={100}
+                          step={0.01}
+                          className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green pr-7"
+                        />
+                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-secondary">%</span>
+                      </div>
+                    </div>
+                    {!split.is_primary && (
+                      <button
+                        onClick={() => {
+                          // Make this one primary, others not
+                          setBillingSplits((prev) =>
+                            prev.map((s, i) => ({ ...s, is_primary: i === idx }))
+                          );
+                        }}
+                        className="text-xs text-secondary hover:text-crx-green"
+                        title="Set as primary"
+                      >
+                        Set Primary
+                      </button>
                     )}
+                    <button
+                      onClick={() => removeBillingSplit(idx)}
+                      className="text-gray-400 hover:text-red-500 p-1"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
                   </div>
-                  <div className="w-28">
-                    <div className="relative">
+                  {/* Per-grower pricing override */}
+                  <div className="flex items-center gap-3 pl-1">
+                    <div className="w-36">
+                      <label className="block text-xs text-secondary mb-0.5">Price Override ($/ac)</label>
+                      <div className="relative">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-secondary">$</span>
+                        <input
+                          type="number"
+                          value={split.price_override_cents != null ? (split.price_override_cents / 100).toFixed(2) : ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            updateSplit(idx, 'price_override_cents', val ? Math.round(parseFloat(val) * 100) : null);
+                          }}
+                          min={0}
+                          step={0.01}
+                          placeholder="—"
+                          className="w-full pl-5 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-xs text-secondary mb-0.5">Pricing Note</label>
                       <input
-                        type="number"
-                        value={split.split_pct}
-                        onChange={(e) => updateSplit(idx, 'split_pct', parseFloat(e.target.value) || 0)}
-                        min={0}
-                        max={100}
-                        step={0.01}
-                        className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green pr-7"
+                        type="text"
+                        value={split.pricing_note}
+                        onChange={(e) => updateSplit(idx, 'pricing_note', e.target.value)}
+                        placeholder="e.g. Prepaid rate, Landlord rate"
+                        className="w-full px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       />
-                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-secondary">%</span>
                     </div>
                   </div>
-                  {!split.is_primary && (
-                    <button
-                      onClick={() => {
-                        // Make this one primary, others not
-                        setBillingSplits((prev) =>
-                          prev.map((s, i) => ({ ...s, is_primary: i === idx }))
-                        );
-                      }}
-                      className="text-xs text-secondary hover:text-crx-green"
-                      title="Set as primary"
-                    >
-                      Set Primary
-                    </button>
-                  )}
-                  <button
-                    onClick={() => removeBillingSplit(idx)}
-                    className="text-gray-400 hover:text-red-500 p-1"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
                 </div>
               ))}
 

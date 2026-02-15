@@ -5,7 +5,7 @@
  * to show aging buckets and generate printable customer statements.
  */
 import { useEffect, useState } from 'react';
-import { DollarSign, FileText, Printer, TrendingDown, TrendingUp, ArrowLeft, Zap } from 'lucide-react';
+import { DollarSign, FileText, Printer, TrendingDown, TrendingUp, ArrowLeft, Zap, FileStack } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -13,8 +13,9 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
-import { downloadStatementPdf } from '../lib/statementPdf';
+import { downloadStatementPdf, downloadBatchStatements } from '../lib/statementPdf';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
+import FinanceChargePreviewModal from '../components/invoices/FinanceChargePreviewModal';
 import { useAuth } from '../contexts/AuthContext';
 import type { ARAgingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
 
@@ -25,11 +26,16 @@ export default function ARaging() {
   const { profile } = useAuth();
   const [tab, setTab] = useState<TabKey>('aging');
   const [loading, setLoading] = useState(true);
-  const [generatingCharges, setGeneratingCharges] = useState(false);
+  const [showFinanceChargePreview, setShowFinanceChargePreview] = useState(false);
   const [showStatementDialog, setShowStatementDialog] = useState(false);
   const [printingStatement, setPrintingStatement] = useState(false);
   const [printCustomerId, setPrintCustomerId] = useState<string | null>(null);
   const [printCustomerName, setPrintCustomerName] = useState('');
+
+  // Batch statement selection
+  const [selectedCustomers, setSelectedCustomers] = useState<Set<string>>(new Set());
+  const [showBatchStatementDialog, setShowBatchStatementDialog] = useState(false);
+  const [batchPrinting, setBatchPrinting] = useState(false);
 
   // Aging
   const [agingData, setAgingData] = useState<ARAgingRow[]>([]);
@@ -142,6 +148,23 @@ export default function ARaging() {
 
   const agingColumns: Column<ARAgingRow>[] = [
     {
+      key: 'customer_id' as keyof ARAgingRow,
+      header: '',
+      className: 'w-10',
+      render: (r) => (
+        <input
+          type="checkbox"
+          checked={selectedCustomers.has(r.customer_id)}
+          onChange={(e) => {
+            e.stopPropagation();
+            toggleCustomerSelect(r.customer_id);
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
+        />
+      ),
+    },
+    {
       key: 'farm_name',
       header: 'Customer',
       sortable: true,
@@ -211,7 +234,7 @@ export default function ARaging() {
       render: (r) => <span className="font-mono font-semibold">{fmt(r.total_outstanding)}</span>,
     },
     {
-      key: 'customer_id' as keyof ARAgingRow,
+      key: 'invoice_count' as keyof ARAgingRow,
       header: '',
       render: (r) => (
         <button
@@ -321,24 +344,8 @@ export default function ARaging() {
     setLoading(false);
   };
 
-  const handleGenerateFinanceCharges = async () => {
-    setGeneratingCharges(true);
-    try {
-      const { data, error } = await supabase.rpc('generate_finance_charges', {
-        p_as_of_date: asOfDate,
-        p_performed_by: profile?.id,
-      });
-      if (error) throw error;
-      const result = data as { charges_generated: number; details: any[] };
-      if (result.charges_generated === 0) {
-        toast('info', 'No finance charges to generate — no overdue balances with finance charge rates configured');
-      } else {
-        toast('success', `Generated ${result.charges_generated} finance charge invoice(s)`);
-      }
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to generate finance charges');
-    }
-    setGeneratingCharges(false);
+  const handleFinanceChargeSuccess = () => {
+    fetchAging();
   };
 
   const openStatementDialog = (custId: string, custName: string) => {
@@ -374,23 +381,86 @@ export default function ARaging() {
     setPrintingStatement(false);
   };
 
+  // Batch statement selection helpers
+  const toggleCustomerSelect = (id: string) => {
+    setSelectedCustomers((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllCustomers = () => {
+    if (selectedCustomers.size === agingData.length && agingData.length > 0) {
+      setSelectedCustomers(new Set());
+    } else {
+      setSelectedCustomers(new Set(agingData.map((r) => r.customer_id)));
+    }
+  };
+
+  const handleBatchStatements = async (options: StatementOptions) => {
+    setShowBatchStatementDialog(false);
+    setBatchPrinting(true);
+    try {
+      const stmtDataList: DetailedStatementData[] = [];
+      for (const custId of selectedCustomers) {
+        const { data, error } = await supabase.rpc('get_detailed_statement_data', {
+          p_customer_id: custId,
+          p_as_of_date: options.as_of_date,
+          p_mode: options.mode,
+        });
+        if (error) {
+          console.error(`Statement error for ${custId}:`, error.message);
+          continue;
+        }
+        const stmtData = data as DetailedStatementData;
+        if (stmtData && stmtData.transactions && stmtData.transactions.length > 0) {
+          stmtDataList.push(stmtData);
+        }
+      }
+
+      if (stmtDataList.length === 0) {
+        toast('info', 'No customers had outstanding balances for statements');
+      } else {
+        await downloadBatchStatements(stmtDataList, options);
+        toast('success', `Downloaded ${stmtDataList.length} statement(s)`);
+      }
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to generate batch statements');
+    }
+    setBatchPrinting(false);
+  };
+
   const seasonOptions = Array.from({ length: 5 }, (_, i) => currentSeason - i);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold font-heading text-nav-dark">AR Aging & Statements</h1>
-        {profile?.role === 'admin' && (
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<Zap className="w-4 h-4" />}
-            onClick={handleGenerateFinanceCharges}
-            loading={generatingCharges}
-          >
-            Finance Charges
-          </Button>
-        )}
+        <div className="flex gap-2">
+          {selectedCustomers.size > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<FileStack className="w-4 h-4" />}
+              onClick={() => setShowBatchStatementDialog(true)}
+              loading={batchPrinting}
+            >
+              Batch Statements ({selectedCustomers.size})
+            </Button>
+          )}
+          {profile?.role === 'admin' && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Zap className="w-4 h-4" />}
+              onClick={() => setShowFinanceChargePreview(true)}
+            >
+              Preview Finance Charges
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -432,6 +502,14 @@ export default function ARaging() {
               <Button variant="secondary" size="sm" onClick={fetchAging}>
                 Refresh
               </Button>
+              {agingData.length > 0 && (
+                <button
+                  onClick={toggleAllCustomers}
+                  className="text-xs text-crx-green hover:underline ml-2"
+                >
+                  {selectedCustomers.size === agingData.length ? 'Deselect All' : 'Select All'}
+                </button>
+              )}
               <div className="ml-auto">
                 <Button
                   variant="secondary"
@@ -710,6 +788,22 @@ export default function ARaging() {
         onClose={() => setShowStatementDialog(false)}
         onGenerate={handlePrintStatement}
         loading={printingStatement}
+      />
+
+      {/* Batch Statement Print Dialog */}
+      <StatementPrintDialog
+        open={showBatchStatementDialog}
+        onClose={() => setShowBatchStatementDialog(false)}
+        onGenerate={handleBatchStatements}
+        loading={batchPrinting}
+      />
+
+      {/* Finance Charge Preview Modal */}
+      <FinanceChargePreviewModal
+        open={showFinanceChargePreview}
+        onClose={() => setShowFinanceChargePreview(false)}
+        asOfDate={asOfDate}
+        onSuccess={handleFinanceChargeSuccess}
       />
     </div>
   );

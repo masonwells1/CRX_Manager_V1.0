@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Plus, Trash2, Search, MapPin } from 'lucide-react';
+import { ArrowLeft, Save, Plus, Trash2, Search, MapPin, FileText } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -14,6 +14,10 @@ import { supabase } from '../lib/db';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, Field } from '../types';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
+import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
+import { downloadYearEndSummaryPdf } from '../lib/yearEndSummaryPdf';
+import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
+import type { YearEndSummaryData } from '../types';
 
 export default function CustomerDetail() {
   const { id } = useParams();
@@ -52,6 +56,8 @@ export default function CustomerDetail() {
   const [tabLoading, setTabLoading] = useState(false);
   const [emailError, setEmailError] = useState('');
   const [phoneError, setPhoneError] = useState('');
+  const [showSummaryDialog, setShowSummaryDialog] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
   // Parent customer search
   const [allCustomers, setAllCustomers] = useState<{ id: string; farm_name: string }[]>([]);
@@ -262,6 +268,8 @@ export default function CustomerDetail() {
         default_commission_split: customer.default_commission_split,
         credit_limit_cents: customer.credit_limit_cents || 0,
         finance_charge_rate: customer.finance_charge_rate || 0,
+        finance_charge_enabled: customer.finance_charge_enabled ?? true,
+        finance_charge_grace_days: customer.finance_charge_grace_days ?? 0,
         notes: customer.notes,
         is_active: customer.is_active,
       };
@@ -312,15 +320,45 @@ export default function CustomerDetail() {
 
   const tabs = ['info', 'fields', 'quotes', 'orders', 'deliveries', 'history'] as const;
 
+  const handleGenerateSummary = async (season: number, options: YearEndSummaryOptions) => {
+    if (!id || isNew) return;
+    setSummaryLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('get_customer_year_end_summary', {
+        p_customer_id: id,
+        p_season: season,
+      });
+      if (error) throw error;
+      await downloadYearEndSummaryPdf(data as unknown as YearEndSummaryData, options);
+      toast('success', `Season ${season} summary generated`);
+      setShowSummaryDialog(false);
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to generate summary');
+    }
+    setSummaryLoading(false);
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/customers')} className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary">
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <h2 className="text-lg font-semibold font-heading text-nav-dark">
-          {isNew ? 'New Customer' : customer.farm_name}
-        </h2>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate('/customers')} className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary">
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <h2 className="text-lg font-semibold font-heading text-nav-dark">
+            {isNew ? 'New Customer' : customer.farm_name}
+          </h2>
+        </div>
+        {!isNew && (profile?.role === 'admin' || profile?.role === 'sales_rep') && (
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<FileText className="w-4 h-4" />}
+            onClick={() => setShowSummaryDialog(true)}
+          >
+            Season Summary
+          </Button>
+        )}
       </div>
 
       {!isNew && (
@@ -379,6 +417,35 @@ export default function CustomerDetail() {
                 step={0.5}
                 value={customer.finance_charge_rate ?? ''}
                 onChange={(e) => update('finance_charge_rate', e.target.value ? parseFloat(e.target.value) : 0)}
+              />
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">Finance Charges</label>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => update('finance_charge_enabled', !(customer.finance_charge_enabled ?? true))}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      (customer.finance_charge_enabled ?? true) ? 'bg-crx-green' : 'bg-gray-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        (customer.finance_charge_enabled ?? true) ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                  <span className="text-sm text-secondary">
+                    {(customer.finance_charge_enabled ?? true) ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+              </div>
+              <Input
+                label="Grace Period (days)"
+                type="number"
+                min={0}
+                step={1}
+                value={customer.finance_charge_grace_days ?? 0}
+                onChange={(e) => update('finance_charge_grace_days', e.target.value ? parseInt(e.target.value) : 0)}
               />
 
               {/* Parent Customer (Farm Group) selector */}
@@ -855,6 +922,14 @@ export default function CustomerDetail() {
           )}
         </Card>
       )}
+
+      <YearEndSummaryDialog
+        open={showSummaryDialog}
+        onClose={() => setShowSummaryDialog(false)}
+        onGenerate={handleGenerateSummary}
+        loading={summaryLoading}
+        customerName={customer.farm_name || ''}
+      />
 
       <UnsavedChangesModal
         open={blocker.state === 'blocked'}

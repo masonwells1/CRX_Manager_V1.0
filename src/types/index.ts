@@ -94,6 +94,8 @@ export interface Customer {
   other_acres: number | null;
   payment_terms: string | null;
   default_commission_split: CommissionSplit | null;
+  finance_charge_enabled: boolean;
+  finance_charge_grace_days: number;
   notes: string | null;
   is_active: boolean;
   created_at: string;
@@ -671,6 +673,8 @@ export interface InvoiceShare {
   amount_cents: number;
   is_primary: boolean;
   sort_order: number;
+  price_per_acre_cents: number | null;
+  pricing_note: string | null;
   created_at: string;
   customer?: Customer;
 }
@@ -863,6 +867,8 @@ export interface FieldBillingDefault {
   split_pct: number;
   is_primary: boolean;
   notes: string | null;
+  price_override_cents: number | null;
+  pricing_note: string | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;
@@ -1399,4 +1405,128 @@ export interface CustomerTransactionRow {
   debit_cents: number;
   credit_cents: number;
   running_balance_cents: number;
+}
+
+// Sprint 16: Payment Allocation
+
+export interface PaymentAllocationEntry {
+  invoice_id: string;
+  invoice_number: string;
+  invoice_date: string;
+  due_date: string | null;
+  invoice_type: InvoiceType;
+  total_amount_cents: number;
+  balance_cents: number;
+  days_aged: number;
+  allocated_cents: number; // user-editable
+}
+
+export interface PaymentAllocationResult {
+  success: boolean;
+  total_cents: number;
+  allocated_cents: number;
+  prepay_created_cents: number;
+  prepay_credit_id: string | null;
+  allocations: Array<{
+    invoice_id: string;
+    invoice_number: string;
+    amount_cents: number;
+    payment_id: string;
+  }>;
+}
+
+// Sprint 13: Finance Charge Intelligence
+
+export interface FinanceChargePreview {
+  customer_id: string;
+  customer_name: string;
+  account_number: string | null;
+  overdue_balance_cents: number;
+  charge_rate: number;
+  grace_days: number;
+  days_overdue: number;
+  charge_amount_cents: number;
+  finance_charge_enabled: boolean;
+}
+
+// Sprint 17: Year-End Customer Summary
+
+export interface YearEndSummaryData {
+  customer: {
+    id: string;
+    farm_name: string;
+    contact_name: string | null;
+    account_number: string | null;
+    email: string | null;
+    phone: string | null;
+    billing_address: string | null;
+    city: string | null;
+    state: string | null;
+    zip: string | null;
+    assigned_tier: number;
+    payment_terms: string | null;
+  };
+  season: number;
+  season_start: string;
+  season_end: string;
+  financial: {
+    total_invoiced_cents: number;
+    total_paid_cents: number;
+    prepay_applied_cents: number;
+    outstanding_balance_cents: number;
+    invoice_count: number;
+  };
+  product_usage: YearEndProductUsage[];
+  acreage: {
+    total_acres: number;
+    by_crop: Array<{ crop_type: string; acres: number }>;
+  };
+  invoices: YearEndInvoiceRow[];
+  shares: YearEndShareRow[];
+  prior_season: {
+    total_invoiced_cents: number;
+    total_paid_cents: number;
+    invoice_count: number;
+    total_acres: number;
+  } | null;
+}
+
+export interface YearEndProductUsage {
+  category: string;
+  product_name: string;
+  epa_registration: string | null;
+  total_quantity: number;
+  unit_size: string | null;
+  avg_rate_per_acre: number | null;
+  rate_unit: string | null;
+  total_acres_treated: number;
+  total_cost_cents: number;
+  total_applied: number;
+  total_applied_unit: string | null;
+  total_applied_gl_lb: number;
+  gl_lb_unit: string | null;
+  is_application_fee: boolean;
+}
+
+export interface YearEndInvoiceRow {
+  invoice_number: string;
+  invoice_date: string;
+  invoice_type: string;
+  field_names: string[] | null;
+  total_acres: number | null;
+  crop_type: string | null;
+  total_amount_cents: number;
+  balance_cents: number;
+  status: string;
+}
+
+export interface YearEndShareRow {
+  invoice_number: string;
+  field_names: string[] | null;
+  share_customer_name: string;
+  split_percentage: number;
+  acres: number | null;
+  amount_cents: number;
+  price_per_acre_cents: number | null;
+  pricing_note: string | null;
 }

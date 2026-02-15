@@ -379,25 +379,49 @@ function drawDetailedTransactions(
         y = margin;
       }
 
+      const hasPerAcrePricing = tx.shares.some((s: InvoiceShare) => s.price_per_acre_cents != null);
       autoTable(doc, {
         startY: y,
-        margin: { left: margin + 180, right: margin },
-        head: [['', 'Shares', 'Acres', 'Total']],
-        body: tx.shares.map((s: InvoiceShare) => [
-          s.customer_name,
-          `${fmtNum(s.split_percentage, 2)}%`,
-          s.acres != null ? fmtNum(s.acres, 2) : '',
-          fmt(s.amount_cents),
-        ]),
+        margin: { left: margin + (hasPerAcrePricing ? 120 : 180), right: margin },
+        head: [hasPerAcrePricing
+          ? ['', '$/Acre', 'Shares', 'Acres', 'Total']
+          : ['', 'Shares', 'Acres', 'Total']],
+        body: tx.shares.map((s: InvoiceShare) => {
+          const name = s.pricing_note
+            ? `${s.customer_name}\n${s.pricing_note}`
+            : s.customer_name;
+          return hasPerAcrePricing
+            ? [
+                name,
+                s.price_per_acre_cents != null ? fmt(s.price_per_acre_cents) : '',
+                `${fmtNum(s.split_percentage, 2)}%`,
+                s.acres != null ? fmtNum(s.acres, 2) : '',
+                fmt(s.amount_cents),
+              ]
+            : [
+                name,
+                `${fmtNum(s.split_percentage, 2)}%`,
+                s.acres != null ? fmtNum(s.acres, 2) : '',
+                fmt(s.amount_cents),
+              ];
+        }),
         theme: 'plain',
         styles: { fontSize: 7.5, cellPadding: 2, textColor: CHARCOAL },
         headStyles: { fillColor: [248, 248, 248], textColor: GRAY, fontStyle: 'bold', fontSize: 7 },
-        columnStyles: {
-          0: { cellWidth: 'auto' },
-          1: { halign: 'right', cellWidth: 50 },
-          2: { halign: 'right', cellWidth: 50 },
-          3: { halign: 'right', fontStyle: 'bold', cellWidth: 60 },
-        },
+        columnStyles: hasPerAcrePricing
+          ? {
+              0: { cellWidth: 'auto' },
+              1: { halign: 'right', cellWidth: 40 },
+              2: { halign: 'right', cellWidth: 40 },
+              3: { halign: 'right', cellWidth: 40 },
+              4: { halign: 'right', fontStyle: 'bold', cellWidth: 55 },
+            }
+          : {
+              0: { cellWidth: 'auto' },
+              1: { halign: 'right', cellWidth: 50 },
+              2: { halign: 'right', cellWidth: 50 },
+              3: { halign: 'right', fontStyle: 'bold', cellWidth: 60 },
+            },
         didDrawPage: drawPageFooter,
       });
       y = (doc as any).lastAutoTable.finalY + 4;

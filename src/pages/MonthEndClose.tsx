@@ -14,8 +14,11 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { downloadBatchStatements } from '../lib/statementPdf';
+import { downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
-import type { DetailedStatementData, StatementOptions } from '../types';
+import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
+import type { DetailedStatementData, StatementOptions, YearEndSummaryData } from '../types';
+import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 
 interface PeriodInfo {
   id?: string;
@@ -61,6 +64,8 @@ export default function MonthEndClose() {
   const [generating, setGenerating] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [showStatementDialog, setShowStatementDialog] = useState(false);
+  const [showYeDialog, setShowYeDialog] = useState(false);
+  const [yeLoading, setYeLoading] = useState(false);
 
   const current = getCurrentPeriod();
 
@@ -174,6 +179,41 @@ export default function MonthEndClose() {
     setGenerating(false);
   };
 
+  const handleGenerateYearEnd = async (season: number, options: YearEndSummaryOptions) => {
+    setYeLoading(true);
+    try {
+      // Get all customers with invoices for this season
+      const { data: custIds, error: custErr } = await supabase
+        .from('invoices')
+        .select('customer_id')
+        .eq('season', season)
+        .in('status', ['posted', 'voided'])
+        .is('deleted_at', null);
+      if (custErr) throw custErr;
+
+      const uniqueIds = [...new Set((custIds || []).map((r) => r.customer_id))];
+      if (uniqueIds.length === 0) {
+        toast('info', `No customers have invoices for season ${season}`);
+        setYeLoading(false);
+        return;
+      }
+
+      toast('info', `Generating ${uniqueIds.length} year-end summary PDF(s)...`);
+      const summaries: YearEndSummaryData[] = [];
+      for (const cid of uniqueIds) {
+        const { data, error } = await supabase.rpc('get_customer_year_end_summary', { p_customer_id: cid, p_season: season });
+        if (error) { console.error(`Failed for ${cid}:`, error); continue; }
+        summaries.push(data as unknown as YearEndSummaryData);
+      }
+      await downloadBatchYearEndSummaries(summaries, options);
+      toast('success', `Generated ${summaries.length} year-end summary PDF(s)`);
+      setShowYeDialog(false);
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to generate year-end summaries');
+    }
+    setYeLoading(false);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -191,6 +231,14 @@ export default function MonthEndClose() {
           <p className="text-sm text-secondary mt-1">Review and close accounting periods</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            icon={<Download className="w-4 h-4" />}
+            onClick={() => setShowYeDialog(true)}
+            loading={yeLoading}
+          >
+            Year-End Summaries
+          </Button>
           <Button
             variant="secondary"
             icon={<FileText className="w-4 h-4" />}
@@ -369,6 +417,15 @@ export default function MonthEndClose() {
         onGenerate={handleGenerateStatements}
         loading={generating}
         defaultDate={current.end}
+      />
+
+      {/* Year-End Summary Dialog */}
+      <YearEndSummaryDialog
+        open={showYeDialog}
+        onClose={() => setShowYeDialog(false)}
+        onGenerate={handleGenerateYearEnd}
+        loading={yeLoading}
+        batchMode
       />
 
       {/* Close Confirmation Modal */}

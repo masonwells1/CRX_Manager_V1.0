@@ -54,6 +54,7 @@ const MonthEndClose = lazy(() => import('./pages/MonthEndClose'));
 const CommissionPayments = lazy(() => import('./pages/CommissionPayments'));
 const CustomerTransactionReview = lazy(() => import('./pages/CustomerTransactionReview'));
 const PrepaymentManager = lazy(() => import('./pages/PrepaymentManager'));
+const PaymentAllocation = lazy(() => import('./pages/PaymentAllocation'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -134,6 +135,7 @@ const router = createBrowserRouter([
           { path: 'commission-payments', element: <ProtectedRoute allowedRoles={['admin']}><CommissionPayments /></ProtectedRoute> },
           { path: 'customer-transactions', element: <ProtectedRoute allowedRoles={['admin']}><CustomerTransactionReview /></ProtectedRoute> },
           { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><PrepaymentManager /></ProtectedRoute> },
+          { path: 'payment-allocation', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PaymentAllocation /></ProtectedRoute> },
           { path: 'team-board', element: <TeamBoard /> },
           { path: 'notifications', element: <Notifications /> },
           { path: 'settings', element: <ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute> },

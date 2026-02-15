@@ -48,6 +48,8 @@ export interface InvoicePdfShare {
   split_percentage: number;
   acres: number | null;
   amount_cents: number;
+  price_per_acre_cents?: number | null;
+  pricing_note?: string | null;
 }
 
 export interface InvoicePdfData {
@@ -457,16 +459,32 @@ function drawFieldApplicationLayout(
   // Shares table
   if (opts.show_shares && data.shares && data.shares.length > 1) {
     y += 6;
+    const hasPerAcrePricing = data.shares.some(s => s.price_per_acre_cents != null);
     autoTable(doc, {
       startY: y,
-      margin: { left: margin + 200, right: margin },
-      head: [['', 'Shares', 'Acres', 'Total']],
-      body: data.shares.map(s => [
-        s.customer_name,
-        `${fmtNum(s.split_percentage, 2)}%`,
-        s.acres != null ? fmtNum(s.acres, 2) : '',
-        fmt(s.amount_cents),
-      ]),
+      margin: { left: margin + (hasPerAcrePricing ? 140 : 200), right: margin },
+      head: [hasPerAcrePricing
+        ? ['', '$/Acre', 'Shares', 'Acres', 'Total']
+        : ['', 'Shares', 'Acres', 'Total']],
+      body: data.shares.map(s => {
+        const name = s.pricing_note
+          ? `${s.customer_name}\n${s.pricing_note}`
+          : s.customer_name;
+        return hasPerAcrePricing
+          ? [
+              name,
+              s.price_per_acre_cents != null ? fmt(s.price_per_acre_cents) : '',
+              `${fmtNum(s.split_percentage, 2)}%`,
+              s.acres != null ? fmtNum(s.acres, 2) : '',
+              fmt(s.amount_cents),
+            ]
+          : [
+              name,
+              `${fmtNum(s.split_percentage, 2)}%`,
+              s.acres != null ? fmtNum(s.acres, 2) : '',
+              fmt(s.amount_cents),
+            ];
+      }),
       theme: 'plain',
       styles: { fontSize: 8.5, cellPadding: 3, textColor: CHARCOAL },
       headStyles: {
@@ -475,12 +493,20 @@ function drawFieldApplicationLayout(
         fontStyle: 'bold',
         fontSize: 8,
       },
-      columnStyles: {
-        0: { cellWidth: 'auto' },
-        1: { halign: 'right', cellWidth: 55 },
-        2: { halign: 'right', cellWidth: 55 },
-        3: { halign: 'right', fontStyle: 'bold', cellWidth: 65 },
-      },
+      columnStyles: hasPerAcrePricing
+        ? {
+            0: { cellWidth: 'auto' },
+            1: { halign: 'right', cellWidth: 50 },
+            2: { halign: 'right', cellWidth: 45 },
+            3: { halign: 'right', cellWidth: 45 },
+            4: { halign: 'right', fontStyle: 'bold', cellWidth: 60 },
+          }
+        : {
+            0: { cellWidth: 'auto' },
+            1: { halign: 'right', cellWidth: 55 },
+            2: { halign: 'right', cellWidth: 55 },
+            3: { halign: 'right', fontStyle: 'bold', cellWidth: 65 },
+          },
       didDrawPage: drawPageFooter,
     });
     y = (doc as any).lastAutoTable.finalY + 6;
@@ -585,23 +611,45 @@ function drawChemicalSaleLayout(
   // Shares table (chemical sales can also have splits)
   if (opts.show_shares && data.shares && data.shares.length > 1) {
     y += 4;
+    const hasPerAcrePricing = data.shares.some(s => s.price_per_acre_cents != null);
     autoTable(doc, {
       startY: y,
-      margin: { left: margin + 200, right: margin },
-      head: [['Customer', 'Shares', 'Total']],
-      body: data.shares.map(s => [
-        s.customer_name,
-        `${fmtNum(s.split_percentage, 4)}%`,
-        fmt(s.amount_cents),
-      ]),
+      margin: { left: margin + (hasPerAcrePricing ? 140 : 200), right: margin },
+      head: [hasPerAcrePricing
+        ? ['Customer', '$/Acre', 'Shares', 'Total']
+        : ['Customer', 'Shares', 'Total']],
+      body: data.shares.map(s => {
+        const name = s.pricing_note
+          ? `${s.customer_name}\n${s.pricing_note}`
+          : s.customer_name;
+        return hasPerAcrePricing
+          ? [
+              name,
+              s.price_per_acre_cents != null ? fmt(s.price_per_acre_cents) : '',
+              `${fmtNum(s.split_percentage, 4)}%`,
+              fmt(s.amount_cents),
+            ]
+          : [
+              name,
+              `${fmtNum(s.split_percentage, 4)}%`,
+              fmt(s.amount_cents),
+            ];
+      }),
       theme: 'plain',
       styles: { fontSize: 8.5, cellPadding: 3, textColor: CHARCOAL },
       headStyles: { fillColor: TABLE_HEADER_BG, textColor: CHARCOAL, fontStyle: 'bold', fontSize: 8 },
-      columnStyles: {
-        0: { cellWidth: 'auto' },
-        1: { halign: 'right', cellWidth: 65 },
-        2: { halign: 'right', fontStyle: 'bold', cellWidth: 70 },
-      },
+      columnStyles: hasPerAcrePricing
+        ? {
+            0: { cellWidth: 'auto' },
+            1: { halign: 'right', cellWidth: 50 },
+            2: { halign: 'right', cellWidth: 55 },
+            3: { halign: 'right', fontStyle: 'bold', cellWidth: 65 },
+          }
+        : {
+            0: { cellWidth: 'auto' },
+            1: { halign: 'right', cellWidth: 65 },
+            2: { halign: 'right', fontStyle: 'bold', cellWidth: 70 },
+          },
       didDrawPage: drawPageFooter,
     });
     y = (doc as any).lastAutoTable.finalY + 6;
@@ -676,3 +724,33 @@ export async function downloadInvoicePdf(data: InvoicePdfData) {
   const doc = await generateInvoicePdf(data);
   doc.save(`${data.invoice_number}.pdf`);
 }
+
+// ── Batch PDF Generator ──────────────────────────────────────────────────
+// Generates each invoice as a separate PDF and downloads them sequentially.
+// jsPDF doesn't support page-level merging between documents, so each
+// invoice becomes its own file (same approach as batch statements).
+
+export async function generateBatchInvoicePdf(dataList: InvoicePdfData[]) {
+  if (dataList.length === 0) {
+    throw new Error('No invoices to generate');
+  }
+
+  // For a single invoice, just return its doc directly
+  if (dataList.length === 1) {
+    return generateInvoicePdf(dataList[0]);
+  }
+
+  // For multiple invoices, download each separately with a small delay
+  for (let i = 0; i < dataList.length; i++) {
+    const doc = await generateInvoicePdf(dataList[i]);
+    doc.save(`${dataList[i].invoice_number}.pdf`);
+    // Small delay between downloads to prevent browser blocking
+    if (i < dataList.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+  }
+
+  // Return the last doc (caller may call .save() but we already saved all)
+  return generateInvoicePdf(dataList[dataList.length - 1]);
+}
+

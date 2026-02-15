@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Download, CheckCircle2 } from 'lucide-react';
+import { Download, CheckCircle2, FileText } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -13,13 +13,17 @@ import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, fmtCurrency, type ReportPdfColumn } from '../lib/reportPdf';
 import ReportShell from '../components/reports/ReportShell';
 import LogbookReport from '../components/reports/LogbookReport';
+import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
+import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
+import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, InventoryCostRow,
+  YearEndSummaryData,
 } from '../types';
 
 // ─── Category / Tab types ──────────────────────────────────────
-type Category = 'profitability' | 'logbook' | 'financial' | 'operational';
+type Category = 'profitability' | 'logbook' | 'financial' | 'operational' | 'year_end';
 type ProfitTab = 'customer' | 'product' | 'commission' | 'revenue';
 type FinancialTab = 'pnl' | 'gross_sales' | 'customer_balance' | 'commission_balance';
 type OperationalTab = 'chemical_history' | 'inventory_cost' | 'posted_applications' | 'price_list';
@@ -131,6 +135,13 @@ export default function Reports() {
   const [inventoryCostData, setInventoryCostData] = useState<InventoryCostRow[]>([]);
   const [priceListData, setPriceListData] = useState<Record<string, unknown>[]>([]);
   const [postedAppsData, setPostedAppsData] = useState<Record<string, unknown>[]>([]);
+
+  // ─── YEAR-END data ────────────────────────────────────────
+  const [yeCustomerOptions, setYeCustomerOptions] = useState<{ id: string; name: string }[]>([]);
+  const [yeSelectedCustomer, setYeSelectedCustomer] = useState('');
+  const [showYeDialog, setShowYeDialog] = useState(false);
+  const [yeLoading, setYeLoading] = useState(false);
+  const [yeBatchMode, setYeBatchMode] = useState(false);
 
   // Load product options on mount (for chemical history filter)
   useEffect(() => {
@@ -333,6 +344,61 @@ export default function Reports() {
       field_name: r.field?.field_name || '-',
       applicator_name: r.applicator?.full_name || '-',
     })));
+  };
+
+  // ─── YEAR-END fetchers / handlers ──────────────────────
+  useEffect(() => {
+    if (category === 'year_end' && yeCustomerOptions.length === 0) {
+      supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(1000)
+        .then(({ data }) => setYeCustomerOptions((data || []).map((r) => ({ id: r.id, name: r.farm_name }))));
+    }
+  }, [category]);
+
+  const handleYeGenerate = async (season: number, options: YearEndSummaryOptions) => {
+    setYeLoading(true);
+    try {
+      if (yeBatchMode) {
+        // Batch: get all customers with invoices for this season
+        const { data: custIds, error: custErr } = await supabase
+          .from('invoices')
+          .select('customer_id')
+          .eq('season', season)
+          .in('status', ['posted', 'voided'])
+          .is('deleted_at', null);
+        if (custErr) throw custErr;
+
+        const uniqueIds = [...new Set((custIds || []).map((r) => r.customer_id))];
+        if (uniqueIds.length === 0) {
+          toast('info', `No customers have invoices for season ${season}`);
+          setYeLoading(false);
+          return;
+        }
+
+        toast('info', `Generating ${uniqueIds.length} summary PDF(s)...`);
+        const summaries: YearEndSummaryData[] = [];
+        for (const cid of uniqueIds) {
+          const { data, error } = await supabase.rpc('get_customer_year_end_summary', { p_customer_id: cid, p_season: season });
+          if (error) { console.error(`Failed for ${cid}:`, error); continue; }
+          summaries.push(data as unknown as YearEndSummaryData);
+        }
+        await downloadBatchYearEndSummaries(summaries, options);
+        toast('success', `Generated ${summaries.length} season summary PDF(s)`);
+      } else {
+        // Single customer
+        if (!yeSelectedCustomer) { toast('error', 'Select a customer'); setYeLoading(false); return; }
+        const { data, error } = await supabase.rpc('get_customer_year_end_summary', {
+          p_customer_id: yeSelectedCustomer,
+          p_season: season,
+        });
+        if (error) throw error;
+        await downloadYearEndSummaryPdf(data as unknown as YearEndSummaryData, options);
+        toast('success', `Season ${season} summary generated`);
+      }
+      setShowYeDialog(false);
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to generate summary');
+    }
+    setYeLoading(false);
   };
 
   // ─── Commission mark-paid (original) ────────────────────────
@@ -615,6 +681,7 @@ export default function Reports() {
     { key: 'logbook', label: 'Application Logbook' },
     { key: 'financial', label: 'Financial' },
     { key: 'operational', label: 'Operational' },
+    { key: 'year_end', label: 'Year-End Summaries' },
   ];
 
   const profitTabs: { key: ProfitTab; label: string }[] = [
@@ -837,6 +904,68 @@ export default function Reports() {
           </Card>
         </>
       )}
+
+      {/* ═══ YEAR-END SUMMARIES ═══ */}
+      {category === 'year_end' && (
+        <>
+          <Card>
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-semibold text-nav-dark mb-1">Year-End Customer Summaries</h3>
+                <p className="text-xs text-secondary">
+                  Generate comprehensive season summary PDFs with financials, product usage, acreage, invoice history, and year-over-year comparisons.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-4">
+                <div className="flex-1 min-w-[250px]">
+                  <label className="block text-xs font-medium text-secondary mb-1">Customer</label>
+                  <select
+                    value={yeSelectedCustomer}
+                    onChange={(e) => setYeSelectedCustomer(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  >
+                    <option value="">— Select Customer —</option>
+                    {yeCustomerOptions.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <Button
+                  size="sm"
+                  icon={<FileText className="w-4 h-4" />}
+                  onClick={() => { setYeBatchMode(false); setShowYeDialog(true); }}
+                  disabled={!yeSelectedCustomer}
+                >
+                  Generate Summary
+                </Button>
+
+                {isAdmin && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<FileText className="w-4 h-4" />}
+                    onClick={() => { setYeBatchMode(true); setShowYeDialog(true); }}
+                  >
+                    Generate All
+                  </Button>
+                )}
+              </div>
+            </div>
+          </Card>
+        </>
+      )}
+
+      {/* Year-End Summary Dialog */}
+      <YearEndSummaryDialog
+        open={showYeDialog}
+        onClose={() => setShowYeDialog(false)}
+        onGenerate={handleYeGenerate}
+        loading={yeLoading}
+        customerName={yeBatchMode ? undefined : yeCustomerOptions.find((c) => c.id === yeSelectedCustomer)?.name}
+        batchMode={yeBatchMode}
+      />
     </div>
   );
 }

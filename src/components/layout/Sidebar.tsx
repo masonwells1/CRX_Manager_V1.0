@@ -157,6 +157,7 @@ const navigation: NavEntry[] = [
       icon: <DollarSign className="w-5 h-5" />,
       items: [
         { path: '/ar-aging', label: 'AR Aging', icon: <Clock className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/payment-allocation', label: 'Apply Payments', icon: <CreditCard className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/prepayments', label: 'Prepayments', icon: <Wallet className="w-4 h-4" />, roles: ['admin'] },
         { path: '/commission-payments', label: 'Commission Pay', icon: <Banknote className="w-4 h-4" />, roles: ['admin'] },
         { path: '/customer-transactions', label: 'Transactions', icon: <CreditCard className="w-4 h-4" />, roles: ['admin'] },

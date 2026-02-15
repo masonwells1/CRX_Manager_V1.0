@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Send, Ban } from 'lucide-react';
+import { Plus, FileText, Check, Send, Ban, Printer, Mail } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -9,7 +9,10 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
-import type { Invoice, InvoiceStatus } from '../types';
+import BatchVoidModal from '../components/invoices/BatchVoidModal';
+import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
+import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
+import { generateBatchInvoicePdf, type InvoicePdfData } from '../lib/invoicePdf';
 
 type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null };
 
@@ -63,6 +66,10 @@ export default function Invoices() {
   const [typeFilter, setTypeFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [posting, setPosting] = useState(false);
+  const [voiding, setVoiding] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const [showVoidModal, setShowVoidModal] = useState(false);
+  const [showBatchPrintDialog, setShowBatchPrintDialog] = useState(false);
 
   useEffect(() => {
     fetchInvoices();
@@ -108,20 +115,17 @@ export default function Invoices() {
     .filter((i) => i.status === 'posted' && i.balance_cents > 0)
     .reduce((s, i) => s + i.balance_cents, 0);
 
+  // Determine what's selected for action buttons
+  const selectedInvoices = invoices.filter((i) => selected.has(i.id));
+  const selectedPostable = selectedInvoices.filter((i) => ['draft', 'unposted'].includes(i.status));
+  const selectedVoidable = selectedInvoices.filter((i) => i.status === 'posted');
+  const selectableStatuses = ['draft', 'unposted', 'posted'];
+
   // Batch post
   const handleBatchPost = async () => {
-    const ids = Array.from(selected);
+    const ids = selectedPostable.map((i) => i.id);
     if (ids.length === 0) {
-      toast('error', 'Select invoices to post');
-      return;
-    }
-    // Validate all are draft/unposted
-    const invalid = ids.filter((id) => {
-      const inv = invoices.find((i) => i.id === id);
-      return inv && !['draft', 'unposted'].includes(inv.status);
-    });
-    if (invalid.length > 0) {
-      toast('error', `${invalid.length} selected invoice(s) cannot be posted (already posted/voided)`);
+      toast('error', 'No postable invoices selected');
       return;
     }
 
@@ -140,6 +144,136 @@ export default function Invoices() {
     setPosting(false);
   };
 
+  // Batch void
+  const handleBatchVoid = async (reason: string) => {
+    const ids = selectedVoidable.map((i) => i.id);
+    if (ids.length === 0) {
+      toast('error', 'No posted invoices selected to void');
+      return;
+    }
+
+    setVoiding(true);
+    const { data, error } = await supabase.rpc('batch_void_invoices', {
+      p_invoice_ids: ids,
+      p_void_reason: reason,
+      p_performed_by: profile?.id,
+    });
+    if (error) {
+      console.error('Batch void failed:', error.message);
+      toast('error', error.message || 'Failed to void invoices');
+    } else {
+      toast('success', `Voided ${data} invoice(s)`);
+      setSelected(new Set());
+      fetchInvoices();
+    }
+    setShowVoidModal(false);
+    setVoiding(false);
+  };
+
+  // Batch print
+  const handleBatchPrint = async (options: InvoicePrintOptions) => {
+    setShowBatchPrintDialog(false);
+    setPrinting(true);
+
+    try {
+      // Fetch full data for each selected invoice
+      const pdfDataList: InvoicePdfData[] = [];
+
+      for (const inv of selectedInvoices) {
+        // Fetch customer details
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('billing_address, city, state, zip, account_number, payment_terms')
+          .eq('id', inv.customer_id)
+          .single();
+
+        // Fetch items with product details
+        const { data: items } = await supabase
+          .from('invoice_items')
+          .select('*, product:products(product_name, epa_registration, product_form)')
+          .eq('invoice_id', inv.id)
+          .order('sort_order');
+
+        // Fetch shares
+        const { data: shares } = await supabase
+          .from('invoice_shares')
+          .select('*, customer:customers!invoice_shares_customer_id_fkey(farm_name)')
+          .eq('invoice_id', inv.id);
+
+        const pdfData: InvoicePdfData = {
+          invoice_number: inv.invoice_number,
+          invoice_date: inv.invoice_date,
+          due_date: inv.due_date || undefined,
+          invoice_type: inv.invoice_type || 'chemical_sale',
+          status: inv.status || 'draft',
+          customer_name: inv.customer_name,
+          customer_address: cust?.billing_address || undefined,
+          customer_city: cust?.city || undefined,
+          customer_state: cust?.state || undefined,
+          customer_zip: cust?.zip || undefined,
+          account_number: cust?.account_number || undefined,
+          payment_terms: cust?.payment_terms || undefined,
+          salesman_name: inv.salesman_name || undefined,
+          purchase_order_ref: inv.purchase_order_ref || undefined,
+          header_notes: inv.header_notes || undefined,
+          footer_notes: inv.footer_notes || undefined,
+          crop_type: inv.crop_type || undefined,
+          field_names: inv.field_names || undefined,
+          total_acres: inv.total_acres || undefined,
+          applicator_name: inv.applicator_name || undefined,
+          vehicle_name: inv.vehicle_name || undefined,
+          application_date: inv.application_date || undefined,
+          shares: (shares || []).length > 0 ? (shares as any[]).map(s => ({
+            customer_name: s.customer?.farm_name || 'Unknown',
+            split_percentage: s.split_percentage,
+            acres: s.acres,
+            amount_cents: s.amount_cents,
+            price_per_acre_cents: s.price_per_acre_cents || null,
+            pricing_note: s.pricing_note || null,
+          })) : undefined,
+          items: ((items || []) as any[]).map((it) => ({
+            description: it.description,
+            product_name: it.product?.product_name || it.description,
+            quantity: Number(it.quantity),
+            unit_size: it.unit_size || undefined,
+            unit_price_cents: it.unit_price_cents,
+            extended_cents: it.extended_cents,
+            cost_cents: it.cost_cents,
+            rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
+            rate_unit: it.rate_unit || null,
+            total_applied: it.total_applied ? Number(it.total_applied) : null,
+            total_applied_unit: it.total_applied_unit || null,
+            total_applied_gl_lb: it.total_applied_gl_lb ? Number(it.total_applied_gl_lb) : null,
+            gl_lb_unit: it.gl_lb_unit || null,
+            epa_registration: it.epa_registration || it.product?.epa_registration || null,
+            is_application_fee: it.is_application_fee || false,
+            product_form: it.product_form || it.product?.product_form || null,
+          })),
+          total_amount_cents: inv.total_amount_cents || 0,
+          total_cost_cents: inv.total_cost_cents || 0,
+          paid_amount_cents: inv.paid_amount_cents || 0,
+          prepay_applied_cents: inv.prepay_applied_cents || 0,
+          balance_cents: inv.balance_cents || 0,
+          options,
+        };
+        pdfDataList.push(pdfData);
+      }
+
+      if (pdfDataList.length === 0) {
+        toast('error', 'No invoices to print');
+        setPrinting(false);
+        return;
+      }
+
+      await generateBatchInvoicePdf(pdfDataList);
+      toast('success', `Printed ${pdfDataList.length} invoice(s) to PDF`);
+    } catch (err: any) {
+      console.error('Batch print failed:', err);
+      toast('error', err.message || 'Failed to generate batch PDF');
+    }
+    setPrinting(false);
+  };
+
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -150,11 +284,11 @@ export default function Invoices() {
   };
 
   const toggleAll = () => {
-    const postable = filtered.filter((i) => ['draft', 'unposted'].includes(i.status));
-    if (selected.size === postable.length) {
+    const selectable = filtered.filter((i) => selectableStatuses.includes(i.status));
+    if (selected.size === selectable.length && selectable.length > 0) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(postable.map((i) => i.id)));
+      setSelected(new Set(selectable.map((i) => i.id)));
     }
   };
 
@@ -164,7 +298,7 @@ export default function Invoices() {
       header: '',
       className: 'w-10',
       render: (row) =>
-        ['draft', 'unposted'].includes(row.status) ? (
+        selectableStatuses.includes(row.status) ? (
           <input
             type="checkbox"
             checked={selected.has(row.id)}
@@ -245,21 +379,58 @@ export default function Invoices() {
     },
   ];
 
+  // Determine if batch print dialog needs any shares info
+  const anySelectedHasShares = selectedInvoices.some(
+    (i) => i.invoice_type === 'field_application'
+  );
+  const anySelectedIsFieldApp = selectedInvoices.some(
+    (i) => i.invoice_type === 'field_application'
+  );
+
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold font-heading text-nav-dark">Invoices</h1>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
           {selected.size > 0 && profile?.role === 'admin' && (
-            <Button
-              variant="secondary"
-              icon={<Send className="w-4 h-4" />}
-              onClick={handleBatchPost}
-              loading={posting}
-            >
-              Post {selected.size} Selected
-            </Button>
+            <>
+              {selectedPostable.length > 0 && (
+                <Button
+                  variant="secondary"
+                  icon={<Send className="w-4 h-4" />}
+                  onClick={handleBatchPost}
+                  loading={posting}
+                >
+                  Post {selectedPostable.length} Selected
+                </Button>
+              )}
+              {selectedVoidable.length > 0 && (
+                <Button
+                  variant="danger"
+                  icon={<Ban className="w-4 h-4" />}
+                  onClick={() => setShowVoidModal(true)}
+                >
+                  Void {selectedVoidable.length} Selected
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                icon={<Printer className="w-4 h-4" />}
+                onClick={() => setShowBatchPrintDialog(true)}
+                loading={printing}
+              >
+                Print {selected.size} Selected
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<Mail className="w-4 h-4" />}
+                disabled
+                title="Coming soon — requires email integration"
+              >
+                Email
+              </Button>
+            </>
           )}
           <Button
             variant="secondary"
@@ -368,12 +539,12 @@ export default function Invoices() {
                     </option>
                   ))}
                 </select>
-                {filtered.some((i) => ['draft', 'unposted'].includes(i.status)) && (
+                {filtered.some((i) => selectableStatuses.includes(i.status)) && (
                   <button
                     onClick={toggleAll}
                     className="text-xs text-crx-green hover:underline ml-2"
                   >
-                    {selected.size > 0 ? 'Deselect All' : 'Select All Postable'}
+                    {selected.size > 0 ? 'Deselect All' : 'Select All'}
                   </button>
                 )}
               </div>
@@ -381,6 +552,25 @@ export default function Invoices() {
           />
         </div>
       </Card>
+
+      {/* Batch Void Modal */}
+      <BatchVoidModal
+        open={showVoidModal}
+        onClose={() => setShowVoidModal(false)}
+        count={selectedVoidable.length}
+        onConfirm={handleBatchVoid}
+        loading={voiding}
+      />
+
+      {/* Batch Print Dialog */}
+      <InvoicePrintDialog
+        open={showBatchPrintDialog}
+        onClose={() => setShowBatchPrintDialog(false)}
+        invoiceType={anySelectedIsFieldApp ? 'field_application' : 'chemical_sale'}
+        hasShares={anySelectedHasShares}
+        onPrint={handleBatchPrint}
+        loading={printing}
+      />
     </div>
   );
 }
