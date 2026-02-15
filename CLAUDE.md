@@ -7,14 +7,19 @@
 - **Who it's for:** Crop RX Solutions (admin, sales reps, drivers)
 - **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
 
-## Current State (as of 2026-02-13)
+## Current State (as of 2026-02-15)
 - **Tier 1-3 hardening:** COMPLETE (security, performance, offline support, idempotency, image compression, activity triggers)
 - **Phases 4A-7:** COMPLETE (invoicing, fields, blend recipes, warehouses, cycle counts, returns/RMA, AR aging, compliance, rebates)
-- **Deployed to:** Vercel (private preview/staging)
-- **Test coverage:** Minimal -- only 3 E2E test files (auth, customers, permissions)
 - **Phase 4B:** COMPLETE (Mapbox satellite maps: field boundary drawing, acreage auto-calc, map/list toggle, customer field mini-maps)
-- **Next task:** T3-002 comprehensive test coverage (10-15 day effort)
+- **Sprints 7-11:** COMPLETE (Vehicles, Job Scheduling, Reporting, Month-End Close, Financial Workflows)
+- **Sprint 12:** COMPLETE (Invoice & Statement PDF redesign — 3 invoice layouts, dual-mode statements, remittance stubs)
+- **Sprints 13-17:** COMPLETE (Billing System Upgrade — finance charge intelligence, grower share transparency, batch operations, unified payment allocation, year-end customer summaries)
+- **Deployed to:** Vercel (private preview/staging)
+- **Test coverage:** 91 unit tests (Vitest) + 3 E2E test files (Playwright)
+- **57 migrations** applied to remote Supabase
+- **46 pages**, **46 components**, **~105 RPC functions**
 - **See CONTEXT.md** for full business context and data model details
+- **See `.claude/projects/C--/memory/`** for detailed topic files (MEMORY.md, rpc-reference.md, pages-and-components.md, migration-history.md, sprint12-pdf-system.md, sprints13-17-billing-upgrade.md)
 
 ## Architecture Rules -- Follow These
 1. **Database changes MUST use migrations** -- create files in `supabase/migrations/`, never modify tables directly
