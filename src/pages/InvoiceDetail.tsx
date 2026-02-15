@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer,
@@ -85,6 +85,7 @@ export default function InvoiceDetail() {
 
   // Print PDF
   const [printing, setPrinting] = useState(false);
+  const printingRef = useRef(false);
 
   // Write-off modal
   const [showWriteOff, setShowWriteOff] = useState(false);
@@ -362,6 +363,9 @@ export default function InvoiceDetail() {
 
   // Print invoice PDF
   const handlePrint = async (options?: InvoicePrintOptions) => {
+    // Ref-based guard prevents multiple concurrent executions (triple-fire from click propagation)
+    if (printingRef.current) return;
+    printingRef.current = true;
     setPrinting(true);
     try {
       // Fetch enriched item data for PDF (with EPA, rates, GL/LB)
@@ -432,9 +436,12 @@ export default function InvoiceDetail() {
       setShowPrintDialog(false);
       toast('success', 'Invoice PDF downloaded');
     } catch (err: any) {
+      console.error('Failed to generate invoice PDF:', err);
       toast('error', err.message || 'Failed to generate PDF');
+    } finally {
+      setPrinting(false);
+      printingRef.current = false;
     }
-    setPrinting(false);
   };
 
   const totalCents = items.reduce((s, i) => s + i.extended_cents, 0);
