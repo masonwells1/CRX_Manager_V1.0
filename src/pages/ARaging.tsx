@@ -5,7 +5,7 @@
  * to show aging buckets and generate printable customer statements.
  */
 import { useEffect, useState } from 'react';
-import { DollarSign, FileText, TrendingDown, TrendingUp, ArrowLeft, Zap } from 'lucide-react';
+import { DollarSign, FileText, Printer, TrendingDown, TrendingUp, ArrowLeft, Zap } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -13,8 +13,10 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
+import { downloadStatementPdf } from '../lib/statementPdf';
+import StatementPrintDialog from '../components/statements/StatementPrintDialog';
 import { useAuth } from '../contexts/AuthContext';
-import type { ARAgingRow, CustomerStatementRow, SeasonComparisonRow } from '../types';
+import type { ARAgingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
 
 type TabKey = 'aging' | 'statement' | 'season';
 
@@ -24,6 +26,10 @@ export default function ARaging() {
   const [tab, setTab] = useState<TabKey>('aging');
   const [loading, setLoading] = useState(true);
   const [generatingCharges, setGeneratingCharges] = useState(false);
+  const [showStatementDialog, setShowStatementDialog] = useState(false);
+  const [printingStatement, setPrintingStatement] = useState(false);
+  const [printCustomerId, setPrintCustomerId] = useState<string | null>(null);
+  const [printCustomerName, setPrintCustomerName] = useState('');
 
   // Aging
   const [agingData, setAgingData] = useState<ARAgingRow[]>([]);
@@ -204,6 +210,22 @@ export default function ARaging() {
       sortable: true,
       render: (r) => <span className="font-mono font-semibold">{fmt(r.total_outstanding)}</span>,
     },
+    {
+      key: 'customer_id' as keyof ARAgingRow,
+      header: '',
+      render: (r) => (
+        <button
+          className="text-crx-green hover:text-crx-green/70 p-1"
+          title="Print Statement"
+          onClick={(e) => {
+            e.stopPropagation();
+            openStatementDialog(r.customer_id, r.farm_name);
+          }}
+        >
+          <Printer className="w-4 h-4" />
+        </button>
+      ),
+    },
   ];
 
   const stmtColumns: Column<CustomerStatementRow>[] = [
@@ -317,6 +339,39 @@ export default function ARaging() {
       toast('error', err.message || 'Failed to generate finance charges');
     }
     setGeneratingCharges(false);
+  };
+
+  const openStatementDialog = (custId: string, custName: string) => {
+    setPrintCustomerId(custId);
+    setPrintCustomerName(custName);
+    setShowStatementDialog(true);
+  };
+
+  const handlePrintStatement = async (options: StatementOptions) => {
+    if (!printCustomerId) return;
+    setShowStatementDialog(false);
+    setPrintingStatement(true);
+    try {
+      const { data, error } = await supabase.rpc('get_detailed_statement_data', {
+        p_customer_id: printCustomerId,
+        p_as_of_date: options.as_of_date,
+        p_mode: options.mode,
+      });
+      if (error) throw error;
+
+      const stmtData = data as DetailedStatementData;
+      if (!stmtData || !stmtData.transactions || stmtData.transactions.length === 0) {
+        toast('info', `No outstanding balance for ${printCustomerName}`);
+        setPrintingStatement(false);
+        return;
+      }
+
+      await downloadStatementPdf(stmtData, options);
+      toast('success', `Statement downloaded for ${printCustomerName}`);
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to generate statement');
+    }
+    setPrintingStatement(false);
   };
 
   const seasonOptions = Array.from({ length: 5 }, (_, i) => currentSeason - i);
@@ -510,8 +565,21 @@ export default function ARaging() {
                 />
               </div>
               <Button icon={<FileText className="w-4 h-4" />} onClick={fetchStatement}>
-                Generate Statement
+                Load Transactions
               </Button>
+              {selectedCustomer && (
+                <Button
+                  variant="secondary"
+                  icon={<Printer className="w-4 h-4" />}
+                  onClick={() => {
+                    const cust = customers.find((c) => c.id === selectedCustomer);
+                    openStatementDialog(selectedCustomer, cust?.farm_name || 'Customer');
+                  }}
+                  loading={printingStatement}
+                >
+                  Print Statement
+                </Button>
+              )}
             </div>
           </Card>
 
@@ -635,6 +703,14 @@ export default function ARaging() {
           </Card>
         </>
       )}
+
+      {/* Statement Print Dialog */}
+      <StatementPrintDialog
+        open={showStatementDialog}
+        onClose={() => setShowStatementDialog(false)}
+        onGenerate={handlePrintStatement}
+        loading={printingStatement}
+      />
     </div>
   );
 }

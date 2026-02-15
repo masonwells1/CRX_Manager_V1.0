@@ -13,7 +13,9 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import { downloadStatementPdf, type StatementData } from '../lib/statementPdf';
+import { downloadBatchStatements } from '../lib/statementPdf';
+import StatementPrintDialog from '../components/statements/StatementPrintDialog';
+import type { DetailedStatementData, StatementOptions } from '../types';
 
 interface PeriodInfo {
   id?: string;
@@ -58,6 +60,7 @@ export default function MonthEndClose() {
   const [closing, setClosing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [showStatementDialog, setShowStatementDialog] = useState(false);
 
   const current = getCurrentPeriod();
 
@@ -145,50 +148,25 @@ export default function MonthEndClose() {
     setClosing(false);
   };
 
-  const handleGenerateStatements = async () => {
+  const handleGenerateStatements = async (options: StatementOptions) => {
+    setShowStatementDialog(false);
     setGenerating(true);
     try {
       const { data, error } = await supabase.rpc('generate_batch_statements', {
-        p_as_of_date: current.end,
+        p_as_of_date: options.as_of_date,
         p_performed_by: profile?.id,
+        p_mode: options.mode,
       });
       if (error) throw error;
 
-      const statements = data as StatementData[];
-      if (!statements || statements.length === 0) {
+      const statements = data as DetailedStatementData[];
+      if (!statements || !Array.isArray(statements) || statements.length === 0) {
         toast('info', 'No customers have outstanding balances');
         setGenerating(false);
         return;
       }
 
-      // Generate and download each statement
-      for (const stmt of statements) {
-        const stmtData: StatementData = {
-          customer_name: (stmt as any).farm_name,
-          contact_name: (stmt as any).contact_name,
-          email: (stmt as any).email,
-          phone: (stmt as any).phone,
-          address: (stmt as any).address,
-          city: (stmt as any).city,
-          state: (stmt as any).state,
-          zip: (stmt as any).zip,
-          as_of_date: current.end,
-          outstanding_balance_cents: (stmt as any).outstanding_balance_cents,
-          transactions: ((stmt as any).transactions || []).map((tx: any) => ({
-            invoice_number: tx.invoice_number,
-            invoice_date: tx.invoice_date,
-            due_date: tx.due_date,
-            total_amount_cents: tx.total_amount_cents,
-            paid_amount_cents: tx.paid_amount_cents,
-            prepay_applied_cents: tx.prepay_applied_cents,
-            balance_cents: tx.balance_cents,
-            status: tx.status,
-            invoice_type: tx.invoice_type,
-          })),
-        };
-        await downloadStatementPdf(stmtData);
-      }
-
+      await downloadBatchStatements(statements, options);
       toast('success', `Generated ${statements.length} customer statement(s)`);
     } catch (err: any) {
       toast('error', err.message || 'Failed to generate statements');
@@ -216,7 +194,7 @@ export default function MonthEndClose() {
           <Button
             variant="secondary"
             icon={<FileText className="w-4 h-4" />}
-            onClick={handleGenerateStatements}
+            onClick={() => setShowStatementDialog(true)}
             loading={generating}
           >
             Generate Statements
@@ -383,6 +361,15 @@ export default function MonthEndClose() {
           </div>
         </Card>
       )}
+
+      {/* Statement Print Dialog */}
+      <StatementPrintDialog
+        open={showStatementDialog}
+        onClose={() => setShowStatementDialog(false)}
+        onGenerate={handleGenerateStatements}
+        loading={generating}
+        defaultDate={current.end}
+      />
 
       {/* Close Confirmation Modal */}
       <Modal open={showCloseModal} onClose={() => setShowCloseModal(false)} title="Close Accounting Period">

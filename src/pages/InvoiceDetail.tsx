@@ -11,9 +11,10 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import type { Invoice, InvoiceItem, InvoiceStatus, Product, Customer } from '../types';
+import type { Invoice, InvoiceItem, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, type InvoicePdfData } from '../lib/invoicePdf';
 import WriteOffModal from '../components/invoices/WriteOffModal';
+import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 
 interface LineItem {
   id?: string;
@@ -88,6 +89,10 @@ export default function InvoiceDetail() {
   // Write-off modal
   const [showWriteOff, setShowWriteOff] = useState(false);
 
+  // Print dialog
+  const [showPrintDialog, setShowPrintDialog] = useState(false);
+  const [shares, setShares] = useState<InvoiceShare[]>([]);
+
   // Void modal
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState('');
@@ -160,6 +165,15 @@ export default function InvoiceDetail() {
         }))
       );
     }
+
+    // Fetch shares
+    const { data: shareData } = await supabase
+      .from('invoice_shares')
+      .select('*')
+      .eq('invoice_id', invoiceId)
+      .order('sort_order');
+    setShares((shareData || []) as InvoiceShare[]);
+
     setLoading(false);
   };
 
@@ -347,9 +361,18 @@ export default function InvoiceDetail() {
   };
 
   // Print invoice PDF
-  const handlePrint = async () => {
+  const handlePrint = async (options?: InvoicePrintOptions) => {
     setPrinting(true);
     try {
+      // Fetch enriched item data for PDF (with EPA, rates, GL/LB)
+      const { data: enrichedItems } = await supabase
+        .from('invoice_items')
+        .select('*, product:products(product_name, epa_registration, product_form)')
+        .eq('invoice_id', id)
+        .order('sort_order');
+
+      const cust = customers.find(c => c.id === invoice.customer_id);
+
       const pdfData: InvoicePdfData = {
         invoice_number: invoice.invoice_number || 'DRAFT',
         invoice_date: invoice.invoice_date || new Date().toISOString().split('T')[0],
@@ -357,27 +380,56 @@ export default function InvoiceDetail() {
         invoice_type: invoice.invoice_type || 'chemical_sale',
         status: invoice.status || 'draft',
         customer_name: customerName,
+        customer_address: cust?.billing_address || undefined,
+        customer_city: cust?.city || undefined,
+        customer_state: cust?.state || undefined,
+        customer_zip: cust?.zip || undefined,
+        account_number: cust?.account_number || undefined,
+        payment_terms: cust?.payment_terms || undefined,
         salesman_name: salespeople.find((s) => s.id === invoice.salesman_id)?.full_name,
         purchase_order_ref: invoice.purchase_order_ref || undefined,
         header_notes: invoice.header_notes || undefined,
         footer_notes: invoice.footer_notes || undefined,
-        items: items.map((it) => ({
+        crop_type: invoice.crop_type || undefined,
+        field_names: invoice.field_names || undefined,
+        total_acres: invoice.total_acres || undefined,
+        applicator_name: invoice.applicator_name || undefined,
+        vehicle_name: invoice.vehicle_name || undefined,
+        application_date: invoice.application_date || undefined,
+        shares: shares.length > 0 ? shares.map(s => ({
+          customer_name: s.customer_name,
+          split_percentage: s.split_percentage,
+          acres: s.acres,
+          amount_cents: s.amount_cents,
+        })) : undefined,
+        items: (enrichedItems || []).map((it: any) => ({
           description: it.description,
-          product_name: it.product_name,
-          quantity: it.quantity,
+          product_name: it.product?.product_name || it.description,
+          quantity: Number(it.quantity),
           unit_size: it.unit_size || undefined,
           unit_price_cents: it.unit_price_cents,
           extended_cents: it.extended_cents,
-          rate_per_acre: it.rate_per_acre,
-          acres: it.acres,
+          cost_cents: it.cost_cents,
+          rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
+          rate_unit: it.rate_unit || null,
+          acres: it.acres ? Number(it.acres) : null,
+          total_applied: it.total_applied ? Number(it.total_applied) : null,
+          total_applied_unit: it.total_applied_unit || null,
+          total_applied_gl_lb: it.total_applied_gl_lb ? Number(it.total_applied_gl_lb) : null,
+          gl_lb_unit: it.gl_lb_unit || null,
+          epa_registration: it.epa_registration || it.product?.epa_registration || null,
+          is_application_fee: it.is_application_fee || false,
+          product_form: it.product_form || it.product?.product_form || null,
         })),
-        total_amount_cents: items.reduce((s, i) => s + i.extended_cents, 0),
-        total_cost_cents: items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0),
+        total_amount_cents: invoice.total_amount_cents || items.reduce((s, i) => s + i.extended_cents, 0),
+        total_cost_cents: invoice.total_cost_cents || items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0),
         paid_amount_cents: invoice.paid_amount_cents || 0,
         prepay_applied_cents: invoice.prepay_applied_cents || 0,
         balance_cents: invoice.balance_cents || 0,
+        options,
       };
       await downloadInvoicePdf(pdfData);
+      setShowPrintDialog(false);
       toast('success', 'Invoice PDF downloaded');
     } catch (err: any) {
       toast('error', err.message || 'Failed to generate PDF');
@@ -444,8 +496,7 @@ export default function InvoiceDetail() {
             <Button
               variant="secondary"
               icon={<Printer className="w-4 h-4" />}
-              onClick={handlePrint}
-              loading={printing}
+              onClick={() => setShowPrintDialog(true)}
               showChevron={false}
             >
               Print
@@ -868,6 +919,16 @@ export default function InvoiceDetail() {
         invoiceNumber={invoice.invoice_number || ''}
         balanceCents={invoice.balance_cents || 0}
         onSuccess={() => fetchInvoice(id!)}
+      />
+
+      {/* Print Dialog */}
+      <InvoicePrintDialog
+        open={showPrintDialog}
+        onClose={() => setShowPrintDialog(false)}
+        invoiceType={invoice.invoice_type || 'chemical_sale'}
+        hasShares={shares.length > 1}
+        onPrint={handlePrint}
+        loading={printing}
       />
     </div>
   );

@@ -80,6 +80,11 @@ export interface Customer {
   phone: string | null;
   email: string | null;
   billing_address: string | null;
+  shipping_address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  account_number: string | null;
   assigned_tier: number;
   assigned_sales_rep: string | null;
   parent_customer_id: string | null;
@@ -604,6 +609,16 @@ export interface Invoice {
   footer_notes: string | null;
   parent_invoice_id: string | null;
 
+  // Field application context (snapshot from job)
+  crop_type: string | null;
+  field_names: string[] | null;
+  total_acres: number | null;
+  applicator_name: string | null;
+  vehicle_name: string | null;
+  application_date: string | null;
+  job_id: string | null;
+  total_cost_cents: number;
+
   deleted_at: string | null;
   created_at: string;
   updated_at: string;
@@ -613,6 +628,7 @@ export interface Invoice {
   order?: Order;
   salesman?: Profile;
   items?: InvoiceItem[];
+  shares?: InvoiceShare[];
 }
 
 export interface InvoiceItem {
@@ -629,11 +645,118 @@ export interface InvoiceItem {
   rate_per_acre: number | null;
   acres: number | null;
   unit_size: string | null;
+  rate_unit: string | null;
+  total_applied: number | null;
+  total_applied_unit: string | null;
+  total_applied_gl_lb: number | null;
+  gl_lb_unit: string | null;
+  epa_registration: string | null;
+  product_form: string | null;
+  is_application_fee: boolean;
   notes: string | null;
   created_at: string;
   updated_at: string;
   product?: Product;
 }
+
+// ── Invoice Shares (grower splits for PDF display) ──────────────────────
+
+export interface InvoiceShare {
+  id: string;
+  invoice_id: string;
+  customer_id: string;
+  customer_name: string;
+  split_percentage: number;
+  acres: number | null;
+  amount_cents: number;
+  is_primary: boolean;
+  sort_order: number;
+  created_at: string;
+  customer?: Customer;
+}
+
+// ── Invoice & Statement PDF Data Types ──────────────────────────────────
+
+export interface InvoicePrintOptions {
+  show_shares: boolean;
+  show_price_per_acre: boolean;
+  show_epa_registration: boolean;
+}
+
+export interface StatementOptions {
+  mode: 'summary' | 'detailed';
+  show_shares: boolean;
+  as_of_date: string;
+}
+
+export interface DetailedStatementData {
+  customer: {
+    id: string;
+    farm_name: string;
+    contact_name: string | null;
+    account_number: string | null;
+    email: string | null;
+    phone: string | null;
+    billing_address: string | null;
+    city: string | null;
+    state: string | null;
+    zip: string | null;
+    payment_terms: string | null;
+  };
+  transactions: DetailedStatementTransaction[];
+  aging: {
+    current_cents: number;
+    days_30_cents: number;
+    days_60_cents: number;
+    days_90_cents: number;
+    over_90_cents: number;
+  };
+  outstanding_balance_cents: number;
+  as_of_date: string;
+  mode: 'summary' | 'detailed';
+}
+
+export interface DetailedStatementTransaction {
+  invoice_number: string;
+  invoice_date: string;
+  due_date: string | null;
+  invoice_type: string;
+  status: string;
+  days_aged: number;
+  description: string;
+  crop_type: string | null;
+  field_names: string[] | null;
+  total_acres: number | null;
+  grower_names: string[] | null;
+  total_amount_cents: number;
+  paid_amount_cents: number;
+  prepay_applied_cents: number;
+  balance_cents: number;
+  items: DetailedStatementItem[];
+  shares: InvoiceShare[];
+  finance_charge_cents: number;
+  net_due_cents: number;
+  price_per_acre: number | null;
+}
+
+export interface DetailedStatementItem {
+  product_name: string;
+  epa_registration: string | null;
+  rate_per_acre: number | null;
+  rate_unit: string | null;
+  total_applied: number | null;
+  total_applied_unit: string | null;
+  total_applied_gl_lb: number | null;
+  gl_lb_unit: string | null;
+  unit_price_cents: number;
+  total_cost_cents: number;
+  is_application_fee: boolean;
+  quantity: number;
+  unit_size: string | null;
+  product_form: string | null;
+}
+
+// ── Allocation Sets ─────────────────────────────────────────────────────
 
 export interface AllocationSet {
   id: string;

@@ -120,3 +120,28 @@ export function validateCommissionSplits(
   }
   return null;
 }
+
+/**
+ * Convert total applied quantity to gallons (liquid) or pounds (dry).
+ * Liquid: OZ→GL (/128), PT→GL (/8), QT→GL (/4), GL stays.
+ * Dry:    OZ→LB (/16), LB stays.
+ */
+export function convertToGlLb(
+  totalApplied: number,
+  unit: string,
+  productForm: 'liquid' | 'dry' | string,
+): { value: number; unit: string } {
+  if (productForm === 'dry') {
+    const u = unit.toUpperCase();
+    if (u === 'OZ') return { value: totalApplied / 16, unit: 'LB' };
+    return { value: totalApplied, unit: 'LB' };
+  }
+  // Liquid
+  const u = unit.toUpperCase();
+  if (u === 'OZ') return { value: totalApplied / 128, unit: 'GL' };
+  if (u === 'PT') return { value: totalApplied / 8, unit: 'GL' };
+  if (u === 'QT') return { value: totalApplied / 4, unit: 'GL' };
+  if (u === 'GL') return { value: totalApplied, unit: 'GL' };
+  // Default to OZ→GL for unknown units
+  return { value: totalApplied / 128, unit: 'GL' };
+}
