@@ -874,6 +874,30 @@ export interface FieldBillingDefault {
   customer?: Customer;
 }
 
+// Field Import
+export interface ParsedImportField {
+  index: number;
+  field_name: string;
+  customer_id: string | null;
+  legal_description: string | null;
+  county: string | null;
+  state: string | null;
+  total_acres: number | null;
+  crop_type: string | null;
+  fsa_farm_number: string | null;
+  fsa_tract_number: string | null;
+  fsa_field_number: string | null;
+  soil_type: string | null;
+  irrigation: boolean;
+  notes: string | null;
+  boundary_geojson: object;
+  centroid_geojson: object;
+  calculated_acres: number;
+  raw_properties: Record<string, unknown>;
+  errors: string[];
+  isValid: boolean;
+}
+
 // Phase 5: Inventory Enhancements
 
 export interface Warehouse {

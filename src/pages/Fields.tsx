@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, MapPin, List, Map as MapIcon } from 'lucide-react';
+import { Plus, MapPin, List, Map as MapIcon, Upload } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -10,6 +10,7 @@ import { supabase } from '../lib/db';
 import type { Field } from '../types';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
+import BulkFieldImport from '../components/fields/BulkFieldImport';
 
 type FieldWithCustomer = Field & { customer_name: string };
 
@@ -21,6 +22,7 @@ export default function Fields() {
   const [cropFilter, setCropFilter] = useState('');
   const [countyFilter, setCountyFilter] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
+  const [importModalOpen, setImportModalOpen] = useState(false);
 
   // Collect unique values for filter dropdowns
   const cropTypes = [...new Set(fields.map((f) => f.crop_type).filter(Boolean))] as string[];
@@ -154,9 +156,18 @@ export default function Fields() {
           </button>
         </div>
 
-        <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/fields/new')}>
-          Add Field
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            icon={<Upload className="w-4 h-4" />}
+            onClick={() => setImportModalOpen(true)}
+          >
+            Import Fields
+          </Button>
+          <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/fields/new')}>
+            Add Field
+          </Button>
+        </div>
       </div>
 
       {viewMode === 'map' ? (
@@ -252,6 +263,12 @@ export default function Fields() {
           </div>
         </Card>
       )}
+
+      <BulkFieldImport
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+        onSuccess={fetchFields}
+      />
     </div>
   );
 }
