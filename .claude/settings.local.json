@@ -1,20 +1,30 @@
 {
   "permissions": {
     "allow": [
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(node:*)",
+      "Bash(git:*)",
+      "Bash(ls:*)",
+      "Bash(dir:*)",
       "Bash(wc:*)",
       "Bash(tree:*)",
-      "Bash(dir:*)",
-      "Bash(ls -la \"C:\\\\CRX_Manager_V1.0\\\\src\\\\pages\"\" | grep \".tsx \")",
-      "Bash(npx tsc:*)",
-      "Bash(npm install)",
-      "Bash(npm run typecheck:*)",
-      "Bash(npm run build:*)",
       "Bash(echo:*)",
-      "Bash(git add:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\nFix all TypeScript errors, add RLS migration, and create CLAUDE.md\n\n- Fix ~60 pre-existing TypeScript type errors across 20+ files\n- Add tuple types for jsPDF color arrays in quotePdf.ts and deliveryPdf.ts\n- Fix toast calls from object syntax to correct positional args\n- Fix component props \\(Modal size, Button variant, Select options, DataTable\\)\n- Fix ActivityFeed hook ordering \\(used before declaration\\)\n- Fix exportToCSV call in Payments.tsx \\(missing columns parameter\\)\n- Add null coalescing for nullable fields in QuoteBuilder PDF generation\n- Add index signatures for DataTable generic constraint in Reports/Payments\n- Remove unused imports and variables across all files\n- Add missing TypeScript fields: Order.total_paid/balance_due,\n  Inventory.reorder_point/min_stock_level, Commission.paid_date/paid_note,\n  TeamNote/TeamNoteComment.deleted_at/deleted_by\n- Fix InventoryPage to read reorder_point/min_stock_level from DB\n- Add order_date to Dashboard orders query\n- Add CORS documentation to all 3 edge functions\n- Create RLS migration for sales rep INSERT permissions\n- Create CLAUDE.md AI dev/QA reference\n\nBoth tsc --noEmit and npm run build pass with zero errors.\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git push:*)",
-      "Bash(git pull:*)",
-      "Bash(git stash:*)"
+      "Bash(cat:*)",
+      "Bash(rm:*)",
+      "Bash(mkdir:*)",
+      "Bash(cp:*)",
+      "Bash(mv:*)",
+      "Bash(pwd:*)",
+      "Bash(cd:*)",
+      "Bash(test:*)",
+      "Bash(which:*)",
+      "Bash(find:*)",
+      "Bash(sort:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(diff:*)",
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\":*)"
     ]
   }
 }

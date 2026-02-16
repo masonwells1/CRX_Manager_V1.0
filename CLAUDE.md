@@ -7,19 +7,15 @@
 - **Who it's for:** Crop RX Solutions (admin, sales reps, drivers)
 - **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
 
-## Current State (as of 2026-02-15)
-- **Tier 1-3 hardening:** COMPLETE (security, performance, offline support, idempotency, image compression, activity triggers)
-- **Phases 4A-7:** COMPLETE (invoicing, fields, blend recipes, warehouses, cycle counts, returns/RMA, AR aging, compliance, rebates)
-- **Phase 4B:** COMPLETE (Mapbox satellite maps: field boundary drawing, acreage auto-calc, map/list toggle, customer field mini-maps)
-- **Sprints 7-11:** COMPLETE (Vehicles, Job Scheduling, Reporting, Month-End Close, Financial Workflows)
-- **Sprint 12:** COMPLETE (Invoice & Statement PDF redesign — 3 invoice layouts, dual-mode statements, remittance stubs)
-- **Sprints 13-17:** COMPLETE (Billing System Upgrade — finance charge intelligence, grower share transparency, batch operations, unified payment allocation, year-end customer summaries)
+## Current State (as of 2026-02-16)
+- **All hardening & features:** COMPLETE through Sprint 17
 - **Deployed to:** Vercel (private preview/staging)
-- **Test coverage:** 91 unit tests (Vitest) + 3 E2E test files (Playwright)
-- **57 migrations** applied to remote Supabase
-- **46 pages**, **46 components**, **~105 RPC functions**
-- **See CONTEXT.md** for full business context and data model details
-- **See `.claude/projects/C--/memory/`** for detailed topic files (MEMORY.md, rpc-reference.md, pages-and-components.md, migration-history.md, sprint12-pdf-system.md, sprints13-17-billing-upgrade.md)
+- **Test coverage:** 91 unit tests (Vitest) + 8 Playwright E2E spec files
+- **57 migrations** applied to remote Supabase, **67 tables**, **~105 RPC functions**
+- **46 pages**, 41+ components
+- **Pre-commit hook:** `npm run build` + `npx vitest run` run automatically before every commit
+- **See repo `MEMORY.md`** for complete 566-line project reference (schema, RPCs, all pages, full history)
+- **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
 
 ## Architecture Rules -- Follow These
 1. **Database changes MUST use migrations** -- create files in `supabase/migrations/`, never modify tables directly
@@ -41,7 +37,7 @@
 - **Frontend:** React 18 + TypeScript + Vite
 - **Backend:** Supabase (PostgreSQL + Auth + Edge Functions + Realtime + Storage)
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
-- **Testing:** Playwright (E2E only, tests in `tests/e2e/`)
+- **Testing:** Vitest (91 unit tests) + Playwright (8 E2E specs in `tests/e2e/`)
 - **Deployment:** Vercel (private preview/staging), configured via `vercel.json`
 - **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid
 - **PDF Generation:** jsPDF + jspdf-autotable (client-side)
@@ -53,17 +49,19 @@
 ```bash
 npm run dev          # Start dev server (http://localhost:5173)
 npm run build        # Production build
-npm run preview      # Preview production build
+npx vitest run       # Run 91 unit tests
 npm run typecheck    # TypeScript error check
 npm run lint         # ESLint
 npm run test:e2e     # Run Playwright E2E tests
 npm run test:e2e:ui  # Interactive Playwright UI
 ```
+**Note:** Pre-commit hook automatically runs `npm run build` + `npx vitest run` before every commit.
 
 ### User Roles
-1. **admin** - Full CRUD on all tables. Manages users, products, costs, inventory, purchase orders, commissions.
-2. **sales_rep** - Creates quotes, orders, deliveries. Manages own customers. Views own commissions. Cannot modify products/costs or purchase orders.
-3. **driver** - Views assigned deliveries and related inventory. Updates delivery status. Cannot access quotes, orders, or financial data.
+1. **admin** - Full CRUD on all tables. Manages users, products, costs, inventory, purchase orders, commissions, month-end close, write-offs, settings.
+2. **sales_rep** - Creates quotes, orders, deliveries, jobs, invoices, blend tickets, application records. Manages own customers/fields. Views own commissions.
+3. **driver** - Views assigned deliveries and related inventory. Updates delivery status. Records signatures. Cannot access quotes, orders, or financial data.
+4. **applicator** - Views assigned jobs. Records applied info (weather, gallons, times). Views customers/products/fields/recipes. Cannot create jobs or access financial data.
 
 ### Project Structure
 ```
@@ -82,16 +80,21 @@ src/
     imageCompression.ts # Client-side image compression
     quotePdf.ts        # Quote PDF generation
     deliveryPdf.ts     # Delivery receipt PDF generation
+    invoicePdf.ts      # Invoice PDF (3 layouts)
+    statementPdf.ts    # Customer statement PDF (dual-mode)
+    reportPdf.ts       # Generic report PDF generator
+    yearEndSummaryPdf.ts # Year-end customer summary PDF
     csvExport.ts       # CSV export utility
     ocrParser.ts       # OCR text parsing for blend tickets
     blendMathValidator.ts # Blend recipe math validation
     quoteCalc.ts       # Quote calculation helpers
+    paymentAllocation.test.ts # 9 payment allocation tests
   hooks/
     useOnlineStatus.ts     # Online/offline detection
     useRealtimeSubscription.ts # Supabase realtime wrapper
     usePageMeta.ts         # Page title/meta
     useOCRProcessor.ts     # OCR processing hook
-  pages/               # 34 page components (lazy-loaded from App.tsx)
+  pages/               # 46 page components (lazy-loaded from App.tsx)
   components/
     auth/              # LoginPage, ProtectedRoute
     layout/            # AppLayout, Sidebar, TopBar
@@ -102,6 +105,9 @@ src/
     orders/            # BulkOrderImport
     products/          # BulkProductImport, BulkPricingImport
     quotes/            # BulkQuoteImport
+    invoices/          # BatchVoidModal, FinanceChargePreviewModal, InvoicePrintDialog, WriteOffModal
+    reports/           # ReportShell, LogbookReport, YearEndSummaryDialog
+    statements/        # StatementPrintDialog
     team/              # ActivityFeed, CommentsSection, NotificationsPanel, TagsManager, TeamBoardFilters
   types/
     index.ts           # All TypeScript interfaces and types
@@ -113,42 +119,52 @@ tests/
   e2e/                 # Playwright E2E tests (auth, customers, permissions)
 ```
 
-### Pages (34 total)
+### Pages (46 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
-| `/` | Dashboard | KPIs, revenue chart, upcoming deliveries, low stock alerts, open AR |
-| `/products` | Products | Product master with tier pricing, bulk import |
-| `/products/:id` | ProductDetail | Single product edit, cost history |
-| `/customers` | Customers | Customer list with tier filtering, bulk import |
-| `/customers/:id` | CustomerDetail | Customer profile, addresses, acreage, commission splits |
-| `/quotes` | Quotes | Quote list with status filtering, duplication |
-| `/quotes/new` | QuoteBuilder | Create quote with sections, rate calc, PDF generation |
+| `/` | Dashboard | KPIs, today's jobs, recent activity |
+| `/products` | Products | Product catalog with search/filter, bulk import |
+| `/products/:id` | ProductDetail | Product CRUD (pricing tiers, EPA info, RUP status) |
+| `/customers` | Customers | Customer list with search/filter, bulk import |
+| `/customers/:id` | CustomerDetail | Customer edit, credit limit, finance charge rate, prepayment apply |
+| `/quotes` | Quotes | Quote list with status filters |
+| `/quotes/new` | QuoteBuilder | Multi-line quote with tiered pricing, commission splits, PDF |
 | `/quotes/:id` | QuoteBuilder | Edit existing quote |
-| `/orders` | Orders | Order list with fulfillment tracking |
-| `/orders/new` | NewOrder | Manual order or quote conversion |
-| `/orders/:id` | OrderDetail | Order detail with items, payments, deliveries |
-| `/inventory` | InventoryPage | Stock levels, holds, receive/adjust, low stock |
-| `/deliveries` | Deliveries | Delivery list with driver/date filtering |
+| `/orders` | Orders | Order list with status badges |
+| `/orders/new` | NewOrder | Direct order creation (bypasses quote) |
+| `/orders/:id` | OrderDetail | Order detail with status transitions, convert to invoice |
+| `/inventory` | InventoryPage | Inventory levels, low-stock alerts, cost valuation |
+| `/deliveries` | Deliveries | Delivery list with status filters |
 | `/deliveries/new` | NewDelivery | Create delivery from order |
-| `/deliveries/:id` | DeliveryDetail | Delivery detail, signature capture, PDF receipt |
+| `/deliveries/:id` | DeliveryDetail | Delivery detail, partial delivery, signature capture |
 | `/blend-tickets` | BlendTickets | OCR ticket processing with image upload |
-| `/blend-tickets/:id` | BlendTicketDetail | OCR results, product extraction, review workflow |
-| `/purchase-orders` | PurchaseOrders | Supplier PO list |
-| `/purchase-orders/new` | NewPurchaseOrder | Create PO from inventory/products |
-| `/purchase-orders/:id` | PurchaseOrderDetail | PO detail with receiving |
-| `/brand-vs-generic` | BrandVsGeneric | Ingredient mapping: branded vs generic |
-| `/reports` | Reports | Customer profitability, product profitability, commissions, monthly revenue. CSV export. |
-| `/crop-programs` | CropPrograms | Seasonal crop program management |
-| `/invoices` | Invoices | Invoice management with posting workflow |
-| `/invoices/:id` | InvoiceDetail | Invoice detail with items, allocations, payments |
-| `/fields` | Fields | Farm field management with map/list toggle (geospatial, FSA numbers) |
-| `/fields/:id` | FieldDetail | Field detail with satellite map, boundary drawing, auto-acreage |
-| `/recipes` | BlendRecipes | Saved blend recipe management (create, duplicate, edit) |
+| `/blend-tickets/:id` | BlendTicketDetail | Ticket review, approve/reject, create application record |
+| `/purchase-orders` | PurchaseOrders | PO list with status filters |
+| `/purchase-orders/new` | NewPurchaseOrder | Create PO from vendor catalog |
+| `/purchase-orders/:id` | PurchaseOrderDetail | PO detail, receive items |
+| `/jobs` | Jobs | Job list with date/status/customer filters |
+| `/jobs/:id` | JobDetail | Full job editor: fields on map, chemicals, vehicle/applicator, complete, transfer to invoice |
+| `/vehicles` | Vehicles | Vehicle CRUD (ground/air), capacity, registration |
+| `/vehicles/:id` | VehicleDetail | Single vehicle edit form |
+| `/application-records` | ApplicationRecords | Read-only list of all chemical applications (from jobs + blend tickets) |
+| `/invoices` | Invoices | Invoice list (unposted/posted), batch print, period-closed warnings |
+| `/invoices/:id` | InvoiceDetail | Invoice detail, post/unpost, print PDF, write-off |
+| `/payments` | Payments | Payment recording and listing |
+| `/payment-allocation` | PaymentAllocation | Unified payment allocation to invoices |
+| `/ar-aging` | ARaging | AR aging report, generate finance charges |
+| `/month-end` | MonthEndClose | Admin-only. Period status, checklist, batch statements, "Roll the Month" |
+| `/commission-payments` | CommissionPayments | Admin-only. Create from unpaid commissions, post workflow |
+| `/customer-transactions` | CustomerTransactionReview | Admin-only. Per-customer transaction history with running balance |
+| `/prepayments` | PrepaymentManager | Admin-only. Prepay balances, auto-apply to oldest invoices |
+| `/reports` | Reports | 14 reports: 4 logbook, 6 financial, 4 operational. CSV/PDF export. |
+| `/fields` | Fields | Field list with Mapbox map view |
+| `/fields/:id` | FieldDetail | Field CRUD with polygon drawing on satellite map |
+| `/recipes` | BlendRecipes | Reusable blend recipe management, create job from recipe |
 | `/cycle-counts` | CycleCounts | Inventory cycle counting with variance tracking |
 | `/returns` | Returns | Returns/RMA workflow (request → approve → receive → credit) |
-| `/payments` | Payments | Payment tracking and AR balance |
-| `/ar-aging` | ARaging | AR aging buckets, customer statements, season comparison |
+| `/brand-vs-generic` | BrandVsGeneric | Ingredient mapping: branded vs generic |
+| `/crop-programs` | CropPrograms | Seasonal crop program management |
 | `/compliance` | Compliance | Applicator license tracking, RUP product list |
 | `/rebates` | Rebates | Manufacturer rebate programs and claim management |
 | `/team-board` | TeamBoard | Kanban board: notes/todos/announcements, comments, real-time |
@@ -159,16 +175,17 @@ tests/
 
 ## Supabase Backend Reference
 
-### Database Tables (40+ total)
+### Database Tables (67 total)
 
 **Core Business:**
-- `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active)
-- `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-3, acreage, commission_split jsonb)
+- `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
+- `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-4, credit_limit, finance_charge_rate, prepay_balance)
 - `customer_addresses` - Multiple addresses per customer (label, address, delivery_notes, is_default)
-- `products` - Product master (product_name, sku, category, vendor, tier1/2/3 pricing, rates, is_rup, signal_word)
+- `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, product_form)
 - `cost_history` - Cost change audit log (product_id, old/new costs and prices, change_note)
-- `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, crop_type, soil_type)
+- `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, Mapbox polygon geometry)
 - `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
+- `vehicles` - Ground/air application equipment (type, capacity, registration, FAA N-number or DOT#, status)
 
 **Quotes & Orders:**
 - `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at)
@@ -191,6 +208,15 @@ tests/
 - `deliveries` - Scheduled deliveries (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url)
 - `delivery_items` - Items on delivery (order_item_id, product_id, quantity)
 
+**Job Scheduling:**
+- `jobs` - Job headers (status: scheduled/in_progress/completed/cancelled/invoiced, customer, applicator, vehicle, recipe)
+- `job_fields` - Fields assigned to a job (many-to-many with sort order)
+- `job_chemicals` - Chemicals/products for a job with rates and pricing
+- `job_applied_info` - Recorded data when completed: actual times, weather, gallons applied
+
+**Application Records:**
+- `application_records` - Single source of truth for "what was applied, where, when, by whom." Fed from completed jobs AND approved blend tickets. JSONB for products and weather.
+
 **OCR / Blend Tickets:**
 - `blend_tickets` - OCR ticket records (ticket_number, status, review_status, ocr_confidence_score, raw_ocr_text)
 - `blend_ticket_products` - Extracted products (product_name, quantity, confidence_score, manually_corrected)
@@ -212,6 +238,14 @@ tests/
 - `prepay_credits` - Prepayment credits (customer_id, original_amount_cents, remaining_cents, source_payment_id)
 - `prepay_applications` - Prepay credit applications to invoices (credit_id, invoice_id, applied_cents)
 - `financial_audit_log` - Immutable audit trail (entity_type, entity_id, action, old_data/new_data jsonb, performed_by)
+
+**Financial:**
+- `accounting_periods` - Month-end close tracking (status: open/closed)
+- `commission_payments` - Commission payment headers (status: unposted/posted)
+- `commission_payment_items` - Individual commissions included in a payment
+- `write_offs` - Invoice write-off records with reason and approval
+- `finance_charges` - Interest charges on overdue invoices
+- `prepayments` - Customer prepayment deposits
 
 **Blend Recipes:**
 - `blend_recipes` - Saved blend recipe templates (recipe_name, recipe_number, category, total_cost, total_weight, status)
@@ -239,24 +273,48 @@ tests/
 - `ingredient_map` - Brand to generic product mapping
 - `unit_conversions` - Unit conversion factors (unit, factor_oz)
 
-### RPC Functions (SQL)
-```sql
-get_ar_aging(p_as_of_date date)           -- AR aging buckets by customer (current, 30, 60, 90, 120+ days)
-get_customer_statement(p_customer_id, p_start_date, p_end_date) -- Chronological transactions with running balance
-get_season_comparison(p_season_a, p_season_b) -- YoY revenue, profit, orders, active customers
-get_fields_with_geojson(p_customer_id uuid DEFAULT NULL) -- Fields with centroid/boundary as GeoJSON text (for map markers)
-get_field_geojson(p_field_id uuid)        -- Single field's centroid/boundary as GeoJSON text
-save_field_geometry(p_field_id, p_centroid_geojson, p_boundary_geojson) -- Save PostGIS geo data from GeoJSON strings
-```
-AR/statement/season RPCs are `SECURITY DEFINER STABLE`. Geo RPCs use `SET search_path = public, extensions` for PostGIS access.
+### RPC Functions (~105 total — key ones listed)
+
+**Atomic Save/Delete:**
+- `save_quote()`, `save_job()`, `save_customer()`, `save_blend_ticket()`, `save_purchase_order()`, `delete_purchase_order()`, `duplicate_quote()`
+
+**Order & Delivery:**
+- `convert_quote_to_order()`, `create_direct_order()`, `complete_delivery()` (partial delivery + inventory deduction)
+
+**Job Scheduling:**
+- `complete_job()` — marks completed, creates application_record, deducts inventory
+- `transfer_job_to_invoice()` — creates invoice from job, sets status='invoiced'
+- `load_recipe_into_job()` — copies recipe items into job chemicals
+
+**Sequential Numbers (advisory locks):**
+- `next_delivery_number()` → DEL-YYYY-NNNN, `next_po_number()` → PO-YYYY-NNNN
+- `next_application_record_number()` → APP-YYYY-NNNN, `next_job_number()` → JOB-YYYY-NNNN
+- `next_commission_payment_number()` → CP-YYYY-NNNN
+
+**Reporting (10 RPCs):**
+- `get_logbook_by_customer()`, `get_logbook_by_applicator()`, `get_logbook_by_field()`, `get_logbook_faa()`
+- `get_bottom_line_pnl()`, `get_gross_sales_report()`, `get_customer_balance_listing()`
+- `get_chemical_history()`, `get_commission_balance_report()`, `get_inventory_cost_report()`
+
+**Financial:**
+- `close_accounting_period()`, `check_period_open()`, `generate_batch_statements()`, `get_monthly_summary()`
+- `create_commission_payment()`, `post_commission_payment()`
+- `apply_write_off()`, `generate_finance_charges()`
+- `get_customer_transaction_review()`, `apply_remaining_prepayments()`
+
+**Geo / Maps:**
+- `get_fields_with_geojson()`, `get_field_geojson()`, `save_field_geometry()` — use `SET search_path = public, extensions` for PostGIS
+
+**Dashboard:**
+- `dashboard_summary()` — 8 queries consolidated into 1 RPC
 
 ### Helper Functions (SQL)
 ```sql
-is_admin()     -- SELECT EXISTS(profiles WHERE id = auth.uid() AND role = 'admin')
-is_sales_rep() -- SELECT EXISTS(profiles WHERE id = auth.uid() AND role = 'sales_rep')
-is_driver()    -- SELECT EXISTS(profiles WHERE id = auth.uid() AND role = 'driver')
+is_admin()      -- SECURITY DEFINER STABLE
+is_sales_rep()  -- SECURITY DEFINER STABLE
+is_driver()     -- SECURITY DEFINER STABLE
+is_applicator() -- SECURITY DEFINER STABLE
 ```
-All three are `SECURITY DEFINER STABLE`.
 
 ### Database Trigger
 - **`on_auth_user_created`** - After INSERT on `auth.users`, calls `handle_new_user()` which auto-creates a `profiles` row using `raw_user_meta_data` (full_name, role defaults to 'sales_rep').
@@ -340,7 +398,22 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix. Key migrat
 21. `20260213000000` - Inventory enhancements (warehouses, cycle_counts, cycle_count_items, inventory warehouse_id FK)
 22. `20260213100000` - Returns/RMA system (returns, return_items, inventory restocking support)
 23. `20260213200000` - Reporting, compliance & rebates (applicator_licenses, rebate_programs, rebate_claims, AR aging/statement/season RPCs, products is_rup & signal_word)
-24. `20260214000000` - Phase 4B Mapbox integration (customer_addresses lat/lng, get_fields_with_geojson, get_field_geojson, save_field_geometry RPCs)
+24. `20260214000000` - Phase 4B Mapbox integration (geo RPCs, PostGIS)
+25. `20260214200000` - Vehicles table
+26. `20260214210000` - Applicator role expansion (license fields on profiles)
+27. `20260214220000` - Application records table + RPCs
+28. `20260215200000` - Job scheduling tables (jobs, job_fields, job_chemicals, job_applied_info)
+29. `20260216200000` - Reporting RPCs (10 report functions)
+30. `20260217200000` - Accounting periods (month-end close)
+31. `20260217210000` - Commission payments
+32. `20260218200000` - Financial workflows (write-offs, finance charges, prepayments, transaction review)
+33. `20260219200000` - Invoice/statement enrichment
+34. `20260219210000` - Invoice/statement RPCs
+35. `20260220200000` - Finance charge intelligence
+36. `20260221200000` - Grower share pricing
+37. `20260222200000` - Batch operations
+38. `20260223200000` - Payment allocation
+39. `20260224200000` - Year-end summary
 
 ### Edge Functions
 - **create-user** - Admin-only: creates a new auth user with role metadata
@@ -435,6 +508,24 @@ Used for:
 - Claim numbers auto-generated: `RC-{year}-{sequential 4-digit}`
 - Amounts stored as cents (bigint) for precision
 
+### Job Lifecycle
+`scheduled` -> `in_progress` -> `completed` -> `cancelled` -> `invoiced`
+- Created with customer, fields, chemicals (from recipe or manual)
+- Assigned to applicator + vehicle
+- Completion records applied_info (weather, gallons, times), creates application_record, deducts inventory
+- Transfer to invoice creates invoice from job line items
+
+### Commission Payment Lifecycle
+`unposted` -> `posted`
+- Created from selected unpaid commissions for a sales rep
+- Posting locks amounts and marks individual commissions as paid
+
+### Month-End Close
+- Periods track open/closed status per month
+- Closing validates all invoices posted, runs checklist
+- Closed periods prevent backdated transactions (`check_period_open()` raises exception)
+- Batch statement generation for all customers with activity
+
 ### Season Dates
 - Season runs **July 1 to June 30**
 - Delivered YTD calculated from season start
@@ -495,30 +586,28 @@ checkMutationResult(result, 'Update customer');
 ### Role-Based Testing Matrix
 Test every feature as each role:
 
-| Feature | Admin | Sales Rep | Driver |
-|---------|-------|-----------|--------|
-| Dashboard KPIs | Full view | Full view (no driver section) | Deliveries only |
-| Products CRUD | Full | Read only | No access |
-| Customers CRUD | Full | Own assigned only | Via delivery only |
-| Quotes CRUD | Full | Own only | No access |
-| Orders CRUD | Full | Create/Read | No access |
-| Inventory | Full + receive/adjust | Read + holds | Read only |
-| Deliveries | Full | Create/Read | Own assigned + update status |
-| Purchase Orders | Full | No access | No access |
-| Blend Tickets | Full | Upload/review | No access |
-| Commissions | Full | Own only | No access |
-| Payments | Full | Read/Create | No access |
-| Invoices | Full | Read/Create | No access |
-| Fields | Full | Own customer fields | No access |
-| Blend Recipes | Full | Create/Edit | No access |
-| Cycle Counts | Full | No access | No access |
-| Returns/RMA | Full | Create/Read | No access |
-| AR Aging | Full | No access | No access |
-| Compliance | Full | Read only | No access |
-| Rebates | Full | No access | No access |
-| Team Board | Full | Full (own notes) | Full (own notes) |
-| Settings | Full | No access | No access |
-| User Management | Full | No access | No access |
+| Feature | Admin | Sales Rep | Driver | Applicator |
+|---------|-------|-----------|--------|------------|
+| Dashboard KPIs | Full view | Full view | Deliveries only | Jobs only |
+| Products CRUD | Full | Read only | No access | Read only |
+| Customers CRUD | Full | Own assigned | Via delivery only | Read only |
+| Quotes CRUD | Full | Own only | No access | No access |
+| Orders CRUD | Full | Create/Read | No access | No access |
+| Inventory | Full | Read + holds | Read only | No access |
+| Deliveries | Full | Create/Read | Own + update status | No access |
+| Purchase Orders | Full | No access | No access | No access |
+| Blend Tickets | Full | Upload/review | No access | No access |
+| Jobs | Full | Create/Edit | No access | Own assigned + record applied info |
+| Vehicles | Full | Read only | No access | Read only |
+| Application Records | Full | Read | No access | Read |
+| Invoices | Full | Read/Create | No access | No access |
+| Payments | Full | Read/Create | No access | No access |
+| Month-End Close | Full | No access | No access | No access |
+| Commission Payments | Full | No access | No access | No access |
+| Fields | Full | Own customer | No access | Read only |
+| Reports | Full | Limited | No access | No access |
+| Team Board | Full | Full (own notes) | Full (own notes) | Full (own notes) |
+| Settings | Full | No access | No access | No access |
 
 ### Workflow End-to-End Tests
 
@@ -616,11 +705,24 @@ Test every feature as each role:
 - Season comparison uses RPC `get_season_comparison()` — YoY metrics (July 1-June 30 seasons)
 - Financial audit log: immutable append-only table, logged via `financial_audit_log` inserts
 - Tab-based page layout pattern used in: ARaging (3 tabs), Compliance (2 tabs), Rebates (2 tabs), InventoryPage, BlendRecipes
+- Job number format: `JOB-{YYYY}-{sequential 4-digit}` via `next_job_number()` RPC
+- Application record number format: `APP-{YYYY}-{sequential 4-digit}` via `next_application_record_number()`
+- Commission payment number format: `CP-{YYYY}-{sequential 4-digit}` via `next_commission_payment_number()`
+- ReportShell component: reusable date range + season presets + CSV/PDF export wrapper (`src/components/reports/ReportShell.tsx`)
+- LogbookReport component: 4 sub-tabs (by Customer/Applicator/Field/FAA) (`src/components/reports/LogbookReport.tsx`)
+- Invoice PDF: 3 layouts via `src/lib/invoicePdf.ts` (756 lines)
+- Statement PDF: dual-mode via `src/lib/statementPdf.ts` (818 lines)
+- Year-end summary PDF: `src/lib/yearEndSummaryPdf.ts` (633 lines)
+- Money pattern: all cents as bigint — display divides by 100, store multiplied by 100
+- Atomic operations: PostgreSQL RPCs with `FOR UPDATE` row locks for race-free multi-table writes
 
 ### Build & Type Checking
-- `npx tsc --noEmit` for type checking (no tsconfig issues)
-- `npx vite build` for full build verification
-- Product type has `is_active`, `current_cost`, `unit_size`, `sku`, `vendor` fields
+- `npm run build` for full build verification (pre-commit hook runs this automatically)
+- `npx vitest run` for 91 unit tests (pre-commit hook runs this automatically)
+- `npx tsc --noEmit` for type checking only
+- Known warning: vendor-mapbox chunk is ~1,680KB (>500KB limit) — Mapbox is large, this is expected
+- react-map-gl v8: import from `'react-map-gl/mapbox'`, NOT bare `'react-map-gl'`
+- react-map-gl can't go in Vite manualChunks — only put `mapbox-gl`
 
 ### Key Files
 - Types: `src/types/index.ts`
