@@ -1,6 +1,6 @@
 # CRX Manager V1.0 — Complete Project Reference
 
-> **Last updated:** February 14, 2026
+> **Last updated:** February 16, 2026
 > **Purpose:** Comprehensive reference for any AI agent working on this codebase.
 
 ---
@@ -11,7 +11,7 @@
 - **GitHub user:** `masonwells1`
 - **Auth:** HTTPS via `gh` CLI (`v2.86.0`)
 - **Git identity:** `Mason Wells` / `253580866+masonwells1@users.noreply.github.com`
-- **Latest commit:** `fda6700` — Sprints 7-11: Vehicles, Job Scheduling, Reporting, Month-End, Financial Workflows
+- **Latest commit:** `91c3e97` — Add bulk field import with shapefile, KML, and GeoJSON support
 - **Branch:** `main` (clean, up to date with origin)
 
 ## 2. What CRX Manager Is
@@ -61,7 +61,7 @@ All three are publishable client-side keys (safe in browser).
 | PDF Generation | jsPDF (quotes, deliveries, invoices, statements, reports) |
 | OCR | Supabase Edge Function + OpenAI Vision API (blend ticket processing) |
 | Signature Capture | signature_pad v5 |
-| Testing | Vitest (82 unit tests), Playwright (E2E specs) |
+| Testing | Vitest (91 unit tests), Playwright (E2E specs) |
 | Offline Support | Service worker queue + sync |
 | Routing | React Router v6 (createBrowserRouter) |
 | State | React Context (AuthContext) + local component state |
@@ -218,6 +218,9 @@ MapContainer, DrawControl, FieldMarkers
 ### Reports (`src/components/reports/`)
 ReportShell (reusable date range + season presets + CSV/PDF export wrapper), LogbookReport (4 sub-tabs: by Customer/Applicator/Field/FAA)
 
+### Fields (`src/components/fields/`)
+BulkFieldImport (shapefile/KML/GeoJSON import wizard), AttributeMappingStep, ImportPreviewMap
+
 ### Bulk Imports (`src/components/*/Bulk*.tsx`)
 BulkProductImport, BulkCustomerImport, BulkOrderImport, BulkPOImport, BulkQuoteImport, BulkPricingImport, BulkTicketUpload
 
@@ -230,7 +233,7 @@ WriteOffModal
 ### Root-level
 EnvCheck, ErrorBoundary
 
-## 9. Library Files (`src/lib/` — 20 files)
+## 9. Library Files (`src/lib/` — 23 files)
 
 | File | Purpose |
 |------|---------|
@@ -254,6 +257,8 @@ EnvCheck, ErrorBoundary
 | `blendMathValidator.test.ts` | 11 unit tests for blend math |
 | `ocrParser.test.ts` | 23 unit tests for OCR parsing |
 | `rpcContracts.test.ts` | 19 RPC contract tests |
+| `paymentAllocation.test.ts` | 9 payment allocation tests |
+| `fieldImportParser.ts` | Shapefile/KML/GeoJSON parsing, coordinate projection (proj4), attribute extraction |
 
 ## 10. Custom Hooks (`src/hooks/` — 6 hooks)
 
@@ -456,11 +461,12 @@ Fields foundation, billing architecture, blend ticket/order linkage, blend recip
 
 ## 15. Testing
 
-### Unit Tests (82 tests via Vitest + jsdom)
+### Unit Tests (91 tests via Vitest + jsdom)
 - `quoteCalc.test.ts` — 29 tests: tier pricing, conversion factors, recalcItem, quote totals, commission validation
 - `blendMathValidator.test.ts` — 11 tests: blend math validation
 - `ocrParser.test.ts` — 23 tests: OCR result parsing
 - `rpcContracts.test.ts` — 19 tests: RPC contract validation for 13+ RPCs
+- `paymentAllocation.test.ts` — 9 tests: payment allocation logic
 
 ### E2E Tests (Playwright)
 8 spec files: navigation, dashboard, products, quotes, orders, inventory, deliveries, POs, reports.
@@ -498,6 +504,12 @@ Closed the biggest gaps vs. the legacy CheMan system:
 - **S9:** Reporting engine (14 reports: 4 logbook, 6 financial, 4 operational)
 - **S10:** Month-end close, invoice/statement PDFs, commission payment lifecycle
 - **S11:** Financial workflows (write-offs, finance charges, prepayment application, transaction review)
+
+### Phase 5: Bulk Field Import (Feb 16, 2026)
+- Shapefile (.shp/.dbf/.shx), KML, and GeoJSON import wizard on Fields page
+- 3-step flow: upload files → map attributes to field columns → preview on map → bulk insert
+- Coordinate reprojection via proj4 (handles non-WGS84 shapefiles)
+- New deps: shapefile, proj4, togeojson-with-extended-style, @turf/bbox
 
 ## 17. Key Files for Quick Reference
 
@@ -541,7 +553,8 @@ Closed the biggest gaps vs. the legacy CheMan system:
 | CSV export | Complete |
 | Offline support | Complete |
 | Accessibility (ARIA, keyboard nav) | Complete |
-| 82 unit tests + E2E specs | Complete |
+| Bulk field import (shapefile/KML/GeoJSON) | Complete |
+| 91 unit tests + E2E specs | Complete |
 
 ### Deferred to Post-Pilot
 - Aerial-specific entities (obstructions, airport strips, ground crews, pests)
@@ -563,3 +576,6 @@ Closed the biggest gaps vs. the legacy CheMan system:
 | `8213c04` | Sprint 5: 9 files, 775+/25- |
 | `de8b708` | Sprint 6: 17 files, 4080+/233- |
 | `fda6700` | Sprints 7-11: Vehicles, Job Scheduling, Reporting, Month-End, Financial Workflows |
+| `e0c920d` | Sprints 13-17: Billing upgrade — finance charges, grower shares, batch ops, payment allocation, year-end |
+| `cfd8d37` | Fix invoice PDF print handler firing multiple times per click |
+| `91c3e97` | Add bulk field import with shapefile, KML, and GeoJSON support |

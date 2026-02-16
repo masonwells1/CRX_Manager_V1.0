@@ -8,11 +8,12 @@
 - **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
 
 ## Current State (as of 2026-02-16)
-- **All hardening & features:** COMPLETE through Sprint 17
+- **All hardening & features:** COMPLETE through Sprint 17 + Bulk Field Import
 - **Deployed to:** Vercel (private preview/staging)
 - **Test coverage:** 91 unit tests (Vitest) + 8 Playwright E2E spec files
 - **57 migrations** applied to remote Supabase, **67 tables**, **~105 RPC functions**
-- **46 pages**, 41+ components
+- **46 pages**, 44+ components
+- **Latest commit:** `91c3e97` on main (pushed)
 - **Pre-commit hook:** `npm run build` + `npx vitest run` run automatically before every commit
 - **See repo `MEMORY.md`** for complete 566-line project reference (schema, RPCs, all pages, full history)
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
@@ -39,7 +40,8 @@
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
 - **Testing:** Vitest (91 unit tests) + Playwright (8 E2E specs in `tests/e2e/`)
 - **Deployment:** Vercel (private preview/staging), configured via `vercel.json`
-- **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid
+- **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid + @turf/bbox
+- **Geo Import:** shapefile (parse .shp/.dbf/.shx), proj4 (coordinate reprojection), togeojson-with-extended-style (KML→GeoJSON)
 - **PDF Generation:** jsPDF + jspdf-autotable (client-side)
 - **OCR:** Tesseract.js + PDF.js (client-side), Google Vision AI (server-side Edge Function)
 - **Signatures:** signature_pad
@@ -88,6 +90,7 @@ src/
     ocrParser.ts       # OCR text parsing for blend tickets
     blendMathValidator.ts # Blend recipe math validation
     quoteCalc.ts       # Quote calculation helpers
+    fieldImportParser.ts # Shapefile/KML/GeoJSON parsing & coordinate reprojection
     paymentAllocation.test.ts # 9 payment allocation tests
   hooks/
     useOnlineStatus.ts     # Online/offline detection
@@ -100,6 +103,7 @@ src/
     layout/            # AppLayout, Sidebar, TopBar
     ui/                # Badge, Button, Card, DataTable, Modal, Input, Select, Skeleton, Toast, etc.
     map/               # MapContainer, DrawControl, FieldMarkers (Mapbox satellite maps)
+    fields/            # BulkFieldImport (shapefile/KML/GeoJSON wizard), AttributeMappingStep, ImportPreviewMap
     blendtickets/      # BulkTicketUpload
     customers/         # BulkCustomerImport
     orders/            # BulkOrderImport
@@ -158,7 +162,7 @@ tests/
 | `/customer-transactions` | CustomerTransactionReview | Admin-only. Per-customer transaction history with running balance |
 | `/prepayments` | PrepaymentManager | Admin-only. Prepay balances, auto-apply to oldest invoices |
 | `/reports` | Reports | 14 reports: 4 logbook, 6 financial, 4 operational. CSV/PDF export. |
-| `/fields` | Fields | Field list with Mapbox map view |
+| `/fields` | Fields | Field list with Mapbox map view + bulk import (shapefile/KML/GeoJSON) |
 | `/fields/:id` | FieldDetail | Field CRUD with polygon drawing on satellite map |
 | `/recipes` | BlendRecipes | Reusable blend recipe management, create job from recipe |
 | `/cycle-counts` | CycleCounts | Inventory cycle counting with variance tracking |
@@ -715,6 +719,8 @@ Test every feature as each role:
 - Year-end summary PDF: `src/lib/yearEndSummaryPdf.ts` (633 lines)
 - Money pattern: all cents as bigint — display divides by 100, store multiplied by 100
 - Atomic operations: PostgreSQL RPCs with `FOR UPDATE` row locks for race-free multi-table writes
+- Field import: 3-step wizard (upload → attribute mapping → preview map → insert). Parser in `src/lib/fieldImportParser.ts`. Supports .shp/.dbf/.shx, .kml, .geojson. Uses proj4 for coordinate reprojection.
+- ParsedImportField type in `src/types/index.ts` — includes boundary_geojson, centroid_geojson, calculated_acres, raw_properties, errors[], isValid
 
 ### Build & Type Checking
 - `npm run build` for full build verification (pre-commit hook runs this automatically)
