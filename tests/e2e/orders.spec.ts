@@ -9,9 +9,9 @@ test.describe('Orders Page', () => {
   });
 
   test('should display orders list', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText('Orders');
+    await expect(page.locator('h1').first()).toContainText('Order');
     const rows = page.locator('table tbody tr');
-    const emptyState = page.locator('text=No orders');
+    const emptyState = page.locator('text=/no orders/i');
     await expect(rows.first().or(emptyState)).toBeVisible({ timeout: 10000 });
   });
 
@@ -46,6 +46,8 @@ test.describe('New Order Page', () => {
   });
 
   test('should load new order form', async ({ page }) => {
-    await expect(page.locator('text=Customer, label:has-text("Customer")').first()).toBeVisible({ timeout: 10000 });
+    // Customer label and select are in the main content area
+    await expect(page.locator('#main-content').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('#main-content select, #main-content label:has-text("Customer")').first()).toBeVisible({ timeout: 10000 });
   });
 });

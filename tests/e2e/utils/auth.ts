@@ -2,7 +2,7 @@ import { Page } from '@playwright/test';
 
 export const TEST_USER = {
   email: 'mason@croprxsolutions.com',
-  password: 'TestPassword123!',
+  password: 'Mwells0413',
 };
 
 export async function login(page: Page, email = TEST_USER.email, password = TEST_USER.password) {

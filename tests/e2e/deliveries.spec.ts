@@ -9,7 +9,8 @@ test.describe('Deliveries Page', () => {
   });
 
   test('should display deliveries list', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText('Deliveries');
+    // TopBar h1 shows "Delivery Management"
+    await expect(page.locator('h1').first()).toContainText('Delivery');
     const rows = page.locator('table tbody tr');
     const emptyState = page.locator('text=No deliveries');
     await expect(rows.first().or(emptyState)).toBeVisible({ timeout: 10000 });

@@ -16,8 +16,8 @@ test.describe('Inventory Page', () => {
   });
 
   test('should show summary cards', async ({ page }) => {
-    // Summary cards show total SKUs, low stock, etc.
-    const cards = page.locator('[class*="card"], [class*="Card"]');
+    // Summary cards use Card component with shadow-card class
+    const cards = page.locator('[class*="shadow-card"], [class*="rounded-xl"]');
     await expect(cards.first()).toBeVisible({ timeout: 10000 });
   });
 

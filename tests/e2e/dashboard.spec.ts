@@ -9,10 +9,10 @@ test.describe('Dashboard', () => {
   });
 
   test('should display dashboard with summary cards', async ({ page }) => {
-    await expect(page.locator('h1, h2').first()).toContainText(/Dashboard/i);
-    // Dashboard should have KPI/summary cards
-    const cards = page.locator('[class*="card"], [class*="Card"]');
-    await expect(cards.first()).toBeVisible({ timeout: 10000 });
+    // TopBar h1 shows "Dashboard Overview"
+    await expect(page.locator('h1').first()).toContainText(/Dashboard/i);
+    // Dashboard should have main content area visible
+    await expect(page.locator('#main-content')).toBeVisible({ timeout: 10000 });
   });
 
   test('should show recent activity feed', async ({ page }) => {

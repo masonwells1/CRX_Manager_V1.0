@@ -9,9 +9,9 @@ test.describe('Quotes Page', () => {
   });
 
   test('should display quotes list', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText('Quotes');
+    await expect(page.locator('h1').first()).toContainText('Quote');
     const rows = page.locator('table tbody tr');
-    const emptyState = page.locator('text=No quotes');
+    const emptyState = page.locator('text=/no quotes/i');
     await expect(rows.first().or(emptyState)).toBeVisible({ timeout: 10000 });
   });
 
@@ -54,7 +54,7 @@ test.describe('Quote Builder', () => {
 
   test('should load quote builder page', async ({ page }) => {
     // Should have customer selector and section area
-    await expect(page.locator('text=Customer, label:has-text("Customer")').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('label:has-text("Customer"), select').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('should have tier selector', async ({ page }) => {

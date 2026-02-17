@@ -21,9 +21,9 @@ test.describe('Settings Page', () => {
   });
 
   test('should show user management section for admin', async ({ page }) => {
-    // Admin should see user management
+    // Admin should see user management (CardHeader renders "User Management" as h3)
     await expect(
-      page.locator('text=/users|team members|staff/i').first()
+      page.locator('text=/user management|users|team members|add user/i').first()
     ).toBeVisible({ timeout: 10000 });
   });
 

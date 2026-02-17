@@ -1,11 +1,13 @@
 import { test, expect } from '@playwright/test';
-import { login, logout, TEST_USER } from './utils/auth';
+import { login, TEST_USER } from './utils/auth';
 
 test.describe('Authentication', () => {
   test('should show login page when not authenticated', async ({ page }) => {
     await page.goto('/');
-    await expect(page).toHaveURL('/login');
-    await expect(page.locator('h1')).toContainText('Welcome');
+    // Auth check is async; wait for redirect
+    await expect(page).toHaveURL('/login', { timeout: 10000 });
+    // Login page has "Welcome Back" h2 and "Sign In" button
+    await expect(page.locator('h2:has-text("Welcome"), button:has-text("Sign In")').first()).toBeVisible();
   });
 
   test('should login with valid credentials', async ({ page }) => {
@@ -28,8 +30,9 @@ test.describe('Authentication', () => {
     await login(page);
     await expect(page).toHaveURL('/');
 
-    await page.click('[data-testid="user-menu"] button:has-text("Sign Out")');
-    await expect(page).toHaveURL('/login');
+    // Sign Out button is small icon in collapsed sidebar; force click it
+    await page.locator('button[aria-label="Sign out"]').click({ force: true });
+    await expect(page).toHaveURL('/login', { timeout: 15000 });
   });
 
   test('should redirect to login when accessing protected route', async ({ page }) => {

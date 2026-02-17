@@ -9,10 +9,10 @@ test.describe('Products Page', () => {
   });
 
   test('should display products list', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText('Products');
+    await expect(page.locator('h1').first()).toContainText('Product');
     // Should have at least one product row or an empty state
     const rows = page.locator('table tbody tr, [role="row"]');
-    const emptyState = page.locator('text=No products');
+    const emptyState = page.locator('text=/no products/i');
     await expect(rows.first().or(emptyState)).toBeVisible({ timeout: 10000 });
   });
 

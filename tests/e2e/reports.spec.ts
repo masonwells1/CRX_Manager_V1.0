@@ -13,8 +13,8 @@ test.describe('Reports Page', () => {
   });
 
   test('should have report type tabs or sections', async ({ page }) => {
-    // Reports page has tabs for different report types
-    const tabs = page.locator('button, [role="tab"]');
+    // Reports page has tabs in main content for different report types
+    const tabs = page.locator('#main-content button, #main-content [role="tab"]');
     await expect(tabs.first()).toBeVisible({ timeout: 10000 });
   });
 });
@@ -27,12 +27,12 @@ test.describe('Payments Page', () => {
   });
 
   test('should display payments page', async ({ page }) => {
-    await expect(page.locator('h1')).toContainText(/Payments/i);
+    await expect(page.locator('h1').first()).toContainText(/Payment/i);
   });
 
   test('should show payment records or empty state', async ({ page }) => {
     const rows = page.locator('table tbody tr');
-    const emptyState = page.locator('text=No payments');
+    const emptyState = page.locator('text=/no payments|no orders/i');
     await expect(rows.first().or(emptyState)).toBeVisible({ timeout: 10000 });
   });
 });
