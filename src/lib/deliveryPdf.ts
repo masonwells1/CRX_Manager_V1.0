@@ -1,6 +1,7 @@
 /**
- * deliveryPdf.ts — generates a professional Crop RX delivery receipt PDF
+ * deliveryPdf.ts — generates professional Crop RX delivery receipt PDFs
  * GAP FIX #12: Delivery Receipt PDF
+ * Sprint 18: Added batch generation + delivered vs planned quantities + issue display
  */
 // jsPDF and autoTable are dynamically imported inside each function
 // to keep them out of the main bundle (~500KB each)
@@ -8,14 +9,16 @@
 const CRX_GREEN: [number, number, number] = [40, 162, 106];
 const CHARCOAL: [number, number, number] = [46, 46, 46];
 const GRAY: [number, number, number] = [78, 78, 78];
+const AMBER: [number, number, number] = [217, 119, 6];
 
 interface PdfDeliveryItem {
   product_name: string;
   quantity: number;
   unit_size: string;
+  quantity_delivered?: number;
 }
 
-interface PdfDeliveryData {
+export interface PdfDeliveryData {
   delivery_number: string;
   order_number: string;
   customer_name: string;
@@ -26,16 +29,19 @@ interface PdfDeliveryData {
   status: string;
   signed_by?: string;
   delivery_notes?: string;
+  priority?: string;
+  issue_type?: string;
+  issue_notes?: string;
   items: PdfDeliveryItem[];
 }
 
 const fmt = (n: number) => n.toLocaleString();
 
-export async function generateDeliveryPdf(data: PdfDeliveryData) {
-  const { default: jsPDF } = await import('jspdf');
-  const { default: autoTable } = await import('jspdf-autotable');
-
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+function renderDeliveryPage(
+  doc: any,
+  data: PdfDeliveryData,
+  autoTable: any
+) {
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 40;
   let y = 40;
@@ -58,6 +64,18 @@ export async function generateDeliveryPdf(data: PdfDeliveryData) {
   doc.text(`Order: ${data.order_number}`, pageW - margin, 50, { align: 'right' });
 
   y = 85;
+
+  // Priority badge (if not normal)
+  if (data.priority && data.priority !== 'normal') {
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    const priorityLabel = data.priority.toUpperCase();
+    const badgeColor: [number, number, number] =
+      data.priority === 'urgent' ? [220, 38, 38] :
+      data.priority === 'high' ? [217, 119, 6] : [107, 114, 128];
+    doc.setTextColor(...badgeColor);
+    doc.text(`PRIORITY: ${priorityLabel}`, pageW - margin, 65, { align: 'right' });
+  }
 
   // Info grid
   const colW = (pageW - margin * 2) / 2;
@@ -87,24 +105,70 @@ export async function generateDeliveryPdf(data: PdfDeliveryData) {
 
   y += 10;
 
-  // Items table
-  const rows = data.items.map((item) => [
-    item.product_name,
-    fmt(item.quantity),
-    item.unit_size || '-',
-  ]);
+  // Items table — show delivered vs planned for completed deliveries
+  const isCompleted = data.status === 'completed';
+  const hasDelivered = isCompleted && data.items.some((it) => it.quantity_delivered != null);
+
+  const head = hasDelivered
+    ? [['Product', 'Planned', 'Delivered', 'Unit Size']]
+    : [['Product', 'Quantity', 'Unit Size']];
+
+  const rows = data.items.map((item) => {
+    if (hasDelivered) {
+      return [
+        item.product_name,
+        fmt(item.quantity),
+        fmt(item.quantity_delivered ?? item.quantity),
+        item.unit_size || '-',
+      ];
+    }
+    return [
+      item.product_name,
+      fmt(item.quantity),
+      item.unit_size || '-',
+    ];
+  });
 
   autoTable(doc, {
     startY: y,
     margin: { left: margin, right: margin },
-    head: [['Product', 'Quantity', 'Unit Size']],
+    head,
     body: rows,
     theme: 'plain',
     styles: { fontSize: 10, cellPadding: 6, textColor: CHARCOAL },
     headStyles: { fillColor: [240, 240, 240], textColor: CHARCOAL, fontStyle: 'bold' },
+    didParseCell: (hookData: any) => {
+      // Highlight partial deliveries in amber
+      if (hasDelivered && hookData.section === 'body' && hookData.column.index === 2) {
+        const planned = data.items[hookData.row.index]?.quantity ?? 0;
+        const delivered = data.items[hookData.row.index]?.quantity_delivered ?? 0;
+        if (delivered < planned) {
+          hookData.cell.styles.textColor = AMBER;
+          hookData.cell.styles.fontStyle = 'bold';
+        }
+      }
+    },
   });
 
   y = (doc as any).lastAutoTable.finalY + 20;
+
+  // Issue reporting section
+  if (data.issue_type && data.issue_type !== 'none') {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(220, 38, 38);
+    doc.text('ISSUE REPORTED', margin, y);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(...GRAY);
+    doc.text(data.issue_type.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()), margin + 100, y);
+    y += 14;
+    if (data.issue_notes) {
+      const lines = doc.splitTextToSize(data.issue_notes, pageW - margin * 2);
+      doc.text(lines, margin, y);
+      y += lines.length * 12 + 10;
+    }
+    y += 10;
+  }
 
   // Notes
   if (data.delivery_notes) {
@@ -136,11 +200,49 @@ export async function generateDeliveryPdf(data: PdfDeliveryData) {
   doc.setFontSize(7);
   doc.setTextColor(160, 160, 160);
   doc.text('Crop RX Solutions  •  Robinson, IL  •  Thank you for your business!', pageW / 2, footerY, { align: 'center' });
+}
 
+export async function generateDeliveryPdf(data: PdfDeliveryData) {
+  const { default: jsPDF } = await import('jspdf');
+  const { default: autoTable } = await import('jspdf-autotable');
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  renderDeliveryPage(doc, data, autoTable);
   return doc;
 }
 
 export async function downloadDeliveryPdf(data: PdfDeliveryData) {
   const doc = await generateDeliveryPdf(data);
   doc.save(`${data.delivery_number}_receipt.pdf`);
+}
+
+/**
+ * Generate a combined multi-page PDF for multiple delivery receipts.
+ * Each delivery gets its own page.
+ */
+export async function generateBatchDeliveryPdf(dataList: PdfDeliveryData[]) {
+  if (dataList.length === 0) {
+    throw new Error('No deliveries to generate');
+  }
+
+  const { default: jsPDF } = await import('jspdf');
+  const { default: autoTable } = await import('jspdf-autotable');
+
+  // For a single delivery, just download directly
+  if (dataList.length === 1) {
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+    renderDeliveryPage(doc, dataList[0], autoTable);
+    doc.save(`${dataList[0].delivery_number}_receipt.pdf`);
+    return;
+  }
+
+  // Multiple deliveries — one page each
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+
+  for (let i = 0; i < dataList.length; i++) {
+    if (i > 0) doc.addPage();
+    renderDeliveryPage(doc, dataList[i], autoTable);
+  }
+
+  doc.save(`delivery_receipts_batch_${dataList.length}.pdf`);
 }

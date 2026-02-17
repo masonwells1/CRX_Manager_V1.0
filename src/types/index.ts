@@ -259,6 +259,8 @@ export interface InventoryHold {
 }
 
 export type DeliveryStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
+export type DeliveryPriority = 'low' | 'normal' | 'high' | 'urgent';
+export type DeliveryIssueType = 'none' | 'customer_not_home' | 'gate_locked' | 'road_blocked' | 'wrong_address' | 'refused' | 'weather' | 'other';
 
 export interface Delivery {
   id: string;
@@ -271,10 +273,20 @@ export interface Delivery {
   scheduled_time: string | null;
   status: DeliveryStatus;
   delivery_notes: string | null;
+  priority: DeliveryPriority;
+  delivery_window_start: string | null;
+  delivery_window_end: string | null;
   completed_at: string | null;
   signature_url: string | null;
   signed_by: string | null;
   receipt_pdf_url: string | null;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
+  cancel_reason: string | null;
+  issue_type: DeliveryIssueType | null;
+  issue_notes: string | null;
+  last_edited_by: string | null;
+  last_edited_at: string | null;
   season: number | null;
   deleted_at: string | null;
   created_by: string;
@@ -296,6 +308,43 @@ export interface DeliveryItem {
   unit_size: string | null;
   notes: string | null;
   product?: Product;
+}
+
+export interface DeliveryPhoto {
+  id: string;
+  delivery_id: string;
+  storage_path: string;
+  image_url: string;
+  caption: string | null;
+  uploaded_by: string;
+  uploaded_at: string;
+  file_size: number | null;
+  sort_order: number;
+  uploader?: Profile;
+}
+
+export type DeliveryRemainderStatus = 'pending' | 'scheduled' | 'fulfilled' | 'cancelled';
+
+export interface DeliveryRemainder {
+  id: string;
+  original_delivery_id: string;
+  order_id: string;
+  order_item_id: string;
+  customer_id: string;
+  product_id: string;
+  quantity_remaining: number;
+  unit_size: string | null;
+  status: DeliveryRemainderStatus;
+  followup_delivery_id: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined fields from RPC
+  customer_name?: string;
+  product_name?: string;
+  original_delivery_number?: string;
+  original_delivery_date?: string;
+  order_number?: string;
 }
 
 export type POStatus = 'draft' | 'submitted' | 'partially_received' | 'fully_received' | 'cancelled';

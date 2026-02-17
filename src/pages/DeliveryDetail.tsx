@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff, Minus, Plus } from 'lucide-react';
+import {
+  ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff,
+  Minus, Plus, Pencil, X, Ban, Camera, UserPlus, AlertTriangle, RefreshCw,
+} from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import Input from '../components/ui/Input';
+import Modal from '../components/ui/Modal';
 import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -12,26 +17,96 @@ import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
-import type { Delivery, DeliveryItem, Customer, CustomerAddress, Profile } from '../types';
+import { compressImage } from '../lib/imageCompression';
+import type {
+  Delivery, DeliveryItem, DeliveryPhoto, DeliveryRemainder,
+  Customer, CustomerAddress, Profile, OrderItem, DeliveryIssueType,
+} from '../types';
+
+const ISSUE_TYPE_LABELS: Record<string, string> = {
+  none: 'None',
+  customer_not_home: 'Customer Not Home',
+  gate_locked: 'Gate Locked',
+  road_blocked: 'Road Blocked',
+  wrong_address: 'Wrong Address',
+  refused: 'Refused',
+  weather: 'Weather',
+  other: 'Other',
+};
+
+const PRIORITY_LABELS: Record<string, string> = {
+  low: 'Low',
+  normal: 'Normal',
+  high: 'High',
+  urgent: 'Urgent',
+};
+
+const PRIORITY_BADGE: Record<string, string> = {
+  low: 'default',
+  normal: 'info',
+  high: 'warning',
+  urgent: 'danger',
+};
 
 export default function DeliveryDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { role, profile } = useAuth();
   const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [delivery, setDelivery] = useState<Delivery | null>(null);
   const [items, setItems] = useState<DeliveryItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [address, setAddress] = useState<CustomerAddress | null>(null);
   const [driver, setDriver] = useState<Profile | null>(null);
+  const [photos, setPhotos] = useState<DeliveryPhoto[]>([]);
+  const [remainders, setRemainders] = useState<DeliveryRemainder[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Driver completion state
   const [signedBy, setSignedBy] = useState('');
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
   const [deliveryQtys, setDeliveryQtys] = useState<Record<string, number>>({});
+  const [driverIssueType, setDriverIssueType] = useState<DeliveryIssueType>('none');
+  const [driverIssueNotes, setDriverIssueNotes] = useState('');
   const isOnline = useOnlineStatus();
 
+  // Edit mode state
+  const [editing, setEditing] = useState(false);
+  const [editDriver, setEditDriver] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [editTime, setEditTime] = useState('');
+  const [editWindowStart, setEditWindowStart] = useState('');
+  const [editWindowEnd, setEditWindowEnd] = useState('');
+  const [editAddress, setEditAddress] = useState('');
+  const [editPriority, setEditPriority] = useState('normal');
+  const [editNotes, setEditNotes] = useState('');
+  const [editItems, setEditItems] = useState<Array<{
+    order_item_id: string; product_id: string; product_name: string;
+    quantity: number; max_quantity: number; unit_size: string;
+  }>>([]);
+  const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
+  const [drivers, setDrivers] = useState<Profile[]>([]);
+  const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // Cancel modal state
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+
+  // Photo upload state
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  // Followup state
+  const [creatingFollowup, setCreatingFollowup] = useState(false);
+
   const isDriver = role === 'driver';
+  const isAdminOrRep = role === 'admin' || role === 'sales_rep';
+  const canEdit = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
+  const canCancel = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
 
   useEffect(() => {
     if (id) fetchDelivery();
@@ -48,7 +123,7 @@ export default function DeliveryDetail() {
       const del = delData as Delivery;
       setDelivery(del);
 
-      const [custRes, itemsRes, addrRes, driverRes] = await Promise.all([
+      const [custRes, itemsRes, addrRes, driverRes, photosRes] = await Promise.all([
         supabase.from('customers').select('*').eq('id', del.customer_id).maybeSingle(),
         supabase.from('delivery_items').select('*, product:products(product_name)').eq('delivery_id', id!),
         del.delivery_address_id
@@ -57,17 +132,30 @@ export default function DeliveryDetail() {
         del.assigned_driver
           ? supabase.from('profiles').select('*').eq('id', del.assigned_driver).maybeSingle()
           : Promise.resolve({ data: null }),
+        supabase.from('delivery_photos').select('*').eq('delivery_id', id!).order('sort_order'),
       ]);
 
       setCustomer(custRes.data as Customer | null);
       const loadedItems = (itemsRes.data || []) as DeliveryItem[];
       setItems(loadedItems);
-      // Initialize delivery quantities to planned quantity for each item
       const initQtys: Record<string, number> = {};
       loadedItems.forEach((item) => { initQtys[item.id] = item.quantity; });
       setDeliveryQtys(initQtys);
       setAddress(addrRes.data as CustomerAddress | null);
       setDriver(driverRes.data as Profile | null);
+      setPhotos((photosRes.data || []) as DeliveryPhoto[]);
+
+      // Fetch remainders for completed deliveries
+      if (del.status === 'completed') {
+        const { data: remData } = await supabase
+          .from('delivery_remainders')
+          .select('*, product:products(product_name)')
+          .eq('original_delivery_id', id!);
+        setRemainders((remData || []).map((r: any) => ({
+          ...r,
+          product_name: r.product?.product_name || 'Unknown',
+        })) as DeliveryRemainder[]);
+      }
     }
     setLoading(false);
   };
@@ -78,6 +166,214 @@ export default function DeliveryDetail() {
 
   const isPartialDelivery = items.some((item) => (deliveryQtys[item.id] ?? item.quantity) < item.quantity);
   const hasAnyQty = items.some((item) => (deliveryQtys[item.id] ?? item.quantity) > 0);
+
+  // ── Edit Mode ──────────────────────────────────────────────────────────
+
+  const startEditing = async () => {
+    if (!delivery || !customer) return;
+    setEditDriver(delivery.assigned_driver || '');
+    setEditDate(delivery.scheduled_date);
+    setEditTime(delivery.scheduled_time || '');
+    setEditWindowStart(delivery.delivery_window_start || '');
+    setEditWindowEnd(delivery.delivery_window_end || '');
+    setEditAddress(delivery.delivery_address_id || '');
+    setEditPriority(delivery.priority || 'normal');
+    setEditNotes(delivery.delivery_notes || '');
+
+    // Fetch addresses, drivers, order items for edit dropdowns
+    const [addrRes, driverRes, oiRes] = await Promise.all([
+      supabase.from('customer_addresses').select('*').eq('customer_id', customer.id).order('is_default', { ascending: false }),
+      supabase.from('profiles').select('*').in('role', ['driver', 'admin']).eq('is_active', true).order('full_name'),
+      supabase.from('order_items').select('*').eq('order_id', delivery.order_id).order('section_name'),
+    ]);
+    setAddresses((addrRes.data || []) as CustomerAddress[]);
+    setDrivers((driverRes.data || []) as Profile[]);
+    setOrderItems((oiRes.data || []) as OrderItem[]);
+
+    // Map current items for editing
+    setEditItems(items.map((item) => ({
+      order_item_id: item.order_item_id,
+      product_id: item.product_id,
+      product_name: (item.product as unknown as { product_name: string })?.product_name || 'Unknown',
+      quantity: item.quantity,
+      max_quantity: item.quantity, // Will be calculated below
+      unit_size: item.unit_size || '',
+    })));
+
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!delivery || !profile) return;
+    setSavingEdit(true);
+
+    const activeItems = editItems.filter((item) => item.quantity > 0);
+    if (activeItems.length === 0) {
+      toast('error', 'At least one item required');
+      setSavingEdit(false);
+      return;
+    }
+
+    const itemsJson = activeItems.map((item) => ({
+      order_item_id: item.order_item_id,
+      product_id: item.product_id,
+      quantity: item.quantity,
+      unit_size: item.unit_size || null,
+    }));
+
+    const { error } = await supabase.rpc('edit_delivery', {
+      p_delivery_id: id!,
+      p_assigned_driver: editDriver || null,
+      p_scheduled_date: editDate,
+      p_scheduled_time: editTime || null,
+      p_delivery_window_start: editWindowStart || null,
+      p_delivery_window_end: editWindowEnd || null,
+      p_delivery_address_id: editAddress || null,
+      p_delivery_notes: editNotes || null,
+      p_priority: editPriority,
+      p_items: itemsJson,
+      p_performed_by: profile.id,
+    });
+
+    if (error) {
+      toast('error', error.message || 'Failed to save changes');
+    } else {
+      toast('success', 'Delivery updated');
+      setEditing(false);
+      fetchDelivery();
+    }
+    setSavingEdit(false);
+  };
+
+  const updateEditItemQty = (orderItemId: string, qty: number) => {
+    setEditItems((prev) =>
+      prev.map((item) =>
+        item.order_item_id === orderItemId
+          ? { ...item, quantity: Math.max(0, Math.min(qty, item.max_quantity || 9999)) }
+          : item
+      )
+    );
+  };
+
+  // ── Cancel Delivery ────────────────────────────────────────────────────
+
+  const handleCancel = async () => {
+    if (!profile) return;
+    setCancelling(true);
+    const { error } = await supabase.rpc('cancel_delivery', {
+      p_delivery_id: id!,
+      p_cancel_reason: cancelReason.trim() || 'Cancelled',
+      p_performed_by: profile.id,
+    });
+    if (error) {
+      toast('error', error.message || 'Failed to cancel delivery');
+    } else {
+      toast('success', 'Delivery cancelled');
+      setCancelOpen(false);
+      setCancelReason('');
+      fetchDelivery();
+    }
+    setCancelling(false);
+  };
+
+  // ── Reassign (Take This Delivery) ─────────────────────────────────────
+
+  const handleReassign = async () => {
+    if (!profile || !delivery) return;
+    if (!confirm(`Take delivery ${delivery.delivery_number}? The current driver will be notified.`)) return;
+
+    const { error } = await supabase.rpc('reassign_delivery', {
+      p_delivery_id: id!,
+      p_new_driver: profile.id,
+      p_performed_by: profile.id,
+    });
+
+    if (error) {
+      toast('error', error.message || 'Failed to reassign delivery');
+    } else {
+      toast('success', 'Delivery assigned to you');
+      fetchDelivery();
+    }
+  };
+
+  // ── Photo Upload ───────────────────────────────────────────────────────
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !profile || !delivery) return;
+
+    if (photos.length + files.length > 10) {
+      toast('error', 'Maximum 10 photos per delivery');
+      return;
+    }
+
+    setUploadingPhoto(true);
+    let uploadCount = 0;
+
+    for (const rawFile of Array.from(files)) {
+      try {
+        const file = await compressImage(rawFile);
+        const ext = file.name.split('.').pop() || 'jpg';
+        const storagePath = `delivery-photos/${id}/${Date.now()}_${uploadCount}.${ext}`;
+
+        const { error: uploadErr } = await supabase.storage
+          .from('delivery-photos')
+          .upload(storagePath, file, { contentType: file.type });
+
+        if (uploadErr) {
+          toast('error', `Upload failed: ${uploadErr.message}`);
+          continue;
+        }
+
+        const { data: urlData } = supabase.storage
+          .from('delivery-photos')
+          .getPublicUrl(storagePath);
+
+        await supabase.from('delivery_photos').insert({
+          delivery_id: id!,
+          storage_path: storagePath,
+          image_url: urlData.publicUrl,
+          uploaded_by: profile.id,
+          file_size: file.size,
+          sort_order: photos.length + uploadCount,
+        });
+
+        uploadCount++;
+      } catch (err) {
+        console.error('Photo upload error:', err);
+      }
+    }
+
+    if (uploadCount > 0) {
+      toast('success', `${uploadCount} photo${uploadCount > 1 ? 's' : ''} uploaded`);
+      fetchDelivery();
+    }
+    setUploadingPhoto(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // ── Follow-up Delivery ─────────────────────────────────────────────────
+
+  const handleCreateFollowup = async () => {
+    if (!profile) return;
+    setCreatingFollowup(true);
+
+    const { data, error } = await supabase.rpc('create_followup_delivery', {
+      p_original_delivery_id: id!,
+      p_performed_by: profile.id,
+    });
+
+    if (error) {
+      toast('error', error.message || 'Failed to create follow-up delivery');
+    } else {
+      const result = data as { delivery_id: string; delivery_number: string; item_count: number };
+      toast('success', `Follow-up delivery ${result.delivery_number} created with ${result.item_count} items`);
+      navigate(`/deliveries/${result.delivery_id}`);
+    }
+    setCreatingFollowup(false);
+  };
+
+  // ── Complete Delivery (Driver) ─────────────────────────────────────────
 
   const handleComplete = async () => {
     if (!signedBy.trim()) {
@@ -95,7 +391,6 @@ export default function DeliveryDetail() {
     if (!confirm(confirmMsg)) return;
     setCompleting(true);
 
-    // Build quantities JSON — only include if any item is partial
     const quantitiesJson = isPartialDelivery
       ? Object.fromEntries(items.map((item) => [item.id, deliveryQtys[item.id] ?? item.quantity]))
       : null;
@@ -105,9 +400,10 @@ export default function DeliveryDetail() {
       p_signed_by: signedBy,
       p_performed_by: profile.id,
       ...(quantitiesJson ? { p_quantities: quantitiesJson } : {}),
+      ...(driverIssueType !== 'none' ? { p_issue_type: driverIssueType } : {}),
+      ...(driverIssueNotes.trim() ? { p_issue_notes: driverIssueNotes.trim() } : {}),
     };
 
-    // If offline, queue the action for later sync
     if (!isOnline) {
       try {
         await queueAction({
@@ -117,7 +413,7 @@ export default function DeliveryDetail() {
           retryCount: 0,
         });
         toast('success', 'Delivery saved offline — will sync when you reconnect');
-      } catch (err) {
+      } catch {
         toast('error', 'Failed to save offline. Please try again.');
       }
       setCompleting(false);
@@ -125,9 +421,7 @@ export default function DeliveryDetail() {
     }
 
     try {
-      // Atomic RPC: delivery status + order_items + inventory + audit trail in one transaction
       const { error } = await supabase.rpc('complete_delivery', rpcParams);
-
       if (error) throw error;
 
       // Upload signature image if provided
@@ -140,12 +434,10 @@ export default function DeliveryDetail() {
             byteArray[i] = byteCharacters.charCodeAt(i);
           }
           const blob = new Blob([byteArray], { type: 'image/png' });
-
           const filePath = `signatures/${id}.png`;
           const { error: uploadError } = await supabase.storage
             .from('delivery-signatures')
             .upload(filePath, blob, { upsert: true, contentType: 'image/png' });
-
           if (!uploadError) {
             const { data: urlData } = supabase.storage
               .from('delivery-signatures')
@@ -156,7 +448,6 @@ export default function DeliveryDetail() {
               .eq('id', id!);
           }
         } catch (sigErr) {
-          // Non-blocking — delivery is already completed, just log
           console.warn('Signature upload failed:', sigErr);
         }
       }
@@ -170,6 +461,8 @@ export default function DeliveryDetail() {
     }
     setCompleting(false);
   };
+
+  // ── Loading / Not Found ────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -198,6 +491,21 @@ export default function DeliveryDetail() {
 
   const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}`;
 
+  const canTakeDelivery =
+    profile &&
+    delivery.assigned_driver !== profile.id &&
+    (delivery.status === 'scheduled' || delivery.status === 'in_progress');
+
+  const canUploadPhoto =
+    delivery.status !== 'cancelled' &&
+    (isAdminOrRep || (isDriver && delivery.assigned_driver === profile?.id));
+
+  const hasPendingRemainders = remainders.some((r) => r.status === 'pending');
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // DRIVER VIEW (dark mobile UI)
+  // ═══════════════════════════════════════════════════════════════════════
+
   if (isDriver) {
     return (
       <div className="dark min-h-screen bg-gray-900 -m-4 sm:-m-6 p-4 sm:p-6">
@@ -210,22 +518,49 @@ export default function DeliveryDetail() {
         </button>
 
         <div className="space-y-4">
+          {/* Header card */}
           <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xl font-semibold text-white font-heading">
                 {delivery.delivery_number}
               </h2>
-              <Badge variant={statusToBadgeVariant[delivery.status] || 'default'} size="md">
-                {delivery.status.replace('_', ' ')}
-              </Badge>
+              <div className="flex items-center gap-2">
+                {delivery.priority && delivery.priority !== 'normal' && (
+                  <Badge variant={(PRIORITY_BADGE[delivery.priority] || 'default') as any} size="sm">
+                    {PRIORITY_LABELS[delivery.priority]}
+                  </Badge>
+                )}
+                <Badge variant={statusToBadgeVariant[delivery.status] || 'default'} size="md">
+                  {delivery.status.replace('_', ' ')}
+                </Badge>
+              </div>
             </div>
             <p className="text-lg text-white font-medium">{customer?.farm_name}</p>
             <p className="text-sm text-gray-400 mt-1">
               {new Date(delivery.scheduled_date).toLocaleDateString()}
               {delivery.scheduled_time && ` at ${delivery.scheduled_time}`}
+              {delivery.delivery_window_start && delivery.delivery_window_end &&
+                ` (${delivery.delivery_window_start} - ${delivery.delivery_window_end})`}
             </p>
           </div>
 
+          {/* Take delivery button */}
+          {canTakeDelivery && (
+            <button
+              onClick={handleReassign}
+              className="flex items-center gap-4 w-full bg-gray-800 rounded-xl p-5 border border-crx-green active:bg-gray-700 transition-colors"
+            >
+              <div className="w-12 h-12 rounded-full bg-crx-green flex items-center justify-center shrink-0">
+                <UserPlus className="w-6 h-6 text-white" />
+              </div>
+              <div className="text-left">
+                <p className="text-white font-medium">Take This Delivery</p>
+                <p className="text-sm text-gray-400">Assign to yourself</p>
+              </div>
+            </button>
+          )}
+
+          {/* Call customer */}
           {customer?.phone && (
             <a
               href={`tel:${customer.phone}`}
@@ -241,6 +576,7 @@ export default function DeliveryDetail() {
             </a>
           )}
 
+          {/* Navigate */}
           <a
             href={mapsUrl}
             target="_blank"
@@ -256,6 +592,7 @@ export default function DeliveryDetail() {
             </div>
           </a>
 
+          {/* Products */}
           <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
             <h3 className="text-white font-semibold mb-4">Products</h3>
             <div className="space-y-3">
@@ -290,7 +627,7 @@ export default function DeliveryDetail() {
                           className="w-16 text-center px-1 py-1.5 text-sm text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green"
                           min="0"
                           max={item.quantity}
-                          aria-label={`Quantity to deliver for ${(item.product as unknown as { product_name: string })?.product_name || 'item'}`}
+                          aria-label={`Quantity for ${(item.product as unknown as { product_name: string })?.product_name || 'item'}`}
                         />
                         <button
                           onClick={() => updateDeliveryQty(item.id, currentQty + 1, item.quantity)}
@@ -306,13 +643,79 @@ export default function DeliveryDetail() {
             </div>
           </div>
 
+          {/* Photo upload (driver) */}
+          {canUploadPhoto && (
+            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-white font-semibold">Delivery Photos</h3>
+                <span className="text-sm text-gray-400">{photos.length}/10</span>
+              </div>
+              {photos.length > 0 && (
+                <div className="grid grid-cols-3 gap-2 mb-4">
+                  {photos.map((photo) => (
+                    <img
+                      key={photo.id}
+                      src={photo.image_url}
+                      alt={photo.caption || 'Delivery photo'}
+                      className="w-full h-24 object-cover rounded-lg border border-gray-600"
+                    />
+                  ))}
+                </div>
+              )}
+              {photos.length < 10 && (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={handlePhotoUpload}
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploadingPhoto}
+                    className="w-full py-3 flex items-center justify-center gap-2 text-white border border-gray-600 rounded-lg active:bg-gray-700 disabled:opacity-50 transition-colors"
+                  >
+                    <Camera className="w-5 h-5" />
+                    {uploadingPhoto ? 'Uploading...' : 'Add Photo'}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Issue reporting (driver, before completion) */}
+          {delivery.status !== 'completed' && delivery.status !== 'cancelled' && (
+            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700 space-y-3">
+              <h3 className="text-white font-semibold">Report Issue (Optional)</h3>
+              <select
+                value={driverIssueType}
+                onChange={(e) => setDriverIssueType(e.target.value as DeliveryIssueType)}
+                className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green"
+              >
+                {Object.entries(ISSUE_TYPE_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+              {driverIssueType !== 'none' && (
+                <textarea
+                  value={driverIssueNotes}
+                  onChange={(e) => setDriverIssueNotes(e.target.value)}
+                  placeholder="Describe the issue..."
+                  rows={2}
+                  className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-crx-green resize-none"
+                />
+              )}
+            </div>
+          )}
+
+          {/* Complete delivery section */}
           {delivery.status !== 'completed' && delivery.status !== 'cancelled' && (
             <div className="bg-gray-800 rounded-xl p-5 border border-gray-700 space-y-4">
               <h3 className="text-white font-semibold">Complete Delivery</h3>
               <div>
-                <label className="block text-sm font-medium text-gray-400 mb-1">
-                  Signed By
-                </label>
+                <label className="block text-sm font-medium text-gray-400 mb-1">Signed By</label>
                 <input
                   type="text"
                   value={signedBy}
@@ -350,6 +753,10 @@ export default function DeliveryDetail() {
     );
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // ADMIN / SALES REP VIEW (light desktop UI)
+  // ═══════════════════════════════════════════════════════════════════════
+
   return (
     <div className="space-y-4">
       <button
@@ -360,6 +767,7 @@ export default function DeliveryDetail() {
         Back to Deliveries
       </button>
 
+      {/* Header Card */}
       <Card>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -368,13 +776,35 @@ export default function DeliveryDetail() {
             </h2>
             <p className="text-sm text-secondary mt-1">{customer?.farm_name}</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {canEdit && !editing && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Pencil className="w-4 h-4" />}
+                showChevron={false}
+                onClick={startEditing}
+              >
+                Edit
+              </Button>
+            )}
+            {canTakeDelivery && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<UserPlus className="w-4 h-4" />}
+                showChevron={false}
+                onClick={handleReassign}
+              >
+                Take Delivery
+              </Button>
+            )}
             <Button
               variant="secondary"
               size="sm"
               icon={<Download className="w-4 h-4" />}
               showChevron={false}
-              onClick={async () =>
+              onClick={() =>
                 downloadDeliveryPdf({
                   delivery_number: delivery.delivery_number,
                   order_number: (delivery as any).order_number || delivery.order_id || '-',
@@ -389,8 +819,9 @@ export default function DeliveryDetail() {
                   signed_by: delivery.signed_by || undefined,
                   delivery_notes: delivery.delivery_notes || undefined,
                   items: items.map((i) => ({
-                    product_name: (i as any).product_name,
+                    product_name: (i as any).product_name || (i.product as any)?.product_name || 'Unknown',
                     quantity: i.quantity,
+                    quantity_delivered: delivery.status === 'completed' ? i.quantity_delivered : undefined,
                     unit_size: i.unit_size || '-',
                   })),
                 })
@@ -398,34 +829,224 @@ export default function DeliveryDetail() {
             >
               Receipt PDF
             </Button>
+            {canCancel && (
+              <Button
+                variant="danger"
+                size="sm"
+                icon={<Ban className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setCancelOpen(true)}
+              >
+                Cancel
+              </Button>
+            )}
+            {delivery.priority && delivery.priority !== 'normal' && (
+              <Badge variant={(PRIORITY_BADGE[delivery.priority] || 'default') as any} size="md">
+                {PRIORITY_LABELS[delivery.priority]}
+              </Badge>
+            )}
             <Badge variant={statusToBadgeVariant[delivery.status] || 'default'} size="md">
               {delivery.status.replace('_', ' ')}
             </Badge>
           </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
-          <div>
-            <p className="text-xs text-secondary">Scheduled</p>
-            <p className="text-sm font-medium text-nav-dark">
-              {new Date(delivery.scheduled_date).toLocaleDateString()}
-            </p>
+
+        {/* Delivery info — read mode */}
+        {!editing && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
+            <div>
+              <p className="text-xs text-secondary">Scheduled</p>
+              <p className="text-sm font-medium text-nav-dark">
+                {new Date(delivery.scheduled_date).toLocaleDateString()}
+                {delivery.scheduled_time && ` at ${delivery.scheduled_time}`}
+              </p>
+              {delivery.delivery_window_start && delivery.delivery_window_end && (
+                <p className="text-xs text-secondary mt-0.5">
+                  Window: {delivery.delivery_window_start} - {delivery.delivery_window_end}
+                </p>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-secondary">Driver</p>
+              <p className="text-sm font-medium text-nav-dark">
+                {driver?.full_name || 'Unassigned'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-secondary">Address</p>
+              <p className="text-sm font-medium text-nav-dark">{fullAddress}</p>
+            </div>
+            <div>
+              <p className="text-xs text-secondary">Phone</p>
+              <p className="text-sm font-medium text-nav-dark">{customer?.phone || '-'}</p>
+            </div>
+            {delivery.delivery_notes && (
+              <div className="col-span-2 sm:col-span-4">
+                <p className="text-xs text-secondary">Notes</p>
+                <p className="text-sm text-nav-dark">{delivery.delivery_notes}</p>
+              </div>
+            )}
           </div>
-          <div>
-            <p className="text-xs text-secondary">Driver</p>
-            <p className="text-sm font-medium text-nav-dark">
-              {driver?.full_name || 'Unassigned'}
-            </p>
+        )}
+
+        {/* Delivery info — edit mode */}
+        {editing && (
+          <div className="mt-6 space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">Assigned Driver</label>
+                <select
+                  value={editDriver}
+                  onChange={(e) => setEditDriver(e.target.value)}
+                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">Unassigned</option>
+                  {drivers.map((d) => (
+                    <option key={d.id} value={d.id}>{d.full_name} ({d.role})</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">Priority</label>
+                <select
+                  value={editPriority}
+                  onChange={(e) => setEditPriority(e.target.value)}
+                  className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  {Object.entries(PRIORITY_LABELS).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input
+                label="Scheduled Date"
+                type="date"
+                value={editDate}
+                onChange={(e) => setEditDate(e.target.value)}
+              />
+              <Input
+                label="Scheduled Time"
+                type="time"
+                value={editTime}
+                onChange={(e) => setEditTime(e.target.value)}
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input
+                label="Delivery Window Start"
+                type="time"
+                value={editWindowStart}
+                onChange={(e) => setEditWindowStart(e.target.value)}
+              />
+              <Input
+                label="Delivery Window End"
+                type="time"
+                value={editWindowEnd}
+                onChange={(e) => setEditWindowEnd(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-secondary mb-1">Delivery Address</label>
+              <select
+                value={editAddress}
+                onChange={(e) => setEditAddress(e.target.value)}
+                className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              >
+                <option value="">Use billing address</option>
+                {addresses.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label} - {[a.address_line, a.city, a.state].filter(Boolean).join(', ')}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Input
+              label="Delivery Notes"
+              value={editNotes}
+              onChange={(e) => setEditNotes(e.target.value)}
+              placeholder="Special instructions, gate codes, etc."
+            />
+
+            {/* Edit items */}
+            <div>
+              <h4 className="text-sm font-medium text-secondary mb-2">Delivery Items</h4>
+              <div className="space-y-2">
+                {editItems.map((item) => (
+                  <div key={item.order_item_id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-nav-dark truncate">{item.product_name}</p>
+                      <p className="text-xs text-secondary">{item.unit_size || 'units'}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => updateEditItemQty(item.order_item_id, item.quantity - 1)}
+                        className="w-7 h-7 rounded border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
+                      >
+                        <Minus className="w-3 h-3 text-secondary" />
+                      </button>
+                      <input
+                        type="number"
+                        value={item.quantity}
+                        onChange={(e) => updateEditItemQty(item.order_item_id, parseInt(e.target.value) || 0)}
+                        className="w-16 text-center px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+                        min="0"
+                      />
+                      <button
+                        onClick={() => updateEditItemQty(item.order_item_id, item.quantity + 1)}
+                        className="w-7 h-7 rounded border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
+                      >
+                        <Plus className="w-3 h-3 text-secondary" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="secondary" onClick={() => setEditing(false)}>Cancel</Button>
+              <Button onClick={saveEdit} loading={savingEdit}>Save Changes</Button>
+            </div>
           </div>
-          <div>
-            <p className="text-xs text-secondary">Address</p>
-            <p className="text-sm font-medium text-nav-dark">{fullAddress}</p>
-          </div>
-          <div>
-            <p className="text-xs text-secondary">Phone</p>
-            <p className="text-sm font-medium text-nav-dark">{customer?.phone || '-'}</p>
-          </div>
-        </div>
+        )}
       </Card>
+
+      {/* Cancel info for cancelled deliveries */}
+      {delivery.status === 'cancelled' && delivery.cancel_reason && (
+        <Card>
+          <div className="flex items-start gap-3">
+            <Ban className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="text-sm font-semibold text-red-700">Cancelled</h3>
+              <p className="text-sm text-secondary mt-1">{delivery.cancel_reason}</p>
+              {delivery.cancelled_at && (
+                <p className="text-xs text-secondary mt-1">
+                  {new Date(delivery.cancelled_at).toLocaleString()}
+                </p>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Issue info for completed deliveries with issues */}
+      {delivery.status === 'completed' && delivery.issue_type && delivery.issue_type !== 'none' && (
+        <Card>
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <h3 className="text-sm font-semibold text-amber-700">
+                Issue Reported: {ISSUE_TYPE_LABELS[delivery.issue_type] || delivery.issue_type}
+              </h3>
+              {delivery.issue_notes && (
+                <p className="text-sm text-secondary mt-1">{delivery.issue_notes}</p>
+              )}
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Signature display for completed deliveries */}
       {delivery.status === 'completed' && delivery.signature_url && (
@@ -445,46 +1066,182 @@ export default function DeliveryDetail() {
         </Card>
       )}
 
-      <Card>
-        <h3 className="text-lg font-semibold font-heading text-nav-dark mb-4">Products</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-100">
-                <th className="px-4 py-3 text-left font-medium text-secondary">Product</th>
-                <th className="px-4 py-3 text-left font-medium text-secondary">Planned Qty</th>
-                {delivery.status === 'completed' && (
-                  <th className="px-4 py-3 text-left font-medium text-secondary">Delivered</th>
-                )}
-                <th className="px-4 py-3 text-left font-medium text-secondary">Unit Size</th>
-                <th className="px-4 py-3 text-left font-medium text-secondary">Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => (
-                <tr key={item.id} className="border-b border-gray-50">
-                  <td className="px-4 py-3 font-medium text-nav-dark">
-                    {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
-                  </td>
-                  <td className="px-4 py-3">{item.quantity}</td>
+      {/* Products table */}
+      {!editing && (
+        <Card>
+          <h3 className="text-lg font-semibold font-heading text-nav-dark mb-4">Products</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-4 py-3 text-left font-medium text-secondary">Product</th>
+                  <th className="px-4 py-3 text-left font-medium text-secondary">Planned Qty</th>
                   {delivery.status === 'completed' && (
-                    <td className="px-4 py-3">
-                      <span className={item.quantity_delivered < item.quantity ? 'text-amber-600 font-medium' : ''}>
-                        {item.quantity_delivered}
-                      </span>
-                      {item.quantity_delivered < item.quantity && (
-                        <span className="text-xs text-amber-500 ml-1">(partial)</span>
-                      )}
-                    </td>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Delivered</th>
                   )}
-                  <td className="px-4 py-3">{item.unit_size || '-'}</td>
-                  <td className="px-4 py-3 text-secondary">{item.notes || '-'}</td>
+                  <th className="px-4 py-3 text-left font-medium text-secondary">Unit Size</th>
+                  <th className="px-4 py-3 text-left font-medium text-secondary">Notes</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id} className="border-b border-gray-50">
+                    <td className="px-4 py-3 font-medium text-nav-dark">
+                      {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
+                    </td>
+                    <td className="px-4 py-3">{item.quantity}</td>
+                    {delivery.status === 'completed' && (
+                      <td className="px-4 py-3">
+                        <span className={item.quantity_delivered < item.quantity ? 'text-amber-600 font-medium' : ''}>
+                          {item.quantity_delivered}
+                        </span>
+                        {item.quantity_delivered < item.quantity && (
+                          <span className="text-xs text-amber-500 ml-1">(partial)</span>
+                        )}
+                      </td>
+                    )}
+                    <td className="px-4 py-3">{item.unit_size || '-'}</td>
+                    <td className="px-4 py-3 text-secondary">{item.notes || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {/* Remainders for completed partial deliveries */}
+      {delivery.status === 'completed' && remainders.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold font-heading text-nav-dark">Remaining Items</h3>
+            {hasPendingRemainders && isAdminOrRep && (
+              <Button
+                size="sm"
+                icon={<RefreshCw className="w-4 h-4" />}
+                onClick={handleCreateFollowup}
+                loading={creatingFollowup}
+              >
+                Create Follow-up Delivery
+              </Button>
+            )}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-4 py-3 text-left font-medium text-secondary">Product</th>
+                  <th className="px-4 py-3 text-left font-medium text-secondary">Remaining</th>
+                  <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {remainders.map((rem) => (
+                  <tr key={rem.id} className="border-b border-gray-50">
+                    <td className="px-4 py-3 font-medium text-nav-dark">
+                      {rem.product_name || 'Unknown'}
+                    </td>
+                    <td className="px-4 py-3 text-amber-600 font-medium">
+                      {rem.quantity_remaining} {rem.unit_size || 'units'}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge
+                        variant={rem.status === 'pending' ? 'warning' : rem.status === 'scheduled' ? 'info' : rem.status === 'fulfilled' ? 'success' : 'default'}
+                        size="sm"
+                      >
+                        {rem.status}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {/* Photos section */}
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold font-heading text-nav-dark">
+            Delivery Photos {photos.length > 0 && `(${photos.length})`}
+          </h3>
+          {canUploadPhoto && photos.length < 10 && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handlePhotoUpload}
+                className="hidden"
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Camera className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => fileInputRef.current?.click()}
+                loading={uploadingPhoto}
+              >
+                Upload Photo
+              </Button>
+            </>
+          )}
         </div>
+        {photos.length === 0 ? (
+          <p className="text-sm text-secondary text-center py-6">No photos uploaded</p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {photos.map((photo) => (
+              <div key={photo.id} className="relative group">
+                <img
+                  src={photo.image_url}
+                  alt={photo.caption || 'Delivery photo'}
+                  className="w-full h-32 object-cover rounded-lg border border-gray-200"
+                />
+                {photo.caption && (
+                  <p className="text-xs text-secondary mt-1 truncate">{photo.caption}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
+
+      {/* Cancel Modal */}
+      <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancel Delivery">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
+            <Ban className="w-5 h-5 text-red-600 flex-shrink-0" />
+            <p className="text-sm text-red-800">
+              You are about to cancel delivery <strong>{delivery.delivery_number}</strong>.
+              The assigned driver will be notified.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Cancel Reason</label>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="Enter reason for cancellation..."
+              rows={3}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setCancelOpen(false)}>Go Back</Button>
+            <Button
+              variant="danger"
+              icon={<Ban className="w-4 h-4" />}
+              onClick={handleCancel}
+              loading={cancelling}
+            >
+              Cancel Delivery
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

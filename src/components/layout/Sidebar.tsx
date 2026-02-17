@@ -129,6 +129,7 @@ const navigation: NavEntry[] = [
       items: [
         { path: '/jobs', label: 'Job Schedule', icon: <CalendarClock className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
         { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-4 h-4" /> },
+        { path: '/delivery-remainders', label: 'Remainders', icon: <Package className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/vehicles', label: 'Vehicles', icon: <Plane className="w-4 h-4" />, roles: ['admin'] },
         { path: '/blend-tickets', label: 'Blend Tickets', icon: <Image className="w-4 h-4" /> },
         { path: '/application-records', label: 'App Records', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },

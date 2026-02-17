@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Plus, Trash2, Search, MapPin, FileText } from 'lucide-react';
+import { ArrowLeft, Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,7 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
-import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, Field } from '../types';
+import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field } from '../types';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
@@ -53,6 +53,7 @@ export default function CustomerDetail() {
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name: string })[]>([]);
   const [fields, setFields] = useState<(Field & { customer_name: string })[]>([]);
   const [history, setHistory] = useState<any[]>([]);
+  const [customerRemainders, setCustomerRemainders] = useState<DeliveryRemainder[]>([]);
   const [tabLoading, setTabLoading] = useState(false);
   const [emailError, setEmailError] = useState('');
   const [phoneError, setPhoneError] = useState('');
@@ -180,6 +181,20 @@ export default function CustomerDetail() {
         driver_name: d.driver?.full_name || 'Unassigned',
       }));
       setDeliveries(rows);
+
+      // Fetch pending remainders for this customer
+      const { data: remData } = await supabase
+        .from('delivery_remainders')
+        .select('*, product:products(product_name), original_delivery:deliveries!delivery_remainders_original_delivery_id_fkey(delivery_number)')
+        .eq('customer_id', id)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+      const remainders = ((remData || []) as any[]).map((r) => ({
+        ...r,
+        product_name: r.product?.product_name || 'Unknown',
+        original_delivery_number: r.original_delivery?.delivery_number || '-',
+      }));
+      setCustomerRemainders(remainders);
     } else if (selectedTab === 'history') {
       // GAP FIX #15: Fetch purchase history — all products this customer has ordered
       const { data: orderIds } = await supabase
@@ -809,59 +824,134 @@ export default function CustomerDetail() {
       )}
 
       {tab === 'deliveries' && !isNew && (
-        <Card padding={false}>
-          <div className="p-5">
-            <CardHeader title="Customer" accent="Deliveries" />
-          </div>
-          {tabLoading ? (
-            <div className="px-5 pb-5 space-y-3">
-              {Array.from({ length: 3 }).map((_, i) => (
-                <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
-              ))}
+        <div className="space-y-4">
+          <Card padding={false}>
+            <div className="p-5">
+              <CardHeader title="Customer" accent="Deliveries" />
             </div>
-          ) : deliveries.length === 0 ? (
-            <div className="px-5 pb-5">
-              <p className="text-sm text-secondary">No deliveries for this customer yet.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-t border-b border-gray-100">
-                    <th className="px-5 py-3 text-left font-medium text-secondary">Delivery #</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Driver</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Scheduled</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Completed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {deliveries.map((d) => (
-                    <tr
-                      key={d.id}
-                      onClick={() => navigate(`/deliveries/${d.id}`)}
-                      className="border-b border-gray-50 hover:bg-crx-green-tint cursor-pointer transition-colors"
-                    >
-                      <td className="px-5 py-3 font-medium text-nav-dark">{d.delivery_number}</td>
-                      <td className="px-4 py-3">
-                        <Badge variant={statusToBadgeVariant[d.status] || 'default'}>
-                          {d.status.replace('_', ' ')}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-3">{d.driver_name}</td>
-                      <td className="px-4 py-3 text-secondary">
-                        {new Date(d.scheduled_date).toLocaleDateString()}
-                      </td>
-                      <td className="px-4 py-3 text-secondary">
-                        {d.completed_at ? new Date(d.completed_at).toLocaleDateString() : '-'}
-                      </td>
+            {tabLoading ? (
+              <div className="px-5 pb-5 space-y-3">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
+                ))}
+              </div>
+            ) : deliveries.length === 0 ? (
+              <div className="px-5 pb-5">
+                <p className="text-sm text-secondary">No deliveries for this customer yet.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-t border-b border-gray-100">
+                      <th className="px-5 py-3 text-left font-medium text-secondary">Delivery #</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">Driver</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">Scheduled</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">Completed</th>
+                      <th className="px-4 py-3 text-left font-medium text-secondary">Signature</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {deliveries.map((d) => {
+                      const isPartial = d.status === 'completed' && d.issue_type && d.issue_type !== 'none';
+                      return (
+                        <tr
+                          key={d.id}
+                          onClick={() => navigate(`/deliveries/${d.id}`)}
+                          className={`border-b border-gray-50 hover:bg-crx-green-tint cursor-pointer transition-colors ${
+                            isPartial ? 'bg-amber-50/50' : ''
+                          }`}
+                        >
+                          <td className="px-5 py-3">
+                            <div className="flex items-center gap-2">
+                              <Truck className="w-4 h-4 text-crx-green flex-shrink-0" />
+                              <span className="font-medium text-nav-dark">{d.delivery_number}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <Badge variant={statusToBadgeVariant[d.status] || 'default'}>
+                              {d.status.replace('_', ' ')}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-3">{d.driver_name}</td>
+                          <td className="px-4 py-3 text-secondary">
+                            {new Date(d.scheduled_date).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3 text-secondary">
+                            {d.completed_at ? new Date(d.completed_at).toLocaleDateString() : '-'}
+                          </td>
+                          <td className="px-4 py-3">
+                            {d.signed_by ? (
+                              <Badge variant="success">Signed</Badge>
+                            ) : d.status === 'completed' ? (
+                              <Badge variant="warning">No Sig</Badge>
+                            ) : (
+                              <span className="text-secondary">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
+          {/* Pending Remainders for this customer */}
+          {!tabLoading && customerRemainders.length > 0 && (
+            <Card>
+              <CardHeader
+                title="Pending"
+                accent="Remainders"
+                action={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<AlertTriangle className="w-3 h-3" />}
+                    showChevron={false}
+                    onClick={() => navigate('/delivery-remainders')}
+                  >
+                    View All
+                  </Button>
+                }
+              />
+              <div className="overflow-x-auto mt-3">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="px-4 py-2 text-left font-medium text-secondary">Product</th>
+                      <th className="px-4 py-2 text-left font-medium text-secondary">Qty Remaining</th>
+                      <th className="px-4 py-2 text-left font-medium text-secondary">Unit</th>
+                      <th className="px-4 py-2 text-left font-medium text-secondary">Original Delivery</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {customerRemainders.map((r) => (
+                      <tr key={r.id} className="border-b border-gray-50">
+                        <td className="px-4 py-2 font-medium text-nav-dark">{r.product_name || 'Unknown'}</td>
+                        <td className="px-4 py-2 text-amber-600 font-semibold">{r.quantity_remaining}</td>
+                        <td className="px-4 py-2 text-secondary">{r.unit_size || '-'}</td>
+                        <td className="px-4 py-2">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/deliveries/${r.original_delivery_id}`);
+                            }}
+                            className="text-crx-green hover:underline text-xs"
+                          >
+                            {r.original_delivery_number || r.original_delivery_id?.slice(0, 8)}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
           )}
-        </Card>
+        </div>
       )}
 
       {/* GAP FIX #15: Purchase History Tab */}
