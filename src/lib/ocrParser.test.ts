@@ -124,7 +124,7 @@ describe('parseOCRText', () => {
 
   it('extracts products with quantities', () => {
     const result = parseOCRText(
-      'Products:\nRoundup 10 gal\nAtrazine 5 lb'
+      'Product  Rate/Acre  Total Product\nRoundup 10 gal\nAtrazine 5 lb'
     );
     expect(result.products.length).toBeGreaterThanOrEqual(2);
   });
