@@ -375,6 +375,52 @@ export interface PurchaseOrderItem {
   product?: Product;
 }
 
+// ── Receiving ─────────────────────────────────────────────────
+
+export type ReceivingCondition = 'good' | 'damaged' | 'short' | 'wrong_product' | 'mixed';
+
+export interface ReceivingRecord {
+  id: string;
+  purchase_order_id: string;
+  po_item_id: string;
+  product_id: string;
+  quantity_received: number;
+  received_by: string;
+  received_at: string;
+  notes: string | null;
+  condition: ReceivingCondition;
+  lot_number: string | null;
+  storage_location: string;
+  unit_size: string | null;
+  created_at: string;
+  // Joined fields from RPC
+  po_number?: string;
+  vendor?: string;
+  product_name?: string;
+  received_by_name?: string;
+  photo_count?: number;
+}
+
+export interface ReceivingPhoto {
+  id: string;
+  receiving_record_id: string;
+  storage_path: string;
+  image_url: string;
+  caption: string | null;
+  uploaded_by: string;
+  uploaded_at: string;
+  file_size: number | null;
+  sort_order: number;
+}
+
+export interface ReceivingSummary {
+  expected_today: number;
+  pending_receipt: number;
+  received_this_week: number;
+  items_received_ytd: number;
+  damaged_this_week: number;
+}
+
 export interface Commission {
   id: string;
   order_id: string;

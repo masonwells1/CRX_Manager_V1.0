@@ -35,6 +35,7 @@ import {
   Wallet,
   ChevronLeft,
   ChevronRight,
+  PackageCheck,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import type { UserRole } from '../../types';
@@ -145,7 +146,8 @@ const navigation: NavEntry[] = [
       items: [
         { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-4 h-4" /> },
         { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/purchase-orders', label: 'Supplier POs', icon: <ShoppingCart className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/purchase-orders', label: 'Supplier POs', icon: <ShoppingCart className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/returns', label: 'Returns', icon: <RotateCcw className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },

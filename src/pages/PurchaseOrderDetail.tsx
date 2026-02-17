@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, PackageCheck, Pencil, Trash2 } from 'lucide-react';
+import { ArrowLeft, PackageCheck, Pencil, Trash2, Download } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -12,7 +12,25 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import type { PurchaseOrder, PurchaseOrderItem, POStatus } from '../types';
+import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition } from '../types';
+
+/* ─── Condition badge helpers ─── */
+const conditionVariant = (c: string): 'success' | 'error' | 'warning' | 'default' => {
+  if (c === 'good') return 'success';
+  if (c === 'damaged' || c === 'wrong_product') return 'error';
+  if (c === 'short' || c === 'mixed') return 'warning';
+  return 'default';
+};
+const conditionLabel = (c: string) =>
+  c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+
+/* ─── Per-item receive state ─── */
+interface ReceiveItemState {
+  qty: string;
+  condition: ReceivingCondition;
+  lot_number: string;
+  notes: string;
+}
 
 export default function PurchaseOrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -22,9 +40,15 @@ export default function PurchaseOrderDetail() {
   const [po, setPo] = useState<PurchaseOrder | null>(null);
   const [items, setItems] = useState<PurchaseOrderItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [receiveOpen, setReceiveOpen] = useState(false);
-  const [receiveQtys, setReceiveQtys] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+
+  /* Receive modal state */
+  const [receiveOpen, setReceiveOpen] = useState(false);
+  const [receiveItems, setReceiveItems] = useState<Record<string, ReceiveItemState>>({});
+  const [storageLocation, setStorageLocation] = useState('Main Warehouse');
+  const [receiveStep, setReceiveStep] = useState<'fill' | 'review'>('fill');
+
+  /* Edit modal state */
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [editForm, setEditForm] = useState({
@@ -43,10 +67,18 @@ export default function PurchaseOrderDetail() {
     quantity_received: number;
   }>>([]);
 
+  /* Receiving history */
+  const [receivingHistory, setReceivingHistory] = useState<ReceivingRecord[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
   const isAdmin = role === 'admin';
+  const canReceive = role === 'admin' || role === 'sales_rep';
 
   useEffect(() => {
-    if (id) fetchPO();
+    if (id) {
+      fetchPO();
+      fetchReceivingHistory();
+    }
   }, [id]);
 
   const fetchPO = async () => {
@@ -67,18 +99,69 @@ export default function PurchaseOrderDetail() {
     setLoading(false);
   };
 
+  const fetchReceivingHistory = async () => {
+    setHistoryLoading(true);
+    const { data, error } = await supabase
+      .from('receiving_records')
+      .select('*, product:products(product_name), receiver:profiles!receiving_records_received_by_fkey(full_name)')
+      .eq('purchase_order_id', id!)
+      .order('received_at', { ascending: false });
+
+    if (!error && data) {
+      const rows = (data as any[]).map((r) => ({
+        ...r,
+        product_name: r.product?.product_name || 'Unknown',
+        received_by_name: r.receiver?.full_name || 'Unknown',
+      }));
+      setReceivingHistory(rows as ReceivingRecord[]);
+    }
+    setHistoryLoading(false);
+  };
+
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
+  /* ─── Open receive modal ─── */
+  const openReceiveModal = () => {
+    const initial: Record<string, ReceiveItemState> = {};
+    items.forEach((item) => {
+      initial[item.id] = {
+        qty: '0',
+        condition: 'good',
+        lot_number: '',
+        notes: '',
+      };
+    });
+    setReceiveItems(initial);
+    setStorageLocation('Main Warehouse');
+    setReceiveStep('fill');
+    setReceiveOpen(true);
+  };
+
+  const updateReceiveItem = (itemId: string, field: keyof ReceiveItemState, value: string) => {
+    setReceiveItems((prev) => ({
+      ...prev,
+      [itemId]: { ...prev[itemId], [field]: value },
+    }));
+  };
+
+  /* ─── Submit receive ─── */
   const handleReceive = async () => {
     if (!profile) return;
-    // Build items payload — only include items with qty > 0
+
     const itemsPayload = items
-      .filter((item) => parseInt(receiveQtys[item.id] || '0') > 0)
-      .map((item) => ({
-        po_item_id: item.id,
-        quantity: parseInt(receiveQtys[item.id] || '0'),
-      }));
+      .filter((item) => parseInt(receiveItems[item.id]?.qty || '0') > 0)
+      .map((item) => {
+        const ri = receiveItems[item.id];
+        return {
+          po_item_id: item.id,
+          quantity: parseInt(ri.qty || '0'),
+          condition: ri.condition,
+          lot_number: ri.lot_number || null,
+          notes: ri.notes || null,
+          storage_location: storageLocation,
+        };
+      });
 
     if (itemsPayload.length === 0) {
       toast('error', 'Enter a quantity for at least one item');
@@ -88,20 +171,77 @@ export default function PurchaseOrderDetail() {
     setSaving(true);
     try {
       const idemKey = generateIdempotencyKey('receive_po_items', profile.id);
-      const { error } = await supabase.rpc('receive_po_items', {
+      const { data, error } = await supabase.rpc('receive_po_items', {
         p_items: itemsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+
       toast('success', 'Items received and inventory updated');
+
+      // Offer PDF download
+      const receivingRecordIds = (data as any)?.receiving_record_ids;
+      if (receivingRecordIds && receivingRecordIds.length > 0 && po) {
+        try {
+          const { downloadReceivingPdf } = await import('../lib/receivingPdf');
+          await downloadReceivingPdf({
+            po_number: po.po_number,
+            vendor: po.vendor,
+            received_at: new Date().toISOString(),
+            received_by_name: profile.full_name || 'Unknown',
+            storage_location: storageLocation,
+            items: itemsPayload.map((ip) => {
+              const poItem = items.find((i) => i.id === ip.po_item_id);
+              return {
+                product_name: (poItem?.product as any)?.product_name || 'Unknown',
+                quantity_received: ip.quantity,
+                condition: ip.condition,
+                lot_number: ip.lot_number || undefined,
+                unit_size: poItem?.unit_size || undefined,
+                notes: ip.notes || undefined,
+              };
+            }),
+          });
+        } catch {
+          // PDF download is non-critical
+        }
+      }
+
       setReceiveOpen(false);
       fetchPO();
+      fetchReceivingHistory();
     } catch (error: any) {
       console.error('Error receiving items:', error);
       toast('error', error.message || 'Failed to receive items');
     }
     setSaving(false);
+  };
+
+  /* ─── Download receiving PDF for a history entry ─── */
+  const handleDownloadHistoryPdf = async (record: ReceivingRecord) => {
+    if (!po) return;
+    try {
+      const { downloadReceivingPdf } = await import('../lib/receivingPdf');
+      await downloadReceivingPdf({
+        po_number: po.po_number,
+        vendor: po.vendor,
+        received_at: record.received_at,
+        received_by_name: record.received_by_name || 'Unknown',
+        storage_location: record.storage_location,
+        items: [{
+          product_name: record.product_name || 'Unknown',
+          quantity_received: record.quantity_received,
+          condition: record.condition,
+          lot_number: record.lot_number || undefined,
+          unit_size: record.unit_size || undefined,
+          notes: record.notes || undefined,
+        }],
+      });
+      toast('success', 'Receiving receipt downloaded');
+    } catch {
+      toast('error', 'Failed to download receipt');
+    }
   };
 
   const openEditModal = () => {
@@ -132,7 +272,7 @@ export default function PurchaseOrderDetail() {
       const itemsPayload = editItems.map((item) => ({
         product_id: item.product_id,
         product_name: item.product_name,
-        unit_size: item.unit_size,
+        unit_size: (item as any).unit_size,
         quantity_ordered: parseFloat(item.quantity_ordered),
         unit_cost: parseFloat(item.unit_cost),
         quantity_received: item.quantity_received || 0,
@@ -203,8 +343,12 @@ export default function PurchaseOrderDetail() {
     );
   }
 
+  /* Items with qty entered for review step */
+  const reviewItems = items.filter((item) => parseInt(receiveItems[item.id]?.qty || '0') > 0);
+
   return (
     <div className="space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <button
           onClick={() => navigate('/purchase-orders')}
@@ -213,25 +357,28 @@ export default function PurchaseOrderDetail() {
           <ArrowLeft className="w-4 h-4" />
           Back to Purchase Orders
         </button>
-        {isAdmin && (
-          <div className="flex items-center gap-2">
-            {(po.status === 'submitted' || po.status === 'partially_received') && (
-              <Button icon={<PackageCheck className="w-4 h-4" />} onClick={() => setReceiveOpen(true)}>
-                Receive Items
-              </Button>
-            )}
-            <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
-              Edit
+        <div className="flex items-center gap-2">
+          {canReceive && (po.status === 'submitted' || po.status === 'partially_received') && (
+            <Button icon={<PackageCheck className="w-4 h-4" />} onClick={openReceiveModal}>
+              Receive Items
             </Button>
-            {(po.status === 'draft' || po.status === 'submitted') && (
-              <Button variant="danger" icon={<Trash2 className="w-4 h-4" />} onClick={() => setDeleteOpen(true)}>
-                Delete
+          )}
+          {isAdmin && (
+            <>
+              <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
+                Edit
               </Button>
-            )}
-          </div>
-        )}
+              {(po.status === 'draft' || po.status === 'submitted') && (
+                <Button variant="danger" icon={<Trash2 className="w-4 h-4" />} onClick={() => setDeleteOpen(true)}>
+                  Delete
+                </Button>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
+      {/* PO Summary Card */}
       <Card>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -270,6 +417,7 @@ export default function PurchaseOrderDetail() {
         </div>
       </Card>
 
+      {/* Line Items */}
       <Card padding={false}>
         <div className="p-5">
           <CardHeader title="Line" accent="Items" />
@@ -314,45 +462,241 @@ export default function PurchaseOrderDetail() {
         </div>
       </Card>
 
-      <Modal open={receiveOpen} onClose={() => setReceiveOpen(false)} title="Receive" accent="Items">
-        <div className="space-y-4">
-          {items.map((item) => {
-            const remaining = item.quantity_ordered - item.quantity_received;
-            return (
-              <div key={item.id} className="flex items-center gap-4">
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-nav-dark">
-                    {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
-                  </p>
-                  <p className="text-xs text-secondary">
-                    {remaining} remaining of {item.quantity_ordered}
-                  </p>
-                </div>
-                <div className="w-24">
-                  <Input
-                    type="number"
-                    min="0"
-                    max={String(remaining)}
-                    value={receiveQtys[item.id] || '0'}
-                    onChange={(e) =>
-                      setReceiveQtys((prev) => ({ ...prev, [item.id]: e.target.value }))
-                    }
-                  />
-                </div>
-              </div>
-            );
-          })}
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setReceiveOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleReceive} loading={saving}>
-              Receive
-            </Button>
-          </div>
+      {/* Receiving History */}
+      <Card padding={false}>
+        <div className="p-5">
+          <CardHeader title="Receiving" accent="History" />
+          {historyLoading ? (
+            <div className="h-20 bg-gray-50 rounded-lg animate-pulse" />
+          ) : receivingHistory.length === 0 ? (
+            <p className="text-sm text-secondary py-4">No items have been received yet.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Date</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Product</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Qty</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Condition</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Lot #</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Location</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">By</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Notes</th>
+                    <th className="px-4 py-3 w-10"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {receivingHistory.map((rec) => (
+                    <tr key={rec.id} className="border-b border-gray-50">
+                      <td className="px-4 py-3">
+                        <div>
+                          <p className="text-sm">{new Date(rec.received_at).toLocaleDateString()}</p>
+                          <p className="text-xs text-secondary">
+                            {new Date(rec.received_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-nav-dark">{rec.product_name || '-'}</td>
+                      <td className="px-4 py-3 font-mono">
+                        {rec.quantity_received}
+                        {rec.unit_size && <span className="text-xs text-secondary ml-1">({rec.unit_size})</span>}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant={conditionVariant(rec.condition)}>
+                          {conditionLabel(rec.condition)}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 text-xs font-mono text-secondary">{rec.lot_number || '-'}</td>
+                      <td className="px-4 py-3 text-xs text-secondary">{rec.storage_location}</td>
+                      <td className="px-4 py-3 text-xs">{rec.received_by_name || '-'}</td>
+                      <td className="px-4 py-3 text-xs text-secondary max-w-[150px] truncate">{rec.notes || '-'}</td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => handleDownloadHistoryPdf(rec)}
+                          className="text-crx-green hover:text-crx-green/80 transition-colors"
+                          title="Download receipt"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
+      </Card>
+
+      {/* Enhanced Receive Modal */}
+      <Modal
+        open={receiveOpen}
+        onClose={() => setReceiveOpen(false)}
+        title="Receive"
+        accent="Items"
+        size="large"
+      >
+        {receiveStep === 'fill' ? (
+          <div className="space-y-4">
+            {/* Storage location */}
+            <div>
+              <label className="block text-sm font-medium text-nav-dark mb-1">Storage Location</label>
+              <Select
+                value={storageLocation}
+                onChange={(e) => setStorageLocation(e.target.value)}
+                options={[
+                  { value: 'Main Warehouse', label: 'Main Warehouse' },
+                  { value: 'Secondary Storage', label: 'Secondary Storage' },
+                  { value: 'Cold Storage', label: 'Cold Storage' },
+                  { value: 'Field Storage', label: 'Field Storage' },
+                ]}
+              />
+            </div>
+
+            <div className="border-t pt-4">
+              <h4 className="text-sm font-medium text-nav-dark mb-3">Items to Receive</h4>
+              <div className="space-y-4">
+                {items.map((item) => {
+                  const remaining = item.quantity_ordered - item.quantity_received;
+                  if (remaining <= 0) return null;
+                  const ri = receiveItems[item.id];
+                  if (!ri) return null;
+
+                  return (
+                    <div key={item.id} className="border border-gray-100 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-sm font-medium text-nav-dark">
+                            {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
+                          </p>
+                          <p className="text-xs text-secondary">
+                            {remaining} remaining of {item.quantity_ordered}
+                            {item.unit_size && <span> ({item.unit_size})</span>}
+                          </p>
+                        </div>
+                        <div className="w-24">
+                          <Input
+                            type="number"
+                            min="0"
+                            max={String(remaining)}
+                            value={ri.qty}
+                            onChange={(e) => updateReceiveItem(item.id, 'qty', e.target.value)}
+                            placeholder="0"
+                          />
+                        </div>
+                      </div>
+
+                      {parseInt(ri.qty || '0') > 0 && (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-4 border-l-2 border-crx-green/30">
+                          <div>
+                            <label className="block text-xs text-secondary mb-1">Condition</label>
+                            <Select
+                              value={ri.condition}
+                              onChange={(e) => updateReceiveItem(item.id, 'condition', e.target.value)}
+                              options={[
+                                { value: 'good', label: 'Good' },
+                                { value: 'damaged', label: 'Damaged' },
+                                { value: 'short', label: 'Short' },
+                                { value: 'wrong_product', label: 'Wrong Product' },
+                                { value: 'mixed', label: 'Mixed' },
+                              ]}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-secondary mb-1">Lot Number</label>
+                            <Input
+                              value={ri.lot_number}
+                              onChange={(e) => updateReceiveItem(item.id, 'lot_number', e.target.value)}
+                              placeholder="Optional"
+                            />
+                          </div>
+                          <div className="sm:col-span-1">
+                            <label className="block text-xs text-secondary mb-1">Notes</label>
+                            <Input
+                              value={ri.notes}
+                              onChange={(e) => updateReceiveItem(item.id, 'notes', e.target.value)}
+                              placeholder="Any issues or notes"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setReceiveOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => setReceiveStep('review')}
+                disabled={reviewItems.length === 0}
+              >
+                Review ({reviewItems.length} item{reviewItems.length !== 1 ? 's' : ''})
+              </Button>
+            </div>
+          </div>
+        ) : (
+          /* Review Step */
+          <div className="space-y-4">
+            <div className="bg-gray-50 rounded-xl p-4">
+              <p className="text-xs text-secondary mb-2">STORAGE LOCATION</p>
+              <p className="text-sm font-medium text-nav-dark">{storageLocation}</p>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="px-3 py-2 text-left font-medium text-secondary">Product</th>
+                    <th className="px-3 py-2 text-left font-medium text-secondary">Qty</th>
+                    <th className="px-3 py-2 text-left font-medium text-secondary">Condition</th>
+                    <th className="px-3 py-2 text-left font-medium text-secondary">Lot #</th>
+                    <th className="px-3 py-2 text-left font-medium text-secondary">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reviewItems.map((item) => {
+                    const ri = receiveItems[item.id];
+                    return (
+                      <tr key={item.id} className="border-b border-gray-50">
+                        <td className="px-3 py-2 font-medium text-nav-dark">
+                          {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
+                        </td>
+                        <td className="px-3 py-2 font-mono">{ri.qty}</td>
+                        <td className="px-3 py-2">
+                          <Badge variant={conditionVariant(ri.condition)}>
+                            {conditionLabel(ri.condition)}
+                          </Badge>
+                        </td>
+                        <td className="px-3 py-2 text-xs font-mono">{ri.lot_number || '-'}</td>
+                        <td className="px-3 py-2 text-xs text-secondary">{ri.notes || '-'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setReceiveStep('fill')}>
+                Back
+              </Button>
+              <Button variant="secondary" onClick={() => setReceiveOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleReceive} loading={saving}>
+                Confirm & Receive
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
+      {/* Edit Modal */}
       <Modal open={editOpen} onClose={() => setEditOpen(false)} title="Edit Purchase" accent="Order">
         <div className="space-y-4">
           <div>
@@ -457,6 +801,7 @@ export default function PurchaseOrderDetail() {
         </div>
       </Modal>
 
+      {/* Delete Modal */}
       <Modal open={deleteOpen} onClose={() => setDeleteOpen(false)} title="Delete Purchase" accent="Order">
         <div className="space-y-4">
           <p className="text-sm text-secondary">

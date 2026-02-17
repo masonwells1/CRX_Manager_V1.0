@@ -56,6 +56,7 @@ const CustomerTransactionReview = lazy(() => import('./pages/CustomerTransaction
 const PrepaymentManager = lazy(() => import('./pages/PrepaymentManager'));
 const PaymentAllocation = lazy(() => import('./pages/PaymentAllocation'));
 const DeliveryRemainders = lazy(() => import('./pages/DeliveryRemainders'));
+const ReceivingLog = lazy(() => import('./pages/ReceivingLog'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -118,6 +119,7 @@ const router = createBrowserRouter([
           { path: 'recipes', element: <BlendRecipes /> },
           { path: 'cycle-counts', element: <CycleCounts /> },
           { path: 'returns', element: <Returns /> },
+          { path: 'receiving', element: <ReceivingLog /> },
           { path: 'purchase-orders', element: <PurchaseOrders /> },
           { path: 'purchase-orders/new', element: <NewPurchaseOrder /> },
           { path: 'purchase-orders/:id', element: <PurchaseOrderDetail /> },
