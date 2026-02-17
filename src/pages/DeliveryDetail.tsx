@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff,
   Minus, Plus, Pencil, X, Ban, Camera, UserPlus, AlertTriangle, RefreshCw,
+  PlayCircle, Lock, Zap,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -15,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
+import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
@@ -103,10 +105,19 @@ export default function DeliveryDetail() {
   // Followup state
   const [creatingFollowup, setCreatingFollowup] = useState(false);
 
+  // Start delivery state
+  const [startModalOpen, setStartModalOpen] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  // Order context for items display
+  const [orderItemContext, setOrderItemContext] = useState<Record<string, { ordered: number; delivered: number; remaining: number }>>({});
+
   const isDriver = role === 'driver';
   const isAdminOrRep = role === 'admin' || role === 'sales_rep';
   const canEdit = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
   const canCancel = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
+  const isAssignedDriver = isDriver && profile?.id === delivery?.assigned_driver;
+  const canConfirm = (isAdminOrRep || isAssignedDriver) && delivery?.status === 'scheduled';
 
   useEffect(() => {
     if (id) fetchDelivery();
@@ -144,6 +155,25 @@ export default function DeliveryDetail() {
       setAddress(addrRes.data as CustomerAddress | null);
       setDriver(driverRes.data as Profile | null);
       setPhotos((photosRes.data || []) as DeliveryPhoto[]);
+
+      // Fetch order item context for items display
+      if (del.order_id) {
+        const { data: oiData } = await supabase
+          .from('order_items')
+          .select('id, total_units_needed, quantity_delivered, quantity_remaining')
+          .eq('order_id', del.order_id);
+        if (oiData) {
+          const ctx: Record<string, { ordered: number; delivered: number; remaining: number }> = {};
+          oiData.forEach((oi: any) => {
+            ctx[oi.id] = {
+              ordered: oi.total_units_needed,
+              delivered: oi.quantity_delivered,
+              remaining: oi.quantity_remaining,
+            };
+          });
+          setOrderItemContext(ctx);
+        }
+      }
 
       // Fetch remainders for completed deliveries
       if (del.status === 'completed') {
@@ -207,20 +237,7 @@ export default function DeliveryDetail() {
     if (!delivery || !profile) return;
     setSavingEdit(true);
 
-    const activeItems = editItems.filter((item) => item.quantity > 0);
-    if (activeItems.length === 0) {
-      toast('error', 'At least one item required');
-      setSavingEdit(false);
-      return;
-    }
-
-    const itemsJson = activeItems.map((item) => ({
-      order_item_id: item.order_item_id,
-      product_id: item.product_id,
-      quantity: item.quantity,
-      unit_size: item.unit_size || null,
-    }));
-
+    // Items are locked to the order — only save logistics changes
     const { error } = await supabase.rpc('edit_delivery', {
       p_delivery_id: id!,
       p_assigned_driver: editDriver || null,
@@ -231,7 +248,6 @@ export default function DeliveryDetail() {
       p_delivery_address_id: editAddress || null,
       p_delivery_notes: editNotes || null,
       p_priority: editPriority,
-      p_items: itemsJson,
       p_performed_by: profile.id,
     });
 
@@ -371,6 +387,26 @@ export default function DeliveryDetail() {
       navigate(`/deliveries/${result.delivery_id}`);
     }
     setCreatingFollowup(false);
+  };
+
+  // ── Start Delivery (Confirm) ──────────────────────────────────────────
+
+  const handleStartDelivery = async () => {
+    if (!delivery || !profile) return;
+    setConfirming(true);
+    try {
+      const { error } = await supabase.rpc('confirm_delivery', {
+        p_delivery_id: id!,
+        p_performed_by: profile.id,
+      });
+      if (error) throw error;
+      toast('success', `Delivery ${delivery.delivery_number} started`);
+      setStartModalOpen(false);
+      fetchDelivery();
+    } catch (err: any) {
+      toast('error', err.message || 'Failed to start delivery');
+    }
+    setConfirming(false);
   };
 
   // ── Complete Delivery (Driver) ─────────────────────────────────────────
@@ -521,8 +557,13 @@ export default function DeliveryDetail() {
           {/* Header card */}
           <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-semibold text-white font-heading">
+              <h2 className="text-xl font-semibold text-white font-heading flex items-center gap-2">
                 {delivery.delivery_number}
+                {delivery.is_quick_delivery && (
+                  <Badge variant="warning" size="sm">
+                    <span className="flex items-center gap-1"><Zap className="w-3 h-3" />Quick</span>
+                  </Badge>
+                )}
               </h2>
               <div className="flex items-center gap-2">
                 {delivery.priority && delivery.priority !== 'normal' && (
@@ -685,8 +726,30 @@ export default function DeliveryDetail() {
             </div>
           )}
 
-          {/* Issue reporting (driver, before completion) */}
-          {delivery.status !== 'completed' && delivery.status !== 'cancelled' && (
+          {/* Start Delivery section — show when scheduled */}
+          {delivery.status === 'scheduled' && (
+            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+              <div className="text-center py-6">
+                <Package className="w-12 h-12 text-gray-500 mx-auto mb-3" />
+                <h3 className="text-lg font-semibold text-white">Delivery Not Started</h3>
+                <p className="text-sm text-gray-400 mt-1 mb-4">
+                  Verify inventory on your truck, then start this delivery to begin.
+                </p>
+                {(isAssignedDriver || isAdminOrRep) && (
+                  <button
+                    onClick={() => setStartModalOpen(true)}
+                    className="px-6 py-3 bg-crx-green text-white text-lg font-semibold rounded-xl active:bg-crx-green-hover transition-colors flex items-center justify-center gap-2 mx-auto"
+                  >
+                    <PlayCircle className="w-6 h-6" />
+                    Start Delivery
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Issue reporting (driver, when in_progress) */}
+          {delivery.status === 'in_progress' && (
             <div className="bg-gray-800 rounded-xl p-5 border border-gray-700 space-y-3">
               <h3 className="text-white font-semibold">Report Issue (Optional)</h3>
               <select
@@ -710,8 +773,8 @@ export default function DeliveryDetail() {
             </div>
           )}
 
-          {/* Complete delivery section */}
-          {delivery.status !== 'completed' && delivery.status !== 'cancelled' && (
+          {/* Complete delivery section — only when in_progress */}
+          {delivery.status === 'in_progress' && (
             <div className="bg-gray-800 rounded-xl p-5 border border-gray-700 space-y-4">
               <h3 className="text-white font-semibold">Complete Delivery</h3>
               <div>
@@ -749,6 +812,21 @@ export default function DeliveryDetail() {
             </div>
           )}
         </div>
+
+        {/* Start Delivery Modal (driver view) */}
+        <StartDeliveryModal
+          open={startModalOpen}
+          onClose={() => setStartModalOpen(false)}
+          onConfirm={handleStartDelivery}
+          delivery={delivery}
+          items={items.map((i) => ({
+            id: i.id,
+            product_name: (i.product as unknown as { product_name: string })?.product_name,
+            quantity: i.quantity,
+            unit_size: i.unit_size,
+          }))}
+          loading={confirming}
+        />
       </div>
     );
   }
@@ -771,12 +849,27 @@ export default function DeliveryDetail() {
       <Card>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h2 className="text-xl font-semibold font-heading text-nav-dark">
+            <h2 className="text-xl font-semibold font-heading text-nav-dark flex items-center gap-2">
               {delivery.delivery_number}
+              {delivery.is_quick_delivery && (
+                <Badge variant="warning" size="sm">
+                  <span className="flex items-center gap-1"><Zap className="w-3 h-3" />Quick</span>
+                </Badge>
+              )}
             </h2>
             <p className="text-sm text-secondary mt-1">{customer?.farm_name}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {canConfirm && !editing && (
+              <Button
+                size="sm"
+                icon={<PlayCircle className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setStartModalOpen(true)}
+              >
+                Start Delivery
+              </Button>
+            )}
             {canEdit && !editing && (
               <Button
                 variant="secondary"
@@ -969,37 +1062,24 @@ export default function DeliveryDetail() {
               placeholder="Special instructions, gate codes, etc."
             />
 
-            {/* Edit items */}
+            {/* Delivery items — locked to order */}
             <div>
               <h4 className="text-sm font-medium text-secondary mb-2">Delivery Items</h4>
+              <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-700 mb-3 flex items-start gap-2">
+                <Lock className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="font-medium">Delivery items are locked to the order</p>
+                  <p className="text-xs mt-1">To change quantities, update the order or cancel this delivery and create a new one.</p>
+                </div>
+              </div>
               <div className="space-y-2">
                 {editItems.map((item) => (
-                  <div key={item.order_item_id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-nav-dark truncate">{item.product_name}</p>
+                  <div key={item.order_item_id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                    <div>
+                      <p className="text-sm font-medium text-nav-dark">{item.product_name}</p>
                       <p className="text-xs text-secondary">{item.unit_size || 'units'}</p>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => updateEditItemQty(item.order_item_id, item.quantity - 1)}
-                        className="w-7 h-7 rounded border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
-                      >
-                        <Minus className="w-3 h-3 text-secondary" />
-                      </button>
-                      <input
-                        type="number"
-                        value={item.quantity}
-                        onChange={(e) => updateEditItemQty(item.order_item_id, parseInt(e.target.value) || 0)}
-                        className="w-16 text-center px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20"
-                        min="0"
-                      />
-                      <button
-                        onClick={() => updateEditItemQty(item.order_item_id, item.quantity + 1)}
-                        className="w-7 h-7 rounded border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
-                      >
-                        <Plus className="w-3 h-3 text-secondary" />
-                      </button>
-                    </div>
+                    <p className="text-sm font-mono font-medium text-nav-dark">{item.quantity}</p>
                   </div>
                 ))}
               </div>
@@ -1066,7 +1146,7 @@ export default function DeliveryDetail() {
         </Card>
       )}
 
-      {/* Products table */}
+      {/* Products table with order context */}
       {!editing && (
         <Card>
           <h3 className="text-lg font-semibold font-heading text-nav-dark mb-4">Products</h3>
@@ -1075,35 +1155,51 @@ export default function DeliveryDetail() {
               <thead>
                 <tr className="border-b border-gray-100">
                   <th className="px-4 py-3 text-left font-medium text-secondary">Product</th>
-                  <th className="px-4 py-3 text-left font-medium text-secondary">Planned Qty</th>
+                  <th className="px-4 py-3 text-right font-medium text-secondary">Ordered</th>
+                  <th className="px-4 py-3 text-right font-medium text-secondary">Prev. Delivered</th>
+                  <th className="px-4 py-3 text-right font-medium text-secondary">This Delivery</th>
                   {delivery.status === 'completed' && (
-                    <th className="px-4 py-3 text-left font-medium text-secondary">Delivered</th>
+                    <th className="px-4 py-3 text-right font-medium text-secondary">Actual</th>
                   )}
-                  <th className="px-4 py-3 text-left font-medium text-secondary">Unit Size</th>
-                  <th className="px-4 py-3 text-left font-medium text-secondary">Notes</th>
+                  <th className="px-4 py-3 text-right font-medium text-secondary">Remaining After</th>
+                  <th className="px-4 py-3 text-left font-medium text-secondary">Unit</th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => (
-                  <tr key={item.id} className="border-b border-gray-50">
-                    <td className="px-4 py-3 font-medium text-nav-dark">
-                      {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
-                    </td>
-                    <td className="px-4 py-3">{item.quantity}</td>
-                    {delivery.status === 'completed' && (
-                      <td className="px-4 py-3">
-                        <span className={item.quantity_delivered < item.quantity ? 'text-amber-600 font-medium' : ''}>
-                          {item.quantity_delivered}
-                        </span>
-                        {item.quantity_delivered < item.quantity && (
-                          <span className="text-xs text-amber-500 ml-1">(partial)</span>
-                        )}
+                {items.map((item) => {
+                  const ctx = orderItemContext[item.order_item_id];
+                  const ordered = ctx?.ordered ?? item.quantity;
+                  const prevDelivered = ctx?.delivered ?? 0;
+                  const thisDelivery = item.quantity;
+                  const actualDelivered = delivery.status === 'completed' ? item.quantity_delivered : thisDelivery;
+                  const remainingAfter = Math.max(0, ordered - prevDelivered - actualDelivered);
+                  return (
+                    <tr key={item.id} className="border-b border-gray-50">
+                      <td className="px-4 py-3 font-medium text-nav-dark">
+                        {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
                       </td>
-                    )}
-                    <td className="px-4 py-3">{item.unit_size || '-'}</td>
-                    <td className="px-4 py-3 text-secondary">{item.notes || '-'}</td>
-                  </tr>
-                ))}
+                      <td className="px-4 py-3 text-right font-mono">{ordered}</td>
+                      <td className="px-4 py-3 text-right font-mono text-secondary">{prevDelivered}</td>
+                      <td className="px-4 py-3 text-right font-mono">{thisDelivery}</td>
+                      {delivery.status === 'completed' && (
+                        <td className="px-4 py-3 text-right font-mono">
+                          <span className={item.quantity_delivered < item.quantity ? 'text-amber-600 font-medium' : ''}>
+                            {item.quantity_delivered}
+                          </span>
+                          {item.quantity_delivered < item.quantity && (
+                            <span className="text-xs text-amber-500 ml-1">(partial)</span>
+                          )}
+                        </td>
+                      )}
+                      <td className="px-4 py-3 text-right font-mono">
+                        <span className={remainingAfter > 0 ? 'text-amber-600 font-medium' : 'text-green-600'}>
+                          {remainingAfter}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-secondary">{item.unit_size || '-'}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1208,6 +1304,21 @@ export default function DeliveryDetail() {
           </div>
         )}
       </Card>
+
+      {/* Start Delivery Modal */}
+      <StartDeliveryModal
+        open={startModalOpen}
+        onClose={() => setStartModalOpen(false)}
+        onConfirm={handleStartDelivery}
+        delivery={delivery}
+        items={items.map((i) => ({
+          id: i.id,
+          product_name: (i.product as unknown as { product_name: string })?.product_name,
+          quantity: i.quantity,
+          unit_size: i.unit_size,
+        }))}
+        loading={confirming}
+      />
 
       {/* Cancel Modal */}
       <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancel Delivery">

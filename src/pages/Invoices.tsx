@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Send, Ban, Printer, Mail } from 'lucide-react';
+import { Plus, FileText, Check, Send, Ban, Printer, Mail, Zap } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -64,6 +64,7 @@ export default function Invoices() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [quickDeliveryOnly, setQuickDeliveryOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [posting, setPosting] = useState(false);
   const [voiding, setVoiding] = useState(false);
@@ -103,6 +104,7 @@ export default function Invoices() {
   const filtered = invoices.filter((inv) => {
     if (statusFilter && inv.status !== statusFilter) return false;
     if (typeFilter && inv.invoice_type !== typeFilter) return false;
+    if (quickDeliveryOnly && !inv.is_quick_delivery) return false;
     return true;
   });
 
@@ -319,6 +321,9 @@ export default function Invoices() {
         <div className="flex items-center gap-2">
           <FileText className="w-4 h-4 text-crx-green flex-shrink-0" />
           <span className="font-medium text-nav-dark">{row.invoice_number}</span>
+          {row.is_quick_delivery && (
+            <Zap className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" title="Quick Delivery" />
+          )}
         </div>
       ),
     },
@@ -539,6 +544,17 @@ export default function Invoices() {
                     </option>
                   ))}
                 </select>
+                <button
+                  onClick={() => setQuickDeliveryOnly((v) => !v)}
+                  className={`flex items-center gap-1 px-3 py-2 text-sm border rounded-lg transition-colors ${
+                    quickDeliveryOnly
+                      ? 'border-amber-400 bg-amber-50 text-amber-700'
+                      : 'border-gray-200 text-secondary hover:border-gray-300'
+                  }`}
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  Quick Deliveries
+                </button>
                 {filtered.some((i) => selectableStatuses.includes(i.status)) && (
                   <button
                     onClick={toggleAll}

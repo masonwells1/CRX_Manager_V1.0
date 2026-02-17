@@ -292,6 +292,7 @@ export interface Delivery {
   created_by: string;
   created_at: string;
   updated_at: string;
+  is_quick_delivery?: boolean;
   customer?: Customer;
   order?: Order;
   driver?: Profile;
@@ -715,6 +716,8 @@ export interface Invoice {
   application_date: string | null;
   job_id: string | null;
   total_cost_cents: number;
+
+  is_quick_delivery?: boolean;
 
   deleted_at: string | null;
   created_at: string;

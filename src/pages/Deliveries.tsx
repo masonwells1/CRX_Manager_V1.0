@@ -12,6 +12,7 @@ import {
   Phone,
   MapPin,
   Clock,
+  Zap,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -21,6 +22,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
+import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import type { Delivery, Profile, Customer } from '../types';
 
 /* ─── Row type ─── */
@@ -95,6 +97,9 @@ export default function Deliveries() {
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [rescheduling, setRescheduling] = useState(false);
 
+  /* Quick Delivery modal */
+  const [quickDeliveryOpen, setQuickDeliveryOpen] = useState(false);
+
   /* Remainder count for summary */
   const [remainderCount, setRemainderCount] = useState(0);
 
@@ -102,6 +107,7 @@ export default function Deliveries() {
   const [unassigned, setUnassigned] = useState<DeliveryRow[]>([]);
 
   const canCreate = role === 'admin' || role === 'sales_rep';
+  const canQuickDeliver = role === 'admin' || role === 'sales_rep' || role === 'driver';
   const isDriver = role === 'driver';
 
   useEffect(() => {
@@ -433,6 +439,12 @@ export default function Deliveries() {
         {d.priority && d.priority !== 'normal' && (
           <div className="pt-1">{priorityBadge(d.priority)}</div>
         )}
+        {d.status === 'scheduled' && (
+          <p className="text-xs text-emerald-400 font-medium pt-1">Tap to start delivery &rarr;</p>
+        )}
+        {d.status === 'in_progress' && (
+          <p className="text-xs text-amber-400 font-medium pt-1">Ready to complete &rarr;</p>
+        )}
       </div>
     );
 
@@ -441,7 +453,17 @@ export default function Deliveries() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold text-white">My Deliveries</h1>
-          <Badge variant="info">{deliveries.filter((d) => d.status !== 'cancelled' && d.status !== 'completed').length} Active</Badge>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Zap className="w-4 h-4" />}
+              onClick={() => setQuickDeliveryOpen(true)}
+            >
+              Quick Delivery
+            </Button>
+            <Badge variant="info">{deliveries.filter((d) => d.status !== 'cancelled' && d.status !== 'completed').length} Active</Badge>
+          </div>
         </div>
 
         {/* Today */}
@@ -509,6 +531,12 @@ export default function Deliveries() {
             </div>
           </div>
         )}
+
+        {/* Quick Delivery Modal */}
+        <QuickDeliveryModal
+          open={quickDeliveryOpen}
+          onClose={() => setQuickDeliveryOpen(false)}
+        />
       </div>
     );
   }
@@ -631,6 +659,15 @@ export default function Deliveries() {
                 </Button>
               )}
             </>
+          )}
+          {canQuickDeliver && (
+            <Button
+              variant="secondary"
+              icon={<Zap className="w-4 h-4" />}
+              onClick={() => setQuickDeliveryOpen(true)}
+            >
+              Quick Delivery
+            </Button>
           )}
           {canCreate && (
             <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/deliveries/new')}>
@@ -845,6 +882,12 @@ export default function Deliveries() {
           </div>
         </div>
       )}
+
+      {/* Quick Delivery Modal */}
+      <QuickDeliveryModal
+        open={quickDeliveryOpen}
+        onClose={() => setQuickDeliveryOpen(false)}
+      />
     </div>
   );
 }
