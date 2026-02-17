@@ -7,6 +7,7 @@ interface AuthContextValue {
   session: Session | null;
   profile: Profile | null;
   role: UserRole | null;
+  deniedPages: string[];
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
@@ -16,6 +17,7 @@ const AuthContext = createContext<AuthContextValue>({
   session: null,
   profile: null,
   role: null,
+  deniedPages: [],
   loading: true,
   signIn: async () => ({ error: null }),
   signOut: async () => {},
@@ -92,6 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session,
         profile,
         role: profile?.role ?? null,
+        deniedPages: profile?.denied_pages ?? [],
         loading,
         signIn,
         signOut,

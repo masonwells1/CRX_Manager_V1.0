@@ -10,6 +10,7 @@ export interface Profile {
   role: UserRole;
   phone: string | null;
   is_active: boolean;
+  denied_pages: string[];
   created_at: string;
   updated_at: string;
 }

@@ -363,12 +363,11 @@ export default function InventoryPage() {
 
   const handleReleaseHold = async (holdId: string) => {
     try {
-      const releaseResult = await supabase
-        .from('inventory_holds')
-        .update({ is_active: false })
-        .eq('id', holdId)
-        .select();
-      checkMutationResult(releaseResult, 'Release inventory hold');
+      const { error } = await supabase.rpc('release_inventory_hold', {
+        p_hold_id: holdId,
+        p_performed_by: profile?.id,
+      });
+      if (error) throw error;
 
       toast('success', 'Hold released');
       fetchInventory();

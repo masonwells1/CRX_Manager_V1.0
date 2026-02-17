@@ -1,5 +1,6 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { getPageKeyFromPath, hasPageAccess } from '../../lib/pagePermissions';
 import type { UserRole } from '../../types';
 import { Loader2 } from 'lucide-react';
 
@@ -9,7 +10,8 @@ interface ProtectedRouteProps {
 }
 
 export default function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
-  const { session, profile, loading } = useAuth();
+  const { session, profile, deniedPages, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -29,6 +31,12 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
   }
 
   if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
+    return <Navigate to="/" replace />;
+  }
+
+  // Per-user page permission check (deny-list)
+  const pageKey = getPageKeyFromPath(location.pathname);
+  if (pageKey && profile && !hasPageAccess(profile.role, deniedPages, pageKey)) {
     return <Navigate to="/" replace />;
   }
 

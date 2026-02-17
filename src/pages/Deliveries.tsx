@@ -367,10 +367,11 @@ export default function Deliveries() {
     }
     setRescheduling(true);
     const ids = selectedCancellable.map((d) => d.id);
-    const { error } = await supabase
-      .from('deliveries')
-      .update({ scheduled_date: rescheduleDate })
-      .in('id', ids);
+    const { error } = await supabase.rpc('batch_reschedule_deliveries', {
+      p_delivery_ids: ids,
+      p_new_date: rescheduleDate,
+      p_performed_by: profile?.id,
+    });
     if (error) {
       toast('error', error.message || 'Failed to reschedule');
     } else {

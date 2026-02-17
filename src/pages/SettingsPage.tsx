@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Save, UserPlus, Pencil } from 'lucide-react';
+import { Save, UserPlus, Pencil, Shield } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,7 +11,104 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
 import { supabase, checkMutationResult } from '../lib/db';
+import { getPagesForRole, getCategories } from '../lib/pagePermissions';
 import type { Profile, AppSetting, UserRole } from '../types';
+
+// --- Permissions Panel ---
+
+function UserPermissionsPanel({
+  role,
+  deniedPages,
+  onChange,
+}: {
+  role: UserRole;
+  deniedPages: string[];
+  onChange: (pages: string[]) => void;
+}) {
+  const rolePages = getPagesForRole(role);
+  const categories = getCategories(rolePages);
+
+  if (role === 'admin') return null;
+  if (rolePages.length === 0) return null;
+
+  const allowedCount = rolePages.length - deniedPages.length;
+
+  const togglePage = (key: string) => {
+    if (deniedPages.includes(key)) {
+      onChange(deniedPages.filter((k) => k !== key));
+    } else {
+      onChange([...deniedPages, key]);
+    }
+  };
+
+  const enableAll = () => onChange([]);
+  const disableAll = () => onChange(rolePages.map((p) => p.key));
+
+  return (
+    <div className="border border-gray-200 rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b border-gray-200">
+        <div className="flex items-center gap-2">
+          <Shield className="w-4 h-4 text-crx-green" />
+          <span className="text-sm font-medium text-nav-dark">
+            Page Access ({allowedCount}/{rolePages.length})
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={enableAll}
+            className="text-xs text-crx-green hover:underline"
+          >
+            Enable All
+          </button>
+          <span className="text-gray-300">|</span>
+          <button
+            type="button"
+            onClick={disableAll}
+            className="text-xs text-red-500 hover:underline"
+          >
+            Disable All
+          </button>
+        </div>
+      </div>
+      <div className="max-h-64 overflow-y-auto px-3 py-2 space-y-3">
+        {categories.map((cat) => {
+          const catPages = rolePages.filter((p) => p.category === cat);
+          return (
+            <div key={cat}>
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400 mb-1">
+                {cat}
+              </p>
+              <div className="space-y-1">
+                {catPages.map((page) => {
+                  const allowed = !deniedPages.includes(page.key);
+                  return (
+                    <label
+                      key={page.key}
+                      className="flex items-center gap-2 cursor-pointer py-0.5"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={allowed}
+                        onChange={() => togglePage(page.key)}
+                        className="w-3.5 h-3.5 rounded border-gray-300 text-crx-green focus:ring-crx-green/20"
+                      />
+                      <span className={`text-sm ${allowed ? 'text-nav-dark' : 'text-gray-400 line-through'}`}>
+                        {page.label}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// --- Settings Page ---
 
 export default function SettingsPage() {
   const { role, profile } = useAuth();
@@ -42,6 +139,7 @@ export default function SettingsPage() {
   const [editName, setEditName] = useState('');
   const [editPhone, setEditPhone] = useState('');
   const [editIsActive, setEditIsActive] = useState(true);
+  const [editDeniedPages, setEditDeniedPages] = useState<string[]>([]);
   const [savingUser, setSavingUser] = useState(false);
 
   useEffect(() => {
@@ -177,8 +275,20 @@ export default function SettingsPage() {
     setEditRole(user.role);
     setEditPhone(user.phone || '');
     setEditIsActive(user.is_active);
+    setEditDeniedPages(user.denied_pages || []);
     setEditModalOpen(true);
   };
+
+  // When role changes, prune denied pages that don't apply to the new role
+  const handleEditRoleChange = useCallback((newRoleValue: UserRole) => {
+    setEditRole(newRoleValue);
+    if (newRoleValue === 'admin') {
+      setEditDeniedPages([]);
+    } else {
+      const validKeys = getPagesForRole(newRoleValue).map((p) => p.key);
+      setEditDeniedPages((prev) => prev.filter((k) => validKeys.includes(k)));
+    }
+  }, []);
 
   const handleEditUser = async () => {
     if (!editingUser) return;
@@ -191,6 +301,7 @@ export default function SettingsPage() {
         new_full_name: editName,
         new_phone: editPhone || null,
         new_is_active: editIsActive,
+        new_denied_pages: editRole === 'admin' ? [] : editDeniedPages,
       });
       if (error) {
         toast('error', error.message || 'Failed to update user');
@@ -213,6 +324,7 @@ export default function SettingsPage() {
     admin: 'success',
     sales_rep: 'info',
     driver: 'warning',
+    applicator: 'warning',
   };
 
   if (role !== 'admin') return null;
@@ -267,6 +379,7 @@ export default function SettingsPage() {
                 <th className="px-4 py-3 text-left font-medium text-secondary">Role</th>
                 <th className="px-4 py-3 text-left font-medium text-secondary">Phone</th>
                 <th className="px-4 py-3 text-left font-medium text-secondary">Status</th>
+                <th className="px-4 py-3 text-left font-medium text-secondary">Restrictions</th>
                 <th className="px-4 py-3 text-left font-medium text-secondary"></th>
               </tr>
             </thead>
@@ -283,6 +396,15 @@ export default function SettingsPage() {
                     <Badge variant={u.is_active ? 'success' : 'default'}>
                       {u.is_active ? 'Active' : 'Inactive'}
                     </Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    {u.role === 'admin' ? (
+                      <span className="text-xs text-gray-400">Full access</span>
+                    ) : u.denied_pages?.length > 0 ? (
+                      <Badge variant="warning">{u.denied_pages.length} restricted</Badge>
+                    ) : (
+                      <span className="text-xs text-gray-400">None</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <Button
@@ -365,7 +487,7 @@ export default function SettingsPage() {
         </div>
       </Modal>
 
-      <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} title="Edit" accent="User">
+      <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} title="Edit" accent="User" size="large">
         <div className="space-y-4">
           {editingUser && (
             <p className="text-sm text-secondary">{editingUser.email}</p>
@@ -375,7 +497,7 @@ export default function SettingsPage() {
             <label className="block text-sm font-medium text-secondary mb-1">Role</label>
             <select
               value={editRole}
-              onChange={(e) => setEditRole(e.target.value as UserRole)}
+              onChange={(e) => handleEditRoleChange(e.target.value as UserRole)}
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             >
               <option value="admin">Admin</option>
@@ -396,6 +518,13 @@ export default function SettingsPage() {
               <span className="text-sm font-medium text-secondary">Active</span>
             </label>
           </div>
+
+          <UserPermissionsPanel
+            role={editRole}
+            deniedPages={editDeniedPages}
+            onChange={setEditDeniedPages}
+          />
+
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setEditModalOpen(false)}>Cancel</Button>
             <Button onClick={handleEditUser} loading={savingUser}>Save Changes</Button>

@@ -38,6 +38,7 @@ import {
   PackageCheck,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
 import type { UserRole } from '../../types';
 import logoWhite from '../../assets/logo_3-01_(3).png';
 
@@ -214,8 +215,23 @@ function hasRoleAccess(roles: UserRole[] | undefined, userRole: UserRole | undef
   return !!userRole && roles.includes(userRole);
 }
 
-function getVisibleItems(items: NavSubItem[], userRole: UserRole | undefined): NavSubItem[] {
-  return items.filter((item) => hasRoleAccess(item.roles, userRole));
+function hasNavAccess(
+  roles: UserRole[] | undefined,
+  userRole: UserRole | undefined,
+  deniedPages: string[],
+  path: string
+): boolean {
+  if (!hasRoleAccess(roles, userRole)) return false;
+  // Check per-user deny list
+  const pageKey = getPageKeyFromPath(path);
+  if (pageKey && userRole) {
+    return hasPageAccess(userRole, deniedPages, pageKey);
+  }
+  return true;
+}
+
+function getVisibleItems(items: NavSubItem[], userRole: UserRole | undefined, deniedPages: string[]): NavSubItem[] {
+  return items.filter((item) => hasNavAccess(item.roles, userRole, deniedPages, item.path));
 }
 
 /** Check if any sub-item's route is the current active route */
@@ -234,7 +250,7 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
-  const { profile, signOut } = useAuth();
+  const { profile, deniedPages, signOut } = useAuth();
   const location = useLocation();
   const userRole = profile?.role;
 
@@ -282,7 +298,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
     navigation.map((entry) => {
       if (entry.type === 'standalone') {
         const { link } = entry;
-        if (!hasRoleAccess(link.roles, userRole)) return null;
+        if (!hasNavAccess(link.roles, userRole, deniedPages, link.path)) return null;
 
         const active = isRouteActive(link.path);
 
@@ -327,7 +343,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
 
       // Category entry
       const { category } = entry;
-      const visibleItems = getVisibleItems(category.items, userRole);
+      const visibleItems = getVisibleItems(category.items, userRole, deniedPages);
       if (visibleItems.length === 0) return null;
 
       const isOpen = openCategory === category.id;

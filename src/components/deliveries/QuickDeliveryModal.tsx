@@ -26,6 +26,7 @@ interface CustomerOption {
   id: string;
   farm_name: string;
   account_number: string | null;
+  assigned_tier: number;
 }
 
 interface QuickDeliveryModalProps {
@@ -93,7 +94,7 @@ export default function QuickDeliveryModal({
     const timer = setTimeout(async () => {
       const { data } = await supabase
         .from('customers')
-        .select('id, farm_name, account_number')
+        .select('id, farm_name, account_number, assigned_tier')
         .eq('is_active', true)
         .or(`farm_name.ilike.%${customerSearch}%,account_number.ilike.%${customerSearch}%`)
         .order('farm_name')
@@ -108,11 +109,33 @@ export default function QuickDeliveryModal({
     setSelectedCustomer(c);
     setCustomerSearch(c.farm_name + (c.account_number ? ` (${c.account_number})` : ''));
     setShowCustomerDropdown(false);
-  }, []);
+
+    // Re-price existing items for the new customer's tier
+    setItems((prev) =>
+      prev.map((item) => {
+        const product = products.find((p) => p.id === item.product_id);
+        if (!product) return item;
+        const tier = c.assigned_tier ?? 1;
+        let priceCents: number;
+        if (tier === 3 && product.tier3_price != null) priceCents = Math.round(product.tier3_price * 100);
+        else if (tier === 2 && product.tier2_price != null) priceCents = Math.round(product.tier2_price * 100);
+        else priceCents = Math.round((product.tier1_price || 0) * 100);
+        return { ...item, price_cents: priceCents };
+      })
+    );
+  }, [products]);
 
   const clearCustomer = () => {
     setSelectedCustomer(null);
     setCustomerSearch('');
+  };
+
+  // Get the correct tier price for the selected customer
+  const getTierPrice = (product: Product): number => {
+    const tier = selectedCustomer?.assigned_tier ?? 1;
+    if (tier === 3 && product.tier3_price != null) return Math.round(product.tier3_price * 100);
+    if (tier === 2 && product.tier2_price != null) return Math.round(product.tier2_price * 100);
+    return Math.round((product.tier1_price || 0) * 100);
   };
 
   // Product selection
@@ -129,7 +152,7 @@ export default function QuickDeliveryModal({
           product_name: product.product_name,
           quantity: 1,
           unit_size: product.unit_size || '',
-          price_cents: Math.round((product.tier1_price || 0) * 100),
+          price_cents: getTierPrice(product),
         },
       ]);
     }
