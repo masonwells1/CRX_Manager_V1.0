@@ -7,13 +7,14 @@
 - **Who it's for:** Crop RX Solutions (admin, sales reps, drivers)
 - **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
 
-## Current State (as of 2026-02-27)
+## Current State (as of 2026-02-17)
 - **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import
 - **Deployed to:** Vercel (private preview/staging)
-- **Test coverage:** 91 unit tests (Vitest) + 8 Playwright E2E spec files
+- **Test coverage:** 379 unit tests (Vitest, 33 test files) + 121 Playwright E2E tests (20 spec files) = **500 total tests**
 - **60 migrations** applied to remote Supabase, **72 tables**, **~110 RPC functions**
 - **48 pages**, 49 components
-- **Latest commit:** `63b43f3` on main (pushed)
+- **Latest commit:** `c374765` on main (pushed)
+- **T3-002 test coverage:** Phases 1-5 COMPLETE (see Development History)
 - **Pre-commit hook:** `npm run build` + `npx vitest run` run automatically before every commit
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
 - **Supabase Project ID:** `rhyzpcqhnizqbxphqdkr`
@@ -38,7 +39,7 @@
 - **Frontend:** React 18 + TypeScript + Vite
 - **Backend:** Supabase (PostgreSQL + Auth + Edge Functions + Realtime + Storage)
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
-- **Testing:** Vitest (91 unit tests) + Playwright (8 E2E specs in `tests/e2e/`)
+- **Testing:** Vitest (379 unit tests, 33 files) + Playwright (121 E2E tests, 20 spec files in `tests/e2e/`)
 - **Deployment:** Vercel (private preview/staging), configured via `vercel.json`
 - **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid + @turf/bbox
 - **Geo Import:** shapefile (parse .shp/.dbf/.shx), proj4 (coordinate reprojection), togeojson-with-extended-style (KML→GeoJSON)
@@ -51,7 +52,7 @@
 ```bash
 npm run dev          # Start dev server (http://localhost:5173)
 npm run build        # Production build
-npx vitest run       # Run 91 unit tests
+npx vitest run       # Run 379 unit tests (33 test files)
 npm run typecheck    # TypeScript error check
 npm run lint         # ESLint
 npm run test:e2e     # Run Playwright E2E tests
@@ -122,7 +123,7 @@ supabase/
   migrations/          # All database migrations (SQL, chronological order)
   functions/           # Edge Functions: create-user, seed-admin, setup-blend-tickets-storage
 tests/
-  e2e/                 # Playwright E2E tests (auth, customers, permissions)
+  e2e/                 # 121 Playwright E2E tests across 20 spec files (all pages covered)
 ```
 
 ### Pages (48 total)
@@ -778,7 +779,7 @@ Test every feature as each role:
 
 ### Build & Type Checking
 - `npm run build` for full build verification (pre-commit hook runs this automatically)
-- `npx vitest run` for 91 unit tests (pre-commit hook runs this automatically)
+- `npx vitest run` for 379 unit tests (pre-commit hook runs this automatically)
 - `npx tsc --noEmit` for type checking only
 - Known warning: vendor-mapbox chunk is ~1,680KB (>500KB limit) — Mapbox is large, this is expected
 - react-map-gl v8: import from `'react-map-gl/mapbox'`, NOT bare `'react-map-gl'`
@@ -816,6 +817,7 @@ Test every feature as each role:
 | S19 | Receiving System Enhancement (event tracking, dashboard, PDF receipts) | Feb 26 |
 | S20 | Delivery Integrity & Quick Delivery (confirm flow, locked items, ad-hoc deliveries) | Feb 27 |
 | — | Bulk Field Import (shapefile/KML/GeoJSON wizard with proj4 reprojection) | Feb 16 |
+| T3-002 | Comprehensive test coverage: 379 unit + 121 E2E = 500 total tests | Feb 17 |
 
 ---
 
