@@ -7,16 +7,16 @@
 - **Who it's for:** Crop RX Solutions (admin, sales reps, drivers)
 - **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
 
-## Current State (as of 2026-02-16)
-- **All hardening & features:** COMPLETE through Sprint 17 + Bulk Field Import
+## Current State (as of 2026-02-27)
+- **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import
 - **Deployed to:** Vercel (private preview/staging)
 - **Test coverage:** 91 unit tests (Vitest) + 8 Playwright E2E spec files
-- **57 migrations** applied to remote Supabase, **67 tables**, **~105 RPC functions**
-- **46 pages**, 44+ components
-- **Latest commit:** `91c3e97` on main (pushed)
+- **60 migrations** applied to remote Supabase, **72 tables**, **~110 RPC functions**
+- **48 pages**, 49 components
+- **Latest commit:** `63b43f3` on main (pushed)
 - **Pre-commit hook:** `npm run build` + `npx vitest run` run automatically before every commit
-- **See repo `MEMORY.md`** for complete 566-line project reference (schema, RPCs, all pages, full history)
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
+- **Supabase Project ID:** `rhyzpcqhnizqbxphqdkr`
 
 ## Architecture Rules -- Follow These
 1. **Database changes MUST use migrations** -- create files in `supabase/migrations/`, never modify tables directly
@@ -62,7 +62,7 @@ npm run test:e2e:ui  # Interactive Playwright UI
 ### User Roles
 1. **admin** - Full CRUD on all tables. Manages users, products, costs, inventory, purchase orders, commissions, month-end close, write-offs, settings.
 2. **sales_rep** - Creates quotes, orders, deliveries, jobs, invoices, blend tickets, application records. Manages own customers/fields. Views own commissions.
-3. **driver** - Views assigned deliveries and related inventory. Updates delivery status. Records signatures. Cannot access quotes, orders, or financial data.
+3. **driver** - Views assigned deliveries and related inventory. Confirms/starts deliveries, completes with signature/photos, reports issues. Can self-assign available deliveries, create quick deliveries. Cannot access quotes or financial data.
 4. **applicator** - Views assigned jobs. Records applied info (weather, gallons, times). Views customers/products/fields/recipes. Cannot create jobs or access financial data.
 
 ### Project Structure
@@ -81,7 +81,8 @@ src/
     offlineSync.ts     # Auto-sync on reconnect
     imageCompression.ts # Client-side image compression
     quotePdf.ts        # Quote PDF generation
-    deliveryPdf.ts     # Delivery receipt PDF generation
+    deliveryPdf.ts     # Delivery receipt PDF (batch + partial display)
+    receivingPdf.ts    # Receiving receipt PDF (condition color-coding + batch)
     invoicePdf.ts      # Invoice PDF (3 layouts)
     statementPdf.ts    # Customer statement PDF (dual-mode)
     reportPdf.ts       # Generic report PDF generator
@@ -97,7 +98,7 @@ src/
     useRealtimeSubscription.ts # Supabase realtime wrapper
     usePageMeta.ts         # Page title/meta
     useOCRProcessor.ts     # OCR processing hook
-  pages/               # 46 page components (lazy-loaded from App.tsx)
+  pages/               # 48 page components (lazy-loaded from App.tsx)
   components/
     auth/              # LoginPage, ProtectedRoute
     layout/            # AppLayout, Sidebar, TopBar
@@ -109,6 +110,7 @@ src/
     orders/            # BulkOrderImport
     products/          # BulkProductImport, BulkPricingImport
     quotes/            # BulkQuoteImport
+    deliveries/        # BatchCancelModal, StartDeliveryModal, QuickDeliveryModal
     invoices/          # BatchVoidModal, FinanceChargePreviewModal, InvoicePrintDialog, WriteOffModal
     reports/           # ReportShell, LogbookReport, YearEndSummaryDialog
     statements/        # StatementPrintDialog
@@ -123,7 +125,7 @@ tests/
   e2e/                 # Playwright E2E tests (auth, customers, permissions)
 ```
 
-### Pages (46 total)
+### Pages (48 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -131,7 +133,7 @@ tests/
 | `/products` | Products | Product catalog with search/filter, bulk import |
 | `/products/:id` | ProductDetail | Product CRUD (pricing tiers, EPA info, RUP status) |
 | `/customers` | Customers | Customer list with search/filter, bulk import |
-| `/customers/:id` | CustomerDetail | Customer edit, credit limit, finance charge rate, prepayment apply |
+| `/customers/:id` | CustomerDetail | Profile, addresses, credit limit, transaction review, finance charge settings, season summary |
 | `/quotes` | Quotes | Quote list with status filters |
 | `/quotes/new` | QuoteBuilder | Multi-line quote with tiered pricing, commission splits, PDF |
 | `/quotes/:id` | QuoteBuilder | Edit existing quote |
@@ -139,20 +141,22 @@ tests/
 | `/orders/new` | NewOrder | Direct order creation (bypasses quote) |
 | `/orders/:id` | OrderDetail | Order detail with status transitions, convert to invoice |
 | `/inventory` | InventoryPage | Inventory levels, low-stock alerts, cost valuation |
-| `/deliveries` | Deliveries | Delivery list with status filters |
+| `/deliveries` | Deliveries | Delivery management + driver dashboard + batch actions + quick delivery (~900 lines) |
 | `/deliveries/new` | NewDelivery | Create delivery from order |
-| `/deliveries/:id` | DeliveryDetail | Delivery detail, partial delivery, signature capture |
+| `/deliveries/:id` | DeliveryDetail | Full lifecycle: confirm, edit, cancel, photos, issues, remainders, order context (~1350 lines) |
+| `/delivery-remainders` | DeliveryRemainders | Pending remainder items across all customers |
 | `/blend-tickets` | BlendTickets | OCR ticket processing with image upload |
 | `/blend-tickets/:id` | BlendTicketDetail | Ticket review, approve/reject, create application record |
 | `/purchase-orders` | PurchaseOrders | PO list with status filters |
 | `/purchase-orders/new` | NewPurchaseOrder | Create PO from vendor catalog |
-| `/purchase-orders/:id` | PurchaseOrderDetail | PO detail, receive items |
+| `/purchase-orders/:id` | PurchaseOrderDetail | PO detail with two-step receive modal + receiving history (~823 lines) |
+| `/receiving` | ReceivingLog | Receiving dashboard with summary cards, filters, searchable log |
 | `/jobs` | Jobs | Job list with date/status/customer filters |
 | `/jobs/:id` | JobDetail | Full job editor: fields on map, chemicals, vehicle/applicator, complete, transfer to invoice |
 | `/vehicles` | Vehicles | Vehicle CRUD (ground/air), capacity, registration |
 | `/vehicles/:id` | VehicleDetail | Single vehicle edit form |
 | `/application-records` | ApplicationRecords | Read-only list of all chemical applications (from jobs + blend tickets) |
-| `/invoices` | Invoices | Invoice list (unposted/posted), batch print, period-closed warnings |
+| `/invoices` | Invoices | Invoice list (unposted/posted), batch print, batch void, quick delivery filter |
 | `/invoices/:id` | InvoiceDetail | Invoice detail, post/unpost, print PDF, write-off |
 | `/payments` | Payments | Payment recording and listing |
 | `/payment-allocation` | PaymentAllocation | Unified payment allocation to invoices |
@@ -179,7 +183,7 @@ tests/
 
 ## Supabase Backend Reference
 
-### Database Tables (67 total)
+### Database Tables (72 total)
 
 **Core Business:**
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -209,8 +213,14 @@ tests/
 - `purchase_order_items` - PO line items (quantity_ordered, quantity_received, unit_cost)
 
 **Deliveries:**
-- `deliveries` - Scheduled deliveries (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url)
+- `deliveries` - Delivery headers (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url, priority, delivery_window_start/end, cancelled_at/by, cancel_reason, issue_type, issue_notes, is_quick_delivery)
 - `delivery_items` - Items on delivery (order_item_id, product_id, quantity)
+- `delivery_photos` - Driver-uploaded delivery photos (delivery_id, storage_path, image_url, uploaded_by)
+- `delivery_remainders` - Partial delivery remainder items (delivery_id, order_item_id, product_id, remainder_quantity, status: pending/scheduled/delivered/cancelled)
+
+**Receiving:**
+- `receiving_records` - Per-event receiving records (po_id, po_item_id, product_id, quantity_received, condition, lot_number, notes, storage_location, received_by)
+- `receiving_photos` - Photos attached to receiving events (receiving_record_id, storage_path, image_url)
 
 **Job Scheduling:**
 - `jobs` - Job headers (status: scheduled/in_progress/completed/cancelled/invoiced, customer, applicator, vehicle, recipe)
@@ -277,13 +287,25 @@ tests/
 - `ingredient_map` - Brand to generic product mapping
 - `unit_conversions` - Unit conversion factors (unit, factor_oz)
 
-### RPC Functions (~105 total — key ones listed)
+### RPC Functions (~110 total — key ones listed)
 
 **Atomic Save/Delete:**
 - `save_quote()`, `save_job()`, `save_customer()`, `save_blend_ticket()`, `save_purchase_order()`, `delete_purchase_order()`, `duplicate_quote()`
 
 **Order & Delivery:**
-- `convert_quote_to_order()`, `create_direct_order()`, `complete_delivery()` (partial delivery + inventory deduction)
+- `convert_quote_to_order()`, `create_direct_order()`, `cancel_order()`, `update_order_items()`
+- `confirm_delivery()` — scheduled → in_progress transition
+- `complete_delivery()` — requires in_progress, creates remainder rows for partial deliveries
+- `edit_delivery()` — logistics only, items param ignored (locked to order)
+- `cancel_delivery()`, `batch_cancel_deliveries()`, `reassign_delivery()`
+- `create_followup_delivery()`, `get_customer_delivery_remainders()`
+- `create_quick_delivery()` — atomic order + delivery + draft invoice in one transaction
+
+**Inventory & Receiving:**
+- `adjust_inventory()`, `receive_po_items()` — per-item condition/lot/notes/storage, creates receiving_records
+- `complete_cycle_count()`
+- `get_receiving_log()` — paginated, filterable receiving history
+- `get_receiving_summary()` — dashboard stats (expected_today, pending_receipt, received_this_week, items_ytd, damaged_this_week)
 
 **Job Scheduling:**
 - `complete_job()` — marks completed, creates application_record, deducts inventory
@@ -341,10 +363,14 @@ is_applicator() -- SECURITY DEFINER STABLE
 | inventory | Admin / Sales Rep / Driver | Admin | Admin | Admin |
 | inventory_transactions | Admin / Sales Rep | Admin / Sales Rep | - | - |
 | inventory_holds | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
-| purchase_orders | Admin | Admin | Admin | Admin |
-| purchase_order_items | Admin | Admin | Admin | Admin |
-| deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep (own) | Admin / Driver (assigned) | Admin |
-| delivery_items | Admin / Sales Rep / Driver (via delivery) | Admin / Sales Rep | Admin | Admin |
+| purchase_orders | Admin / Sales Rep | Admin | Admin | Admin |
+| purchase_order_items | Admin / Sales Rep | Admin | Admin | Admin |
+| receiving_records | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| receiving_photos | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| deliveries | Admin / Sales Rep / Driver (assigned) | Admin / Sales Rep | Admin / Sales Rep / Driver (assigned) | Admin |
+| delivery_items | Admin / Sales Rep / Driver (via delivery) | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
+| delivery_photos | Admin / Sales Rep / Driver | Admin / Sales Rep / Driver | - | Admin |
+| delivery_remainders | Admin / Sales Rep / Driver | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | commissions | Admin / Sales Rep (own recipient) | Admin | Admin | - |
 | payments | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | team_notes | All authenticated | Own created_by | Own created_by / Admin | Admin |
@@ -418,6 +444,9 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix. Key migrat
 37. `20260222200000` - Batch operations
 38. `20260223200000` - Payment allocation
 39. `20260224200000` - Year-end summary
+40. `20260225200000` - Delivery system enhancements (delivery_photos, delivery_remainders, edit/cancel/batch/reassign/followup RPCs, driver issue reporting)
+41. `20260226200000` - Receiving system enhancements (receiving_records, receiving_photos, per-item condition/lot/notes, receiving log/summary RPCs)
+42. `20260227200000` - Delivery integrity & quick delivery (confirm_delivery, items locked to order, complete requires in_progress, create_quick_delivery atomic RPC, is_quick_delivery flags)
 
 ### Edge Functions
 - **create-user** - Admin-only: creates a new auth user with role metadata
@@ -436,6 +465,8 @@ Used for:
 
 ### Storage Buckets
 - **blend-ticket-images** - Private bucket for blend ticket images (RLS-protected)
+- **delivery-photos** - Private bucket for delivery photos (driver uploads, RLS-protected)
+- **receiving-photos** - Private bucket for receiving event photos (RLS-protected)
 - **Admin user:** mason@croprxsolutions.com (UUID: 22c1fc50-4d2a-4baa-8ff8-341c0c7edd4f)
 
 ---
@@ -459,17 +490,26 @@ Used for:
 
 ### Delivery Lifecycle
 `scheduled` -> `in_progress` -> `completed` -> `cancelled`
-- Created from orders with item selection
-- Assigned to a driver
-- Completion triggers inventory transactions (type: 'delivered')
-- Signature capture and PDF receipt generation
+- Created from orders with item selection, or via Quick Delivery (atomic order + delivery + draft invoice)
+- Assigned to a driver with priority, delivery window, and notes
+- **Two-step flow:** Must `confirm_delivery()` (scheduled → in_progress) before completing. Shows inventory check warning.
+- **Items locked to order:** Delivery item quantities cannot be edited — always match the order
+- **Order context columns:** Items display shows Ordered / Prev. Delivered / This Delivery / Remaining After
+- Completion triggers inventory transactions (type: 'delivered'), creates remainder rows for partial deliveries
+- Signature capture, photo upload (up to 10), driver issue reporting
+- PDF receipt generation with batch support + partial delivery display
+- Edit mode: driver, date/time, window, address, priority, notes (not item quantities)
+- Cancel with reason, batch cancel, reassign driver, follow-up delivery from remainders
 
 ### Purchase Order Lifecycle
 `draft` -> `submitted` -> `partially_received` -> `fully_received` -> `cancelled`
-- Receiving updates PO item quantities and inventory levels
+- Receiving updates PO item quantities and inventory levels via two-step receive modal (fill details → review → confirm)
+- Per-item receiving: condition (good/damaged/short/wrong_item), lot number, notes, storage location
+- Creates `receiving_records` for per-event tracking with photo attachments
 - Auto-updates product cost if PO unit_cost differs
 - Creates cost_history entries on cost changes
 - Creates inventory_transaction (type: 'received')
+- Receiving dashboard at `/receiving` with summary cards and filterable log
 
 ### Inventory Calculations
 - **Total on Floor** = quantity_available + quantity_prebooked
@@ -598,8 +638,8 @@ Test every feature as each role:
 | Quotes CRUD | Full | Own only | No access | No access |
 | Orders CRUD | Full | Create/Read | No access | No access |
 | Inventory | Full | Read + holds | Read only | No access |
-| Deliveries | Full | Create/Read | Own + update status | No access |
-| Purchase Orders | Full | No access | No access | No access |
+| Deliveries | Full | Create/Edit/Cancel | Own + confirm/complete/photos/issues/quick delivery | No access |
+| Purchase Orders | Full | Read/Receive | No access | No access |
 | Blend Tickets | Full | Upload/review | No access | No access |
 | Jobs | Full | Create/Edit | No access | Own assigned + record applied info |
 | Vehicles | Full | Read only | No access | Read only |
@@ -623,8 +663,17 @@ Test every feature as each role:
 5. Convert to order (creates order + order_items + commissions)
 6. Create delivery from order
 7. Assign driver
-8. Complete delivery (updates inventory, order fulfillment)
-9. Record payment (updates order balance_due)
+8. Confirm/start delivery (scheduled → in_progress, inventory check warning)
+9. Complete delivery (updates inventory, order fulfillment, creates remainders for partial)
+10. Record payment (updates order balance_due)
+
+**Quick Delivery (ad-hoc):**
+1. Open Quick Delivery modal (from Deliveries page or driver dashboard)
+2. Search/select customer
+3. Add products with quantities
+4. Optionally assign driver, set date, add notes
+5. Submit → creates order + delivery + draft invoice atomically
+6. Sales rep reviews and posts the draft invoice
 
 **Purchase Order to Inventory:**
 1. Create PO with product items
@@ -721,6 +770,11 @@ Test every feature as each role:
 - Atomic operations: PostgreSQL RPCs with `FOR UPDATE` row locks for race-free multi-table writes
 - Field import: 3-step wizard (upload → attribute mapping → preview map → insert). Parser in `src/lib/fieldImportParser.ts`. Supports .shp/.dbf/.shx, .kml, .geojson. Uses proj4 for coordinate reprojection.
 - ParsedImportField type in `src/types/index.ts` — includes boundary_geojson, centroid_geojson, calculated_acres, raw_properties, errors[], isValid
+- Delivery enhancements (S18): edit/cancel/reassign deliveries, driver issue reporting (damaged/shortage/refused/wrong_product/access_issue/other), photo uploads (up to 10, compressed), delivery remainders with follow-up creation, batch cancel with reason
+- Receiving system (S19): two-step receive modal (fill details → review summary → confirm), per-item condition/lot/notes/storage_location, receiving dashboard at /receiving with summary cards + DataTable, receiving receipt PDF with condition color-coding
+- Delivery integrity (S20): two-step confirm→complete flow (StartDeliveryModal with inventory check warning), items locked to order (read-only in edit mode), order context columns (Ordered/Prev. Delivered/This Delivery/Remaining After), quick delivery modal (customer search + product picker → atomic order+delivery+invoice), is_quick_delivery flag on deliveries + invoices
+- Delivery PDF: `src/lib/deliveryPdf.ts` — batch support, delivered vs planned columns, partial delivery amber highlight
+- Receiving PDF: `src/lib/receivingPdf.ts` — CRX green header, condition color-coding, batch support
 
 ### Build & Type Checking
 - `npm run build` for full build verification (pre-commit hook runs this automatically)
@@ -734,12 +788,36 @@ Test every feature as each role:
 - Types: `src/types/index.ts`
 - DB client: `src/lib/db.ts`
 - Auth context: `src/contexts/AuthContext.tsx` (provides `profile`, `role`)
+- Deliveries page: `src/pages/Deliveries.tsx` (~900 lines, driver dashboard + batch actions + quick delivery)
+- Delivery detail: `src/pages/DeliveryDetail.tsx` (~1350 lines, full lifecycle)
+- Delivery components: `src/components/deliveries/` (BatchCancelModal, StartDeliveryModal, QuickDeliveryModal)
+- Receiving log: `src/pages/ReceivingLog.tsx` (dashboard with summary cards + DataTable)
+- PO detail: `src/pages/PurchaseOrderDetail.tsx` (~823 lines, two-step receive modal + receiving history)
 - OCR Edge Function: `supabase/functions/process-blend-ticket/index.ts`
 - User creation Edge Function: `supabase/functions/create-user/index.ts`
 
 ### Supabase Secrets Required
 - `ALLOWED_ORIGIN` - CORS origin for production
 - `GOOGLE_VISION_API_KEY` - Google Cloud Vision API key for OCR
+
+## Development History
+
+| Sprint | What | When |
+|--------|------|------|
+| S0-S6 | 109-defect audit fix | Feb 11 |
+| S7-S11 | Vehicles, Jobs, Reports, Month-End, Finance | Feb 14-18 |
+| S12 | Invoice & Statement PDF redesign (Chem-Man match) | Feb 19 |
+| S13 | Finance Charge Intelligence (preview, grace periods, opt-out) | Feb 20 |
+| S14 | Grower Share Transparency (per-grower $/acre pricing) | Feb 21 |
+| S15 | Batch Operations (void, print, statements, apply prepayments) | Feb 22 |
+| S16 | Unified Payment Allocation (new page, auto-allocate, prepay) | Feb 23 |
+| S17 | Year-End Customer Summary (PDF: financials, products, acreage, YoY) | Feb 24 |
+| S18 | Delivery System Enhancement (edit, batch, driver dashboard, remainders, photos) | Feb 25 |
+| S19 | Receiving System Enhancement (event tracking, dashboard, PDF receipts) | Feb 26 |
+| S20 | Delivery Integrity & Quick Delivery (confirm flow, locked items, ad-hoc deliveries) | Feb 27 |
+| — | Bulk Field Import (shapefile/KML/GeoJSON wizard with proj4 reprojection) | Feb 16 |
+
+---
 
 ## Documentation Index
 - `CONTEXT.md` -- Full business context, features, data model, assumptions (READ THIS FIRST for deep understanding)
