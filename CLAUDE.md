@@ -7,13 +7,13 @@
 - **Who it's for:** Crop RX Solutions (admin, sales reps, drivers)
 - **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
 
-## Current State (as of 2026-02-17)
-- **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import
+## Current State (as of 2026-03-04)
+- **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import + Safety Audit + Quick Receive
 - **Deployed to:** Vercel (private preview/staging)
-- **Test coverage:** 379 unit tests (Vitest, 33 test files) + 121 Playwright E2E tests (20 spec files) = **500 total tests**
-- **60 migrations** applied to remote Supabase, **72 tables**, **~110 RPC functions**
-- **48 pages**, 49 components
-- **Latest commit:** `c374765` on main (pushed)
+- **Test coverage:** 419 unit tests (Vitest, 34 test files) + 28 Playwright E2E spec files
+- **64+ migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
+- **49 pages**, 50+ components
+- **Latest commit:** `196f221` on main (pushed)
 - **T3-002 test coverage:** Phases 1-5 COMPLETE (see Development History)
 - **Pre-commit hook:** `npm run build` + `npx vitest run` run automatically before every commit
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
@@ -126,7 +126,7 @@ tests/
   e2e/                 # 121 Playwright E2E tests across 20 spec files (all pages covered)
 ```
 
-### Pages (48 total)
+### Pages (49 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -152,6 +152,7 @@ tests/
 | `/purchase-orders/new` | NewPurchaseOrder | Create PO from vendor catalog |
 | `/purchase-orders/:id` | PurchaseOrderDetail | PO detail with two-step receive modal + receiving history (~823 lines) |
 | `/receiving` | ReceivingLog | Receiving dashboard with summary cards, filters, searchable log |
+| `/receiving/quick` | QuickReceive | 3-step wizard: vendor+products → auto-match to oldest open POs → confirm |
 | `/jobs` | Jobs | Job list with date/status/customer filters |
 | `/jobs/:id` | JobDetail | Full job editor: fields on map, chemicals, vehicle/applicator, complete, transfer to invoice |
 | `/vehicles` | Vehicles | Vehicle CRUD (ground/air), capacity, registration |
@@ -307,6 +308,7 @@ tests/
 - `complete_cycle_count()`
 - `get_receiving_log()` — paginated, filterable receiving history
 - `get_receiving_summary()` — dashboard stats (expected_today, pending_receipt, received_this_week, items_ytd, damaged_this_week)
+- `match_quick_receive_items()` — auto-allocate products to oldest open POs for Quick Receive
 
 **Job Scheduling:**
 - `complete_job()` — marks completed, creates application_record, deducts inventory
@@ -448,6 +450,11 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix. Key migrat
 40. `20260225200000` - Delivery system enhancements (delivery_photos, delivery_remainders, edit/cancel/batch/reassign/followup RPCs, driver issue reporting)
 41. `20260226200000` - Receiving system enhancements (receiving_records, receiving_photos, per-item condition/lot/notes, receiving log/summary RPCs)
 42. `20260227200000` - Delivery integrity & quick delivery (confirm_delivery, items locked to order, complete requires in_progress, create_quick_delivery atomic RPC, is_quick_delivery flags)
+43. Safety audit hardening (page permissions, notification triggers, business logic)
+44. User page permissions
+45. Business logic enhancements
+46. Dashboard integrity alerts
+47. Quick Receive (match_quick_receive_items RPC, receive_po_items p_allow_over_receive)
 
 ### Edge Functions
 - **create-user** - Admin-only: creates a new auth user with role metadata
@@ -818,6 +825,9 @@ Test every feature as each role:
 | S20 | Delivery Integrity & Quick Delivery (confirm flow, locked items, ad-hoc deliveries) | Feb 27 |
 | — | Bulk Field Import (shapefile/KML/GeoJSON wizard with proj4 reprojection) | Feb 16 |
 | T3-002 | Comprehensive test coverage: 379 unit + 121 E2E = 500 total tests | Feb 17 |
+| — | OCR Parser Overhaul & Edge Function v4 (multi-line fields, look-behind values) | Feb 17 |
+| — | Safety Audit & Business Logic Hardening (page permissions, notifications, E2E) | Feb 28-Mar 3 |
+| — | Quick Receive Feature (vendor+product receiving without PO numbers) | Mar 4 |
 
 ---
 

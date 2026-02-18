@@ -25,3 +25,5 @@ dist-ssr
 supabase/.temp/
 nul
 ENV_SETUP.md
+playwright-report/
+test-results/
