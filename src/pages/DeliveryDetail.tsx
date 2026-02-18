@@ -276,7 +276,7 @@ export default function DeliveryDetail() {
   const handleCancel = async () => {
     if (!profile) return;
     setCancelling(true);
-    const { error } = await supabase.rpc('cancel_delivery', {
+    const { data: cancelResult, error } = await supabase.rpc('cancel_delivery', {
       p_delivery_id: id!,
       p_cancel_reason: cancelReason.trim() || 'Cancelled',
       p_performed_by: profile.id,
@@ -284,7 +284,12 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', error.message || 'Failed to cancel delivery');
     } else {
-      toast('success', 'Delivery cancelled');
+      // Show detailed summary toast with cascade info
+      const parts: string[] = ['Delivery cancelled.'];
+      if (cancelResult?.items_restored > 0) parts.push(`Inventory restored for ${cancelResult.items_restored} item(s).`);
+      if (cancelResult?.draft_invoices_voided > 0) parts.push(`${cancelResult.draft_invoices_voided} draft invoice(s) voided.`);
+      if (cancelResult?.posted_invoices_notified > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_notified} posted invoice(s) needing review.`);
+      toast('success', parts.join(' '));
       setCancelOpen(false);
       setCancelReason('');
       fetchDelivery();

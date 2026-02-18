@@ -125,12 +125,22 @@ export default function OrderDetail() {
 
     try {
       if (newStatus === 'cancelled' && order.status !== 'cancelled') {
-        // Atomic RPC: cancellation + inventory release
-        const { error } = await supabase.rpc('cancel_order', {
+        // Atomic RPC: cancellation + inventory release + cascade (void drafts, zero commissions, release holds)
+        const { data: cancelResult, error } = await supabase.rpc('cancel_order', {
           p_order_id: id!,
           p_performed_by: profile.id,
         });
         if (error) throw error;
+        // Show summary toast with cascade details
+        if (cancelResult && cancelResult.status === 'cancelled') {
+          const parts: string[] = ['Order cancelled.'];
+          if (cancelResult.holds_released > 0) parts.push(`${cancelResult.holds_released} hold(s) released.`);
+          if (cancelResult.commissions_cancelled > 0) parts.push(`${cancelResult.commissions_cancelled} commission(s) zeroed.`);
+          if (cancelResult.draft_invoices_voided > 0) parts.push(`${cancelResult.draft_invoices_voided} draft invoice(s) voided.`);
+          if (cancelResult.posted_invoices_notified > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_notified} posted invoice(s) requiring manual void.`);
+          if (cancelResult.paid_commissions_flagged > 0) parts.push(`Admin notified about ${cancelResult.paid_commissions_flagged} paid commission(s).`);
+          toast('success', parts.join(' '));
+        }
       } else {
         // Simple status change (no inventory impact)
         const statusResult = await supabase
@@ -139,9 +149,9 @@ export default function OrderDetail() {
           .eq('id', id!)
           .select();
         checkMutationResult(statusResult, 'Update order status');
+        toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
       }
 
-      toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
       logActivity('order_status_changed', `Order ${order.order_number} status changed to ${newStatus}`, profile.id, 'order', order.id, order.customer_id);
       notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by);
       setStatusModalOpen(false);

@@ -273,12 +273,17 @@ export default function QuickDeliveryModal({
               placeholder="Search by farm name or account number..."
             />
             {selectedCustomer && (
-              <button
-                onClick={clearCustomer}
-                className="absolute right-2 top-7 text-xs text-gray-400 hover:text-gray-600"
-              >
-                clear
-              </button>
+              <div className="absolute right-2 top-7 flex items-center gap-2">
+                <span className="text-xs font-medium text-brand-dark bg-brand-light px-1.5 py-0.5 rounded">
+                  Tier {selectedCustomer.assigned_tier || 1}
+                </span>
+                <button
+                  onClick={clearCustomer}
+                  className="text-xs text-gray-400 hover:text-gray-600"
+                >
+                  clear
+                </button>
+              </div>
             )}
             {showCustomerDropdown && customerResults.length > 0 && (
               <div className="absolute z-30 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">

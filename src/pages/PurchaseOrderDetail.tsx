@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { notifyDamagedReceiving } from '../lib/notificationTriggers';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition } from '../types';
 
 /* ─── Condition badge helpers ─── */
@@ -179,6 +180,23 @@ export default function PurchaseOrderDetail() {
       if (error) throw error;
 
       toast('success', 'Items received and inventory updated');
+
+      // AUDIT 3.2: Notify admins about damaged/non-good items
+      if (po) {
+        const damagedItems = itemsPayload
+          .filter((ip: any) => ip.condition && ip.condition !== 'good')
+          .map((ip: any) => {
+            const poItem = items.find((i) => i.id === ip.po_item_id);
+            return {
+              productName: (poItem?.product as any)?.product_name || 'Unknown',
+              quantity: ip.quantity,
+              condition: ip.condition,
+            };
+          });
+        if (damagedItems.length > 0) {
+          notifyDamagedReceiving(po.po_number, damagedItems, po.id);
+        }
+      }
 
       // Offer PDF download
       const receivingRecordIds = (data as any)?.receiving_record_ids;

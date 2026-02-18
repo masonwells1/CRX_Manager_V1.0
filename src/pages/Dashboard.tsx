@@ -131,6 +131,12 @@ export default function Dashboard() {
 
     // GAP FIX #17: Run automated notification checks (low stock, expiring quotes)
     runPeriodicNotificationChecks();
+
+    // T4: Check for delivery remainders pending 7+ / 14+ days (fire-and-forget)
+    supabase.rpc('check_remainder_reminders').then(() => {}).catch(() => {});
+
+    // A2.7: Clean up holds from expired quotes (fire-and-forget)
+    supabase.rpc('release_expired_quote_holds').then(() => {}).catch(() => {});
   };
 
   const fmt = (n: number) =>

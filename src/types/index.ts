@@ -339,6 +339,8 @@ export interface DeliveryRemainder {
   status: DeliveryRemainderStatus;
   followup_delivery_id: string | null;
   notes: string | null;
+  reminder_sent_at: string | null;
+  escalation_sent_at: string | null;
   created_at: string;
   updated_at: string;
   // Joined fields from RPC
@@ -433,7 +435,7 @@ export interface Commission {
   commission_amount: number;
   order_profit: number;
   order_date: string;
-  status: 'pending' | 'paid';
+  status: 'pending' | 'paid' | 'cancelled';
   paid_date: string | null;
   paid_note: string | null;
   created_at: string;

@@ -197,6 +197,57 @@ export async function notifyLargeOrder(
 }
 
 /**
+ * Notify admins when PO items are received in damaged/wrong condition.
+ * Call this from PurchaseOrderDetail after receive_po_items() completes.
+ */
+export async function notifyDamagedReceiving(
+  poNumber: string,
+  damagedItems: Array<{ productName: string; quantity: number; condition: string }>,
+  poId: string
+) {
+  if (!damagedItems || damagedItems.length === 0) return;
+
+  try {
+    const summary = damagedItems
+      .map((i) => `${i.productName} (${i.quantity} — ${i.condition})`)
+      .join(', ');
+
+    await supabase.rpc('notify_damaged_receiving', {
+      p_po_number: poNumber,
+      p_items_summary: summary,
+      p_po_id: poId,
+    });
+  } catch (err) {
+    console.error('Damaged receiving notification failed:', err);
+  }
+}
+
+/**
+ * Notify admins when a customer's credit limit is exceeded by a new order.
+ * Call this from NewOrder after order creation.
+ */
+export async function notifyCreditLimitExceeded(
+  customerName: string,
+  outstandingAR: number,
+  creditLimit: number,
+  customerId: string
+) {
+  if (outstandingAR <= creditLimit) return;
+
+  try {
+    await notifyAdmins(
+      'Credit Limit Exceeded',
+      `${customerName} outstanding AR $${outstandingAR.toLocaleString()} exceeds credit limit $${creditLimit.toLocaleString()}`,
+      'credit_limit_exceeded',
+      'customer',
+      customerId
+    );
+  } catch (err) {
+    console.error('Credit limit notification failed:', err);
+  }
+}
+
+/**
  * Run all periodic notification checks.
  * Call this once from Dashboard on load.
  */

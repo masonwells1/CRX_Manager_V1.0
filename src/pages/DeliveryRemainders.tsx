@@ -191,7 +191,20 @@ export default function DeliveryRemainders() {
       key: 'created_at',
       header: 'Created',
       sortable: true,
-      render: (row) => new Date(row.created_at).toLocaleDateString(),
+      render: (row) => {
+        const daysOld = Math.floor((Date.now() - new Date(row.created_at).getTime()) / (1000 * 60 * 60 * 24));
+        return (
+          <div className="flex items-center gap-1.5">
+            <span>{new Date(row.created_at).toLocaleDateString()}</span>
+            {row.status === 'pending' && daysOld >= 14 && (
+              <Badge variant="error">14d+</Badge>
+            )}
+            {row.status === 'pending' && daysOld >= 7 && daysOld < 14 && (
+              <Badge variant="warning">7d+</Badge>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: 'id' as any,
