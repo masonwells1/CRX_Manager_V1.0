@@ -15,6 +15,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import type { Product, Customer } from '../types';
 
 interface LocalItem {
@@ -177,6 +178,24 @@ export default function NewOrder() {
 
       const orderId = (data as any)?.order_id;
       toast('success', 'Order created successfully');
+
+      // Phase 3.3: Credit limit check — warn (not block) if exceeded
+      if (customerId) {
+        try {
+          const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
+            p_customer_id: customerId,
+          });
+          if (creditCheck && (creditCheck as any).exceeded) {
+            const cl = creditCheck as any;
+            const fmtUsd = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+            toast('warning', `Credit limit warning: ${cl.farm_name} outstanding AR ${fmtUsd(cl.outstanding_ar)} exceeds limit ${fmtUsd(cl.credit_limit)}`);
+            notifyCreditLimitExceeded(cl.farm_name, cl.outstanding_ar, cl.credit_limit, customerId);
+          }
+        } catch {
+          // Non-blocking — credit limit check failure should not prevent navigation
+        }
+      }
+
       navigate(`/orders/${orderId}`);
     } catch (err) {
       console.error('Error creating order:', err);

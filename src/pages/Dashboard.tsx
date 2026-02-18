@@ -50,6 +50,11 @@ interface DashboardData {
   monthlyRevenue: Array<{ month: string; revenue: number; profit: number }>;
   lowStockCount: number;
   openArBalance: number;
+  // Phase 3.6: Integrity alert counts
+  driverIssuesCount: number;
+  customersOverCreditCount: number;
+  expiredHoldsCount: number;
+  cancelledPostedCount: number;
 }
 
 export default function Dashboard() {
@@ -71,6 +76,10 @@ export default function Dashboard() {
     monthlyRevenue: [],
     lowStockCount: 0,
     openArBalance: 0,
+    driverIssuesCount: 0,
+    customersOverCreditCount: 0,
+    expiredHoldsCount: 0,
+    cancelledPostedCount: 0,
   });
 
   useEffect(() => {
@@ -122,6 +131,10 @@ export default function Dashboard() {
         })),
         lowStockCount: Number(d.low_stock_count) || 0,
         openArBalance: Number(d.open_ar_balance) || 0,
+        driverIssuesCount: Number(d.driver_issues_count) || 0,
+        customersOverCreditCount: Number(d.customers_over_credit_count) || 0,
+        expiredHoldsCount: Number(d.expired_holds_count) || 0,
+        cancelledPostedCount: Number(d.cancelled_posted_count) || 0,
       });
     } catch (err) {
       console.error('Dashboard load error:', err);
@@ -297,9 +310,9 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* GAP FIX #10 + #2: Alerts row */}
-      {!isDriver && (data.lowStockCount > 0 || data.openArBalance > 0) && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      {/* GAP FIX #10 + #2 + Phase 3.6: Alerts row */}
+      {!isDriver && (data.lowStockCount > 0 || data.openArBalance > 0 || data.driverIssuesCount > 0 || data.customersOverCreditCount > 0 || data.expiredHoldsCount > 0 || data.cancelledPostedCount > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {data.lowStockCount > 0 && (
             <div
               onClick={() => navigate('/inventory')}
@@ -321,6 +334,54 @@ export default function Dashboard() {
               <div>
                 <p className="text-sm font-semibold text-red-800">Outstanding A/R</p>
                 <p className="text-xs text-red-600">{fmt(data.openArBalance)} unpaid balance</p>
+              </div>
+            </div>
+          )}
+          {data.driverIssuesCount > 0 && (
+            <div
+              onClick={() => navigate('/deliveries')}
+              className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-orange-100 transition-colors"
+            >
+              <Truck className="w-5 h-5 text-orange-600" />
+              <div>
+                <p className="text-sm font-semibold text-orange-800">Driver Issues</p>
+                <p className="text-xs text-orange-600">{data.driverIssuesCount} delivery(ies) with unresolved issues</p>
+              </div>
+            </div>
+          )}
+          {data.customersOverCreditCount > 0 && (
+            <div
+              onClick={() => navigate('/customers')}
+              className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-red-100 transition-colors"
+            >
+              <Users className="w-5 h-5 text-red-600" />
+              <div>
+                <p className="text-sm font-semibold text-red-800">Over Credit Limit</p>
+                <p className="text-xs text-red-600">{data.customersOverCreditCount} customer(s) over credit limit</p>
+              </div>
+            </div>
+          )}
+          {data.expiredHoldsCount > 0 && (
+            <div
+              onClick={() => navigate('/quotes')}
+              className="bg-purple-50 border border-purple-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-purple-100 transition-colors"
+            >
+              <Warehouse className="w-5 h-5 text-purple-600" />
+              <div>
+                <p className="text-sm font-semibold text-purple-800">Stale Inventory Holds</p>
+                <p className="text-xs text-purple-600">{data.expiredHoldsCount} expired quote(s) with active holds</p>
+              </div>
+            </div>
+          )}
+          {data.cancelledPostedCount > 0 && (
+            <div
+              onClick={() => navigate('/invoices')}
+              className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-red-100 transition-colors"
+            >
+              <FileText className="w-5 h-5 text-red-600" />
+              <div>
+                <p className="text-sm font-semibold text-red-800">Cancelled + Posted</p>
+                <p className="text-xs text-red-600">{data.cancelledPostedCount} cancelled delivery(ies) with posted invoices</p>
               </div>
             </div>
           )}

@@ -23,7 +23,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
-import { notifyLargeOrder } from '../lib/notificationTriggers';
+import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { downloadQuotePdf } from '../lib/quotePdf';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import type {
@@ -766,6 +766,24 @@ export default function QuoteBuilder() {
       const result = data as { status: string; order_id?: string; order_number?: string };
       toast('success', `Order ${result.order_number || ''} created`);
       notifyLargeOrder(result.order_id!, result.order_number || '', selectedCustomer?.farm_name || 'customer', totals.totalPrice);
+
+      // Phase 3.3: Credit limit check — warn (not block) if exceeded
+      if (customerId) {
+        try {
+          const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
+            p_customer_id: customerId,
+          });
+          if (creditCheck && (creditCheck as any).exceeded) {
+            const cl = creditCheck as any;
+            const fmtCl = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+            toast('warning', `Credit limit warning: ${selectedCustomer?.farm_name || 'Customer'} outstanding AR ${fmtCl(cl.outstanding_ar)} exceeds limit ${fmtCl(cl.credit_limit)}`);
+            notifyCreditLimitExceeded(selectedCustomer?.farm_name || 'Customer', cl.outstanding_ar, cl.credit_limit, customerId);
+          }
+        } catch {
+          // Non-blocking — credit limit check should not prevent navigation
+        }
+      }
+
       navigate(`/orders/${result.order_id}`);
     } catch (error: any) {
       console.error('Error converting to order:', error);

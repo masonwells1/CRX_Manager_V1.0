@@ -1524,7 +1524,7 @@ BEGIN
   UPDATE inventory_holds ih SET
     is_active = false, updated_at = now()
   FROM quotes q
-  WHERE ih.quote_id = q.id
+  WHERE ih.source_id = q.id
     AND ih.is_active = true
     AND q.status IN ('declined', 'expired');
 
