@@ -216,6 +216,13 @@ export default function ReceivingLog() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold font-heading text-nav-dark">Receiving Log</h1>
+        <button
+          onClick={() => navigate('/receiving/quick')}
+          className="flex items-center gap-2 px-4 py-2 bg-crx-green text-white rounded-xl text-sm font-medium hover:bg-crx-green/90 transition-colors shadow-sm"
+        >
+          <PackageCheck className="w-4 h-4" />
+          Quick Receive
+        </button>
       </div>
 
       {/* Summary Cards */}

@@ -57,6 +57,7 @@ const PrepaymentManager = lazy(() => import('./pages/PrepaymentManager'));
 const PaymentAllocation = lazy(() => import('./pages/PaymentAllocation'));
 const DeliveryRemainders = lazy(() => import('./pages/DeliveryRemainders'));
 const ReceivingLog = lazy(() => import('./pages/ReceivingLog'));
+const QuickReceive = lazy(() => import('./pages/QuickReceive'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -121,6 +122,7 @@ const router = createBrowserRouter([
           { path: 'cycle-counts', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CycleCounts /></ProtectedRoute> },
           { path: 'returns', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Returns /></ProtectedRoute> },
           { path: 'receiving', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ReceivingLog /></ProtectedRoute> },
+          { path: 'receiving/quick', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><QuickReceive /></ProtectedRoute> },
           { path: 'purchase-orders', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PurchaseOrders /></ProtectedRoute> },
           { path: 'purchase-orders/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><NewPurchaseOrder /></ProtectedRoute> },
           { path: 'purchase-orders/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PurchaseOrderDetail /></ProtectedRoute> },

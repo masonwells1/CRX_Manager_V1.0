@@ -1655,3 +1655,39 @@ export interface YearEndShareRow {
   price_per_acre_cents: number | null;
   pricing_note: string | null;
 }
+
+// ── Quick Receive ─────────────────────────────────────────────────
+
+export interface QuickReceiveItem {
+  key: string;
+  product_id: string;
+  product_name: string;
+  sku: string | null;
+  quantity: number;
+  condition: ReceivingCondition;
+  lot_number: string;
+  notes: string;
+}
+
+export interface QuickReceiveAllocation {
+  po_item_id: string;
+  purchase_order_id: string;
+  po_number: string;
+  po_vendor: string;
+  unit_cost: number;
+  quantity_allocated: number;
+  po_remaining_before: number;
+  po_remaining_after: number;
+  unit_size: string | null;
+}
+
+export interface QuickReceiveMatchResult {
+  product_id: string;
+  product_name: string;
+  quantity_requested: number;
+  quantity_allocated: number;
+  quantity_unmatched: number;
+  has_multiple_costs: boolean;
+  lot_number: string | null;
+  allocations: QuickReceiveAllocation[];
+}

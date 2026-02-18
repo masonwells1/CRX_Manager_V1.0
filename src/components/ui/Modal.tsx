@@ -55,11 +55,20 @@ export default function Modal({
     [onClose]
   );
 
+  // Separate effect for keyboard listener (updates when handler changes)
+  useEffect(() => {
+    if (open) {
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open, handleKeyDown]);
+
+  // Separate effect for focus + body overflow (only runs when open changes)
   useEffect(() => {
     if (open) {
       document.body.style.overflow = 'hidden';
-      document.addEventListener('keydown', handleKeyDown);
-      // Focus the dialog on open
       requestAnimationFrame(() => {
         const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE);
         if (focusable && focusable.length > 0) {
@@ -71,9 +80,8 @@ export default function Modal({
     }
     return () => {
       document.body.style.overflow = '';
-      document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [open, handleKeyDown]);
+  }, [open]);
 
   if (!open) return null;
 
