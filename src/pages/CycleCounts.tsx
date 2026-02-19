@@ -8,7 +8,8 @@ import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import type { CycleCount, CycleCountItem, Inventory, Product } from '../types';
 
@@ -257,9 +258,11 @@ export default function CycleCounts() {
 
     setCompleting(true);
     try {
+      const completeKey = generateIdempotencyKey('complete_cycle_count', profile.id);
       const { error } = await supabase.rpc('complete_cycle_count', {
         p_cycle_count_id: activeCount.id,
         p_completed_by: profile.id,
+        p_idempotency_key: completeKey,
       });
 
       if (error) throw error;

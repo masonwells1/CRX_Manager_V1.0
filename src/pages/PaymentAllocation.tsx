@@ -20,7 +20,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import type { PaymentAllocationEntry, PaymentAllocationResult } from '../types';
 
@@ -39,6 +39,7 @@ const toDollarDisplay = (cents: number): string => (cents / 100).toFixed(2);
 
 const daysBetween = (from: string, to: Date): number => {
   const d = new Date(from);
+  if (isNaN(d.getTime())) return 0;
   return Math.max(0, Math.floor((to.getTime() - d.getTime()) / (1000 * 60 * 60 * 24)));
 };
 
@@ -47,10 +48,12 @@ export function autoAllocate(
   checkCents: number,
   invoices: { id: string; balance_cents: number }[],
 ): Map<string, number> {
+  if (!Number.isFinite(checkCents) || checkCents <= 0) return new Map();
   const result = new Map<string, number>();
   let remaining = checkCents;
   for (const inv of invoices) {
     if (remaining <= 0) break;
+    if (!Number.isFinite(inv.balance_cents) || inv.balance_cents <= 0) continue;
     const apply = Math.min(remaining, inv.balance_cents);
     if (apply > 0) {
       result.set(inv.id, apply);
@@ -237,6 +240,10 @@ export default function PaymentAllocation() {
       toast('error', 'Some allocations exceed invoice balances');
       return;
     }
+    // Confirm if 100% of check goes to prepay (no invoice allocations)
+    if (!hasAllocations && remaining > 0) {
+      if (!confirm(`No invoices allocated. ${fmt(checkCents)} will be added as prepay credit. Continue?`)) return;
+    }
 
     setSubmitting(true);
     try {
@@ -260,7 +267,7 @@ export default function PaymentAllocation() {
       });
 
       if (error) throw error;
-      const result = data as PaymentAllocationResult;
+      const result = assertRpcResult<PaymentAllocationResult>(data, 'allocate_payment');
       setLastResult(result);
 
       const parts = [`Applied ${fmt(result.allocated_cents)} to ${result.allocations.length} invoice(s)`];
@@ -600,10 +607,10 @@ export default function PaymentAllocation() {
                     onClick={handleSubmit}
                     loading={submitting}
                     disabled={
-                      !hasAllocations && remaining <= 0 ||
                       remaining < 0 ||
                       hasValidationError ||
-                      checkCents <= 0
+                      checkCents <= 0 ||
+                      (!hasAllocations && remaining <= 0)
                     }
                     icon={<DollarSign className="w-4 h-4" />}
                   >

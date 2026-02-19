@@ -13,7 +13,8 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { exportToCSV } from '../lib/csvExport';
 
 interface CommissionPaymentRow {
@@ -170,6 +171,7 @@ export default function CommissionPayments() {
     }
     setCreating(true);
     try {
+      const createKey = generateIdempotencyKey('create_commission_payment', profile?.id || '');
       const { data, error } = await supabase.rpc('create_commission_payment', {
         p_commission_ids: Array.from(selectedCommissions),
         p_payment_method: payMethod,
@@ -177,6 +179,7 @@ export default function CommissionPayments() {
         p_payment_date: payDate,
         p_notes: payNotes || null,
         p_performed_by: profile?.id,
+        p_idempotency_key: createKey,
       });
       if (error) throw error;
       toast('success', `Commission payment created: ${fmt(selectedTotal)}`);
@@ -191,9 +194,11 @@ export default function CommissionPayments() {
   const handlePost = async (paymentId: string) => {
     setPosting(paymentId);
     try {
+      const postKey = generateIdempotencyKey('post_commission_payment', profile?.id || '');
       const { error } = await supabase.rpc('post_commission_payment', {
         p_payment_id: paymentId,
         p_performed_by: profile?.id,
+        p_idempotency_key: postKey,
       });
       if (error) throw error;
       toast('success', 'Commission payment posted');

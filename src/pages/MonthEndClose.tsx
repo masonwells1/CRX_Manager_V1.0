@@ -12,7 +12,8 @@ import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { downloadBatchStatements } from '../lib/statementPdf';
 import { downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
@@ -139,9 +140,11 @@ export default function MonthEndClose() {
   const handleClose = async () => {
     setClosing(true);
     try {
+      const closeKey = generateIdempotencyKey('close_accounting_period', profile?.id || '');
       const { data, error } = await supabase.rpc('close_accounting_period', {
         p_period_end: current.end,
         p_performed_by: profile?.id,
+        p_idempotency_key: closeKey,
       });
       if (error) throw error;
       toast('success', `Period closed: ${current.label}`);
@@ -157,14 +160,16 @@ export default function MonthEndClose() {
     setShowStatementDialog(false);
     setGenerating(true);
     try {
+      const stmtKey = generateIdempotencyKey('generate_batch_statements', profile?.id || '');
       const { data, error } = await supabase.rpc('generate_batch_statements', {
         p_as_of_date: options.as_of_date,
         p_performed_by: profile?.id,
         p_mode: options.mode,
+        p_idempotency_key: stmtKey,
       });
       if (error) throw error;
 
-      const statements = data as DetailedStatementData[];
+      const statements = assertRpcResult<DetailedStatementData[]>(data, 'generate_batch_statements');
       if (!statements || !Array.isArray(statements) || statements.length === 0) {
         toast('info', 'No customers have outstanding balances');
         setGenerating(false);

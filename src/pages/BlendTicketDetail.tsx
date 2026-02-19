@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck } from 'lucide-react';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/ui/Button';
@@ -227,11 +228,13 @@ export function BlendTicketDetail() {
         rate_per_acre_unit: p.rate_per_acre_unit,
       }));
 
+      const saveKey = generateIdempotencyKey('save_blend_ticket', profile!.id);
       const { error } = await supabase.rpc('save_blend_ticket', {
         p_ticket_id: ticket.id,
         p_ticket_payload: ticketPayload,
         p_products: productsPayload,
         p_performed_by: profile!.id,
+        p_idempotency_key: saveKey,
       });
       if (error) throw error;
 
@@ -369,13 +372,15 @@ export function BlendTicketDetail() {
     if (!ticket || !selectedOrderId || !profile) return;
     setLinking(true);
     try {
+      const linkKey = generateIdempotencyKey('link_blend_ticket_to_order', profile.id);
       const { data, error } = await supabase.rpc('link_blend_ticket_to_order', {
         p_blend_ticket_id: ticket.id,
         p_order_id: selectedOrderId,
         p_performed_by: profile.id,
+        p_idempotency_key: linkKey,
       });
       if (error) throw error;
-      const result = data as any;
+      const result = assertRpcResult<any>(data, 'link_blend_ticket_to_order');
       if (!result.success) throw new Error(result.error);
       toast('success', `Linked to order ${result.order_number} (${result.items_linked} items matched)`);
       setShowLinkModal(false);
@@ -391,12 +396,14 @@ export function BlendTicketDetail() {
     if (!ticket || !profile) return;
     if (!confirm('Unlink this blend ticket from its order? The order itself will not be deleted.')) return;
     try {
+      const unlinkKey = generateIdempotencyKey('unlink_blend_ticket_from_order', profile.id);
       const { data, error } = await supabase.rpc('unlink_blend_ticket_from_order', {
         p_blend_ticket_id: ticket.id,
         p_performed_by: profile.id,
+        p_idempotency_key: unlinkKey,
       });
       if (error) throw error;
-      const result = data as any;
+      const result = assertRpcResult<any>(data, 'unlink_blend_ticket_from_order');
       if (!result.success) throw new Error(result.error);
       toast('success', 'Blend ticket unlinked from order');
       await loadTicketData();
@@ -409,15 +416,17 @@ export function BlendTicketDetail() {
     if (!ticket || !profile || !newOrderNumber.trim()) return;
     setLinking(true);
     try {
+      const createOrderKey = generateIdempotencyKey('create_order_from_blend_ticket', profile.id);
       const { data, error } = await supabase.rpc('create_order_from_blend_ticket', {
         p_blend_ticket_id: ticket.id,
         p_order_number: newOrderNumber.trim(),
         p_order_date: newOrderDate,
         p_notes: newOrderNotes || null,
         p_performed_by: profile.id,
+        p_idempotency_key: createOrderKey,
       });
       if (error) throw error;
-      const result = data as any;
+      const result = assertRpcResult<any>(data, 'create_order_from_blend_ticket');
       if (!result.success) throw new Error(result.error);
       toast('success', `Order ${result.order_number} created with ${result.items_created} items`);
       setShowCreateOrderModal(false);
@@ -437,9 +446,11 @@ export function BlendTicketDetail() {
 
     setCreatingAppRecord(true);
     try {
+      const appRecKey = generateIdempotencyKey('create_application_record_from_blend_ticket', profile.id);
       const { data, error } = await supabase.rpc('create_application_record_from_blend_ticket', {
         p_blend_ticket_id: ticket.id,
         p_performed_by: profile.id,
+        p_idempotency_key: appRecKey,
       });
       if (error) throw error;
       logActivity('application_record_created', `Application record created from blend ticket ${ticket.ticket_number}`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);

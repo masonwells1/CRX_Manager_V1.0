@@ -85,4 +85,35 @@ describe('autoAllocate', () => {
     const total = Array.from(result.values()).reduce((s, v) => s + v, 0);
     expect(total).toBe(4);
   });
+
+  // --- Edge case guards (production hardening) ---
+
+  it('NaN check amount — returns empty map', () => {
+    const result = autoAllocate(NaN, invoices);
+    expect(result.size).toBe(0);
+  });
+
+  it('negative check amount — returns empty map', () => {
+    const result = autoAllocate(-500_00, invoices);
+    expect(result.size).toBe(0);
+  });
+
+  it('Infinity check amount — returns empty map', () => {
+    const result = autoAllocate(Infinity, invoices);
+    expect(result.size).toBe(0);
+  });
+
+  it('skips invoices with NaN/negative balance', () => {
+    const mixed = [
+      { id: 'bad1', balance_cents: NaN },
+      { id: 'good', balance_cents: 100_00 },
+      { id: 'bad2', balance_cents: -50_00 },
+      { id: 'good2', balance_cents: 200_00 },
+    ];
+    const result = autoAllocate(250_00, mixed);
+    expect(result.has('bad1')).toBe(false);
+    expect(result.has('bad2')).toBe(false);
+    expect(result.get('good')).toBe(100_00);
+    expect(result.get('good2')).toBe(150_00);
+  });
 });

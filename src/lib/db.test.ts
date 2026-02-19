@@ -5,7 +5,7 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn().mockReturnValue({}),
 }));
 
-import { checkMutationResult } from './db';
+import { checkMutationResult, assertRpcResult } from './db';
 
 describe('checkMutationResult', () => {
   it('does nothing when result has data and no error', () => {
@@ -46,6 +46,35 @@ describe('checkMutationResult', () => {
     } catch (e: any) {
       expect(e.message).toContain('delete invoice');
       expect(e.message).toContain('no rows were affected');
+    }
+  });
+});
+
+describe('assertRpcResult', () => {
+  it('returns data when non-null', () => {
+    const result = assertRpcResult<{ id: string }>({ id: 'abc' }, 'test_rpc');
+    expect(result).toEqual({ id: 'abc' });
+  });
+
+  it('throws when data is null (silent RLS denial)', () => {
+    expect(() => assertRpcResult(null, 'save_quote')).toThrow('save_quote returned no data');
+  });
+
+  it('throws when data is undefined', () => {
+    expect(() => assertRpcResult(undefined, 'allocate_payment')).toThrow('allocate_payment returned no data');
+  });
+
+  it('passes through falsy but valid values (0, false, empty string)', () => {
+    expect(assertRpcResult(0, 'test')).toBe(0);
+    expect(assertRpcResult(false, 'test')).toBe(false);
+    expect(assertRpcResult('', 'test')).toBe('');
+  });
+
+  it('includes RPC name in error message', () => {
+    try {
+      assertRpcResult(null, 'my_custom_rpc');
+    } catch (e: any) {
+      expect(e.message).toContain('my_custom_rpc');
     }
   });
 });

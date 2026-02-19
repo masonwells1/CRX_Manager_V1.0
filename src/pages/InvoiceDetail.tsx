@@ -10,7 +10,8 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Invoice, InvoiceItem, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, type InvoicePdfData } from '../lib/invoicePdf';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -286,9 +287,11 @@ export default function InvoiceDetail() {
         notes: it.notes,
       }));
 
+      const idemKey = generateIdempotencyKey('save_invoice', profile!.id);
       const { data, error } = await supabase.rpc('save_invoice', {
         p_invoice: payload,
         p_items: itemsPayload,
+        p_idempotency_key: idemKey,
       });
 
       if (error) throw error;
@@ -309,7 +312,8 @@ export default function InvoiceDetail() {
   // Post invoice
   const handlePost = async () => {
     try {
-      const { error } = await supabase.rpc('post_invoice', { p_invoice_id: id });
+      const idemKey = generateIdempotencyKey('post_invoice', profile!.id);
+      const { error } = await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey });
       if (error) throw error;
       toast('success', 'Invoice posted');
       fetchInvoice(id!);
@@ -321,9 +325,11 @@ export default function InvoiceDetail() {
   // Void invoice
   const handleVoid = async () => {
     try {
+      const idemKey = generateIdempotencyKey('void_invoice', profile!.id);
       const { error } = await supabase.rpc('void_invoice', {
         p_invoice_id: id,
         p_void_reason: voidReason || 'Voided by admin',
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
       toast('success', 'Invoice voided');
@@ -342,12 +348,14 @@ export default function InvoiceDetail() {
       return;
     }
     try {
+      const idemKey = generateIdempotencyKey('record_invoice_payment', profile!.id);
       const { error } = await supabase.rpc('record_invoice_payment', {
         p_invoice_id: id,
         p_amount_cents: Math.round(amountDollars * 100),
         p_payment_method: payMethod,
         p_reference_number: payRef || null,
         p_notes: payNotes || null,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
       toast('success', `Payment of ${fmt(Math.round(amountDollars * 100))} recorded`);

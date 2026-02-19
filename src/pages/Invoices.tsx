@@ -7,7 +7,8 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { exportToCSV } from '../lib/csvExport';
 import BatchVoidModal from '../components/invoices/BatchVoidModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
@@ -132,8 +133,10 @@ export default function Invoices() {
     }
 
     setPosting(true);
+    const postKey = generateIdempotencyKey('batch_post_invoices', profile!.id);
     const { data, error } = await supabase.rpc('batch_post_invoices', {
       p_invoice_ids: ids,
+      p_idempotency_key: postKey,
     });
     if (error) {
       console.error('Batch post failed:', error.message);
@@ -155,10 +158,12 @@ export default function Invoices() {
     }
 
     setVoiding(true);
+    const voidKey = generateIdempotencyKey('batch_void_invoices', profile?.id || '');
     const { data, error } = await supabase.rpc('batch_void_invoices', {
       p_invoice_ids: ids,
       p_void_reason: reason,
       p_performed_by: profile?.id,
+      p_idempotency_key: voidKey,
     });
     if (error) {
       console.error('Batch void failed:', error.message);

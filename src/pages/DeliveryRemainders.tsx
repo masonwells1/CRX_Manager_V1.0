@@ -11,7 +11,8 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 
 interface RemainderRow {
   id: string;
@@ -96,13 +97,16 @@ export default function DeliveryRemainders() {
   const handleCreateFollowup = async (deliveryId: string) => {
     setCreating(deliveryId);
     try {
+      const followupKey = generateIdempotencyKey('create_followup_delivery', profile?.id || '');
       const { data, error } = await supabase.rpc('create_followup_delivery', {
         p_original_delivery_id: deliveryId,
         p_performed_by: profile?.id,
+        p_idempotency_key: followupKey,
       });
       if (error) throw error;
+      const deliveryIdResult = assertRpcResult<string>(data, 'create_followup_delivery');
       toast('success', 'Follow-up delivery created');
-      navigate(`/deliveries/${data}`);
+      navigate(`/deliveries/${deliveryIdResult}`);
     } catch (err: any) {
       toast('error', err.message || 'Failed to create follow-up delivery');
     }

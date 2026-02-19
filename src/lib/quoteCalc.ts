@@ -96,8 +96,8 @@ export function computeQuoteTotals(items: CalcItem[]): {
   let totalPrice = 0;
   let totalCost = 0;
   for (const item of items) {
-    totalPrice += item.total_price;
-    totalCost += item.current_cost * (item.total_units_needed || 0);
+    totalPrice += (item.total_price || 0);
+    totalCost += (item.current_cost || 0) * (item.total_units_needed || 0);
   }
   const totalProfit = totalPrice - totalCost;
   const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;

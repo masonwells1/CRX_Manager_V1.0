@@ -21,7 +21,8 @@ import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { downloadQuotePdf } from '../lib/quotePdf';
@@ -152,7 +153,8 @@ export default function QuoteBuilder() {
   useEffect(() => {
     if (!initialLoadDone.current) return;
     setIsDirty(true);
-  }, [customerId, tier, validDays, headerNotes, footerNotes, sections]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
 
   useEffect(() => {
     fetchReferenceData();
@@ -585,11 +587,13 @@ export default function QuoteBuilder() {
     }));
 
     try {
+      const idemKey = generateIdempotencyKey('save_quote', profile.id);
       const { data, error } = await supabase.rpc('save_quote', {
         p_quote_id: (quoteId && isEditing) ? quoteId : null,
         p_quote_payload: quotePayload,
         p_sections: sectionsPayload,
         p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) {
@@ -632,6 +636,7 @@ export default function QuoteBuilder() {
 
   // === GAP FIX #1: Download Quote as PDF ===
   const handleDownloadPdf = async () => {
+    try {
     await downloadQuotePdf({
       quote_number: quoteNumber,
       customer_name: selectedCustomer?.farm_name || 'Customer',
@@ -668,6 +673,10 @@ export default function QuoteBuilder() {
       },
     });
     toast('success', 'PDF downloaded');
+    } catch (err: any) {
+      console.error('PDF generation error:', err);
+      toast('error', err.message || 'Failed to generate PDF');
+    }
   };
 
   const handleSendQuote = async () => {
@@ -756,14 +765,16 @@ export default function QuoteBuilder() {
 
     try {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
+      const idemKey = generateIdempotencyKey('convert_quote_to_order', profile!.id);
       const { data, error } = await supabase.rpc('convert_quote_to_order', {
         p_quote_id: savedId,
         p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) throw error;
 
-      const result = data as { status: string; order_id?: string; order_number?: string };
+      const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string }>(data, 'convert_quote_to_order');
       toast('success', `Order ${result.order_number || ''} created`);
       notifyLargeOrder(result.order_id!, result.order_number || '', selectedCustomer?.farm_name || 'customer', totals.totalPrice);
 

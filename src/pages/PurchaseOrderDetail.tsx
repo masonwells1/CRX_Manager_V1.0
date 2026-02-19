@@ -9,7 +9,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
@@ -296,6 +296,7 @@ export default function PurchaseOrderDetail() {
         quantity_received: item.quantity_received || 0,
       }));
 
+      const savePOKey = generateIdempotencyKey('save_purchase_order', profile.id);
       const { data, error } = await supabase.rpc('save_purchase_order', {
         p_po_id: id,
         p_po_payload: {
@@ -307,6 +308,7 @@ export default function PurchaseOrderDetail() {
         },
         p_items: itemsPayload,
         p_performed_by: profile.id,
+        p_idempotency_key: savePOKey,
       });
 
       if (error) throw error;
@@ -325,9 +327,11 @@ export default function PurchaseOrderDetail() {
     setSaving(true);
 
     try {
+      const delPOKey = generateIdempotencyKey('delete_purchase_order', profile.id);
       const { data, error } = await supabase.rpc('delete_purchase_order', {
         p_po_id: id,
         p_performed_by: profile.id,
+        p_idempotency_key: delPOKey,
       });
 
       if (error) throw error;

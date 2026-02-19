@@ -8,7 +8,8 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Quote } from '../types';
 
 export default function Quotes() {
@@ -24,16 +25,19 @@ export default function Quotes() {
   const handleDuplicate = async (quoteId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
+      const idemKey = generateIdempotencyKey('duplicate_quote', profile!.id);
       const { data: result, error } = await supabase.rpc('duplicate_quote', {
         p_source_quote_id: quoteId,
         p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
       });
       if (error) {
         toast('error', `Failed to duplicate quote: ${error.message}`);
         return;
       }
-      toast('success', `Quote duplicated as ${result.quote_number}`);
-      navigate(`/quotes/${result.quote_id}`);
+      const dupResult = assertRpcResult<{ quote_id: string; quote_number: string }>(result, 'duplicate_quote');
+      toast('success', `Quote duplicated as ${dupResult.quote_number}`);
+      navigate(`/quotes/${dupResult.quote_id}`);
     } catch (err: any) {
       toast('error', `Failed to duplicate quote: ${err.message || 'Unknown error'}`);
     }

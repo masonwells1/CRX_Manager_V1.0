@@ -11,7 +11,8 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Job, JobStatus, JobField, JobChemical, JobAppliedInfo, Customer, Product, Field, Vehicle, Profile, BlendRecipe } from '../types';
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
@@ -263,12 +264,14 @@ export default function JobDetail() {
         sort_order: i,
       }));
 
+      const idemKey = generateIdempotencyKey('save_job', profile!.id);
       const { data, error } = await supabase.rpc('save_job', {
         p_job_id: isNew ? null : id,
         p_job_payload: payload,
         p_fields: fieldsPayload,
         p_chemicals: chemsPayload,
         p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) throw error;
@@ -297,10 +300,12 @@ export default function JobDetail() {
   const handleComplete = async () => {
     setCompleting(true);
     try {
+      const idemKey = generateIdempotencyKey('complete_job', profile!.id);
       const { data, error } = await supabase.rpc('complete_job', {
         p_job_id: id,
         p_applied_info: appliedInfo,
         p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
       const result = data as any;
@@ -319,9 +324,11 @@ export default function JobDetail() {
     if (!confirm('Transfer this job to an invoice? This will create a new invoice from the job chemicals.')) return;
     setTransferring(true);
     try {
+      const idemKey = generateIdempotencyKey('transfer_job_to_invoice', profile!.id);
       const { data, error } = await supabase.rpc('transfer_job_to_invoice', {
         p_job_id: id,
         p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
       const result = data as any;

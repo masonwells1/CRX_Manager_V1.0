@@ -8,7 +8,8 @@ import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import type { Return, ReturnItem, Customer, Product, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
 
@@ -248,9 +249,11 @@ export default function Returns() {
   const handleApprove = async () => {
     if (!activeReturn || !profile) return;
     try {
+      const approveKey = generateIdempotencyKey('approve_return', profile.id);
       const { error } = await supabase.rpc('approve_return', {
         p_return_id: activeReturn.id,
         p_approved_by: profile.id,
+        p_idempotency_key: approveKey,
       });
       if (error) throw error;
 
@@ -286,9 +289,11 @@ export default function Returns() {
   const handleReceive = async () => {
     if (!activeReturn || !profile) return;
     try {
+      const receiveKey = generateIdempotencyKey('receive_return', profile.id);
       const { error } = await supabase.rpc('receive_return', {
         p_return_id: activeReturn.id,
         p_received_by: profile.id,
+        p_idempotency_key: receiveKey,
       });
       if (error) throw error;
 
@@ -304,9 +309,11 @@ export default function Returns() {
   const handleIssueCredit = async () => {
     if (!activeReturn || !profile) return;
     try {
+      const creditKey = generateIdempotencyKey('issue_return_credit', profile.id);
       const { error } = await supabase.rpc('issue_return_credit', {
         p_return_id: activeReturn.id,
         p_actor_id: profile.id,
+        p_idempotency_key: creditKey,
       });
       if (error) throw error;
 

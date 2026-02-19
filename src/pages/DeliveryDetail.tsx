@@ -13,7 +13,8 @@ import Modal from '../components/ui/Modal';
 import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDeliveryRemainder } from '../lib/notificationTriggers';
@@ -239,6 +240,7 @@ export default function DeliveryDetail() {
     setSavingEdit(true);
 
     // Items are locked to the order — only save logistics changes
+    const idemKey = generateIdempotencyKey('edit_delivery', profile.id);
     const { error } = await supabase.rpc('edit_delivery', {
       p_delivery_id: id!,
       p_assigned_driver: editDriver || null,
@@ -250,6 +252,7 @@ export default function DeliveryDetail() {
       p_delivery_notes: editNotes || null,
       p_priority: editPriority,
       p_performed_by: profile.id,
+      p_idempotency_key: idemKey,
     });
 
     if (error) {
@@ -277,10 +280,12 @@ export default function DeliveryDetail() {
   const handleCancel = async () => {
     if (!profile) return;
     setCancelling(true);
+    const idemKey = generateIdempotencyKey('cancel_delivery', profile.id);
     const { data: cancelResult, error } = await supabase.rpc('cancel_delivery', {
       p_delivery_id: id!,
       p_cancel_reason: cancelReason.trim() || 'Cancelled',
       p_performed_by: profile.id,
+      p_idempotency_key: idemKey,
     });
     if (error) {
       toast('error', error.message || 'Failed to cancel delivery');
@@ -380,15 +385,17 @@ export default function DeliveryDetail() {
     if (!profile) return;
     setCreatingFollowup(true);
 
+    const idemKey = generateIdempotencyKey('create_followup_delivery', profile.id);
     const { data, error } = await supabase.rpc('create_followup_delivery', {
       p_original_delivery_id: id!,
       p_performed_by: profile.id,
+      p_idempotency_key: idemKey,
     });
 
     if (error) {
       toast('error', error.message || 'Failed to create follow-up delivery');
     } else {
-      const result = data as { delivery_id: string; delivery_number: string; item_count: number };
+      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; item_count: number }>(data, 'create_followup_delivery');
       toast('success', `Follow-up delivery ${result.delivery_number} created with ${result.item_count} items`);
       navigate(`/deliveries/${result.delivery_id}`);
     }
@@ -401,9 +408,11 @@ export default function DeliveryDetail() {
     if (!delivery || !profile) return;
     setConfirming(true);
     try {
+      const idemKey = generateIdempotencyKey('confirm_delivery', profile.id);
       const { error } = await supabase.rpc('confirm_delivery', {
         p_delivery_id: id!,
         p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
       toast('success', `Delivery ${delivery.delivery_number} started`);
@@ -437,10 +446,12 @@ export default function DeliveryDetail() {
       ? Object.fromEntries(items.map((item) => [item.id, deliveryQtys[item.id] ?? item.quantity]))
       : null;
 
+    const idemKey = generateIdempotencyKey('complete_delivery', profile.id);
     const rpcParams: Record<string, unknown> = {
       p_delivery_id: id!,
       p_signed_by: signedBy,
       p_performed_by: profile.id,
+      p_idempotency_key: idemKey,
       ...(quantitiesJson ? { p_quantities: quantitiesJson } : {}),
       ...(driverIssueType !== 'none' ? { p_issue_type: driverIssueType } : {}),
       ...(driverIssueNotes.trim() ? { p_issue_notes: driverIssueNotes.trim() } : {}),

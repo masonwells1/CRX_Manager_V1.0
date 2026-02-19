@@ -20,7 +20,8 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import type { Delivery, Profile, Customer } from '../types';
@@ -292,10 +293,12 @@ export default function Deliveries() {
       return;
     }
     setCancelling(true);
+    const cancelKey = generateIdempotencyKey('batch_cancel_deliveries', profile?.id || '');
     const { data, error } = await supabase.rpc('batch_cancel_deliveries', {
       p_delivery_ids: ids,
       p_reason: reason,
       p_performed_by: profile?.id,
+      p_idempotency_key: cancelKey,
     });
     if (error) {
       console.error('Batch cancel failed:', error.message);
@@ -367,10 +370,12 @@ export default function Deliveries() {
     }
     setRescheduling(true);
     const ids = selectedCancellable.map((d) => d.id);
+    const rescheduleKey = generateIdempotencyKey('batch_reschedule_deliveries', profile?.id || '');
     const { error } = await supabase.rpc('batch_reschedule_deliveries', {
       p_delivery_ids: ids,
       p_new_date: rescheduleDate,
       p_performed_by: profile?.id,
+      p_idempotency_key: rescheduleKey,
     });
     if (error) {
       toast('error', error.message || 'Failed to reschedule');
@@ -395,10 +400,12 @@ export default function Deliveries() {
     const myCompleted = deliveries.filter((d) => d.status === 'completed').slice(0, 10);
 
     const handleTakeDelivery = async (deliveryId: string) => {
+      const reassignKey = generateIdempotencyKey('reassign_delivery', profile?.id || '');
       const { error } = await supabase.rpc('reassign_delivery', {
         p_delivery_id: deliveryId,
         p_new_driver_id: profile?.id,
         p_performed_by: profile?.id,
+        p_idempotency_key: reassignKey,
       });
       if (error) {
         toast('error', error.message || 'Failed to take delivery');

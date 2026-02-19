@@ -10,6 +10,18 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
  * RLS-blocked updates/deletes return { data: null, count: 0 } with no error.
  * Call this after any .update() or .delete() to verify rows were affected.
  */
+/**
+ * Assert that an RPC call returned non-null data.
+ * Supabase returns { data: null, error: null } when RLS denies access to
+ * SECURITY DEFINER functions — this catches that silent failure.
+ */
+export function assertRpcResult<T>(data: unknown, rpcName: string): T {
+  if (data === null || data === undefined) {
+    throw new Error(`${rpcName} returned no data — operation may have been denied`);
+  }
+  return data as T;
+}
+
 export function checkMutationResult(
   result: { error: any; data: any; count?: number | null },
   operation: string
