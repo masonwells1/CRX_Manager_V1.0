@@ -248,6 +248,47 @@ export async function notifyCreditLimitExceeded(
 }
 
 /**
+ * Notify sales rep + admins when a delivery is completed with partial quantities.
+ * Call this from DeliveryDetail after completing a delivery with remainders.
+ */
+export async function notifyDeliveryRemainder(
+  deliveryId: string,
+  deliveryNumber: string,
+  orderNumber: string,
+  remainderItems: Array<{ product: string; ordered: number; delivered: number }>,
+  createdBy?: string
+) {
+  if (!remainderItems || remainderItems.length === 0) return;
+
+  try {
+    const summary = remainderItems
+      .map((i) => `${i.product}: ${i.delivered}/${i.ordered}`)
+      .join(', ');
+
+    const title = 'Delivery Completed with Remainders';
+    const message = `Delivery ${deliveryNumber} (Order ${orderNumber}) had partial quantities: ${summary}`;
+
+    // Notify admins
+    await notifyAdmins(title, message, 'delivery_remainder', 'delivery', deliveryId);
+
+    // Also notify the order creator if provided and not an admin
+    if (createdBy) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', createdBy)
+        .maybeSingle();
+
+      if (profile && profile.role !== 'admin') {
+        await createNotification(createdBy, title, message, 'delivery_remainder', 'delivery', deliveryId);
+      }
+    }
+  } catch (err) {
+    console.error('Delivery remainder notification failed:', err);
+  }
+}
+
+/**
  * Run all periodic notification checks.
  * Call this once from Dashboard on load.
  */

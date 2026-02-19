@@ -385,36 +385,18 @@ export default function InventoryPage() {
     const qty = parseInt(addQty) || 0;
     setAdding(true);
 
-    const existing = inventory.find(
-      (i) => i.product_id === addProductId && i.location === addLocation
-    );
-    if (existing) {
-      toast('error', 'Inventory record already exists for this product at this location. Use Receive or Adjust instead.');
-      setAdding(false);
-      return;
-    }
-
-    const product = products.find((p) => p.id === addProductId);
-    const { error } = await supabase.from('inventory').insert({
-      product_id: addProductId,
-      location: addLocation || 'Main Warehouse',
-      quantity_available: qty,
-      unit_size: addUnitSize || product?.unit_size || null,
+    const { data, error } = await supabase.rpc('manual_inventory_add', {
+      p_product_id: addProductId,
+      p_location: addLocation || 'Main Warehouse',
+      p_quantity: qty,
+      p_unit_size: addUnitSize || null,
+      p_performed_by: profile?.id || null,
+      p_notes: qty > 0 ? `Initial inventory record created with ${qty} units` : null,
     });
 
     if (error) {
       toast('error', error.message || 'Failed to add inventory');
     } else {
-      if (qty > 0 && profile) {
-        await supabase.from('inventory_transactions').insert({
-          product_id: addProductId,
-          transaction_type: 'adjusted',
-          quantity: qty,
-          to_location: addLocation || 'Main Warehouse',
-          performed_by: profile.id,
-          notes: `Initial inventory record created with ${qty} units`,
-        });
-      }
       toast('success', 'Inventory record added');
       setAddOpen(false);
       fetchInventory();

@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
+import { notifyDeliveryRemainder } from '../lib/notificationTriggers';
 import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
@@ -495,6 +496,28 @@ export default function DeliveryDetail() {
 
       toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
       logActivity('delivery_completed', `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}`, profile.id, 'delivery', delivery.id, delivery.customer_id);
+
+      // F15: Notify about delivery remainders
+      if (isPartialDelivery) {
+        const remainderItems = items
+          .map((item) => ({
+            product: (item as any).product_name || 'Unknown',
+            ordered: item.quantity,
+            delivered: deliveryQtys[item.id] ?? item.quantity,
+          }))
+          .filter((r) => r.delivered < r.ordered);
+
+        if (remainderItems.length > 0) {
+          notifyDeliveryRemainder(
+            delivery.id,
+            delivery.delivery_number,
+            (delivery as any).order_number || '',
+            remainderItems,
+            delivery.created_by
+          );
+        }
+      }
+
       fetchDelivery();
     } catch (error: any) {
       console.error('Error completing delivery:', error);
