@@ -11,6 +11,7 @@ import Input from '../ui/Input';
 import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
+import { generateIdempotencyKey } from '../../lib/idempotency';
 import type { Product, Profile } from '../../types';
 
 interface QuickItem {
@@ -191,6 +192,7 @@ export default function QuickDeliveryModal({
 
     setSubmitting(true);
     try {
+      const idemKey = generateIdempotencyKey('create_quick_delivery', profile?.id || '');
       const { data, error } = await supabase.rpc('create_quick_delivery', {
         p_customer_id: selectedCustomer.id,
         p_items: items.map((i) => ({
@@ -203,6 +205,7 @@ export default function QuickDeliveryModal({
         p_scheduled_date: scheduledDate,
         p_delivery_notes: deliveryNotes || null,
         p_performed_by: profile?.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) throw error;

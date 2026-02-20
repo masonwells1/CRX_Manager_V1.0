@@ -104,9 +104,9 @@ export default function DeliveryRemainders() {
         p_idempotency_key: followupKey,
       });
       if (error) throw error;
-      const deliveryIdResult = assertRpcResult<string>(data, 'create_followup_delivery');
-      toast('success', 'Follow-up delivery created');
-      navigate(`/deliveries/${deliveryIdResult}`);
+      const followupResult = assertRpcResult<{ delivery_id: string; delivery_number: string; item_count: number }>(data, 'create_followup_delivery');
+      toast('success', `Follow-up delivery ${followupResult.delivery_number} created with ${followupResult.item_count} item(s)`);
+      navigate(`/deliveries/${followupResult.delivery_id}`);
     } catch (err: any) {
       toast('error', err.message || 'Failed to create follow-up delivery');
     }

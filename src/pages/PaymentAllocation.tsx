@@ -260,7 +260,7 @@ export default function PaymentAllocation() {
         p_total_cents: checkCents,
         p_allocations: allocations,
         p_payment_method: paymentMethod,
-        p_reference: referenceNumber || null,
+        p_reference_number: referenceNumber || null,
         p_notes: notes || null,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
@@ -270,7 +270,7 @@ export default function PaymentAllocation() {
       const result = assertRpcResult<PaymentAllocationResult>(data, 'allocate_payment');
       setLastResult(result);
 
-      const parts = [`Applied ${fmt(result.allocated_cents)} to ${result.allocations.length} invoice(s)`];
+      const parts = [`Applied ${fmt(result.total_allocated_cents)} to ${result.invoices_paid} invoice(s)`];
       if (result.prepay_created_cents > 0) {
         parts.push(`${fmt(result.prepay_created_cents)} added as prepay credit`);
       }
@@ -317,7 +317,7 @@ export default function PaymentAllocation() {
             <div className="flex-1">
               <p className="font-medium text-nav-dark">Payment Applied Successfully</p>
               <p className="text-sm text-secondary mt-1">
-                {fmt(lastResult.allocated_cents)} applied to {lastResult.allocations.length} invoice(s)
+                {fmt(lastResult.total_allocated_cents)} applied to {lastResult.invoices_paid} invoice(s)
                 {lastResult.prepay_created_cents > 0 && (
                   <> &middot; {fmt(lastResult.prepay_created_cents)} added as prepay credit</>
                 )}

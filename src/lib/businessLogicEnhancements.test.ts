@@ -112,40 +112,42 @@ describe('T2: Quick delivery commissions', () => {
 describe('T3: Order cancellation cascade', () => {
   it('cancel_order response includes cascade counts', () => {
     const mockResponse = {
-      status: 'cancelled',
+      success: true,
+      order_number: 'ORD-001',
       holds_released: 2,
       commissions_cancelled: 1,
       paid_commissions_flagged: 0,
       draft_invoices_voided: 1,
-      posted_invoices_notified: 0,
+      posted_invoices_flagged: 0,
     };
 
-    expect(mockResponse.status).toBe('cancelled');
+    expect(mockResponse.success).toBe(true);
     expect(mockResponse.holds_released).toBeGreaterThanOrEqual(0);
     expect(mockResponse.commissions_cancelled).toBeGreaterThanOrEqual(0);
     expect(mockResponse.draft_invoices_voided).toBeGreaterThanOrEqual(0);
   });
 
   it('already_cancelled returns correct status', () => {
-    const mockResponse = { status: 'already_cancelled' };
-    expect(mockResponse.status).toBe('already_cancelled');
+    const mockResponse = { success: true, order_number: 'ORD-001' };
+    expect(mockResponse.success).toBe(true);
   });
 
   it('toast summary parts built correctly from cascade result', () => {
     const cancelResult = {
-      status: 'cancelled',
+      success: true,
+      order_number: 'ORD-001',
       holds_released: 3,
       commissions_cancelled: 2,
       paid_commissions_flagged: 1,
       draft_invoices_voided: 1,
-      posted_invoices_notified: 1,
+      posted_invoices_flagged: 1,
     };
 
     const parts: string[] = ['Order cancelled.'];
     if (cancelResult.holds_released > 0) parts.push(`${cancelResult.holds_released} hold(s) released.`);
     if (cancelResult.commissions_cancelled > 0) parts.push(`${cancelResult.commissions_cancelled} commission(s) zeroed.`);
     if (cancelResult.draft_invoices_voided > 0) parts.push(`${cancelResult.draft_invoices_voided} draft invoice(s) voided.`);
-    if (cancelResult.posted_invoices_notified > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_notified} posted invoice(s) requiring manual void.`);
+    if (cancelResult.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
     if (cancelResult.paid_commissions_flagged > 0) parts.push(`Admin notified about ${cancelResult.paid_commissions_flagged} paid commission(s).`);
 
     expect(parts).toHaveLength(6);
@@ -248,7 +250,7 @@ describe('A2.1/A2.2: Delivery cancellation cascade', () => {
       delivery_id: 'del-1',
       items_restored: 3,
       draft_invoices_voided: 1,
-      posted_invoices_notified: 0,
+      posted_invoices_flagged: 0,
     };
     expect(mockResponse.items_restored).toBe(3);
     expect(mockResponse.draft_invoices_voided).toBe(1);
@@ -258,12 +260,12 @@ describe('A2.1/A2.2: Delivery cancellation cascade', () => {
     const cancelResult = {
       items_restored: 2,
       draft_invoices_voided: 1,
-      posted_invoices_notified: 1,
+      posted_invoices_flagged: 1,
     };
     const parts: string[] = ['Delivery cancelled.'];
     if (cancelResult.items_restored > 0) parts.push(`Inventory restored for ${cancelResult.items_restored} item(s).`);
     if (cancelResult.draft_invoices_voided > 0) parts.push(`${cancelResult.draft_invoices_voided} draft invoice(s) voided.`);
-    if (cancelResult.posted_invoices_notified > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_notified} posted invoice(s) needing review.`);
+    if (cancelResult.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) needing review.`);
     expect(parts).toHaveLength(4);
     expect(parts.join(' ')).toContain('Inventory restored for 2 item(s)');
   });
@@ -273,7 +275,7 @@ describe('A2.1/A2.2: Delivery cancellation cascade', () => {
       status: 'cancelled',
       items_restored: 0,
       draft_invoices_voided: 0,
-      posted_invoices_notified: 0,
+      posted_invoices_flagged: 0,
     };
     expect(cancelResult.items_restored).toBe(0);
   });

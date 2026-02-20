@@ -296,7 +296,7 @@ export default function Deliveries() {
     const cancelKey = generateIdempotencyKey('batch_cancel_deliveries', profile?.id || '');
     const { data, error } = await supabase.rpc('batch_cancel_deliveries', {
       p_delivery_ids: ids,
-      p_reason: reason,
+      p_cancel_reason: reason,
       p_performed_by: profile?.id,
       p_idempotency_key: cancelKey,
     });
@@ -403,7 +403,7 @@ export default function Deliveries() {
       const reassignKey = generateIdempotencyKey('reassign_delivery', profile?.id || '');
       const { error } = await supabase.rpc('reassign_delivery', {
         p_delivery_id: deliveryId,
-        p_new_driver_id: profile?.id,
+        p_new_driver: profile?.id,
         p_performed_by: profile?.id,
         p_idempotency_key: reassignKey,
       });

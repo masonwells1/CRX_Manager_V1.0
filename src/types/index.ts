@@ -1548,16 +1548,10 @@ export interface PaymentAllocationEntry {
 
 export interface PaymentAllocationResult {
   success: boolean;
-  total_cents: number;
-  allocated_cents: number;
+  allocation_set_id: string;
+  total_allocated_cents: number;
   prepay_created_cents: number;
-  prepay_credit_id: string | null;
-  allocations: Array<{
-    invoice_id: string;
-    invoice_number: string;
-    amount_cents: number;
-    payment_id: string;
-  }>;
+  invoices_paid: number;
 }
 
 // Sprint 13: Finance Charge Intelligence

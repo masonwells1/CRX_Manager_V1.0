@@ -294,7 +294,7 @@ export default function DeliveryDetail() {
       const parts: string[] = ['Delivery cancelled.'];
       if (cancelResult?.items_restored > 0) parts.push(`Inventory restored for ${cancelResult.items_restored} item(s).`);
       if (cancelResult?.draft_invoices_voided > 0) parts.push(`${cancelResult.draft_invoices_voided} draft invoice(s) voided.`);
-      if (cancelResult?.posted_invoices_notified > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_notified} posted invoice(s) needing review.`);
+      if (cancelResult?.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) needing review.`);
       toast('success', parts.join(' '));
       setCancelOpen(false);
       setCancelReason('');

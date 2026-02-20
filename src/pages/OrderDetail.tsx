@@ -132,12 +132,12 @@ export default function OrderDetail() {
         });
         if (error) throw error;
         // Show summary toast with cascade details
-        if (cancelResult && cancelResult.status === 'cancelled') {
+        if (cancelResult && cancelResult.success) {
           const parts: string[] = ['Order cancelled.'];
           if (cancelResult.holds_released > 0) parts.push(`${cancelResult.holds_released} hold(s) released.`);
           if (cancelResult.commissions_cancelled > 0) parts.push(`${cancelResult.commissions_cancelled} commission(s) zeroed.`);
           if (cancelResult.draft_invoices_voided > 0) parts.push(`${cancelResult.draft_invoices_voided} draft invoice(s) voided.`);
-          if (cancelResult.posted_invoices_notified > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_notified} posted invoice(s) requiring manual void.`);
+          if (cancelResult.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
           if (cancelResult.paid_commissions_flagged > 0) parts.push(`Admin notified about ${cancelResult.paid_commissions_flagged} paid commission(s).`);
           toast('success', parts.join(' '));
         }
