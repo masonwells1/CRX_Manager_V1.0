@@ -1245,6 +1245,97 @@ export default function DeliveryDetail() {
         </Card>
       )}
 
+      {/* Complete Delivery section — admin/sales_rep view when in_progress */}
+      {delivery.status === 'in_progress' && isAdminOrRep && (
+        <Card>
+          <h3 className="text-lg font-semibold font-heading text-nav-dark mb-4">Complete Delivery</h3>
+
+          {/* Quantity adjustments per item */}
+          <div className="space-y-2 mb-4">
+            <p className="text-sm text-secondary">Adjust quantities if partial delivery:</p>
+            {items.map((item) => {
+              const currentQty = deliveryQtys[item.id] ?? item.quantity;
+              return (
+                <div key={item.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-nav-dark truncate">
+                      {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
+                    </p>
+                    <p className="text-xs text-secondary">Planned: {item.quantity} {item.unit_size || 'units'}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => updateDeliveryQty(item.id, currentQty - 1, item.quantity)}
+                      className="w-8 h-8 rounded-lg border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
+                    >
+                      <Minus className="w-3.5 h-3.5 text-secondary" />
+                    </button>
+                    <input
+                      type="number"
+                      value={currentQty}
+                      onChange={(e) => updateDeliveryQty(item.id, parseInt(e.target.value) || 0, item.quantity)}
+                      className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                      min="0"
+                      max={item.quantity}
+                    />
+                    <button
+                      onClick={() => updateDeliveryQty(item.id, currentQty + 1, item.quantity)}
+                      className="w-8 h-8 rounded-lg border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-secondary" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Signed by */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+            <Input
+              label="Signed By"
+              value={signedBy}
+              onChange={(e) => setSignedBy(e.target.value)}
+              placeholder="Customer name"
+              required
+            />
+            <div>
+              <label className="block text-sm font-medium text-secondary mb-1">Issue (Optional)</label>
+              <select
+                value={driverIssueType}
+                onChange={(e) => setDriverIssueType(e.target.value as DeliveryIssueType)}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              >
+                {Object.entries(ISSUE_TYPE_LABELS).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {driverIssueType !== 'none' && (
+            <div className="mb-4">
+              <Input
+                label="Issue Notes"
+                value={driverIssueNotes}
+                onChange={(e) => setDriverIssueNotes(e.target.value)}
+                placeholder="Describe the issue..."
+              />
+            </div>
+          )}
+
+          <div className="flex justify-end">
+            <Button
+              onClick={handleComplete}
+              loading={completing}
+              icon={<CheckCircle2 className="w-4 h-4" />}
+            >
+              {isPartialDelivery ? 'Complete (Partial)' : 'Complete Delivery'}
+            </Button>
+          </div>
+        </Card>
+      )}
+
       {/* Remainders for completed partial deliveries */}
       {delivery.status === 'completed' && remainders.length > 0 && (
         <Card>

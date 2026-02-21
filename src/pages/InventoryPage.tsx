@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import DataTable, { type Column } from '../components/ui/DataTable';
+import EditableDataTable, { type EditableColumn } from '../components/ui/EditableDataTable';
 import Modal from '../components/ui/Modal';
 import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
@@ -10,6 +10,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { logActivity } from '../lib/activityLogger';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
 interface InventoryRow extends Inventory {
@@ -597,7 +598,37 @@ export default function InventoryPage() {
     return 'text-red-600';
   };
 
-  const columns: Column<InventoryRow>[] = [
+  const locationOptions = locations.map((l) => ({ value: l, label: l }));
+
+  const handleBulkSave = async (changes: Map<string, Record<string, any>>) => {
+    try {
+      for (const [inventoryId, fields] of changes) {
+        // Skip virtual rows (they don't have real DB records)
+        if (inventoryId.startsWith('virtual-')) {
+          continue;
+        }
+
+        const { error } = await supabase
+          .from('inventory')
+          .update({ ...fields, updated_at: new Date().toISOString() })
+          .eq('id', inventoryId);
+
+        if (error) throw error;
+      }
+
+      const realChanges = [...changes.keys()].filter((k) => !k.startsWith('virtual-')).length;
+      toast('success', `Updated ${realChanges} inventory item(s)`);
+      if (profile) {
+        logActivity('inventory_bulk_updated', `${realChanges} inventory item(s) updated via inline edit`, profile.id, 'inventory', null);
+      }
+      fetchInventory();
+    } catch (err: any) {
+      toast('error', sanitizeError(err));
+      throw err;
+    }
+  };
+
+  const columns: EditableColumn<InventoryRow>[] = [
     {
       key: 'product_name',
       header: 'Product',
@@ -657,7 +688,40 @@ export default function InventoryPage() {
         <span className="text-gray-500">{row.delivered_ytd.toFixed(1)}</span>
       ),
     },
-    { key: 'location', header: 'Location', sortable: true },
+    {
+      key: 'location',
+      header: 'Location',
+      sortable: true,
+      editable: isAdmin,
+      editType: 'select',
+      editOptions: locationOptions,
+    },
+    {
+      key: 'reorder_point',
+      header: 'Reorder Pt',
+      sortable: true,
+      editable: isAdmin,
+      editType: 'number',
+      editMin: 0,
+      editStep: '1',
+      render: (row) => (
+        <span className={`font-mono text-sm ${row.is_low_stock ? 'text-red-600 font-semibold' : ''}`}>
+          {row.reorder_point || '-'}
+        </span>
+      ),
+    },
+    {
+      key: 'min_stock_level',
+      header: 'Min Stock',
+      sortable: true,
+      editable: isAdmin,
+      editType: 'number',
+      editMin: 0,
+      editStep: '1',
+      render: (row) => (
+        <span className="font-mono text-sm">{row.min_stock_level || '-'}</span>
+      ),
+    },
     ...(isAdmin
       ? [
           {
@@ -688,7 +752,7 @@ export default function InventoryPage() {
                 </button>
               </div>
             ),
-          } satisfies Column<InventoryRow>,
+          } satisfies EditableColumn<InventoryRow>,
         ]
       : []),
   ];
@@ -789,15 +853,18 @@ export default function InventoryPage() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable
-            data={filtered as unknown as Record<string, unknown>[]}
-            columns={columns as unknown as Column<Record<string, unknown>>[]}
+          <EditableDataTable<InventoryRow>
+            data={filtered}
+            columns={columns}
+            rowKey="id"
             searchable
             searchPlaceholder="Search products..."
             searchKeys={['product_name']}
             emptyTitle="No inventory records"
             emptyDescription="Inventory will appear as products are stocked"
             loading={loading}
+            canEdit={isAdmin}
+            onSave={handleBulkSave}
             filters={
               <select
                 value={locationFilter}

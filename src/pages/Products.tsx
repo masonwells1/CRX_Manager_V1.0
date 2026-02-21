@@ -3,17 +3,18 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Upload, FileUp } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import DataTable, { type Column } from '../components/ui/DataTable';
+import EditableDataTable, { type EditableColumn } from '../components/ui/EditableDataTable';
 import Badge from '../components/ui/Badge';
 import BulkPricingImport from '../components/products/BulkPricingImport';
 import BulkProductImport from '../components/products/BulkProductImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, sanitizeError } from '../lib/db';
+import { logActivity } from '../lib/activityLogger';
 import type { Product } from '../types';
 
 export default function Products() {
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
@@ -59,11 +60,65 @@ export default function Products() {
 
   const isAdmin = role === 'admin';
 
-  const columns: Column<Product>[] = [
+  const categoryOptions = categories.map((c) => ({ value: c, label: c }));
+  const vendorOptions = vendors.map((v) => ({ value: v, label: v }));
+
+  const handleBulkSave = async (changes: Map<string, Record<string, any>>) => {
+    try {
+      // Log cost history for pricing changes
+      for (const [productId, fields] of changes) {
+        const original = products.find((p) => p.id === productId);
+        if (!original || !profile) continue;
+
+        const pricingChanged =
+          ('current_cost' in fields && Number(fields.current_cost) !== Number(original.current_cost)) ||
+          ('tier1_price' in fields && Number(fields.tier1_price) !== Number(original.tier1_price)) ||
+          ('tier2_price' in fields && Number(fields.tier2_price) !== Number(original.tier2_price)) ||
+          ('tier3_price' in fields && Number(fields.tier3_price) !== Number(original.tier3_price));
+
+        if (pricingChanged) {
+          await supabase.from('cost_history').insert({
+            product_id: productId,
+            changed_by: profile.id,
+            old_cost: original.current_cost,
+            new_cost: 'current_cost' in fields ? fields.current_cost : original.current_cost,
+            old_tier1_price: original.tier1_price,
+            new_tier1_price: 'tier1_price' in fields ? fields.tier1_price : original.tier1_price,
+            old_tier2_price: original.tier2_price,
+            new_tier2_price: 'tier2_price' in fields ? fields.tier2_price : original.tier2_price,
+            old_tier3_price: original.tier3_price,
+            new_tier3_price: 'tier3_price' in fields ? fields.tier3_price : original.tier3_price,
+            change_note: 'Updated via inline bulk edit',
+          });
+        }
+
+        // Update product
+        const { error } = await supabase
+          .from('products')
+          .update({ ...fields, updated_at: new Date().toISOString() })
+          .eq('id', productId);
+
+        if (error) throw error;
+      }
+
+      toast('success', `Updated ${changes.size} product(s)`);
+      if (profile) {
+        logActivity('products_bulk_updated', `${changes.size} product(s) updated via inline edit`, profile.id, 'product', null);
+      }
+      fetchProducts();
+    } catch (err: any) {
+      toast('error', sanitizeError(err));
+      throw err; // re-throw so EditableDataTable stays in edit mode
+    }
+  };
+
+  const columns: EditableColumn<Product>[] = [
     {
       key: 'product_name',
       header: 'Product Name',
       sortable: true,
+      editable: isAdmin,
+      editType: 'text',
       render: (row) => (
         <div className="max-w-xs">
           <p className="font-medium text-nav-dark truncate">{row.product_name}</p>
@@ -71,29 +126,51 @@ export default function Products() {
         </div>
       ),
     },
-    { key: 'category', header: 'Category', sortable: true },
-    { key: 'vendor', header: 'Vendor', sortable: true },
+    {
+      key: 'category',
+      header: 'Category',
+      sortable: true,
+      editable: isAdmin,
+      editType: 'select',
+      editOptions: categoryOptions,
+    },
+    {
+      key: 'vendor',
+      header: 'Vendor',
+      sortable: true,
+      editable: isAdmin,
+      editType: 'select',
+      editOptions: vendorOptions,
+    },
     ...(isAdmin
       ? [
           {
-            key: 'current_cost' as const,
+            key: 'current_cost',
             header: 'Cost',
             sortable: true,
+            editable: true,
+            editType: 'number' as const,
+            editMin: 0,
+            editStep: '0.01',
             render: (row: Product) => (
               <span className="font-mono text-sm">
-                {row.current_cost != null ? `$${row.current_cost.toFixed(2)}` : '-'}
+                {row.current_cost != null ? `$${Number(row.current_cost).toFixed(2)}` : '-'}
               </span>
             ),
-          } satisfies Column<Product>,
+          } satisfies EditableColumn<Product>,
         ]
       : []),
     {
       key: 'tier1_price',
       header: 'T1 Price',
       sortable: true,
+      editable: isAdmin,
+      editType: 'number',
+      editMin: 0,
+      editStep: '0.01',
       render: (row) => (
         <span className="font-mono text-sm">
-          {row.tier1_price != null ? `$${row.tier1_price.toFixed(2)}` : '-'}
+          {row.tier1_price != null ? `$${Number(row.tier1_price).toFixed(2)}` : '-'}
         </span>
       ),
     },
@@ -101,9 +178,13 @@ export default function Products() {
       key: 'tier2_price',
       header: 'T2 Price',
       sortable: true,
+      editable: isAdmin,
+      editType: 'number',
+      editMin: 0,
+      editStep: '0.01',
       render: (row) => (
         <span className="font-mono text-sm">
-          {row.tier2_price != null ? `$${row.tier2_price.toFixed(2)}` : '-'}
+          {row.tier2_price != null ? `$${Number(row.tier2_price).toFixed(2)}` : '-'}
         </span>
       ),
     },
@@ -111,15 +192,21 @@ export default function Products() {
       key: 'tier3_price',
       header: 'T3 Price',
       sortable: true,
+      editable: isAdmin,
+      editType: 'number',
+      editMin: 0,
+      editStep: '0.01',
       render: (row) => (
         <span className="font-mono text-sm">
-          {row.tier3_price != null ? `$${row.tier3_price.toFixed(2)}` : '-'}
+          {row.tier3_price != null ? `$${Number(row.tier3_price).toFixed(2)}` : '-'}
         </span>
       ),
     },
     {
       key: 'is_active',
       header: 'Status',
+      editable: isAdmin,
+      editType: 'toggle',
       render: (row) => (
         <Badge variant={row.is_active ? 'success' : 'default'}>
           {row.is_active ? 'Active' : 'Inactive'}
@@ -154,9 +241,10 @@ export default function Products() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable<Product>
+          <EditableDataTable<Product>
             data={filtered}
             columns={columns}
+            rowKey="id"
             searchable
             searchPlaceholder="Search products..."
             searchKeys={['product_name', 'sku', 'category', 'vendor']}
@@ -171,6 +259,8 @@ export default function Products() {
               ) : undefined
             }
             loading={loading}
+            canEdit={isAdmin}
+            onSave={handleBulkSave}
             filters={
               <>
                 <select

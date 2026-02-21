@@ -42,7 +42,7 @@ export default function QuickDeliveryModal({
   onCreated,
 }: QuickDeliveryModalProps) {
   const navigate = useNavigate();
-  const { profile } = useAuth();
+  const { profile, role } = useAuth();
   const { toast } = useToast();
 
   // Customer search
@@ -72,7 +72,7 @@ export default function QuickDeliveryModal({
     const fetchData = async () => {
       const [{ data: prodData }, { data: driverData }] = await Promise.all([
         supabase.from('products').select('*').eq('is_active', true).order('product_name'),
-        supabase.from('profiles').select('*').eq('role', 'driver').eq('is_active', true).order('full_name'),
+        supabase.from('profiles').select('*').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       ]);
       setProducts((prodData || []) as Product[]);
       setDrivers((driverData || []) as Profile[]);
@@ -179,6 +179,7 @@ export default function QuickDeliveryModal({
     : products;
 
   const totalCents = items.reduce((sum, i) => sum + i.price_cents * i.quantity, 0);
+  const showPricing = role === 'admin' || role === 'sales_rep';
 
   const handleSubmit = async () => {
     if (!selectedCustomer) {
@@ -334,8 +335,8 @@ export default function QuickDeliveryModal({
                       <th className="text-left px-3 py-2 font-medium text-secondary">Product</th>
                       <th className="text-center px-3 py-2 font-medium text-secondary w-24">Qty</th>
                       <th className="text-left px-3 py-2 font-medium text-secondary">Unit</th>
-                      <th className="text-right px-3 py-2 font-medium text-secondary">Price</th>
-                      <th className="text-right px-3 py-2 font-medium text-secondary">Total</th>
+                      {showPricing && <th className="text-right px-3 py-2 font-medium text-secondary">Price</th>}
+                      {showPricing && <th className="text-right px-3 py-2 font-medium text-secondary">Total</th>}
                       <th className="w-10" />
                     </tr>
                   </thead>
@@ -353,12 +354,16 @@ export default function QuickDeliveryModal({
                           />
                         </td>
                         <td className="px-3 py-2 text-secondary">{item.unit_size || '—'}</td>
-                        <td className="px-3 py-2 text-right font-mono text-secondary">
-                          {fmtCurrency(item.price_cents)}
-                        </td>
-                        <td className="px-3 py-2 text-right font-mono font-medium">
-                          {fmtCurrency(item.price_cents * item.quantity)}
-                        </td>
+                        {showPricing && (
+                          <td className="px-3 py-2 text-right font-mono text-secondary">
+                            {fmtCurrency(item.price_cents)}
+                          </td>
+                        )}
+                        {showPricing && (
+                          <td className="px-3 py-2 text-right font-mono font-medium">
+                            {fmtCurrency(item.price_cents * item.quantity)}
+                          </td>
+                        )}
                         <td className="px-3 py-2">
                           <button
                             onClick={() => removeItem(item._key)}
@@ -370,17 +375,19 @@ export default function QuickDeliveryModal({
                       </tr>
                     ))}
                   </tbody>
-                  <tfoot>
-                    <tr className="bg-gray-50 border-t border-gray-200">
-                      <td colSpan={4} className="px-3 py-2 text-right font-medium text-nav-dark">
-                        Total:
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono font-semibold text-crx-green">
-                        {fmtCurrency(totalCents)}
-                      </td>
-                      <td />
-                    </tr>
-                  </tfoot>
+                  {showPricing && (
+                    <tfoot>
+                      <tr className="bg-gray-50 border-t border-gray-200">
+                        <td colSpan={4} className="px-3 py-2 text-right font-medium text-nav-dark">
+                          Total:
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono font-semibold text-crx-green">
+                          {fmtCurrency(totalCents)}
+                        </td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             )}

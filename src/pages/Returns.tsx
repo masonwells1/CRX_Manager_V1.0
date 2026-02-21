@@ -174,9 +174,23 @@ export default function Returns() {
       return;
     }
 
+    // Validate all items have a product selected (prevent empty UUID)
+    const invalidItems = newItems.filter(item => !item.product_id);
+    if (invalidItems.length > 0) {
+      toast('error', `Please select a product for all ${invalidItems.length} item(s)`);
+      return;
+    }
+
     setCreating(true);
     try {
-      const returnNum = `RMA-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`;
+      // Use sequential RPC instead of timestamp-based number
+      const { data: rpcNum, error: rpcError } = await supabase.rpc('next_return_number');
+      if (rpcError || !rpcNum) {
+        toast('error', rpcError?.message || 'Failed to generate return number');
+        setCreating(false);
+        return;
+      }
+      const returnNum = rpcNum as string;
 
       const { data: ret, error: retError } = await supabase
         .from('returns')

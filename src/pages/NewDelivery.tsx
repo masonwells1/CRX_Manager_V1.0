@@ -189,6 +189,21 @@ export default function NewDelivery() {
       return;
     }
 
+    // Check for duplicate deliveries on same order
+    const { data: existingDels } = await supabase
+      .from('deliveries')
+      .select('delivery_number, status')
+      .eq('order_id', selectedOrderId)
+      .in('status', ['scheduled', 'in_progress']);
+
+    if (existingDels && existingDels.length > 0) {
+      const delList = existingDels.map(d => `${d.delivery_number} (${d.status.replace('_', ' ')})`).join(', ');
+      const proceed = confirm(
+        `This order already has ${existingDels.length} active delivery(ies): ${delList}.\n\nCreate another delivery for this order?`
+      );
+      if (!proceed) return;
+    }
+
     setSaving(true);
 
     const order = orders.find((o) => o.id === selectedOrderId);
