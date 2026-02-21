@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText, Info } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, FileText, Info, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
+import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 
 interface BulkQuoteImportProps {
   open: boolean;
@@ -65,13 +66,15 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-      if (selectedFile.size > 5 * 1024 * 1024) {
-        toast('error', 'File too large. Maximum size is 5MB.');
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        toast('error', 'File too large. Maximum size is 10MB.');
         e.target.value = '';
         return;
       }
-      if (!selectedFile.name.toLowerCase().endsWith('.csv') && selectedFile.type !== 'text/csv') {
-        toast('error', 'Invalid file type. Please upload a CSV file.');
+      const isCSV = isCSVFile(selectedFile);
+      const isOCR = isOCRSupported(selectedFile);
+      if (!isCSV && !isOCR) {
+        toast('error', 'Invalid file type. Please upload a CSV, PDF, or image file.');
         e.target.value = '';
         return;
       }
@@ -108,11 +111,68 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
     return { headers, rows };
   };
 
+  const parseWithVisionOCR = async (file: File): Promise<{ valid: ParsedQuoteItem[]; invalid: Array<{ row: number; error: string; data: Record<string, string> }> }> => {
+    const result = await processDocumentWithOCR(file, 'quote_list');
+
+    if (!result.success || !result.parsed_data) {
+      toast('error', result.error || 'OCR processing failed. Try a clearer image or CSV instead.');
+      return { valid: [], invalid: [] };
+    }
+
+    const data = result.parsed_data as {
+      items?: Array<{
+        quote_number?: string;
+        customer_name?: string;
+        product_name?: string;
+        acres?: number;
+        price?: number;
+        rate?: number;
+      }>;
+    };
+
+    if (!data.items || data.items.length === 0) {
+      toast('error', 'No quote items found in document.');
+      return { valid: [], invalid: [] };
+    }
+
+    const valid: ParsedQuoteItem[] = [];
+    const invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
+
+    data.items.forEach((item, idx) => {
+      if (!item.quote_number || !item.customer_name || !item.product_name) {
+        invalid.push({
+          row: idx + 1,
+          error: 'Missing required fields (quote_number, customer_name, or product_name)',
+          data: { ...item } as unknown as Record<string, string>,
+        });
+        return;
+      }
+      valid.push({
+        quote_number: item.quote_number,
+        customer_farm_name: item.customer_name,
+        product_name: item.product_name,
+        acres: item.acres,
+        price_per_unit: item.price,
+        actual_rate: item.rate,
+      });
+    });
+
+    return { valid, invalid };
+  };
+
   const handleParse = async () => {
     if (!file) return;
     setParsing(true);
 
     try {
+      // Route: CSV → client-side parser, PDF/Image → Vision OCR
+      if (!isCSVFile(file)) {
+        const ocrResult = await parseWithVisionOCR(file);
+        setValidation(ocrResult);
+        setParsing(false);
+        return;
+      }
+
       const text = await file.text();
       const { headers, rows } = parseCSV(text);
 
@@ -410,14 +470,14 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       <div className="space-y-4">
         <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg">
           <h4 className="text-sm font-medium text-nav-dark mb-2 flex items-center gap-2">
-            <Info className="w-4 h-4" />
+            <Sparkles className="w-4 h-4 text-blue-600" />
             How to Import Quotes
           </h4>
           <ol className="text-xs text-secondary space-y-1 list-decimal list-inside mb-3">
-            <li>Each row in your CSV represents one line item on a quote</li>
+            <li>Upload a CSV, PDF quote document, or photo of a quote sheet</li>
             <li>Multiple rows with the same quote_number will be grouped into one quote</li>
             <li>Customers and products must already exist in the system</li>
-            <li>Upload your CSV file and review before importing</li>
+            <li>PDF/image files are processed with Google Vision OCR</li>
           </ol>
           <div className="p-3 bg-white rounded border border-gray-200">
             <p className="text-xs font-medium text-secondary mb-2">Required Columns:</p>
@@ -445,10 +505,10 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
 
         {!validation && !uploadResults && (
           <div>
-            <label className="block text-sm font-medium text-secondary mb-2">Select CSV File</label>
+            <label className="block text-sm font-medium text-secondary mb-2">Select File</label>
             <input
               type="file"
-              accept=".csv"
+              accept=".csv,.pdf,.jpg,.jpeg,.png,.webp,image/*"
               onChange={handleFileChange}
               className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-crx-green-light file:text-crx-green hover:file:bg-crx-green hover:file:text-white transition-colors cursor-pointer"
             />
@@ -458,6 +518,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 <span>
                   {file.name} ({(file.size / 1024).toFixed(1)} KB)
                 </span>
+                {!isCSVFile(file) && <span className="text-blue-600">(Vision OCR)</span>}
               </div>
             )}
           </div>
@@ -567,7 +628,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               disabled={!file || parsing}
               loading={parsing}
             >
-              Parse File
+              {file && !isCSVFile(file) ? (parsing ? 'Processing with Vision OCR...' : 'Process with Vision OCR') : 'Parse File'}
             </Button>
           )}
           {validation && !uploadResults && (

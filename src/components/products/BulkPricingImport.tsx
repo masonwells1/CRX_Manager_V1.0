@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Upload, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Upload, CheckCircle, XCircle, AlertCircle, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult } from '../../lib/db';
+import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 
 interface BulkPricingImportProps {
   open: boolean;
@@ -36,13 +37,15 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-      if (selectedFile.size > 5 * 1024 * 1024) {
-        toast('error', 'File too large. Maximum size is 5MB.');
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        toast('error', 'File too large. Maximum size is 10MB.');
         e.target.value = '';
         return;
       }
-      if (!selectedFile.name.toLowerCase().endsWith('.csv') && selectedFile.type !== 'text/csv') {
-        toast('error', 'Invalid file type. Please upload a CSV file.');
+      const isCSV = isCSVFile(selectedFile);
+      const isOCR = isOCRSupported(selectedFile);
+      if (!isCSV && !isOCR) {
+        toast('error', 'Invalid file type. Please upload a CSV, PDF, or image file.');
         e.target.value = '';
         return;
       }
@@ -81,16 +84,59 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
     return rows;
   };
 
+  const parseWithVisionOCR = async (file: File): Promise<ParsedRow[]> => {
+    const result = await processDocumentWithOCR(file, 'price_list');
+
+    if (!result.success || !result.parsed_data) {
+      toast('error', result.error || 'OCR processing failed. Try a clearer image or CSV instead.');
+      return [];
+    }
+
+    const data = result.parsed_data as {
+      vendor_name?: string;
+      items?: Array<{
+        sku?: string;
+        product_name?: string;
+        cost?: number;
+        tier1_price?: number;
+        tier2_price?: number;
+        tier3_price?: number;
+      }>;
+    };
+
+    if (!data.items || data.items.length === 0) {
+      toast('error', 'No pricing items found in document.');
+      return [];
+    }
+
+    // Map OCR items — use SKU if available, otherwise product_name as SKU fallback
+    return data.items
+      .filter((item) => item.sku || item.product_name)
+      .map((item) => ({
+        sku: item.sku || item.product_name || '',
+        cost: item.cost,
+        tier1_price: item.tier1_price,
+        tier2_price: item.tier2_price,
+        tier3_price: item.tier3_price,
+      }));
+  };
+
   const handleParse = async () => {
     if (!file) return;
     setParsing(true);
 
     try {
-      const text = await file.text();
-      const parsed = parseCSV(text);
+      let parsed: ParsedRow[];
+
+      if (isCSVFile(file)) {
+        const text = await file.text();
+        parsed = parseCSV(text);
+      } else {
+        parsed = await parseWithVisionOCR(file);
+      }
 
       if (parsed.length === 0) {
-        toast('error', 'No valid data found. Ensure CSV has "sku" column and at least one price column.');
+        toast('error', 'No valid data found. Ensure file has SKU/product and at least one price column.');
         setParsing(false);
         return;
       }
@@ -98,10 +144,10 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
       const skus = parsed.map((p) => p.sku);
       const { data: products } = await supabase
         .from('products')
-        .select('id, sku')
-        .in('sku', skus);
+        .select('id, sku, product_name')
+        .or(`sku.in.(${skus.map(s => `"${s}"`).join(',')}),product_name.in.(${skus.map(s => `"${s}"`).join(',')})`);
 
-      const foundSkus = new Set((products || []).map((p) => p.sku));
+      const foundSkus = new Set((products || []).flatMap((p) => [p.sku, p.product_name].filter(Boolean)));
       const valid: ParsedRow[] = [];
       const invalid: Array<{ row: number; sku: string; error: string }> = [];
       const notFound: string[] = [];
@@ -136,7 +182,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
 
       setValidation({ valid, invalid, notFound });
     } catch (error) {
-      toast('error', 'Failed to parse CSV file');
+      toast('error', 'Failed to process file');
     }
     setParsing(false);
   };
@@ -217,30 +263,34 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
     <Modal open={open} onClose={handleClose} title="Bulk Pricing" accent="Import" maxWidth="max-w-2xl">
       <div className="space-y-4">
         <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg">
-          <h4 className="text-sm font-medium text-nav-dark mb-2">CSV Format</h4>
+          <h4 className="text-sm font-medium text-nav-dark mb-2 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-blue-600" />
+            CSV or PDF/Image Upload
+          </h4>
           <p className="text-xs text-secondary mb-2">
-            Upload a CSV file with the following columns (all prices optional, but include at least one):
+            Upload a CSV, PDF price list, or photo. Products matched by SKU or name.
           </p>
           <code className="block text-xs bg-white p-2 rounded border border-gray-200 font-mono">
             sku,cost,tier1_price,tier2_price,tier3_price
           </code>
           <p className="text-xs text-secondary mt-2">
-            Products are matched by SKU. Only matching products will be updated.
+            PDF/image files are processed with Google Vision OCR for automatic extraction.
           </p>
         </div>
 
         {!validation && !uploadResults && (
           <div>
-            <label className="block text-sm font-medium text-secondary mb-2">Select CSV File</label>
+            <label className="block text-sm font-medium text-secondary mb-2">Select File</label>
             <input
               type="file"
-              accept=".csv"
+              accept=".csv,.pdf,.jpg,.jpeg,.png,.webp,image/*"
               onChange={handleFileChange}
               className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-crx-green-light file:text-crx-green hover:file:bg-crx-green hover:file:text-white transition-colors cursor-pointer"
             />
             {file && (
               <p className="text-xs text-secondary mt-2">
                 Selected: {file.name} ({(file.size / 1024).toFixed(1)} KB)
+                {!isCSVFile(file) && <span className="ml-1 text-blue-600">(Vision OCR)</span>}
               </p>
             )}
           </div>
@@ -316,7 +366,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
               disabled={!file || parsing}
               loading={parsing}
             >
-              Parse File
+              {file && !isCSVFile(file) ? (parsing ? 'Processing with Vision OCR...' : 'Process with Vision OCR') : 'Parse File'}
             </Button>
           )}
           {validation && !uploadResults && (

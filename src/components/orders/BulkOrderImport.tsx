@@ -1,12 +1,10 @@
 import { useState } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase } from '../../lib/db';
-import * as pdfjsLib from 'pdfjs-dist';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -71,8 +69,11 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         return;
       }
       const name = selectedFile.name.toLowerCase();
-      if (!name.endsWith('.csv') && !name.endsWith('.pdf') && selectedFile.type !== 'text/csv' && selectedFile.type !== 'application/pdf') {
-        toast('error', 'Invalid file type. Please upload a CSV or PDF file.');
+      const isCSV = name.endsWith('.csv') || selectedFile.type === 'text/csv';
+      const isPDF = name.endsWith('.pdf') || selectedFile.type === 'application/pdf';
+      const isImage = selectedFile.type.startsWith('image/') || /\.(jpg|jpeg|png|webp)$/i.test(name);
+      if (!isCSV && !isPDF && !isImage) {
+        toast('error', 'Invalid file type. Please upload a CSV, PDF, or image file.');
         e.target.value = '';
         return;
       }
@@ -104,90 +105,49 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     return { headers, rows };
   };
 
-  const extractTextFromPDF = async (file: File): Promise<string> => {
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-    let fullText = '';
+  const parseWithVisionOCR = async (file: File): Promise<{ valid: ParsedOrder[]; invalid: any[] }> => {
+    const result = await processDocumentWithOCR(file, 'invoice');
 
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item: any) => item.str)
-        .join(' ');
-      fullText += pageText + '\n';
+    if (!result.success || !result.parsed_data) {
+      toast('error', result.error || 'OCR processing failed. Try a clearer image or CSV instead.');
+      return { valid: [], invalid: [] };
     }
 
-    return fullText;
-  };
+    const data = result.parsed_data as {
+      order_number: string;
+      customer_name: string;
+      order_date: string;
+      status: string;
+      notes: string;
+      items: Array<{ product_name: string; quantity: number; price_per_unit: number; unit_size: string; notes: string }>;
+    };
 
-  const parsePDFInvoice = (text: string): ParsedOrder[] => {
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-
-    let invoiceNumber = '';
-    let customerName = '';
-    let invoiceDate = '';
-    const items: ParsedOrderItem[] = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      if (line.includes('Invoice #') || line.includes('Invoice#')) {
-        const match = line.match(/Invoice\s*#?\s*([A-Z0-9-]+)/i);
-        if (match) invoiceNumber = match[1];
-      }
-
-      if (line.includes('Invoice Date')) {
-        const match = line.match(/Invoice Date\s+(\d{2}\/\d{2}\/\d{4})/);
-        if (match) invoiceDate = match[1];
-      }
-
-      if (!customerName && i < 20) {
-        if (line.match(/^[A-Z][A-Z\s&]+(?:LLC|INC|CORP|LTD)?$/i) &&
-            line.length > 5 &&
-            !line.includes('Invoice') &&
-            !line.includes('Crop RX') &&
-            !line.includes('Date') &&
-            !line.includes('Chemical')) {
-          customerName = line;
-        }
-      }
+    if (!data.order_number && data.items.length === 0) {
+      toast('error', `OCR could not extract order data (confidence: ${result.confidence}%). Try a clearer image or CSV.`);
+      return { valid: [], invalid: [] };
     }
 
-    const fullText = lines.join(' ');
-
-    const datePattern = /(\d{2}\/\d{2}\/\d{4})\s+([A-Za-z0-9\s\.\-\(\)]+?)\s+(?:(\d+\-\d+(?:\-\d+)?))?\s*([\d,]+\.?\d*)\s*GL\s*\$?([\d,]+\.?\d*)\s*(?:GL)?\s*\$?([\d,]+\.?\d*)/g;
-
-    let match;
-    while ((match = datePattern.exec(fullText)) !== null) {
-      const [, , productName, epaReg, quantity, cost] = match;
-
-      const cleanQuantity = parseFloat(quantity.replace(/,/g, ''));
-      const cleanCost = parseFloat(cost.replace(/,/g, ''));
-
-      if (!isNaN(cleanQuantity) && !isNaN(cleanCost) && cleanQuantity > 0) {
-        items.push({
-          product_name: productName.trim(),
-          quantity: cleanQuantity,
-          price_per_unit: cleanCost,
-          unit_cost: cleanCost,
-          unit_size: 'GL',
-          notes: epaReg ? `EPA Reg: ${epaReg}` : undefined,
-        });
-      }
+    if (result.confidence < 50) {
+      toast('warning', `Low OCR confidence (${result.confidence}%). Please review the parsed data carefully.`);
     }
 
-    if (!invoiceNumber || items.length === 0) {
-      return [];
-    }
+    const parsedOrder: ParsedOrder = {
+      order_number: data.order_number || 'OCR-IMPORT',
+      customer_name: data.customer_name || 'Unknown Customer',
+      order_date: data.order_date || new Date().toISOString().split('T')[0],
+      status: data.status || 'confirmed',
+      notes: data.notes || '',
+      items: data.items.map((item) => ({
+        product_name: item.product_name,
+        quantity: item.quantity,
+        price_per_unit: item.price_per_unit,
+        unit_cost: item.price_per_unit,
+        unit_size: item.unit_size || undefined,
+        notes: item.notes || undefined,
+      })),
+    };
 
-    return [{
-      order_number: invoiceNumber,
-      customer_name: customerName || 'Unknown Customer',
-      order_date: invoiceDate || new Date().toISOString().split('T')[0],
-      status: 'confirmed',
-      items,
-    }];
+    return { valid: parsedOrder.items.length > 0 ? [parsedOrder] : [], invalid: [] };
   };
 
   const parseCSVOrders = (text: string): { valid: ParsedOrder[]; invalid: any[] } => {
@@ -292,16 +252,8 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
       let parsedOrders: ParsedOrder[] = [];
       let invalid: any[] = [];
 
-      if (file.name.toLowerCase().endsWith('.pdf')) {
-        const text = await extractTextFromPDF(file);
-        parsedOrders = parsePDFInvoice(text);
-
-        if (parsedOrders.length === 0) {
-          toast('error', 'Could not parse PDF. Unable to extract invoice data.');
-          setParsing(false);
-          return;
-        }
-      } else {
+      if (isCSVFile(file)) {
+        // CSV: parse client-side (fast, no API call)
         const text = await file.text();
         const result = parseCSVOrders(text);
         parsedOrders = result.valid;
@@ -312,6 +264,20 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           setParsing(false);
           return;
         }
+      } else if (isOCRSupported(file)) {
+        // PDF or image: send to Google Vision OCR via Edge Function
+        const result = await parseWithVisionOCR(file);
+        parsedOrders = result.valid;
+        invalid = result.invalid;
+
+        if (parsedOrders.length === 0) {
+          setParsing(false);
+          return; // Toast already shown by parseWithVisionOCR
+        }
+      } else {
+        toast('error', 'Unsupported file type.');
+        setParsing(false);
+        return;
       }
 
       setValidation({ valid: parsedOrders, invalid });
@@ -439,10 +405,12 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
                   </ul>
                 </div>
                 <div>
-                  <p className="font-medium text-xs">PDF Invoices:</p>
+                  <p className="font-medium text-xs flex items-center gap-1">
+                    <Sparkles className="w-3 h-3" /> PDF & Image (Vision OCR):
+                  </p>
                   <ul className="list-disc list-inside space-y-1 text-xs ml-2">
-                    <li>Automatically extracts invoice number, customer, date, and line items</li>
-                    <li>Works with standard invoice formats</li>
+                    <li>Upload invoice PDFs or photos — AI extracts data automatically</li>
+                    <li>Works with scanned documents, photos, and digital PDFs</li>
                   </ul>
                 </div>
               </div>
@@ -454,7 +422,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           <Upload className="w-12 h-12 text-gray-400 mx-auto mb-3" />
           <input
             type="file"
-            accept=".csv,.pdf"
+            accept=".csv,.pdf,.jpg,.jpeg,.png,.webp,image/*"
             onChange={handleFileChange}
             className="hidden"
             id="order-file-upload"
@@ -469,7 +437,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
               <span>
                 Click to upload or drag and drop
                 <br />
-                <span className="text-xs text-gray-500">CSV or PDF files</span>
+                <span className="text-xs text-gray-500">CSV, PDF, or image files</span>
               </span>
             )}
           </label>
@@ -477,7 +445,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
 
         {file && !validation && (
           <Button onClick={handleParse} disabled={parsing} className="w-full">
-            {parsing ? 'Parsing...' : 'Parse File'}
+            {parsing ? (file && !isCSVFile(file) ? 'Processing with Vision OCR...' : 'Parsing...') : 'Parse File'}
           </Button>
         )}
 

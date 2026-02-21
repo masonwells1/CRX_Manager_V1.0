@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText, ChevronDown, ChevronRight, Trash2, Search } from 'lucide-react';
-import * as pdfjsLib from 'pdfjs-dist';
+import { Upload, CheckCircle, AlertCircle, FileText, ChevronDown, ChevronRight, Trash2, Search, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
@@ -8,10 +7,8 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
-import { fuzzyMatchProduct } from '../../lib/ocrParser';
+import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import type { Product } from '../../types';
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 // ---------- interfaces ----------
 
@@ -82,202 +79,63 @@ function fuzzyMatchProductWithScore(
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
-// ---------- PDF extraction ----------
+// ---------- Vision OCR parsing ----------
 
-async function extractTextFromPDF(file: File): Promise<string> {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  let fullText = '';
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const textContent = await page.getTextContent();
-    const pageText = textContent.items.map((item: any) => item.str).join(' ');
-    fullText += pageText + '\n';
-  }
-  return fullText;
-}
+async function parseWithVisionOCR(file: File, filename: string, products: Product[]): Promise<ParsedPO> {
+  const result = await processDocumentWithOCR(file, 'purchase_order');
 
-// ---------- PDF parsing ----------
-
-function extractDate(text: string): string {
-  // Try labelled date first
-  const labelledPatterns = [
-    /(?:Invoice|PO|Order|Ship)\s*Date\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    /Date\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/,
-    /(\w+\s+\d{1,2},?\s+\d{4})/i,
-  ];
-  for (const pattern of labelledPatterns) {
-    const match = text.match(pattern);
-    if (match) return match[1].trim();
-  }
-  return new Date().toISOString().split('T')[0];
-}
-
-function extractVendor(lines: string[]): string {
-  // Check for labelled vendor lines
-  for (const line of lines.slice(0, 25)) {
-    const labelMatch = line.match(/(?:vendor|supplier|from|sold\s+by|ship(?:ped)?\s+from)\s*:?\s+(.+)/i);
-    if (labelMatch && labelMatch[1].trim().length > 2) return labelMatch[1].trim();
-  }
-  // Look for company-like name in the first 15 lines
-  for (const line of lines.slice(0, 15)) {
-    const trimmed = line.trim();
-    if (
-      trimmed.length > 4 &&
-      trimmed.length < 80 &&
-      /(?:LLC|INC|CORP|LTD|CO\.|COMPANY|CHEMICAL|SUPPLY|SOLUTIONS|INDUSTRIES)/i.test(trimmed) &&
-      !/invoice|purchase|order|date|bill\s+to|ship\s+to|page|total/i.test(trimmed)
-    ) {
-      return trimmed;
-    }
-  }
-  return '';
-}
-
-function extractInvoiceNumber(text: string): string {
-  const patterns = [
-    /(?:Invoice|Inv)\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
-    /(?:PO|P\.?O\.?)\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
-    /(?:Order|Ref(?:erence)?)\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
-    /(?:Document|Doc)\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
-  ];
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) return match[1];
-  }
-  return '';
-}
-
-function extractLineItems(text: string, lines: string[]): ParsedPOItem[] {
-  const items: ParsedPOItem[] = [];
-
-  // Strategy 1: Look for the specific CRX vendor invoice pattern used in BulkOrderImport
-  // Pattern: date product_name (optional EPA) quantity GL $cost GL $total
-  const crxPattern =
-    /(\d{2}\/\d{2}\/\d{4})\s+([A-Za-z0-9\s.\-()]+?)\s+(?:(\d+-\d+(?:-\d+)?))?\s*([\d,]+\.?\d*)\s*GL\s*\$?([\d,]+\.?\d*)\s*(?:GL)?\s*\$?([\d,]+\.?\d*)/g;
-  let match;
-  while ((match = crxPattern.exec(text)) !== null) {
-    const [, , productName, epaReg, quantity, cost] = match;
-    const cleanQty = parseFloat(quantity.replace(/,/g, ''));
-    const cleanCost = parseFloat(cost.replace(/,/g, ''));
-    if (!isNaN(cleanQty) && !isNaN(cleanCost) && cleanQty > 0) {
-      items.push({
-        extracted_name: productName.trim(),
-        matched_product: null,
-        match_confidence: 0,
-        quantity_ordered: cleanQty,
-        unit_cost: cleanCost,
-        unit_size: 'GL',
-        notes: epaReg ? `EPA Reg: ${epaReg}` : '',
-      });
-    }
+  if (!result.success || !result.parsed_data) {
+    return {
+      source_file: filename,
+      vendor_name: '',
+      invoice_number: '',
+      invoice_date: new Date().toISOString().split('T')[0],
+      items: [],
+      raw_text: result.raw_text || '',
+      parse_errors: [result.error || 'OCR processing failed'],
+      expanded: true,
+    };
   }
 
-  if (items.length > 0) return items;
+  const data = result.parsed_data as {
+    vendor_name?: string;
+    invoice_number?: string;
+    invoice_date?: string;
+    items?: Array<{
+      product_name: string;
+      quantity: number;
+      unit_cost: number;
+      unit_size?: string;
+    }>;
+  };
 
-  // Strategy 2: Generic tabular parsing
-  // Look for lines that have a product description followed by numeric values
-  // Common patterns: "Product Name  10  25.50  255.00" or "Product Name  10 GL  $25.50  $255.00"
-  const unitPatterns = /\b(GL|GAL|GALLON|LB|LBS|OZ|QT|QUART|PT|PINT|CASE|EA|EACH|TON|BAG|JUG|DRUM|TOTE)\b/i;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.length < 5) continue;
-
-    // Skip header-like lines
-    if (/^\s*(product|item|description|qty|quantity|price|amount|total|unit|#)\s/i.test(trimmed)) continue;
-    if (/^\s*(sub\s*total|grand\s*total|tax|freight|shipping|discount|balance|due)\s/i.test(trimmed)) continue;
-
-    // Match: text portion followed by at least a quantity and a price
-    // Pattern: ProductName ... Qty [Unit] UnitPrice [LineTotal]
-    const lineMatch = trimmed.match(
-      /^(.{4,60}?)\s{2,}([\d,]+\.?\d*)\s*(?:([A-Za-z]{1,6})\s+)?\$?\s*([\d,]+\.?\d{2})\s*(?:\$?\s*[\d,]+\.?\d{2})?$/,
-    );
-
-    if (lineMatch) {
-      const [, name, qty, unit, price] = lineMatch;
-      const cleanQty = parseFloat(qty.replace(/,/g, ''));
-      const cleanPrice = parseFloat(price.replace(/,/g, ''));
-      if (
-        !isNaN(cleanQty) &&
-        !isNaN(cleanPrice) &&
-        cleanQty > 0 &&
-        cleanPrice > 0 &&
-        name.trim().length > 2
-      ) {
-        items.push({
-          extracted_name: name.trim(),
-          matched_product: null,
-          match_confidence: 0,
-          quantity_ordered: cleanQty,
-          unit_cost: cleanPrice,
-          unit_size: unit || '',
-          notes: '',
-        });
-      }
-    }
-  }
-
-  if (items.length > 0) return items;
-
-  // Strategy 3: Very loose fallback - look for any line with a dollar amount preceded by text and a number
-  const loosePattern = /^(.{4,}?)\s+([\d,]+\.?\d*)\s+\$?([\d,]+\.\d{2})/;
-  for (const line of lines) {
-    const m = line.trim().match(loosePattern);
-    if (m) {
-      const name = m[1].trim();
-      const qty = parseFloat(m[2].replace(/,/g, ''));
-      const price = parseFloat(m[3].replace(/,/g, ''));
-      if (
-        !isNaN(qty) && !isNaN(price) && qty > 0 && price > 0 &&
-        name.length > 2 &&
-        !/total|sub|tax|freight|shipping|discount|balance|due/i.test(name)
-      ) {
-        items.push({
-          extracted_name: name,
-          matched_product: null,
-          match_confidence: 0,
-          quantity_ordered: qty,
-          unit_cost: price,
-          unit_size: '',
-          notes: '',
-        });
-      }
-    }
-  }
-
-  return items;
-}
-
-function parsePDFForPO(text: string, filename: string, products: Product[]): ParsedPO {
-  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l);
   const parse_errors: string[] = [];
+  if (!data.vendor_name) parse_errors.push('Could not detect vendor name');
+  if (!data.invoice_number) parse_errors.push('Could not detect invoice/PO number');
+  if (!data.items || data.items.length === 0) parse_errors.push('No line items found');
+  if (result.warning) parse_errors.push(result.warning);
 
-  const vendor_name = extractVendor(lines);
-  if (!vendor_name) parse_errors.push('Could not detect vendor name');
-
-  const invoice_number = extractInvoiceNumber(text);
-  if (!invoice_number) parse_errors.push('Could not detect invoice/PO number');
-
-  const invoice_date = extractDate(text);
-
-  const rawItems = extractLineItems(text, lines);
-  if (rawItems.length === 0) parse_errors.push('No line items found');
-
-  // Fuzzy match each item against product catalog
-  const items = rawItems.map((item) => {
-    const { product, score } = fuzzyMatchProductWithScore(item.extracted_name, products);
-    return { ...item, matched_product: product, match_confidence: score };
+  // Map OCR items to ParsedPOItem with local fuzzy matching against product catalog
+  const items: ParsedPOItem[] = (data.items || []).map((ocrItem) => {
+    const { product, score } = fuzzyMatchProductWithScore(ocrItem.product_name, products);
+    return {
+      extracted_name: ocrItem.product_name,
+      matched_product: product,
+      match_confidence: score,
+      quantity_ordered: ocrItem.quantity || 0,
+      unit_cost: ocrItem.unit_cost || 0,
+      unit_size: ocrItem.unit_size || '',
+      notes: '',
+    };
   });
 
   return {
     source_file: filename,
-    vendor_name,
-    invoice_number,
-    invoice_date,
+    vendor_name: data.vendor_name || '',
+    invoice_number: data.invoice_number || '',
+    invoice_date: data.invoice_date || new Date().toISOString().split('T')[0],
     items,
-    raw_text: text,
+    raw_text: result.raw_text,
     parse_errors,
     expanded: true,
   };
@@ -324,8 +182,8 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         toast('error', `${f.name} is too large. Maximum 10MB per file.`);
         continue;
       }
-      if (!f.name.toLowerCase().endsWith('.pdf') && f.type !== 'application/pdf') {
-        toast('error', `${f.name} is not a PDF file.`);
+      if (!isOCRSupported(f)) {
+        toast('error', `${f.name} is not a supported file type. Upload PDF or image files.`);
         continue;
       }
       valid.push(f);
@@ -345,8 +203,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
       const results: ParsedPO[] = [];
       for (const file of files) {
         try {
-          const text = await extractTextFromPDF(file);
-          const parsed = parsePDFForPO(text, file.name, products);
+          const parsed = await parseWithVisionOCR(file, file.name, products);
           results.push(parsed);
         } catch (err) {
           console.error(`Error parsing ${file.name}:`, err);
@@ -357,18 +214,18 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             invoice_date: new Date().toISOString().split('T')[0],
             items: [],
             raw_text: '',
-            parse_errors: [`Failed to read PDF: ${err instanceof Error ? err.message : 'Unknown error'}`],
+            parse_errors: [`Failed to process: ${err instanceof Error ? err.message : 'Unknown error'}`],
             expanded: true,
           });
         }
       }
       if (results.every((r) => r.items.length === 0)) {
-        toast('error', 'Could not extract any line items from the uploaded PDFs.');
+        toast('error', 'Could not extract any line items from the uploaded files.');
       }
       setParsedPOs(results);
     } catch (err) {
       console.error('Parse error:', err);
-      toast('error', 'Error parsing PDF files');
+      toast('error', 'Error processing files');
     } finally {
       setParsing(false);
     }
@@ -578,19 +435,19 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   // ---------- render ----------
 
   return (
-    <Modal open={open} onClose={handleClose} title="Import POs from PDF" size="large">
+    <Modal open={open} onClose={handleClose} title="Import POs from Documents" size="large">
       <div className="space-y-4" style={{ maxWidth: '900px' }}>
         {/* Instructions */}
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <div className="flex items-start gap-3">
-            <FileText className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+            <Sparkles className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-blue-900">
-              <p className="font-medium mb-1">Upload vendor PDF invoices</p>
+              <p className="font-medium mb-1">Upload vendor invoices — PDF or photo</p>
               <ul className="list-disc list-inside space-y-0.5 text-xs">
-                <li>Upload one or more PDF invoices from vendors</li>
-                <li>System extracts vendor, invoice number, date, and line items</li>
-                <li>Products are auto-matched to your catalog - review and correct before importing</li>
-                <li>Each PDF creates a draft Purchase Order</li>
+                <li>Upload PDFs or photos (JPEG, PNG) of vendor invoices</li>
+                <li>Google Vision OCR extracts vendor, invoice number, date, and line items</li>
+                <li>Products are auto-matched to your catalog — review and correct before importing</li>
+                <li>Each document creates a draft Purchase Order</li>
               </ul>
             </div>
           </div>
@@ -603,7 +460,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
               <Upload className="w-12 h-12 text-gray-400 mx-auto mb-3" />
               <input
                 type="file"
-                accept=".pdf"
+                accept=".pdf,.jpg,.jpeg,.png,.webp,image/*"
                 multiple
                 onChange={handleFileChange}
                 className="hidden"
@@ -619,7 +476,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                   <span>
                     Click to upload or drag and drop
                     <br />
-                    <span className="text-xs text-gray-500">PDF files (max 10MB each)</span>
+                    <span className="text-xs text-gray-500">PDF or image files (max 10MB each)</span>
                   </span>
                 )}
               </label>
@@ -627,7 +484,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
             {files.length > 0 && (
               <Button onClick={handleParse} disabled={parsing} className="w-full">
-                {parsing ? 'Parsing PDFs...' : `Parse ${files.length} PDF${files.length !== 1 ? 's' : ''}`}
+                {parsing ? 'Processing with Vision OCR...' : `Process ${files.length} file${files.length !== 1 ? 's' : ''} with Vision OCR`}
               </Button>
             )}
           </>
@@ -765,7 +622,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                             <table className="w-full text-sm">
                               <thead>
                                 <tr className="border-b border-gray-100 text-left text-xs text-secondary uppercase tracking-wide">
-                                  <th className="px-3 py-2 font-medium">PDF Name</th>
+                                  <th className="px-3 py-2 font-medium">Extracted Name</th>
                                   <th className="px-3 py-2 font-medium">Matched Product</th>
                                   <th className="px-3 py-2 font-medium w-20">Conf.</th>
                                   <th className="px-3 py-2 font-medium w-24">Qty</th>

@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase } from '../../lib/db';
+import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 
 interface BulkCustomerImportProps {
   open: boolean;
@@ -57,13 +58,15 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-      if (selectedFile.size > 5 * 1024 * 1024) {
-        toast('error', 'File too large. Maximum size is 5MB.');
+      if (selectedFile.size > 10 * 1024 * 1024) {
+        toast('error', 'File too large. Maximum size is 10MB.');
         e.target.value = '';
         return;
       }
-      if (!selectedFile.name.toLowerCase().endsWith('.csv') && selectedFile.type !== 'text/csv') {
-        toast('error', 'Invalid file type. Please upload a CSV file.');
+      const isCSV = isCSVFile(selectedFile);
+      const isOCR = isOCRSupported(selectedFile);
+      if (!isCSV && !isOCR) {
+        toast('error', 'Invalid file type. Please upload a CSV, PDF, or image file.');
         e.target.value = '';
         return;
       }
@@ -133,11 +136,64 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
     return { headers, rows };
   };
 
+  const parseWithVisionOCR = async (file: File): Promise<{ valid: ParsedCustomer[]; invalid: Array<{ row: number; error: string; data: Record<string, string> }> }> => {
+    const result = await processDocumentWithOCR(file, 'customer_list');
+
+    if (!result.success || !result.parsed_data) {
+      toast('error', result.error || 'OCR processing failed. Try a clearer image or CSV instead.');
+      return { valid: [], invalid: [] };
+    }
+
+    const data = result.parsed_data as {
+      items?: Array<{
+        farm_name: string;
+        contact_name?: string;
+        phone?: string;
+        email?: string;
+        address?: string;
+        tier?: number;
+      }>;
+    };
+
+    if (!data.items || data.items.length === 0) {
+      toast('error', 'No customers found in document.');
+      return { valid: [], invalid: [] };
+    }
+
+    const valid: ParsedCustomer[] = [];
+    const invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
+
+    data.items.forEach((item, idx) => {
+      if (!item.farm_name) {
+        invalid.push({ row: idx + 1, error: 'Missing farm name', data: { ...item } as unknown as Record<string, string> });
+        return;
+      }
+      valid.push({
+        farm_name: item.farm_name,
+        contact_name: item.contact_name,
+        phone: item.phone,
+        email: item.email,
+        billing_address: item.address,
+        assigned_tier: item.tier && [1, 2, 3].includes(item.tier) ? item.tier : 1,
+      });
+    });
+
+    return { valid, invalid };
+  };
+
   const handleParse = async () => {
     if (!file) return;
     setParsing(true);
 
     try {
+      // Route: CSV → client-side parser, PDF/Image → Vision OCR
+      if (!isCSVFile(file)) {
+        const ocrResult = await parseWithVisionOCR(file);
+        setValidation(ocrResult);
+        setParsing(false);
+        return;
+      }
+
       const text = await file.text();
       const { headers, rows } = parseCSV(text);
 
@@ -279,11 +335,14 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
     <Modal open={open} onClose={handleClose} title="Bulk Customer" accent="Import" maxWidth="max-w-3xl">
       <div className="space-y-4">
         <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg">
-          <h4 className="text-sm font-medium text-nav-dark mb-2">How to Import</h4>
+          <h4 className="text-sm font-medium text-nav-dark mb-2 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-blue-600" />
+            How to Import
+          </h4>
           <ol className="text-xs text-secondary space-y-1 list-decimal list-inside">
-            <li>Save your Excel file as CSV (File &gt; Save As &gt; CSV)</li>
-            <li>Ensure your spreadsheet has a column for farm names</li>
-            <li>Upload the CSV file below</li>
+            <li>Upload a CSV, PDF customer list, or photo of a customer sheet</li>
+            <li>Ensure your file has farm/customer names</li>
+            <li>PDF/image files are processed with Google Vision OCR</li>
             <li>Review detected customers and import</li>
           </ol>
           <div className="mt-3 p-2 bg-white rounded border border-gray-200">
@@ -300,10 +359,10 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
 
         {!validation && !uploadResults && (
           <div>
-            <label className="block text-sm font-medium text-secondary mb-2">Select CSV File</label>
+            <label className="block text-sm font-medium text-secondary mb-2">Select File</label>
             <input
               type="file"
-              accept=".csv"
+              accept=".csv,.pdf,.jpg,.jpeg,.png,.webp,image/*"
               onChange={handleFileChange}
               className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-crx-green-light file:text-crx-green hover:file:bg-crx-green hover:file:text-white transition-colors cursor-pointer"
             />
@@ -311,6 +370,7 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
               <div className="mt-2 flex items-center gap-2 text-xs text-secondary">
                 <FileText className="w-4 h-4" />
                 <span>{file.name} ({(file.size / 1024).toFixed(1)} KB)</span>
+                {!isCSVFile(file) && <span className="text-blue-600">(Vision OCR)</span>}
               </div>
             )}
           </div>
@@ -397,7 +457,7 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
               disabled={!file || parsing}
               loading={parsing}
             >
-              Parse File
+              {file && !isCSVFile(file) ? (parsing ? 'Processing with Vision OCR...' : 'Process with Vision OCR') : 'Parse File'}
             </Button>
           )}
           {validation && !uploadResults && (
