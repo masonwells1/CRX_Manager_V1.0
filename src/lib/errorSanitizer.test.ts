@@ -92,6 +92,27 @@ describe('sanitizeError', () => {
     expect(sanitizeError('Delivery is not in a cancellable state')).toBe('Delivery is not in a cancellable state');
   });
 
+  it('handles plain objects with message property (PostgrestError from Supabase)', () => {
+    // Supabase RPC errors return plain objects {message, details, hint, code}
+    expect(sanitizeError({
+      message: 'Insufficient inventory for Product X: need 100 units, only 0 available',
+      details: 'some details',
+      hint: null,
+      code: 'P0001',
+    })).toBe('Insufficient inventory for Product X: need 100 units, only 0 available');
+
+    expect(sanitizeError({
+      message: 'Delivery not found',
+      code: 'P0001',
+    })).toBe('Delivery not found');
+
+    // Plain objects with message that match constraint patterns should still be sanitized
+    expect(sanitizeError({
+      message: 'duplicate key value violates unique constraint "orders_order_number_key"',
+      code: '23505',
+    })).toBe('A record with this information already exists');
+  });
+
   it('handles non-string non-Error types', () => {
     expect(sanitizeError(42)).toBe('An unexpected error occurred');
     expect(sanitizeError({})).toBe('An unexpected error occurred');

@@ -28,9 +28,14 @@ const CONSTRAINT_PATTERNS: Array<[RegExp, string]> = [
 export function sanitizeError(error: unknown): string {
   if (!error) return 'An unexpected error occurred';
 
+  // Handle Error instances, plain objects with .message (PostgrestError from Supabase), and strings
   const message = error instanceof Error
     ? error.message
-    : typeof error === 'string' ? error : 'An unexpected error occurred';
+    : typeof error === 'string'
+      ? error
+      : typeof error === 'object' && error !== null && 'message' in error && typeof (error as any).message === 'string'
+        ? (error as any).message
+        : 'An unexpected error occurred';
 
   for (const [pattern, replacement] of CONSTRAINT_PATTERNS) {
     if (pattern.test(message)) {

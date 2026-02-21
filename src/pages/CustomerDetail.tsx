@@ -303,7 +303,7 @@ export default function CustomerDetail() {
         p_customer_id: isNew ? null : id,
         p_customer_payload: customerPayload,
         p_addresses: addressesPayload,
-        p_performed_by: profile!.id,
+        p_performed_by: profile?.id,
       });
 
       if (error) {
@@ -312,7 +312,7 @@ export default function CustomerDetail() {
         setIsDirty(false);
         if (isNew) {
           toast('success', 'Customer created');
-          navigate(`/customers/${data}`, { replace: true });
+          navigate(`/customers/${data?.customer_id ?? data}`, { replace: true });
         } else {
           toast('success', 'Customer updated');
           fetchAddresses();

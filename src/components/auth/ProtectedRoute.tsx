@@ -25,18 +25,23 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
     return <Navigate to="/login" replace />;
   }
 
-  // T1-004: Deactivated users must be blocked even with valid JWT
-  if (profile && !profile.is_active) {
+  // Session exists but profile failed to load — block access
+  if (!profile) {
     return <Navigate to="/login" replace />;
   }
 
-  if (allowedRoles && profile && !allowedRoles.includes(profile.role)) {
+  // T1-004: Deactivated users must be blocked even with valid JWT
+  if (!profile.is_active) {
+    return <Navigate to="/login" replace />;
+  }
+
+  if (allowedRoles && !allowedRoles.includes(profile.role)) {
     return <Navigate to="/" replace />;
   }
 
   // Per-user page permission check (deny-list)
   const pageKey = getPageKeyFromPath(location.pathname);
-  if (pageKey && profile && !hasPageAccess(profile.role, deniedPages, pageKey)) {
+  if (pageKey && !hasPageAccess(profile.role, deniedPages, pageKey)) {
     return <Navigate to="/" replace />;
   }
 

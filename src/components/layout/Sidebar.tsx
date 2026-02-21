@@ -103,8 +103,8 @@ const navigation: NavEntry[] = [
       label: 'Customers',
       icon: <Users className="w-5 h-5" />,
       items: [
-        { path: '/customers', label: 'Customers', icon: <Users className="w-4 h-4" /> },
-        { path: '/fields', label: 'Fields', icon: <MapPin className="w-4 h-4" /> },
+        { path: '/customers', label: 'Customers', icon: <Users className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/fields', label: 'Fields', icon: <MapPin className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/crop-programs', label: 'Crop Programs', icon: <Sprout className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },
@@ -116,7 +116,7 @@ const navigation: NavEntry[] = [
       label: 'Products',
       icon: <Package className="w-5 h-5" />,
       items: [
-        { path: '/products', label: 'Products', icon: <Package className="w-4 h-4" /> },
+        { path: '/products', label: 'Products', icon: <Package className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/recipes', label: 'Blend Recipes', icon: <Beaker className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
@@ -130,10 +130,10 @@ const navigation: NavEntry[] = [
       icon: <CalendarClock className="w-5 h-5" />,
       items: [
         { path: '/jobs', label: 'Job Schedule', icon: <CalendarClock className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
-        { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-4 h-4" /> },
+        { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'driver'] },
         { path: '/delivery-remainders', label: 'Remainders', icon: <Package className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/vehicles', label: 'Vehicles', icon: <Plane className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/blend-tickets', label: 'Blend Tickets', icon: <Image className="w-4 h-4" /> },
+        { path: '/blend-tickets', label: 'Blend Tickets', icon: <Image className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/application-records', label: 'App Records', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
       ],
     },
@@ -145,7 +145,7 @@ const navigation: NavEntry[] = [
       label: 'Inventory',
       icon: <Warehouse className="w-5 h-5" />,
       items: [
-        { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-4 h-4" /> },
+        { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin'] },
         { path: '/purchase-orders', label: 'Supplier POs', icon: <ShoppingCart className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },

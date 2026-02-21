@@ -569,7 +569,8 @@ export default function DeliveryDetail() {
   const canTakeDelivery =
     profile &&
     delivery.assigned_driver !== profile.id &&
-    (delivery.status === 'scheduled' || delivery.status === 'in_progress');
+    (delivery.status === 'scheduled' || delivery.status === 'in_progress') &&
+    (isAdminOrRep || (isDriver && !delivery.assigned_driver));
 
   const canUploadPhoto =
     delivery.status !== 'cancelled' &&

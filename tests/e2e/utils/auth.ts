@@ -1,8 +1,8 @@
 import { Page } from '@playwright/test';
 
 export const TEST_USER = {
-  email: 'mason@croprxsolutions.com',
-  password: 'Mwells0413',
+  email: process.env.E2E_TEST_EMAIL || 'mason@croprxsolutions.com',
+  password: process.env.E2E_TEST_PASSWORD || '',
 };
 
 export async function login(page: Page, email = TEST_USER.email, password = TEST_USER.password) {

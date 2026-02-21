@@ -212,11 +212,14 @@ export async function notifyDamagedReceiving(
       .map((i) => `${i.productName} (${i.quantity} — ${i.condition})`)
       .join(', ');
 
-    await supabase.rpc('notify_damaged_receiving', {
+    const { error } = await supabase.rpc('notify_damaged_receiving', {
       p_po_number: poNumber,
       p_items_summary: summary,
       p_po_id: poId,
     });
+    if (error) {
+      console.error('Damaged receiving notification RPC error:', error.message);
+    }
   } catch (err) {
     console.error('Damaged receiving notification failed:', err);
   }
