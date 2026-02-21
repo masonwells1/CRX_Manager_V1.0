@@ -10,7 +10,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Invoice, InvoiceItem, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, type InvoicePdfData } from '../lib/invoicePdf';
@@ -304,7 +304,7 @@ export default function InvoiceDetail() {
       }
     } catch (err: any) {
       console.error('Save error:', err);
-      toast('error', err.message || 'Failed to save invoice');
+      toast('error', sanitizeError(err));
     }
     setSaving(false);
   };
@@ -318,7 +318,7 @@ export default function InvoiceDetail() {
       toast('success', 'Invoice posted');
       fetchInvoice(id!);
     } catch (err: any) {
-      toast('error', err.message || 'Failed to post');
+      toast('error', sanitizeError(err));
     }
   };
 
@@ -336,7 +336,7 @@ export default function InvoiceDetail() {
       setShowVoidModal(false);
       fetchInvoice(id!);
     } catch (err: any) {
-      toast('error', err.message || 'Failed to void');
+      toast('error', sanitizeError(err));
     }
   };
 
@@ -365,7 +365,7 @@ export default function InvoiceDetail() {
       setPayNotes('');
       fetchInvoice(id!);
     } catch (err: any) {
-      toast('error', err.message || 'Failed to record payment');
+      toast('error', sanitizeError(err));
     }
   };
 
@@ -445,7 +445,7 @@ export default function InvoiceDetail() {
       toast('success', 'Invoice PDF downloaded');
     } catch (err: any) {
       console.error('Failed to generate invoice PDF:', err);
-      toast('error', err.message || 'Failed to generate PDF');
+      toast('error', sanitizeError(err));
     } finally {
       setPrinting(false);
       printingRef.current = false;

@@ -140,7 +140,8 @@ export async function parseKMLFile(kmlText: string): Promise<ParseResult> {
   const warnings: string[] = [];
 
   // Dynamic import to avoid bundling if unused
-  const { kml } = await import('togeojson-with-extended-style');
+  const togeojson = await import('@mapbox/togeojson');
+  const kml = togeojson.kml;
 
   const parser = new DOMParser();
   const xmlDoc = parser.parseFromString(kmlText, 'text/xml');

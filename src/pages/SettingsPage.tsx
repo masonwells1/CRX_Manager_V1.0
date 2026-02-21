@@ -10,7 +10,7 @@ import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { getPagesForRole, getCategories } from '../lib/pagePermissions';
 import type { Profile, AppSetting, UserRole } from '../types';
 
@@ -195,7 +195,7 @@ export default function SettingsPage() {
       toast('success', 'Company info saved');
       if (profile) logActivity('settings_updated', 'Company info updated', profile.id);
     } catch (err: any) {
-      toast('error', err.message || 'Failed to save company info');
+      toast('error', sanitizeError(err));
     }
     setSavingCompany(false);
   };
@@ -210,7 +210,7 @@ export default function SettingsPage() {
       toast('success', 'Default settings saved');
       if (profile) logActivity('settings_updated', 'Default settings updated', profile.id);
     } catch (err: any) {
-      toast('error', err.message || 'Failed to save default settings');
+      toast('error', sanitizeError(err));
     }
     setSavingDefaults(false);
   };
@@ -304,7 +304,7 @@ export default function SettingsPage() {
         new_denied_pages: editRole === 'admin' ? [] : editDeniedPages,
       });
       if (error) {
-        toast('error', error.message || 'Failed to update user');
+        toast('error', sanitizeError(error));
       } else if (data?.error) {
         toast('error', data.error);
       } else {

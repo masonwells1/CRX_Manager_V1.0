@@ -20,7 +20,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import type { PaymentAllocationEntry, PaymentAllocationResult } from '../types';
 
@@ -276,7 +276,7 @@ export default function PaymentAllocation() {
       }
       toast('success', parts.join('. '));
     } catch (err: any) {
-      toast('error', err.message || 'Failed to apply payment');
+      toast('error', sanitizeError(err));
     }
     setSubmitting(false);
   };

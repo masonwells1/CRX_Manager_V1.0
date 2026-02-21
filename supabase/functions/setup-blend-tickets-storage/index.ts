@@ -2,10 +2,19 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
+function getAllowedOrigin(): string {
+  const origin = Deno.env.get("ALLOWED_ORIGIN");
+  if (origin) return origin;
+  const url = Deno.env.get("SUPABASE_URL") || "";
+  if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
+  console.error("ALLOWED_ORIGIN not set — CORS will block all requests");
+  return "";
+}
+
 const corsHeaders = {
-  "Access-Control-Allow-Origin": Deno.env.get("ALLOWED_ORIGIN") || "http://localhost:5173",
+  "Access-Control-Allow-Origin": getAllowedOrigin(),
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey",
 };
 
 Deno.serve(async (req: Request) => {

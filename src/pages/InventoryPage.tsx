@@ -8,7 +8,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
@@ -352,7 +352,7 @@ export default function InventoryPage() {
     });
 
     if (error) {
-      toast('error', error.message || 'Failed to create hold');
+      toast('error', sanitizeError(error));
     } else {
       toast('success', 'Hold created successfully');
       setHoldOpen(false);
@@ -373,7 +373,7 @@ export default function InventoryPage() {
       fetchInventory();
       fetchHolds();
     } catch (error: any) {
-      toast('error', error.message || 'Failed to release hold');
+      toast('error', sanitizeError(error));
     }
   };
 
@@ -395,7 +395,7 @@ export default function InventoryPage() {
     });
 
     if (error) {
-      toast('error', error.message || 'Failed to add inventory');
+      toast('error', sanitizeError(error));
     } else {
       toast('success', 'Inventory record added');
       setAddOpen(false);
@@ -574,7 +574,7 @@ export default function InventoryPage() {
       fetchInventory();
     } catch (error: any) {
       console.error('Failed to delete inventory:', error);
-      toast('error', error.message || 'Failed to delete inventory item');
+      toast('error', sanitizeError(error));
     }
   };
 

@@ -15,7 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import type { Order, OrderItem, Customer } from '../types';
 
 export default function OrderDetail() {
@@ -115,7 +115,7 @@ export default function OrderDetail() {
       fetchOrder();
     } catch (error: any) {
       console.error('Error saving edits:', error);
-      toast('error', error.message || 'Failed to save edits');
+      toast('error', sanitizeError(error));
     }
     setSaving(false);
   };
@@ -158,7 +158,7 @@ export default function OrderDetail() {
       fetchOrder();
     } catch (error: any) {
       console.error('Error changing status:', error);
-      toast('error', error.message || 'Failed to change status');
+      toast('error', sanitizeError(error));
     }
   };
 

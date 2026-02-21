@@ -20,7 +20,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
@@ -302,7 +302,7 @@ export default function Deliveries() {
     });
     if (error) {
       console.error('Batch cancel failed:', error.message);
-      toast('error', error.message || 'Failed to cancel deliveries');
+      toast('error', sanitizeError(error));
     } else {
       toast('success', `Cancelled ${data} delivery(ies)`);
       setSelected(new Set());
@@ -358,7 +358,7 @@ export default function Deliveries() {
       toast('success', `Printed ${pdfDataList.length} delivery receipt(s) to PDF`);
     } catch (err: any) {
       console.error('Batch print failed:', err);
-      toast('error', err.message || 'Failed to generate batch PDF');
+      toast('error', sanitizeError(err));
     }
     setPrinting(false);
   };
@@ -378,7 +378,7 @@ export default function Deliveries() {
       p_idempotency_key: rescheduleKey,
     });
     if (error) {
-      toast('error', error.message || 'Failed to reschedule');
+      toast('error', sanitizeError(error));
     } else {
       toast('success', `Rescheduled ${ids.length} delivery(ies) to ${new Date(rescheduleDate).toLocaleDateString()}`);
       setSelected(new Set());
@@ -408,7 +408,7 @@ export default function Deliveries() {
         p_idempotency_key: reassignKey,
       });
       if (error) {
-        toast('error', error.message || 'Failed to take delivery');
+        toast('error', sanitizeError(error));
       } else {
         toast('success', 'Delivery assigned to you');
         fetchDeliveries();

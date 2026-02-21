@@ -12,7 +12,7 @@ import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { downloadBatchStatements } from '../lib/statementPdf';
 import { downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
@@ -151,7 +151,7 @@ export default function MonthEndClose() {
       setShowCloseModal(false);
       fetchData();
     } catch (err: any) {
-      toast('error', err.message || 'Failed to close period');
+      toast('error', sanitizeError(err));
     }
     setClosing(false);
   };
@@ -179,7 +179,7 @@ export default function MonthEndClose() {
       await downloadBatchStatements(statements, options);
       toast('success', `Generated ${statements.length} customer statement(s)`);
     } catch (err: any) {
-      toast('error', err.message || 'Failed to generate statements');
+      toast('error', sanitizeError(err));
     }
     setGenerating(false);
   };
@@ -214,7 +214,7 @@ export default function MonthEndClose() {
       toast('success', `Generated ${summaries.length} year-end summary PDF(s)`);
       setShowYeDialog(false);
     } catch (err: any) {
-      toast('error', err.message || 'Failed to generate year-end summaries');
+      toast('error', sanitizeError(err));
     }
     setYeLoading(false);
   };

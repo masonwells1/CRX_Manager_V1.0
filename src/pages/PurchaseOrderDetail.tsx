@@ -9,7 +9,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, sanitizeError } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
@@ -231,7 +231,7 @@ export default function PurchaseOrderDetail() {
       fetchReceivingHistory();
     } catch (error: any) {
       console.error('Error receiving items:', error);
-      toast('error', error.message || 'Failed to receive items');
+      toast('error', sanitizeError(error));
     }
     setSaving(false);
   };
@@ -317,7 +317,7 @@ export default function PurchaseOrderDetail() {
       setEditOpen(false);
       fetchPO();
     } catch (err: any) {
-      toast('error', err.message || 'Failed to update purchase order');
+      toast('error', sanitizeError(err));
     }
     setSaving(false);
   };
@@ -339,7 +339,7 @@ export default function PurchaseOrderDetail() {
       toast('success', 'Purchase order deleted');
       navigate('/purchase-orders');
     } catch (err: any) {
-      toast('error', err.message || 'Failed to delete purchase order');
+      toast('error', sanitizeError(err));
     }
     setSaving(false);
   };

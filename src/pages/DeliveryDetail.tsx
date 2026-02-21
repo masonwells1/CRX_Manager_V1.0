@@ -13,7 +13,7 @@ import Modal from '../components/ui/Modal';
 import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
@@ -256,7 +256,7 @@ export default function DeliveryDetail() {
     });
 
     if (error) {
-      toast('error', error.message || 'Failed to save changes');
+      toast('error', sanitizeError(error));
     } else {
       toast('success', 'Delivery updated');
       setEditing(false);
@@ -288,7 +288,7 @@ export default function DeliveryDetail() {
       p_idempotency_key: idemKey,
     });
     if (error) {
-      toast('error', error.message || 'Failed to cancel delivery');
+      toast('error', sanitizeError(error));
     } else {
       // Show detailed summary toast with cascade info
       const parts: string[] = ['Delivery cancelled.'];
@@ -316,7 +316,7 @@ export default function DeliveryDetail() {
     });
 
     if (error) {
-      toast('error', error.message || 'Failed to reassign delivery');
+      toast('error', sanitizeError(error));
     } else {
       toast('success', 'Delivery assigned to you');
       fetchDelivery();
@@ -393,7 +393,7 @@ export default function DeliveryDetail() {
     });
 
     if (error) {
-      toast('error', error.message || 'Failed to create follow-up delivery');
+      toast('error', sanitizeError(error));
     } else {
       const result = assertRpcResult<{ delivery_id: string; delivery_number: string; item_count: number }>(data, 'create_followup_delivery');
       toast('success', `Follow-up delivery ${result.delivery_number} created with ${result.item_count} items`);
@@ -419,7 +419,7 @@ export default function DeliveryDetail() {
       setStartModalOpen(false);
       fetchDelivery();
     } catch (err: any) {
-      toast('error', err.message || 'Failed to start delivery');
+      toast('error', sanitizeError(err));
     }
     setConfirming(false);
   };
@@ -532,7 +532,7 @@ export default function DeliveryDetail() {
       fetchDelivery();
     } catch (error: any) {
       console.error('Error completing delivery:', error);
-      toast('error', error.message || 'Failed to complete delivery');
+      toast('error', sanitizeError(error));
     }
     setCompleting(false);
   };

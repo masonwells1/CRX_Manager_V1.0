@@ -7,7 +7,7 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { exportToCSV } from '../lib/csvExport';
 import BatchVoidModal from '../components/invoices/BatchVoidModal';
@@ -140,7 +140,7 @@ export default function Invoices() {
     });
     if (error) {
       console.error('Batch post failed:', error.message);
-      toast('error', error.message || 'Failed to post invoices');
+      toast('error', sanitizeError(error));
     } else {
       toast('success', `Posted ${data} invoice(s)`);
       setSelected(new Set());
@@ -167,7 +167,7 @@ export default function Invoices() {
     });
     if (error) {
       console.error('Batch void failed:', error.message);
-      toast('error', error.message || 'Failed to void invoices');
+      toast('error', sanitizeError(error));
     } else {
       toast('success', `Voided ${data} invoice(s)`);
       setSelected(new Set());
@@ -276,7 +276,7 @@ export default function Invoices() {
       toast('success', `Printed ${pdfDataList.length} invoice(s) to PDF`);
     } catch (err: any) {
       console.error('Batch print failed:', err);
-      toast('error', err.message || 'Failed to generate batch PDF');
+      toast('error', sanitizeError(err));
     }
     setPrinting(false);
   };

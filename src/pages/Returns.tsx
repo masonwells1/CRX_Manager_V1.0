@@ -8,7 +8,7 @@ import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import type { Return, ReturnItem, Customer, Product, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
@@ -223,7 +223,7 @@ export default function Returns() {
       setShowCreate(false);
       fetchReturns();
     } catch (err: any) {
-      toast('error', err.message || 'Failed to create return');
+      toast('error', sanitizeError(err));
     } finally {
       setCreating(false);
     }
@@ -262,7 +262,7 @@ export default function Returns() {
       setShowDetail(false);
       fetchReturns();
     } catch (err: any) {
-      toast('error', err.message || 'Failed to approve');
+      toast('error', sanitizeError(err));
     }
   };
 
@@ -282,7 +282,7 @@ export default function Returns() {
       setShowDetail(false);
       fetchReturns();
     } catch (err: any) {
-      toast('error', err.message || 'Failed to reject');
+      toast('error', sanitizeError(err));
     }
   };
 
@@ -302,7 +302,7 @@ export default function Returns() {
       setShowDetail(false);
       fetchReturns();
     } catch (err: any) {
-      toast('error', err.message || 'Failed to receive');
+      toast('error', sanitizeError(err));
     }
   };
 
@@ -322,7 +322,7 @@ export default function Returns() {
       setShowDetail(false);
       fetchReturns();
     } catch (err: any) {
-      toast('error', err.message || 'Failed to issue credit');
+      toast('error', sanitizeError(err));
     }
   };
 
