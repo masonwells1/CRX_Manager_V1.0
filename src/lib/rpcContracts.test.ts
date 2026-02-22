@@ -99,22 +99,35 @@ interface SaveQuoteParams {
 }
 
 interface SaveCustomerParams {
-  p_id: string | null;
-  p_farm_name: string;
-  p_contact_name: string | null;
-  p_phone: string | null;
-  p_email: string | null;
-  p_billing_address: string | null;
-  p_assigned_tier: number;
-  p_assigned_sales_rep: string | null;
-  p_total_acres: number | null;
-  p_corn_acres: number | null;
-  p_soybean_acres: number | null;
-  p_other_acres: number | null;
-  p_payment_terms: string | null;
-  p_default_commission_split: { splits: Array<{ recipient: string; percentage: number }> } | null;
-  p_notes: string | null;
-  p_is_active: boolean;
+  p_customer_id: string | null;  // uuid — null for new customer
+  p_customer_payload: {
+    farm_name: string;
+    contact_name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    billing_address?: string | null;
+    assigned_tier?: number;
+    assigned_sales_rep?: string | null;
+    total_acres?: number | null;
+    corn_acres?: number | null;
+    soybean_acres?: number | null;
+    other_acres?: number | null;
+    payment_terms?: string | null;
+    default_commission_split?: { splits: Array<{ recipient: string; percentage: number }> } | null;
+    notes?: string | null;
+    is_active?: boolean;
+    credit_limit_cents?: number | null;
+    finance_charge_enabled?: boolean;
+    finance_charge_rate?: number | null;
+    finance_charge_grace_days?: number | null;
+    parent_customer_id?: string | null;
+  };
+  p_addresses: Array<{
+    id?: string | null;
+    label: string;
+    address_line: string;
+    is_default?: boolean;
+  }> | null;
   p_performed_by: string;
 }
 
@@ -138,12 +151,17 @@ interface SavePurchaseOrderParams {
 }
 
 interface ReceivePOItemsParams {
-  p_po_id: string;
   p_items: Array<{
     po_item_id: string;
-    quantity_received: number;
+    quantity: number;       // RPC reads v_item->>'quantity', NOT 'quantity_received'
+    condition?: string;     // default: 'good'
+    lot_number?: string;
+    notes?: string;
+    storage_location?: string; // default: 'Main Warehouse'
   }>;
   p_performed_by: string;
+  p_idempotency_key?: string;
+  p_allow_over_receive?: boolean;
 }
 
 interface AdjustInventoryParams {
@@ -367,27 +385,49 @@ describe('RPC contract: save_quote', () => {
 });
 
 describe('RPC contract: save_customer', () => {
-  it('accepts valid params', () => {
+  it('accepts valid params for new customer', () => {
     const params = assertShape<SaveCustomerParams>({
-      p_id: null,
-      p_farm_name: 'Test Farm',
-      p_contact_name: 'John Doe',
-      p_phone: '555-1234',
-      p_email: 'john@test.com',
-      p_billing_address: '123 Farm Rd',
-      p_assigned_tier: 1,
-      p_assigned_sales_rep: null,
-      p_total_acres: 1000,
-      p_corn_acres: 500,
-      p_soybean_acres: 300,
-      p_other_acres: 200,
-      p_payment_terms: 'Net 30',
-      p_default_commission_split: null,
-      p_notes: null,
-      p_is_active: true,
+      p_customer_id: null,
+      p_customer_payload: {
+        farm_name: 'Test Farm',
+        contact_name: 'John Doe',
+        phone: '555-1234',
+        email: 'john@test.com',
+        billing_address: '123 Farm Rd',
+        assigned_tier: 1,
+        assigned_sales_rep: null,
+        total_acres: 1000,
+        corn_acres: 500,
+        soybean_acres: 300,
+        other_acres: 200,
+        payment_terms: 'Net 30',
+        default_commission_split: null,
+        notes: null,
+        is_active: true,
+        credit_limit_cents: 50000000,
+        finance_charge_enabled: true,
+        finance_charge_rate: 1.5,
+        finance_charge_grace_days: 30,
+      },
+      p_addresses: [
+        { label: 'Main', address_line: '123 Farm Rd', is_default: true },
+      ],
       p_performed_by: 'user-uuid',
     });
-    expect(params.p_farm_name).toBe('Test Farm');
+    expect(params.p_customer_payload.farm_name).toBe('Test Farm');
+    expect(params.p_addresses).toHaveLength(1);
+  });
+
+  it('accepts existing customer id for update', () => {
+    const params = assertShape<SaveCustomerParams>({
+      p_customer_id: 'existing-customer-uuid',
+      p_customer_payload: {
+        farm_name: 'Updated Farm',
+      },
+      p_addresses: null,
+      p_performed_by: 'user-uuid',
+    });
+    expect(params.p_customer_id).toBeTruthy();
   });
 });
 
@@ -420,14 +460,23 @@ describe('RPC contract: save_purchase_order', () => {
 describe('RPC contract: receive_po_items', () => {
   it('accepts valid params', () => {
     const params = assertShape<ReceivePOItemsParams>({
-      p_po_id: 'po-uuid',
       p_items: [
-        { po_item_id: 'item-1', quantity_received: 50 },
-        { po_item_id: 'item-2', quantity_received: 25 },
+        { po_item_id: 'item-1', quantity: 50 },
+        { po_item_id: 'item-2', quantity: 25, condition: 'damaged', notes: 'Box crushed' },
       ],
       p_performed_by: 'user-uuid',
     });
     expect(params.p_items).toHaveLength(2);
+  });
+
+  it('accepts optional idempotency key and over-receive flag', () => {
+    const params = assertShape<ReceivePOItemsParams>({
+      p_items: [{ po_item_id: 'item-1', quantity: 10 }],
+      p_performed_by: 'user-uuid',
+      p_idempotency_key: 'receive_po_items:user-uuid:1234',
+      p_allow_over_receive: true,
+    });
+    expect(params.p_allow_over_receive).toBe(true);
   });
 });
 

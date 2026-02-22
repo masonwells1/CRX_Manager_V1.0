@@ -9,11 +9,13 @@
  */
 
 import * as pdfjsLib from 'pdfjs-dist';
+// Use Vite's asset URL import to bundle the worker locally (avoids CSP violation from CDN)
+import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { compressImage } from './imageCompression';
 import { supabase } from './db';
 
-// Ensure PDF.js worker is configured
-pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Ensure PDF.js worker is configured — local bundled worker (CSP-safe)
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

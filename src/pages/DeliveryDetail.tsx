@@ -126,11 +126,17 @@ export default function DeliveryDetail() {
   }, [id]);
 
   const fetchDelivery = async () => {
-    const { data: delData } = await supabase
+    const { data: delData, error: delError } = await supabase
       .from('deliveries')
       .select('*')
       .eq('id', id!)
       .maybeSingle();
+
+    if (delError) {
+      toast('error', sanitizeError(delError));
+      setLoading(false);
+      return;
+    }
 
     if (delData) {
       const del = delData as Delivery;

@@ -795,10 +795,21 @@ export default function QuoteBuilder() {
         }
       }
 
+      // Bug #31 fix: Clear dirty state before navigate to prevent unsaved changes dialog
+      setIsDirty(false);
       navigate(`/orders/${result.order_id}`);
     } catch (error: any) {
       console.error('Error converting to order:', error);
-      toast('error', error.message || 'Failed to create order');
+      // Bug #30 fix: Extract error message from Supabase RPC error objects
+      const errMsg = error?.message || error?.details || error?.hint || 'Failed to create order';
+      toast('error', errMsg);
+      // Bug #29 fix: Revert quote status to 'sent' since conversion failed
+      try {
+        await supabase.from('quotes').update({ status: 'sent' }).eq('id', savedId);
+        setStatus('sent');
+      } catch {
+        // Best effort — status revert failed
+      }
     }
     setConverting(false);
   };

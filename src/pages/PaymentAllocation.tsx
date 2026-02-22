@@ -109,16 +109,23 @@ export default function PaymentAllocation() {
     }
     const timer = setTimeout(async () => {
       setSearchLoading(true);
-      const { data } = await supabase
-        .from('customers')
-        .select('id, farm_name, account_number, prepay_balance_cents')
-        .eq('is_active', true)
-        .or(`farm_name.ilike.%${customerSearch}%,account_number.ilike.%${customerSearch}%`)
-        .order('farm_name')
-        .limit(15);
-      setCustomerResults((data || []) as CustomerOption[]);
-      setShowDropdown(true);
-      setSearchLoading(false);
+      try {
+        const { data, error } = await supabase
+          .from('customers')
+          .select('id, farm_name, account_number, prepay_balance_cents')
+          .eq('is_active', true)
+          .or(`farm_name.ilike.%${customerSearch}%,account_number.ilike.%${customerSearch}%`)
+          .order('farm_name')
+          .limit(15);
+        if (error) throw error;
+        setCustomerResults((data || []) as CustomerOption[]);
+        setShowDropdown(true);
+      } catch {
+        setCustomerResults([]);
+        setShowDropdown(false);
+      } finally {
+        setSearchLoading(false);
+      }
     }, 300);
     return () => clearTimeout(timer);
   }, [customerSearch, selectedCustomer]);
