@@ -108,7 +108,7 @@ export default function Deliveries() {
   const [unassigned, setUnassigned] = useState<DeliveryRow[]>([]);
 
   const canCreate = role === 'admin' || role === 'sales_rep';
-  const canQuickDeliver = role === 'admin' || role === 'sales_rep' || role === 'driver';
+  const canQuickDeliver = role === 'admin' || role === 'sales_rep';
   const isDriver = role === 'driver';
 
   useEffect(() => {
@@ -462,14 +462,16 @@ export default function Deliveries() {
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-bold text-white">My Deliveries</h1>
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={<Zap className="w-4 h-4" />}
-              onClick={() => setQuickDeliveryOpen(true)}
-            >
-              Quick Delivery
-            </Button>
+            {canQuickDeliver && (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<Zap className="w-4 h-4" />}
+                onClick={() => setQuickDeliveryOpen(true)}
+              >
+                Quick Delivery
+              </Button>
+            )}
             <Badge variant="info">{deliveries.filter((d) => d.status !== 'cancelled' && d.status !== 'completed').length} Active</Badge>
           </div>
         </div>
