@@ -142,57 +142,67 @@ export default function DeliveryDetail() {
       const del = delData as Delivery;
       setDelivery(del);
 
-      const [custRes, itemsRes, addrRes, driverRes, photosRes] = await Promise.all([
-        supabase.from('customers').select('*').eq('id', del.customer_id).maybeSingle(),
-        supabase.from('delivery_items').select('*, product:products(product_name)').eq('delivery_id', id!),
-        del.delivery_address_id
-          ? supabase.from('customer_addresses').select('*').eq('id', del.delivery_address_id).maybeSingle()
-          : Promise.resolve({ data: null }),
-        del.assigned_driver
-          ? supabase.from('profiles').select('*').eq('id', del.assigned_driver).maybeSingle()
-          : Promise.resolve({ data: null }),
-        supabase.from('delivery_photos').select('*').eq('delivery_id', id!).order('sort_order'),
-      ]);
+      try {
+        const [custRes, itemsRes, addrRes, driverRes, photosRes] = await Promise.all([
+          supabase.from('customers').select('*').eq('id', del.customer_id).maybeSingle(),
+          supabase.from('delivery_items').select('*, product:products(product_name)').eq('delivery_id', id!),
+          del.delivery_address_id
+            ? supabase.from('customer_addresses').select('*').eq('id', del.delivery_address_id).maybeSingle()
+            : Promise.resolve({ data: null }),
+          del.assigned_driver
+            ? supabase.from('profiles').select('*').eq('id', del.assigned_driver).maybeSingle()
+            : Promise.resolve({ data: null }),
+          supabase.from('delivery_photos').select('*').eq('delivery_id', id!).order('sort_order'),
+        ]);
 
-      setCustomer(custRes.data as Customer | null);
-      const loadedItems = (itemsRes.data || []) as DeliveryItem[];
-      setItems(loadedItems);
-      const initQtys: Record<string, number> = {};
-      loadedItems.forEach((item) => { initQtys[item.id] = item.quantity; });
-      setDeliveryQtys(initQtys);
-      setAddress(addrRes.data as CustomerAddress | null);
-      setDriver(driverRes.data as Profile | null);
-      setPhotos((photosRes.data || []) as DeliveryPhoto[]);
+        setCustomer(custRes.data as Customer | null);
+        const loadedItems = (itemsRes.data || []) as DeliveryItem[];
+        setItems(loadedItems);
+        const initQtys: Record<string, number> = {};
+        loadedItems.forEach((item) => { initQtys[item.id] = item.quantity; });
+        setDeliveryQtys(initQtys);
+        setAddress(addrRes.data as CustomerAddress | null);
+        setDriver(driverRes.data as Profile | null);
+        setPhotos((photosRes.data || []) as DeliveryPhoto[]);
 
-      // Fetch order item context for items display
-      if (del.order_id) {
-        const { data: oiData } = await supabase
-          .from('order_items')
-          .select('id, total_units_needed, quantity_delivered, quantity_remaining')
-          .eq('order_id', del.order_id);
-        if (oiData) {
-          const ctx: Record<string, { ordered: number; delivered: number; remaining: number }> = {};
-          oiData.forEach((oi: any) => {
-            ctx[oi.id] = {
-              ordered: oi.total_units_needed,
-              delivered: oi.quantity_delivered,
-              remaining: oi.quantity_remaining,
-            };
-          });
-          setOrderItemContext(ctx);
+        // Fetch order item context for items display
+        if (del.order_id) {
+          const { data: oiData, error: oiError } = await supabase
+            .from('order_items')
+            .select('id, total_units_needed, quantity_delivered, quantity_remaining')
+            .eq('order_id', del.order_id);
+          if (oiError) {
+            toast('error', sanitizeError(oiError));
+          } else if (oiData) {
+            const ctx: Record<string, { ordered: number; delivered: number; remaining: number }> = {};
+            oiData.forEach((oi: any) => {
+              ctx[oi.id] = {
+                ordered: oi.total_units_needed,
+                delivered: oi.quantity_delivered,
+                remaining: oi.quantity_remaining,
+              };
+            });
+            setOrderItemContext(ctx);
+          }
         }
-      }
 
-      // Fetch remainders for completed deliveries
-      if (del.status === 'completed') {
-        const { data: remData } = await supabase
-          .from('delivery_remainders')
-          .select('*, product:products(product_name)')
-          .eq('original_delivery_id', id!);
-        setRemainders((remData || []).map((r: any) => ({
-          ...r,
-          product_name: r.product?.product_name || 'Unknown',
-        })) as DeliveryRemainder[]);
+        // Fetch remainders for completed deliveries
+        if (del.status === 'completed') {
+          const { data: remData, error: remError } = await supabase
+            .from('delivery_remainders')
+            .select('*, product:products(product_name)')
+            .eq('original_delivery_id', id!);
+          if (remError) {
+            toast('error', sanitizeError(remError));
+          } else {
+            setRemainders((remData || []).map((r: any) => ({
+              ...r,
+              product_name: r.product?.product_name || 'Unknown',
+            })) as DeliveryRemainder[]);
+          }
+        }
+      } catch (err) {
+        toast('error', 'Failed to load delivery details. Please refresh.');
       }
     }
     setLoading(false);

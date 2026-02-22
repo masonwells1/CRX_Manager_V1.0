@@ -126,6 +126,10 @@ interface SaveCustomerParams {
     id?: string | null;
     label: string;
     address_line: string;
+    city?: string | null;
+    state?: string | null;
+    zip?: string | null;
+    delivery_notes?: string | null;
     is_default?: boolean;
   }> | null;
   p_performed_by: string;
@@ -410,7 +414,7 @@ describe('RPC contract: save_customer', () => {
         finance_charge_grace_days: 30,
       },
       p_addresses: [
-        { label: 'Main', address_line: '123 Farm Rd', is_default: true },
+        { label: 'Main', address_line: '123 Farm Rd', city: 'Springfield', state: 'IL', zip: '62701', delivery_notes: null, is_default: true },
       ],
       p_performed_by: 'user-uuid',
     });

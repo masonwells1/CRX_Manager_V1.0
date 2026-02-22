@@ -93,15 +93,27 @@ export default function QuickDeliveryModal({
       return;
     }
     const timer = setTimeout(async () => {
-      const { data } = await supabase
-        .from('customers')
-        .select('id, farm_name, account_number, assigned_tier')
-        .eq('is_active', true)
-        .or(`farm_name.ilike.%${customerSearch}%,account_number.ilike.%${customerSearch}%`)
-        .order('farm_name')
-        .limit(15);
-      setCustomerResults((data || []) as CustomerOption[]);
-      setShowCustomerDropdown(true);
+      try {
+        const { data, error } = await supabase
+          .from('customers')
+          .select('id, farm_name, account_number, assigned_tier')
+          .eq('is_active', true)
+          .or(`farm_name.ilike.%${customerSearch}%,account_number.ilike.%${customerSearch}%`)
+          .order('farm_name')
+          .limit(15);
+        if (error) {
+          toast('error', 'Customer search failed. Please try again.');
+          setCustomerResults([]);
+          setShowCustomerDropdown(false);
+        } else {
+          setCustomerResults((data || []) as CustomerOption[]);
+          setShowCustomerDropdown(true);
+        }
+      } catch {
+        toast('error', 'Customer search failed. Please try again.');
+        setCustomerResults([]);
+        setShowCustomerDropdown(false);
+      }
     }, 300);
     return () => clearTimeout(timer);
   }, [customerSearch, selectedCustomer]);
