@@ -77,8 +77,8 @@ function renderReceivingPage(
   ];
   const infoRight = [
     ['PO Number', data.po_number],
-    ['Date Received', new Date(data.received_at).toLocaleDateString()],
-    ['Time', new Date(data.received_at).toLocaleTimeString()],
+    ['Date Received', new Date(data.received_at + (data.received_at.includes('T') ? '' : 'T00:00:00')).toLocaleDateString()],
+    ['Time', new Date(data.received_at + (data.received_at.includes('T') ? '' : 'T00:00:00')).toLocaleTimeString()],
   ];
 
   doc.setFontSize(9);

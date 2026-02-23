@@ -1,18 +1,21 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { PostgrestError } from '@supabase/supabase-js';
+
+type QueryError = PostgrestError | Error | null;
 
 interface UseSupabaseQueryOptions<T> {
   /** The async function that performs the Supabase query */
-  queryFn: (signal: AbortSignal) => Promise<{ data: T | null; error: any }>;
+  queryFn: (signal: AbortSignal) => Promise<{ data: T | null; error: QueryError }>;
   /** Whether to run the query immediately (default: true) */
   enabled?: boolean;
   /** Callback on error */
-  onError?: (error: any) => void;
+  onError?: (error: QueryError) => void;
 }
 
 interface UseSupabaseQueryResult<T> {
   data: T | null;
   loading: boolean;
-  error: any;
+  error: QueryError;
   refetch: () => void;
 }
 
@@ -40,7 +43,7 @@ export function useSupabaseQuery<T>({
 }: UseSupabaseQueryOptions<T>): UseSupabaseQueryResult<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(enabled);
-  const [error, setError] = useState<any>(null);
+  const [error, setError] = useState<QueryError>(null);
   const mountedRef = useRef(true);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -68,10 +71,11 @@ export function useSupabaseQuery<T>({
       } else {
         setData(result.data);
       }
-    } catch (err: any) {
-      if (!mountedRef.current || err?.name === 'AbortError') return;
-      setError(err);
-      onError?.(err);
+    } catch (err: unknown) {
+      const caughtError = err instanceof Error ? err : new Error(String(err));
+      if (!mountedRef.current || caughtError.name === 'AbortError') return;
+      setError(caughtError);
+      onError?.(caughtError);
     } finally {
       if (mountedRef.current) {
         setLoading(false);

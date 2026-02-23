@@ -76,7 +76,7 @@ export default function ProductDetail() {
   useEffect(() => {
     supabase.from('unit_conversions').select('*').order('unit').then(({ data }) => {
       setUnitConversions((data || []) as UnitConversion[]);
-    });
+    }).catch(() => { /* non-critical: unit conversion list stays empty */ });
   }, []);
 
   const fetchProduct = async () => {

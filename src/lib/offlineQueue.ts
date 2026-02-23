@@ -107,3 +107,39 @@ export async function getPendingCount(): Promise<number> {
     request.onerror = () => reject(request.error);
   });
 }
+
+/**
+ * Remove all actions that have exceeded MAX_RETRIES (permanently failed).
+ * Returns the number of cleared actions.
+ */
+export async function clearFailedActions(maxRetries: number = 3): Promise<number> {
+  const actions = await getPendingActions();
+  const failed = actions.filter((a) => a.retryCount >= maxRetries);
+  for (const action of failed) {
+    await removeAction(action.id!);
+  }
+  return failed.length;
+}
+
+/**
+ * Remove actions older than the given age in milliseconds.
+ * Default: 7 days. Prevents stale data from accumulating.
+ */
+export async function clearStaleActions(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<number> {
+  const actions = await getPendingActions();
+  const cutoff = Date.now() - maxAgeMs;
+  const stale = actions.filter((a) => new Date(a.createdAt).getTime() < cutoff);
+  for (const action of stale) {
+    await removeAction(action.id!);
+  }
+  return stale.length;
+}
+
+/**
+ * Get only the permanently failed actions (retryCount >= maxRetries).
+ * Useful for surfacing failed items to the user in a dashboard.
+ */
+export async function getFailedActions(maxRetries: number = 3): Promise<PendingAction[]> {
+  const actions = await getPendingActions();
+  return actions.filter((a) => a.retryCount >= maxRetries);
+}

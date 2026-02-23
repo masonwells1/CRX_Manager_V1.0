@@ -32,18 +32,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchProfile = async (userId: string) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle();
-    if (error) {
-      console.error('Failed to fetch profile:', error.message);
-      setProfile(null);
-      return;
+  const fetchProfile = async (userId: string, retries = 2) => {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+      if (!error) {
+        setProfile(data ?? null);
+        return;
+      }
+      console.error(`Profile fetch attempt ${attempt + 1} failed:`, error.message);
+      if (attempt < retries) {
+        // Wait 1s before retry (doubles each attempt)
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
     }
-    setProfile(data ?? null);
+    // All retries exhausted — set null so ProtectedRoute can handle it
+    setProfile(null);
   };
 
   useEffect(() => {
@@ -54,6 +61,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } else {
         setLoading(false);
       }
+    }).catch(() => {
+      // Network error during initial session check — show login
+      setLoading(false);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
@@ -83,9 +93,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    // Clear local state immediately so the UI goes to login
     setProfile(null);
     setSession(null);
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Offline or network error — local state is already cleared,
+      // so user still gets redirected to login. Session cookie will
+      // expire naturally on its own.
+    }
   };
 
   return (

@@ -136,7 +136,8 @@ export default function Deliveries() {
           item_count: 0,
         }));
         setUnassigned(rows);
-      });
+      })
+      .catch(() => { /* non-critical: unassigned deliveries list stays empty */ });
   }, [isDriver, deliveries]);
 
   const fetchDrivers = async () => {

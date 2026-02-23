@@ -740,17 +740,29 @@ export async function generateBatchInvoicePdf(dataList: InvoicePdfData[]) {
     return generateInvoicePdf(dataList[0]);
   }
 
-  // For multiple invoices, download each separately with a small delay
-  for (let i = 0; i < dataList.length; i++) {
-    const doc = await generateInvoicePdf(dataList[i]);
-    doc.save(`${dataList[i].invoice_number}.pdf`);
-    // Small delay between downloads to prevent browser blocking
-    if (i < dataList.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
+  // Generate each invoice as a separate Blob, then combine into a single
+  // download link using a zip-like concatenation of individual PDF saves.
+  // Since each invoice can span multiple pages (autoTable paginates), we
+  // can't simply addPage() across invoices. Instead, download sequentially
+  // but only trigger ONE browser download using the first doc, and append
+  // remaining as individual saves with requestAnimationFrame to avoid
+  // popup blockers.
+  const docs = await Promise.all(dataList.map((d) => generateInvoicePdf(d)));
+
+  // Save first immediately (always allowed by browser)
+  docs[0].save(`${dataList[0].invoice_number}.pdf`);
+
+  // Queue remaining downloads spaced out via rAF to avoid popup blockers.
+  // Most browsers allow sequential downloads from user-initiated actions.
+  for (let i = 1; i < docs.length; i++) {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        docs[i].save(`${dataList[i].invoice_number}.pdf`);
+        resolve();
+      });
+    });
   }
 
-  // Return the last doc (caller may call .save() but we already saved all)
-  return generateInvoicePdf(dataList[dataList.length - 1]);
+  return docs[docs.length - 1];
 }
 

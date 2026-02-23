@@ -10,11 +10,17 @@ vi.mock('./db', () => ({
 const mockGetPendingActions = vi.fn();
 const mockRemoveAction = vi.fn().mockResolvedValue(undefined);
 const mockUpdateAction = vi.fn().mockResolvedValue(undefined);
+const mockClearFailedActions = vi.fn().mockResolvedValue(0);
+const mockClearStaleActions = vi.fn().mockResolvedValue(0);
+const mockGetFailedActions = vi.fn().mockResolvedValue([]);
 
 vi.mock('./offlineQueue', () => ({
   getPendingActions: () => mockGetPendingActions(),
   removeAction: (id: number) => mockRemoveAction(id),
   updateAction: (action: any) => mockUpdateAction(action),
+  clearFailedActions: (...args: any[]) => mockClearFailedActions(...args),
+  clearStaleActions: (...args: any[]) => mockClearStaleActions(...args),
+  getFailedActions: (...args: any[]) => mockGetFailedActions(...args),
 }));
 
 import { syncPendingActions } from './offlineSync';
@@ -27,7 +33,7 @@ describe('syncPendingActions', () => {
   it('returns { synced: 0, failed: 0 } when queue is empty', async () => {
     mockGetPendingActions.mockResolvedValue([]);
     const result = await syncPendingActions();
-    expect(result).toEqual({ synced: 0, failed: 0 });
+    expect(result).toEqual({ synced: 0, failed: 0, cleaned: 0 });
   });
 
   it('syncs a complete_delivery action successfully', async () => {
@@ -40,7 +46,7 @@ describe('syncPendingActions', () => {
 
     expect(mockRpc).toHaveBeenCalledWith('complete_delivery', { delivery_id: 'd-1' });
     expect(mockRemoveAction).toHaveBeenCalledWith(1);
-    expect(result).toEqual({ synced: 1, failed: 0 });
+    expect(result).toEqual({ synced: 1, failed: 0, cleaned: 0 });
   });
 
   it('syncs a record_payment action successfully', async () => {
@@ -53,7 +59,7 @@ describe('syncPendingActions', () => {
 
     expect(mockRpc).toHaveBeenCalledWith('record_payment', { amount: 100 });
     expect(mockRemoveAction).toHaveBeenCalledWith(2);
-    expect(result).toEqual({ synced: 1, failed: 0 });
+    expect(result).toEqual({ synced: 1, failed: 0, cleaned: 0 });
   });
 
   it('increments retryCount on RPC error (under max retries)', async () => {
@@ -68,7 +74,7 @@ describe('syncPendingActions', () => {
       expect.objectContaining({ id: 3, retryCount: 1, lastError: 'timeout' })
     );
     expect(mockRemoveAction).not.toHaveBeenCalled();
-    expect(result).toEqual({ synced: 0, failed: 0 }); // not "failed" until max retries
+    expect(result).toEqual({ synced: 0, failed: 0, cleaned: 0 }); // not "failed" until max retries
   });
 
   it('marks as failed after reaching max retries (3)', async () => {
@@ -82,7 +88,7 @@ describe('syncPendingActions', () => {
     expect(mockUpdateAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: 4, retryCount: 3, lastError: 'still failing' })
     );
-    expect(result).toEqual({ synced: 0, failed: 1 });
+    expect(result).toEqual({ synced: 0, failed: 1, cleaned: 0 });
   });
 
   it('handles unknown operations by failing them', async () => {
@@ -93,9 +99,9 @@ describe('syncPendingActions', () => {
     const result = await syncPendingActions();
 
     expect(mockUpdateAction).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 5, retryCount: 1, lastError: expect.stringContaining('Unknown operation') })
+      expect.objectContaining({ id: 5, retryCount: 1, lastError: expect.stringContaining('Unknown offline operation') })
     );
-    expect(result).toEqual({ synced: 0, failed: 0 });
+    expect(result).toEqual({ synced: 0, failed: 0, cleaned: 0 });
   });
 
   it('processes multiple actions in sequence', async () => {
@@ -110,7 +116,7 @@ describe('syncPendingActions', () => {
 
     expect(mockRpc).toHaveBeenCalledTimes(3);
     expect(mockRemoveAction).toHaveBeenCalledTimes(3);
-    expect(result).toEqual({ synced: 3, failed: 0 });
+    expect(result).toEqual({ synced: 3, failed: 0, cleaned: 0 });
   });
 
   it('continues processing remaining actions when one fails', async () => {
@@ -125,7 +131,7 @@ describe('syncPendingActions', () => {
 
     const result = await syncPendingActions();
 
-    expect(result).toEqual({ synced: 1, failed: 0 });
+    expect(result).toEqual({ synced: 1, failed: 0, cleaned: 0 });
     expect(mockUpdateAction).toHaveBeenCalledTimes(1); // failed one
     expect(mockRemoveAction).toHaveBeenCalledTimes(1); // synced one
   });

@@ -164,7 +164,7 @@ export default function QuoteBuilder() {
       generateQuoteNumber().then(() => {
         // Allow a tick for state to settle before tracking changes
         setTimeout(() => { initialLoadDone.current = true; }, 0);
-      });
+      }).catch(() => { /* non-critical: quote number defaults handled inside generateQuoteNumber */ });
     }
   }, [id]);
 

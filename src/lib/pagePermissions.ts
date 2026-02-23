@@ -91,7 +91,7 @@ export function hasPageAccess(
 
   // Find the page definition
   const page = PAGE_PERMISSIONS.find((p) => p.key === pageKey);
-  if (!page) return true; // Unknown page key — don't block
+  if (!page) return false; // Unknown page key — deny by default (fail-closed)
 
   // Role must be allowed
   if (!page.roles.includes(role)) return false;

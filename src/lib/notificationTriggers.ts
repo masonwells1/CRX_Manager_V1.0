@@ -27,7 +27,7 @@ export async function checkLowStockNotifications() {
     if (!lowStockItems) return;
 
     const alerts = lowStockItems.filter(
-      (i: any) => Number(i.quantity_available) <= Number(i.reorder_point)
+      (i) => Number(i.quantity_available) <= Number(i.reorder_point)
     );
 
     if (alerts.length === 0) return;
@@ -40,12 +40,14 @@ export async function checkLowStockNotifications() {
       .eq('notification_type', 'low_stock')
       .gte('created_at', `${today}T00:00:00Z`);
 
-    const alreadyNotified = new Set((existingToday || []).map((n: any) => n.related_entity_id));
+    const alreadyNotified = new Set((existingToday || []).map((n) => n.related_entity_id));
 
     for (const item of alerts) {
       if (alreadyNotified.has(item.product_id)) continue;
 
-      const productName = (item as any).product?.product_name || 'Unknown product';
+      // Supabase returns joined relations as nested objects
+      const product = item.product as unknown as { product_name: string } | null;
+      const productName = product?.product_name || 'Unknown product';
       await notifyAdmins(
         'Low Stock Alert',
         `${productName} is low — ${item.quantity_available} units available (reorder point: ${item.reorder_point})`,
@@ -85,13 +87,16 @@ export async function checkExpiringQuoteNotifications() {
       .eq('notification_type', 'quote_expiring')
       .gte('created_at', `${today}T00:00:00Z`);
 
-    const alreadyNotified = new Set((existingToday || []).map((n: any) => n.related_entity_id));
+    const alreadyNotified = new Set((existingToday || []).map((n) => n.related_entity_id));
 
     for (const quote of expiringQuotes) {
       if (alreadyNotified.has(quote.id)) continue;
 
-      const customerName = (quote as any).customer?.[0]?.farm_name ||
-        (quote as any).customer?.farm_name || 'customer';
+      // Supabase may return joined relations as object or array depending on relationship type
+      const customer = quote.customer as unknown as { farm_name: string } | { farm_name: string }[] | null;
+      const customerName = Array.isArray(customer)
+        ? customer[0]?.farm_name || 'customer'
+        : customer?.farm_name || 'customer';
       const daysLeft = Math.ceil(
         (new Date(quote.expires_at!).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
       );

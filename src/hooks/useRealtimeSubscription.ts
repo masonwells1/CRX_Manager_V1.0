@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { supabase } from '../lib/db';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 
-type SubscriptionCallback = (payload: any) => void;
+type RealtimePayload = RealtimePostgresChangesPayload<Record<string, unknown>>;
+type SubscriptionCallback = (payload: RealtimePayload) => void;
 
 interface SubscriptionConfig {
   table: string;
@@ -15,6 +16,17 @@ interface SubscriptionConfig {
 }
 
 export function useRealtimeSubscription(config: SubscriptionConfig) {
+  // Store callbacks in refs to avoid stale closures
+  const onChangeRef = useRef(config.onChange);
+  const onInsertRef = useRef(config.onInsert);
+  const onUpdateRef = useRef(config.onUpdate);
+  const onDeleteRef = useRef(config.onDelete);
+
+  onChangeRef.current = config.onChange;
+  onInsertRef.current = config.onInsert;
+  onUpdateRef.current = config.onUpdate;
+  onDeleteRef.current = config.onDelete;
+
   useEffect(() => {
     let channel: RealtimeChannel;
 
@@ -26,24 +38,22 @@ export function useRealtimeSubscription(config: SubscriptionConfig) {
 
       channel
         .on(
-          'postgres_changes' as any,
+          'postgres_changes' as 'system',
           {
             event: eventType,
             schema: 'public',
             table: config.table,
             filter: config.filter,
-          },
-          (payload: any) => {
-            if (config.onChange) {
-              config.onChange(payload);
-            }
+          } as Record<string, string | undefined>,
+          (payload: RealtimePayload) => {
+            onChangeRef.current?.(payload);
 
-            if (payload.eventType === 'INSERT' && config.onInsert) {
-              config.onInsert(payload);
-            } else if (payload.eventType === 'UPDATE' && config.onUpdate) {
-              config.onUpdate(payload);
-            } else if (payload.eventType === 'DELETE' && config.onDelete) {
-              config.onDelete(payload);
+            if (payload.eventType === 'INSERT') {
+              onInsertRef.current?.(payload);
+            } else if (payload.eventType === 'UPDATE') {
+              onUpdateRef.current?.(payload);
+            } else if (payload.eventType === 'DELETE') {
+              onDeleteRef.current?.(payload);
             }
           }
         )

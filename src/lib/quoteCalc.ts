@@ -128,20 +128,22 @@ export function validateCommissionSplits(
  */
 export function convertToGlLb(
   totalApplied: number,
-  unit: string,
+  unit: string | null | undefined,
   productForm: 'liquid' | 'dry' | string,
 ): { value: number; unit: string } {
+  const u = (unit || 'OZ').toUpperCase();
+
   if (productForm === 'dry') {
-    const u = unit.toUpperCase();
     if (u === 'OZ') return { value: totalApplied / 16, unit: 'LB' };
+    if (u === 'LB') return { value: totalApplied, unit: 'LB' };
+    // Unknown dry unit — assume already in LB
     return { value: totalApplied, unit: 'LB' };
   }
   // Liquid
-  const u = unit.toUpperCase();
   if (u === 'OZ') return { value: totalApplied / 128, unit: 'GL' };
   if (u === 'PT') return { value: totalApplied / 8, unit: 'GL' };
   if (u === 'QT') return { value: totalApplied / 4, unit: 'GL' };
   if (u === 'GL') return { value: totalApplied, unit: 'GL' };
-  // Default to OZ→GL for unknown units
+  // Unknown liquid unit — default to OZ→GL
   return { value: totalApplied / 128, unit: 'GL' };
 }

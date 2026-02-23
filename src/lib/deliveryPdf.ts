@@ -85,7 +85,7 @@ function renderDeliveryPage(
     ['Driver', data.driver_name],
   ];
   const infoRight = [
-    ['Scheduled', new Date(data.scheduled_date).toLocaleDateString()],
+    ['Scheduled', new Date(data.scheduled_date + 'T00:00:00').toLocaleDateString()],
     ['Completed', data.completed_at ? new Date(data.completed_at).toLocaleDateString() : 'Pending'],
     ['Signed By', data.signed_by || '-'],
   ];

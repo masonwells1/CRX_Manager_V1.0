@@ -148,7 +148,8 @@ export default function Reports() {
     supabase.from('products').select('id, product_name').eq('is_active', true).order('product_name').limit(500)
       .then(({ data: rows }) => {
         setProductOptions((rows || []).map((r) => ({ id: r.id, name: r.product_name })));
-      });
+      })
+      .catch(() => { /* non-critical: product filter dropdown stays empty */ });
   }, []);
 
   // ─── Fetch on tab/date change ───────────────────────────────
@@ -350,7 +351,8 @@ export default function Reports() {
   useEffect(() => {
     if (category === 'year_end' && yeCustomerOptions.length === 0) {
       supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(1000)
-        .then(({ data }) => setYeCustomerOptions((data || []).map((r) => ({ id: r.id, name: r.farm_name }))));
+        .then(({ data }) => setYeCustomerOptions((data || []).map((r) => ({ id: r.id, name: r.farm_name }))))
+        .catch(() => { /* non-critical: customer dropdown stays empty */ });
     }
   }, [category]);
 

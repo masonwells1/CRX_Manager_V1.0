@@ -5,6 +5,7 @@ import {
   recalcItem,
   computeQuoteTotals,
   validateCommissionSplits,
+  convertToGlLb,
   type CalcItem,
 } from './quoteCalc';
 import type { Product, UnitConversion } from '../types';
@@ -425,5 +426,95 @@ describe('validateCommissionSplits', () => {
         { recipient: 'C', percentage: 33.34 },
       ])
     ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// convertToGlLb
+// ---------------------------------------------------------------------------
+
+describe('convertToGlLb', () => {
+  // ── Liquid conversions ───────────────────────────────────────────────
+
+  it('converts OZ to GL for liquid (÷128)', () => {
+    const result = convertToGlLb(256, 'OZ', 'liquid');
+    expect(result).toEqual({ value: 2, unit: 'GL' });
+  });
+
+  it('converts PT to GL for liquid (÷8)', () => {
+    const result = convertToGlLb(16, 'PT', 'liquid');
+    expect(result).toEqual({ value: 2, unit: 'GL' });
+  });
+
+  it('converts QT to GL for liquid (÷4)', () => {
+    const result = convertToGlLb(8, 'QT', 'liquid');
+    expect(result).toEqual({ value: 2, unit: 'GL' });
+  });
+
+  it('passes through GL for liquid', () => {
+    const result = convertToGlLb(5, 'GL', 'liquid');
+    expect(result).toEqual({ value: 5, unit: 'GL' });
+  });
+
+  it('treats unknown liquid unit as OZ→GL', () => {
+    const result = convertToGlLb(128, 'EACH', 'liquid');
+    expect(result).toEqual({ value: 1, unit: 'GL' });
+  });
+
+  // ── Dry conversions ─────────────────────────────────────────────────
+
+  it('converts OZ to LB for dry (÷16)', () => {
+    const result = convertToGlLb(32, 'OZ', 'dry');
+    expect(result).toEqual({ value: 2, unit: 'LB' });
+  });
+
+  it('passes through LB for dry', () => {
+    const result = convertToGlLb(10, 'LB', 'dry');
+    expect(result).toEqual({ value: 10, unit: 'LB' });
+  });
+
+  it('treats unknown dry unit as LB pass-through', () => {
+    const result = convertToGlLb(5, 'BAG', 'dry');
+    expect(result).toEqual({ value: 5, unit: 'LB' });
+  });
+
+  // ── Null / undefined / empty unit (Sprint B fix) ────────────────────
+
+  it('defaults null unit to OZ for liquid', () => {
+    const result = convertToGlLb(128, null, 'liquid');
+    expect(result).toEqual({ value: 1, unit: 'GL' });
+  });
+
+  it('defaults undefined unit to OZ for liquid', () => {
+    const result = convertToGlLb(128, undefined, 'liquid');
+    expect(result).toEqual({ value: 1, unit: 'GL' });
+  });
+
+  it('defaults empty string unit to OZ for liquid', () => {
+    const result = convertToGlLb(128, '', 'liquid');
+    expect(result).toEqual({ value: 1, unit: 'GL' });
+  });
+
+  it('defaults null unit to OZ for dry', () => {
+    const result = convertToGlLb(16, null, 'dry');
+    expect(result).toEqual({ value: 1, unit: 'LB' });
+  });
+
+  // ── Case insensitivity ──────────────────────────────────────────────
+
+  it('handles lowercase unit strings', () => {
+    expect(convertToGlLb(4, 'qt', 'liquid')).toEqual({ value: 1, unit: 'GL' });
+    expect(convertToGlLb(16, 'oz', 'dry')).toEqual({ value: 1, unit: 'LB' });
+  });
+
+  it('handles mixed-case unit strings', () => {
+    expect(convertToGlLb(8, 'Pt', 'liquid')).toEqual({ value: 1, unit: 'GL' });
+  });
+
+  // ── Zero value ──────────────────────────────────────────────────────
+
+  it('handles zero totalApplied', () => {
+    expect(convertToGlLb(0, 'QT', 'liquid')).toEqual({ value: 0, unit: 'GL' });
+    expect(convertToGlLb(0, 'OZ', 'dry')).toEqual({ value: 0, unit: 'LB' });
   });
 });
