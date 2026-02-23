@@ -27,3 +27,4 @@ nul
 ENV_SETUP.md
 playwright-report/
 test-results/
+test-import.csv

@@ -1,6 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Load .env so E2E_TEST_EMAIL / E2E_TEST_PASSWORD are available to tests
 const envPath = resolve(__dirname, '.env');
