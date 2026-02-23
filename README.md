@@ -1,20 +1,22 @@
 # CRX Manager V1.0
 
-Business management system for **Crop RX Solutions**, an agricultural product distributor. Manages the full workflow from quoting to delivery: customer management, product catalog with 3-tier pricing, quote builder, order fulfillment, delivery scheduling with digital signatures, inventory tracking, purchase orders, blend tickets, team collaboration, and reporting.
+Business management system for **Crop RX Solutions**, an agricultural chemical distributor. Manages the full order-to-cash workflow: customer management, 3-tier product pricing, quote building, order fulfillment, delivery scheduling with GPS & digital signatures, inventory tracking, purchase orders, blend ticket OCR, invoicing, payments, AR aging, commission tracking, field mapping, compliance, and reporting.
 
 ## Tech Stack
 
 - **Frontend:** React 18, TypeScript, Vite, Tailwind CSS
 - **Backend:** Supabase (PostgreSQL, Auth, Storage, Realtime, Edge Functions)
-- **Testing:** Playwright (E2E)
-- **Deployment:** Vercel
-- **Other:** jsPDF, Tesseract.js, signature_pad, Lucide React
+- **Maps:** Mapbox GL JS + react-map-gl (satellite field mapping with draw tools)
+- **Testing:** Vitest (unit) + Playwright (E2E)
+- **Deployment:** Vercel (private staging)
+- **Other:** jsPDF (PDF generation), Google Vision AI (OCR), proj4/shapefile (GIS import), Sentry (error tracking), Lucide React (icons)
 
 ## Quick Start
 
 ### Prerequisites
 - Node.js 18+
 - Supabase project with migrations applied
+- Mapbox account (free tier) for satellite field maps
 - Git
 
 ### Setup
@@ -24,7 +26,7 @@ git clone https://github.com/masonwells1/CRX_Manager_V1.0.git
 cd CRX_Manager_V1.0
 npm install
 cp .env.example .env
-# Edit .env with your Supabase URL and anon key
+# Edit .env with your Supabase URL, anon key, and Mapbox token
 npm run dev
 ```
 
@@ -36,6 +38,8 @@ Open http://localhost:5173 in your browser.
 |----------|-------------|
 | `VITE_SUPABASE_URL` | Your Supabase project URL |
 | `VITE_SUPABASE_ANON_KEY` | Your Supabase anonymous/public key |
+| `VITE_MAPBOX_TOKEN` | Mapbox public access token (for field maps) |
+| `VITE_SENTRY_DSN` | Sentry DSN for error tracking (optional) |
 
 All variables must start with `VITE_` to be accessible in the app. See `.env.example`.
 
@@ -46,12 +50,14 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 | `npm run dev` | Start development server (port 5173) |
 | `npm run build` | Build for production |
 | `npm run preview` | Preview production build locally |
+| `npm test` | Run all 766 unit tests |
+| `npm run test:watch` | Run unit tests in watch mode |
 | `npm run typecheck` | Check TypeScript errors |
 | `npm run lint` | Run ESLint |
 | `npm run test:e2e` | Run Playwright E2E tests |
 | `npm run test:e2e:ui` | Interactive Playwright test UI |
-| `npm run test:e2e:headed` | Watch tests run in browser |
-| `npm run test:e2e:report` | View HTML test report |
+
+> **Note:** A pre-commit hook runs `npm run build` + `npm test` automatically before every commit. Commits are blocked if the build fails or any test fails.
 
 ## User Roles
 
@@ -60,63 +66,74 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 | **admin** | Full access to everything |
 | **sales_rep** | Own assigned customers, quotes, orders, products (read-only) |
 | **driver** | Own assigned deliveries, customer addresses (read-only) |
+| **applicator** | Own assigned jobs, application records, products/fields (read-only) |
 
 ## Features
 
-- Customer management with tiered pricing
-- Product catalog (598+ products, 3-tier pricing, EPA registration)
-- Quote builder with sections, margin calculations, PDF generation
-- Order management with fulfillment tracking
-- Delivery scheduling with driver assignment and digital signatures
-- Inventory tracking with transaction audit trail
-- Purchase orders to vendors
-- Blend ticket system with OCR processing
-- Team collaboration board (notes, todos, announcements)
-- Real-time notifications via Supabase Realtime
-- Bulk CSV import for customers, products, quotes, orders, blend tickets
-- Brand vs generic product comparison
-- Commission tracking with split percentages
-- Reports and analytics with PDF export
-- Offline support for critical operations
-- Idempotency keys for critical writes
+### Core Business
+- **Customers** — Master list, tiered pricing, addresses, farm fields, purchase history
+- **Products** — Catalog with 3-tier pricing, EPA registration, unit conversions, cost history
+- **Quotes** — Multi-section quote builder, margin calculations, PDF generation, convert to order
+- **Orders** — Line-item management, fulfillment tracking, credit limit alerts, bulk import
+- **Deliveries** — Driver assignment, signature capture, photo upload, GPS tracking, partial delivery support, offline capable
+- **Receiving** — PO receipt with condition tracking (good/damaged/short), quick receive workflow
+
+### Inventory & Purchasing
+- **Inventory** — Real-time stock levels, low stock alerts, holds, adjustments, cycle counts
+- **Purchase Orders** — Vendor PO creation, receiving workflow, condition recording
+- **Returns** — RMA processing, restocking, credit memos
+
+### Financial
+- **Invoicing** — Auto-generate from deliveries, 3 layout modes, batch print, void/write-off
+- **Payments** — Check recording, auto-allocation across invoices, prepay credits
+- **AR Aging** — Aging buckets (current/30/60/90+), customer statements, finance charges
+- **Commissions** — Split percentages, payment lifecycle, posting workflow
+- **Month-End** — Period close checklist, batch statement generation, year-end summaries
+
+### Field Operations
+- **Field Mapping** — Mapbox satellite maps, polygon draw tools, bulk import (shapefile/KML/GeoJSON)
+- **Jobs** — Application scheduling, applicator/vehicle assignment, recipe loading
+- **Blend Tickets** — OCR upload via Google Vision AI, manual creation, order linkage
+- **Recipes** — Tank mix templates with product ratios
+- **Compliance** — Applicator license tracking, RUP product flags, expiry alerts
+
+### Collaboration & Reporting
+- **Team Board** — Notes, todos, announcements with tags and comments
+- **Notifications** — Real-time via Supabase (low stock, expiring quotes, order status, etc.)
+- **Reports** — Profitability, logbook, P&L, gross sales, commission balance, chemical history, price list, year-end
+- **Bulk Import** — CSV import for customers, products, quotes, orders, POs, blend tickets
+- **Offline Support** — IndexedDB queue for critical operations when disconnected
 
 ## Database
 
-25 tables in Supabase PostgreSQL with Row Level Security (RLS) on all tables. See:
-- `SCHEMA_QUICK_REFERENCE.sql` -- complete schema
-- `DATABASE_RELATIONSHIPS.md` -- entity relationships
-- `supabase/migrations/` -- all migration files
+72+ tables in Supabase PostgreSQL with Row Level Security (RLS) on all tables. ~110 RPC functions. 77 migration files in `supabase/migrations/`. 5 Edge Functions for user creation, OCR processing, and storage setup.
+
+See [CLAUDE.md](./CLAUDE.md) for the complete table list, RLS policy matrix, and RPC function inventory.
 
 ## Deployment
 
-Deployed to **Vercel** (private staging). Configuration in `vercel.json`.
+Deployed to **Vercel** (private staging). Configuration in `vercel.json` with security headers.
 
-Build settings:
-- **Framework:** Vite
-- **Build command:** `npm run build`
-- **Output directory:** `dist`
-
-See [DEPLOYMENT.md](./DEPLOYMENT.md) for full instructions.
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environment setup, and rollback procedures.
 
 ## Documentation
 
 | File | Contents |
 |------|----------|
-| [CONTEXT.md](./CONTEXT.md) | Full business context, features, data model, assumptions |
-| [CLAUDE.md](./CLAUDE.md) | Claude Code project instructions |
-| [DATABASE_RELATIONSHIPS.md](./DATABASE_RELATIONSHIPS.md) | Entity relationship diagrams |
-| [SCHEMA_QUICK_REFERENCE.sql](./SCHEMA_QUICK_REFERENCE.sql) | Complete SQL schema |
-| [TESTING.md](./TESTING.md) | Testing guide (beginner-friendly) |
-| [DEPLOYMENT.md](./DEPLOYMENT.md) | Deployment instructions |
-| [VERIFICATION.md](./VERIFICATION.md) | Setup verification and known issues |
-| [TEST_CHECKLIST.md](./TEST_CHECKLIST.md) | Pre-deployment checklist |
+| [CLAUDE.md](./CLAUDE.md) | Complete project reference — architecture, schema, RPCs, business logic, feature inventory |
+| [TESTING.md](./TESTING.md) | Testing guide (beginner-friendly) — setup, running tests, troubleshooting |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Deployment instructions — Vercel/Netlify setup, env vars, rollback |
+| [ENV_SETUP.md](./ENV_SETUP.md) | Environment variable setup guide |
 
 ## Current State
 
-- Security hardening (Tier 1-3): **Complete**
-- Deployed to Vercel: **Yes** (private staging)
-- Test coverage: **Minimal** (3 E2E test files)
-- Next milestone: Comprehensive test coverage (T3-002)
+- **49 pages**, 50+ components, fully lazy-loaded
+- **766 unit tests** (45 test files) + **31 E2E spec files**
+- **72+ database tables**, ~110 RPC functions, 77 migrations
+- **0 ESLint errors**, 0 TypeScript errors
+- **Pre-commit hook** blocks commits if build or tests fail
+- **Deployed to Vercel** (private staging — not shared publicly yet)
+- All hardening sprints (0-20) + safety audit + codebase audit: **Complete**
 
 ## License
 
@@ -125,4 +142,4 @@ Private - All rights reserved
 ---
 
 **Version:** 1.0
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-23

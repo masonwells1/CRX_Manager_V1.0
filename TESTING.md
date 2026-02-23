@@ -2,13 +2,22 @@
 
 This guide will walk you through testing the application. No coding experience needed!
 
+## Quick Facts
+
+| Metric | Count |
+|--------|-------|
+| **Unit tests** | 766 (Vitest, 45 test files in `src/`) |
+| **E2E specs** | 31 Playwright spec files (in `tests/e2e/`) |
+| **Pre-commit hook** | Runs `npm run build` + `npm test` before every commit — blocks if anything fails |
+
 ## Table of Contents
 1. [Setting Up Your Computer](#setting-up-your-computer)
 2. [Running the Application Locally](#running-the-application-locally)
-3. [Running Automated Tests](#running-automated-tests)
-4. [Deploying to Staging](#deploying-to-staging)
-5. [Pre-Release Checklist](#pre-release-checklist)
-6. [Troubleshooting](#troubleshooting)
+3. [Running Unit Tests](#running-unit-tests)
+4. [Running E2E Tests](#running-e2e-tests)
+5. [Deploying to Staging](#deploying-to-staging)
+6. [Pre-Release Checklist](#pre-release-checklist)
+7. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -140,15 +149,55 @@ If you see an error screen about missing environment variables:
 
 ---
 
-## Running Automated Tests
+## Running Unit Tests
 
-The application includes automated tests that check if everything is working correctly.
+Unit tests check individual pieces of logic (calculations, PDF generation, data parsing, etc.) without needing a browser or database connection.
+
+### Running All Unit Tests
+
+```bash
+npm test
+```
+
+This runs all 766 unit tests across 45 test files. Takes about 10-20 seconds.
+
+### Running Tests in Watch Mode
+
+```bash
+npm run test:watch
+```
+
+This keeps running and automatically re-tests when you save a file. Great during development.
+
+### What Unit Tests Cover
+
+- **PDF generation:** Quote, delivery, invoice, statement, receiving, year-end summary PDFs
+- **Business logic:** Quote calculations, payment allocation, blend math validation
+- **Data parsing:** OCR text parsing, field import (shapefile/KML/GeoJSON), CSV export
+- **Permissions:** Page-level role access (admin/sales_rep/driver/applicator)
+- **Offline support:** IndexedDB queue operations, sync logic
+- **Utilities:** Unit conversions, idempotency keys, image compression
+
+### Pre-Commit Hook
+
+Every time you commit code, the pre-commit hook automatically runs:
+1. `npm run build` — ensures the app compiles
+2. `npm test` — ensures all 766 unit tests pass
+
+If either fails, the commit is **blocked**. You must fix the issue before committing.
+
+---
+
+## Running E2E Tests
+
+E2E (end-to-end) tests open a real browser and test the full application — login, creating records, navigating pages, etc.
 
 ### What Do These Tests Check?
 
 - **Login/Logout:** Can users log in and out?
 - **Customer Management:** Can you create, view, and search for customers?
 - **Permissions:** Can users access the pages they're supposed to?
+- **All 49 pages:** Every page is tested for loading and basic functionality
 
 ### Running the Tests
 
@@ -452,15 +501,25 @@ npm install          # Install dependencies (run once)
 npm run dev          # Start development server
 npm run build        # Build for production
 npm run preview      # Preview production build locally
+npm run typecheck    # Check TypeScript errors
+npm run lint         # Run ESLint
 ```
 
-### Testing
+### Unit Tests (Vitest)
+```bash
+npm test                  # Run all 766 unit tests
+npm run test:watch        # Run unit tests in watch mode
+```
+
+### E2E Tests (Playwright)
 ```bash
 npm run test:e2e          # Run all E2E tests
 npm run test:e2e:ui       # Interactive test UI
 npm run test:e2e:headed   # Watch tests run in browser
 npm run test:e2e:report   # View test report
 ```
+
+> **Pre-commit hook:** `npm run build` + `npm test` run automatically before every commit. Commits are blocked if anything fails.
 
 ### Git Commands
 ```bash

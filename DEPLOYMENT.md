@@ -5,7 +5,8 @@ This guide explains how to deploy your application to production.
 ## Prerequisites
 
 Before deploying, ensure:
-- ✅ All tests pass locally (`npm run test:e2e`)
+- ✅ All unit tests pass (`npm test`)
+- ✅ All E2E tests pass (`npm run test:e2e`)
 - ✅ Production build works (`npm run build`)
 - ✅ Changes tested on staging environment
 - ✅ Supabase production database is ready
@@ -13,7 +14,7 @@ Before deploying, ensure:
 
 ## Deployment Options
 
-### Option 1: Netlify (Recommended for Beginners)
+### Option 1: Netlify (Alternative)
 
 #### Initial Setup
 
@@ -61,7 +62,7 @@ After initial setup, Netlify automatically deploys when you push to GitHub:
 
 ---
 
-### Option 2: Vercel
+### Option 2: Vercel (Current Deployment)
 
 #### Initial Setup
 
@@ -115,6 +116,8 @@ Your production `.env` should contain:
 ```env
 VITE_SUPABASE_URL=https://your-production-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-production-anon-key
+VITE_MAPBOX_TOKEN=pk.your-mapbox-token
+VITE_SENTRY_DSN=https://your-sentry-dsn (optional)
 ```
 
 **Security Notes:**
@@ -142,6 +145,7 @@ VITE_SUPABASE_ANON_KEY=your-production-anon-key
 - [ ] All TODO comments addressed
 
 ### Testing
+- [ ] All unit tests pass (`npm test` — 766 tests)
 - [ ] All E2E tests pass (`npm run test:e2e`)
 - [ ] Manual testing completed on staging
 - [ ] Mobile responsiveness verified
@@ -164,7 +168,7 @@ VITE_SUPABASE_ANON_KEY=your-production-anon-key
 ### Supabase Edge Function Secrets
 
 The following secrets **must** be set on your Supabase project before
-Edge Functions (`create-user`, `process-blend-ticket`) will work in production.
+Edge Functions (`create-user`, `process-blend-ticket`, `process-document`) will work in production.
 
 | Secret | Purpose | How to set |
 |--------|---------|------------|

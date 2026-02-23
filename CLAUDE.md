@@ -11,7 +11,7 @@
 - **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import + Safety Audit + Quick Receive + Codebase Audit + Lint Cleanup
 - **Deployed to:** Vercel (private preview/staging)
 - **Test coverage:** 766 unit tests (Vitest, 45 test files) + 31 Playwright E2E spec files
-- **64+ migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
+- **77 migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
 - **ESLint:** 0 errors (fully lint-clean as of 2026-02-23)
 - **Latest commit:** `22f9c86` on main (pushed)
@@ -31,6 +31,37 @@
 8. **Use the Supabase client from `src/lib/db.ts`** -- never create additional clients
 9. **Activity logging:** Call `logActivity()` from `src/lib/activityLogger.ts` for important user actions
 10. **Idempotency:** Use `generateIdempotencyKey()` for critical write operations (order creation, delivery completion, etc.)
+
+---
+
+## Feature Inventory (Quick Reference)
+
+Use this table to check **"does this feature already exist?"** before building anything new.
+
+| Domain | Pages | Key Capabilities |
+|--------|-------|-----------------|
+| **Dashboard** | `/` | KPIs, today's jobs, recent activity, integrity alerts |
+| **Customers** | `/customers`, `/customers/:id` | Master list, tiered pricing (1-4), addresses, credit limits, finance charge settings, season summary, bulk import |
+| **Products** | `/products`, `/products/:id` | Catalog with 3-tier pricing, EPA registration, RUP status, signal words, unit conversions, cost history, bulk import/pricing import |
+| **Quotes** | `/quotes`, `/quotes/new`, `/quotes/:id` | Multi-section builder, tiered pricing, commission splits, margin calcs, PDF generation, versioning, convert to order, bulk import |
+| **Orders** | `/orders`, `/orders/new`, `/orders/:id` | Direct creation or from quote, line-item management, fulfillment tracking, credit limit alerts, bulk import |
+| **Deliveries** | `/deliveries`, `/deliveries/new`, `/deliveries/:id`, `/delivery-remainders` | Driver assignment, confirm→complete flow, signature capture, photo upload (10 max), GPS, partial delivery remainders, quick delivery (atomic order+delivery+invoice), batch cancel, driver dashboard |
+| **Receiving** | `/receiving`, `/receiving/quick` | PO receiving with per-item condition/lot/notes, receiving dashboard with summary cards, quick receive (auto-match to oldest POs), photo attachments |
+| **Inventory** | `/inventory`, `/cycle-counts` | Real-time stock levels, low stock alerts, holds, adjustments, warehouse tracking, cycle counts with variance |
+| **Purchase Orders** | `/purchase-orders`, `/purchase-orders/new`, `/purchase-orders/:id` | Vendor PO creation, two-step receive modal, receiving history, auto-cost update |
+| **Invoices** | `/invoices`, `/invoices/:id` | Auto-generate from deliveries, 3 PDF layouts, batch print, batch void, write-off, post/unpost |
+| **Payments** | `/payments`, `/payment-allocation`, `/prepayments` | Check recording, unified allocation across invoices, prepay credits, auto-apply |
+| **AR & Finance** | `/ar-aging`, `/month-end`, `/commission-payments`, `/customer-transactions` | Aging buckets (current/30/60/90+), finance charges, statements, period close, commission posting, transaction review |
+| **Jobs** | `/jobs`, `/jobs/:id` | Application scheduling, applicator/vehicle assignment, recipe loading, complete→application record, transfer to invoice |
+| **Blend Tickets** | `/blend-tickets`, `/blend-tickets/:id` | OCR upload (Google Vision AI + Tesseract.js), manual creation, product extraction, approve/reject, link to orders |
+| **Recipes** | `/recipes` | Reusable blend recipe templates, product ratios, create job from recipe |
+| **Fields** | `/fields`, `/fields/:id` | Mapbox satellite maps, polygon draw tools, bulk import (shapefile/KML/GeoJSON with proj4 reprojection) |
+| **Compliance** | `/compliance` | Applicator license tracking, RUP product flags, expiry alerts |
+| **Returns** | `/returns` | RMA workflow (request→approve→receive→credit), restocking, credit memos |
+| **Vehicles** | `/vehicles`, `/vehicles/:id` | Ground/air equipment CRUD, capacity, registration, FAA/DOT numbers |
+| **Reports** | `/reports` | 14 reports: logbook (4 views), P&L, gross sales, commission balance, chemical history, inventory cost, year-end summary. CSV/PDF export. |
+| **Team Board** | `/team-board` | Kanban: notes/todos/announcements, comments, tags, real-time updates |
+| **Other** | `/notifications`, `/settings`, `/application-records`, `/brand-vs-generic`, `/crop-programs`, `/rebates` | Notification center, admin settings/user management, application records log, ingredient mapping, crop programs, rebate claims |
 
 ---
 
@@ -122,9 +153,9 @@ src/
   assets/              # Logo images
 supabase/
   migrations/          # All database migrations (SQL, chronological order)
-  functions/           # Edge Functions: create-user, seed-admin, setup-blend-tickets-storage
+  functions/           # Edge Functions: create-user, process-blend-ticket, process-document, seed-admin, setup-blend-tickets-storage
 tests/
-  e2e/                 # 121 Playwright E2E tests across 20 spec files (all pages covered)
+  e2e/                 # 31 Playwright E2E spec files (all pages covered)
 ```
 
 ### Pages (49 total)
@@ -457,8 +488,10 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix. Key migrat
 46. Dashboard integrity alerts
 47. Quick Receive (match_quick_receive_items RPC, receive_po_items p_allow_over_receive)
 
-### Edge Functions
+### Edge Functions (5 total in `supabase/functions/`)
 - **create-user** - Admin-only: creates a new auth user with role metadata
+- **process-blend-ticket** - OCR processing via Google Vision AI (requires GOOGLE_VISION_API_KEY secret)
+- **process-document** - Document processing Edge Function
 - **seed-admin** - One-time: creates initial admin user (requires SEED_ADMIN_SECRET header)
 - **setup-blend-tickets-storage** - Returns storage bucket configuration instructions
 
@@ -787,7 +820,7 @@ Test every feature as each role:
 
 ### Build & Type Checking
 - `npm run build` for full build verification (pre-commit hook runs this automatically)
-- `npx vitest run` for 379 unit tests (pre-commit hook runs this automatically)
+- `npx vitest run` for 766 unit tests (pre-commit hook runs this automatically)
 - `npx tsc --noEmit` for type checking only
 - Known warning: vendor-mapbox chunk is ~1,680KB (>500KB limit) — Mapbox is large, this is expected
 - react-map-gl v8: import from `'react-map-gl/mapbox'`, NOT bare `'react-map-gl'`
@@ -825,7 +858,7 @@ Test every feature as each role:
 | S19 | Receiving System Enhancement (event tracking, dashboard, PDF receipts) | Feb 26 |
 | S20 | Delivery Integrity & Quick Delivery (confirm flow, locked items, ad-hoc deliveries) | Feb 27 |
 | — | Bulk Field Import (shapefile/KML/GeoJSON wizard with proj4 reprojection) | Feb 16 |
-| T3-002 | Comprehensive test coverage: 379 unit + 121 E2E = 500 total tests | Feb 17 |
+| T3-002 | Comprehensive test coverage: 766 unit tests (45 files) + 31 E2E spec files | Feb 17 |
 | — | OCR Parser Overhaul & Edge Function v4 (multi-line fields, look-behind values) | Feb 17 |
 | — | Safety Audit & Business Logic Hardening (page permissions, notifications, E2E) | Feb 28-Mar 3 |
 | — | Quick Receive Feature (vendor+product receiving without PO numbers) | Mar 4 |
@@ -833,10 +866,8 @@ Test every feature as each role:
 ---
 
 ## Documentation Index
-- `CONTEXT.md` -- Full business context, features, data model, assumptions (READ THIS FIRST for deep understanding)
-- `DATABASE_RELATIONSHIPS.md` -- Entity relationship diagrams and FK details
-- `SCHEMA_QUICK_REFERENCE.sql` -- Complete SQL schema (may be outdated -- check migrations for latest)
-- `TESTING.md` -- Testing guide (beginner-friendly)
-- `DEPLOYMENT.md` -- Deployment to Vercel/Netlify
-- `VERIFICATION.md` -- Setup verification and known issues
-- `TEST_CHECKLIST.md` -- Pre-deployment checklist
+- `CLAUDE.md` (this file) -- Complete project reference: architecture, schema, RPCs, business logic, feature inventory
+- `README.md` -- Project overview, quick start, tech stack, feature summary
+- `TESTING.md` -- Testing guide (beginner-friendly): setup, running unit & E2E tests, troubleshooting
+- `DEPLOYMENT.md` -- Deployment instructions: Vercel/Netlify setup, env vars, Edge Function secrets, rollback
+- `ENV_SETUP.md` -- Environment variable setup guide (gitignored)
