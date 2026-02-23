@@ -384,6 +384,7 @@ export default function DeliveryDetail() {
         uploadCount++;
       } catch (err) {
         console.error('Photo upload error:', err);
+        toast('error', 'Photo upload failed. Please try again.');
       }
     }
 
@@ -518,6 +519,8 @@ export default function DeliveryDetail() {
           }
         } catch (sigErr) {
           console.warn('Signature upload failed:', sigErr);
+          toast('error', 'Signature could not be saved. Please try completing the delivery again.');
+          return;
         }
       }
 
