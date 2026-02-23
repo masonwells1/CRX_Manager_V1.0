@@ -28,3 +28,7 @@ ENV_SETUP.md
 playwright-report/
 test-results/
 test-import.csv
+
+# Generated files
+INV-*.pdf
+*.generated.pdf
