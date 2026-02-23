@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, ClipboardCheck, CheckCircle, XCircle, Eye, RotateCcw } from 'lucide-react';
+import { Plus, CheckCircle, XCircle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -8,10 +8,10 @@ import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
-import type { CycleCount, CycleCountItem, Inventory, Product } from '../types';
+import type { CycleCount, CycleCountItem } from '../types';
 
 type CountRow = CycleCount & {
   initiator_name: string;
@@ -24,6 +24,26 @@ type CountRow = CycleCount & {
 type CountItemRow = CycleCountItem & {
   product_name: string;
 };
+
+interface CycleCountDbRow {
+  id: string;
+  initiator?: { full_name: string } | null;
+  completer?: { full_name: string } | null;
+  items?: Array<{ is_counted: boolean; variance: number | null }>;
+  [key: string]: unknown;
+}
+
+interface InventoryDbRow {
+  id: string;
+  product_id: string;
+  quantity_available: number;
+  product?: { product_name: string } | null;
+}
+
+interface CountItemDbRow {
+  product?: { product_name: string } | null;
+  [key: string]: unknown;
+}
 
 export default function CycleCounts() {
   const { profile, role } = useAuth();
@@ -72,14 +92,14 @@ export default function CycleCounts() {
       return;
     }
 
-    const rows: CountRow[] = ((data || []) as any[]).map((c) => ({
+    const rows: CountRow[] = ((data || []) as CycleCountDbRow[]).map((c) => ({
       ...c,
       initiator_name: c.initiator?.full_name || 'Unknown',
       completer_name: c.completer?.full_name || null,
       item_count: c.items?.length || 0,
-      counted_count: c.items?.filter((i: any) => i.is_counted).length || 0,
-      variance_count: c.items?.filter((i: any) => i.variance && i.variance !== 0).length || 0,
-    }));
+      counted_count: c.items?.filter((i) => i.is_counted).length || 0,
+      variance_count: c.items?.filter((i) => i.variance && i.variance !== 0).length || 0,
+    })) as CountRow[];
     setCounts(rows);
     setLoading(false);
   };
@@ -90,8 +110,8 @@ export default function CycleCounts() {
       supabase.from('inventory').select('location'),
       supabase.from('warehouses').select('name').eq('is_active', true),
     ]);
-    const invLocs = [...new Set((invRes.data || []).map((r: any) => r.location).filter(Boolean))];
-    const whLocs = (whRes.data || []).map((r: any) => r.name);
+    const invLocs = [...new Set((invRes.data || []).map((r: { location: string | null }) => r.location).filter(Boolean))];
+    const whLocs = (whRes.data || []).map((r: { name: string }) => r.name);
     const all = [...new Set([...invLocs, ...whLocs])].sort();
     setWarehouses(all);
   };
@@ -119,7 +139,7 @@ export default function CycleCounts() {
         .order('product_id');
 
       if (invError) throw invError;
-      const invItems = (invData || []) as any[];
+      const invItems = (invData || []) as InventoryDbRow[];
 
       if (invItems.length === 0) {
         toast('error', 'No inventory found at this location');
@@ -142,7 +162,7 @@ export default function CycleCounts() {
       if (ccError) throw ccError;
 
       // Insert items
-      const items = invItems.map((inv: any) => ({
+      const items = invItems.map((inv) => ({
         cycle_count_id: cc.id,
         product_id: inv.product_id,
         inventory_id: inv.id,
@@ -167,8 +187,8 @@ export default function CycleCounts() {
       setShowNew(false);
       setNewNotes('');
       fetchCounts();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to create cycle count');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to create cycle count');
     } finally {
       setCreating(false);
     }
@@ -191,10 +211,10 @@ export default function CycleCounts() {
       toast('error', 'Failed to load count items');
     }
 
-    const rows: CountItemRow[] = ((data || []) as any[]).map((item) => ({
+    const rows: CountItemRow[] = ((data || []) as CountItemDbRow[]).map((item) => ({
       ...item,
       product_name: item.product?.product_name || 'Unknown',
-    }));
+    })) as CountItemRow[];
     setCountItems(rows);
     setLoadingItems(false);
   };
@@ -282,8 +302,8 @@ export default function CycleCounts() {
       toast('success', `Cycle count completed. ${varianceItems.length} adjustments made.`);
       setShowDetail(false);
       fetchCounts();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to complete cycle count');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to complete cycle count');
     } finally {
       setCompleting(false);
     }
@@ -305,8 +325,8 @@ export default function CycleCounts() {
       toast('success', 'Cycle count cancelled');
       setShowDetail(false);
       fetchCounts();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to cancel');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to cancel');
     }
   };
 
@@ -342,7 +362,7 @@ export default function CycleCounts() {
       render: (row) => statusBadge(row.status),
     },
     {
-      key: 'item_count' as any,
+      key: 'item_count',
       header: 'Products',
       render: (row) => (
         <span>
@@ -351,7 +371,7 @@ export default function CycleCounts() {
       ),
     },
     {
-      key: 'variance_count' as any,
+      key: 'variance_count',
       header: 'Variances',
       render: (row) => (
         <span className={row.variance_count > 0 ? 'text-red-600 font-medium' : 'text-gray-500'}>
@@ -360,7 +380,7 @@ export default function CycleCounts() {
       ),
     },
     {
-      key: 'initiator_name' as any,
+      key: 'initiator_name',
       header: 'Started By',
       render: (row) => <span className="text-sm">{row.initiator_name}</span>,
     },

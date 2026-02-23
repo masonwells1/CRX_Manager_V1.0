@@ -9,7 +9,6 @@ import {
   XCircle,
   Printer,
   CalendarRange,
-  Phone,
   MapPin,
   Clock,
   Zap,
@@ -20,11 +19,11 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
-import type { Delivery, Profile, Customer } from '../types';
+import type { Delivery, Profile } from '../types';
 
 /* ─── Row type ─── */
 interface DeliveryRow extends Delivery {
@@ -129,7 +128,7 @@ export default function Deliveries() {
       .order('scheduled_date')
       .limit(20)
       .then(({ data }) => {
-        const rows = ((data || []) as any[]).map((d) => ({
+        const rows = ((data || []) as Record<string, unknown>[]).map((d) => ({
           ...d,
           customer_name: d.customer?.farm_name || 'Unknown',
           driver_name: 'Unassigned',
@@ -189,8 +188,8 @@ export default function Deliveries() {
       return;
     }
 
-    const deliveryIds = (delData || []).map((d: any) => d.id);
-    let countMap: Record<string, number> = {};
+    const deliveryIds = (delData || []).map((d) => d.id);
+    const countMap: Record<string, number> = {};
     if (deliveryIds.length > 0) {
       const { data: itemCounts } = await supabase
         .from('delivery_items')
@@ -310,7 +309,7 @@ export default function Deliveries() {
         setSelected(new Set());
         fetchDeliveries();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Batch cancel error:', err);
       toast('error', sanitizeError(err));
     }
@@ -345,7 +344,7 @@ export default function Deliveries() {
           priority: del.priority || 'normal',
           issue_type: del.issue_type || undefined,
           issue_notes: del.issue_notes || undefined,
-          items: ((items || []) as any[]).map((it) => ({
+          items: ((items || []) as Record<string, unknown>[]).map((it) => ({
             product_name: it.product?.product_name || it.product_name,
             quantity: it.quantity,
             unit_size: it.unit_size || '-',
@@ -362,7 +361,7 @@ export default function Deliveries() {
 
       await generateBatchDeliveryPdf(pdfDataList);
       toast('success', `Printed ${pdfDataList.length} delivery receipt(s) to PDF`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Batch print failed:', err);
       toast('error', sanitizeError(err));
     }
@@ -393,7 +392,7 @@ export default function Deliveries() {
         setRescheduleDate('');
         fetchDeliveries();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Batch reschedule error:', err);
       toast('error', sanitizeError(err));
     }
@@ -425,7 +424,7 @@ export default function Deliveries() {
           toast('success', 'Delivery assigned to you');
           fetchDeliveries();
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Take delivery error:', err);
         toast('error', sanitizeError(err));
       }
@@ -570,7 +569,7 @@ export default function Deliveries() {
   /* ─── Admin / Sales Rep View ─── */
   const columns: Column<DeliveryRow>[] = [
     {
-      key: 'id' as any,
+      key: 'id',
       header: '',
       className: 'w-10',
       render: (row) =>

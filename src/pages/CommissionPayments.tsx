@@ -5,7 +5,7 @@
  * Sprint 10: Commission Payment Lifecycle
  */
 import { useEffect, useState } from 'react';
-import { DollarSign, Send, Plus, Check, Clock, FileText } from 'lucide-react';
+import { DollarSign, Send, Plus, Check, Clock } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -13,7 +13,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { exportToCSV } from '../lib/csvExport';
 
@@ -87,7 +87,7 @@ export default function CommissionPayments() {
 
     // Get item counts
     const rows: CommissionPaymentRow[] = [];
-    for (const p of (data || []) as any[]) {
+    for (const p of (data || []) as Record<string, unknown>[]) {
       const { count } = await supabase
         .from('commission_payment_items')
         .select('*', { count: 'exact', head: true })
@@ -117,7 +117,7 @@ export default function CommissionPayments() {
       .limit(500);
 
     setUnpaidCommissions(
-      ((data || []) as any[]).map((c) => ({
+      ((data || []) as Record<string, unknown>[]).map((c) => ({
         ...c,
         recipient_name: c.recipient?.full_name || 'Unknown',
       })),
@@ -172,7 +172,7 @@ export default function CommissionPayments() {
     setCreating(true);
     try {
       const createKey = generateIdempotencyKey('create_commission_payment', profile?.id || '');
-      const { data, error } = await supabase.rpc('create_commission_payment', {
+      const { error } = await supabase.rpc('create_commission_payment', {
         p_commission_ids: Array.from(selectedCommissions),
         p_payment_method: payMethod,
         p_reference: payRef || null,
@@ -185,8 +185,8 @@ export default function CommissionPayments() {
       toast('success', `Commission payment created: ${fmt(selectedTotal)}`);
       setShowCreate(false);
       fetchPayments();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to create payment');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to create payment');
     }
     setCreating(false);
   };
@@ -203,8 +203,8 @@ export default function CommissionPayments() {
       if (error) throw error;
       toast('success', 'Commission payment posted');
       fetchPayments();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to post');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to post');
     }
     setPosting(null);
   };
@@ -225,7 +225,7 @@ export default function CommissionPayments() {
       sortable: true,
       render: (r) => <span className="font-medium text-nav-dark">{r.payment_number}</span>,
     },
-    { key: 'recipient_name' as any, header: 'Recipient', sortable: true },
+    { key: 'recipient_name', header: 'Recipient', sortable: true },
     {
       key: 'total_amount',
       header: 'Amount',
@@ -241,7 +241,7 @@ export default function CommissionPayments() {
       render: (r) => new Date(r.payment_date + 'T00:00:00').toLocaleDateString(),
     },
     {
-      key: 'item_count' as any,
+      key: 'item_count',
       header: 'Items',
       render: (r) => <span className="text-secondary">{r.item_count} commission(s)</span>,
     },

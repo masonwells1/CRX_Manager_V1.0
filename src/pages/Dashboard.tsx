@@ -92,7 +92,26 @@ export default function Dashboard() {
       const { data: rpc, error } = await supabase.rpc('dashboard_summary');
       if (error) throw error;
 
-      const d = rpc as Record<string, any>;
+      interface DashboardRpc {
+        total_revenue: number;
+        total_profit: number;
+        overall_margin: number;
+        quote_counts: { draft: number; sent: number; accepted: number };
+        quote_pipeline_value: number;
+        inventory_available: number;
+        inventory_prebooked: number;
+        upcoming_deliveries: Array<{ id: string; delivery_number: string; scheduled_date: string; status: string; customer: string | null; driver: string | null }>;
+        recent_activity: Array<{ id: string; event_type: string; description: string; created_at: string }>;
+        top_customers: Array<{ farm_name: string; total: number }>;
+        monthly_revenue: Array<{ month: string; revenue: number; profit: number }>;
+        low_stock_count: number;
+        open_ar_balance: number;
+        driver_issues_count: number;
+        customers_over_credit_count: number;
+        expired_holds_count: number;
+        cancelled_posted_count: number;
+      }
+      const d = rpc as DashboardRpc;
 
       setData({
         totalRevenue: Number(d.total_revenue) || 0,
@@ -106,7 +125,7 @@ export default function Dashboard() {
         quotePipelineValue: Number(d.quote_pipeline_value) || 0,
         inventoryAvailable: Number(d.inventory_available) || 0,
         inventoryPrebooked: Number(d.inventory_prebooked) || 0,
-        upcomingDeliveries: (d.upcoming_deliveries || []).map((del: any) => ({
+        upcomingDeliveries: (d.upcoming_deliveries || []).map((del) => ({
           id: del.id,
           delivery_number: del.delivery_number,
           scheduled_date: del.scheduled_date,
@@ -114,17 +133,17 @@ export default function Dashboard() {
           customer: del.customer || null,
           driver: del.driver || null,
         })),
-        recentActivity: (d.recent_activity || []).map((act: any) => ({
+        recentActivity: (d.recent_activity || []).map((act) => ({
           id: act.id,
           event_type: act.event_type,
           description: act.description,
           created_at: act.created_at,
         })),
-        topCustomers: (d.top_customers || []).map((c: any) => ({
+        topCustomers: (d.top_customers || []).map((c) => ({
           farm_name: c.farm_name,
           total: Number(c.total) || 0,
         })),
-        monthlyRevenue: (d.monthly_revenue || []).map((m: any) => ({
+        monthlyRevenue: (d.monthly_revenue || []).map((m) => ({
           month: m.month,
           revenue: Number(m.revenue) || 0,
           profit: Number(m.profit) || 0,

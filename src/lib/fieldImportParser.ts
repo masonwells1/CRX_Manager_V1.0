@@ -37,7 +37,7 @@ export async function parseShapefileBundle(
   const warnings: string[] = [];
 
   // shapefile.read returns a GeoJSON FeatureCollection
-  const fc = await (shapefile as any).read(shpBuffer, dbfBuffer);
+  const fc = await (shapefile as unknown as { read: (shp: ArrayBuffer, dbf: ArrayBuffer) => Promise<GeoJSON.FeatureCollection> }).read(shpBuffer, dbfBuffer);
 
   if (!fc || !fc.features || fc.features.length === 0) {
     throw new Error('No features found in shapefile.');
@@ -56,9 +56,9 @@ export async function parseShapefileBundle(
     crsDetected = extractCRSName(prjText);
     try {
       reprojectToWGS84(fc, prjText);
-    } catch (err: any) {
+    } catch (err: unknown) {
       warnings.push(
-        `Could not reproject coordinates: ${err.message}. Assuming WGS84.`
+        `Could not reproject coordinates: ${err instanceof Error ? err.message : String(err)}. Assuming WGS84.`
       );
     }
   } else {
@@ -87,9 +87,9 @@ export async function parseShapefileBundle(
 export function parseGeoJSONFile(jsonText: string): ParseResult {
   const warnings: string[] = [];
 
-  let parsed: any;
+  let parsed: Record<string, unknown>;
   try {
-    parsed = JSON.parse(jsonText);
+    parsed = JSON.parse(jsonText) as Record<string, unknown>;
   } catch {
     throw new Error('Invalid JSON file. Could not parse.');
   }

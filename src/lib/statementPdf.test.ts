@@ -38,8 +38,8 @@ vi.mock('jspdf', () => {
 });
 
 vi.mock('jspdf-autotable', () => ({
-  default: vi.fn((doc: any, opts: any) => {
-    doc.lastAutoTable = { finalY: (opts.startY || 0) + 100 };
+  default: vi.fn((doc: Record<string, unknown>, opts: Record<string, unknown>) => {
+    (doc as typeof mockDoc).lastAutoTable = { finalY: ((opts.startY as number) || 0) + 100 };
   }),
 }));
 
@@ -157,7 +157,7 @@ describe('generateStatementPdf', () => {
   it('renders customer name', async () => {
     await generateStatementPdf(makeStatementData());
     const textCalls = mockDoc.text.mock.calls.flat();
-    const hasCustomer = textCalls.some((arg: any) =>
+    const hasCustomer = textCalls.some((arg: unknown) =>
       typeof arg === 'string' && arg.includes('Smith Farm')
     );
     expect(hasCustomer).toBe(true);

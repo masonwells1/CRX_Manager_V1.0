@@ -10,9 +10,9 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import type { Invoice, InvoiceItem, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
+import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, type InvoicePdfData } from '../lib/invoicePdf';
 import WriteOffModal from '../components/invoices/WriteOffModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
@@ -144,7 +144,7 @@ export default function InvoiceDetail() {
     }
 
     setInvoice(data as Invoice);
-    setCustomerName((data as any).customer?.farm_name || '');
+    setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
 
     // Fetch items
     const { data: itemData } = await supabase
@@ -155,7 +155,7 @@ export default function InvoiceDetail() {
 
     if (itemData) {
       setItems(
-        (itemData as any[]).map((it) => ({
+        (itemData as Array<Record<string, unknown> & { id: string; product_id: string; product?: { product_name: string }; description: string; quantity: number; unit_price_cents: number; extended_cents: number; cost_cents: number; rate_per_acre?: number | null; acres?: number | null; unit_size?: string; rate_unit?: string; total_applied?: number; sort_order?: number }>).map((it) => ({
           id: it.id,
           product_id: it.product_id,
           product_name: it.product?.product_name || it.description || '',
@@ -307,7 +307,7 @@ export default function InvoiceDetail() {
       } else {
         fetchInvoice(id!);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Save error:', err);
       toast('error', sanitizeError(err));
     }
@@ -323,7 +323,7 @@ export default function InvoiceDetail() {
       if (error) throw error;
       toast('success', 'Invoice posted');
       fetchInvoice(id!);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setPosting(false);
@@ -343,7 +343,7 @@ export default function InvoiceDetail() {
       toast('success', 'Invoice voided');
       setShowVoidModal(false);
       fetchInvoice(id!);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setVoiding(false);
@@ -374,7 +374,7 @@ export default function InvoiceDetail() {
       setPayRef('');
       setPayNotes('');
       fetchInvoice(id!);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setPayingInvoice(false);
@@ -425,7 +425,7 @@ export default function InvoiceDetail() {
           acres: s.acres,
           amount_cents: s.amount_cents,
         })) : undefined,
-        items: (enrichedItems || []).map((it: any) => ({
+        items: (enrichedItems || []).map((it: Record<string, unknown> & { description?: string; product?: { product_name: string }; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null; rate_unit?: string | null; acres?: number | null; total_applied?: number | null }) => ({
           description: it.description,
           product_name: it.product?.product_name || it.description,
           quantity: Number(it.quantity),
@@ -454,7 +454,7 @@ export default function InvoiceDetail() {
       await downloadInvoicePdf(pdfData);
       setShowPrintDialog(false);
       toast('success', 'Invoice PDF downloaded');
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to generate invoice PDF:', err);
       toast('error', sanitizeError(err));
     } finally {
@@ -609,7 +609,7 @@ export default function InvoiceDetail() {
               {editable ? (
                 <select
                   value={invoice.invoice_type || 'chemical_sale'}
-                  onChange={(e) => setInvoice((prev) => ({ ...prev, invoice_type: e.target.value as any }))}
+                  onChange={(e) => setInvoice((prev) => ({ ...prev, invoice_type: e.target.value as InvoiceType }))}
                   className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="chemical_sale">Chemical Sale</option>
@@ -651,7 +651,7 @@ export default function InvoiceDetail() {
                   ))}
                 </select>
               ) : (
-                <p className="mt-1 text-sm">{(invoice as any).salesman?.full_name || '-'}</p>
+                <p className="mt-1 text-sm">{(invoice as unknown as { salesman?: { full_name: string } }).salesman?.full_name || '-'}</p>
               )}
             </div>
 

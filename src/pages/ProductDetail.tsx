@@ -188,8 +188,8 @@ export default function ProductDetail() {
         toast('success', 'Product updated');
         logActivity('product_updated', `Product ${product.product_name} updated`, profile!.id, 'product', id);
         if (pricingChanged) fetchCostHistory();
-      } catch (err: any) {
-        toast('error', err.message || 'Failed to update product');
+      } catch (err: unknown) {
+        toast('error', err instanceof Error ? err.message : 'Failed to update product');
       }
     }
     setSaving(false);
@@ -228,8 +228,8 @@ export default function ProductDetail() {
         setCostNote('');
         toast('success', 'Cost updated');
         logActivity('product_cost_updated', `Product cost updated to $${cost}`, profile!.id, 'product', id);
-      } catch (err: any) {
-        toast('error', err.message || 'Failed to update product cost');
+      } catch (err: unknown) {
+        toast('error', err instanceof Error ? err.message : 'Failed to update product cost');
       }
     }
   };

@@ -5,7 +5,7 @@
  * and provides a view of Restricted Use Pesticide (RUP) products.
  */
 import { useEffect, useState } from 'react';
-import { ShieldCheck, Plus, AlertTriangle, Search, Award, Package } from 'lucide-react';
+import { Plus, AlertTriangle, Award, Package } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -16,7 +16,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
-import type { ApplicatorLicense, Product } from '../types';
+import type { ApplicatorLicense } from '../types';
 
 type TabKey = 'licenses' | 'rup_products';
 
@@ -38,9 +38,8 @@ interface RUPProduct {
 }
 
 export default function Compliance() {
-  const { profile, role } = useAuth();
+  const { profile } = useAuth();
   const { toast } = useToast();
-  const isAdmin = role === 'admin';
   const [tab, setTab] = useState<TabKey>('licenses');
   const [loading, setLoading] = useState(true);
 
@@ -96,7 +95,7 @@ export default function Compliance() {
       return;
     }
 
-    const mapped = ((data || []) as any[]).map((l) => ({
+    const mapped = ((data || []) as Record<string, unknown>[]).map((l) => ({
       ...l,
       farm_name: l.customer?.farm_name || 'Unknown',
     }));
@@ -219,8 +218,8 @@ export default function Compliance() {
       }
       setModalOpen(false);
       fetchLicenses();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to save license');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to save license');
     }
     setSaving(false);
   };
@@ -477,7 +476,7 @@ export default function Compliance() {
               <label className="text-sm font-medium text-nav-dark">License Type</label>
               <select
                 value={form.license_type}
-                onChange={(e) => setForm({ ...form, license_type: e.target.value as any })}
+                onChange={(e) => setForm({ ...form, license_type: e.target.value as 'private' | 'commercial' | 'public' })}
                 className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="private">Private</option>

@@ -5,9 +5,9 @@ import ProtectedRoute from './ProtectedRoute';
 
 // Mock the AuthContext
 const mockAuth = {
-  session: null as any,
-  profile: null as any,
-  role: null as any,
+  session: null as { user: { id: string } } | null,
+  profile: null as { id: string; role: string; is_active: boolean } | null,
+  role: null as string | null,
   loading: false,
   signIn: vi.fn(),
   signOut: vi.fn(),

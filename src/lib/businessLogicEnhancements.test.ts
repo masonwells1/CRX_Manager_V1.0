@@ -377,7 +377,6 @@ describe('A2.7: Inventory hold release on quote status change', () => {
   });
 
   it('trigger does NOT fire on status change to accepted', () => {
-    const oldStatus = 'sent';
     const newStatus = 'accepted';
     const shouldRelease = ['declined', 'expired'].includes(newStatus);
     expect(shouldRelease).toBe(false);

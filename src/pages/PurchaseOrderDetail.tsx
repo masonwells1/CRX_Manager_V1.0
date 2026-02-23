@@ -9,8 +9,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, assertRpcResult, sanitizeError } from '../lib/db';
-import { logActivity } from '../lib/activityLogger';
+import { supabase, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition } from '../types';
@@ -109,7 +108,7 @@ export default function PurchaseOrderDetail() {
       .order('received_at', { ascending: false });
 
     if (!error && data) {
-      const rows = (data as any[]).map((r) => ({
+      const rows = (data as Array<ReceivingRecord & { product?: { product_name: string }; receiver?: { full_name: string } }>).map((r) => ({
         ...r,
         product_name: r.product?.product_name || 'Unknown',
         received_by_name: r.receiver?.full_name || 'Unknown',
@@ -184,11 +183,11 @@ export default function PurchaseOrderDetail() {
       // AUDIT 3.2: Notify admins about damaged/non-good items
       if (po) {
         const damagedItems = itemsPayload
-          .filter((ip: any) => ip.condition && ip.condition !== 'good')
-          .map((ip: any) => {
+          .filter((ip) => ip.condition && ip.condition !== 'good')
+          .map((ip) => {
             const poItem = items.find((i) => i.id === ip.po_item_id);
             return {
-              productName: (poItem?.product as any)?.product_name || 'Unknown',
+              productName: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
               quantity: ip.quantity,
               condition: ip.condition,
             };
@@ -199,7 +198,7 @@ export default function PurchaseOrderDetail() {
       }
 
       // Offer PDF download
-      const receivingRecordIds = (data as any)?.receiving_record_ids;
+      const receivingRecordIds = (data as { receiving_record_ids?: string[] } | null)?.receiving_record_ids;
       if (receivingRecordIds && receivingRecordIds.length > 0 && po) {
         try {
           const { downloadReceivingPdf } = await import('../lib/receivingPdf');
@@ -212,7 +211,7 @@ export default function PurchaseOrderDetail() {
             items: itemsPayload.map((ip) => {
               const poItem = items.find((i) => i.id === ip.po_item_id);
               return {
-                product_name: (poItem?.product as any)?.product_name || 'Unknown',
+                product_name: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
                 quantity_received: ip.quantity,
                 condition: ip.condition,
                 lot_number: ip.lot_number || undefined,
@@ -229,7 +228,7 @@ export default function PurchaseOrderDetail() {
       setReceiveOpen(false);
       fetchPO();
       fetchReceivingHistory();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error receiving items:', error);
       toast('error', sanitizeError(error));
     }
@@ -290,14 +289,14 @@ export default function PurchaseOrderDetail() {
       const itemsPayload = editItems.map((item) => ({
         product_id: item.product_id,
         product_name: item.product_name,
-        unit_size: (item as any).unit_size,
+        unit_size: (item as unknown as { unit_size?: string }).unit_size,
         quantity_ordered: parseFloat(item.quantity_ordered),
         unit_cost: parseFloat(item.unit_cost),
         quantity_received: item.quantity_received || 0,
       }));
 
       const savePOKey = generateIdempotencyKey('save_purchase_order', profile.id);
-      const { data, error } = await supabase.rpc('save_purchase_order', {
+      const { error } = await supabase.rpc('save_purchase_order', {
         p_po_id: id,
         p_po_payload: {
           vendor: editForm.vendor,
@@ -316,7 +315,7 @@ export default function PurchaseOrderDetail() {
       toast('success', 'Purchase order updated');
       setEditOpen(false);
       fetchPO();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setSaving(false);
@@ -328,7 +327,7 @@ export default function PurchaseOrderDetail() {
 
     try {
       const delPOKey = generateIdempotencyKey('delete_purchase_order', profile.id);
-      const { data, error } = await supabase.rpc('delete_purchase_order', {
+      const { error } = await supabase.rpc('delete_purchase_order', {
         p_po_id: id,
         p_performed_by: profile.id,
         p_idempotency_key: delPOKey,
@@ -338,7 +337,7 @@ export default function PurchaseOrderDetail() {
 
       toast('success', 'Purchase order deleted');
       navigate('/purchase-orders');
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setSaving(false);

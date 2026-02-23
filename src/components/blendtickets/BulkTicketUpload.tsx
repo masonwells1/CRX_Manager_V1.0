@@ -118,7 +118,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
       if (ticketError) throw ticketError;
       const ticketNumber = ticketNumberData;
 
-      const ticketData: any = {
+      const ticketData: Record<string, unknown> = {
         ticket_number: ticketNumber,
         uploaded_by: profile!.id,
         upload_date: new Date().toISOString(),
@@ -209,9 +209,9 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
       onUploadComplete();
 
       setError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Upload error:', err);
-      setError(err.message || 'Failed to upload images');
+      setError(err instanceof Error ? err.message : 'Failed to upload images');
     } finally {
       setIsUploading(false);
     }

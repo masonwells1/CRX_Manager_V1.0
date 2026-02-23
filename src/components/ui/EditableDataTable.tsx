@@ -20,7 +20,7 @@ export interface EditableColumn<T> {
   /** Step for number inputs */
   editStep?: string;
   /** Format display value (e.g. currency formatting) */
-  formatValue?: (value: any) => string;
+  formatValue?: (value: unknown) => string;
 }
 
 interface EditableDataTableProps<T> {
@@ -37,14 +37,14 @@ interface EditableDataTableProps<T> {
   filters?: ReactNode;
   loading?: boolean;
   /** Called with a map of rowId -> changed fields when user clicks Save */
-  onSave?: (changes: Map<string, Record<string, any>>) => Promise<void>;
+  onSave?: (changes: Map<string, Record<string, unknown>>) => Promise<void>;
   /** Whether edit mode is available */
   canEdit?: boolean;
   /** Extra actions to render next to the Edit/Save buttons */
   headerActions?: ReactNode;
 }
 
-export default function EditableDataTable<T extends Record<string, any>>({
+export default function EditableDataTable<T extends Record<string, unknown>>({
   data,
   columns,
   rowKey,
@@ -65,7 +65,7 @@ export default function EditableDataTable<T extends Record<string, any>>({
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [editMode, setEditMode] = useState(false);
-  const [dirtyRows, setDirtyRows] = useState<Map<string, Record<string, any>>>(new Map());
+  const [dirtyRows, setDirtyRows] = useState<Map<string, Record<string, unknown>>>(new Map());
   const [saving, setSaving] = useState(false);
 
   const dirtyCount = dirtyRows.size;
@@ -117,14 +117,15 @@ export default function EditableDataTable<T extends Record<string, any>>({
   );
 
   const setCellValue = useCallback(
-    (row: T, colKey: string, value: any) => {
+    (row: T, colKey: string, value: unknown) => {
       const id = String(row[rowKey]);
       setDirtyRows((prev) => {
         const next = new Map(prev);
         const existing = next.get(id) || {};
         // If value matches original, remove it from dirty
         if (value === row[colKey] || (value === '' && row[colKey] == null)) {
-          const { [colKey]: _, ...rest } = existing;
+          const rest = { ...existing };
+          delete rest[colKey];
           if (Object.keys(rest).length === 0) {
             next.delete(id);
           } else {

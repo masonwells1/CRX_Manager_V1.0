@@ -194,7 +194,7 @@ export default function SettingsPage() {
       ]);
       toast('success', 'Company info saved');
       if (profile) logActivity('settings_updated', 'Company info updated', profile.id);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setSavingCompany(false);
@@ -209,7 +209,7 @@ export default function SettingsPage() {
       ]);
       toast('success', 'Default settings saved');
       if (profile) logActivity('settings_updated', 'Default settings updated', profile.id);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setSavingDefaults(false);

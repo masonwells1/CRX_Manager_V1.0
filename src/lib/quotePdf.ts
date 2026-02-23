@@ -6,6 +6,11 @@
  */
 // jsPDF and autoTable are dynamically imported inside each function
 // to keep them out of the main bundle (~500KB each)
+import type jsPDF from 'jspdf';
+
+type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
+  lastAutoTable: { finalY: number };
+};
 
 // Brand colours
 const CRX_GREEN: [number, number, number] = [40, 162, 106]; // #28A26A
@@ -183,7 +188,7 @@ export async function generateQuotePdf(data: PdfQuoteData) {
       alternateRowStyles: { fillColor: [252, 252, 252] },
     });
 
-    y = (doc as any).lastAutoTable.finalY + 6;
+    y = (doc as JsPDFWithAutoTable).lastAutoTable.finalY + 6;
 
     if (section.section_notes) {
       doc.setFontSize(8);

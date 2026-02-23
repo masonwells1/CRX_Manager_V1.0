@@ -63,7 +63,7 @@ export default function Products() {
   const categoryOptions = categories.map((c) => ({ value: c, label: c }));
   const vendorOptions = vendors.map((v) => ({ value: v, label: v }));
 
-  const handleBulkSave = async (changes: Map<string, Record<string, any>>) => {
+  const handleBulkSave = async (changes: Map<string, Record<string, unknown>>) => {
     try {
       // Log cost history for pricing changes
       for (const [productId, fields] of changes) {
@@ -106,7 +106,7 @@ export default function Products() {
         logActivity('products_bulk_updated', `${changes.size} product(s) updated via inline edit`, profile.id, 'product', null);
       }
       fetchProducts();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
       throw err; // re-throw so EditableDataTable stays in edit mode
     }

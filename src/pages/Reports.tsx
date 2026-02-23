@@ -10,8 +10,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
-import { downloadReportPdf, fmtCurrency, type ReportPdfColumn } from '../lib/reportPdf';
-import ReportShell from '../components/reports/ReportShell';
 import LogbookReport from '../components/reports/LogbookReport';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
@@ -339,7 +337,7 @@ export default function Reports() {
     if (endDate) query = query.lte('application_date', endDate);
     const { data, error } = await query;
     if (error) { toast('error', 'Failed to load posted applications.'); return; }
-    setPostedAppsData((data || []).map((r: any) => ({
+    setPostedAppsData((data || []).map((r: Record<string, unknown> & { customer?: { farm_name?: string }; field?: { field_name?: string }; applicator?: { full_name?: string } }) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       field_name: r.field?.field_name || '-',
@@ -397,8 +395,8 @@ export default function Reports() {
         toast('success', `Season ${season} summary generated`);
       }
       setShowYeDialog(false);
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to generate summary');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to generate summary');
     }
     setYeLoading(false);
   };
@@ -414,8 +412,8 @@ export default function Reports() {
       toast('success', `${result.data!.length} commission(s) marked as paid`);
       if (profile) logActivity('commissions_paid', `${result.data!.length} commission(s) marked as paid`, profile.id);
       fetchCommissions();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to update commissions');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to update commissions');
     }
     setMarkingPaid(false);
   };
@@ -423,7 +421,7 @@ export default function Reports() {
   const toggleCommissionSelect = (id: string) => {
     setSelectedCommissions((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) { next.delete(id); } else { next.add(id); }
       return next;
     });
   };
@@ -738,7 +736,7 @@ export default function Reports() {
         {category === 'financial' && financialTab === 'gross_sales' && (
           <div>
             <label className="block text-xs font-medium text-secondary mb-1">Group By</label>
-            <select value={grossSalesGroupBy} onChange={(e) => setGrossSalesGroupBy(e.target.value as any)} aria-label="Group by" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+            <select value={grossSalesGroupBy} onChange={(e) => setGrossSalesGroupBy(e.target.value as 'product' | 'customer' | 'salesman')} aria-label="Group by" className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
               <option value="product">Product</option>
               <option value="customer">Customer</option>
               <option value="salesman">Salesman</option>

@@ -294,7 +294,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
       });
 
       setValidation({ valid, invalid });
-    } catch (error) {
+    } catch {
       toast('error', 'Failed to parse file.');
     }
     setParsing(false);

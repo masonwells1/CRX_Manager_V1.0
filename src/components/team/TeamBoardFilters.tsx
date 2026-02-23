@@ -53,7 +53,7 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
     setProfiles((data || []) as Profile[]);
   };
 
-  const updateFilter = (key: keyof FilterState, value: any) => {
+  const updateFilter = (key: keyof FilterState, value: string | string[] | boolean) => {
     onChange({ ...filters, [key]: value });
   };
 

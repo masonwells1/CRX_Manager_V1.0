@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, RotateCcw, CheckCircle, XCircle, ArrowDownToLine, DollarSign } from 'lucide-react';
+import { Plus, CheckCircle, XCircle, ArrowDownToLine, DollarSign } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -8,7 +8,7 @@ import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, assertRpcResult, sanitizeError } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import type { Return, ReturnItem, Customer, Product, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
@@ -104,7 +104,7 @@ export default function Returns() {
       return;
     }
 
-    const rows: ReturnRow[] = ((data || []) as any[]).map((r) => ({
+    const rows: ReturnRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requester?: { full_name: string }; items?: unknown[] }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       order_number: r.order?.order_number || null,
@@ -153,7 +153,7 @@ export default function Returns() {
     ]);
   };
 
-  const updateItem = (idx: number, field: keyof EditItem, value: any) => {
+  const updateItem = (idx: number, field: keyof EditItem, value: EditItem[keyof EditItem]) => {
     const updated = [...newItems];
     updated[idx] = { ...updated[idx], [field]: value };
     setNewItems(updated);
@@ -236,7 +236,7 @@ export default function Returns() {
       toast('success', `Return ${returnNum} created`);
       setShowCreate(false);
       fetchReturns();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     } finally {
       setCreating(false);
@@ -275,7 +275,7 @@ export default function Returns() {
       toast('success', 'Return approved');
       setShowDetail(false);
       fetchReturns();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
   };
@@ -295,7 +295,7 @@ export default function Returns() {
       toast('success', 'Return rejected');
       setShowDetail(false);
       fetchReturns();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
   };
@@ -315,7 +315,7 @@ export default function Returns() {
       toast('success', 'Return received and inventory restocked');
       setShowDetail(false);
       fetchReturns();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
   };
@@ -335,7 +335,7 @@ export default function Returns() {
       toast('success', 'Credit issued');
       setShowDetail(false);
       fetchReturns();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
   };
@@ -357,13 +357,13 @@ export default function Returns() {
       render: (row) => <span className="font-medium text-nav-dark">{row.return_number}</span>,
     },
     {
-      key: 'customer_name' as any,
+      key: 'customer_name',
       header: 'Customer',
       sortable: true,
       render: (row) => <span>{row.customer_name}</span>,
     },
     {
-      key: 'order_number' as any,
+      key: 'order_number',
       header: 'Order',
       render: (row) => (row.order_number ? <span className="text-sm">{row.order_number}</span> : <span className="text-gray-400">-</span>),
     },
@@ -382,7 +382,7 @@ export default function Returns() {
       render: (row) => <span className="capitalize text-sm">{REASON_LABELS[row.reason as ReturnReason] || row.reason}</span>,
     },
     {
-      key: 'item_count' as any,
+      key: 'item_count',
       header: 'Items',
       render: (row) => <span>{row.item_count}</span>,
     },

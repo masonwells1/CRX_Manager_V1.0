@@ -16,6 +16,13 @@ import type {
   StatementOptions,
   InvoiceShare,
 } from '../types';
+import type jsPDF from 'jspdf';
+import type { autoTable as autoTableFn } from 'jspdf-autotable';
+
+/** jsPDF instance with lastAutoTable from jspdf-autotable plugin */
+type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
+  lastAutoTable: { finalY: number };
+};
 
 const CRX_GREEN: [number, number, number] = [40, 162, 106];
 const CHARCOAL: [number, number, number] = [46, 46, 46];
@@ -219,13 +226,13 @@ export async function generateStatementPdf(
 // ── Summary Mode ─────────────────────────────────────────────────────────
 
 function drawSummaryTransactions(
-  doc: any,
+  doc: JsPDFWithAutoTable,
   data: DetailedStatementData,
   startY: number,
   margin: number,
   pageW: number,
   pageH: number,
-  autoTable: any,
+  autoTable: typeof autoTableFn,
   drawPageFooter: () => void,
 ): number {
   let y = startY;
@@ -272,7 +279,7 @@ function drawSummaryTransactions(
     didDrawPage: drawPageFooter,
   });
 
-  y = (doc as any).lastAutoTable.finalY + 10;
+  y = doc.lastAutoTable.finalY + 10;
 
   // Total line
   doc.setDrawColor(200, 200, 200);
@@ -290,14 +297,14 @@ function drawSummaryTransactions(
 // ── Detailed Mode ────────────────────────────────────────────────────────
 
 function drawDetailedTransactions(
-  doc: any,
+  doc: JsPDFWithAutoTable,
   data: DetailedStatementData,
   startY: number,
   margin: number,
   pageW: number,
   pageH: number,
   showShares: boolean,
-  autoTable: any,
+  autoTable: typeof autoTableFn,
   drawPageFooter: () => void,
 ): number {
   let y = startY;
@@ -424,7 +431,7 @@ function drawDetailedTransactions(
             },
         didDrawPage: drawPageFooter,
       });
-      y = (doc as any).lastAutoTable.finalY + 4;
+      y = doc.lastAutoTable.finalY + 4;
     }
 
     // ── Finance charges ───────────────────────────────────────────
@@ -478,12 +485,12 @@ function drawDetailedTransactions(
 // ── Embedded Product Tables for Detailed Mode ────────────────────────────
 
 function drawFieldApplicationItems(
-  doc: any,
+  doc: JsPDFWithAutoTable,
   tx: DetailedStatementTransaction,
   startY: number,
   margin: number,
   pageW: number,
-  autoTable: any,
+  autoTable: typeof autoTableFn,
   drawPageFooter: () => void,
 ): number {
   const indent = margin + 10;
@@ -546,16 +553,16 @@ function drawFieldApplicationItems(
     didDrawPage: drawPageFooter,
   });
 
-  return (doc as any).lastAutoTable.finalY + 4;
+  return doc.lastAutoTable.finalY + 4;
 }
 
 function drawChemicalSaleItems(
-  doc: any,
+  doc: JsPDFWithAutoTable,
   tx: DetailedStatementTransaction,
   startY: number,
   margin: number,
   pageW: number,
-  autoTable: any,
+  autoTable: typeof autoTableFn,
   drawPageFooter: () => void,
 ): number {
   const indent = margin + 10;
@@ -599,16 +606,16 @@ function drawChemicalSaleItems(
     didDrawPage: drawPageFooter,
   });
 
-  return (doc as any).lastAutoTable.finalY + 4;
+  return doc.lastAutoTable.finalY + 4;
 }
 
 function drawMiscItems(
-  doc: any,
+  doc: JsPDFWithAutoTable,
   tx: DetailedStatementTransaction,
   startY: number,
   margin: number,
   pageW: number,
-  autoTable: any,
+  autoTable: typeof autoTableFn,
   drawPageFooter: () => void,
 ): number {
   const indent = margin + 10;
@@ -631,13 +638,13 @@ function drawMiscItems(
     didDrawPage: drawPageFooter,
   });
 
-  return (doc as any).lastAutoTable.finalY + 4;
+  return doc.lastAutoTable.finalY + 4;
 }
 
 // ── Remittance Stub ──────────────────────────────────────────────────────
 
 function drawRemittanceStub(
-  doc: any,
+  doc: JsPDFWithAutoTable,
   data: DetailedStatementData,
   margin: number,
   pageW: number,
@@ -795,12 +802,8 @@ export async function generateBatchStatementsPdf(
   const doc = await generateStatementPdf(statements[0], options);
 
   // Append remaining statements on new pages
-  for (let i = 1; i < statements.length; i++) {
-    const { default: jsPDF } = await import('jspdf');
-    // Create individual doc and merge via content replication
-    // Since jsPDF doesn't support easy merging, we generate them individually
-    // and rely on the caller to handle batch (print-all or zip)
-  }
+  // Note: jsPDF doesn't support easy merging, so we generate them individually
+  // and rely on the caller to handle batch (print-all or zip)
 
   return doc;
 }

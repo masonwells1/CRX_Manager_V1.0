@@ -193,7 +193,7 @@ export default function CropPrograms() {
 
   const updateItem = (idx: number, field: keyof ProgramItem, value: string | number) => {
     const updated = [...formItems];
-    (updated[idx] as any)[field] = value;
+    (updated[idx] as Record<string, string | number>)[field] = value;
     if (field === 'product_id') {
       const prod = products.find((p) => p.id === value);
       updated[idx].product_name = prod?.product_name || '';

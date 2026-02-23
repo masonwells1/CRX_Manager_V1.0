@@ -152,7 +152,7 @@ export default function PaymentAllocation() {
       return;
     }
 
-    const mapped: PaymentAllocationEntry[] = ((data || []) as any[]).map((inv) => ({
+    const mapped: PaymentAllocationEntry[] = ((data || []) as Array<{ id: string; invoice_number: string; invoice_date: string; due_date: string; invoice_type: string; total_amount_cents: number; balance_cents: number }>).map((inv) => ({
       invoice_id: inv.id,
       invoice_number: inv.invoice_number,
       invoice_date: inv.invoice_date,
@@ -282,7 +282,7 @@ export default function PaymentAllocation() {
         parts.push(`${fmt(result.prepay_created_cents)} added as prepay credit`);
       }
       toast('success', parts.join('. '));
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setSubmitting(false);

@@ -42,7 +42,7 @@ interface GlobalActivity {
   note_id: string;
   user_id: string;
   action_type: string;
-  changes: any;
+  changes: Record<string, unknown> | null;
   created_at: string;
   user?: { full_name: string };
   note_title?: string;
@@ -148,7 +148,7 @@ export default function TeamBoard() {
 
     if (notesData && notesData.length > 0) {
       // Batch fetch all tags in one query instead of per-note
-      const noteIds = notesData.map((n: any) => n.id);
+      const noteIds = notesData.map((n: { id: string }) => n.id);
       const { data: allTagLinks } = await supabase
         .from('team_note_tags')
         .select('note_id, tag_id, note_tags(id, name, color)')
@@ -163,20 +163,20 @@ export default function TeamBoard() {
 
       // Build lookup maps
       const tagMap: Record<string, Array<{ id: string; name: string; color: string }>> = {};
-      (allTagLinks || []).forEach((link: any) => {
+      (allTagLinks || []).forEach((link: { note_id: string; note_tags: { id: string; name: string; color: string } | null }) => {
         if (!link.note_tags) return;
         if (!tagMap[link.note_id]) tagMap[link.note_id] = [];
         tagMap[link.note_id].push(link.note_tags);
       });
 
       const countMap: Record<string, number> = {};
-      (commentCounts || []).forEach((c: any) => {
+      (commentCounts || []).forEach((c: { note_id: string }) => {
         countMap[c.note_id] = (countMap[c.note_id] || 0) + 1;
       });
 
       // Resolve completer names (who completed each task)
       const completerIds = [...new Set(
-        notesData.filter((n: any) => n.completed_by).map((n: any) => n.completed_by)
+        notesData.filter((n: { completed_by?: string | null }) => n.completed_by).map((n: { completed_by?: string | null }) => n.completed_by)
       )];
       const completerMap: Record<string, { full_name: string }> = {};
       if (completerIds.length > 0) {
@@ -184,12 +184,12 @@ export default function TeamBoard() {
           .from('profiles')
           .select('id, full_name')
           .in('id', completerIds);
-        (completerProfiles || []).forEach((p: any) => {
+        (completerProfiles || []).forEach((p: { id: string; full_name: string }) => {
           completerMap[p.id] = { full_name: p.full_name };
         });
       }
 
-      const notesWithExtras = notesData.map((note: any) => ({
+      const notesWithExtras = notesData.map((note: TeamNote & { id: string; completed_by?: string | null }) => ({
         ...note,
         tags: tagMap[note.id] || [],
         comment_count: countMap[note.id] || 0,
@@ -235,7 +235,7 @@ export default function TeamBoard() {
 
     if (data && data.length > 0) {
       // Fetch note titles for context
-      const noteIds = [...new Set(data.map((a: any) => a.note_id).filter(Boolean))];
+      const noteIds = [...new Set(data.map((a: { note_id: string }) => a.note_id).filter(Boolean))];
       const titleMap: Record<string, string> = {};
 
       if (noteIds.length > 0) {
@@ -244,12 +244,12 @@ export default function TeamBoard() {
           .select('id, title')
           .in('id', noteIds);
 
-        (noteData || []).forEach((n: any) => { titleMap[n.id] = n.title; });
+        (noteData || []).forEach((n: { id: string; title: string }) => { titleMap[n.id] = n.title; });
       }
 
-      const enriched = data.map((a: any) => ({
+      const enriched = data.map((a: GlobalActivity & { note_id: string; changes?: Record<string, unknown> | null }) => ({
         ...a,
-        note_title: titleMap[a.note_id] || (a.changes?.note?.title) || 'Deleted note',
+        note_title: titleMap[a.note_id] || ((a.changes as Record<string, Record<string, unknown>> | null)?.note?.title as string) || 'Deleted note',
       }));
 
       setGlobalActivities(enriched);
@@ -353,8 +353,8 @@ export default function TeamBoard() {
         setModalOpen(false);
         resetForm();
         fetchNotes();
-      } catch (err: any) {
-        toast('error', err.message || 'Failed to update note');
+      } catch (err: unknown) {
+        toast('error', err instanceof Error ? err.message : 'Failed to update note');
       }
     } else {
       const { error } = await supabase.from('team_notes').insert({
@@ -398,8 +398,8 @@ export default function TeamBoard() {
       checkMutationResult(result, 'Delete note');
       toast('success', 'Note deleted');
       fetchNotes();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to delete note');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to delete note');
     }
     setDeleteConfirmId(null);
   };
@@ -423,8 +423,8 @@ export default function TeamBoard() {
         .select();
       checkMutationResult(result, 'Toggle note completion');
       fetchNotes();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to update note');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to update note');
     }
   };
 
@@ -437,8 +437,8 @@ export default function TeamBoard() {
         .select();
       checkMutationResult(result, 'Toggle note pin');
       fetchNotes();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to update note');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to update note');
     }
   };
 
@@ -668,7 +668,7 @@ export default function TeamBoard() {
   };
 
   const getActivityText = (a: GlobalActivity) => {
-    const user = (a.user as any)?.full_name || 'Someone';
+    const user = (a.user as { full_name: string } | undefined)?.full_name || 'Someone';
     const actionMap: Record<string, string> = {
       created: 'created',
       completed: 'completed',

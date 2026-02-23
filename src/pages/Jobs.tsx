@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, CalendarClock } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -109,7 +109,7 @@ export default function Jobs() {
       return;
     }
 
-    const rows: JobRow[] = ((data || []) as any[]).map((j) => ({
+    const rows: JobRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; applicator?: { full_name?: string }; vehicle?: { vehicle_name?: string } }>).map((j) => ({
       ...j,
       customer_name: j.customer?.farm_name || 'Unknown',
       applicator_name: j.applicator?.full_name || '-',

@@ -105,7 +105,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     return { headers, rows };
   };
 
-  const parseWithVisionOCR = async (file: File): Promise<{ valid: ParsedOrder[]; invalid: any[] }> => {
+  const parseWithVisionOCR = async (file: File): Promise<{ valid: ParsedOrder[]; invalid: Array<{ row: number; error: string; data: Record<string, string> }> }> => {
     const result = await processDocumentWithOCR(file, 'invoice');
 
     if (!result.success || !result.parsed_data) {
@@ -150,7 +150,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     return { valid: parsedOrder.items.length > 0 ? [parsedOrder] : [], invalid: [] };
   };
 
-  const parseCSVOrders = (text: string): { valid: ParsedOrder[]; invalid: any[] } => {
+  const parseCSVOrders = (text: string): { valid: ParsedOrder[]; invalid: Array<{ row: number; error: string; data: Record<string, string> }> } => {
     const { headers, rows } = parseCSV(text);
 
     if (headers.length === 0 || rows.length === 0) {
@@ -230,7 +230,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           unit_size: itemFieldMap.unit_size !== undefined ? row[itemFieldMap.unit_size] : undefined,
           notes: itemFieldMap.item_notes !== undefined ? row[itemFieldMap.item_notes] : undefined,
         });
-      } catch (error) {
+      } catch {
         invalid.push({
           row: idx + 2,
           error: 'Error parsing row',
@@ -250,7 +250,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
 
     try {
       let parsedOrders: ParsedOrder[] = [];
-      let invalid: any[] = [];
+      let invalid: Array<{ row: number; error: string; data: Record<string, string> }> = [];
 
       if (isCSVFile(file)) {
         // CSV: parse client-side (fast, no API call)

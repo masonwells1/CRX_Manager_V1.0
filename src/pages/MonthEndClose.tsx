@@ -141,7 +141,7 @@ export default function MonthEndClose() {
     setClosing(true);
     try {
       const closeKey = generateIdempotencyKey('close_accounting_period', profile?.id || '');
-      const { data, error } = await supabase.rpc('close_accounting_period', {
+      const { error } = await supabase.rpc('close_accounting_period', {
         p_period_end: current.end,
         p_performed_by: profile?.id,
         p_idempotency_key: closeKey,
@@ -150,7 +150,7 @@ export default function MonthEndClose() {
       toast('success', `Period closed: ${current.label}`);
       setShowCloseModal(false);
       fetchData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setClosing(false);
@@ -178,7 +178,7 @@ export default function MonthEndClose() {
 
       await downloadBatchStatements(statements, options);
       toast('success', `Generated ${statements.length} customer statement(s)`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setGenerating(false);
@@ -213,7 +213,7 @@ export default function MonthEndClose() {
       await downloadBatchYearEndSummaries(summaries, options);
       toast('success', `Generated ${summaries.length} year-end summary PDF(s)`);
       setShowYeDialog(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setYeLoading(false);

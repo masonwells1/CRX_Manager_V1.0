@@ -99,7 +99,7 @@ function extractDate(text: string, lines: string[]): string | null {
   }
 
   // Fallback: find any date pattern in the text
-  const dateMatch = text.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  const dateMatch = text.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
   if (dateMatch) {
     return parseDateString(dateMatch[0]);
   }
@@ -111,11 +111,11 @@ function extractDate(text: string, lines: string[]): string | null {
  * Parse a date string, handling 2-digit years (e.g. "2/6/26" → "2026-02-06")
  */
 function parseDateString(dateStr: string): string | null {
-  const match = dateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  const match = dateStr.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
   if (!match) return null;
 
-  let month = parseInt(match[1], 10);
-  let day = parseInt(match[2], 10);
+  const month = parseInt(match[1], 10);
+  const day = parseInt(match[2], 10);
   let year = parseInt(match[3], 10);
 
   // Handle 2-digit year

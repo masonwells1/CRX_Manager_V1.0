@@ -30,8 +30,8 @@ vi.mock('jspdf', () => {
 });
 
 vi.mock('jspdf-autotable', () => ({
-  default: vi.fn((doc: any, opts: any) => {
-    doc.lastAutoTable = { finalY: (opts.startY || 0) + 100 };
+  default: vi.fn((doc: Record<string, unknown>, opts: Record<string, unknown>) => {
+    (doc as typeof mockDoc).lastAutoTable = { finalY: ((opts.startY as number) || 0) + 100 };
   }),
 }));
 
@@ -39,7 +39,7 @@ import { generateQuotePdf, downloadQuotePdf } from './quotePdf';
 
 // ── Test Data ───────────────────────────────────────────────────────────
 
-function makeQuoteData(overrides: Record<string, any> = {}) {
+function makeQuoteData(overrides: Record<string, unknown> = {}) {
   return {
     quote_number: 'Q-2026-001',
     customer_name: 'Smith Farm',
@@ -106,7 +106,7 @@ describe('generateQuotePdf', () => {
   it('renders the quote number', async () => {
     await generateQuotePdf(makeQuoteData());
     const textCalls = mockDoc.text.mock.calls.flat();
-    const hasQuoteNum = textCalls.some((arg: any) =>
+    const hasQuoteNum = textCalls.some((arg: unknown) =>
       typeof arg === 'string' && arg.includes('Q-2026-001')
     );
     expect(hasQuoteNum).toBe(true);
@@ -115,7 +115,7 @@ describe('generateQuotePdf', () => {
   it('renders customer name', async () => {
     await generateQuotePdf(makeQuoteData());
     const textCalls = mockDoc.text.mock.calls.flat();
-    const hasCustomer = textCalls.some((arg: any) =>
+    const hasCustomer = textCalls.some((arg: unknown) =>
       typeof arg === 'string' && arg.includes('Smith Farm')
     );
     expect(hasCustomer).toBe(true);

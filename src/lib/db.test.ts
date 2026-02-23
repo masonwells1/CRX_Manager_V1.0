@@ -43,9 +43,9 @@ describe('checkMutationResult', () => {
   it('includes operation name in error message', () => {
     try {
       checkMutationResult({ error: null, data: [], count: 0 }, 'delete invoice');
-    } catch (e: any) {
-      expect(e.message).toContain('delete invoice');
-      expect(e.message).toContain('no rows were affected');
+    } catch (e: unknown) {
+      expect((e as Error).message).toContain('delete invoice');
+      expect((e as Error).message).toContain('no rows were affected');
     }
   });
 });
@@ -73,8 +73,8 @@ describe('assertRpcResult', () => {
   it('includes RPC name in error message', () => {
     try {
       assertRpcResult(null, 'my_custom_rpc');
-    } catch (e: any) {
-      expect(e.message).toContain('my_custom_rpc');
+    } catch (e: unknown) {
+      expect((e as Error).message).toContain('my_custom_rpc');
     }
   });
 });

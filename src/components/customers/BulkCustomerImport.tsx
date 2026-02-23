@@ -285,7 +285,7 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
       });
 
       setValidation({ valid, invalid });
-    } catch (error) {
+    } catch {
       toast('error', 'Failed to parse file. Please ensure it is a valid CSV.');
     }
     setParsing(false);

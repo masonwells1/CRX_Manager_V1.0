@@ -24,7 +24,7 @@ export function assertRpcResult<T>(data: unknown, rpcName: string): T {
 }
 
 export function checkMutationResult(
-  result: { error: any; data: any; count?: number | null },
+  result: { error: unknown; data: unknown; count?: number | null },
   operation: string
 ): void {
   if (result.error) throw result.error;

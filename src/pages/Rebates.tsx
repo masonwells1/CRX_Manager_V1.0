@@ -5,10 +5,10 @@
  * and reconcile payments received.
  */
 import { useEffect, useState } from 'react';
-import { Plus, DollarSign, TrendingUp, CheckCircle2, FileText } from 'lucide-react';
+import { Plus, DollarSign, TrendingUp, FileText } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -124,7 +124,7 @@ export default function Rebates() {
       toast('error', 'Failed to load rebate programs');
       console.error(error.message);
     }
-    const mapped = ((data || []) as any[]).map((p) => ({
+    const mapped = ((data || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>).map((p) => ({
       ...p,
       product_name: p.product?.product_name || null,
     }));
@@ -143,7 +143,7 @@ export default function Rebates() {
       toast('error', 'Failed to load rebate claims');
       console.error(error.message);
     }
-    const mapped = ((data || []) as any[]).map((c) => ({
+    const mapped = ((data || []) as Array<Record<string, unknown> & { program?: { program_name?: string; manufacturer?: string }; customer?: { farm_name?: string }; product?: { product_name?: string }; order?: { order_number?: string } }>).map((c) => ({
       ...c,
       program_name: c.program?.program_name || '',
       manufacturer: c.program?.manufacturer || '',
@@ -233,8 +233,8 @@ export default function Rebates() {
       }
       setPModalOpen(false);
       fetchPrograms();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to save program');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to save program');
     }
     setSaving(false);
   };
@@ -282,8 +282,8 @@ export default function Rebates() {
       if (profile) logActivity('rebate_claim_created', `Rebate claim ${claimNum} created`, profile.id);
       setCModalOpen(false);
       fetchClaims();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to create claim');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to create claim');
     }
     setSaving(false);
   };
@@ -300,8 +300,8 @@ export default function Rebates() {
       toast('success', `Claim marked as ${newStatus}`);
       if (profile) logActivity('rebate_claim_updated', `Rebate claim status → ${newStatus}`, profile.id);
       fetchClaims();
-    } catch (err: any) {
-      toast('error', err.message);
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to update claim status');
     }
   };
 

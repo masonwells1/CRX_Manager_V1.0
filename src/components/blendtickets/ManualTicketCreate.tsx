@@ -73,7 +73,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       .is('deleted_at', null)
       .order('name')
       .then(({ data }) => {
-        if (data) setRecipes(data as any);
+        if (data) setRecipes(data as unknown as (BlendRecipe & { items: BlendRecipeItem[] })[]);
       });
   }, []);
 
@@ -132,7 +132,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
     ]);
   }
 
-  function updateProduct(tempId: string, field: keyof ManualProduct, value: any) {
+  function updateProduct(tempId: string, field: keyof ManualProduct, value: string | number | null) {
     setProducts(products.map(p => (p.tempId === tempId ? { ...p, [field]: value } : p)));
   }
 
@@ -219,9 +219,9 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       );
 
       onComplete();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error creating manual ticket:', err);
-      setError(err.message || 'Failed to create ticket');
+      setError(err instanceof Error ? err.message : 'Failed to create ticket');
     } finally {
       setSaving(false);
     }

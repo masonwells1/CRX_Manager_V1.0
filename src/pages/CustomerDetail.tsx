@@ -19,6 +19,25 @@ import { downloadYearEndSummaryPdf } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryData } from '../types';
 
+interface PurchaseHistoryItem {
+  product_name: string;
+  total_units: number;
+  total_spent: number;
+  total_delivered: number;
+  order_count: number;
+}
+
+interface FieldGeoRow extends Field {
+  customer_name?: string;
+}
+
+interface RemainderRow {
+  id: string;
+  product?: { product_name: string } | null;
+  original_delivery?: { delivery_number: string } | null;
+  [key: string]: unknown;
+}
+
 export default function CustomerDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -52,7 +71,7 @@ export default function CustomerDetail() {
   const [orders, setOrders] = useState<(Order & { fulfillment_pct: number })[]>([]);
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name: string })[]>([]);
   const [fields, setFields] = useState<(Field & { customer_name: string })[]>([]);
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<PurchaseHistoryItem[]>([]);
   const [customerRemainders, setCustomerRemainders] = useState<DeliveryRemainder[]>([]);
   const [tabLoading, setTabLoading] = useState(false);
   const [emailError, setEmailError] = useState('');
@@ -125,7 +144,7 @@ export default function CustomerDetail() {
     if (selectedTab === 'fields') {
       const { data, error: fieldError } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
       if (fieldError) console.error('Failed to load fields:', fieldError);
-      const rows = ((data || []) as any[]).map((f: any) => ({
+      const rows = ((data || []) as FieldGeoRow[]).map((f) => ({
         ...f,
         customer_name: f.customer_name || '',
       }));
@@ -191,7 +210,7 @@ export default function CustomerDetail() {
         .eq('customer_id', id)
         .eq('status', 'pending')
         .order('created_at', { ascending: false });
-      const remainders = ((remData || []) as any[]).map((r) => ({
+      const remainders = ((remData || []) as RemainderRow[]).map((r) => ({
         ...r,
         product_name: r.product?.product_name || 'Unknown',
         original_delivery_number: r.original_delivery?.delivery_number || '-',
@@ -207,10 +226,10 @@ export default function CustomerDetail() {
         const { data: allItems } = await supabase
           .from('order_items')
           .select('product_name, price_per_unit, total_units_needed, total_price, quantity_delivered, section_name, order_id')
-          .in('order_id', orderIds.map((o: any) => o.id));
+          .in('order_id', orderIds.map((o: { id: string }) => o.id));
         // Aggregate by product
-        const productMap: Record<string, { product_name: string; total_units: number; total_spent: number; total_delivered: number; order_count: number }> = {};
-        (allItems || []).forEach((item: any) => {
+        const productMap: Record<string, PurchaseHistoryItem> = {};
+        (allItems || []).forEach((item: { product_name: string; total_units_needed: number | null; total_price: number | null; quantity_delivered: number | null }) => {
           const key = item.product_name;
           if (!productMap[key]) {
             productMap[key] = { product_name: key, total_units: 0, total_spent: 0, total_delivered: 0, order_count: 0 };
@@ -320,8 +339,8 @@ export default function CustomerDetail() {
           fetchAddresses();
         }
       }
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to save customer');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to save customer');
     }
     setSaving(false);
   };
@@ -349,8 +368,8 @@ export default function CustomerDetail() {
       await downloadYearEndSummaryPdf(data as unknown as YearEndSummaryData, options);
       toast('success', `Season ${season} summary generated`);
       setShowSummaryDialog(false);
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to generate summary');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to generate summary');
     }
     setSummaryLoading(false);
   };
@@ -615,7 +634,7 @@ export default function CustomerDetail() {
               <CardHeader title="Field" accent="Locations" />
               <MapContainer className="h-[250px] w-full rounded-lg overflow-hidden">
                 <FieldMarkers
-                  fields={fields as any}
+                  fields={fields as Field[]}
                   onFieldClick={(fieldId) => navigate(`/fields/${fieldId}`)}
                 />
               </MapContainer>
@@ -1001,11 +1020,11 @@ export default function CustomerDetail() {
                 <tfoot>
                   <tr className="border-t border-gray-200 bg-gray-50">
                     <td className="px-5 py-3 font-semibold text-nav-dark">Total</td>
-                    <td className="px-4 py-3 font-semibold">{history.reduce((s: number, h: any) => s + h.order_count, 0)}</td>
-                    <td className="px-4 py-3 font-semibold">{history.reduce((s: number, h: any) => s + h.total_units, 0).toLocaleString()}</td>
-                    <td className="px-4 py-3 font-semibold">{history.reduce((s: number, h: any) => s + h.total_delivered, 0).toLocaleString()}</td>
+                    <td className="px-4 py-3 font-semibold">{history.reduce((s: number, h: PurchaseHistoryItem) => s + h.order_count, 0)}</td>
+                    <td className="px-4 py-3 font-semibold">{history.reduce((s: number, h: PurchaseHistoryItem) => s + h.total_units, 0).toLocaleString()}</td>
+                    <td className="px-4 py-3 font-semibold">{history.reduce((s: number, h: PurchaseHistoryItem) => s + h.total_delivered, 0).toLocaleString()}</td>
                     <td className="px-4 py-3 font-semibold font-mono text-crx-green">
-                      {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(history.reduce((s: number, h: any) => s + h.total_spent, 0))}
+                      {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(history.reduce((s: number, h: PurchaseHistoryItem) => s + h.total_spent, 0))}
                     </td>
                   </tr>
                 </tfoot>

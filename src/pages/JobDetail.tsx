@@ -11,9 +11,61 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import type { Job, JobStatus, JobField, JobChemical, JobAppliedInfo, Customer, Product, Field, Vehicle, Profile, BlendRecipe } from '../types';
+import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe } from '../types';
+
+interface JobDbRow {
+  id: string;
+  job_number: string;
+  status: JobStatus;
+  customer_id: string;
+  job_date: string;
+  scheduled_time?: string | null;
+  applicator_id?: string | null;
+  vehicle_id?: string | null;
+  recipe_id?: string | null;
+  notes?: string | null;
+  batch_id?: string | null;
+  job_fields?: Array<{
+    field_id: string;
+    acres_to_treat?: number | null;
+    sort_order: number;
+    field?: { field_name: string } | null;
+  }>;
+  job_chemicals?: Array<{
+    id: string;
+    product_id: string;
+    quantity?: number | null;
+    unit?: string | null;
+    rate_per_acre?: number | null;
+    rate_unit?: string | null;
+    cost_per_unit_cents?: number | null;
+    price_per_unit_cents?: number | null;
+    sort_order: number;
+    product?: { product_name: string } | null;
+  }>;
+  applied_info?: Array<{
+    wind_speed?: number | null;
+    wind_direction?: string | null;
+    temperature?: number | null;
+    humidity?: number | null;
+    actual_gallons_applied?: number | null;
+    notes?: string | null;
+  }> | {
+    wind_speed?: number | null;
+    wind_direction?: string | null;
+    temperature?: number | null;
+    humidity?: number | null;
+    actual_gallons_applied?: number | null;
+    notes?: string | null;
+  } | null;
+}
+
+interface SaveJobResult { job_id: string }
+interface CompleteJobResult { record_number: string }
+interface TransferJobResult { invoice_id: string; invoice_number: string }
+interface LoadRecipeResult { items_loaded: number }
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
   scheduled: 'info',
@@ -67,7 +119,7 @@ export default function JobDetail() {
   const [recipes, setRecipes] = useState<BlendRecipe[]>([]);
 
   // Job form
-  const [jobId, setJobId] = useState<string | null>(null);
+  const [, setJobId] = useState<string | null>(null);
   const [jobNumber, setJobNumber] = useState('');
   const [status, setStatus] = useState<JobStatus>('scheduled');
   const [customerId, setCustomerId] = useState('');
@@ -158,7 +210,7 @@ export default function JobDetail() {
       return;
     }
 
-    const j = data as any;
+    const j = data as unknown as JobDbRow;
     setJobId(j.id);
     setJobNumber(j.job_number);
     setStatus(j.status);
@@ -172,7 +224,7 @@ export default function JobDetail() {
     setBatchId(j.batch_id || '');
 
     setFieldRows(
-      (j.job_fields || []).map((f: any) => ({
+      (j.job_fields || []).map((f) => ({
         field_id: f.field_id,
         field_name: f.field?.field_name || '',
         acres_to_treat: f.acres_to_treat?.toString() || '',
@@ -181,7 +233,7 @@ export default function JobDetail() {
     );
 
     setChemRows(
-      (j.job_chemicals || []).map((c: any) => ({
+      (j.job_chemicals || []).map((c) => ({
         id: c.id,
         product_id: c.product_id,
         product_name: c.product?.product_name || '',
@@ -212,7 +264,7 @@ export default function JobDetail() {
   };
 
   // Computed
-  const customerFields = allFields.filter(f => !customerId || (f as any).customer_id === customerId);
+  const customerFields = allFields.filter(f => !customerId || f.customer_id === customerId);
   const totalAcres = fieldRows.reduce((sum, f) => sum + (parseFloat(f.acres_to_treat) || 0), 0);
   const totalCostCents = chemRows.reduce((sum, c) => sum + ((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0)), 0);
   const totalPriceCents = chemRows.reduce((sum, c) => sum + ((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0)), 0);
@@ -275,7 +327,7 @@ export default function JobDetail() {
       });
 
       if (error) throw error;
-      const result = data as any;
+      const result = data as unknown as SaveJobResult;
 
       if (profile) logActivity(
         isNew ? 'job_created' : 'job_updated',
@@ -291,8 +343,8 @@ export default function JobDetail() {
       } else {
         await fetchJob();
       }
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to save job');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to save job');
     }
     setSaving(false);
   };
@@ -308,14 +360,14 @@ export default function JobDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      const result = data as any;
+      const result = data as unknown as CompleteJobResult;
       if (profile) logActivity('job_completed', `Job ${jobNumber} completed → App Record ${result.record_number}`, profile.id);
       toast('success', `Job completed! Application record ${result.record_number} created.`);
       setShowCompleteModal(false);
       setIsDirty(false);
       await fetchJob();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to complete job');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to complete job');
     }
     setCompleting(false);
   };
@@ -331,13 +383,13 @@ export default function JobDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      const result = data as any;
+      const result = data as unknown as TransferJobResult;
       if (profile) logActivity('job_invoiced', `Job ${jobNumber} → Invoice ${result.invoice_number}`, profile.id);
       toast('success', `Invoice ${result.invoice_number} created`);
       setIsDirty(false);
       navigate(`/invoices/${result.invoice_id}`);
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to transfer to invoice');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
     }
     setTransferring(false);
   };
@@ -351,12 +403,12 @@ export default function JobDetail() {
         p_recipe_id: selectedRecipeId,
       });
       if (error) throw error;
-      toast('success', `Loaded ${(data as any).items_loaded} items from recipe`);
+      toast('success', `Loaded ${(data as unknown as LoadRecipeResult).items_loaded} items from recipe`);
       setShowRecipeModal(false);
       setIsDirty(false);
       await fetchJob();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to load recipe');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to load recipe');
     }
     setLoadingRecipe(false);
   };
@@ -372,8 +424,8 @@ export default function JobDetail() {
     if (key === 'field_id') {
       const f = allFields.find(af => af.id === value);
       updated[i].field_name = f?.field_name || '';
-      if (f && (f as any).total_acres && !updated[i].acres_to_treat) {
-        updated[i].acres_to_treat = (f as any).total_acres.toString();
+      if (f && f.total_acres && !updated[i].acres_to_treat) {
+        updated[i].acres_to_treat = f.total_acres.toString();
       }
     }
     setFieldRows(updated);

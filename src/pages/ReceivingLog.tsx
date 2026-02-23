@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   PackageCheck,
@@ -27,7 +27,7 @@ const conditionLabel = (c: string) =>
   c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
 
 export default function ReceivingLog() {
-  const { role, profile } = useAuth();
+  useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -79,7 +79,7 @@ export default function ReceivingLog() {
 
     // Fetch receiving log via RPC
     try {
-      const params: Record<string, any> = {
+      const params: Record<string, string | number> = {
         p_limit: 500,
         p_offset: 0,
       };
@@ -104,7 +104,7 @@ export default function ReceivingLog() {
       // Extract unique vendors for filter dropdown
       const uniqueVendors = [...new Set(rows.map((r) => r.vendor).filter(Boolean))] as string[];
       if (uniqueVendors.length > 0) setVendors(uniqueVendors);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Failed to load receiving log:', err);
       toast('error', 'Failed to load receiving log');
     }
@@ -129,7 +129,7 @@ export default function ReceivingLog() {
       },
     },
     {
-      key: 'po_number' as any,
+      key: 'po_number',
       header: 'PO #',
       sortable: true,
       render: (row) => (
@@ -145,13 +145,13 @@ export default function ReceivingLog() {
       ),
     },
     {
-      key: 'vendor' as any,
+      key: 'vendor',
       header: 'Vendor',
       sortable: true,
       render: (row) => <span className="text-sm">{row.vendor || '-'}</span>,
     },
     {
-      key: 'product_name' as any,
+      key: 'product_name',
       header: 'Product',
       sortable: true,
       render: (row) => <span className="text-sm font-medium text-nav-dark">{row.product_name || '-'}</span>,
@@ -178,7 +178,7 @@ export default function ReceivingLog() {
       ),
     },
     {
-      key: 'received_by_name' as any,
+      key: 'received_by_name',
       header: 'Received By',
       sortable: true,
       render: (row) => <span className="text-sm">{row.received_by_name || '-'}</span>,
@@ -198,7 +198,7 @@ export default function ReceivingLog() {
       ),
     },
     {
-      key: 'photo_count' as any,
+      key: 'photo_count',
       header: '',
       className: 'w-10',
       render: (row) =>
@@ -286,7 +286,7 @@ export default function ReceivingLog() {
             columns={columns}
             searchable
             searchPlaceholder="Search by PO#, vendor, product, lot#..."
-            searchKeys={['po_number', 'vendor', 'product_name', 'lot_number', 'notes'] as any[]}
+            searchKeys={['po_number', 'vendor', 'product_name', 'lot_number', 'notes'] as string[]}
             onRowClick={(row) => navigate(`/purchase-orders/${row.purchase_order_id}`)}
             emptyTitle="No receiving records"
             emptyDescription="Items received on purchase orders will appear here"

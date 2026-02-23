@@ -61,7 +61,7 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
       .eq('note_id', noteId);
 
     if (data) {
-      const tags = data.map((d: any) => d.note_tags).filter(Boolean);
+      const tags = data.map((d: Record<string, unknown>) => d.note_tags).filter(Boolean);
       setNoteTags(tags);
     }
   };
@@ -127,8 +127,8 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
       checkMutationResult(result, 'Remove tag from note');
       fetchNoteTags();
       if (onTagsChange) onTagsChange();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to remove tag');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to remove tag');
     }
   };
 

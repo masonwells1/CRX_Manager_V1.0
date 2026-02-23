@@ -5,6 +5,13 @@
  */
 // jsPDF and autoTable are dynamically imported inside each function
 // to keep them out of the main bundle (~500KB each)
+import type jsPDF from 'jspdf';
+import type { autoTable as autoTableFn } from 'jspdf-autotable';
+import type { CellHookData } from 'jspdf-autotable';
+
+type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
+  lastAutoTable: { finalY: number };
+};
 
 const CRX_GREEN: [number, number, number] = [40, 162, 106];
 const CHARCOAL: [number, number, number] = [46, 46, 46];
@@ -38,9 +45,9 @@ export interface PdfDeliveryData {
 const fmt = (n: number) => n.toLocaleString();
 
 function renderDeliveryPage(
-  doc: any,
+  doc: JsPDFWithAutoTable,
   data: PdfDeliveryData,
-  autoTable: any
+  autoTable: typeof autoTableFn
 ) {
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 40;
@@ -137,7 +144,7 @@ function renderDeliveryPage(
     theme: 'plain',
     styles: { fontSize: 10, cellPadding: 6, textColor: CHARCOAL },
     headStyles: { fillColor: [240, 240, 240], textColor: CHARCOAL, fontStyle: 'bold' },
-    didParseCell: (hookData: any) => {
+    didParseCell: (hookData: CellHookData) => {
       // Highlight partial deliveries in amber
       if (hasDelivered && hookData.section === 'body' && hookData.column.index === 2) {
         const planned = data.items[hookData.row.index]?.quantity ?? 0;
@@ -150,7 +157,7 @@ function renderDeliveryPage(
     },
   });
 
-  y = (doc as any).lastAutoTable.finalY + 20;
+  y = doc.lastAutoTable.finalY + 20;
 
   // Issue reporting section
   if (data.issue_type && data.issue_type !== 'none') {

@@ -184,7 +184,7 @@ describe('DataTable', () => {
 
   // Null value handling
   it('shows dash for null/undefined cell values', () => {
-    const sparseData = [{ id: 1, name: 'Test', age: 20, email: undefined as any }];
+    const sparseData = [{ id: 1, name: 'Test', age: 20, email: undefined as unknown as string }];
     render(<DataTable data={sparseData} columns={columns} />);
     expect(screen.getByText('-')).toBeInTheDocument();
   });

@@ -176,7 +176,7 @@ export default function NewOrder() {
 
       if (error) throw error;
 
-      const orderId = (data as any)?.order_id;
+      const orderId = (data as Record<string, unknown> | null)?.order_id as string | undefined;
       if (!orderId) {
         toast('error', 'Order creation failed — no order ID returned');
         setSaving(false);
@@ -190,11 +190,11 @@ export default function NewOrder() {
           const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
             p_customer_id: customerId,
           });
-          if (creditCheck && (creditCheck as any).exceeded) {
-            const cl = creditCheck as any;
+          const cl = creditCheck as { exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null;
+          if (cl && cl.exceeded) {
             const fmtUsd = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
-            toast('warning', `Credit limit warning: ${cl.farm_name} outstanding AR ${fmtUsd(cl.outstanding_ar)} exceeds limit ${fmtUsd(cl.credit_limit)}`);
-            notifyCreditLimitExceeded(cl.farm_name, cl.outstanding_ar, cl.credit_limit, customerId);
+            toast('warning', `Credit limit warning: ${cl.farm_name} outstanding AR ${fmtUsd(cl.outstanding_ar ?? 0)} exceeds limit ${fmtUsd(cl.credit_limit ?? 0)}`);
+            notifyCreditLimitExceeded(cl.farm_name ?? 'Unknown', cl.outstanding_ar ?? 0, cl.credit_limit ?? 0, customerId);
           }
         } catch {
           // Non-blocking — credit limit check failure should not prevent navigation
@@ -204,7 +204,7 @@ export default function NewOrder() {
       navigate(`/orders/${orderId}`);
     } catch (err) {
       console.error('Error creating order:', err);
-      toast('error', 'Failed to create order: ' + (err as any).message);
+      toast('error', 'Failed to create order: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setSaving(false);
     }

@@ -33,8 +33,8 @@ export function sanitizeError(error: unknown): string {
     ? error.message
     : typeof error === 'string'
       ? error
-      : typeof error === 'object' && error !== null && 'message' in error && typeof (error as any).message === 'string'
-        ? (error as any).message
+      : typeof error === 'object' && error !== null && 'message' in error && typeof (error as Record<string, unknown>).message === 'string'
+        ? (error as Record<string, unknown>).message as string
         : 'An unexpected error occurred';
 
   for (const [pattern, replacement] of CONSTRAINT_PATTERNS) {

@@ -8,7 +8,7 @@ interface ActivityEntry {
   note_id: string;
   user_id: string;
   action_type: string;
-  changes: any;
+  changes: Record<string, unknown> | null;
   created_at: string;
   user?: {
     full_name: string;
@@ -68,7 +68,7 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
   };
 
   const getActionText = (activity: ActivityEntry) => {
-    const userName = (activity.user as any)?.full_name || 'Someone';
+    const userName = activity.user?.full_name || 'Someone';
 
     switch (activity.action_type) {
       case 'created':
@@ -113,7 +113,7 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
             <span className="font-medium">{userName}</span> deleted a comment
           </>
         );
-      case 'assigned':
+      case 'assigned': {
         const oldAssignee = activity.changes?.old_assignee;
         const newAssignee = activity.changes?.new_assignee;
         if (!oldAssignee && newAssignee) {
@@ -135,6 +135,7 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
             </>
           );
         }
+      }
       case 'deleted':
         return (
           <>

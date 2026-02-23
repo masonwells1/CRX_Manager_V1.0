@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText, Info, Sparkles } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
@@ -262,7 +262,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       });
 
       setValidation({ valid, invalid });
-    } catch (error) {
+    } catch {
       toast('error', 'Failed to parse file. Please ensure it is a valid CSV.');
     }
     setParsing(false);
@@ -353,7 +353,6 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
           });
 
           let itemsCreated = 0;
-          let itemsFailed = 0;
 
           for (const [sectionName, sectionItems] of sectionGroups) {
             const { data: section, error: sectionError } = await supabase
@@ -367,7 +366,6 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               .single();
 
             if (sectionError || !section) {
-              itemsFailed += sectionItems.length;
               continue;
             }
 
@@ -375,7 +373,6 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               const productId = productMap.get(item.product_name.toLowerCase().trim());
 
               if (!productId) {
-                itemsFailed++;
                 continue;
               }
 
@@ -422,9 +419,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 notes: item.notes || '',
               });
 
-              if (itemError) {
-                itemsFailed++;
-              } else {
+              if (!itemError) {
                 itemsCreated++;
               }
             }
@@ -437,7 +432,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
             details.push(`Quote ${quoteNumber}: No items could be created`);
             failCount++;
           }
-        } catch (error) {
+        } catch {
           details.push(`Quote ${quoteNumber}: Unexpected error`);
           failCount++;
         }
@@ -452,7 +447,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
       if (failCount > 0) {
         toast('error', `Failed to import ${failCount} quote(s)`);
       }
-    } catch (error) {
+    } catch {
       toast('error', 'Import failed');
     }
     setUploading(false);

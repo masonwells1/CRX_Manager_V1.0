@@ -43,10 +43,10 @@ export default function Fields() {
       return;
     }
 
-    const rows = ((data || []) as any[]).map((f) => ({
+    const rows = (data || []).map((f: Record<string, unknown>) => ({
       ...f,
-      customer_name: f.customer_name || 'Unknown',
-    }));
+      customer_name: (f.customer_name as string) || 'Unknown',
+    })) as unknown as FieldWithCustomer[];
     setFields(rows);
     setLoading(false);
   };
@@ -200,7 +200,7 @@ export default function Fields() {
 
           <MapContainer className="h-[500px] w-full rounded-lg overflow-hidden">
             <FieldMarkers
-              fields={filtered as any}
+              fields={filtered}
               onFieldClick={(fieldId) => navigate(`/fields/${fieldId}`)}
             />
           </MapContainer>

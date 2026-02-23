@@ -131,7 +131,7 @@ export default function InventoryPage() {
       return acc;
     }, {} as Record<string, number>);
 
-    const onOrderByProduct = (poRes.data || []).reduce((acc, poi: any) => {
+    const onOrderByProduct = (poRes.data || []).reduce((acc, poi: { product_id: string; quantity_ordered: number; quantity_received: number }) => {
       const remaining = Number(poi.quantity_ordered) - Number(poi.quantity_received);
       acc[poi.product_id] = (acc[poi.product_id] || 0) + remaining;
       return acc;
@@ -164,7 +164,6 @@ export default function InventoryPage() {
 
     const buildRow = (
       item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string; inventory_unit?: string | null; container_size?: number | null; container_type?: string | null; reorder_point: number; min_stock_level: number },
-      _isVirtual: boolean
     ): InventoryRow => {
       const onOrderQty = onOrderByProduct[item.product_id] || 0;
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
@@ -214,7 +213,6 @@ export default function InventoryPage() {
           reorder_point: item.reorder_point || 0,
           min_stock_level: item.min_stock_level || 0,
         },
-        false
       )
     );
 
@@ -231,7 +229,6 @@ export default function InventoryPage() {
           reorder_point: 0,
           min_stock_level: 0,
         },
-        true
       )
     );
 
@@ -261,7 +258,7 @@ export default function InventoryPage() {
       return;
     }
 
-    const holdRows = (data || []).map((h: any) => ({
+    const holdRows = (data || []).map((h: Record<string, unknown> & { product?: { product_name: string }; customer?: { farm_name: string }; creator?: { full_name: string } }) => ({
       ...h,
       product_name: h.product?.product_name || 'Unknown',
       customer_name: h.customer?.farm_name || null,
@@ -373,7 +370,7 @@ export default function InventoryPage() {
       toast('success', 'Hold released');
       fetchInventory();
       fetchHolds();
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast('error', sanitizeError(error));
     }
   };
@@ -390,7 +387,7 @@ export default function InventoryPage() {
     }
     setAdding(true);
 
-    const { data, error } = await supabase.rpc('manual_inventory_add', {
+    const { error } = await supabase.rpc('manual_inventory_add', {
       p_product_id: addProductId,
       p_location: addLocation || 'Main Warehouse',
       p_quantity: qty,
@@ -424,7 +421,7 @@ export default function InventoryPage() {
       .in('purchase_orders.status', ['draft', 'submitted', 'partially_received']);
 
     if (!error && data) {
-      const pos = data.map((item: any) => ({
+      const pos = data.map((item: { id: string; quantity_ordered: number; quantity_received: number; unit_cost: number; unit_size: string | null; product_id: string; purchase_order_id: string; purchase_orders: { po_number: string; status: string } }) => ({
         id: item.id,
         po_number: item.purchase_orders.po_number,
         ordered: item.quantity_ordered,
@@ -484,7 +481,7 @@ export default function InventoryPage() {
       fetchInventory();
     } catch (error) {
       console.error('Error receiving inventory:', error);
-      toast('error', 'Failed to receive inventory: ' + (error as any).message);
+      toast('error', 'Failed to receive inventory: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -514,7 +511,7 @@ export default function InventoryPage() {
       fetchInventory();
     } catch (error) {
       console.error('Error adjusting inventory:', error);
-      toast('error', 'Failed to adjust inventory: ' + (error as any).message);
+      toast('error', 'Failed to adjust inventory: ' + (error instanceof Error ? error.message : String(error)));
     }
   };
 
@@ -577,7 +574,7 @@ export default function InventoryPage() {
 
       toast('success', 'Inventory item deleted');
       fetchInventory();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to delete inventory:', error);
       toast('error', sanitizeError(error));
     }
@@ -604,7 +601,7 @@ export default function InventoryPage() {
 
   const locationOptions = locations.map((l) => ({ value: l, label: l }));
 
-  const handleBulkSave = async (changes: Map<string, Record<string, any>>) => {
+  const handleBulkSave = async (changes: Map<string, Record<string, unknown>>) => {
     try {
       for (const [inventoryId, fields] of changes) {
         // Skip virtual rows (they don't have real DB records)
@@ -626,7 +623,7 @@ export default function InventoryPage() {
         logActivity('inventory_bulk_updated', `${realChanges} inventory item(s) updated via inline edit`, profile.id, 'inventory', null);
       }
       fetchInventory();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
       throw err;
     }

@@ -38,8 +38,8 @@ export default function Quotes() {
       const dupResult = assertRpcResult<{ quote_id: string; quote_number: string }>(result, 'duplicate_quote');
       toast('success', `Quote duplicated as ${dupResult.quote_number}`);
       navigate(`/quotes/${dupResult.quote_id}`);
-    } catch (err: any) {
-      toast('error', `Failed to duplicate quote: ${err.message || 'Unknown error'}`);
+    } catch (err: unknown) {
+      toast('error', `Failed to duplicate quote: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 

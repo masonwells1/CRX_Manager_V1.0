@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Trash2 } from 'lucide-react';
+import { ArrowLeft, Save } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -127,8 +127,8 @@ export default function VehicleDetail() {
         toast('success', 'Vehicle saved');
         setIsDirty(false);
       }
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to save vehicle');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to save vehicle');
     }
     setSaving(false);
   };

@@ -5,6 +5,12 @@
  * Sprint 9: Generic Report PDF Generator
  */
 
+import type jsPDF from 'jspdf';
+
+type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
+  lastAutoTable: { finalY: number };
+};
+
 const CRX_GREEN: [number, number, number] = [40, 162, 106];
 const CHARCOAL: [number, number, number] = [46, 46, 46];
 const GRAY: [number, number, number] = [78, 78, 78];
@@ -111,7 +117,7 @@ export async function generateReportPdf(options: ReportPdfOptions) {
       fontStyle: 'bold',
       fontSize: 7,
     },
-    columnStyles: colStyles as any,
+    columnStyles: colStyles as Record<number, { halign?: string }>,
     alternateRowStyles: { fillColor: [252, 252, 252] },
     didDrawPage: () => {
       // Footer on every page
@@ -131,7 +137,7 @@ export async function generateReportPdf(options: ReportPdfOptions) {
 
   // Summary footer note
   if (options.footerNote) {
-    y = (doc as any).lastAutoTable.finalY + 14;
+    y = (doc as JsPDFWithAutoTable).lastAutoTable.finalY + 14;
     doc.setFontSize(8);
     doc.setTextColor(...GRAY);
     doc.text(options.footerNote, margin, y);

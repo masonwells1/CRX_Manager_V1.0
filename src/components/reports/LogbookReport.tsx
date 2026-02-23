@@ -63,7 +63,7 @@ export default function LogbookReport() {
         setEntities((rows || []).map((r) => ({ id: r.id, label: r.full_name })));
       } else if (tab === 'field') {
         const { data: rows } = await supabase.from('fields').select('id, field_name, customer:customers(farm_name)').eq('is_active', true).order('field_name').limit(500);
-        setEntities((rows || []).map((r: any) => ({ id: r.id, label: `${r.field_name} — ${r.customer?.farm_name || 'Unknown'}` })));
+        setEntities((rows || []).map((r: { id: string; field_name: string; customer?: { farm_name: string } }) => ({ id: r.id, label: `${r.field_name} — ${r.customer?.farm_name || 'Unknown'}` })));
       }
     }
     loadEntities();

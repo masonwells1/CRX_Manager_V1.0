@@ -7,7 +7,7 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { exportToCSV } from '../lib/csvExport';
 import BatchVoidModal from '../components/invoices/BatchVoidModal';
@@ -93,7 +93,7 @@ export default function Invoices() {
       return;
     }
 
-    const rows = ((data || []) as any[]).map((inv) => ({
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman?: { full_name: string } }>).map((inv) => ({
       ...inv,
       customer_name: inv.customer?.farm_name || 'Unknown',
       salesman_name: inv.salesman?.full_name || null,
@@ -147,7 +147,7 @@ export default function Invoices() {
         setSelected(new Set());
         fetchInvoices();
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Batch post error:', err);
       toast('error', sanitizeError(err));
     }
@@ -235,7 +235,7 @@ export default function Invoices() {
           applicator_name: inv.applicator_name || undefined,
           vehicle_name: inv.vehicle_name || undefined,
           application_date: inv.application_date || undefined,
-          shares: (shares || []).length > 0 ? (shares as any[]).map(s => ({
+          shares: (shares || []).length > 0 ? (shares as Array<{ customer?: { farm_name: string }; split_percentage: number; acres: number; amount_cents: number; price_per_acre_cents: number | null; pricing_note: string | null }>).map(s => ({
             customer_name: s.customer?.farm_name || 'Unknown',
             split_percentage: s.split_percentage,
             acres: s.acres,
@@ -243,7 +243,7 @@ export default function Invoices() {
             price_per_acre_cents: s.price_per_acre_cents || null,
             pricing_note: s.pricing_note || null,
           })) : undefined,
-          items: ((items || []) as any[]).map((it) => ({
+          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name: string }; description?: string; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null }>).map((it) => ({
             description: it.description,
             product_name: it.product?.product_name || it.description,
             quantity: Number(it.quantity),
@@ -279,7 +279,7 @@ export default function Invoices() {
 
       await generateBatchInvoicePdf(pdfDataList);
       toast('success', `Printed ${pdfDataList.length} invoice(s) to PDF`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Batch print failed:', err);
       toast('error', sanitizeError(err));
     }
@@ -306,7 +306,7 @@ export default function Invoices() {
 
   const columns: Column<InvoiceRow>[] = [
     {
-      key: 'id' as any,
+      key: 'id',
       header: '',
       className: 'w-10',
       render: (row) =>
@@ -338,7 +338,7 @@ export default function Invoices() {
       ),
     },
     {
-      key: 'customer_name' as any,
+      key: 'customer_name',
       header: 'Customer',
       sortable: true,
       render: (row) => (
@@ -388,7 +388,7 @@ export default function Invoices() {
       render: (row) => statusBadge(row.status),
     },
     {
-      key: 'salesman_name' as any,
+      key: 'salesman_name',
       header: 'Salesman',
       render: (row) => row.salesman_name || '-',
     },

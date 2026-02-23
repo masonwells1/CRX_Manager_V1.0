@@ -33,7 +33,7 @@ export default function FieldMarkers({ fields, onFieldClick }: FieldMarkersProps
             field_name: f.field_name,
             total_acres: f.total_acres,
             crop_type: f.crop_type,
-            customer_name: (f as any).customer_name || f.customer?.farm_name,
+            customer_name: (f as Field & { customer_name?: string }).customer_name || f.customer?.farm_name,
             lng: geo.coordinates[0],
             lat: geo.coordinates[1],
           });

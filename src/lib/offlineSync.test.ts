@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock supabase
 const mockRpc = vi.fn();
 vi.mock('./db', () => ({
-  supabase: { rpc: (...args: any[]) => mockRpc(...args) },
+  supabase: { rpc: (...args: unknown[]) => mockRpc(...args) },
 }));
 
 // Mock offlineQueue
@@ -17,10 +17,10 @@ const mockGetFailedActions = vi.fn().mockResolvedValue([]);
 vi.mock('./offlineQueue', () => ({
   getPendingActions: () => mockGetPendingActions(),
   removeAction: (id: number) => mockRemoveAction(id),
-  updateAction: (action: any) => mockUpdateAction(action),
-  clearFailedActions: (...args: any[]) => mockClearFailedActions(...args),
-  clearStaleActions: (...args: any[]) => mockClearStaleActions(...args),
-  getFailedActions: (...args: any[]) => mockGetFailedActions(...args),
+  updateAction: (action: unknown) => mockUpdateAction(action),
+  clearFailedActions: (...args: unknown[]) => mockClearFailedActions(...args),
+  clearStaleActions: (...args: unknown[]) => mockClearStaleActions(...args),
+  getFailedActions: (...args: unknown[]) => mockGetFailedActions(...args),
 }));
 
 import { syncPendingActions } from './offlineSync';

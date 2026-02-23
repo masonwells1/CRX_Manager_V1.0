@@ -181,7 +181,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
       });
 
       setValidation({ valid, invalid, notFound });
-    } catch (error) {
+    } catch {
       toast('error', 'Failed to process file');
     }
     setParsing(false);

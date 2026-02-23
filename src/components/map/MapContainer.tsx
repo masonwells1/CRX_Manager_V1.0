@@ -59,7 +59,7 @@ export default function MapContainer({
         mapStyle={SATELLITE_STYLE}
         style={{ width: '100%', height: '100%' }}
         interactive={interactive}
-        onLoad={handleLoad as any}
+        onLoad={handleLoad as unknown as (e: unknown) => void}
         attributionControl={false}
       >
         {interactive && <NavigationControl position="top-right" />}

@@ -136,7 +136,7 @@ describe('validateFeatureGeometry', () => {
   });
 
   it('returns error for empty geometry', () => {
-    const feature = { type: 'Feature', properties: {}, geometry: null } as any;
+    const feature = { type: 'Feature', properties: {}, geometry: null } as unknown as GeoJSON.Feature;
     const errors = validateFeatureGeometry(feature);
     expect(errors).toContain('Empty geometry');
   });

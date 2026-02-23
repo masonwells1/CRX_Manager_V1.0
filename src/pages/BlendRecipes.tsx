@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Copy, Search, Beaker } from 'lucide-react';
+import { Plus, Trash2, Copy } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -9,9 +9,28 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
-import type { BlendRecipe, BlendRecipeItem, Product } from '../types';
+import type { BlendRecipe, Product, RecipeType } from '../types';
 
 type RecipeRow = BlendRecipe & { item_count: number; creator_name: string };
+
+interface RecipeDbRow {
+  id: string;
+  items?: Array<{ count: number }>;
+  creator?: { full_name: string } | null;
+  [key: string]: unknown;
+}
+
+interface RecipeItemDbRow {
+  id: string;
+  product_id: string;
+  product_name?: string;
+  quantity: number;
+  unit: string;
+  rate_per_acre: number | null;
+  sort_order: number;
+  notes?: string | null;
+  product?: { product_name: string } | null;
+}
 
 const CROP_OPTIONS = ['corn', 'soybeans', 'wheat', 'cotton', 'rice', 'other'];
 const TIMING_OPTIONS = ['pre-emerge', 'post-emerge', 'early-season', 'late-season', 'burndown', 'other'];
@@ -28,7 +47,7 @@ interface EditItem {
 }
 
 export default function BlendRecipes() {
-  const { profile } = useAuth();
+  useAuth();
   const { toast } = useToast();
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -69,11 +88,11 @@ export default function BlendRecipes() {
       return;
     }
 
-    const rows: RecipeRow[] = ((data || []) as any[]).map((r) => ({
+    const rows: RecipeRow[] = ((data || []) as RecipeDbRow[]).map((r) => ({
       ...r,
       item_count: r.items?.[0]?.count || 0,
       creator_name: r.creator?.full_name || 'Unknown',
-    }));
+    })) as RecipeRow[];
     setRecipes(rows);
     setLoading(false);
   };
@@ -100,7 +119,7 @@ export default function BlendRecipes() {
       setForm({
         name: recipe.name,
         description: recipe.description || '',
-        recipe_type: recipe.recipe_type as any,
+        recipe_type: recipe.recipe_type as RecipeType,
         crop_type: recipe.crop_type || '',
         timing: recipe.timing || '',
       });
@@ -111,7 +130,7 @@ export default function BlendRecipes() {
         .eq('recipe_id', recipe.id)
         .order('sort_order');
       setEditItems(
-        (data || []).map((item: any) => ({
+        ((data || []) as RecipeItemDbRow[]).map((item) => ({
           id: item.id,
           product_id: item.product_id,
           product_name: item.product?.product_name || item.product_name || '',
@@ -198,8 +217,8 @@ export default function BlendRecipes() {
       toast('success', editId ? 'Recipe updated' : 'Recipe created');
       setShowEditor(false);
       fetchRecipes();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to save recipe');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to save recipe');
     } finally {
       setSaving(false);
     }
@@ -229,7 +248,7 @@ export default function BlendRecipes() {
         .order('sort_order');
 
       if (items && items.length > 0) {
-        const copies = items.map((item: any) => ({
+        const copies = (items as RecipeItemDbRow[]).map((item) => ({
           recipe_id: newRecipe.id,
           product_id: item.product_id,
           product_name: item.product_name,
@@ -244,8 +263,8 @@ export default function BlendRecipes() {
 
       toast('success', 'Recipe duplicated');
       fetchRecipes();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to duplicate');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to duplicate');
     }
   };
 
@@ -260,8 +279,8 @@ export default function BlendRecipes() {
       checkMutationResult(result, 'Delete recipe');
       toast('success', 'Recipe deleted');
       fetchRecipes();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to delete');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to delete');
     }
   };
 
@@ -272,7 +291,7 @@ export default function BlendRecipes() {
     ]);
   };
 
-  const updateItem = (idx: number, field: keyof EditItem, value: any) => {
+  const updateItem = (idx: number, field: keyof EditItem, value: string | number | null) => {
     const updated = [...editItems];
     updated[idx] = { ...updated[idx], [field]: value };
     setEditItems(updated);
@@ -315,17 +334,17 @@ export default function BlendRecipes() {
       render: (row) => (row.timing ? <span className="capitalize">{row.timing.replace('-', ' ')}</span> : '-'),
     },
     {
-      key: 'item_count' as any,
+      key: 'item_count',
       header: 'Products',
       render: (row) => <span>{row.item_count}</span>,
     },
     {
-      key: 'creator_name' as any,
+      key: 'creator_name',
       header: 'Created By',
       render: (row) => <span className="text-sm">{row.creator_name}</span>,
     },
     {
-      key: 'id' as any,
+      key: 'id',
       header: '',
       className: 'w-28',
       render: (row) => (
@@ -433,7 +452,7 @@ export default function BlendRecipes() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Recipe Type</label>
               <select
                 value={form.recipe_type}
-                onChange={(e) => setForm({ ...form, recipe_type: e.target.value as any })}
+                onChange={(e) => setForm({ ...form, recipe_type: e.target.value as RecipeType })}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="generic">Generic</option>

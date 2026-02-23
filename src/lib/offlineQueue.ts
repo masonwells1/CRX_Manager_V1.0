@@ -11,7 +11,7 @@ const STORE_NAME = 'pending_actions';
 export interface PendingAction {
   id?: number;
   operation: string;
-  params: Record<string, any>;
+  params: Record<string, unknown>;
   createdAt: string;
   retryCount: number;
   lastError?: string;

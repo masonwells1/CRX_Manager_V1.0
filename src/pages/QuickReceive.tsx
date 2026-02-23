@@ -196,8 +196,8 @@ export default function QuickReceive() {
       setOverrides({});
       setUnmatchedActions({});
       setStep('review');
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to match items');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to match items');
     }
     setMatching(false);
   };
@@ -303,7 +303,7 @@ export default function QuickReceive() {
       }
 
       // Auto-download PDF receipt
-      const receivingRecordIds = (data as any)?.receiving_record_ids;
+      const receivingRecordIds = (data as Record<string, unknown> | null)?.receiving_record_ids as string[] | undefined;
       if (receivingRecordIds && receivingRecordIds.length > 0) {
         try {
           const { downloadReceivingPdf } = await import('../lib/receivingPdf');
@@ -334,8 +334,8 @@ export default function QuickReceive() {
       setReceiveCount(itemsPayload.length);
       setStep('success');
       toast('success', `Successfully received ${itemsPayload.length} item(s)`);
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to receive items');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to receive items');
     }
     setSaving(false);
   };

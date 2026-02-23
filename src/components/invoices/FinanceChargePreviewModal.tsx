@@ -60,8 +60,8 @@ export default function FinanceChargePreviewModal({
       setPreviews(rows);
       // Select all by default
       setSelected(new Set(rows.map((r) => r.customer_id)));
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to load finance charge preview');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to load finance charge preview');
     }
     setLoading(false);
   };
@@ -110,8 +110,8 @@ export default function FinanceChargePreviewModal({
       }
       onClose();
       onSuccess();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to generate finance charges');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to generate finance charges');
     }
     setGenerating(false);
   };

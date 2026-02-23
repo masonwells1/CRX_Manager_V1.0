@@ -5,7 +5,7 @@ import LoginPage from './LoginPage';
 
 const mockSignIn = vi.fn();
 const mockNavigate = vi.fn();
-let mockSession: any = null;
+let mockSession: { user: { id: string } } | null = null;
 
 vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => ({

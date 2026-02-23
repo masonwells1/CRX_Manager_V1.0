@@ -21,7 +21,7 @@ import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
@@ -606,8 +606,8 @@ export default function QuoteBuilder() {
         setQuoteId(savedQuoteId);
       }
       return savedQuoteId;
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to save quote');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to save quote');
       return null;
     }
   };
@@ -673,9 +673,9 @@ export default function QuoteBuilder() {
       },
     });
     toast('success', 'PDF downloaded');
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('PDF generation error:', err);
-      toast('error', err.message || 'Failed to generate PDF');
+      toast('error', err instanceof Error ? err.message : 'Failed to generate PDF');
     }
   };
 
@@ -784,11 +784,11 @@ export default function QuoteBuilder() {
           const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
             p_customer_id: customerId,
           });
-          if (creditCheck && (creditCheck as any).exceeded) {
-            const cl = creditCheck as any;
+          const cl = creditCheck as { exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null;
+          if (cl && cl.exceeded) {
             const fmtCl = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
-            toast('warning', `Credit limit warning: ${selectedCustomer?.farm_name || 'Customer'} outstanding AR ${fmtCl(cl.outstanding_ar)} exceeds limit ${fmtCl(cl.credit_limit)}`);
-            notifyCreditLimitExceeded(selectedCustomer?.farm_name || 'Customer', cl.outstanding_ar, cl.credit_limit, customerId);
+            toast('warning', `Credit limit warning: ${selectedCustomer?.farm_name || 'Customer'} outstanding AR ${fmtCl(cl.outstanding_ar ?? 0)} exceeds limit ${fmtCl(cl.credit_limit ?? 0)}`);
+            notifyCreditLimitExceeded(selectedCustomer?.farm_name || 'Customer', cl.outstanding_ar ?? 0, cl.credit_limit ?? 0, customerId);
           }
         } catch {
           // Non-blocking — credit limit check should not prevent navigation
@@ -798,10 +798,15 @@ export default function QuoteBuilder() {
       // Bug #31 fix: Clear dirty state before navigate to prevent unsaved changes dialog
       setIsDirty(false);
       navigate(`/orders/${result.order_id}`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error converting to order:', error);
       // Bug #30 fix: Extract error message from Supabase RPC error objects
-      const errMsg = error?.message || error?.details || error?.hint || 'Failed to create order';
+      const errObj = error as Record<string, unknown> | null;
+      const errMsg = (error instanceof Error ? error.message : null)
+        || (errObj && typeof errObj.message === 'string' ? errObj.message : null)
+        || (errObj && typeof errObj.details === 'string' ? errObj.details : null)
+        || (errObj && typeof errObj.hint === 'string' ? errObj.hint : null)
+        || 'Failed to create order';
       toast('error', errMsg);
       // Bug #29 fix: Revert quote status to 'sent' since conversion failed
       try {

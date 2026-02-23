@@ -5,7 +5,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Truck, Package } from 'lucide-react';
-import Card, { CardHeader } from '../components/ui/Card';
+import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -68,7 +68,7 @@ export default function DeliveryRemainders() {
       return;
     }
 
-    const rows = ((data || []) as any[]).map((r) => ({
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; product?: { product_name: string }; original_delivery?: { delivery_number: string }; order?: { order_number: string } }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       product_name: r.product?.product_name || 'Unknown',
@@ -107,8 +107,8 @@ export default function DeliveryRemainders() {
       const followupResult = assertRpcResult<{ delivery_id: string; delivery_number: string; item_count: number }>(data, 'create_followup_delivery');
       toast('success', `Follow-up delivery ${followupResult.delivery_number} created with ${followupResult.item_count} item(s)`);
       navigate(`/deliveries/${followupResult.delivery_id}`);
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to create follow-up delivery');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to create follow-up delivery');
     }
     setCreating(null);
   };
@@ -147,12 +147,12 @@ export default function DeliveryRemainders() {
       ),
     },
     {
-      key: 'unit_size' as any,
+      key: 'unit_size',
       header: 'Unit',
       render: (row) => row.unit_size || '-',
     },
     {
-      key: 'original_delivery_number' as any,
+      key: 'original_delivery_number',
       header: 'Original Delivery',
       sortable: true,
       render: (row) => (
@@ -165,7 +165,7 @@ export default function DeliveryRemainders() {
       ),
     },
     {
-      key: 'order_number' as any,
+      key: 'order_number',
       header: 'Order',
       render: (row) =>
         row.order_number && row.order_id ? (
@@ -211,7 +211,7 @@ export default function DeliveryRemainders() {
       },
     },
     {
-      key: 'id' as any,
+      key: 'id',
       header: '',
       render: (row) =>
         row.status === 'pending' && !row.followup_delivery_id ? (

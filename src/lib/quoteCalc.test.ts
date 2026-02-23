@@ -357,7 +357,7 @@ describe('computeQuoteTotals', () => {
 
   it('handles items with undefined total_price without producing NaN', () => {
     const items: CalcItem[] = [
-      makeItem({ total_price: undefined as any, current_cost: 10, total_units_needed: 5 }),
+      makeItem({ total_price: undefined as unknown as number, current_cost: 10, total_units_needed: 5 }),
       makeItem({ total_price: 200, current_cost: 8, total_units_needed: 10 }),
     ];
     const totals = computeQuoteTotals(items);
@@ -369,7 +369,7 @@ describe('computeQuoteTotals', () => {
 
   it('handles items with undefined current_cost without producing NaN', () => {
     const items: CalcItem[] = [
-      makeItem({ total_price: 100, current_cost: undefined as any, total_units_needed: 5 }),
+      makeItem({ total_price: 100, current_cost: undefined as unknown as number, total_units_needed: 5 }),
     ];
     const totals = computeQuoteTotals(items);
     expect(Number.isFinite(totals.totalCost)).toBe(true);

@@ -67,8 +67,8 @@ export default function WriteOffModal({
       setReason('');
       onClose();
       onSuccess();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to apply write-off');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to apply write-off');
     }
     setSubmitting(false);
   };

@@ -36,8 +36,8 @@ vi.mock('jspdf', () => {
 
 // Mock autoTable — dynamic import returns { default: autoTable }
 vi.mock('jspdf-autotable', () => ({
-  default: vi.fn((doc: any, opts: any) => {
-    doc.lastAutoTable = { finalY: (opts.startY || 0) + 100 };
+  default: vi.fn((doc: Record<string, unknown>, opts: Record<string, unknown>) => {
+    (doc as typeof mockDoc).lastAutoTable = { finalY: ((opts.startY as number) || 0) + 100 };
   }),
 }));
 
@@ -175,7 +175,7 @@ describe('invoicePdf', () => {
       await generateInvoicePdf(makeInvoiceData({ customer_name: 'Smith Farms' }));
       const textCalls = mockDoc.text.mock.calls;
       const uppercaseCall = textCalls.find(
-        (call: any[]) => call[0] === 'SMITH FARMS'
+        (call: unknown[]) => call[0] === 'SMITH FARMS'
       );
       expect(uppercaseCall).toBeDefined();
     });
@@ -184,7 +184,7 @@ describe('invoicePdf', () => {
       await generateInvoicePdf(makeInvoiceData({ invoice_number: 'INV-2026-0042' }));
       const textCalls = mockDoc.text.mock.calls;
       const invoiceNumCall = textCalls.find(
-        (call: any[]) => call[0] === 'INV-2026-0042'
+        (call: unknown[]) => call[0] === 'INV-2026-0042'
       );
       expect(invoiceNumCall).toBeDefined();
     });
@@ -193,7 +193,7 @@ describe('invoicePdf', () => {
       await generateInvoicePdf(makeInvoiceData());
       const textCalls = mockDoc.text.mock.calls;
       const invoiceLabel = textCalls.find(
-        (call: any[]) => call[0] === 'INVOICE'
+        (call: unknown[]) => call[0] === 'INVOICE'
       );
       expect(invoiceLabel).toBeDefined();
     });
@@ -255,7 +255,7 @@ describe('invoicePdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const finChargeLabel = textCalls.find(
-        (call: any[]) => call[0] === 'Finance Charges'
+        (call: unknown[]) => call[0] === 'Finance Charges'
       );
       expect(finChargeLabel).toBeDefined();
     });
@@ -267,7 +267,7 @@ describe('invoicePdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const finChargeLabel = textCalls.find(
-        (call: any[]) => call[0] === 'Finance Charges'
+        (call: unknown[]) => call[0] === 'Finance Charges'
       );
       expect(finChargeLabel).toBeUndefined();
     });
@@ -282,7 +282,7 @@ describe('invoicePdf', () => {
       // Balance color should be CRX_GREEN (0 balance)
       const textCalls = mockDoc.text.mock.calls;
       const balanceDueLabel = textCalls.find(
-        (call: any[]) => call[0] === 'BALANCE DUE'
+        (call: unknown[]) => call[0] === 'BALANCE DUE'
       );
       expect(balanceDueLabel).toBeDefined();
     });
@@ -294,7 +294,7 @@ describe('invoicePdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const paymentsLabel = textCalls.find(
-        (call: any[]) => call[0] === 'Payments'
+        (call: unknown[]) => call[0] === 'Payments'
       );
       expect(paymentsLabel).toBeDefined();
     });
@@ -306,7 +306,7 @@ describe('invoicePdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const prepayLabel = textCalls.find(
-        (call: any[]) => call[0] === 'Prepay Applied'
+        (call: unknown[]) => call[0] === 'Prepay Applied'
       );
       expect(prepayLabel).toBeDefined();
     });
@@ -342,7 +342,7 @@ describe('invoicePdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const descLine = textCalls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('Corn')
+        (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('Corn')
       );
       expect(descLine).toBeDefined();
     });
@@ -356,7 +356,7 @@ describe('invoicePdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const pricePerAcreCall = textCalls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('Price per acre')
+        (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('Price per acre')
       );
       expect(pricePerAcreCall).toBeDefined();
     });
@@ -393,7 +393,7 @@ describe('invoicePdf', () => {
       expect(doc).toBeDefined();
       const textCalls = mockDoc.text.mock.calls;
       const upperCall = textCalls.find(
-        (call: any[]) => call[0] === longName.toUpperCase()
+        (call: unknown[]) => call[0] === longName.toUpperCase()
       );
       expect(upperCall).toBeDefined();
     });
@@ -427,7 +427,7 @@ describe('invoicePdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const addrCall = textCalls.find(
-        (call: any[]) => call[0] === '123 Farm Road'
+        (call: unknown[]) => call[0] === '123 Farm Road'
       );
       expect(addrCall).toBeDefined();
     });
@@ -473,7 +473,7 @@ describe('deliveryPdf', () => {
       await generateDeliveryPdf(makeDeliveryData({ delivery_number: 'DEL-2026-0099' }));
       const textCalls = mockDoc.text.mock.calls;
       const delNumCall = textCalls.find(
-        (call: any[]) => call[0] === 'DEL-2026-0099'
+        (call: unknown[]) => call[0] === 'DEL-2026-0099'
       );
       expect(delNumCall).toBeDefined();
     });
@@ -482,7 +482,7 @@ describe('deliveryPdf', () => {
       await generateDeliveryPdf(makeDeliveryData({ order_number: 'ORD-2026-0050' }));
       const textCalls = mockDoc.text.mock.calls;
       const orderCall = textCalls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('ORD-2026-0050')
+        (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('ORD-2026-0050')
       );
       expect(orderCall).toBeDefined();
     });
@@ -491,7 +491,7 @@ describe('deliveryPdf', () => {
       await generateDeliveryPdf(makeDeliveryData({ priority: 'urgent' }));
       const textCalls = mockDoc.text.mock.calls;
       const priorityCall = textCalls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('PRIORITY: URGENT')
+        (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('PRIORITY: URGENT')
       );
       expect(priorityCall).toBeDefined();
     });
@@ -500,7 +500,7 @@ describe('deliveryPdf', () => {
       await generateDeliveryPdf(makeDeliveryData({ priority: 'high' }));
       const textCalls = mockDoc.text.mock.calls;
       const priorityCall = textCalls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('PRIORITY: HIGH')
+        (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('PRIORITY: HIGH')
       );
       expect(priorityCall).toBeDefined();
     });
@@ -509,7 +509,7 @@ describe('deliveryPdf', () => {
       await generateDeliveryPdf(makeDeliveryData({ priority: 'normal' }));
       const textCalls = mockDoc.text.mock.calls;
       const priorityCall = textCalls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('PRIORITY:')
+        (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('PRIORITY:')
       );
       expect(priorityCall).toBeUndefined();
     });
@@ -547,7 +547,7 @@ describe('deliveryPdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const issueLabel = textCalls.find(
-        (call: any[]) => call[0] === 'ISSUE REPORTED'
+        (call: unknown[]) => call[0] === 'ISSUE REPORTED'
       );
       expect(issueLabel).toBeDefined();
     });
@@ -556,7 +556,7 @@ describe('deliveryPdf', () => {
       await generateDeliveryPdf(makeDeliveryData({ issue_type: 'none' }));
       const textCalls = mockDoc.text.mock.calls;
       const issueLabel = textCalls.find(
-        (call: any[]) => call[0] === 'ISSUE REPORTED'
+        (call: unknown[]) => call[0] === 'ISSUE REPORTED'
       );
       expect(issueLabel).toBeUndefined();
     });
@@ -565,7 +565,7 @@ describe('deliveryPdf', () => {
       await generateDeliveryPdf(makeDeliveryData({ issue_type: undefined }));
       const textCalls = mockDoc.text.mock.calls;
       const issueLabel = textCalls.find(
-        (call: any[]) => call[0] === 'ISSUE REPORTED'
+        (call: unknown[]) => call[0] === 'ISSUE REPORTED'
       );
       expect(issueLabel).toBeUndefined();
     });
@@ -576,7 +576,7 @@ describe('deliveryPdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const notesLabel = textCalls.find(
-        (call: any[]) => call[0] === 'NOTES'
+        (call: unknown[]) => call[0] === 'NOTES'
       );
       expect(notesLabel).toBeDefined();
     });
@@ -651,7 +651,7 @@ describe('receivingPdf', () => {
       await generateReceivingPdf(makeReceivingData({ po_number: 'PO-2026-0099' }));
       const textCalls = mockDoc.text.mock.calls;
       const poCall = textCalls.find(
-        (call: any[]) => call[0] === 'PO-2026-0099'
+        (call: unknown[]) => call[0] === 'PO-2026-0099'
       );
       expect(poCall).toBeDefined();
     });
@@ -660,7 +660,7 @@ describe('receivingPdf', () => {
       await generateReceivingPdf(makeReceivingData({ vendor: 'BASF Corp' }));
       const textCalls = mockDoc.text.mock.calls;
       const vendorCalls = textCalls.filter(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('BASF Corp')
+        (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('BASF Corp')
       );
       // Vendor appears in header and in info grid
       expect(vendorCalls.length).toBeGreaterThanOrEqual(2);
@@ -675,7 +675,7 @@ describe('receivingPdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const notesHeader = textCalls.find(
-        (call: any[]) => call[0] === 'ITEM NOTES'
+        (call: unknown[]) => call[0] === 'ITEM NOTES'
       );
       expect(notesHeader).toBeDefined();
     });
@@ -688,7 +688,7 @@ describe('receivingPdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const notesHeader = textCalls.find(
-        (call: any[]) => call[0] === 'ITEM NOTES'
+        (call: unknown[]) => call[0] === 'ITEM NOTES'
       );
       expect(notesHeader).toBeUndefined();
     });
@@ -703,12 +703,12 @@ describe('receivingPdf', () => {
       }));
       const textCalls = mockDoc.text.mock.calls;
       const summaryLabel = textCalls.find(
-        (call: any[]) => call[0] === 'SUMMARY'
+        (call: unknown[]) => call[0] === 'SUMMARY'
       );
       expect(summaryLabel).toBeDefined();
       // Should show total items count
       const totalItems = textCalls.find(
-        (call: any[]) => typeof call[0] === 'string' && call[0].includes('Total Items: 3')
+        (call: unknown[]) => typeof call[0] === 'string' && call[0].includes('Total Items: 3')
       );
       expect(totalItems).toBeDefined();
     });
@@ -748,7 +748,7 @@ describe('receivingPdf', () => {
       }));
       // CRX_GREEN = [40, 162, 106]
       const greenCalls = mockDoc.setTextColor.mock.calls.filter(
-        (call: any[]) => call[0] === 40 && call[1] === 162 && call[2] === 106
+        (call: unknown[]) => call[0] === 40 && call[1] === 162 && call[2] === 106
       );
       expect(greenCalls.length).toBeGreaterThanOrEqual(1);
     });
@@ -759,7 +759,7 @@ describe('receivingPdf', () => {
       }));
       // RED = [220, 38, 38]
       const redCalls = mockDoc.setTextColor.mock.calls.filter(
-        (call: any[]) => call[0] === 220 && call[1] === 38 && call[2] === 38
+        (call: unknown[]) => call[0] === 220 && call[1] === 38 && call[2] === 38
       );
       expect(redCalls.length).toBeGreaterThanOrEqual(1);
     });
@@ -770,7 +770,7 @@ describe('receivingPdf', () => {
       }));
       // RED = [220, 38, 38]
       const redCalls = mockDoc.setTextColor.mock.calls.filter(
-        (call: any[]) => call[0] === 220 && call[1] === 38 && call[2] === 38
+        (call: unknown[]) => call[0] === 220 && call[1] === 38 && call[2] === 38
       );
       expect(redCalls.length).toBeGreaterThanOrEqual(1);
     });
@@ -781,7 +781,7 @@ describe('receivingPdf', () => {
       }));
       // AMBER = [217, 119, 6]
       const amberCalls = mockDoc.setTextColor.mock.calls.filter(
-        (call: any[]) => call[0] === 217 && call[1] === 119 && call[2] === 6
+        (call: unknown[]) => call[0] === 217 && call[1] === 119 && call[2] === 6
       );
       expect(amberCalls.length).toBeGreaterThanOrEqual(1);
     });

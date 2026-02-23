@@ -86,14 +86,14 @@ export default function Payments() {
       return;
     }
 
-    const mapped = ((orders || []) as any[]).map((o) => ({
+    const mapped = (orders || []).map((o: { id: string; order_number: string; customer_id: string; customer?: { farm_name: string }; total_price: number; total_paid: number; balance_due: number; order_date: string; status: string }) => ({
       id: o.id,
       order_number: o.order_number,
       customer_id: o.customer_id,
       farm_name: o.customer?.farm_name || 'Unknown',
       total_price: Number(o.total_price) || 0,
       total_paid: Number(o.total_paid) || 0,
-      balance_due: Number(o.balance_due) ?? (Number(o.total_price) - Number(o.total_paid || 0)),
+      balance_due: Number(o.balance_due) || (Number(o.total_price) - Number(o.total_paid || 0)),
       order_date: o.order_date,
       status: o.status,
     }));
@@ -110,7 +110,7 @@ export default function Payments() {
       console.error('Failed to load payments:', payError.message);
     }
 
-    const payMapped = ((payData || []) as any[]).map((p) => ({
+    const payMapped = ((payData || []) as Array<Record<string, unknown> & { order?: { order_number?: string; customer?: { farm_name?: string } } }>).map((p) => ({
       ...p,
       order_number: p.order?.order_number || '',
       farm_name: p.order?.customer?.farm_name || '',
@@ -150,9 +150,9 @@ export default function Payments() {
       setPayNotes('');
       setPayMethod('check');
       fetchData();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error recording payment:', error);
-      toast('error', error.message || 'Failed to record payment');
+      toast('error', error instanceof Error ? error.message : 'Failed to record payment');
     }
     setSaving(false);
   };

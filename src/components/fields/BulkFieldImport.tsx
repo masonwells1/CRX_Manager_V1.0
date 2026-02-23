@@ -24,7 +24,7 @@ import {
 import ImportPreviewMap from './ImportPreviewMap';
 import AttributeMappingStep from './AttributeMappingStep';
 import type { Customer, ParsedImportField } from '../../types';
-import type { FeatureCollection, Polygon, GeoJsonProperties } from 'geojson';
+
 
 interface BulkFieldImportProps {
   open: boolean;
@@ -229,8 +229,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
       setParseResult(result);
       setStep(2);
-    } catch (err: any) {
-      setParseError(err.message || 'Failed to parse files.');
+    } catch (err: unknown) {
+      setParseError(err instanceof Error ? err.message : 'Failed to parse files.');
     }
 
     setParsing(false);
@@ -362,9 +362,9 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           }
           success++;
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         failed++;
-        errors.push(`"${pf.field_name}": ${err.message}`);
+        errors.push(`"${pf.field_name}": ${err instanceof Error ? err.message : String(err)}`);
       }
 
       setUploadProgress((prev) => ({ ...prev, current: prev.current + 1 }));

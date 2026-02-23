@@ -22,12 +22,12 @@ export default function OfflineBanner() {
     return () => clearInterval(interval);
   }, []);
 
-  // Auto-sync when coming back online
+  // Auto-sync when coming back online or when items are queued while online
   useEffect(() => {
-    if (isOnline && pendingCount > 0) {
+    if (isOnline && pendingCount > 0 && !syncing) {
       handleSync();
     }
-  }, [isOnline]);
+  }, [isOnline, pendingCount]);
 
   async function checkPending() {
     try {

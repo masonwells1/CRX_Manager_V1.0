@@ -65,9 +65,9 @@ describe('exportToCSV', () => {
 
   beforeEach(() => {
     mockLink = { href: '', download: '', click: vi.fn() };
-    createElementSpy = vi.spyOn(document, 'createElement').mockReturnValue(mockLink as any);
-    vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockLink as any);
-    vi.spyOn(document.body, 'removeChild').mockImplementation(() => mockLink as any);
+    createElementSpy = vi.spyOn(document, 'createElement').mockReturnValue(mockLink as unknown as HTMLElement);
+    vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockLink as unknown as HTMLElement);
+    vi.spyOn(document.body, 'removeChild').mockImplementation(() => mockLink as unknown as HTMLElement);
     createObjectURLSpy = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fake-url');
     revokeObjectURLSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
   });
@@ -105,7 +105,7 @@ describe('exportToCSV', () => {
   });
 
   it('handles null/undefined values in data', () => {
-    const data = [{ name: null, desc: undefined }] as any[];
+    const data = [{ name: null, desc: undefined }] as Array<Record<string, unknown>>;
     const columns = [
       { key: 'name', header: 'Name' },
       { key: 'desc', header: 'Description' },

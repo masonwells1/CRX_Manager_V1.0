@@ -29,7 +29,7 @@ export default function OrderDetail() {
   const [loading, setLoading] = useState(true);
 
   // Related blend tickets
-  const [relatedTickets, setRelatedTickets] = useState<any[]>([]);
+  const [relatedTickets, setRelatedTickets] = useState<{ id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }[]>([]);
 
   // Edit mode state
   const [editing, setEditing] = useState(false);
@@ -77,8 +77,8 @@ export default function OrderDetail() {
         .select('blend_ticket_id, blend_ticket:blend_tickets(id, ticket_number, ticket_date, order_link_status, payment_status)')
         .eq('order_id', id!);
       // Deduplicate by blend_ticket_id
-      const uniqueTickets = new Map<string, any>();
-      (btLinks || []).forEach((link: any) => {
+      const uniqueTickets = new Map<string, Record<string, unknown>>();
+      (btLinks || []).forEach((link: Record<string, unknown>) => {
         if (link.blend_ticket && !uniqueTickets.has(link.blend_ticket_id)) {
           uniqueTickets.set(link.blend_ticket_id, link.blend_ticket);
         }
@@ -113,7 +113,7 @@ export default function OrderDetail() {
       toast('success', 'Order updated');
       setEditing(false);
       fetchOrder();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error saving edits:', error);
       toast('error', sanitizeError(error));
     }
@@ -156,7 +156,7 @@ export default function OrderDetail() {
       notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by);
       setStatusModalOpen(false);
       fetchOrder();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error changing status:', error);
       toast('error', sanitizeError(error));
     }
@@ -199,7 +199,7 @@ export default function OrderDetail() {
   const sections = [...new Set((editing ? editItems : items).map((i) => i.section_name || 'General'))];
   const displayItems = editing ? editItems : items;
   const totalPaid = Number(order.total_paid) || 0;
-  const balanceDue = Number(order.balance_due) ?? (order.total_price - totalPaid);
+  const balanceDue = Number(order.balance_due) || (order.total_price - totalPaid);
 
   return (
     <div className="space-y-4">
@@ -425,7 +425,7 @@ export default function OrderDetail() {
             <h3 className="font-semibold text-nav-dark">Related Blend Tickets</h3>
           </div>
           <div className="space-y-2">
-            {relatedTickets.map((bt: any) => (
+            {relatedTickets.map((bt) => (
               <div key={bt.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                 <button
                   onClick={() => navigate(`/blend-tickets/${bt.id}`)}

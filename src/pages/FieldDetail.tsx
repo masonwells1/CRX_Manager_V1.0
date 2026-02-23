@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Plus, Trash2, MapPin, Search } from 'lucide-react';
+import { ArrowLeft, Save, Trash2, MapPin, Search } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -15,7 +15,7 @@ import { supabase } from '../lib/db';
 import area from '@turf/area';
 import turfCentroid from '@turf/centroid';
 import type { Feature, Polygon } from 'geojson';
-import type { Field, FieldBillingDefault, Customer } from '../types';
+import type { Field, Customer } from '../types';
 
 interface BillingSplit {
   customer_id: string;
@@ -151,7 +151,7 @@ export default function FieldDetail() {
 
       if (defaults && defaults.length > 0) {
         setBillingSplits(
-          defaults.map((d: any) => ({
+          defaults.map((d: { customer_id: string; customer?: { farm_name: string }; split_pct: number; is_primary: boolean; notes?: string; price_override_cents?: number | null; pricing_note?: string }) => ({
             customer_id: d.customer_id,
             customer_name: d.customer?.farm_name || 'Unknown',
             split_pct: Number(d.split_pct),
@@ -287,14 +287,14 @@ export default function FieldDetail() {
           toast('success', 'Field updated');
         }
       }
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to save field');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to save field');
     }
     setSaving(false);
   };
 
   // Handle polygon drawn/updated on map
-  const handleBoundaryChange = useCallback((feature: any) => {
+  const handleBoundaryChange = useCallback((feature: Feature) => {
     if (feature?.geometry?.type === 'Polygon') {
       const polygon: Feature<Polygon> = {
         type: 'Feature',

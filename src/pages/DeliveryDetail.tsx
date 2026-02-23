@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff,
-  Minus, Plus, Pencil, X, Ban, Camera, UserPlus, AlertTriangle, RefreshCw,
+  Minus, Plus, Pencil, Ban, Camera, UserPlus, AlertTriangle, RefreshCw,
   PlayCircle, Lock, Zap,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -45,11 +45,12 @@ const PRIORITY_LABELS: Record<string, string> = {
   urgent: 'Urgent',
 };
 
-const PRIORITY_BADGE: Record<string, string> = {
+type BadgeVariant = 'default' | 'success' | 'warning' | 'error' | 'info' | 'draft' | 'sent' | 'accepted' | 'declined' | 'expired';
+const PRIORITY_BADGE: Record<string, BadgeVariant> = {
   low: 'default',
   normal: 'info',
   high: 'warning',
-  urgent: 'danger',
+  urgent: 'error',
 };
 
 export default function DeliveryDetail() {
@@ -93,7 +94,7 @@ export default function DeliveryDetail() {
   }>>([]);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [drivers, setDrivers] = useState<Profile[]>([]);
-  const [orderItems, setOrderItems] = useState<OrderItem[]>([]);
+  const [, setOrderItems] = useState<OrderItem[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Cancel modal state
@@ -175,7 +176,7 @@ export default function DeliveryDetail() {
             toast('error', sanitizeError(oiError));
           } else if (oiData) {
             const ctx: Record<string, { ordered: number; delivered: number; remaining: number }> = {};
-            oiData.forEach((oi: any) => {
+            oiData.forEach((oi: { id: string; total_units_needed: number; quantity_delivered: number; quantity_remaining: number }) => {
               ctx[oi.id] = {
                 ordered: oi.total_units_needed,
                 delivered: oi.quantity_delivered,
@@ -195,13 +196,13 @@ export default function DeliveryDetail() {
           if (remError) {
             toast('error', sanitizeError(remError));
           } else {
-            setRemainders((remData || []).map((r: any) => ({
+            setRemainders((remData || []).map((r: DeliveryRemainder & { product?: { product_name: string } | null }) => ({
               ...r,
               product_name: r.product?.product_name || 'Unknown',
             })) as DeliveryRemainder[]);
           }
         }
-      } catch (err) {
+      } catch {
         toast('error', 'Failed to load delivery details. Please refresh.');
       }
     }
@@ -279,16 +280,6 @@ export default function DeliveryDetail() {
       fetchDelivery();
     }
     setSavingEdit(false);
-  };
-
-  const updateEditItemQty = (orderItemId: string, qty: number) => {
-    setEditItems((prev) =>
-      prev.map((item) =>
-        item.order_item_id === orderItemId
-          ? { ...item, quantity: Math.max(0, Math.min(qty, item.max_quantity || 9999)) }
-          : item
-      )
-    );
   };
 
   // ── Cancel Delivery ────────────────────────────────────────────────────
@@ -435,7 +426,7 @@ export default function DeliveryDetail() {
       toast('success', `Delivery ${delivery.delivery_number} started`);
       setStartModalOpen(false);
       fetchDelivery();
-    } catch (err: any) {
+    } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
     setConfirming(false);
@@ -531,7 +522,7 @@ export default function DeliveryDetail() {
       if (isPartialDelivery) {
         const remainderItems = items
           .map((item) => ({
-            product: (item as any).product_name || 'Unknown',
+            product: item.product?.product_name || 'Unknown',
             ordered: item.quantity,
             delivered: deliveryQtys[item.id] ?? item.quantity,
           }))
@@ -541,7 +532,7 @@ export default function DeliveryDetail() {
           notifyDeliveryRemainder(
             delivery.id,
             delivery.delivery_number,
-            (delivery as any).order_number || '',
+            delivery.order_id || '',
             remainderItems,
             delivery.created_by
           );
@@ -549,7 +540,7 @@ export default function DeliveryDetail() {
       }
 
       fetchDelivery();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error completing delivery:', error);
       toast('error', sanitizeError(error));
     }
@@ -626,7 +617,7 @@ export default function DeliveryDetail() {
               </h2>
               <div className="flex items-center gap-2">
                 {delivery.priority && delivery.priority !== 'normal' && (
-                  <Badge variant={(PRIORITY_BADGE[delivery.priority] || 'default') as any} size="sm">
+                  <Badge variant={PRIORITY_BADGE[delivery.priority] || 'default'} size="sm">
                     {PRIORITY_LABELS[delivery.priority]}
                   </Badge>
                 )}
@@ -959,7 +950,7 @@ export default function DeliveryDetail() {
               onClick={() =>
                 downloadDeliveryPdf({
                   delivery_number: delivery.delivery_number,
-                  order_number: (delivery as any).order_number || delivery.order_id || '-',
+                  order_number: delivery.order_id || '-',
                   customer_name: customer?.farm_name || 'Customer',
                   customer_address: address
                     ? [address.address_line, address.city, address.state, address.zip].filter(Boolean).join(', ')
@@ -971,7 +962,7 @@ export default function DeliveryDetail() {
                   signed_by: delivery.signed_by || undefined,
                   delivery_notes: delivery.delivery_notes || undefined,
                   items: items.map((i) => ({
-                    product_name: (i as any).product_name || (i.product as any)?.product_name || 'Unknown',
+                    product_name: i.product?.product_name || 'Unknown',
                     quantity: i.quantity,
                     quantity_delivered: delivery.status === 'completed' ? i.quantity_delivered : undefined,
                     unit_size: i.unit_size || '-',
@@ -993,7 +984,7 @@ export default function DeliveryDetail() {
               </Button>
             )}
             {delivery.priority && delivery.priority !== 'normal' && (
-              <Badge variant={(PRIORITY_BADGE[delivery.priority] || 'default') as any} size="md">
+              <Badge variant={PRIORITY_BADGE[delivery.priority] || 'default'} size="md">
                 {PRIORITY_LABELS[delivery.priority]}
               </Badge>
             )}

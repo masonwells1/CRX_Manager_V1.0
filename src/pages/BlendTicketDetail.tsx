@@ -39,7 +39,7 @@ export function BlendTicketDetail() {
   const blocker = useUnsavedChanges(isDirty);
 
   // Phase 3: Order linkage state
-  const [fields, setFields] = useState<Field[]>([]);
+  const [, setFields] = useState<Field[]>([]);
   const [linkedOrders, setLinkedOrders] = useState<BlendTicketToOrderItem[]>([]);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [showCreateOrderModal, setShowCreateOrderModal] = useState(false);
@@ -144,7 +144,7 @@ export function BlendTicketDetail() {
 
       const fetchedImages = imagesResult.data || [];
       const imagesWithSignedUrls = await Promise.all(
-        fetchedImages.map(async (img: any) => {
+        fetchedImages.map(async (img: BlendTicketImage) => {
           if (img.storage_path) {
             const { data } = await supabase.storage
               .from('blend-ticket-images')
@@ -240,9 +240,9 @@ export function BlendTicketDetail() {
 
       setIsDirty(false);
       await loadTicketData();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error saving ticket:', error);
-      toast('error', error.message || 'Operation failed');
+      toast('error', error instanceof Error ? error.message : 'Operation failed');
     } finally {
       setSaving(false);
     }
@@ -266,9 +266,9 @@ export function BlendTicketDetail() {
       logActivity('blend_ticket_approved', `Blend ticket ${ticket.ticket_number} approved`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
 
       navigate('/blend-tickets');
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error approving ticket:', error);
-      toast('error', error.message || 'Operation failed');
+      toast('error', error instanceof Error ? error.message : 'Operation failed');
     }
   }
 
@@ -290,13 +290,13 @@ export function BlendTicketDetail() {
       logActivity('blend_ticket_rejected', `Blend ticket ${ticket.ticket_number} rejected`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
 
       navigate('/blend-tickets');
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error rejecting ticket:', error);
-      toast('error', error.message || 'Operation failed');
+      toast('error', error instanceof Error ? error.message : 'Operation failed');
     }
   }
 
-  function updateProduct(index: number, field: keyof BlendTicketProduct, value: any) {
+  function updateProduct(index: number, field: keyof BlendTicketProduct, value: BlendTicketProduct[keyof BlendTicketProduct]) {
     const updated = [...products];
     updated[index] = { ...updated[index], [field]: value };
     setProducts(updated);
@@ -380,13 +380,13 @@ export function BlendTicketDetail() {
         p_idempotency_key: linkKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<any>(data, 'link_blend_ticket_to_order');
+      const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; items_linked?: number }>(data, 'link_blend_ticket_to_order');
       if (!result.success) throw new Error(result.error);
       toast('success', `Linked to order ${result.order_number} (${result.items_linked} items matched)`);
       setShowLinkModal(false);
       await loadTicketData();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to link');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to link');
     } finally {
       setLinking(false);
     }
@@ -403,12 +403,12 @@ export function BlendTicketDetail() {
         p_idempotency_key: unlinkKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<any>(data, 'unlink_blend_ticket_from_order');
+      const result = assertRpcResult<{ success: boolean; error?: string }>(data, 'unlink_blend_ticket_from_order');
       if (!result.success) throw new Error(result.error);
       toast('success', 'Blend ticket unlinked from order');
       await loadTicketData();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to unlink');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to unlink');
     }
   }
 
@@ -426,13 +426,13 @@ export function BlendTicketDetail() {
         p_idempotency_key: createOrderKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<any>(data, 'create_order_from_blend_ticket');
+      const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; order_id?: string; items_created?: number }>(data, 'create_order_from_blend_ticket');
       if (!result.success) throw new Error(result.error);
       toast('success', `Order ${result.order_number} created with ${result.items_created} items`);
       setShowCreateOrderModal(false);
       navigate(`/orders/${result.order_id}`);
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to create order');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to create order');
     } finally {
       setLinking(false);
     }
@@ -447,7 +447,7 @@ export function BlendTicketDetail() {
     setCreatingAppRecord(true);
     try {
       const appRecKey = generateIdempotencyKey('create_application_record_from_blend_ticket', profile.id);
-      const { data, error } = await supabase.rpc('create_application_record_from_blend_ticket', {
+      const { error } = await supabase.rpc('create_application_record_from_blend_ticket', {
         p_blend_ticket_id: ticket.id,
         p_performed_by: profile.id,
         p_idempotency_key: appRecKey,
@@ -455,15 +455,12 @@ export function BlendTicketDetail() {
       if (error) throw error;
       logActivity('application_record_created', `Application record created from blend ticket ${ticket.ticket_number}`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
       toast('success', 'Application record created successfully');
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to create application record');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to create application record');
     } finally {
       setCreatingAppRecord(false);
     }
   }
-
-  // Filter fields by customer
-  const customerFields = fields.filter(f => !ticket?.customer_id || (f as any).customer_id === ticket.customer_id);
 
   if (loading) {
     return (
@@ -928,7 +925,7 @@ export function BlendTicketDetail() {
             <div className="bg-green-50 border border-green-200 rounded-lg p-4">
               <p className="text-sm text-green-800 font-medium mb-2">Linked Order</p>
               {(() => {
-                const order = (linkedOrders[0] as any)?.order;
+                const order = linkedOrders[0]?.order;
                 return order ? (
                   <div className="flex items-center justify-between">
                     <button

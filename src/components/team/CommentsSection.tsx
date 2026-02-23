@@ -132,8 +132,8 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       setEditingId(null);
       setEditContent('');
       fetchComments();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to update comment');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to update comment');
     }
     setSending(false);
   };
@@ -148,8 +148,8 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       checkMutationResult(result, 'Delete comment');
       toast('success', 'Comment deleted');
       fetchComments();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to delete comment');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to delete comment');
     }
   };
 
@@ -164,7 +164,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
   };
 
   const getCreatorName = (comment: Comment) => {
-    return (comment.creator as any)?.full_name || 'Unknown';
+    return comment.creator?.full_name || 'Unknown';
   };
 
   const formatTime = (timestamp: string) => {

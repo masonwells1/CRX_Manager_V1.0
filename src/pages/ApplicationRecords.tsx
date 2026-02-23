@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { ClipboardCheck } from 'lucide-react';
+
+
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -7,9 +8,9 @@ import SplitHeading from '../components/ui/SplitHeading';
 import Button from '../components/ui/Button';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
-import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
+import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { Download } from 'lucide-react';
-import type { ApplicationRecord, Customer, Profile, Field, Vehicle } from '../types';
+import type { ApplicationRecord } from '../types';
 
 type AppRecordRow = ApplicationRecord & {
   customer_name: string;
@@ -99,7 +100,7 @@ export default function ApplicationRecords() {
       return;
     }
 
-    const rows: AppRecordRow[] = ((data || []) as any[]).map((r) => ({
+    const rows: AppRecordRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; applicator?: { full_name?: string }; field?: { field_name?: string } }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       applicator_name: r.applicator?.full_name || '-',

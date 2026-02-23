@@ -375,8 +375,8 @@ export default function ARaging() {
 
       await downloadStatementPdf(stmtData, options);
       toast('success', `Statement downloaded for ${printCustomerName}`);
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to generate statement');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to generate statement');
     }
     setPrintingStatement(false);
   };
@@ -426,8 +426,8 @@ export default function ARaging() {
         await downloadBatchStatements(stmtDataList, options);
         toast('success', `Downloaded ${stmtDataList.length} statement(s)`);
       }
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to generate batch statements');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to generate batch statements');
     }
     setBatchPrinting(false);
   };

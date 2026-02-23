@@ -28,7 +28,6 @@ export default function PurchaseOrders() {
   const [importOpen, setImportOpen] = useState(false);
 
   const isAdmin = role === 'admin';
-  const canManage = role === 'admin' || role === 'sales_rep';
 
   useEffect(() => {
     fetchPOs();

@@ -38,8 +38,8 @@ vi.mock('jspdf', () => {
 });
 
 vi.mock('jspdf-autotable', () => ({
-  default: vi.fn((doc: any, opts: any) => {
-    doc.lastAutoTable = { finalY: (opts.startY || 0) + 100 };
+  default: vi.fn((doc: Record<string, unknown>, opts: Record<string, unknown>) => {
+    (doc as typeof mockDoc).lastAutoTable = { finalY: ((opts.startY as number) || 0) + 100 };
   }),
 }));
 
@@ -166,7 +166,7 @@ describe('generateYearEndSummaryPdf', () => {
   it('renders season year', async () => {
     await generateYearEndSummaryPdf(makeSummaryData());
     const textCalls = mockDoc.text.mock.calls.flat();
-    const hasSeason = textCalls.some((arg: any) =>
+    const hasSeason = textCalls.some((arg: unknown) =>
       typeof arg === 'string' && arg.includes('2026')
     );
     expect(hasSeason).toBe(true);

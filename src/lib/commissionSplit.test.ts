@@ -238,7 +238,7 @@ describe('commission split integration', () => {
 
     // Step 2: Validate (map to the format validateCommissionSplits expects)
     const validationSplits = splits.map((s) => ({
-      recipient: (s as any).recipient || s.user_id,
+      recipient: (s as unknown as { recipient?: string }).recipient || s.user_id,
       percentage: s.percentage,
     }));
     expect(validateCommissionSplits(validationSplits)).toBeNull();

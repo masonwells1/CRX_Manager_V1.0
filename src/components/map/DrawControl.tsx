@@ -77,10 +77,10 @@ export default function DrawControl({
         ],
       }),
     ({ map }) => {
-      map.on('draw.create', (e: any) => {
+      map.on('draw.create', (e: { features: GeoJSON.Feature[] }) => {
         if (e.features?.length > 0) onDrawCreate?.(e.features[0]);
       });
-      map.on('draw.update', (e: any) => {
+      map.on('draw.update', (e: { features: GeoJSON.Feature[] }) => {
         if (e.features?.length > 0) onDrawUpdate?.(e.features[0]);
       });
       map.on('draw.delete', () => {
@@ -100,7 +100,7 @@ export default function DrawControl({
     if (initialGeoJSON && draw) {
       try {
         draw.deleteAll();
-        draw.add(initialGeoJSON as any);
+        draw.add(initialGeoJSON as unknown as GeoJSON.FeatureCollection);
       } catch {
         // Silently handle invalid GeoJSON
       }

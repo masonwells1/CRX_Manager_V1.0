@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText, ChevronDown, ChevronRight, Trash2, Search, Sparkles } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, ChevronDown, ChevronRight, Trash2, Search, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
@@ -7,7 +7,7 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
-import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
+import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
 import type { Product } from '../../types';
 
 // ---------- interfaces ----------
@@ -419,7 +419,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
   const totalMatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => i.matched_product).length, 0) ?? 0;
   const totalUnmatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => !i.matched_product).length, 0) ?? 0;
-  const totalItems = totalMatched + totalUnmatched;
   const importablePOs = parsedPOs?.filter((po) => po.items.some((i) => i.matched_product && i.quantity_ordered > 0)).length ?? 0;
 
   const filteredProducts = products.filter((p) => {

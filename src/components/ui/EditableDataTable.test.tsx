@@ -211,7 +211,7 @@ describe('EditableDataTable', () => {
     it('null values sort to end', () => {
       const dataWithNull = [
         { id: '1', name: 'Alpha', price: 100, category: 'Seeds', active: true },
-        { id: '2', name: null as any, price: 200, category: 'Chemical', active: true },
+        { id: '2', name: null as unknown as string, price: 200, category: 'Chemical', active: true },
         { id: '3', name: 'Beta', price: 300, category: 'Seeds', active: false },
       ];
       const { container } = render(
@@ -374,7 +374,7 @@ describe('EditableDataTable', () => {
         expect(onSave).toHaveBeenCalledTimes(1);
       });
 
-      const changesMap = onSave.mock.calls[0][0] as Map<string, Record<string, any>>;
+      const changesMap = onSave.mock.calls[0][0] as Map<string, Record<string, unknown>>;
       expect(changesMap).toBeInstanceOf(Map);
       expect(changesMap.get('1')).toEqual({ name: 'Product A Modified' });
     });
@@ -452,7 +452,7 @@ describe('EditableDataTable', () => {
       await waitFor(() => {
         expect(onSave).toHaveBeenCalledTimes(1);
       });
-      const changesMap = onSave.mock.calls[0][0] as Map<string, Record<string, any>>;
+      const changesMap = onSave.mock.calls[0][0] as Map<string, Record<string, unknown>>;
       expect(changesMap.get('1')).toEqual({ name: 'New Name', price: 999 });
     });
 

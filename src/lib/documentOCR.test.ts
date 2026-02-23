@@ -66,7 +66,7 @@ function makeFile(
   const file = new File([bytes], name, { type });
   // Polyfill arrayBuffer() for jsdom compatibility
   if (typeof file.arrayBuffer !== 'function') {
-    (file as any).arrayBuffer = () =>
+    (file as unknown as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer = () =>
       Promise.resolve(bytes.buffer.slice(0, sizeBytes));
   }
   return file;
@@ -80,7 +80,7 @@ function makeCompressedResult(name: string, type: string): File {
   const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // minimal binary data
   const file = new File([bytes], name, { type });
   if (typeof file.arrayBuffer !== 'function') {
-    (file as any).arrayBuffer = () => Promise.resolve(bytes.buffer.slice(0));
+    (file as unknown as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer = () => Promise.resolve(bytes.buffer.slice(0));
   }
   return file;
 }

@@ -16,6 +16,12 @@
  */
 
 import type { YearEndSummaryData, YearEndProductUsage } from '../types';
+import type jsPDF from 'jspdf';
+import type { CellHookData } from 'jspdf-autotable';
+
+type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
+  lastAutoTable: { finalY: number };
+};
 
 // ── Color palette (matches invoice/statement PDFs) ───────────────────────
 
@@ -294,7 +300,7 @@ export async function generateYearEndSummaryPdf(
         3: { halign: 'right', cellWidth: 'auto' },
       },
       alternateRowStyles: { fillColor: ALT_ROW_BG },
-      didDrawCell: (hookData: any) => {
+      didDrawCell: (hookData: CellHookData) => {
         // Color the Change column green/red
         if (hookData.section === 'body' && hookData.column.index === 3) {
           const pctVal = yoyRows[hookData.row.index]?.[3];
@@ -307,7 +313,7 @@ export async function generateYearEndSummaryPdf(
       didDrawPage: drawPageFooter,
     });
 
-    y = (doc as any).lastAutoTable.finalY + 15;
+    y = (doc as JsPDFWithAutoTable).lastAutoTable.finalY + 15;
   }
 
   // ── 5. Product Usage by Category ───────────────────────────────────
@@ -382,7 +388,7 @@ export async function generateYearEndSummaryPdf(
           didDrawPage: drawPageFooter,
         });
 
-        y = (doc as any).lastAutoTable.finalY + 6;
+        y = (doc as JsPDFWithAutoTable).lastAutoTable.finalY + 6;
       }
 
       // Application fees inline
@@ -509,7 +515,7 @@ export async function generateYearEndSummaryPdf(
       didDrawPage: drawPageFooter,
     });
 
-    y = (doc as any).lastAutoTable.finalY + 10;
+    y = (doc as JsPDFWithAutoTable).lastAutoTable.finalY + 10;
 
     // Totals row
     doc.setDrawColor(200, 200, 200);
@@ -562,7 +568,7 @@ export async function generateYearEndSummaryPdf(
       return base;
     });
 
-    const shareColStyles: Record<number, any> = hasOverrides
+    const shareColStyles: Record<number, Record<string, unknown>> = hasOverrides
       ? {
           0: { cellWidth: 75, fontStyle: 'bold' },
           1: { cellWidth: 'auto' },
@@ -599,7 +605,7 @@ export async function generateYearEndSummaryPdf(
       didDrawPage: drawPageFooter,
     });
 
-    y = (doc as any).lastAutoTable.finalY + 15;
+    y = (doc as JsPDFWithAutoTable).lastAutoTable.finalY + 15;
   }
 
   // ── Final page footer ──────────────────────────────────────────────

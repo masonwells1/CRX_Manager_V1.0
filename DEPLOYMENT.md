@@ -159,6 +159,23 @@ VITE_SUPABASE_ANON_KEY=your-production-anon-key
 - [ ] CORS settings correct
 - [ ] Authentication working
 - [ ] Authorization/permissions tested
+- [ ] Supabase Edge Function secrets set (see below)
+
+### Supabase Edge Function Secrets
+
+The following secrets **must** be set on your Supabase project before
+Edge Functions (`create-user`, `process-blend-ticket`) will work in production.
+
+| Secret | Purpose | How to set |
+|--------|---------|------------|
+| `ALLOWED_ORIGIN` | CORS origin for Edge Function responses. Must match your production URL (e.g., `https://app.croprxsolutions.com`). | `npx supabase secrets set ALLOWED_ORIGIN=https://your-domain.com --project-ref <ref>` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Needed by `create-user` to create auth users. Already set by default on hosted Supabase. | Auto-provisioned; verify in Dashboard → Settings → Edge Functions → Environment Variables. |
+| `GOOGLE_VISION_API_KEY` | Used by `process-blend-ticket` for OCR. | `npx supabase secrets set GOOGLE_VISION_API_KEY=<key> --project-ref <ref>` |
+
+**Verification steps:**
+1. Run `npx supabase secrets list --project-ref <ref>` to confirm all secrets are set.
+2. After deploying, test each Edge Function from the frontend to confirm CORS headers are correct.
+3. If you see `403` or `CORS` errors in the browser console, double-check `ALLOWED_ORIGIN` matches the exact origin (including protocol, no trailing slash).
 
 ### Performance
 - [ ] Build size reasonable (`npm run build` check output)

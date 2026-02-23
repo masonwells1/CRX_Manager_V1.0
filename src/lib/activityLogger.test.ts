@@ -5,7 +5,7 @@ const mockInsert = vi.fn().mockResolvedValue({ data: null, error: null });
 const mockFrom = vi.fn().mockReturnValue({ insert: mockInsert });
 
 vi.mock('./db', () => ({
-  supabase: { from: (...args: any[]) => mockFrom(...args) },
+  supabase: { from: (...args: unknown[]) => mockFrom(...args) },
 }));
 
 import { logActivity, createNotification, notifyAdmins } from './activityLogger';
@@ -92,9 +92,7 @@ describe('notifyAdmins', () => {
 
     // First call: from('profiles').select().eq().eq() → returns admins
     // Second call: from('notifications').insert() → inserts
-    let callCount = 0;
     mockFrom.mockImplementation((table: string) => {
-      callCount++;
       if (table === 'profiles') {
         return { select: mockSelect };
       }

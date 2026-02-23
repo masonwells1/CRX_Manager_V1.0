@@ -11,13 +11,19 @@
  */
 
 import type { InvoicePrintOptions } from '../types';
+import type jsPDF from 'jspdf';
+import type { autoTable as autoTableFn } from 'jspdf-autotable';
+
+/** jsPDF instance with lastAutoTable from jspdf-autotable plugin */
+type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
+  lastAutoTable: { finalY: number };
+};
 
 const CRX_GREEN: [number, number, number] = [40, 162, 106];
 const CHARCOAL: [number, number, number] = [46, 46, 46];
 const GRAY: [number, number, number] = [78, 78, 78];
 const LIGHT_BG: [number, number, number] = [245, 250, 247];
 const RED: [number, number, number] = [220, 38, 38];
-const BLACK: [number, number, number] = [0, 0, 0];
 const TABLE_HEADER_BG: [number, number, number] = [240, 240, 240];
 const ALT_ROW_BG: [number, number, number] = [252, 252, 252];
 
@@ -317,8 +323,8 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
 // ── Layout 1: Field Application ──────────────────────────────────────────
 
 function drawFieldApplicationLayout(
-  doc: any, data: InvoicePdfData, startY: number, margin: number, pageW: number,
-  opts: InvoicePrintOptions, autoTable: any, drawPageFooter: () => void,
+  doc: JsPDFWithAutoTable, data: InvoicePdfData, startY: number, margin: number, pageW: number,
+  opts: InvoicePrintOptions, autoTable: typeof autoTableFn, drawPageFooter: () => void,
 ): number {
   let y = startY;
 
@@ -441,7 +447,7 @@ function drawFieldApplicationLayout(
     didDrawPage: drawPageFooter,
   });
 
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = doc.lastAutoTable.finalY + 6;
 
   // Price per acre
   if (opts.show_price_per_acre && data.total_acres && data.total_acres > 0) {
@@ -509,7 +515,7 @@ function drawFieldApplicationLayout(
           },
       didDrawPage: drawPageFooter,
     });
-    y = (doc as any).lastAutoTable.finalY + 6;
+    y = doc.lastAutoTable.finalY + 6;
   }
 
   // Finance charges
@@ -537,8 +543,8 @@ function drawFieldApplicationLayout(
 // ── Layout 2: Chemical Sale ──────────────────────────────────────────────
 
 function drawChemicalSaleLayout(
-  doc: any, data: InvoicePdfData, startY: number, margin: number, pageW: number,
-  opts: InvoicePrintOptions, autoTable: any, drawPageFooter: () => void,
+  doc: JsPDFWithAutoTable, data: InvoicePdfData, startY: number, margin: number, pageW: number,
+  opts: InvoicePrintOptions, autoTable: typeof autoTableFn, drawPageFooter: () => void,
 ): number {
   let y = startY;
 
@@ -599,7 +605,7 @@ function drawChemicalSaleLayout(
     didDrawPage: drawPageFooter,
   });
 
-  y = (doc as any).lastAutoTable.finalY + 6;
+  y = doc.lastAutoTable.finalY + 6;
 
   // Total line
   doc.setFontSize(9);
@@ -652,7 +658,7 @@ function drawChemicalSaleLayout(
           },
       didDrawPage: drawPageFooter,
     });
-    y = (doc as any).lastAutoTable.finalY + 6;
+    y = doc.lastAutoTable.finalY + 6;
   }
 
   // Finance charges
@@ -680,8 +686,8 @@ function drawChemicalSaleLayout(
 // ── Layout 3: Misc Charge ────────────────────────────────────────────────
 
 function drawMiscChargeLayout(
-  doc: any, data: InvoicePdfData, startY: number, margin: number, pageW: number,
-  autoTable: any, drawPageFooter: () => void,
+  doc: JsPDFWithAutoTable, data: InvoicePdfData, startY: number, margin: number, pageW: number,
+  autoTable: typeof autoTableFn, drawPageFooter: () => void,
 ): number {
   let y = startY;
 
@@ -715,7 +721,7 @@ function drawMiscChargeLayout(
     didDrawPage: drawPageFooter,
   });
 
-  return (doc as any).lastAutoTable.finalY + 20;
+  return doc.lastAutoTable.finalY + 20;
 }
 
 // ── Download ─────────────────────────────────────────────────────────────

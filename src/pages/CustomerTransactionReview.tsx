@@ -5,9 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { DollarSign, Download, FileText } from 'lucide-react';
 import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import ReportShell from '../components/reports/ReportShell';

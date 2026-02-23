@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus, Link2, LinkIcon } from 'lucide-react';
+import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus, LinkIcon } from 'lucide-react';
 import { supabase } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useOCRProcessor } from '../hooks/useOCRProcessor';
@@ -12,7 +12,7 @@ import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
 import { BulkTicketUpload } from '../components/blendtickets/BulkTicketUpload';
 import { ManualTicketCreate } from '../components/blendtickets/ManualTicketCreate';
-import DataTable from '../components/ui/DataTable';
+import DataTable, { type Column } from '../components/ui/DataTable';
 import { usePageMeta } from '../hooks/usePageMeta';
 import type { BlendTicket, Customer } from '../types';
 
@@ -87,7 +87,7 @@ export function BlendTickets() {
   });
 
   function getStatusBadge(status: string) {
-    const variants: Record<string, { variant: 'default' | 'warning' | 'success' | 'error'; icon: any }> = {
+    const variants: Record<string, { variant: 'default' | 'warning' | 'success' | 'error'; icon: typeof Clock }> = {
       pending: { variant: 'default', icon: Clock },
       processing: { variant: 'warning', icon: Clock },
       completed: { variant: 'success', icon: CheckCircle },
@@ -393,8 +393,8 @@ export function BlendTickets() {
           />
         ) : (
           <DataTable
-            columns={columns as any}
-            data={filteredTickets as any}
+            columns={columns as Column<BlendTicket>[]}
+            data={filteredTickets}
           />
         )}
       </Card>

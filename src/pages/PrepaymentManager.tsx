@@ -64,7 +64,7 @@ export default function PrepaymentManager() {
 
     // Enrich with unpaid invoice info
     const enriched: CustomerPrepay[] = [];
-    for (const c of (custData || []) as any[]) {
+    for (const c of (custData || []) as Array<{ id: string; farm_name: string; prepay_balance_cents: number }>) {
       const { data: invData } = await supabase
         .from('invoices')
         .select('id, balance_cents')
@@ -78,7 +78,7 @@ export default function PrepaymentManager() {
         farm_name: c.farm_name,
         prepay_balance_cents: c.prepay_balance_cents || 0,
         unpaid_invoice_count: (invData || []).length,
-        unpaid_balance_cents: (invData || []).reduce((s: number, i: any) => s + i.balance_cents, 0),
+        unpaid_balance_cents: (invData || []).reduce((s: number, i: { balance_cents: number }) => s + i.balance_cents, 0),
       });
     }
 
@@ -110,8 +110,8 @@ export default function PrepaymentManager() {
         `Applied ${fmt(result.applied_cents)} to ${result.applied_count} invoice(s). Remaining: ${fmt(result.remaining_prepay_cents)}`,
       );
       fetchCustomers();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to apply prepayments');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to apply prepayments');
     }
     setApplying(null);
   };
@@ -126,7 +126,7 @@ export default function PrepaymentManager() {
         p_idempotency_key: batchKey,
       });
       if (error) throw error;
-      const result = assertRpcResult<{ total_customers: number; total_applied_cents: number; details: any[] }>(data, 'batch_apply_all_prepayments');
+      const result = assertRpcResult<{ total_customers: number; total_applied_cents: number; details: unknown[] }>(data, 'batch_apply_all_prepayments');
       if (result.total_customers === 0) {
         toast('info', 'No prepayments could be applied (no customers with both prepay credits and unpaid invoices)');
       } else {
@@ -136,8 +136,8 @@ export default function PrepaymentManager() {
         );
       }
       fetchCustomers();
-    } catch (err: any) {
-      toast('error', err.message || 'Failed to apply batch prepayments');
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to apply batch prepayments');
     }
     setBatchApplying(false);
   };
@@ -146,15 +146,15 @@ export default function PrepaymentManager() {
   const totalUnpaid = customers.reduce((s, c) => s + c.unpaid_balance_cents, 0);
 
   const columns: Column<CustomerPrepay>[] = [
-    { key: 'farm_name' as any, header: 'Customer', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.farm_name}</span> },
+    { key: 'farm_name', header: 'Customer', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.farm_name}</span> },
     {
-      key: 'prepay_balance_cents' as any,
+      key: 'prepay_balance_cents',
       header: 'Prepay Balance',
       sortable: true,
       render: (r) => <span className="font-medium text-crx-green">{fmt(r.prepay_balance_cents)}</span>,
     },
     {
-      key: 'unpaid_invoice_count' as any,
+      key: 'unpaid_invoice_count',
       header: 'Unpaid Invoices',
       render: (r) => r.unpaid_invoice_count > 0 ? (
         <Badge variant="warning">{r.unpaid_invoice_count} invoice(s)</Badge>
@@ -163,7 +163,7 @@ export default function PrepaymentManager() {
       ),
     },
     {
-      key: 'unpaid_balance_cents' as any,
+      key: 'unpaid_balance_cents',
       header: 'Unpaid Balance',
       sortable: true,
       render: (r) => r.unpaid_balance_cents > 0 ? (
@@ -173,7 +173,7 @@ export default function PrepaymentManager() {
       ),
     },
     {
-      key: 'id' as any,
+      key: 'id',
       header: '',
       render: (r) => r.unpaid_invoice_count > 0 ? (
         <Button
