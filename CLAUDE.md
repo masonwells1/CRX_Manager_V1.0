@@ -14,7 +14,7 @@
 - **77 migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
 - **ESLint:** 0 errors (fully lint-clean as of 2026-02-23)
-- **Latest commit:** `2acd8df` on main (pushed) — update this after each commit
+- **Latest commit:** `b410ea4` on main (pushed) — update this after each commit
 - **T3-002 test coverage:** Phases 1-5 COMPLETE (see Development History)
 - **Pre-commit hook:** `npm run build` + `npx vitest run` run automatically before every commit
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
