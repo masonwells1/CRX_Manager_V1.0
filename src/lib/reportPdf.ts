@@ -117,7 +117,8 @@ export async function generateReportPdf(options: ReportPdfOptions) {
       fontStyle: 'bold',
       fontSize: 7,
     },
-    columnStyles: colStyles as Record<number, { halign?: string }>,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    columnStyles: colStyles as any,
     alternateRowStyles: { fillColor: [252, 252, 252] },
     didDrawPage: () => {
       // Footer on every page

@@ -40,7 +40,6 @@ jobs:
         run: npm run lint
 
       - name: Run TypeScript type check
-        continue-on-error: true
         run: npm run typecheck
 
       - name: Run Vitest unit tests

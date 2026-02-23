@@ -44,7 +44,8 @@ interface EditableDataTableProps<T> {
   headerActions?: ReactNode;
 }
 
-export default function EditableDataTable<T extends Record<string, unknown>>({
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export default function EditableDataTable<T extends Record<string, any>>({
   data,
   columns,
   rowKey,
@@ -184,7 +185,7 @@ export default function EditableDataTable<T extends Record<string, unknown>>({
     if (col.editType === 'select' && col.editOptions) {
       return (
         <select
-          value={value ?? ''}
+          value={String(value ?? '')}
           onChange={(e) => setCellValue(row, col.key, e.target.value)}
           className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 bg-white"
         >
@@ -202,7 +203,7 @@ export default function EditableDataTable<T extends Record<string, unknown>>({
       return (
         <input
           type="number"
-          value={value ?? ''}
+          value={value != null ? String(value) : ''}
           min={col.editMin ?? 0}
           step={col.editStep ?? 'any'}
           onChange={(e) => {
@@ -218,7 +219,7 @@ export default function EditableDataTable<T extends Record<string, unknown>>({
     return (
       <input
         type="text"
-        value={value ?? ''}
+        value={String(value ?? '')}
         onChange={(e) => setCellValue(row, col.key, e.target.value)}
         className="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
       />

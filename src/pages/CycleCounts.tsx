@@ -110,7 +110,7 @@ export default function CycleCounts() {
       supabase.from('inventory').select('location'),
       supabase.from('warehouses').select('name').eq('is_active', true),
     ]);
-    const invLocs = [...new Set((invRes.data || []).map((r: { location: string | null }) => r.location).filter(Boolean))];
+    const invLocs = [...new Set((invRes.data || []).map((r: { location: string | null }) => r.location).filter(Boolean) as string[])];
     const whLocs = (whRes.data || []).map((r: { name: string }) => r.name);
     const all = [...new Set([...invLocs, ...whLocs])].sort();
     setWarehouses(all);
@@ -139,7 +139,7 @@ export default function CycleCounts() {
         .order('product_id');
 
       if (invError) throw invError;
-      const invItems = (invData || []) as InventoryDbRow[];
+      const invItems = (invData || []) as unknown as InventoryDbRow[];
 
       if (invItems.length === 0) {
         toast('error', 'No inventory found at this location');

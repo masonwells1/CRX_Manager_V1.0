@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
-import { downloadInvoicePdf, type InvoicePdfData } from '../lib/invoicePdf';
+import { downloadInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import WriteOffModal from '../components/invoices/WriteOffModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 
@@ -166,10 +166,10 @@ export default function InvoiceDetail() {
           cost_cents: it.cost_cents,
           rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
           acres: it.acres ? Number(it.acres) : null,
-          unit_size: it.unit_size,
+          unit_size: it.unit_size ?? null,
           sort_order: it.sort_order,
-          notes: it.notes,
-        }))
+          notes: it.notes as string | null,
+        })) as LineItem[]
       );
     }
 
@@ -425,7 +425,7 @@ export default function InvoiceDetail() {
           acres: s.acres,
           amount_cents: s.amount_cents,
         })) : undefined,
-        items: (enrichedItems || []).map((it: Record<string, unknown> & { description?: string; product?: { product_name: string }; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null; rate_unit?: string | null; acres?: number | null; total_applied?: number | null }) => ({
+        items: (enrichedItems || []).map((it: Record<string, unknown> & { description?: string; product?: { product_name: string; epa_registration?: string | null; product_form?: string | null }; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null; rate_unit?: string | null; acres?: number | null; total_applied?: number | null }) => ({
           description: it.description,
           product_name: it.product?.product_name || it.description,
           quantity: Number(it.quantity),
@@ -443,7 +443,7 @@ export default function InvoiceDetail() {
           epa_registration: it.epa_registration || it.product?.epa_registration || null,
           is_application_fee: it.is_application_fee || false,
           product_form: it.product_form || it.product?.product_form || null,
-        })),
+        })) as InvoicePdfItem[],
         total_amount_cents: invoice.total_amount_cents || items.reduce((s, i) => s + i.extended_cents, 0),
         total_cost_cents: invoice.total_cost_cents || items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0),
         paid_amount_cents: invoice.paid_amount_cents || 0,

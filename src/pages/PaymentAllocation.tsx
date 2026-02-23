@@ -22,7 +22,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import type { PaymentAllocationEntry, PaymentAllocationResult } from '../types';
+import type { PaymentAllocationEntry, PaymentAllocationResult, InvoiceType } from '../types';
 
 /* ─── Helpers ──────────────────────────────────────────────────────────── */
 
@@ -152,12 +152,12 @@ export default function PaymentAllocation() {
       return;
     }
 
-    const mapped: PaymentAllocationEntry[] = ((data || []) as Array<{ id: string; invoice_number: string; invoice_date: string; due_date: string; invoice_type: string; total_amount_cents: number; balance_cents: number }>).map((inv) => ({
+    const mapped = ((data || []) as Array<{ id: string; invoice_number: string; invoice_date: string; due_date: string | null; invoice_type: string; total_amount_cents: number; balance_cents: number }>).map((inv): PaymentAllocationEntry => ({
       invoice_id: inv.id,
       invoice_number: inv.invoice_number,
       invoice_date: inv.invoice_date,
       due_date: inv.due_date,
-      invoice_type: inv.invoice_type,
+      invoice_type: inv.invoice_type as InvoiceType,
       total_amount_cents: inv.total_amount_cents,
       balance_cents: inv.balance_cents,
       days_aged: daysBetween(inv.invoice_date, today),

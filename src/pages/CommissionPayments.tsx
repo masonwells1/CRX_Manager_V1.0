@@ -87,17 +87,17 @@ export default function CommissionPayments() {
 
     // Get item counts
     const rows: CommissionPaymentRow[] = [];
-    for (const p of (data || []) as Record<string, unknown>[]) {
+    for (const p of (data || []) as Array<Record<string, unknown> & { recipient?: { full_name?: string } }>) {
       const { count } = await supabase
         .from('commission_payment_items')
         .select('*', { count: 'exact', head: true })
-        .eq('commission_payment_id', p.id);
+        .eq('commission_payment_id', p.id as string);
 
       rows.push({
         ...p,
         recipient_name: p.recipient?.full_name || 'Unknown',
         item_count: count || 0,
-      });
+      } as CommissionPaymentRow);
     }
 
     setPayments(rows);
@@ -117,10 +117,10 @@ export default function CommissionPayments() {
       .limit(500);
 
     setUnpaidCommissions(
-      ((data || []) as Record<string, unknown>[]).map((c) => ({
+      ((data || []) as Array<Record<string, unknown> & { recipient?: { full_name?: string } }>).map((c) => ({
         ...c,
         recipient_name: c.recipient?.full_name || 'Unknown',
-      })),
+      })) as unknown as UnpaidCommission[],
     );
   };
 
@@ -257,7 +257,7 @@ export default function CommissionPayments() {
     ...(tab === 'unposted'
       ? [
           {
-            key: 'id' as keyof CommissionPaymentRow,
+            key: 'id',
             header: '',
             render: (r: CommissionPaymentRow) => (
               <Button
@@ -275,8 +275,8 @@ export default function CommissionPayments() {
               </Button>
             ),
           },
-        ]
-      : []),
+        ] as Column<CommissionPaymentRow>[]
+      : ([] as Column<CommissionPaymentRow>[])),
   ];
 
   return (

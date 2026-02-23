@@ -97,9 +97,8 @@ export default function CustomerDetail() {
 
   useEffect(() => {
     // Fetch all customers for parent selector
-    supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500)
-      .then(({ data }) => setAllCustomers((data || []) as { id: string; farm_name: string }[]))
-      .catch(() => { /* non-critical: parent customer selector stays empty */ });
+    void supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500)
+      .then(({ data }) => setAllCustomers((data || []) as { id: string; farm_name: string }[]));
 
     if (!isNew && id) {
       fetchCustomer();
@@ -215,7 +214,7 @@ export default function CustomerDetail() {
         product_name: r.product?.product_name || 'Unknown',
         original_delivery_number: r.original_delivery?.delivery_number || '-',
       }));
-      setCustomerRemainders(remainders);
+      setCustomerRemainders(remainders as unknown as DeliveryRemainder[]);
     } else if (selectedTab === 'history') {
       // GAP FIX #15: Fetch purchase history — all products this customer has ordered
       const { data: orderIds } = await supabase

@@ -527,7 +527,7 @@ describe('deliveryPdf', () => {
       const autoTableCalls = vi.mocked(autoTable).mock.calls;
       expect(autoTableCalls.length).toBeGreaterThanOrEqual(1);
       const tableOpts = autoTableCalls[0][1];
-      expect(tableOpts.head[0]).toEqual(['Product', 'Planned', 'Delivered', 'Unit Size']);
+      expect(tableOpts.head![0]).toEqual(['Product', 'Planned', 'Delivered', 'Unit Size']);
     });
 
     it('shows standard columns for non-completed deliveries', async () => {
@@ -537,7 +537,7 @@ describe('deliveryPdf', () => {
       const autoTableCalls = vi.mocked(autoTable).mock.calls;
       expect(autoTableCalls.length).toBeGreaterThanOrEqual(1);
       const tableOpts = autoTableCalls[0][1];
-      expect(tableOpts.head[0]).toEqual(['Product', 'Quantity', 'Unit Size']);
+      expect(tableOpts.head![0]).toEqual(['Product', 'Quantity', 'Unit Size']);
     });
 
     it('shows issue section when issue_type is not none', async () => {

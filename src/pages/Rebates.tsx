@@ -127,7 +127,7 @@ export default function Rebates() {
     const mapped = ((data || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>).map((p) => ({
       ...p,
       product_name: p.product?.product_name || null,
-    }));
+    })) as unknown as ProgramRow[];
     setPrograms(mapped);
     setLoading(false);
   };
@@ -150,7 +150,7 @@ export default function Rebates() {
       farm_name: c.customer?.farm_name || '',
       product_name: c.product?.product_name || '',
       order_number: c.order?.order_number || '',
-    }));
+    })) as unknown as ClaimRow[];
     setClaims(mapped);
     setLoading(false);
   };

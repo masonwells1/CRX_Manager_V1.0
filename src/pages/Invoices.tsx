@@ -13,7 +13,7 @@ import { exportToCSV } from '../lib/csvExport';
 import BatchVoidModal from '../components/invoices/BatchVoidModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
-import { generateBatchInvoicePdf, type InvoicePdfData } from '../lib/invoicePdf';
+import { generateBatchInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 
 type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null };
 
@@ -97,7 +97,7 @@ export default function Invoices() {
       ...inv,
       customer_name: inv.customer?.farm_name || 'Unknown',
       salesman_name: inv.salesman?.full_name || null,
-    }));
+    })) as unknown as InvoiceRow[];
     setInvoices(rows);
     setLoading(false);
   };
@@ -243,7 +243,7 @@ export default function Invoices() {
             price_per_acre_cents: s.price_per_acre_cents || null,
             pricing_note: s.pricing_note || null,
           })) : undefined,
-          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name: string }; description?: string; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null }>).map((it) => ({
+          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name: string; epa_registration?: string | null; product_form?: string | null }; description?: string; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null }>).map((it) => ({
             description: it.description,
             product_name: it.product?.product_name || it.description,
             quantity: Number(it.quantity),
@@ -260,7 +260,7 @@ export default function Invoices() {
             epa_registration: it.epa_registration || it.product?.epa_registration || null,
             is_application_fee: it.is_application_fee || false,
             product_form: it.product_form || it.product?.product_form || null,
-          })),
+          })) as InvoicePdfItem[],
           total_amount_cents: inv.total_amount_cents || 0,
           total_cost_cents: inv.total_cost_cents || 0,
           paid_amount_cents: inv.paid_amount_cents || 0,
@@ -332,7 +332,7 @@ export default function Invoices() {
           <FileText className="w-4 h-4 text-crx-green flex-shrink-0" />
           <span className="font-medium text-nav-dark">{row.invoice_number}</span>
           {row.is_quick_delivery && (
-            <Zap className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" title="Quick Delivery" />
+            <span title="Quick Delivery"><Zap className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" /></span>
           )}
         </div>
       ),

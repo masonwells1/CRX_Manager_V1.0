@@ -95,10 +95,10 @@ export default function Compliance() {
       return;
     }
 
-    const mapped = ((data || []) as Record<string, unknown>[]).map((l) => ({
+    const mapped = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string } }>).map((l) => ({
       ...l,
       farm_name: l.customer?.farm_name || 'Unknown',
-    }));
+    })) as unknown as LicenseWithCustomer[];
     setLicenses(mapped);
   };
 

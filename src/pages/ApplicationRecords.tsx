@@ -100,14 +100,14 @@ export default function ApplicationRecords() {
       return;
     }
 
-    const rows: AppRecordRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; applicator?: { full_name?: string }; field?: { field_name?: string } }>).map((r) => ({
+    const rows: AppRecordRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; applicator?: { full_name?: string }; field?: { field_name?: string }; vehicle?: { vehicle_name?: string } }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       applicator_name: r.applicator?.full_name || '-',
       field_name: r.field?.field_name || '-',
       vehicle_name: r.vehicle?.vehicle_name || '-',
       product_count: Array.isArray(r.product_data) ? r.product_data.length : 0,
-    }));
+    })) as AppRecordRow[];
     setRecords(rows);
     setLoading(false);
   };
@@ -125,7 +125,7 @@ export default function ApplicationRecords() {
 
   const handleExport = () => {
     exportToCSV(
-      records,
+      records as unknown as Record<string, unknown>[],
       [
         { key: 'record_number', header: 'Record #' },
         { key: 'application_date', header: 'Date', format: fmtDateCSV },

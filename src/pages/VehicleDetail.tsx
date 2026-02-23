@@ -148,7 +148,11 @@ export default function VehicleDetail() {
 
   return (
     <div className="space-y-6">
-      {blocker.isBlocked && <UnsavedChangesModal blocker={blocker} />}
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
 
       {/* Header */}
       <div className="flex items-center gap-4">

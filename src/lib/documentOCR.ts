@@ -73,7 +73,7 @@ async function pdfToImages(file: File): Promise<PageImage[]> {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error(`Failed to create canvas context for page ${i}`);
 
-    await page.render({ canvasContext: ctx, viewport }).promise;
+    await page.render({ canvasContext: ctx, viewport } as unknown as Parameters<typeof page.render>[0]).promise;
 
     // Export as JPEG base64 (strip data:image/jpeg;base64, prefix)
     const dataUrl = canvas.toDataURL('image/jpeg', JPEG_QUALITY);

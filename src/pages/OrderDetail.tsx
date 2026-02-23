@@ -77,8 +77,8 @@ export default function OrderDetail() {
         .select('blend_ticket_id, blend_ticket:blend_tickets(id, ticket_number, ticket_date, order_link_status, payment_status)')
         .eq('order_id', id!);
       // Deduplicate by blend_ticket_id
-      const uniqueTickets = new Map<string, Record<string, unknown>>();
-      (btLinks || []).forEach((link: Record<string, unknown>) => {
+      const uniqueTickets = new Map<string, { id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }>();
+      ((btLinks || []) as unknown as Array<{ blend_ticket_id: string; blend_ticket: { id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null } | null }>).forEach((link) => {
         if (link.blend_ticket && !uniqueTickets.has(link.blend_ticket_id)) {
           uniqueTickets.set(link.blend_ticket_id, link.blend_ticket);
         }
@@ -153,7 +153,7 @@ export default function OrderDetail() {
       }
 
       logActivity('order_status_changed', `Order ${order.order_number} status changed to ${newStatus}`, profile.id, 'order', order.id, order.customer_id);
-      notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by);
+      notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by ?? undefined);
       setStatusModalOpen(false);
       fetchOrder();
     } catch (error: unknown) {

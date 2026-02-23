@@ -128,15 +128,15 @@ export default function Deliveries() {
       .order('scheduled_date')
       .limit(20)
       .then(({ data }) => {
-        const rows = ((data || []) as Record<string, unknown>[]).map((d) => ({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rows = ((data || []) as any[]).map((d) => ({
           ...d,
           customer_name: d.customer?.farm_name || 'Unknown',
           driver_name: 'Unassigned',
           item_count: 0,
         }));
         setUnassigned(rows);
-      })
-      .catch(() => { /* non-critical: unassigned deliveries list stays empty */ });
+      });
   }, [isDriver, deliveries]);
 
   const fetchDrivers = async () => {
@@ -330,11 +330,12 @@ export default function Deliveries() {
           .eq('delivery_id', del.id)
           .order('sort_order');
 
+        const delAny = del as unknown as Record<string, unknown>;
         pdfDataList.push({
           delivery_number: del.delivery_number,
-          order_number: del.order_number || '-',
+          order_number: (delAny.order_number as string) || '-',
           customer_name: del.customer_name,
-          customer_address: del.delivery_address || undefined,
+          customer_address: (delAny.delivery_address as string) || undefined,
           driver_name: del.driver_name,
           scheduled_date: del.scheduled_date,
           completed_at: del.completed_at || undefined,
@@ -344,11 +345,11 @@ export default function Deliveries() {
           priority: del.priority || 'normal',
           issue_type: del.issue_type || undefined,
           issue_notes: del.issue_notes || undefined,
-          items: ((items || []) as Record<string, unknown>[]).map((it) => ({
-            product_name: it.product?.product_name || it.product_name,
-            quantity: it.quantity,
-            unit_size: it.unit_size || '-',
-            quantity_delivered: it.quantity_delivered,
+          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>).map((it) => ({
+            product_name: it.product?.product_name || (it.product_name as string),
+            quantity: it.quantity as number,
+            unit_size: (it.unit_size as string) || '-',
+            quantity_delivered: it.quantity_delivered as number,
           })),
         });
       }
@@ -440,12 +441,12 @@ export default function Deliveries() {
           <Badge variant={statusToBadgeVariant[d.status] || 'default'}>{d.status.replace('_', ' ')}</Badge>
         </div>
         <p className="text-gray-300 text-sm">{d.customer_name}</p>
-        {d.delivery_address && (
+        {(d as unknown as Record<string, unknown>).delivery_address ? (
           <div className="flex items-center gap-2 text-gray-400 text-xs">
             <MapPin className="w-3 h-3" />
-            <span className="truncate">{d.delivery_address}</span>
+            <span className="truncate">{String((d as unknown as Record<string, unknown>).delivery_address)}</span>
           </div>
-        )}
+        ) : null}
         <div className="flex items-center justify-between text-xs text-gray-400">
           <div className="flex items-center gap-1">
             <Calendar className="w-3 h-3" />

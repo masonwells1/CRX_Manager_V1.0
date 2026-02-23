@@ -103,7 +103,7 @@ export default function Products() {
 
       toast('success', `Updated ${changes.size} product(s)`);
       if (profile) {
-        logActivity('products_bulk_updated', `${changes.size} product(s) updated via inline edit`, profile.id, 'product', null);
+        logActivity('products_bulk_updated', `${changes.size} product(s) updated via inline edit`, profile.id, 'product', undefined);
       }
       fetchProducts();
     } catch (err: unknown) {

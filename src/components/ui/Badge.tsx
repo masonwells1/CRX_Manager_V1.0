@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-type BadgeVariant =
+export type BadgeVariant =
   | 'default'
   | 'success'
   | 'warning'
@@ -10,12 +10,14 @@ type BadgeVariant =
   | 'sent'
   | 'accepted'
   | 'declined'
-  | 'expired';
+  | 'expired'
+  | 'danger';
 
-interface BadgeProps {
+export interface BadgeProps {
   variant?: BadgeVariant;
   children: ReactNode;
   size?: 'sm' | 'md';
+  className?: string;
 }
 
 const variantClasses: Record<BadgeVariant, string> = {
@@ -29,6 +31,7 @@ const variantClasses: Record<BadgeVariant, string> = {
   accepted: 'bg-emerald-50 text-emerald-700',
   declined: 'bg-red-50 text-red-700',
   expired: 'bg-orange-50 text-orange-700',
+  danger: 'bg-red-50 text-red-700',
 };
 
 export const statusToBadgeVariant: Record<string, BadgeVariant> = {
@@ -52,13 +55,14 @@ export const statusToBadgeVariant: Record<string, BadgeVariant> = {
   paid: 'success',
 };
 
-export default function Badge({ variant = 'default', children, size = 'sm' }: BadgeProps) {
+export default function Badge({ variant = 'default', children, size = 'sm', className = '' }: BadgeProps) {
   return (
     <span
       className={`
         inline-flex items-center font-medium rounded-full capitalize
         ${variantClasses[variant]}
         ${size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-sm'}
+        ${className}
       `}
     >
       {children}

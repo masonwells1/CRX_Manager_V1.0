@@ -213,7 +213,7 @@ export async function generateDeliveryPdf(data: PdfDeliveryData) {
   const { default: jsPDF } = await import('jspdf');
   const { default: autoTable } = await import('jspdf-autotable');
 
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' }) as unknown as JsPDFWithAutoTable;
   renderDeliveryPage(doc, data, autoTable);
   return doc;
 }
@@ -237,14 +237,14 @@ export async function generateBatchDeliveryPdf(dataList: PdfDeliveryData[]) {
 
   // For a single delivery, just download directly
   if (dataList.length === 1) {
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' }) as unknown as JsPDFWithAutoTable;
     renderDeliveryPage(doc, dataList[0], autoTable);
     doc.save(`${dataList[0].delivery_number}_receipt.pdf`);
     return;
   }
 
   // Multiple deliveries — one page each
-  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' });
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'letter' }) as unknown as JsPDFWithAutoTable;
 
   for (let i = 0; i < dataList.length; i++) {
     if (i > 0) doc.addPage();

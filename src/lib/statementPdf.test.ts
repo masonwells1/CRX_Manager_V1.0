@@ -179,13 +179,16 @@ describe('generateStatementPdf', () => {
     const share: InvoiceShare = {
       id: 'share-1',
       invoice_id: 'inv-1',
-      share_customer_id: 'cust-2',
-      share_customer_name: 'Jones Farm',
+      customer_id: 'cust-2',
+      customer_name: 'Jones Farm',
       split_percentage: 50,
       acres: 50,
       amount_cents: 25000,
+      is_primary: false,
+      sort_order: 0,
       price_per_acre_cents: 500,
       pricing_note: '50/50 split',
+      created_at: '',
     };
     const doc = await generateStatementPdf(makeStatementData({
       mode: 'detailed',
@@ -230,7 +233,7 @@ describe('generateStatementPdf', () => {
   it('respects statement options', async () => {
     const doc = await generateStatementPdf(
       makeStatementData({ mode: 'detailed' }),
-      { mode: 'summary', show_shares: false },
+      { mode: 'summary', show_shares: false, as_of_date: '2026-03-15' },
     );
     expect(doc).toBe(mockDoc);
   });

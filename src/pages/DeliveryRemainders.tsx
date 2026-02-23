@@ -74,7 +74,7 @@ export default function DeliveryRemainders() {
       product_name: r.product?.product_name || 'Unknown',
       original_delivery_number: r.original_delivery?.delivery_number || '-',
       order_number: r.order?.order_number || null,
-    }));
+    })) as unknown as RemainderRow[];
 
     setRemainders(rows);
     setLoading(false);

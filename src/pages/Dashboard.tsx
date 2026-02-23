@@ -100,7 +100,7 @@ export default function Dashboard() {
         quote_pipeline_value: number;
         inventory_available: number;
         inventory_prebooked: number;
-        upcoming_deliveries: Array<{ id: string; delivery_number: string; scheduled_date: string; status: string; customer: string | null; driver: string | null }>;
+        upcoming_deliveries: Array<{ id: string; delivery_number: string; scheduled_date: string; status: string; customer: string | { farm_name: string } | null; driver: string | { full_name: string } | null }>;
         recent_activity: Array<{ id: string; event_type: string; description: string; created_at: string }>;
         top_customers: Array<{ farm_name: string; total: number }>;
         monthly_revenue: Array<{ month: string; revenue: number; profit: number }>;
@@ -130,8 +130,8 @@ export default function Dashboard() {
           delivery_number: del.delivery_number,
           scheduled_date: del.scheduled_date,
           status: del.status,
-          customer: del.customer || null,
-          driver: del.driver || null,
+          customer: typeof del.customer === 'string' ? { farm_name: del.customer } : del.customer || null,
+          driver: typeof del.driver === 'string' ? { full_name: del.driver } : del.driver || null,
         })),
         recentActivity: (d.recent_activity || []).map((act) => ({
           id: act.id,
@@ -165,10 +165,10 @@ export default function Dashboard() {
     runPeriodicNotificationChecks();
 
     // T4: Check for delivery remainders pending 7+ / 14+ days (fire-and-forget)
-    supabase.rpc('check_remainder_reminders').then(() => {}).catch(() => {});
+    void supabase.rpc('check_remainder_reminders');
 
     // A2.7: Clean up holds from expired quotes (fire-and-forget)
-    supabase.rpc('release_expired_quote_holds').then(() => {}).catch(() => {});
+    void supabase.rpc('release_expired_quote_holds');
   };
 
   const fmt = (n: number) =>

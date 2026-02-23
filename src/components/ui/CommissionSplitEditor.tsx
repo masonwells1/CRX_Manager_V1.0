@@ -35,7 +35,7 @@ export default function CommissionSplitEditor({
       if (field === 'percentage') {
         return { ...s, percentage: typeof val === 'string' ? parseFloat(val) || 0 : val };
       }
-      return { ...s, [field]: val };
+      return { ...s, [field]: String(val) };
     });
     onChange({ splits: updated });
   };

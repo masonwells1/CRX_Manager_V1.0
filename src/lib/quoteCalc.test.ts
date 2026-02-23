@@ -25,6 +25,8 @@ function makeProduct(overrides?: Partial<Product>): Product {
     container_size: null,
     unit_size: null,
     epa_registration: null,
+    is_rup: false,
+    signal_word: null,
     product_form: 'liquid',
     inventory_unit: 'Gallon',
     container_unit: null,

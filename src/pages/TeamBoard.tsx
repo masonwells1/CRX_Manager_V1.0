@@ -163,7 +163,7 @@ export default function TeamBoard() {
 
       // Build lookup maps
       const tagMap: Record<string, Array<{ id: string; name: string; color: string }>> = {};
-      (allTagLinks || []).forEach((link: { note_id: string; note_tags: { id: string; name: string; color: string } | null }) => {
+      ((allTagLinks || []) as unknown as Array<{ note_id: string; note_tags: { id: string; name: string; color: string } | null }>).forEach((link) => {
         if (!link.note_tags) return;
         if (!tagMap[link.note_id]) tagMap[link.note_id] = [];
         tagMap[link.note_id].push(link.note_tags);
@@ -1125,19 +1125,19 @@ export default function TeamBoard() {
                           <span className="font-medium text-crx-green">{a.note_title}</span>
                         </p>
                         {/* Show assignment change details */}
-                        {a.action_type === 'assigned' && a.changes && (
+                        {a.action_type === 'assigned' && a.changes != null ? (
                           <p className="text-xs text-gray-400 mt-0.5">
-                            {a.changes.old_assignee && !a.changes.new_assignee && 'Unassigned'}
-                            {!a.changes.old_assignee && a.changes.new_assignee && `Assigned to new team member`}
-                            {a.changes.old_assignee && a.changes.new_assignee && 'Reassigned to different team member'}
+                            {Boolean((a.changes as Record<string, unknown>).old_assignee) && !((a.changes as Record<string, unknown>).new_assignee) ? 'Unassigned' : null}
+                            {!((a.changes as Record<string, unknown>).old_assignee) && Boolean((a.changes as Record<string, unknown>).new_assignee) ? 'Assigned to new team member' : null}
+                            {Boolean((a.changes as Record<string, unknown>).old_assignee) && Boolean((a.changes as Record<string, unknown>).new_assignee) ? 'Reassigned to different team member' : null}
                           </p>
-                        )}
+                        ) : null}
                         {/* Show comment preview */}
-                        {a.action_type === 'commented' && a.changes?.comment?.content && (
+                        {a.action_type === 'commented' && a.changes != null && ((a.changes as Record<string, unknown>).comment as Record<string, unknown> | undefined)?.content ? (
                           <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">
-                            "{a.changes.comment.content}"
+                            &ldquo;{String(((a.changes as Record<string, unknown>).comment as Record<string, unknown>).content)}&rdquo;
                           </p>
-                        )}
+                        ) : null}
                       </div>
                       <div className="text-xs text-gray-400 shrink-0 text-right">
                         <p>{formatDateTime(a.created_at)}</p>

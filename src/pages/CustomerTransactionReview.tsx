@@ -36,8 +36,7 @@ export default function CustomerTransactionReview() {
       .eq('is_active', true)
       .order('farm_name')
       .limit(500)
-      .then(({ data: rows }) => setCustomers((rows || []) as { id: string; farm_name: string }[]))
-      .catch(() => { /* non-critical: customer dropdown stays empty */ });
+      .then(({ data: rows }) => setCustomers((rows || []) as { id: string; farm_name: string }[]));
   }, []);
 
   useEffect(() => {

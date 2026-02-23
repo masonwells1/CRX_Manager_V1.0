@@ -95,6 +95,8 @@ export interface Customer {
   other_acres: number | null;
   payment_terms: string | null;
   default_commission_split: CommissionSplit | null;
+  credit_limit_cents: number | null;
+  finance_charge_rate: number | null;
   finance_charge_enabled: boolean;
   finance_charge_grace_days: number;
   notes: string | null;
@@ -198,6 +200,7 @@ export interface Order {
   salesman_id: string | null;
   deleted_at: string | null;
   notes: string | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;

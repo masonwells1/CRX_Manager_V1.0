@@ -1,3 +1,4 @@
+// @ts-expect-error no type declarations
 import * as shapefile from 'shapefile';
 import proj4 from 'proj4';
 import area from '@turf/area';
@@ -97,13 +98,13 @@ export function parseGeoJSONFile(jsonText: string): ParseResult {
   // Handle both FeatureCollection and single Feature
   let fc: FeatureCollection;
   if (parsed.type === 'FeatureCollection') {
-    fc = parsed;
+    fc = parsed as unknown as FeatureCollection;
   } else if (parsed.type === 'Feature') {
-    fc = { type: 'FeatureCollection', features: [parsed] };
+    fc = { type: 'FeatureCollection', features: [parsed as unknown as Feature] };
   } else if (parsed.type === 'Polygon' || parsed.type === 'MultiPolygon') {
     fc = {
       type: 'FeatureCollection',
-      features: [{ type: 'Feature', properties: {}, geometry: parsed }],
+      features: [{ type: 'Feature', properties: {}, geometry: parsed as unknown as Geometry }],
     };
   } else {
     throw new Error(
@@ -140,6 +141,7 @@ export async function parseKMLFile(kmlText: string): Promise<ParseResult> {
   const warnings: string[] = [];
 
   // Dynamic import to avoid bundling if unused
+  // @ts-expect-error no type declarations
   const togeojson = await import('@mapbox/togeojson');
   const kml = togeojson.kml;
 

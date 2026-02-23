@@ -323,14 +323,14 @@ describe('A2.5: Quick delivery tier pricing', () => {
 
   it('selects tier 2 price for tier 2 customer', () => {
     const product = { tier1_price: 10, tier2_price: 8, tier3_price: 6 };
-    const tier = 2;
+    const tier: number = 2;
     const price = tier === 1 ? product.tier1_price : tier === 2 ? product.tier2_price : product.tier3_price;
     expect(price).toBe(8);
   });
 
   it('selects tier 3 price for tier 3 customer', () => {
     const product = { tier1_price: 10, tier2_price: 8, tier3_price: 6 };
-    const tier = 3;
+    const tier: number = 3;
     const price = tier === 1 ? product.tier1_price : tier === 2 ? product.tier2_price : product.tier3_price;
     expect(price).toBe(6);
   });

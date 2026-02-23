@@ -109,13 +109,13 @@ export default function Jobs() {
       return;
     }
 
-    const rows: JobRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; applicator?: { full_name?: string }; vehicle?: { vehicle_name?: string } }>).map((j) => ({
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; applicator?: { full_name?: string }; vehicle?: { vehicle_name?: string }; job_fields?: unknown[] }>).map((j) => ({
       ...j,
       customer_name: j.customer?.farm_name || 'Unknown',
       applicator_name: j.applicator?.full_name || '-',
       vehicle_name: j.vehicle?.vehicle_name || '-',
       field_count: Array.isArray(j.job_fields) ? j.job_fields.length : 0,
-    }));
+    })) as unknown as JobRow[];
     setJobs(rows);
     setLoading(false);
   };

@@ -104,13 +104,13 @@ export default function Returns() {
       return;
     }
 
-    const rows: ReturnRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requester?: { full_name: string }; items?: unknown[] }>).map((r) => ({
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requester?: { full_name: string }; items?: unknown[] }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       order_number: r.order?.order_number || null,
       requester_name: r.requester?.full_name || 'Unknown',
       item_count: r.items?.length || 0,
-    }));
+    })) as unknown as ReturnRow[];
     setReturns(rows);
     setLoading(false);
   };

@@ -86,7 +86,7 @@ export default function Payments() {
       return;
     }
 
-    const mapped = (orders || []).map((o: { id: string; order_number: string; customer_id: string; customer?: { farm_name: string }; total_price: number; total_paid: number; balance_due: number; order_date: string; status: string }) => ({
+    const mapped = ((orders || []) as unknown as Array<{ id: string; order_number: string; customer_id: string; customer?: { farm_name: string }; total_price: number; total_paid: number; balance_due: number; order_date: string; status: string }>).map((o) => ({
       id: o.id,
       order_number: o.order_number,
       customer_id: o.customer_id,
@@ -114,7 +114,7 @@ export default function Payments() {
       ...p,
       order_number: p.order?.order_number || '',
       farm_name: p.order?.customer?.farm_name || '',
-    }));
+    })) as unknown as Payment[];
     setPayments(payMapped);
     setLoading(false);
   };

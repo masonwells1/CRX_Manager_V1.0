@@ -147,7 +147,7 @@ export default function Reports() {
       .then(({ data: rows }) => {
         setProductOptions((rows || []).map((r) => ({ id: r.id, name: r.product_name })));
       })
-      .catch(() => { /* non-critical: product filter dropdown stays empty */ });
+      ; // non-critical: product filter dropdown stays empty on error
   }, []);
 
   // ─── Fetch on tab/date change ───────────────────────────────
@@ -337,7 +337,7 @@ export default function Reports() {
     if (endDate) query = query.lte('application_date', endDate);
     const { data, error } = await query;
     if (error) { toast('error', 'Failed to load posted applications.'); return; }
-    setPostedAppsData((data || []).map((r: Record<string, unknown> & { customer?: { farm_name?: string }; field?: { field_name?: string }; applicator?: { full_name?: string } }) => ({
+    setPostedAppsData(((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; field?: { field_name?: string }; applicator?: { full_name?: string } }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       field_name: r.field?.field_name || '-',
@@ -350,7 +350,7 @@ export default function Reports() {
     if (category === 'year_end' && yeCustomerOptions.length === 0) {
       supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(1000)
         .then(({ data }) => setYeCustomerOptions((data || []).map((r) => ({ id: r.id, name: r.farm_name }))))
-        .catch(() => { /* non-critical: customer dropdown stays empty */ });
+        ; // non-critical: customer dropdown stays empty on error
     }
   }, [category]);
 

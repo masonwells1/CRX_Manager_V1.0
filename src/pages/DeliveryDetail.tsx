@@ -873,7 +873,7 @@ export default function DeliveryDetail() {
             id: i.id,
             product_name: (i.product as unknown as { product_name: string })?.product_name,
             quantity: i.quantity,
-            unit_size: i.unit_size,
+            unit_size: i.unit_size ?? undefined,
           }))}
           loading={confirming}
         />
@@ -1456,7 +1456,7 @@ export default function DeliveryDetail() {
           id: i.id,
           product_name: (i.product as unknown as { product_name: string })?.product_name,
           quantity: i.quantity,
-          unit_size: i.unit_size,
+          unit_size: i.unit_size ?? undefined,
         }))}
         loading={confirming}
       />

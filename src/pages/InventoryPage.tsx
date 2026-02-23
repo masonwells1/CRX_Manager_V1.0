@@ -421,7 +421,7 @@ export default function InventoryPage() {
       .in('purchase_orders.status', ['draft', 'submitted', 'partially_received']);
 
     if (!error && data) {
-      const pos = data.map((item: { id: string; quantity_ordered: number; quantity_received: number; unit_cost: number; unit_size: string | null; product_id: string; purchase_order_id: string; purchase_orders: { po_number: string; status: string } }) => ({
+      const pos = (data as unknown as Array<{ id: string; quantity_ordered: number; quantity_received: number; unit_cost: number; unit_size: string | null; product_id: string; purchase_order_id: string; purchase_orders: { po_number: string; status: string } }>).map((item) => ({
         id: item.id,
         po_number: item.purchase_orders.po_number,
         ordered: item.quantity_ordered,
@@ -620,7 +620,7 @@ export default function InventoryPage() {
       const realChanges = [...changes.keys()].filter((k) => !k.startsWith('virtual-')).length;
       toast('success', `Updated ${realChanges} inventory item(s)`);
       if (profile) {
-        logActivity('inventory_bulk_updated', `${realChanges} inventory item(s) updated via inline edit`, profile.id, 'inventory', null);
+        logActivity('inventory_bulk_updated', `${realChanges} inventory item(s) updated via inline edit`, profile.id, 'inventory', undefined);
       }
       fetchInventory();
     } catch (err: unknown) {

@@ -62,7 +62,7 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
 
     if (data) {
       const tags = data.map((d: Record<string, unknown>) => d.note_tags).filter(Boolean);
-      setNoteTags(tags);
+      setNoteTags(tags as NoteTag[]);
     }
   };
 

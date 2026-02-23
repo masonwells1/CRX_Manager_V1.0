@@ -446,8 +446,8 @@ export default function JobDetail() {
       const p = allProducts.find(ap => ap.id === value);
       updated[i].product_name = p?.product_name || '';
       if (p) {
-        updated[i].unit = p.unit || '';
-        updated[i].cost_per_unit_cents = ((p.cost_per_unit || 0) * 100).toFixed(0);
+        updated[i].unit = p.unit_size || '';
+        updated[i].cost_per_unit_cents = ((p.current_cost || 0) * 100).toFixed(0);
       }
     }
     setChemRows(updated);
@@ -468,7 +468,11 @@ export default function JobDetail() {
 
   return (
     <div className="space-y-6">
-      {blocker.isBlocked && <UnsavedChangesModal blocker={blocker} />}
+      <UnsavedChangesModal
+        open={blocker.state === 'blocked'}
+        onStay={() => blocker.reset?.()}
+        onLeave={() => blocker.proceed?.()}
+      />
 
       {/* Header */}
       <div className="flex items-center gap-4">

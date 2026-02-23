@@ -158,7 +158,7 @@ export function BlendTicketDetail() {
       setProducts(productsResult.data || []);
       setAllProducts(allProductsResult.data || []);
       setCustomers(customersResult.data || []);
-      setFields(fieldsResult.data || []);
+      setFields((fieldsResult.data || []) as Field[]);
       setLinkedOrders(linkedResult.data || []);
 
       setFormData({

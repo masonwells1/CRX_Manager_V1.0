@@ -203,9 +203,9 @@ describe('EditableDataTable', () => {
       fireEvent.click(screen.getByText('Price'));
       const rows = container.querySelectorAll('tbody tr');
       // ascending: 500, 1000, 2500
-      expect(within(rows[0]).getByText('500')).toBeInTheDocument();
-      expect(within(rows[1]).getByText('1000')).toBeInTheDocument();
-      expect(within(rows[2]).getByText('2500')).toBeInTheDocument();
+      expect(within(rows[0] as HTMLElement).getByText('500')).toBeInTheDocument();
+      expect(within(rows[1] as HTMLElement).getByText('1000')).toBeInTheDocument();
+      expect(within(rows[2] as HTMLElement).getByText('2500')).toBeInTheDocument();
     });
 
     it('null values sort to end', () => {
@@ -223,7 +223,7 @@ describe('EditableDataTable', () => {
       expect(rows[0]).toHaveTextContent('Alpha');
       expect(rows[1]).toHaveTextContent('Beta');
       // Last row has the null name (rendered as '-')
-      expect(within(rows[2]).getByText('-')).toBeInTheDocument();
+      expect(within(rows[2] as HTMLElement).getByText('-')).toBeInTheDocument();
     });
   });
 
