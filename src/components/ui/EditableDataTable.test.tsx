@@ -4,7 +4,7 @@ import EditableDataTable from './EditableDataTable';
 import type { EditableColumn } from './EditableDataTable';
 
 // ── Test data fixtures ──────────────────────────────────────────────
-interface TestProduct {
+interface TestProduct extends Record<string, unknown> {
   id: string;
   name: string;
   price: number;
