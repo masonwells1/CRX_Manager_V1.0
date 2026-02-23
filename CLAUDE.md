@@ -31,6 +31,11 @@
 8. **Use the Supabase client from `src/lib/db.ts`** -- never create additional clients
 9. **Activity logging:** Call `logActivity()` from `src/lib/activityLogger.ts` for important user actions
 10. **Idempotency:** Use `generateIdempotencyKey()` for critical write operations (order creation, delivery completion, etc.)
+11. **Keep docs accurate** -- When adding/changing features, update these files before committing:
+    - `CLAUDE.md` → Current State (page/test/migration counts), Feature Inventory table, Pages table, Database Tables, RPC list, Edge Functions, Documentation Index
+    - `README.md` → Features section, Current State stats
+    - `TESTING.md` → Quick Facts (test counts), "What Unit Tests Cover" list (if adding test files)
+    - `DEPLOYMENT.md` → Environment variables (if adding new env vars), Edge Function list (if adding functions)
 
 ---
 
