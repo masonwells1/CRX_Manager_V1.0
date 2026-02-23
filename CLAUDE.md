@@ -14,10 +14,11 @@
 - **77 migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
 - **ESLint:** 0 errors (fully lint-clean as of 2026-02-23)
-- **Latest commit:** `af90ebf` on main (pushed) — update this after each commit
+- **TypeScript:** 0 strict type errors (enforced in CI — blocks on failure)
+- **Latest commit:** `6a98a92` on main (pushed) — update this after each commit
 - **T3-002 test coverage:** Phases 1-5 COMPLETE (see Development History)
 - **Pre-commit hook:** `npm run lint` + `npm run build` + `npx vitest run` run automatically before every commit
-- **GitHub CI:** ESLint → TypeScript (non-blocking) → Vitest → Build — [status badge](https://github.com/masonwells1/CRX_Manager_V1.0/actions/workflows/ci.yml) ✅ green
+- **GitHub CI:** ESLint → TypeScript → Vitest → Build — [status badge](https://github.com/masonwells1/CRX_Manager_V1.0/actions/workflows/ci.yml) ✅ green (all steps blocking)
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
 - **Supabase Project ID:** `rhyzpcqhnizqbxphqdkr`
 
@@ -62,7 +63,7 @@ These are critical rules that protect the app's integrity. **Never bypass, weake
 ### Code Quality
 - **NEVER remove the pre-commit hook** — it runs `npm run lint` + `npm run build` + `npm test` and blocks broken commits.
 - **NEVER commit with `--no-verify`** — the pre-commit hook exists for a reason.
-- **NEVER add `@ts-ignore` or `any` types** — the codebase is fully typed (0 ESLint errors). Keep it that way.
+- **NEVER add `@ts-ignore` or `any` types** — the codebase is fully typed (0 ESLint errors, 0 TypeScript errors). The only `as any` exception is `reportPdf.ts` columnStyles (jspdf-autotable type limitation, has eslint-disable comment). Keep it that way.
 - **NEVER install additional CSS frameworks** — Tailwind CSS only. Brand color is `crx-green` (#28A26A).
 - **NEVER install additional icon libraries** — Lucide React only.
 - **NEVER create a second Supabase client** — use the one from `src/lib/db.ts`.
@@ -869,6 +870,9 @@ Test every feature as each role:
 - `npx vitest run` for 766 unit tests (pre-commit hook runs this automatically)
 - `npx tsc --noEmit` for type checking only
 - `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI test environments (unit tests mock Supabase)
+- **TypeScript is strict-clean (0 errors)** — CI enforces `npx tsc --noEmit` as a blocking step
+- Supabase join inference: joined FK tables infer as arrays — use `as unknown as TargetType[]` double cast pattern
+- JSX `&&` chains with `unknown` values: use ternary `cond ? <JSX/> : null` instead of `unknownValue && <JSX/>`
 - Known warning: vendor-mapbox chunk is ~1,680KB (>500KB limit) — Mapbox is large, this is expected
 - react-map-gl v8: import from `'react-map-gl/mapbox'`, NOT bare `'react-map-gl'`
 - react-map-gl can't go in Vite manualChunks — only put `mapbox-gl`
@@ -909,6 +913,7 @@ Test every feature as each role:
 | — | OCR Parser Overhaul & Edge Function v4 (multi-line fields, look-behind values) | Feb 17 |
 | — | Safety Audit & Business Logic Hardening (page permissions, notifications, E2E) | Feb 28-Mar 3 |
 | — | Quick Receive Feature (vendor+product receiving without PO numbers) | Mar 4 |
+| — | TypeScript Strict Cleanup: 148 → 0 errors (Supabase join casts, jsPDF types, GeoJSON, ReactNode chains) | Feb 23 |
 
 ---
 
