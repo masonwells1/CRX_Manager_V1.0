@@ -9,7 +9,7 @@
 
 ## Current State (as of 2026-02-23)
 - **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import + Safety Audit + Quick Receive + Codebase Audit + Lint Cleanup
-- **Deployed to:** Vercel (private preview/staging)
+- **Deployed to:** Vercel → **https://croprxsolutions.app** (live)
 - **Test coverage:** 766 unit tests (Vitest, 45 test files) + 31 Playwright E2E spec files
 - **77 migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
@@ -111,7 +111,7 @@ Use this table to check **"does this feature already exist?"** before building a
 - **Backend:** Supabase (PostgreSQL + Auth + Edge Functions + Realtime + Storage)
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
 - **Testing:** Vitest (766 unit tests, 45 files) + Playwright (31 E2E spec files in `tests/e2e/`)
-- **Deployment:** Vercel (private preview/staging), configured via `vercel.json`
+- **Deployment:** Vercel → https://croprxsolutions.app (live), configured via `vercel.json`
 - **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid + @turf/bbox
 - **Geo Import:** shapefile (parse .shp/.dbf/.shx), proj4 (coordinate reprojection), togeojson-with-extended-style (KML→GeoJSON)
 - **PDF Generation:** jsPDF + jspdf-autotable (client-side)
@@ -673,7 +673,7 @@ See `.env.example` for template. Never commit `.env`.
 SUPABASE_URL          # Auto-set by Supabase
 SUPABASE_ANON_KEY     # Auto-set by Supabase
 SUPABASE_SERVICE_ROLE_KEY  # Auto-set by Supabase
-ALLOWED_ORIGIN        # REQUIRED for production CORS (e.g. https://your-domain.com)
+ALLOWED_ORIGIN        # REQUIRED for production CORS — set to https://croprxsolutions.app
 SEED_ADMIN_SECRET     # Required for seed-admin function only
 ```
 
@@ -803,7 +803,7 @@ Test every feature as each role:
 
 ### CORS in Production
 - All 3 edge functions default to `http://localhost:5173` for CORS
-- Set `ALLOWED_ORIGIN` secret in Supabase: `supabase secrets set ALLOWED_ORIGIN=https://your-domain.com`
+- Set `ALLOWED_ORIGIN` secret in Supabase: `supabase secrets set ALLOWED_ORIGIN=https://croprxsolutions.app`
 - Without this, edge function calls will fail with CORS errors in production
 
 ### Offline Support

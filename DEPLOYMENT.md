@@ -131,8 +131,8 @@ VITE_SENTRY_DSN=https://your-sentry-dsn (optional)
 | Environment | Purpose | Database | URL |
 |------------|---------|----------|-----|
 | **Local** | Development | Local Supabase | localhost:5173 |
-| **Staging** | Pre-release testing | Staging Supabase | staging.yourapp.com |
-| **Production** | Live application | Production Supabase | yourapp.com |
+| **Staging** | Pre-release testing | Staging Supabase | Vercel preview deployments |
+| **Production** | Live application | Production Supabase | croprxsolutions.app |
 
 ---
 
@@ -172,7 +172,7 @@ Edge Functions (`create-user`, `process-blend-ticket`, `process-document`) will 
 
 | Secret | Purpose | How to set |
 |--------|---------|------------|
-| `ALLOWED_ORIGIN` | CORS origin for Edge Function responses. Must match your production URL (e.g., `https://app.croprxsolutions.com`). | `npx supabase secrets set ALLOWED_ORIGIN=https://your-domain.com --project-ref <ref>` |
+| `ALLOWED_ORIGIN` | CORS origin for Edge Function responses. Must exactly match `https://croprxsolutions.app` (no trailing slash). | `npx supabase secrets set ALLOWED_ORIGIN=https://croprxsolutions.app --project-ref rhyzpcqhnizqbxphqdkr` |
 | `SUPABASE_SERVICE_ROLE_KEY` | Needed by `create-user` to create auth users. Already set by default on hosted Supabase. | Auto-provisioned; verify in Dashboard → Settings → Edge Functions → Environment Variables. |
 | `GOOGLE_VISION_API_KEY` | Used by `process-blend-ticket` for OCR. | `npx supabase secrets set GOOGLE_VISION_API_KEY=<key> --project-ref <ref>` |
 

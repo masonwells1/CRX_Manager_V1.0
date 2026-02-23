@@ -8,7 +8,7 @@ Business management system for **Crop RX Solutions**, an agricultural chemical d
 - **Backend:** Supabase (PostgreSQL, Auth, Storage, Realtime, Edge Functions)
 - **Maps:** Mapbox GL JS + react-map-gl (satellite field mapping with draw tools)
 - **Testing:** Vitest (unit) + Playwright (E2E)
-- **Deployment:** Vercel (private staging)
+- **Deployment:** Vercel → [croprxsolutions.app](https://croprxsolutions.app)
 - **Other:** jsPDF (PDF generation), Google Vision AI (OCR), proj4/shapefile (GIS import), Sentry (error tracking), Lucide React (icons)
 
 ## Quick Start
@@ -112,7 +112,7 @@ See [CLAUDE.md](./CLAUDE.md) for the complete table list, RLS policy matrix, and
 
 ## Deployment
 
-Deployed to **Vercel** (private staging). Configuration in `vercel.json` with security headers.
+Deployed to **Vercel** at [croprxsolutions.app](https://croprxsolutions.app). Configuration in `vercel.json` with security headers.
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environment setup, and rollback procedures.
 
@@ -132,7 +132,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environme
 - **72+ database tables**, ~110 RPC functions, 77 migrations
 - **0 ESLint errors**, 0 TypeScript errors
 - **Pre-commit hook** blocks commits if build or tests fail
-- **Deployed to Vercel** (private staging — not shared publicly yet)
+- **Deployed to Vercel** at [croprxsolutions.app](https://croprxsolutions.app) (live)
 - All hardening sprints (0-20) + safety audit + codebase audit: **Complete**
 
 ## License
