@@ -98,6 +98,7 @@ export default function InvoiceDetail() {
   // Void modal
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState('');
+  const [voiding, setVoiding] = useState(false);
 
   // Payment modal
   const [showPayModal, setShowPayModal] = useState(false);
@@ -105,6 +106,10 @@ export default function InvoiceDetail() {
   const [payMethod, setPayMethod] = useState('check');
   const [payRef, setPayRef] = useState('');
   const [payNotes, setPayNotes] = useState('');
+  const [payingInvoice, setPayingInvoice] = useState(false);
+
+  // Post loading
+  const [posting, setPosting] = useState(false);
 
   // Fetch reference data
   useEffect(() => {
@@ -311,6 +316,7 @@ export default function InvoiceDetail() {
 
   // Post invoice
   const handlePost = async () => {
+    setPosting(true);
     try {
       const idemKey = generateIdempotencyKey('post_invoice', profile!.id);
       const { error } = await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey });
@@ -320,10 +326,12 @@ export default function InvoiceDetail() {
     } catch (err: any) {
       toast('error', sanitizeError(err));
     }
+    setPosting(false);
   };
 
   // Void invoice
   const handleVoid = async () => {
+    setVoiding(true);
     try {
       const idemKey = generateIdempotencyKey('void_invoice', profile!.id);
       const { error } = await supabase.rpc('void_invoice', {
@@ -338,6 +346,7 @@ export default function InvoiceDetail() {
     } catch (err: any) {
       toast('error', sanitizeError(err));
     }
+    setVoiding(false);
   };
 
   // Record payment
@@ -347,6 +356,7 @@ export default function InvoiceDetail() {
       toast('error', 'Enter a valid payment amount');
       return;
     }
+    setPayingInvoice(true);
     try {
       const idemKey = generateIdempotencyKey('record_invoice_payment', profile!.id);
       const { error } = await supabase.rpc('record_invoice_payment', {
@@ -367,6 +377,7 @@ export default function InvoiceDetail() {
     } catch (err: any) {
       toast('error', sanitizeError(err));
     }
+    setPayingInvoice(false);
   };
 
   // Print invoice PDF
@@ -503,7 +514,7 @@ export default function InvoiceDetail() {
             </Button>
           )}
           {!isNew && editable && isAdmin && (
-            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={handlePost}>
+            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={handlePost} loading={posting}>
               Post
             </Button>
           )}
@@ -885,7 +896,7 @@ export default function InvoiceDetail() {
           />
           <div className="flex justify-end gap-3">
             <Button variant="ghost" onClick={() => setShowVoidModal(false)}>Cancel</Button>
-            <Button variant="primary" onClick={handleVoid}>
+            <Button variant="primary" onClick={handleVoid} loading={voiding}>
               Void Invoice
             </Button>
           </div>
@@ -921,7 +932,7 @@ export default function InvoiceDetail() {
           <Input label="Notes (optional)" value={payNotes} onChange={(e) => setPayNotes(e.target.value)} />
           <div className="flex justify-end gap-3">
             <Button variant="ghost" onClick={() => setShowPayModal(false)}>Cancel</Button>
-            <Button onClick={handlePayment}>Record Payment</Button>
+            <Button onClick={handlePayment} loading={payingInvoice}>Record Payment</Button>
           </div>
         </div>
       </Modal>

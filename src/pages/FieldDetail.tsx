@@ -112,7 +112,10 @@ export default function FieldDetail() {
       setOwnerName(cust?.farm_name || '');
 
       // Fetch GeoJSON for map display
-      const { data: geoData } = await supabase.rpc('get_field_geojson', { p_field_id: id });
+      const { data: geoData, error: geoError } = await supabase.rpc('get_field_geojson', { p_field_id: id });
+      if (geoError) {
+        console.error('Failed to load field geometry:', geoError);
+      }
       if (geoData && geoData.length > 0) {
         const geo = geoData[0];
         if (geo.boundary_geojson) {
@@ -265,11 +268,15 @@ export default function FieldDetail() {
           const centroidGeoJSON = JSON.stringify(centroidResult.geometry);
           const boundaryGeoJSONStr = JSON.stringify(boundaryGeoJSON.geometry);
 
-          await supabase.rpc('save_field_geometry', {
+          const { error: geoError } = await supabase.rpc('save_field_geometry', {
             p_field_id: savedFieldId,
             p_centroid_geojson: centroidGeoJSON,
             p_boundary_geojson: boundaryGeoJSONStr,
           });
+          if (geoError) {
+            console.error('Geometry save error:', geoError);
+            toast('error', 'Field saved but boundary could not be saved. Please try re-drawing.');
+          }
         }
 
         setIsDirty(false);

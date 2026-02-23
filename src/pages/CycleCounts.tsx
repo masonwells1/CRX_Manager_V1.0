@@ -106,8 +106,10 @@ export default function CycleCounts() {
     if (!profile) return;
     setCreating(true);
     try {
-      // Generate count number
-      const countNum = `CC-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`;
+      // Generate sequential count number via advisory-lock RPC
+      const { data: countNumData, error: countNumError } = await supabase.rpc('next_cycle_count_number');
+      if (countNumError) throw countNumError;
+      const countNum = countNumData as string;
 
       // Fetch inventory items for the selected warehouse
       const { data: invData, error: invError } = await supabase

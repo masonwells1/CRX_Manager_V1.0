@@ -384,6 +384,10 @@ export default function InventoryPage() {
       return;
     }
     const qty = parseInt(addQty) || 0;
+    if (qty <= 0) {
+      toast('error', 'Quantity must be greater than 0');
+      return;
+    }
     setAdding(true);
 
     const { data, error } = await supabase.rpc('manual_inventory_add', {

@@ -133,18 +133,23 @@ export default function Invoices() {
     }
 
     setPosting(true);
-    const postKey = generateIdempotencyKey('batch_post_invoices', profile!.id);
-    const { data, error } = await supabase.rpc('batch_post_invoices', {
-      p_invoice_ids: ids,
-      p_idempotency_key: postKey,
-    });
-    if (error) {
-      console.error('Batch post failed:', error.message);
-      toast('error', sanitizeError(error));
-    } else {
-      toast('success', `Posted ${data} invoice(s)`);
-      setSelected(new Set());
-      fetchInvoices();
+    try {
+      const postKey = generateIdempotencyKey('batch_post_invoices', profile!.id);
+      const { data, error } = await supabase.rpc('batch_post_invoices', {
+        p_invoice_ids: ids,
+        p_idempotency_key: postKey,
+      });
+      if (error) {
+        console.error('Batch post failed:', error.message);
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Posted ${data} invoice(s)`);
+        setSelected(new Set());
+        fetchInvoices();
+      }
+    } catch (err: any) {
+      console.error('Batch post error:', err);
+      toast('error', sanitizeError(err));
     }
     setPosting(false);
   };

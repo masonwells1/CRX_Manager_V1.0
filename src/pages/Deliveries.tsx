@@ -293,20 +293,25 @@ export default function Deliveries() {
       return;
     }
     setCancelling(true);
-    const cancelKey = generateIdempotencyKey('batch_cancel_deliveries', profile?.id || '');
-    const { data, error } = await supabase.rpc('batch_cancel_deliveries', {
-      p_delivery_ids: ids,
-      p_cancel_reason: reason,
-      p_performed_by: profile?.id,
-      p_idempotency_key: cancelKey,
-    });
-    if (error) {
-      console.error('Batch cancel failed:', error.message);
-      toast('error', sanitizeError(error));
-    } else {
-      toast('success', `Cancelled ${data} delivery(ies)`);
-      setSelected(new Set());
-      fetchDeliveries();
+    try {
+      const cancelKey = generateIdempotencyKey('batch_cancel_deliveries', profile?.id || '');
+      const { data, error } = await supabase.rpc('batch_cancel_deliveries', {
+        p_delivery_ids: ids,
+        p_cancel_reason: reason,
+        p_performed_by: profile?.id,
+        p_idempotency_key: cancelKey,
+      });
+      if (error) {
+        console.error('Batch cancel failed:', error.message);
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Cancelled ${data} delivery(ies)`);
+        setSelected(new Set());
+        fetchDeliveries();
+      }
+    } catch (err: any) {
+      console.error('Batch cancel error:', err);
+      toast('error', sanitizeError(err));
     }
     setShowCancelModal(false);
     setCancelling(false);
@@ -369,22 +374,27 @@ export default function Deliveries() {
       return;
     }
     setRescheduling(true);
-    const ids = selectedCancellable.map((d) => d.id);
-    const rescheduleKey = generateIdempotencyKey('batch_reschedule_deliveries', profile?.id || '');
-    const { error } = await supabase.rpc('batch_reschedule_deliveries', {
-      p_delivery_ids: ids,
-      p_new_date: rescheduleDate,
-      p_performed_by: profile?.id,
-      p_idempotency_key: rescheduleKey,
-    });
-    if (error) {
-      toast('error', sanitizeError(error));
-    } else {
-      toast('success', `Rescheduled ${ids.length} delivery(ies) to ${new Date(rescheduleDate).toLocaleDateString()}`);
-      setSelected(new Set());
-      setShowReschedule(false);
-      setRescheduleDate('');
-      fetchDeliveries();
+    try {
+      const ids = selectedCancellable.map((d) => d.id);
+      const rescheduleKey = generateIdempotencyKey('batch_reschedule_deliveries', profile?.id || '');
+      const { error } = await supabase.rpc('batch_reschedule_deliveries', {
+        p_delivery_ids: ids,
+        p_new_date: rescheduleDate,
+        p_performed_by: profile?.id,
+        p_idempotency_key: rescheduleKey,
+      });
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Rescheduled ${ids.length} delivery(ies) to ${new Date(rescheduleDate).toLocaleDateString()}`);
+        setSelected(new Set());
+        setShowReschedule(false);
+        setRescheduleDate('');
+        fetchDeliveries();
+      }
+    } catch (err: any) {
+      console.error('Batch reschedule error:', err);
+      toast('error', sanitizeError(err));
     }
     setRescheduling(false);
   };
@@ -400,18 +410,23 @@ export default function Deliveries() {
     const myCompleted = deliveries.filter((d) => d.status === 'completed').slice(0, 10);
 
     const handleTakeDelivery = async (deliveryId: string) => {
-      const reassignKey = generateIdempotencyKey('reassign_delivery', profile?.id || '');
-      const { error } = await supabase.rpc('reassign_delivery', {
-        p_delivery_id: deliveryId,
-        p_new_driver: profile?.id,
-        p_performed_by: profile?.id,
-        p_idempotency_key: reassignKey,
-      });
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', 'Delivery assigned to you');
-        fetchDeliveries();
+      try {
+        const reassignKey = generateIdempotencyKey('reassign_delivery', profile?.id || '');
+        const { error } = await supabase.rpc('reassign_delivery', {
+          p_delivery_id: deliveryId,
+          p_new_driver: profile?.id,
+          p_performed_by: profile?.id,
+          p_idempotency_key: reassignKey,
+        });
+        if (error) {
+          toast('error', sanitizeError(error));
+        } else {
+          toast('success', 'Delivery assigned to you');
+          fetchDeliveries();
+        }
+      } catch (err: any) {
+        console.error('Take delivery error:', err);
+        toast('error', sanitizeError(err));
       }
     };
 

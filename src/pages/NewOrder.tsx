@@ -177,6 +177,11 @@ export default function NewOrder() {
       if (error) throw error;
 
       const orderId = (data as any)?.order_id;
+      if (!orderId) {
+        toast('error', 'Order creation failed — no order ID returned');
+        setSaving(false);
+        return;
+      }
       toast('success', 'Order created successfully');
 
       // Phase 3.3: Credit limit check — warn (not block) if exceeded

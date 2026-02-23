@@ -122,7 +122,8 @@ export default function CustomerDetail() {
   const fetchTabData = async (selectedTab: string) => {
     setTabLoading(true);
     if (selectedTab === 'fields') {
-      const { data } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
+      const { data, error: fieldError } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
+      if (fieldError) console.error('Failed to load fields:', fieldError);
       const rows = ((data || []) as any[]).map((f: any) => ({
         ...f,
         customer_name: f.customer_name || '',
