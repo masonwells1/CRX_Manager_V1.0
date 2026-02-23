@@ -14,7 +14,7 @@
 - **77 migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
 - **ESLint:** 0 errors (fully lint-clean as of 2026-02-23)
-- **Latest commit:** `22f9c86` on main (pushed)
+- **Latest commit:** `2acd8df` on main (pushed) — update this after each commit
 - **T3-002 test coverage:** Phases 1-5 COMPLETE (see Development History)
 - **Pre-commit hook:** `npm run build` + `npx vitest run` run automatically before every commit
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
@@ -805,6 +805,12 @@ Test every feature as each role:
 - All 3 edge functions default to `http://localhost:5173` for CORS
 - Set `ALLOWED_ORIGIN` secret in Supabase: `supabase secrets set ALLOWED_ORIGIN=https://your-domain.com`
 - Without this, edge function calls will fail with CORS errors in production
+
+### Offline Support
+- **What it does:** When the browser loses connection, critical driver actions (delivery completion) queue in IndexedDB and auto-sync when reconnected.
+- **Key files:** `src/lib/offlineQueue.ts` (IndexedDB queue), `src/lib/offlineSync.ts` (auto-retry on reconnect), `src/hooks/useOnlineStatus.ts` (online/offline detection), `src/components/ui/OfflineBanner.tsx` (yellow banner in AppLayout)
+- **Scope:** Currently used in `DeliveryDetail.tsx` for delivery completion. Other pages do NOT have offline support — they simply show the OfflineBanner and block actions.
+- **Status:** Built and unit-tested, but not heavily battle-tested with real field conditions. Consider this a "safety net" feature, not a full offline-first architecture.
 
 ### Known Limitations
 - OCR processing uses Google Vision AI via Edge Function (requires GOOGLE_VISION_API_KEY secret)
