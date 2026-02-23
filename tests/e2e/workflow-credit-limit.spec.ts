@@ -52,7 +52,7 @@ test.describe('Credit Limit Enforcement', () => {
     // Dashboard should load with integrity alerts section
     const pageText = await page.textContent('body');
     // Look for credit limit related alert text
-    const hasCreditAlert = pageText?.includes('Credit') || pageText?.includes('credit');
+    const _hasCreditAlert = pageText?.includes('Credit') || pageText?.includes('credit');
     // Alert card should be present in dashboard (even if count is 0)
     expect(pageText).toBeTruthy();
   });

@@ -115,14 +115,14 @@ function extractDate(text: string, lines: string[]): string | null {
     }
   }
 
-  const dateMatch = text.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  const dateMatch = text.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
   if (dateMatch) return parseDateString(dateMatch[0]);
 
   return null;
 }
 
 function parseDateString(dateStr: string): string | null {
-  const match = dateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  const match = dateStr.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
   if (!match) return null;
 
   const month = parseInt(match[1], 10);

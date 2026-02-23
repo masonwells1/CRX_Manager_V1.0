@@ -81,7 +81,7 @@ test.describe('Driver Role Permissions', () => {
       await firstRow.click();
       await page.waitForTimeout(2000);
       // Photo section should exist on delivery detail
-      const photoSection = page.locator('text=/photo/i, text=/image/i, input[type="file"]');
+      const _photoSection = page.locator('text=/photo/i, text=/image/i, input[type="file"]');
       // May not always be visible depending on delivery status
       const pageText = await page.textContent('body');
       expect(pageText).toBeTruthy();

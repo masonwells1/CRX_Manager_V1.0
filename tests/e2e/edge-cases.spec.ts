@@ -72,7 +72,7 @@ test.describe('Edge Cases', () => {
       await page.waitForTimeout(2000);
       // Should show a clear status indicator
       const pageText = await page.textContent('body');
-      const hasStatus = pageText?.match(/scheduled|in.progress|completed|cancelled/i);
+      const _hasStatus = pageText?.match(/scheduled|in.progress|completed|cancelled/i);
       expect(pageText).toBeTruthy();
     }
   });
@@ -90,7 +90,7 @@ test.describe('Edge Cases', () => {
       const cancelBtn = page.locator('button:has-text("Cancel Delivery")');
       if (await cancelBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
         // If visible, it should be disabled
-        const isDisabled = await cancelBtn.isDisabled();
+        const _isDisabled = await cancelBtn.isDisabled();
         // Either disabled or not present is acceptable
       }
     }
@@ -108,7 +108,7 @@ test.describe('Edge Cases', () => {
       await expect(page).toHaveURL(/\/invoices\/.+/);
       // Look for void button
       const voidBtn = page.locator('button:has-text("Void")');
-      const isVisible = await voidBtn.isVisible({ timeout: 3000 }).catch(() => false);
+      const _isVisible = await voidBtn.isVisible({ timeout: 3000 }).catch(() => false);
       // If visible, clicking should show confirmation (don't actually void)
       // Just verify page loaded correctly
       const heading = page.locator('h1, h2').first();
@@ -166,7 +166,7 @@ test.describe('Edge Cases', () => {
     await expect(heading).toBeVisible({ timeout: 10000 });
     // Look for import button
     const importBtn = page.locator('button:has-text("Import"), button:has-text("import")');
-    const isVisible = await importBtn.isVisible({ timeout: 3000 }).catch(() => false);
+    const _isVisible = await importBtn.isVisible({ timeout: 3000 }).catch(() => false);
     // Page loaded successfully regardless
     expect(await page.textContent('body')).toBeTruthy();
   });

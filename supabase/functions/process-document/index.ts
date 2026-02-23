@@ -179,7 +179,7 @@ async function ocrAllPages(
 
 function parseDateString(dateStr: string): string | null {
   // Try MM/DD/YYYY or MM-DD-YYYY
-  const match = dateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  const match = dateStr.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})/);
   if (!match) return null;
   const month = parseInt(match[1], 10);
   const day = parseInt(match[2], 10);
@@ -213,8 +213,8 @@ function extractLabelledValue(lines: string[], keywords: string[]): string {
 function extractFirstDate(text: string): string {
   // Try labelled dates first
   const labelPatterns = [
-    /(?:Invoice|PO|Order|Ship|Purchase)\s*Date\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
-    /Date\s*:?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i,
+    /(?:Invoice|PO|Order|Ship|Purchase)\s*Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i,
+    /Date\s*:?\s*(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i,
   ];
   for (const pat of labelPatterns) {
     const m = text.match(pat);
@@ -224,7 +224,7 @@ function extractFirstDate(text: string): string {
     }
   }
   // Fallback: first date found
-  const dateMatch = text.match(/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
+  const dateMatch = text.match(/(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/);
   if (dateMatch) {
     const parsed = parseDateString(dateMatch[1]);
     if (parsed) return parsed;
@@ -302,7 +302,7 @@ interface CustomerRow {
   is_active: boolean;
 }
 
-function fuzzyMatchProduct(name: string, products: ProductRow[]): { product: ProductRow | null; score: number } {
+function _fuzzyMatchProduct(name: string, products: ProductRow[]): { product: ProductRow | null; score: number } {
   const norm = name.toLowerCase().replace(/[^a-z0-9]/g, "");
   let best: ProductRow | null = null;
   let bestScore = 0;
@@ -325,7 +325,7 @@ function fuzzyMatchProduct(name: string, products: ProductRow[]): { product: Pro
   return { product: bestScore >= 0.6 ? best : null, score: bestScore };
 }
 
-function fuzzyMatchCustomer(name: string, customers: CustomerRow[]): CustomerRow | null {
+function _fuzzyMatchCustomer(name: string, customers: CustomerRow[]): CustomerRow | null {
   const norm = name.toLowerCase().replace(/[^a-z0-9]/g, "");
   let best: CustomerRow | null = null;
   let bestScore = 0;
@@ -357,9 +357,9 @@ function parseInvoice(rawText: string, lines: string[]): { data: ParsedInvoice; 
 
   // Extract invoice number
   const invPatterns = [
-    /Invoice\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
-    /Order\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
-    /Ref(?:erence)?\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
+    /Invoice\s*#?\s*:?\s*([A-Z0-9][\w-]+)/i,
+    /Order\s*#?\s*:?\s*([A-Z0-9][\w-]+)/i,
+    /Ref(?:erence)?\s*#?\s*:?\s*([A-Z0-9][\w-]+)/i,
   ];
   for (const pat of invPatterns) {
     const m = rawText.match(pat);
@@ -394,7 +394,7 @@ function parseInvoice(rawText: string, lines: string[]): { data: ParsedInvoice; 
 
   // Fallback: generic tabular parsing
   if (items.length === 0) {
-    const unitPat = /\b(GL|GAL|GALLON|LB|LBS|OZ|QT|QUART|PT|PINT|CASE|EA|EACH|TON|BAG|JUG|DRUM|TOTE)\b/i;
+    const _unitPat = /\b(GL|GAL|GALLON|LB|LBS|OZ|QT|QUART|PT|PINT|CASE|EA|EACH|TON|BAG|JUG|DRUM|TOTE)\b/i;
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.length < 5) continue;
@@ -454,10 +454,10 @@ function parsePurchaseOrder(rawText: string, lines: string[]): { data: ParsedPur
   // Invoice/PO number
   let invoiceNumber = "";
   const invPatterns = [
-    /(?:Invoice|Inv)\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
-    /(?:PO|P\.?O\.?)\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
-    /(?:Order|Ref(?:erence)?)\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
-    /(?:Document|Doc)\s*#?\s*:?\s*([A-Z0-9][\w\-]+)/i,
+    /(?:Invoice|Inv)\s*#?\s*:?\s*([A-Z0-9][\w-]+)/i,
+    /(?:PO|P\.?O\.?)\s*#?\s*:?\s*([A-Z0-9][\w-]+)/i,
+    /(?:Order|Ref(?:erence)?)\s*#?\s*:?\s*([A-Z0-9][\w-]+)/i,
+    /(?:Document|Doc)\s*#?\s*:?\s*([A-Z0-9][\w-]+)/i,
   ];
   for (const pat of invPatterns) {
     const m = rawText.match(pat);
@@ -550,7 +550,7 @@ function parsePriceList(rawText: string, lines: string[]): { data: ParsedPriceLi
 
       if (nameSection.length >= 3) {
         // Try to split SKU from product name
-        const skuMatch = nameSection.match(/^([A-Z0-9\-]{3,15})\s+(.+)/);
+        const skuMatch = nameSection.match(/^([A-Z0-9-]{3,15})\s+(.+)/);
         const sku = skuMatch ? skuMatch[1] : "";
         const productName = skuMatch ? skuMatch[2].trim() : nameSection;
 
@@ -594,7 +594,7 @@ function parseProductList(rawText: string, lines: string[]): { data: ParsedProdu
       const firstPriceIdx = trimmed.indexOf(priceMatches[0][0]);
       const nameSection = trimmed.substring(0, firstPriceIdx).trim();
       if (nameSection.length >= 3) {
-        const skuMatch = nameSection.match(/^([A-Z0-9\-]{3,15})\s+(.+)/);
+        const skuMatch = nameSection.match(/^([A-Z0-9-]{3,15})\s+(.+)/);
         const epaMatch = trimmed.match(/(\d+-\d+-\d+)/);
         const unitMatch = trimmed.match(/\b(GL|GAL|LB|OZ|QT|PT|CASE|EA|JUG|DRUM|TOTE|BAG)\b/i);
 
@@ -628,8 +628,8 @@ function parseCustomerList(rawText: string, lines: string[]): { data: ParsedCust
   const items: ParsedCustomerList["items"] = [];
 
   // Look for tabular data with name, phone, email patterns
-  const phonePattern = /\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?\d{4}/;
-  const emailPattern = /[\w.\-]+@[\w.\-]+\.\w+/;
+  const phonePattern = /\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;
+  const emailPattern = /[\w.-]+@[\w.-]+\.\w+/;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -769,13 +769,13 @@ Deno.serve(async (req: Request) => {
   // Parse request body
   let documentType: DocumentType;
   let pages: PageInput[];
-  let metadata: Record<string, string> = {};
+  let _metadata: Record<string, string> = {};
 
   try {
     const body = await req.json();
     documentType = body.document_type;
     pages = body.pages;
-    metadata = body.metadata || {};
+    _metadata = body.metadata || {};
 
     if (!documentType) throw new Error("document_type is required");
     if (!pages || !Array.isArray(pages) || pages.length === 0) {

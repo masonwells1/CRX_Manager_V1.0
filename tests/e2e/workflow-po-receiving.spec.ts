@@ -54,7 +54,7 @@ test.describe('PO Receiving Workflow', () => {
       // Look for receive/receiving button
       const receiveBtn = page.locator('button:has-text("Receive"), button:has-text("receiving")');
       // Button may or may not be visible depending on PO status
-      const isVisible = await receiveBtn.isVisible({ timeout: 3000 }).catch(() => false);
+      const _isVisible = await receiveBtn.isVisible({ timeout: 3000 }).catch(() => false);
       // Just verify the page loaded correctly
       await expect(page.locator('h1, h2').first()).toBeVisible();
     }

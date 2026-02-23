@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { login, TEST_USER } from './utils/auth';
+import { login } from './utils/auth';
 
 test.describe('Authentication', () => {
   test('should show login page when not authenticated', async ({ page }) => {
