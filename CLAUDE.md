@@ -39,6 +39,40 @@
 
 ---
 
+## Hard Red Lines — Do NOT Break These
+
+These are critical rules that protect the app's integrity. **Never bypass, weaken, or remove these.**
+
+### Data Safety
+- **NEVER delete or modify existing migration files** — only add new ones. Old migrations are history.
+- **NEVER remove RLS policies from any table** — every table must have RLS. Adding new tables = adding RLS policies.
+- **NEVER expose `service_role` key in frontend code** — only use `anon` key in the browser.
+- **NEVER modify `financial_audit_log` records** — this table is append-only by design (no UPDATE, no DELETE).
+- **NEVER store money as floating point** — all money values use `bigint` cents (e.g., `balance_cents`). Display divides by 100.
+
+### Business Logic
+- **NEVER skip the delivery confirm→complete flow** — deliveries MUST go `scheduled → in_progress → completed`. No shortcuts.
+- **NEVER allow editing delivery item quantities** — items are locked to the original order. Only driver/date/window/address/priority/notes can be edited.
+- **NEVER create invoices without an order** — invoices always link to an order (even quick deliveries create an order first).
+- **NEVER bypass `check_period_open()`** — closed accounting periods must prevent backdated transactions.
+- **NEVER allow non-admin users to access month-end close, commission payments, or settings** — these are admin-only.
+- **Season runs July 1 to June 30** — do not change this. All YTD calculations, reports, and season comparisons use this date range.
+
+### Code Quality
+- **NEVER remove the pre-commit hook** — it runs `npm run build` + `npm test` and blocks broken commits.
+- **NEVER commit with `--no-verify`** — the pre-commit hook exists for a reason.
+- **NEVER add `@ts-ignore` or `any` types** — the codebase is fully typed (0 ESLint errors). Keep it that way.
+- **NEVER install additional CSS frameworks** — Tailwind CSS only. Brand color is `crx-green` (#28A26A).
+- **NEVER install additional icon libraries** — Lucide React only.
+- **NEVER create a second Supabase client** — use the one from `src/lib/db.ts`.
+
+### Deployment
+- **NEVER commit `.env` files** — they contain secrets. `.gitignore` already blocks them.
+- **NEVER deploy without setting `ALLOWED_ORIGIN`** — Edge Functions will fail with CORS errors.
+- **NEVER push directly to production** — use Vercel's preview deployments first.
+
+---
+
 ## Feature Inventory (Quick Reference)
 
 Use this table to check **"does this feature already exist?"** before building anything new.
