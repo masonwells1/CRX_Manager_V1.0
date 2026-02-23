@@ -14,9 +14,10 @@
 - **77 migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
 - **ESLint:** 0 errors (fully lint-clean as of 2026-02-23)
-- **Latest commit:** `b410ea4` on main (pushed) — update this after each commit
+- **Latest commit:** `af90ebf` on main (pushed) — update this after each commit
 - **T3-002 test coverage:** Phases 1-5 COMPLETE (see Development History)
-- **Pre-commit hook:** `npm run build` + `npx vitest run` run automatically before every commit
+- **Pre-commit hook:** `npm run lint` + `npm run build` + `npx vitest run` run automatically before every commit
+- **GitHub CI:** ESLint → TypeScript (non-blocking) → Vitest → Build — [status badge](https://github.com/masonwells1/CRX_Manager_V1.0/actions/workflows/ci.yml) ✅ green
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
 - **Supabase Project ID:** `rhyzpcqhnizqbxphqdkr`
 
@@ -59,7 +60,7 @@ These are critical rules that protect the app's integrity. **Never bypass, weake
 - **Season runs July 1 to June 30** — do not change this. All YTD calculations, reports, and season comparisons use this date range.
 
 ### Code Quality
-- **NEVER remove the pre-commit hook** — it runs `npm run build` + `npm test` and blocks broken commits.
+- **NEVER remove the pre-commit hook** — it runs `npm run lint` + `npm run build` + `npm test` and blocks broken commits.
 - **NEVER commit with `--no-verify`** — the pre-commit hook exists for a reason.
 - **NEVER add `@ts-ignore` or `any` types** — the codebase is fully typed (0 ESLint errors). Keep it that way.
 - **NEVER install additional CSS frameworks** — Tailwind CSS only. Brand color is `crx-green` (#28A26A).
@@ -129,7 +130,7 @@ npm run lint         # ESLint
 npm run test:e2e     # Run Playwright E2E tests
 npm run test:e2e:ui  # Interactive Playwright UI
 ```
-**Note:** Pre-commit hook automatically runs `npm run build` + `npx vitest run` before every commit.
+**Note:** Pre-commit hook automatically runs `npm run lint` + `npm run build` + `npx vitest run` before every commit. GitHub CI runs the same checks on push to main.
 
 ### User Roles
 1. **admin** - Full CRUD on all tables. Manages users, products, costs, inventory, purchase orders, commissions, month-end close, write-offs, settings.
@@ -867,6 +868,7 @@ Test every feature as each role:
 - `npm run build` for full build verification (pre-commit hook runs this automatically)
 - `npx vitest run` for 766 unit tests (pre-commit hook runs this automatically)
 - `npx tsc --noEmit` for type checking only
+- `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI test environments (unit tests mock Supabase)
 - Known warning: vendor-mapbox chunk is ~1,680KB (>500KB limit) — Mapbox is large, this is expected
 - react-map-gl v8: import from `'react-map-gl/mapbox'`, NOT bare `'react-map-gl'`
 - react-map-gl can't go in Vite manualChunks — only put `mapbox-gl`
