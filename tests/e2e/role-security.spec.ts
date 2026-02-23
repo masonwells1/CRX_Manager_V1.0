@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
+const DRIVER_EMAIL = 'testdriver@croprxsolutions.com';
+const DRIVER_PASSWORD = 'TestDriver123!';
+
 /**
  * Phase 5: Role-Based Security Testing
  * Tests that each role (admin, sales_rep, driver, applicator) can only access
@@ -130,5 +133,60 @@ test.describe('Role-Based Security — Route Protection Verification', () => {
       const heading = page.locator('h1, h2').first();
       await expect(heading).toBeVisible({ timeout: 10000 });
     }
+  });
+});
+
+test.describe('Driver Role Restrictions', () => {
+  test.beforeEach(async ({ page }) => {
+    await login(page, DRIVER_EMAIL, DRIVER_PASSWORD);
+  });
+
+  test('sidebar only shows allowed nav items for driver', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForTimeout(2000);
+
+    // Get all nav link texts
+    const sidebar = page.locator('aside, nav').first();
+    await expect(sidebar).toBeVisible({ timeout: 10000 });
+
+    const allLinks = await page.locator('aside a, nav a').allInnerTexts();
+    const linkText = allLinks.join(' ').toLowerCase();
+
+    // Driver should see Dashboard and Deliveries
+    expect(linkText).toContain('dashboard');
+    expect(linkText).toContain('deliver');
+
+    // Driver should NOT see admin-only links
+    expect(linkText).not.toContain('quote');
+    expect(linkText).not.toContain('invoice');
+    expect(linkText).not.toContain('payment');
+    expect(linkText).not.toContain('settings');
+  });
+
+  test('driver cannot access /quotes — redirected', async ({ page }) => {
+    await page.goto('/quotes');
+    await page.waitForTimeout(2000);
+    // Should redirect away from /quotes (back to / or /dashboard)
+    expect(page.url()).not.toMatch(/\/quotes($|\/)/);
+  });
+
+  test('driver cannot access /invoices — redirected', async ({ page }) => {
+    await page.goto('/invoices');
+    await page.waitForTimeout(2000);
+    expect(page.url()).not.toMatch(/\/invoices($|\/)/);
+  });
+
+  test('driver cannot access /payment-allocation — redirected', async ({ page }) => {
+    await page.goto('/payment-allocation');
+    await page.waitForTimeout(2000);
+    expect(page.url()).not.toMatch(/\/payment-allocation($|\/)/);
+  });
+
+  test('Quick Delivery button not visible to driver on deliveries page', async ({ page }) => {
+    await page.goto('/deliveries');
+    await page.waitForTimeout(2000);
+    // Quick Delivery button must NOT be present for drivers
+    const quickBtn = page.locator('button:has-text("Quick Delivery")');
+    await expect(quickBtn).not.toBeVisible();
   });
 });

@@ -588,3 +588,146 @@ describe('RPC contract: delete_purchase_order', () => {
     expect(params.p_po_id).toBeTruthy();
   });
 });
+
+// -------------------------------------------------------------------------
+// D3 — allocate_payment and create_quick_delivery contract tests
+// -------------------------------------------------------------------------
+
+interface AllocatePaymentParams {
+  p_customer_id: string;       // uuid
+  p_total_cents: number;       // bigint — total check amount in cents
+  p_allocations: Array<{
+    invoice_id: string;        // uuid
+    amount_cents: number;      // bigint
+  }>;
+  p_payment_method: string;    // e.g. 'check', 'ach', 'wire'
+  p_reference_number: string | null;
+  p_notes: string | null;
+  p_performed_by: string;      // uuid
+  p_idempotency_key?: string;
+}
+
+interface CreateQuickDeliveryParams {
+  p_customer_id: string;       // uuid
+  p_items: Array<{
+    product_id: string;        // uuid
+    quantity: number;
+    unit_size: string | null;
+    price_cents: number;       // bigint
+  }>;
+  p_driver_id: string | null;  // uuid or null
+  p_scheduled_date: string;    // ISO date string
+  p_delivery_notes: string | null;
+  p_performed_by: string;      // uuid
+  p_idempotency_key?: string;
+}
+
+describe('RPC contract: allocate_payment', () => {
+  it('accepts valid params with allocations', () => {
+    const params = assertShape<AllocatePaymentParams>({
+      p_customer_id: 'cust-uuid',
+      p_total_cents: 500000,
+      p_allocations: [
+        { invoice_id: 'inv-uuid-1', amount_cents: 300000 },
+        { invoice_id: 'inv-uuid-2', amount_cents: 200000 },
+      ],
+      p_payment_method: 'check',
+      p_reference_number: 'CHK-4567',
+      p_notes: null,
+      p_performed_by: 'user-uuid',
+      p_idempotency_key: 'allocate_payment:user-uuid:1234567890',
+    });
+    expect(params.p_total_cents).toBe(500000);
+    expect(params.p_allocations).toHaveLength(2);
+    expect(params.p_allocations[0].amount_cents).toBe(300000);
+  });
+
+  it('accepts params with empty allocations (prepay only)', () => {
+    const params = assertShape<AllocatePaymentParams>({
+      p_customer_id: 'cust-uuid',
+      p_total_cents: 100000,
+      p_allocations: [],
+      p_payment_method: 'ach',
+      p_reference_number: null,
+      p_notes: 'Prepayment for spring season',
+      p_performed_by: 'user-uuid',
+    });
+    expect(params.p_allocations).toHaveLength(0);
+    expect(params.p_notes).toBeTruthy();
+  });
+
+  it('requires cents not dollars', () => {
+    // Verify the interface enforces number type (not string)
+    const params = assertShape<AllocatePaymentParams>({
+      p_customer_id: 'cust-uuid',
+      p_total_cents: 250099,   // $2,500.99 in cents
+      p_allocations: [{ invoice_id: 'inv-uuid', amount_cents: 250099 }],
+      p_payment_method: 'wire',
+      p_reference_number: 'WIRE-001',
+      p_notes: null,
+      p_performed_by: 'user-uuid',
+    });
+    expect(typeof params.p_total_cents).toBe('number');
+    expect(typeof params.p_allocations[0].amount_cents).toBe('number');
+  });
+});
+
+describe('RPC contract: create_quick_delivery', () => {
+  it('accepts valid params with driver and items', () => {
+    const params = assertShape<CreateQuickDeliveryParams>({
+      p_customer_id: 'cust-uuid',
+      p_items: [
+        {
+          product_id: 'prod-uuid-1',
+          quantity: 5,
+          unit_size: 'Gallon',
+          price_cents: 8750,
+        },
+        {
+          product_id: 'prod-uuid-2',
+          quantity: 2,
+          unit_size: null,
+          price_cents: 12000,
+        },
+      ],
+      p_driver_id: 'driver-uuid',
+      p_scheduled_date: '2026-03-15',
+      p_delivery_notes: 'Call before arriving',
+      p_performed_by: 'admin-uuid',
+      p_idempotency_key: 'create_quick_delivery:admin-uuid:1234567890',
+    });
+    expect(params.p_items).toHaveLength(2);
+    expect(params.p_items[0].price_cents).toBe(8750);
+    expect(params.p_driver_id).toBeTruthy();
+  });
+
+  it('accepts null driver (unassigned delivery)', () => {
+    const params = assertShape<CreateQuickDeliveryParams>({
+      p_customer_id: 'cust-uuid',
+      p_items: [
+        { product_id: 'prod-uuid', quantity: 10, unit_size: 'Quart', price_cents: 5000 },
+      ],
+      p_driver_id: null,
+      p_scheduled_date: '2026-03-20',
+      p_delivery_notes: null,
+      p_performed_by: 'admin-uuid',
+    });
+    expect(params.p_driver_id).toBeNull();
+    expect(params.p_delivery_notes).toBeNull();
+  });
+
+  it('price_cents enforces number type (not dollars)', () => {
+    const params = assertShape<CreateQuickDeliveryParams>({
+      p_customer_id: 'cust-uuid',
+      p_items: [
+        { product_id: 'prod-uuid', quantity: 1, unit_size: null, price_cents: 150000 }, // $1,500.00
+      ],
+      p_driver_id: null,
+      p_scheduled_date: '2026-04-01',
+      p_delivery_notes: null,
+      p_performed_by: 'admin-uuid',
+    });
+    expect(typeof params.p_items[0].price_cents).toBe('number');
+    expect(params.p_items[0].price_cents).toBe(150000);
+  });
+});
