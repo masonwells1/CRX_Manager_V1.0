@@ -7,16 +7,16 @@
 - **Who it's for:** Crop RX Solutions (admin, sales reps, drivers)
 - **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
 
-## Current State (as of 2026-02-23)
-- **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import + Safety Audit + Quick Receive + Codebase Audit + Lint Cleanup
+## Current State (as of 2026-02-24)
+- **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import + Safety Audit + Quick Receive + Codebase Audit + Lint Cleanup + E2E Gate Tests
 - **Deployed to:** Vercel → **https://croprxsolutions.app** (live)
-- **Test coverage:** 766 unit tests (Vitest, 45 test files) + 31 Playwright E2E spec files
-- **77 migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
+- **Test coverage:** 791 unit tests (Vitest, 48 test files) + 351 Playwright E2E tests (33 spec files)
+- **77+ migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
-- **ESLint:** 0 errors (fully lint-clean as of 2026-02-23)
+- **ESLint:** 0 errors (fully lint-clean)
 - **TypeScript:** 0 strict type errors (enforced in CI — blocks on failure)
-- **Latest commit:** `6a98a92` on main (pushed) — update this after each commit
-- **T3-002 test coverage:** Phases 1-5 COMPLETE (see Development History)
+- **Latest commit:** `d52d910` on main (pushed) — update this after each commit
+- **E2E gate tests:** 2 comprehensive gate test suites — admin full-lifecycle (25 tests) + financial operations (25 tests), both 100% green
 - **Pre-commit hook:** `npm run lint` + `npm run build` + `npx vitest run` run automatically before every commit
 - **GitHub CI:** ESLint → TypeScript → Vitest → Build — [status badge](https://github.com/masonwells1/CRX_Manager_V1.0/actions/workflows/ci.yml) ✅ green (all steps blocking)
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
@@ -112,7 +112,7 @@ Use this table to check **"does this feature already exist?"** before building a
 - **Frontend:** React 18 + TypeScript + Vite
 - **Backend:** Supabase (PostgreSQL + Auth + Edge Functions + Realtime + Storage)
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
-- **Testing:** Vitest (766 unit tests, 45 files) + Playwright (31 E2E spec files in `tests/e2e/`)
+- **Testing:** Vitest (791 unit tests, 48 files) + Playwright (351 E2E tests, 33 spec files in `tests/e2e/`)
 - **Deployment:** Vercel → https://croprxsolutions.app (live), configured via `vercel.json`
 - **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid + @turf/bbox
 - **Geo Import:** shapefile (parse .shp/.dbf/.shx), proj4 (coordinate reprojection), togeojson-with-extended-style (KML→GeoJSON)
@@ -125,7 +125,7 @@ Use this table to check **"does this feature already exist?"** before building a
 ```bash
 npm run dev          # Start dev server (http://localhost:5173)
 npm run build        # Production build
-npx vitest run       # Run 766 unit tests (45 test files)
+npx vitest run       # Run 791 unit tests (48 test files)
 npm run typecheck    # TypeScript error check
 npm run lint         # ESLint
 npm run test:e2e     # Run Playwright E2E tests
@@ -786,6 +786,14 @@ Test every feature as each role:
 - Test policies in Supabase SQL editor with `SET request.jwt.claims = '{"sub":"user-id"}'`
 - The `profiles_select` policy uses `USING (true)` - this is intentional for CRM name lookups
 
+### PostgREST / Supabase Gotchas
+- **Resource embedding requires FK to exact target table** — `profiles!fk_name(column)` ONLY works if FK points to `profiles(id)`, NOT `auth.users(id)`. Even though IDs match, PostgREST resolves embedding from FK definition.
+- **Non-existent columns return null, not error** — If a query `.select('missing_column')` references a column that doesn't exist, PostgREST returns `{ data: null }` silently. This looks like "no rows" not "schema error".
+- **After DDL changes, reload schema cache** — Run `NOTIFY pgrst, 'reload schema'` after adding columns or changing FKs. Otherwise PostgREST serves stale schema.
+- **Customer name column is `farm_name`** — NOT `business_name`. All customer display queries use `farm_name`.
+- **`commissions.season` is integer** — NOT text. Use `2026` not `'2026'`.
+- **`cycle_counts` column is `count_number`** — NOT `cycle_count_number`.
+
 ### Migration Ordering
 - Always name migrations with timestamp prefix: `YYYYMMDDHHMMSS_description.sql`
 - Run `supabase db push` or apply via Supabase Dashboard SQL editor
@@ -914,6 +922,10 @@ Test every feature as each role:
 | — | Safety Audit & Business Logic Hardening (page permissions, notifications, E2E) | Feb 28-Mar 3 |
 | — | Quick Receive Feature (vendor+product receiving without PO numbers) | Mar 4 |
 | — | TypeScript Strict Cleanup: 148 → 0 errors (Supabase join casts, jsPDF types, GeoJSON, ReactNode chains) | Feb 23 |
+| — | Admin Full-Lifecycle E2E Gate Test: 25 Playwright tests (quote→return, inventory ops, team board) | Feb 23 |
+| — | Financial Operations E2E Gate Test: 25 tests (invoices, payments, PO receiving, cycle counts, commissions) | Feb 23-24 |
+| — | Bulk Operations: row selection + bulk delete/void/cancel across 8 pages (BulkActionBar, useRowSelection) | Feb 24 |
+| — | DB fixes: commissions denormalized columns, cycle_counts FK→profiles, PostgREST schema cache | Feb 24 |
 
 ---
 
