@@ -56,6 +56,7 @@ async function waitForPage(page: Page, ms = 2000) {
 }
 
 // ── Helper: get text content of inventory cell for a product ──────────
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function getInventoryQty(page: Page, productName: string): Promise<number> {
   await page.goto('/inventory');
   await waitForPage(page, 3000);
@@ -65,7 +66,7 @@ async function getInventoryQty(page: Page, productName: string): Promise<number>
   if (!(await row.isVisible({ timeout: 5000 }).catch(() => false))) {
     return -1; // product not found
   }
-  const rowText = await row.innerText();
+  const _rowText = await row.innerText();
   // The Available column is typically the 3rd column — extract numeric values
   // We'll look for the qty in the row text
   const cells = await row.locator('td').allInnerTexts();
@@ -691,7 +692,7 @@ test.describe.serial('Inventory Operations', () => {
     await expect(page.locator('h1').first()).toContainText(/Inventor/i);
 
     // Get initial row count
-    const initialRows = await page.locator('table tbody tr').count();
+    const _initialRows = await page.locator('table tbody tr').count();
 
     // Look for Add Inventory button
     const addBtn = page.locator('button:has-text("Add Inventory")').first();
@@ -749,7 +750,7 @@ test.describe.serial('Inventory Operations', () => {
       }
 
       // Enter notes
-      const notesInput = modal.locator('input, textarea').filter({ hasText: '' }).last();
+      const _notesInput = modal.locator('input, textarea').filter({ hasText: '' }).last();
       // Try to find a notes/reason field
       const adjustNotes = modal.locator('input[placeholder*="Reason"], textarea, input').last();
       if (await adjustNotes.isVisible({ timeout: 2000 }).catch(() => false)) {

@@ -6,7 +6,7 @@
  * This page lets admins record payments, see balances, and view A/R.
  */
 import { useEffect, useState } from 'react';
-import { DollarSign, Plus, Search } from 'lucide-react';
+import { DollarSign, Plus, Search, FileText } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -16,8 +16,9 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, sanitizeError } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
+import { downloadReportPdf } from '../lib/reportPdf';
 
 interface OrderWithBalance {
   [k: string]: unknown;
@@ -64,6 +65,7 @@ export default function Payments() {
   const [payRef, setPayRef] = useState('');
   const [payNotes, setPayNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -181,6 +183,47 @@ export default function Payments() {
       )
     : payments;
 
+  const handleExportPDF = async () => {
+    setExportingPdf(true);
+    try {
+      if (tab === 'ar') {
+        await downloadReportPdf({
+          title: 'Accounts Receivable',
+          subtitle: `${filteredAr.length} order(s)`,
+          columns: [
+            { header: 'Order', key: 'order_number' },
+            { header: 'Customer', key: 'farm_name' },
+            { header: 'Date', key: 'order_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+            { header: 'Total', key: 'total_price', align: 'right', format: (v) => fmt(Number(v) || 0) },
+            { header: 'Paid', key: 'total_paid', align: 'right', format: (v) => fmt(Number(v) || 0) },
+            { header: 'Balance', key: 'balance_due', align: 'right', format: (v) => fmt(Number(v) || 0) },
+          ],
+          data: filteredAr as unknown as Record<string, unknown>[],
+          orientation: 'landscape',
+        });
+      } else {
+        await downloadReportPdf({
+          title: 'Payment History',
+          subtitle: `${filteredPayments.length} payment(s)`,
+          columns: [
+            { header: 'Date', key: 'payment_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+            { header: 'Order', key: 'order_number' },
+            { header: 'Customer', key: 'farm_name' },
+            { header: 'Amount', key: 'amount', align: 'right', format: (v) => fmt(Number(v) || 0) },
+            { header: 'Method', key: 'payment_method' },
+            { header: 'Ref #', key: 'reference_number', format: (v) => v ? String(v) : '-' },
+          ],
+          data: filteredPayments as unknown as Record<string, unknown>[],
+          orientation: 'landscape',
+        });
+      }
+      toast('success', `Downloaded ${tab === 'ar' ? 'A/R' : 'Payment History'} PDF`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setExportingPdf(false);
+  };
+
   const arColumns: Column<OrderWithBalance>[] = [
     { key: 'order_number', header: 'Order' },
     { key: 'farm_name', header: 'Customer' },
@@ -265,6 +308,15 @@ export default function Payments() {
             }
           >
             Export CSV
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<FileText className="w-4 h-4" />}
+            onClick={handleExportPDF}
+            loading={exportingPdf}
+          >
+            Download PDF
           </Button>
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => setPayOpen(true)}>
             Record Payment

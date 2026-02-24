@@ -1,12 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, MapPin, List, Map as MapIcon, Upload } from 'lucide-react';
+import { Plus, MapPin, List, Map as MapIcon, Upload, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
+import BulkActionBar from '../components/ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
+import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase, sanitizeError } from '../lib/db';
+import { exportToCSV } from '../lib/csvExport';
+import { downloadReportPdf } from '../lib/reportPdf';
 import type { Field } from '../types';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
@@ -17,12 +23,18 @@ type FieldWithCustomer = Field & { customer_name: string };
 export default function Fields() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { role } = useAuth();
   const [fields, setFields] = useState<FieldWithCustomer[]>([]);
   const [loading, setLoading] = useState(true);
   const [cropFilter, setCropFilter] = useState('');
   const [countyFilter, setCountyFilter] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const canBulkAction = role === 'admin' || role === 'sales_rep';
 
   // Collect unique values for filter dropdowns
   const cropTypes = [...new Set(fields.map((f) => f.crop_type).filter(Boolean))] as string[];
@@ -33,7 +45,6 @@ export default function Fields() {
   }, []);
 
   const fetchFields = async () => {
-    // Use RPC to get fields with centroid/boundary as GeoJSON text
     const { data, error } = await supabase.rpc('get_fields_with_geojson');
 
     if (error) {
@@ -57,7 +68,75 @@ export default function Fields() {
     return true;
   });
 
-  const columns: Column<FieldWithCustomer>[] = [
+  const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
+    useRowSelection({ data: filtered, getId: (f) => f.id });
+
+  const checkboxCol = useMemo(
+    () => createCheckboxColumn<FieldWithCustomer>(selected, toggleSelect, (f) => f.id),
+    [selected, toggleSelect]
+  );
+
+  const handleExportCSV = () => {
+    exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
+      { key: 'field_name', header: 'Field Name' },
+      { key: 'customer_name', header: 'Customer' },
+      { key: 'total_acres', header: 'Acres' },
+      { key: 'crop_type', header: 'Crop' },
+      { key: 'county', header: 'County' },
+      { key: 'legal_description', header: 'Legal Description' },
+    ], 'fields');
+    toast('success', `Exported ${selectedRows.length} field(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      await downloadReportPdf({
+        title: 'Fields',
+        subtitle: `${selectedRows.length} field(s) selected`,
+        columns: [
+          { header: 'Field', key: 'field_name' },
+          { header: 'Customer', key: 'customer_name' },
+          { header: 'Acres', key: 'total_acres', align: 'right', format: (v) => v ? Number(v).toLocaleString() : '-' },
+          { header: 'Crop', key: 'crop_type', format: (v) => v ? String(v) : '-' },
+          { header: 'County', key: 'county', format: (v) => v ? String(v) : '-' },
+        ],
+        data: selectedRows as unknown as Record<string, unknown>[],
+        orientation: 'landscape',
+      });
+      toast('success', `Downloaded PDF with ${selectedRows.length} field(s)`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  const handleBulkDelete = async () => {
+    setDeleting(true);
+    try {
+      const ids = selectedRows.map((f) => f.id);
+      const { error } = await supabase.from('fields').delete().in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Deleted ${ids.length} field(s)`);
+        clearSelection();
+        fetchFields();
+      }
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setDeleting(false);
+    setDeleteModalOpen(false);
+  };
+
+  const bulkActions = [
+    { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
+    { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'delete', label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
+  ];
+
+  const dataColumns: Column<FieldWithCustomer>[] = [
     {
       key: 'field_name',
       header: 'Field Name',
@@ -127,33 +206,40 @@ export default function Fields() {
     },
   ];
 
+  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        {/* View toggle */}
-        <div className="flex rounded-lg border border-gray-200 overflow-hidden">
-          <button
-            onClick={() => setViewMode('list')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
-              viewMode === 'list'
-                ? 'bg-crx-green text-white'
-                : 'bg-white text-secondary hover:bg-gray-50'
-            }`}
-          >
-            <List className="w-4 h-4" />
-            List
-          </button>
-          <button
-            onClick={() => setViewMode('map')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
-              viewMode === 'map'
-                ? 'bg-crx-green text-white'
-                : 'bg-white text-secondary hover:bg-gray-50'
-            }`}
-          >
-            <MapIcon className="w-4 h-4" />
-            Map
-          </button>
+      <div className="flex justify-between items-center flex-wrap gap-2">
+        <div className="flex items-center gap-3">
+          {/* View toggle */}
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+            <button
+              onClick={() => setViewMode('list')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
+                viewMode === 'list'
+                  ? 'bg-crx-green text-white'
+                  : 'bg-white text-secondary hover:bg-gray-50'
+              }`}
+            >
+              <List className="w-4 h-4" />
+              List
+            </button>
+            <button
+              onClick={() => setViewMode('map')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium transition-colors ${
+                viewMode === 'map'
+                  ? 'bg-crx-green text-white'
+                  : 'bg-white text-secondary hover:bg-gray-50'
+              }`}
+            >
+              <MapIcon className="w-4 h-4" />
+              Map
+            </button>
+          </div>
+          {canBulkAction && viewMode === 'list' && (
+            <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />
+          )}
         </div>
 
         <div className="flex gap-2">
@@ -234,7 +320,7 @@ export default function Fields() {
               }
               loading={loading}
               filters={
-                <div className="flex gap-2">
+                <>
                   <select
                     value={cropFilter}
                     onChange={(e) => setCropFilter(e.target.value)}
@@ -257,7 +343,15 @@ export default function Fields() {
                       <option key={c} value={c}>{c}</option>
                     ))}
                   </select>
-                </div>
+                  {canBulkAction && filtered.length > 0 && (
+                    <button
+                      onClick={toggleAll}
+                      className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+                    >
+                      {allSelected ? 'Deselect All' : 'Select All'}
+                    </button>
+                  )}
+                </>
               }
             />
           </div>
@@ -268,6 +362,15 @@ export default function Fields() {
         open={importModalOpen}
         onClose={() => setImportModalOpen(false)}
         onSuccess={fetchFields}
+      />
+
+      <BulkDeleteConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        count={selectedCount}
+        entityName="field"
+        onConfirm={handleBulkDelete}
+        loading={deleting}
       />
     </div>
   );

@@ -13,6 +13,7 @@ import {
   Clock,
   Zap,
   Download,
+  FileText,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -25,6 +26,7 @@ import { generateIdempotencyKey } from '../lib/idempotency';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
+import { downloadReportPdf } from '../lib/reportPdf';
 import type { Delivery, Profile } from '../types';
 
 /* ─── Row type ─── */
@@ -98,6 +100,7 @@ export default function Deliveries() {
   const [showReschedule, setShowReschedule] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [rescheduling, setRescheduling] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   /* Quick Delivery modal */
   const [quickDeliveryOpen, setQuickDeliveryOpen] = useState(false);
@@ -403,7 +406,8 @@ export default function Deliveries() {
   };
 
   const handleExportCSV = () => {
-    exportToCSV(selectedDeliveries as unknown as Record<string, unknown>[], [
+    const rows = selected.size > 0 ? selectedDeliveries : filtered;
+    exportToCSV(rows as unknown as Record<string, unknown>[], [
       { key: 'delivery_number', header: 'Delivery #' },
       { key: 'customer_name', header: 'Customer' },
       { key: 'driver_name', header: 'Driver' },
@@ -413,7 +417,33 @@ export default function Deliveries() {
       { key: 'item_count', header: 'Items' },
       { key: 'completed_at', header: 'Completed', format: (v) => fmtDateCSV(v as string) },
     ], 'deliveries');
-    toast('success', `Exported ${selectedDeliveries.length} delivery(ies) to CSV`);
+    toast('success', `Exported ${rows.length} delivery(ies) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExportingPdf(true);
+    try {
+      const rows = selected.size > 0 ? selectedDeliveries : filtered;
+      await downloadReportPdf({
+        title: 'Deliveries',
+        subtitle: `${rows.length} delivery(ies)`,
+        columns: [
+          { header: 'Delivery #', key: 'delivery_number' },
+          { header: 'Customer', key: 'customer_name' },
+          { header: 'Driver', key: 'driver_name' },
+          { header: 'Scheduled', key: 'scheduled_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+          { header: 'Priority', key: 'priority', format: (v) => v ? String(v) : 'normal' },
+          { header: 'Status', key: 'status' },
+          { header: 'Items', key: 'item_count', align: 'right' },
+        ],
+        data: rows as unknown as Record<string, unknown>[],
+        orientation: 'landscape',
+      });
+      toast('success', `Downloaded PDF with ${rows.length} delivery(ies)`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setExportingPdf(false);
   };
 
   /* ─── Driver Dashboard View ─── */
@@ -672,15 +702,25 @@ export default function Deliveries() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-xl font-semibold font-heading text-nav-dark">Deliveries</h1>
         <div className="flex gap-2 flex-wrap justify-end">
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Download className="w-4 h-4" />}
+            onClick={handleExportCSV}
+          >
+            Export CSV
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<FileText className="w-4 h-4" />}
+            onClick={handleExportPDF}
+            loading={exportingPdf}
+          >
+            Download PDF
+          </Button>
           {selected.size > 0 && (
             <>
-              <Button
-                variant="secondary"
-                icon={<Download className="w-4 h-4" />}
-                onClick={handleExportCSV}
-              >
-                Export CSV
-              </Button>
               <Button
                 variant="secondary"
                 icon={<Printer className="w-4 h-4" />}

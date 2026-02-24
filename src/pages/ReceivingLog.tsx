@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   PackageCheck,
@@ -7,13 +7,21 @@ import {
   Clock,
   Camera,
   TrendingUp,
+  Download,
+  FileText,
+  Trash2,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
+import BulkActionBar from '../components/ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
+import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, sanitizeError } from '../lib/db';
+import { exportToCSV } from '../lib/csvExport';
+import { downloadReportPdf } from '../lib/reportPdf';
 import type { ReceivingRecord, ReceivingSummary, Profile } from '../types';
 
 /* ─── Condition badge helpers ─── */
@@ -27,13 +35,17 @@ const conditionLabel = (c: string) =>
   c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
 
 export default function ReceivingLog() {
-  useAuth();
+  const { role } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const canBulkAction = role === 'admin' || role === 'sales_rep';
 
   const [records, setRecords] = useState<ReceivingRecord[]>([]);
   const [summary, setSummary] = useState<ReceivingSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   /* Filters */
   const [vendorFilter, setVendorFilter] = useState('');
@@ -112,8 +124,80 @@ export default function ReceivingLog() {
     setLoading(false);
   };
 
+  /* ─── Bulk selection ─── */
+  const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
+    useRowSelection({ data: records, getId: (r) => r.id });
+
+  const checkboxCol = useMemo(
+    () => createCheckboxColumn<ReceivingRecord>(selected, toggleSelect, (r) => r.id),
+    [selected, toggleSelect]
+  );
+
+  const handleExportCSV = () => {
+    exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
+      { key: 'received_at', header: 'Date' },
+      { key: 'po_number', header: 'PO #' },
+      { key: 'vendor', header: 'Vendor' },
+      { key: 'product_name', header: 'Product' },
+      { key: 'quantity_received', header: 'Qty Received' },
+      { key: 'condition', header: 'Condition' },
+      { key: 'received_by_name', header: 'Received By' },
+      { key: 'lot_number', header: 'Lot #' },
+    ], 'receiving_log');
+    toast('success', `Exported ${selectedRows.length} record(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      await downloadReportPdf({
+        title: 'Receiving Log',
+        subtitle: `${selectedRows.length} record(s) selected`,
+        columns: [
+          { header: 'Date', key: 'received_at', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+          { header: 'PO #', key: 'po_number' },
+          { header: 'Vendor', key: 'vendor' },
+          { header: 'Product', key: 'product_name' },
+          { header: 'Qty', key: 'quantity_received', align: 'right' },
+          { header: 'Condition', key: 'condition' },
+        ],
+        data: selectedRows as unknown as Record<string, unknown>[],
+        orientation: 'landscape',
+      });
+      toast('success', `Downloaded PDF with ${selectedRows.length} record(s)`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  const handleBulkDelete = async () => {
+    setDeleting(true);
+    try {
+      const ids = selectedRows.map((r) => r.id);
+      const { error } = await supabase.from('receiving_records').delete().in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Deleted ${ids.length} record(s)`);
+        clearSelection();
+        fetchData();
+      }
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setDeleting(false);
+    setDeleteModalOpen(false);
+  };
+
+  const bulkActions = [
+    { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
+    { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'delete', label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
+  ];
+
   /* ─── Columns ─── */
-  const columns: Column<ReceivingRecord>[] = [
+  const dataColumns: Column<ReceivingRecord>[] = [
     {
       key: 'received_at',
       header: 'Date',
@@ -211,11 +295,16 @@ export default function ReceivingLog() {
     },
   ];
 
+  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Receiving Log</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-semibold font-heading text-nav-dark">Receiving Log</h1>
+          {canBulkAction && <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />}
+        </div>
         <button
           onClick={() => navigate('/receiving/quick')}
           className="flex items-center gap-2 px-4 py-2 bg-crx-green text-white rounded-xl text-sm font-medium hover:bg-crx-green/90 transition-colors shadow-sm"
@@ -363,11 +452,28 @@ export default function ReceivingLog() {
                     Clear Filters
                   </button>
                 )}
+                {canBulkAction && records.length > 0 && (
+                  <button
+                    onClick={toggleAll}
+                    className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+                  >
+                    {allSelected ? 'Deselect All' : 'Select All'}
+                  </button>
+                )}
               </div>
             }
           />
         </div>
       </Card>
+
+      <BulkDeleteConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        count={selectedCount}
+        entityName="receiving record"
+        onConfirm={handleBulkDelete}
+        loading={deleting}
+      />
     </div>
   );
 }

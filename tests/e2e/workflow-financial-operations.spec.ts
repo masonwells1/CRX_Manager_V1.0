@@ -785,7 +785,7 @@ test.describe.serial('Financial Ops — Prepayments & Finance Charges', () => {
     const customerId = invoicesArray[0].customer_id;
 
     // Enable finance charges on the customer (rate 1.5%, no grace period)
-    const patchResult = await supabaseRest(page, 'PATCH', `customers?id=eq.${customerId}`, {
+    const _patchResult = await supabaseRest(page, 'PATCH', `customers?id=eq.${customerId}`, {
       finance_charge_rate: 1.5,
       finance_charge_enabled: true,
       finance_charge_grace_days: 0,

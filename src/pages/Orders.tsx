@@ -1,13 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload } from 'lucide-react';
+import { Plus, Upload, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Button from '../components/ui/Button';
+import BulkActionBar from '../components/ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import BulkOrderImport from '../components/orders/BulkOrderImport';
+import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase, sanitizeError } from '../lib/db';
+import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
+import { downloadReportPdf } from '../lib/reportPdf';
 import type { Order } from '../types';
 
 interface OrderWithFulfillment extends Order {
@@ -17,10 +23,16 @@ interface OrderWithFulfillment extends Order {
 export default function Orders() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { role } = useAuth();
   const [orders, setOrders] = useState<OrderWithFulfillment[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const canBulkAction = role === 'admin' || role === 'sales_rep';
 
   useEffect(() => {
     fetchOrders();
@@ -73,10 +85,83 @@ export default function Orders() {
     return true;
   });
 
+  const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
+    useRowSelection({ data: filtered, getId: (o) => o.id });
+
+  const checkboxCol = useMemo(
+    () => createCheckboxColumn<OrderWithFulfillment>(selected, toggleSelect, (o) => o.id),
+    [selected, toggleSelect]
+  );
+
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
-  const columns: Column<OrderWithFulfillment>[] = [
+  const handleExportCSV = () => {
+    exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
+      { key: 'order_number', header: 'Order #' },
+      { key: 'customer', header: 'Customer', format: (v) => (v as { farm_name: string })?.farm_name || '' },
+      { key: 'status', header: 'Status' },
+      { key: 'total_price', header: 'Total', format: (v) => fmtCSV(v) },
+      { key: 'order_date', header: 'Order Date', format: (v) => fmtDateCSV(v) },
+      { key: 'fulfillment_pct', header: 'Fulfillment %', format: (v) => `${v}%` },
+    ], 'orders');
+    toast('success', `Exported ${selectedRows.length} order(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      const pdfData = selectedRows.map((o) => ({
+        ...o,
+        customer_name: (o.customer as unknown as { farm_name: string })?.farm_name || '',
+      }));
+      await downloadReportPdf({
+        title: 'Orders',
+        subtitle: `${selectedRows.length} order(s) selected`,
+        columns: [
+          { header: 'Order #', key: 'order_number' },
+          { header: 'Customer', key: 'customer_name' },
+          { header: 'Status', key: 'status' },
+          { header: 'Total', key: 'total_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+          { header: 'Date', key: 'order_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+          { header: 'Fulfillment', key: 'fulfillment_pct', align: 'right', format: (v) => `${v}%` },
+        ],
+        data: pdfData as unknown as Record<string, unknown>[],
+        orientation: 'landscape',
+      });
+      toast('success', `Downloaded PDF with ${selectedRows.length} order(s)`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  const handleBulkDelete = async () => {
+    setDeleting(true);
+    try {
+      const ids = selectedRows.map((o) => o.id);
+      const { error } = await supabase.from('orders').delete().in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Deleted ${ids.length} order(s)`);
+        clearSelection();
+        fetchOrders();
+      }
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setDeleting(false);
+    setDeleteModalOpen(false);
+  };
+
+  const bulkActions = [
+    { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
+    { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'delete', label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
+  ];
+
+  const dataColumns: Column<OrderWithFulfillment>[] = [
     {
       key: 'order_number',
       header: 'Order #',
@@ -128,12 +213,16 @@ export default function Orders() {
     },
   ];
 
+  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex-1 flex items-center gap-3">
           <h1 className="text-2xl font-bold text-nav-dark">Orders</h1>
-          <p className="text-sm text-secondary mt-1">Manage customer orders and invoices</p>
+          {canBulkAction && (
+            <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button variant="secondary" onClick={() => setShowImportModal(true)}>
@@ -160,18 +249,28 @@ export default function Orders() {
             emptyDescription="Orders are created from accepted quotes"
             loading={loading}
             filters={
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                aria-label="Filter by order status"
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-              >
-                <option value="">All Statuses</option>
-                <option value="confirmed">Confirmed</option>
-                <option value="partially_fulfilled">Partially Fulfilled</option>
-                <option value="fulfilled">Fulfilled</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
+              <>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label="Filter by order status"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">All Statuses</option>
+                  <option value="confirmed">Confirmed</option>
+                  <option value="partially_fulfilled">Partially Fulfilled</option>
+                  <option value="fulfilled">Fulfilled</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+                {canBulkAction && filtered.length > 0 && (
+                  <button
+                    onClick={toggleAll}
+                    className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+                  >
+                    {allSelected ? 'Deselect All' : 'Select All'}
+                  </button>
+                )}
+              </>
             }
           />
         </div>
@@ -184,6 +283,15 @@ export default function Orders() {
           setShowImportModal(false);
           fetchOrders();
         }}
+      />
+
+      <BulkDeleteConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        count={selectedCount}
+        entityName="order"
+        onConfirm={handleBulkDelete}
+        loading={deleting}
       />
     </div>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Send, Ban, Printer, Mail, Zap, Trash2 } from 'lucide-react';
+import { Plus, FileText, Check, Send, Ban, Printer, Mail, Zap, Trash2, Download } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -10,6 +10,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { exportToCSV } from '../lib/csvExport';
+import { downloadReportPdf } from '../lib/reportPdf';
 import BatchVoidModal from '../components/invoices/BatchVoidModal';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
@@ -75,6 +76,7 @@ export default function Invoices() {
   const [showBatchPrintDialog, setShowBatchPrintDialog] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   useEffect(() => {
     fetchInvoices();
@@ -312,6 +314,35 @@ export default function Invoices() {
     setShowDeleteModal(false);
   };
 
+  const handleExportPDF = async () => {
+    setExportingPdf(true);
+    try {
+      const rows = selected.size > 0 ? selectedInvoices : filtered;
+      await downloadReportPdf({
+        title: 'Invoices',
+        subtitle: `${rows.length} invoice(s)`,
+        columns: [
+          { header: 'Invoice #', key: 'invoice_number' },
+          { header: 'Customer', key: 'customer_name' },
+          { header: 'Type', key: 'invoice_type', format: (v) => {
+            const map: Record<string, string> = { chemical_sale: 'Chemical', field_application: 'Application', misc_charge: 'Misc' };
+            return map[String(v)] || String(v || '-');
+          }},
+          { header: 'Date', key: 'invoice_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+          { header: 'Total', key: 'total_amount_cents', align: 'right', format: (v) => fmt(Number(v) || 0) },
+          { header: 'Balance', key: 'balance_cents', align: 'right', format: (v) => fmt(Number(v) || 0) },
+          { header: 'Status', key: 'status' },
+        ],
+        data: rows as unknown as Record<string, unknown>[],
+        orientation: 'landscape',
+      });
+      toast('success', `Downloaded PDF with ${rows.length} invoice(s)`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setExportingPdf(false);
+  };
+
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -502,6 +533,15 @@ export default function Invoices() {
             }
           >
             Export CSV
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<Download className="w-4 h-4" />}
+            onClick={handleExportPDF}
+            loading={exportingPdf}
+          >
+            Download PDF
           </Button>
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/new')}>
             New Invoice

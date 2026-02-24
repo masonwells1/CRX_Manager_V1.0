@@ -1,14 +1,19 @@
-import { useEffect, useState } from 'react';
-import { Plus, CheckCircle, XCircle, ArrowDownToLine, DollarSign } from 'lucide-react';
+import { useEffect, useState, useMemo } from 'react';
+import { Plus, CheckCircle, XCircle, ArrowDownToLine, DollarSign, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import BulkActionBar from '../components/ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
+import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { exportToCSV } from '../lib/csvExport';
+import { downloadReportPdf } from '../lib/reportPdf';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import type { Return, ReturnItem, Customer, Product, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
@@ -78,6 +83,10 @@ export default function Returns() {
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   const isAdmin = role === 'admin';
+  const canBulkAction = role === 'admin' || role === 'sales_rep';
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     fetchReturns();
@@ -345,11 +354,85 @@ export default function Returns() {
     return true;
   });
 
+  const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
+    useRowSelection({ data: filtered, getId: (r) => r.id });
+
+  const checkboxCol = useMemo(
+    () => createCheckboxColumn<ReturnRow>(selected, toggleSelect, (r) => r.id),
+    [selected, toggleSelect]
+  );
+
+  const handleExportCSV = () => {
+    exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
+      { key: 'return_number', header: 'Return #' },
+      { key: 'customer_name', header: 'Customer' },
+      { key: 'order_number', header: 'Order' },
+      { key: 'status', header: 'Status' },
+      { key: 'reason', header: 'Reason' },
+      { key: 'total_credit_cents', header: 'Credit (cents)' },
+      { key: 'requested_at', header: 'Requested' },
+    ], 'returns');
+    toast('success', `Exported ${selectedRows.length} return(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      await downloadReportPdf({
+        title: 'Returns',
+        subtitle: `${selectedRows.length} return(s) selected`,
+        columns: [
+          { header: 'Return #', key: 'return_number' },
+          { header: 'Customer', key: 'customer_name' },
+          { header: 'Order', key: 'order_number', format: (v) => v ? String(v) : '-' },
+          { header: 'Status', key: 'status' },
+          { header: 'Reason', key: 'reason' },
+          { header: 'Credit', key: 'total_credit_cents', align: 'right', format: (v) => v ? `$${(Number(v) / 100).toFixed(2)}` : '-' },
+        ],
+        data: selectedRows as unknown as Record<string, unknown>[],
+        orientation: 'landscape',
+      });
+      toast('success', `Downloaded PDF with ${selectedRows.length} return(s)`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  const handleBulkDelete = async () => {
+    setDeleting(true);
+    try {
+      const ids = selectedRows.map((r) => r.id);
+      // Soft delete via deleted_at timestamp
+      const { error } = await supabase
+        .from('returns')
+        .update({ deleted_at: new Date().toISOString() })
+        .in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Deleted ${ids.length} return(s)`);
+        clearSelection();
+        fetchReturns();
+      }
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setDeleting(false);
+    setDeleteModalOpen(false);
+  };
+
+  const bulkActions = [
+    { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
+    { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'delete', label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
+  ];
+
   const formatCents = (cents: number) => {
     return `$${(cents / 100).toFixed(2)}`;
   };
 
-  const columns: Column<ReturnRow>[] = [
+  const dataColumns: Column<ReturnRow>[] = [
     {
       key: 'return_number',
       header: 'Return #',
@@ -404,10 +487,15 @@ export default function Returns() {
     },
   ];
 
+  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Returns / RMA</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-semibold font-heading text-nav-dark">Returns / RMA</h1>
+          {canBulkAction && <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />}
+        </div>
         <Button icon={<Plus className="w-4 h-4" />} onClick={openCreate}>
           New Return
         </Button>
@@ -431,20 +519,30 @@ export default function Returns() {
             }
             loading={loading}
             filters={
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                aria-label="Filter by status"
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-              >
-                <option value="">All Statuses</option>
-                <option value="requested">Requested</option>
-                <option value="approved">Approved</option>
-                <option value="received">Received</option>
-                <option value="credited">Credited</option>
-                <option value="rejected">Rejected</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
+              <>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label="Filter by status"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">All Statuses</option>
+                  <option value="requested">Requested</option>
+                  <option value="approved">Approved</option>
+                  <option value="received">Received</option>
+                  <option value="credited">Credited</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+                {canBulkAction && filtered.length > 0 && (
+                  <button
+                    onClick={toggleAll}
+                    className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+                  >
+                    {allSelected ? 'Deselect All' : 'Select All'}
+                  </button>
+                )}
+              </>
             }
           />
         </div>
@@ -588,6 +686,15 @@ export default function Returns() {
           </div>
         </div>
       </Modal>
+
+      <BulkDeleteConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        count={selectedCount}
+        entityName="return"
+        onConfirm={handleBulkDelete}
+        loading={deleting}
+      />
 
       {/* Return Detail Modal */}
       <Modal

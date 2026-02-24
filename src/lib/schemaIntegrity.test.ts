@@ -417,7 +417,7 @@ describe('Schema Integrity: Data Type Contracts', () => {
   });
 
   it('all UUID columns are string type', () => {
-    for (const { table, columns } of CRITICAL_COLUMNS) {
+    for (const { table: _table, columns } of CRITICAL_COLUMNS) {
       const uuidColumns = columns.filter(c => c.type === 'uuid');
       for (const col of uuidColumns) {
         expect(col.type).toBe('uuid');

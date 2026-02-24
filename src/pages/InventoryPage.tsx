@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2 } from 'lucide-react';
+import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2, Download, FileText } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EditableDataTable, { type EditableColumn } from '../components/ui/EditableDataTable';
@@ -9,6 +9,8 @@ import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { exportToCSV } from '../lib/csvExport';
+import { downloadReportPdf } from '../lib/reportPdf';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
@@ -73,6 +75,46 @@ export default function InventoryPage() {
   const [holdsExpanded, setHoldsExpanded] = useState(true);
 
   const isAdmin = role === 'admin';
+  const [exportingPdf, setExportingPdf] = useState(false);
+
+  const handleExportCSV = () => {
+    exportToCSV(filtered as unknown as Record<string, unknown>[], [
+      { key: 'product_name', header: 'Product' },
+      { key: 'inventory_unit', header: 'Unit' },
+      { key: 'quantity_on_order', header: 'On Order' },
+      { key: 'total_on_floor', header: 'Total on Floor' },
+      { key: 'free_qty', header: 'Net Position' },
+      { key: 'planned_qty', header: 'Planned' },
+      { key: 'quantity_prebooked', header: 'Committed' },
+      { key: 'delivered_ytd', header: 'Delivered YTD' },
+      { key: 'location', header: 'Location' },
+    ], 'inventory');
+    toast('success', `Exported ${filtered.length} inventory row(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExportingPdf(true);
+    try {
+      await downloadReportPdf({
+        title: 'Inventory',
+        subtitle: `${filtered.length} product(s)`,
+        columns: [
+          { header: 'Product', key: 'product_name' },
+          { header: 'Unit', key: 'inventory_unit', format: (v) => v ? String(v) : '-' },
+          { header: 'On Order', key: 'quantity_on_order', align: 'right' },
+          { header: 'On Floor', key: 'total_on_floor', align: 'right' },
+          { header: 'Net', key: 'free_qty', align: 'right', format: (v) => v != null ? Number(v).toFixed(1) : '-' },
+          { header: 'Committed', key: 'quantity_prebooked', align: 'right' },
+        ],
+        data: filtered as unknown as Record<string, unknown>[],
+        orientation: 'landscape',
+      });
+      toast('success', `Downloaded PDF with ${filtered.length} product(s)`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setExportingPdf(false);
+  };
 
   useEffect(() => {
     fetchInventory();
@@ -773,16 +815,24 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-4">
-      {isAdmin && (
-        <div className="flex justify-end gap-2">
-          <Button icon={<Plus className="w-4 h-4" />} onClick={openHoldModal} variant="secondary">
-            Create Hold
-          </Button>
-          <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
-            Add Inventory
-          </Button>
-        </div>
-      )}
+      <div className="flex justify-end gap-2">
+        <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} onClick={handleExportCSV}>
+          Export CSV
+        </Button>
+        <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={handleExportPDF} loading={exportingPdf}>
+          Download PDF
+        </Button>
+        {isAdmin && (
+          <>
+            <Button icon={<Plus className="w-4 h-4" />} onClick={openHoldModal} variant="secondary">
+              Create Hold
+            </Button>
+            <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
+              Add Inventory
+            </Button>
+          </>
+        )}
+      </div>
 
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
