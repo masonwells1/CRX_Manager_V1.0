@@ -48,6 +48,105 @@ async function waitForPage(page: Page, ms = 2000) {
   await page.waitForTimeout(ms);
 }
 
+// ── Helper: get Supabase session info from localStorage ──────────────
+async function getSupabaseSession(page: Page): Promise<{ token: string; userId: string }> {
+  return page.evaluate(() => {
+    const raw = localStorage.getItem('sb-rhyzpcqhnizqbxphqdkr-auth-token');
+    if (!raw) return { token: '', userId: '' };
+    const session = JSON.parse(raw);
+    return {
+      token: session.access_token || '',
+      userId: session.user?.id || '',
+    };
+  });
+}
+
+// ── Helper: Supabase REST API call (runs in browser context) ─────────
+async function supabaseRest(
+  page: Page,
+  method: string,
+  path: string,
+  body?: Record<string, unknown>
+): Promise<unknown> {
+  const { token } = await getSupabaseSession(page);
+  return page.evaluate(
+    async ({ method, path, body, token }) => {
+      const resp = await fetch(
+        `https://rhyzpcqhnizqbxphqdkr.supabase.co/rest/v1/${path}`,
+        {
+          method,
+          headers: {
+            apikey:
+              'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJoeXpwY3Fobml6cWJ4cGhxZGtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAzOTM2NDAsImV4cCI6MjA4NTk2OTY0MH0.WR0vAi_KeGF0OoJ8_dFH7uW6ael9M5xnm6OUo2IZy7U',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            Prefer: 'return=representation',
+          },
+          body: body ? JSON.stringify(body) : undefined,
+        }
+      );
+      const text = await resp.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    },
+    { method, path, body, token }
+  );
+}
+
+// ── Helper: create a fresh PO through the UI ─────────────────────────
+async function createNewPO(page: Page): Promise<string> {
+  await page.goto('/purchase-orders/new');
+  await waitForPage(page, 3000);
+  await expect(page.locator('h1, h2').first()).toBeVisible({ timeout: 10000 });
+
+  // Enter vendor name
+  const vendorInput = page.locator('input[placeholder="Enter or select vendor..."]');
+  await expect(vendorInput).toBeVisible({ timeout: 5000 });
+  await vendorInput.fill(`E2E Vendor ${RUN_ID}`);
+
+  // Click "Select Product" on the pre-existing first item row
+  const selectProductBtn = page.locator('button:has-text("Select Product")').first();
+  await expect(selectProductBtn).toBeVisible({ timeout: 5000 });
+  await selectProductBtn.click();
+  await waitForPage(page, 1000);
+
+  // Product search overlay (fixed position, not role="dialog")
+  const overlay = page.locator('.fixed.inset-0');
+  await expect(overlay).toBeVisible({ timeout: 5000 });
+
+  // Click first product in the scrollable list
+  const productBtn = overlay.locator('.max-h-64 button, .overflow-y-auto button').first();
+  await expect(productBtn).toBeVisible({ timeout: 5000 });
+  await productBtn.click();
+  await waitForPage(page, 1000);
+
+  // Fill quantity — first number input in table (qty column, no step attr)
+  const qtyInput = page.locator('table tbody input[type="number"]').first();
+  await expect(qtyInput).toBeVisible({ timeout: 5000 });
+  await qtyInput.fill('50');
+
+  // Click "Submit PO"
+  const submitBtn = page.locator('button:has-text("Submit PO")');
+  await expect(submitBtn).toBeVisible({ timeout: 5000 });
+  await submitBtn.click();
+  await waitForPage(page, 3000);
+
+  // Handle UnsavedChangesModal race condition
+  try {
+    const leaveBtn = page.locator('button:has-text("Leave")');
+    await leaveBtn.click({ timeout: 3000 });
+  } catch {
+    // No modal appeared — navigation succeeded directly
+  }
+
+  // Wait for redirect to PO detail
+  await expect(page).toHaveURL(/\/purchase-orders\/[0-9a-f-]+/, { timeout: 15000 });
+  return page.url();
+}
+
 // ── Helper: create a direct order and return its URL ──────────────────
 async function createDirectOrder(
   page: Page,
@@ -646,13 +745,9 @@ test.describe.serial('Financial Ops — Prepayments & Finance Charges', () => {
     await page.goto('/ar-aging');
     await waitForPage(page, 3000);
 
-    // Click "Preview Finance Charges" button (admin only)
+    // Click "Preview Finance Charges" button (always visible for admin)
     const previewBtn = page.locator('button:has-text("Preview Finance Charges")');
-    if (!(await previewBtn.isVisible({ timeout: 5000 }).catch(() => false))) {
-      // Button not visible — might not be admin or no overdue invoices
-      test.skip(true, 'Preview Finance Charges button not visible');
-      return;
-    }
+    await expect(previewBtn).toBeVisible({ timeout: 10000 });
 
     await previewBtn.click();
     await waitForPage(page, 2000);
@@ -673,39 +768,64 @@ test.describe.serial('Financial Ops — Prepayments & Finance Charges', () => {
     }
   });
 
-  // P5: Generate finance charges (if preview showed any)
+  // P5: Generate finance charges — enables FC on a customer with outstanding balance,
+  //     sets as_of_date to far future so existing invoices are overdue, then generates
   test('P5: Generate finance charges from AR Aging', async ({ page }) => {
+    test.setTimeout(120000);
+
+    // === SETUP: Enable finance charges on a customer with outstanding invoices ===
+
+    // Find a posted invoice with balance > $5 to get a customer_id
+    const invoices = (await supabaseRest(
+      page, 'GET', 'invoices?status=eq.posted&balance_cents=gt.500&select=customer_id&limit=1'
+    )) as Array<{ customer_id: string }>;
+    const invoicesArray = Array.isArray(invoices) ? invoices : [];
+    expect(invoicesArray.length).toBeGreaterThan(0);
+
+    const customerId = invoicesArray[0].customer_id;
+
+    // Enable finance charges on the customer (rate 1.5%, no grace period)
+    const patchResult = await supabaseRest(page, 'PATCH', `customers?id=eq.${customerId}`, {
+      finance_charge_rate: 1.5,
+      finance_charge_enabled: true,
+      finance_charge_grace_days: 0,
+    });
+
+    // Verify the patch worked by reading back
+    const verify = (await supabaseRest(
+      page, 'GET', `customers?id=eq.${customerId}&select=finance_charge_rate`
+    )) as Array<{ finance_charge_rate: number }>;
+    const verifyArray = Array.isArray(verify) ? verify : [];
+    expect(verifyArray.length).toBeGreaterThan(0);
+    expect(verifyArray[0].finance_charge_rate).toBe(1.5);
+
+    // === Navigate to AR Aging and set as_of_date to far future ===
+
     await page.goto('/ar-aging');
     await waitForPage(page, 3000);
 
-    const previewBtn = page.locator('button:has-text("Preview Finance Charges")');
-    if (!(await previewBtn.isVisible({ timeout: 5000 }).catch(() => false))) {
-      test.skip(true, 'No finance charge preview available');
-      return;
-    }
-
-    await previewBtn.click();
+    // Change "As of Date" input to 2028-01-01 so all invoices appear overdue
+    const dateInput = page.locator('input[type="date"]');
+    await expect(dateInput).toBeVisible({ timeout: 5000 });
+    await dateInput.fill('2028-01-01');
     await waitForPage(page, 2000);
+
+    // Click Preview Finance Charges
+    const previewBtn = page.locator('button:has-text("Preview Finance Charges")');
+    await expect(previewBtn).toBeVisible({ timeout: 10000 });
+    await previewBtn.click();
+    await waitForPage(page, 3000);
 
     const modal = page.locator('[role="dialog"]');
     await expect(modal).toBeVisible({ timeout: 5000 });
 
-    // Look for "Generate All" or "Generate Selected" button
+    // The modal should now show eligible charges (Generate buttons appear only if previews.length > 0)
     const generateBtn = modal.locator('button').filter({ hasText: /Generate/i }).first();
-    if (!(await generateBtn.isVisible({ timeout: 3000 }).catch(() => false))) {
-      // No charges to generate — close and skip
-      const closeBtn = modal.locator('button:has-text("Close"), button:has-text("Cancel")').first();
-      if (await closeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await closeBtn.click();
-      }
-      test.skip(true, 'No finance charges to generate');
-      return;
-    }
-
+    await expect(generateBtn).toBeVisible({ timeout: 10000 });
     await generateBtn.click();
     await waitForPage(page, 3000);
 
-    // Verify success toast or modal closed
+    // Verify success — modal should close or show success message
     const bodyText = await page.textContent('body');
     expect(bodyText).toBeTruthy();
   });
@@ -721,37 +841,13 @@ test.describe.serial('Financial Ops — PO Receiving & Cycle Counts', () => {
     await page.setViewportSize({ width: 1280, height: 720 });
   });
 
-  // R1: Navigate to a PO with receivable items
-  test('R1: Navigate to PO detail with receivable line items', async ({ page }) => {
-    await page.goto('/purchase-orders');
-    await waitForPage(page, 3000);
+  // R1: Create a fresh PO with receivable items (guarantees "Receive Items" button for R2)
+  test('R1: Create new PO with receivable line items', async ({ page }) => {
+    test.setTimeout(60000);
+    state.poUrl = await createNewPO(page);
+    expect(state.poUrl).toContain('/purchase-orders/');
 
-    await expect(page).not.toHaveURL('/login');
-    const heading = page.locator('h1, h2').first();
-    await expect(heading).toBeVisible({ timeout: 10000 });
-
-    // Find a PO that has items to receive (submitted or partially_received)
-    const table = page.locator('table');
-    const empty = page.locator('text=/no purchase|no data|no orders/i');
-    await expect(table.or(empty).first()).toBeVisible({ timeout: 10000 });
-
-    // Click the first PO row
-    const firstRow = page.locator('table tbody tr').first();
-    if (await firstRow.isVisible({ timeout: 5000 }).catch(() => false)) {
-      const link = firstRow.locator('a').first();
-      if (await link.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await link.click();
-      } else {
-        await firstRow.click();
-      }
-      await waitForPage(page, 3000);
-
-      if (page.url().includes('/purchase-orders/')) {
-        state.poUrl = page.url();
-      }
-    }
-
-    // Verify PO detail loaded
+    // Verify PO detail page loaded with line items
     const bodyText = await page.textContent('body');
     expect(bodyText?.toLowerCase()).toMatch(/purchase order|po-|items|vendor/i);
   });
@@ -764,12 +860,9 @@ test.describe.serial('Financial Ops — PO Receiving & Cycle Counts', () => {
     await page.goto(poPath);
     await waitForPage(page, 3000);
 
-    // Click "Receive Items" button
+    // Click "Receive Items" button — always visible on a fresh submitted PO
     const receiveBtn = page.locator('button:has-text("Receive Items")');
-    if (!(await receiveBtn.isVisible({ timeout: 5000 }).catch(() => false))) {
-      test.skip(true, 'No "Receive Items" button — PO may be fully received');
-      return;
-    }
+    await expect(receiveBtn).toBeVisible({ timeout: 10000 });
 
     await receiveBtn.click();
     await waitForPage(page, 1000);
@@ -937,23 +1030,22 @@ test.describe.serial('Financial Ops — PO Receiving & Cycle Counts', () => {
       await confirmBtn.click();
       await waitForPage(page, 5000);
 
-      // Two valid outcomes:
-      // 1) Success: "Shipment Received!" (items were matched and received)
-      // 2) Error toast: "No items to receive" (all items were skipped/unmatched)
-      // Both demonstrate the Quick Receive workflow works end-to-end
-      const successText = page.locator('text=/Shipment Received|Successfully received/i');
-      const stillOnStep2 = page.locator('text=/PO Matching|Back to Edit/i').first();
-      const outcome = await Promise.race([
-        successText.waitFor({ timeout: 8000 }).then(() => 'success').catch(() => null),
-        stillOnStep2.waitFor({ timeout: 8000 }).then(() => 'stayed_on_step2').catch(() => null),
-      ]);
+      // Wait for success — the page should show "Shipment Received!" heading
+      // (Confirmed visible in prior run's page snapshot even when Promise.race failed)
+      const successHeading = page.locator('h2:has-text("Shipment Received")');
+      const successVisible = await successHeading.isVisible({ timeout: 10000 }).catch(() => false);
 
-      // Either outcome is valid — the workflow completed
-      expect(outcome).toBeTruthy();
+      if (!successVisible) {
+        // Fallback: check for any success indicator on the page
+        const bodyText = await page.textContent('body');
+        const hasSuccess = bodyText?.match(/Shipment Received|Successfully received|Receipt Downloaded/i);
+        expect(hasSuccess).toBeTruthy();
+      }
     } else {
-      // Step 2 didn't appear — matching call may have failed
+      // Step 2 didn't appear — we may still be on step 1 or an error occurred
+      // Verify we're still on the Quick Receive page at minimum
       const bodyText = await page.textContent('body');
-      expect(bodyText?.toLowerCase()).toMatch(/quick receive|review|match/i);
+      expect(bodyText?.toLowerCase()).toMatch(/quick receive|review|match|shipment received/i);
     }
   });
 
@@ -971,13 +1063,10 @@ test.describe.serial('Financial Ops — PO Receiving & Cycle Counts', () => {
     const heading = page.locator('h1, h2').first();
     await expect(heading).toBeVisible({ timeout: 10000 });
 
-    // Click "New Cycle Count" button (only visible for admin role)
+    // Click "New Cycle Count" button (admin only, always visible)
     // NOTE: Two matching buttons exist (header + empty state action), so use .first()
     const newCountBtn = page.locator('button:has-text("New Cycle Count")').first();
-    if (!(await newCountBtn.isVisible({ timeout: 10000 }).catch(() => false))) {
-      test.skip(true, 'New Cycle Count button not visible — may not be admin or no data');
-      return;
-    }
+    await expect(newCountBtn).toBeVisible({ timeout: 10000 });
 
     await newCountBtn.click();
     await waitForPage(page, 1000);
@@ -1026,43 +1115,49 @@ test.describe.serial('Financial Ops — PO Receiving & Cycle Counts', () => {
     expect(state.cycleCountNumber).toBeTruthy();
   });
 
-  // R7: Enter counts and complete cycle count
+  // R7: Enter counts and complete cycle count (with retry polling for DB propagation)
   test('R7: Enter counted quantities and complete cycle count', async ({ page }) => {
-    test.setTimeout(60000);
+    test.setTimeout(90000);
     test.skip(!state.cycleCountNumber, 'No cycle count created in R6');
 
-    await page.goto('/cycle-counts');
-    await waitForPage(page, 3000);
-    await page.waitForLoadState('networkidle');
+    // Retry up to 4 times with page reload to handle PostgREST cache timing
+    let targetRow = null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt === 0) {
+        await page.goto('/cycle-counts');
+      } else {
+        await page.reload();
+      }
+      await waitForPage(page, 3000);
+      await page.waitForLoadState('networkidle');
+      await waitForPage(page, 1000);
 
-    // Wait for the table or empty state to render
-    const table = page.locator('table');
-    const emptyState = page.locator('text=/No cycle counts/i');
-    await expect(table.or(emptyState).first()).toBeVisible({ timeout: 15000 });
+      const table = page.locator('table');
+      const hasTable = await table.isVisible({ timeout: 10000 }).catch(() => false);
+      if (!hasTable) continue;
 
-    // If table rendered, look for our cycle count or any in-progress one
-    const hasTable = await table.isVisible({ timeout: 2000 }).catch(() => false);
-    if (hasTable) {
-      // Try finding the specific CC number from R6
-      let targetRow = state.cycleCountNumber
-        ? page.locator('table tbody tr').filter({ hasText: state.cycleCountNumber }).first()
-        : page.locator('table tbody tr').filter({ hasText: /In Progress/i }).first();
-
-      // Fallback: try any "In Progress" row
-      if (!(await targetRow.isVisible({ timeout: 5000 }).catch(() => false))) {
-        targetRow = page.locator('table tbody tr').filter({ hasText: /In Progress/i }).first();
+      // Try finding our specific CC number
+      const row = page.locator('table tbody tr').filter({ hasText: state.cycleCountNumber }).first();
+      if (await row.isVisible({ timeout: 5000 }).catch(() => false)) {
+        targetRow = row;
+        break;
       }
 
-      if (!(await targetRow.isVisible({ timeout: 5000 }).catch(() => false))) {
-        test.skip(true, `No in-progress cycle count found (looking for ${state.cycleCountNumber})`);
-        return;
+      // Fallback: any "In Progress" row
+      const ipRow = page.locator('table tbody tr').filter({ hasText: /In Progress/i }).first();
+      if (await ipRow.isVisible({ timeout: 3000 }).catch(() => false)) {
+        targetRow = ipRow;
+        break;
       }
-      await targetRow.click();
-      await waitForPage(page, 2000);
-    } else {
-      test.skip(true, 'No cycle counts in table (empty state)');
-      return;
     }
+
+    expect(
+      targetRow,
+      `Cycle count ${state.cycleCountNumber} not found after 4 reload attempts`
+    ).toBeTruthy();
+
+    await targetRow!.click();
+    await waitForPage(page, 2000);
 
     // Detail modal should be open
     const modal = page.locator('[role="dialog"]');
@@ -1083,10 +1178,9 @@ test.describe.serial('Financial Ops — PO Receiving & Cycle Counts', () => {
 
     // Click "Complete & Apply Adjustments"
     const completeBtn = modal.locator('button:has-text("Complete")');
-    if (await completeBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await completeBtn.click();
-      await waitForPage(page, 3000);
-    }
+    await expect(completeBtn).toBeVisible({ timeout: 5000 });
+    await completeBtn.click();
+    await waitForPage(page, 3000);
 
     // Verify completion
     const bodyText = await page.textContent('body');
@@ -1125,21 +1219,69 @@ test.describe.serial('Financial Ops — Month-End & Commissions', () => {
     await expect(rollBtn).toBeVisible({ timeout: 5000 });
   });
 
-  // M2: Create a commission payment
+  // M2: Create a commission payment (seeds pending commission if none exist)
   test('M2: Create commission payment from CommissionPayments page', async ({ page }) => {
+    test.setTimeout(90000);
+
+    // === SETUP: Seed a pending commission record via REST if none exist ===
+    const { userId } = await getSupabaseSession(page);
+    expect(userId).toBeTruthy();
+
+    // Check if any unpaid commissions WITH a valid recipient_user_id exist
+    // (commissions with NULL recipient_user_id won't show in the recipients dropdown)
+    const existing = (await supabaseRest(
+      page, 'GET', `commissions?status=neq.paid&recipient_user_id=not.is.null&select=id&limit=1`
+    )) as Array<{ id: string }>;
+
+    if (!existing || existing.length === 0) {
+      // Get a recent order with order_number + customer info for valid FK references
+      const orders = (await supabaseRest(
+        page, 'GET', 'orders?select=id,customer_id,order_number&order=created_at.desc&limit=1'
+      )) as Array<{ id: string; customer_id: string; order_number: string }>;
+      expect(orders?.length).toBeGreaterThan(0);
+
+      const orderId = orders[0].id;
+      const customerId = orders[0].customer_id;
+      const orderNumber = orders[0].order_number;
+
+      // Get the customer name (farm_name) for the denormalized column
+      const customers = (await supabaseRest(
+        page, 'GET', `customers?id=eq.${customerId}&select=farm_name&limit=1`
+      )) as Array<{ farm_name: string }>;
+      const customerName = customers?.[0]?.farm_name || 'Test Customer';
+
+      // Insert a pending commission for the admin user
+      // NOTE: order_number + customer_name are denormalized columns required by CommissionPayments page
+      // NOTE: season is integer type, not text
+      const result = await supabaseRest(page, 'POST', 'commissions', {
+        order_id: orderId,
+        customer_id: customerId,
+        recipient_user_id: userId,
+        split_percentage: 100,
+        commission_amount: 50,
+        order_profit: 250,
+        status: 'pending',
+        order_date: new Date().toISOString().split('T')[0],
+        season: 2026,
+        order_number: orderNumber,
+        customer_name: customerName,
+      });
+
+      // Verify insert succeeded (should return array with the inserted row)
+      expect(Array.isArray(result)).toBeTruthy();
+    }
+
+    // === Now proceed with the commission payment flow ===
+
     await page.goto('/commission-payments');
     await waitForPage(page, 3000);
 
     const heading = page.locator('h1, h2').first();
     await expect(heading).toBeVisible({ timeout: 10000 });
 
-    // Click "New Payment" button
+    // "New Payment" button is always visible for admin
     const newPayBtn = page.locator('button:has-text("New Payment")');
-    if (!(await newPayBtn.isVisible({ timeout: 5000 }).catch(() => false))) {
-      test.skip(true, 'New Payment button not visible');
-      return;
-    }
-
+    await expect(newPayBtn).toBeVisible({ timeout: 10000 });
     await newPayBtn.click();
     await waitForPage(page, 1000);
 
@@ -1147,51 +1289,50 @@ test.describe.serial('Financial Ops — Month-End & Commissions', () => {
     const modal = page.locator('[role="dialog"]');
     await expect(modal).toBeVisible({ timeout: 5000 });
 
-    // Select recipient
+    // Select recipient — should now have at least one (our seeded commission)
     const recipientSelect = modal.locator('select').first();
     await expect(recipientSelect).toBeVisible({ timeout: 3000 });
+
+    // Wait for recipients to load
+    await waitForPage(page, 2000);
     const options = await recipientSelect.locator('option').allInnerTexts();
-    const realRecipients = options.filter(o => !o.includes('Select') && o.trim() !== '' && o !== '— Select Recipient —');
+    // Filter out placeholder AND "Unknown" recipients (NULL recipient_user_id causes display bugs)
+    const realRecipients = options.filter(
+      o => !o.includes('Select') && !o.startsWith('Unknown') && o.trim() !== '' && o !== '— Select Recipient —'
+    );
+    expect(realRecipients.length).toBeGreaterThan(0);
 
-    if (realRecipients.length === 0) {
-      // No recipients with unpaid commissions
-      const closeBtn = modal.locator('button:has-text("Cancel")');
-      if (await closeBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await closeBtn.click();
-      }
-      test.skip(true, 'No recipients with unpaid commissions');
-      return;
-    }
-
-    await recipientSelect.selectOption({ index: 1 });
+    // Select the first REAL recipient (skip placeholder and "Unknown" entries)
+    // Find the index of the first real recipient
+    const targetLabel = realRecipients[0];
+    const allOptions = await recipientSelect.locator('option').allInnerTexts();
+    const targetIndex = allOptions.findIndex(o => o === targetLabel);
+    await recipientSelect.selectOption({ index: targetIndex >= 0 ? targetIndex : 1 });
     await waitForPage(page, 2000);
 
-    // Select commissions (click "Select All" or first checkbox)
+    // Wait for commissions list to appear (checkboxes indicate items loaded)
+    const checkbox = modal.locator('input[type="checkbox"]').first();
+    await expect(checkbox).toBeVisible({ timeout: 10000 });
+
+    // Select commissions — prefer "Select All" button, fallback to first checkbox
     const selectAllLink = modal.locator('button, a').filter({ hasText: /Select All/i }).first();
     if (await selectAllLink.isVisible({ timeout: 3000 }).catch(() => false)) {
       await selectAllLink.click();
       await waitForPage(page, 500);
     } else {
-      // Click first checkbox
-      const checkbox = modal.locator('input[type="checkbox"]').first();
-      if (await checkbox.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await checkbox.click();
-      }
+      await checkbox.click();
     }
 
-    // Set payment method
-    const methodSelect = modal.locator('select').nth(1);
-    if (await methodSelect.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await methodSelect.selectOption('check');
-    }
+    // Wait for button to become enabled (amount > $0)
+    await waitForPage(page, 1000);
 
-    // Click "Create Payment"
+    // Click "Create Payment" — it should now be enabled with amount > $0
     const createBtn = modal.locator('button').filter({ hasText: /Create Payment/i });
-    if (await createBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await createBtn.click();
-      await waitForPage(page, 3000);
-      state.commissionPaymentCreated = true;
-    }
+    await expect(createBtn).toBeVisible({ timeout: 5000 });
+    await expect(createBtn).toBeEnabled({ timeout: 5000 });
+    await createBtn.click();
+    await waitForPage(page, 3000);
+    state.commissionPaymentCreated = true;
 
     // Verify payment was created (toast or row in table)
     const bodyText = await page.textContent('body');
@@ -1249,12 +1390,9 @@ test.describe.serial('Financial Ops — Month-End & Commissions', () => {
     await page.goto('/month-end');
     await waitForPage(page, 3000);
 
-    // Click "Generate Statements" button
+    // Click "Generate Statements" button (always visible on Month-End page)
     const statementsBtn = page.locator('button:has-text("Generate Statements")');
-    if (!(await statementsBtn.isVisible({ timeout: 5000 }).catch(() => false))) {
-      test.skip(true, 'Generate Statements button not visible');
-      return;
-    }
+    await expect(statementsBtn).toBeVisible({ timeout: 10000 });
 
     await statementsBtn.click();
     await waitForPage(page, 2000);
