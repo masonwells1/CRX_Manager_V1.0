@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, type ReactNode } from 'react';
 import type { Column } from '../components/ui/DataTable';
 
 interface UseRowSelectionOptions<T> {
@@ -24,6 +24,10 @@ interface UseRowSelectionReturn<T> {
  * Manages multi-row selection state for DataTable pages.
  * Extracts the Set<string> + toggleSelect + toggleAll pattern
  * used in Invoices.tsx and Deliveries.tsx into a reusable hook.
+ *
+ * NOTE: `selected` is the raw Set of IDs (may contain stale IDs from
+ * previously-visible rows). `selectedRows` / `selectedCount` are derived
+ * from the *current* data — always use those for export / display.
  */
 export function useRowSelection<T>({
   data,
@@ -31,15 +35,6 @@ export function useRowSelection<T>({
   isSelectable,
 }: UseRowSelectionOptions<T>): UseRowSelectionReturn<T> {
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const prevDataRef = useRef(data);
-
-  // Auto-clear selection when data reference changes (e.g., after refetch)
-  useEffect(() => {
-    if (prevDataRef.current !== data) {
-      prevDataRef.current = data;
-      setSelected(new Set());
-    }
-  }, [data]);
 
   const selectableRows = useMemo(
     () => (isSelectable ? data.filter(isSelectable) : data),
@@ -57,7 +52,11 @@ export function useRowSelection<T>({
 
   const toggleAll = useCallback(() => {
     setSelected((prev) => {
-      if (prev.size === selectableRows.length && selectableRows.length > 0) {
+      // Check if every selectable row is currently selected
+      const allCurrentlySelected =
+        selectableRows.length > 0 &&
+        selectableRows.every((row) => prev.has(getId(row)));
+      if (allCurrentlySelected) {
         return new Set();
       }
       return new Set(selectableRows.map(getId));
@@ -68,19 +67,24 @@ export function useRowSelection<T>({
     setSelected(new Set());
   }, []);
 
+  // Only rows in the CURRENT data that are selected — filters out stale IDs
   const selectedRows = useMemo(
     () => data.filter((row) => selected.has(getId(row))),
     [data, selected, getId]
   );
 
-  const allSelected = selectableRows.length > 0 && selected.size === selectableRows.length;
+  // Derive count and allSelected from actual visible data, not raw Set size
+  const selectedCount = selectedRows.length;
+  const allSelected =
+    selectableRows.length > 0 &&
+    selectableRows.every((row) => selected.has(getId(row)));
 
   return {
     selected,
     toggleSelect,
     toggleAll,
     clearSelection,
-    selectedCount: selected.size,
+    selectedCount,
     selectedRows,
     allSelected,
   };

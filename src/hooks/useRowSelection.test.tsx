@@ -107,7 +107,7 @@ describe('useRowSelection', () => {
     ]);
   });
 
-  it('auto-clears selection when data reference changes', () => {
+  it('preserves selection across data reference changes when IDs still exist', () => {
     const { result, rerender } = renderHook(
       ({ data }) => useRowSelection({ data, getId }),
       { initialProps: { data: mockData } }
@@ -116,10 +116,36 @@ describe('useRowSelection', () => {
     act(() => result.current.toggleSelect('1'));
     expect(result.current.selectedCount).toBe(1);
 
-    // Simulate refetch — new array reference
+    // Simulate refetch — new array reference but same IDs
     const newData = [...mockData];
     rerender({ data: newData });
-    expect(result.current.selectedCount).toBe(0);
+    // Selection should persist (id '1' still exists in new data)
+    expect(result.current.selectedCount).toBe(1);
+    expect(result.current.selected.has('1')).toBe(true);
+  });
+
+  it('prunes selectedCount when selected IDs no longer in data', () => {
+    const { result, rerender } = renderHook(
+      ({ data }) => useRowSelection({ data, getId }),
+      { initialProps: { data: mockData } }
+    );
+
+    act(() => {
+      result.current.toggleSelect('1');
+      result.current.toggleSelect('3');
+    });
+    expect(result.current.selectedCount).toBe(2);
+
+    // Simulate filter change — remove id '3' from visible data
+    const filteredData = mockData.filter((r) => r.status === 'active');
+    rerender({ data: filteredData });
+
+    // selectedCount reflects only rows still visible (id '1' is active, '3' is not)
+    expect(result.current.selectedCount).toBe(1);
+    expect(result.current.selectedRows).toHaveLength(1);
+    expect(result.current.selectedRows[0].id).toBe('1');
+    // Raw Set still has '3' but it's effectively invisible
+    expect(result.current.selected.has('3')).toBe(true);
   });
 
   it('allSelected is false when data is empty', () => {
