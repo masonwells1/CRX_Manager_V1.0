@@ -94,7 +94,8 @@ export default function Products() {
       { key: 'category', header: 'Category' },
       { key: 'vendor', header: 'Vendor' },
     ];
-    const priceCols = isAdmin
+    const showCostMargin = isAdmin && showSensitive;
+    const priceCols = showCostMargin
       ? [
           { key: 'current_cost', header: 'Cost', format: (v: unknown) => fmtCSV(v as number) },
           { key: 'tier1_price', header: 'T1 Price', format: (v: unknown) => fmtCSV(v as number) },
@@ -133,7 +134,8 @@ export default function Products() {
         { header: 'SKU', key: 'sku', format: (v) => String(v || '-') },
         { header: 'Category', key: 'category', format: (v) => String(v || '-') },
       ];
-      const pricePdfCols: ReportPdfColumn[] = isAdmin
+      const showCostMarginPdf = isAdmin && showSensitive;
+      const pricePdfCols: ReportPdfColumn[] = showCostMarginPdf
         ? [
             { header: 'Cost', key: 'current_cost', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
             { header: 'T1 Price', key: 'tier1_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
@@ -153,7 +155,7 @@ export default function Products() {
         subtitle: `${selectedRows.length} product(s) selected`,
         columns: [...basePdfCols, ...pricePdfCols, { header: 'Status', key: 'is_active', format: (v) => v ? 'Active' : 'Inactive' }],
         data: pdfData as unknown as Record<string, unknown>[],
-        orientation: isAdmin ? 'landscape' : 'portrait',
+        orientation: showCostMarginPdf ? 'landscape' : 'portrait',
       });
       toast('success', `Downloaded PDF with ${selectedRows.length} product(s)`);
     } catch (err) {
