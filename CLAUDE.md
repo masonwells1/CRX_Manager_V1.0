@@ -917,9 +917,21 @@ Test every feature as each role:
 
 ---
 
+## Future Projects — DO NOT WORK ON UNLESS INSTRUCTED
+
+### Price List Versioning System
+- **Design doc:** `docs/plans/2026-02-23-price-list-versioning-design.md`
+- **Status:** Design complete, NOT implemented. Do not build any part of this without explicit instruction.
+- **Summary:** Named seasonal price snapshots (e.g., "Early Bird 2026"), customer assignment to a price list, QuoteBuilder defaults to committed prices with rep override, margin/commission reporting against committed vs actual prices.
+- **New tables planned:** `seasons`, `price_lists`, `price_list_items` + columns on `customers` and `quotes`
+- **Motivation:** Lock early-commitment customers to favorable pricing as costs change throughout the season. System suggests committed prices, rep can always override. Historical cost tracking via `cost_history` remains unchanged.
+
+---
+
 ## Documentation Index
 - `CLAUDE.md` (this file) -- Complete project reference: architecture, schema, RPCs, business logic, feature inventory
 - `README.md` -- Project overview, quick start, tech stack, feature summary
 - `TESTING.md` -- Testing guide (beginner-friendly): setup, running unit & E2E tests, troubleshooting
 - `DEPLOYMENT.md` -- Deployment instructions: Vercel/Netlify setup, env vars, Edge Function secrets, rollback
 - `ENV_SETUP.md` -- Environment variable setup guide (gitignored)
+- `docs/plans/2026-02-23-price-list-versioning-design.md` -- Price list versioning design (FUTURE, not implemented)
