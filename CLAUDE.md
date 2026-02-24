@@ -10,12 +10,12 @@
 ## Current State (as of 2026-02-24)
 - **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import + Safety Audit + Quick Receive + Codebase Audit + Lint Cleanup + E2E Gate Tests
 - **Deployed to:** Vercel → **https://croprxsolutions.app** (live)
-- **Test coverage:** 791 unit tests (Vitest, 48 test files) + 351 Playwright E2E tests (33 spec files)
+- **Test coverage:** 829 unit tests (Vitest, 49 test files) + 351 Playwright E2E tests (33 spec files)
 - **77+ migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
 - **ESLint:** 0 errors (fully lint-clean)
 - **TypeScript:** 0 strict type errors (enforced in CI — blocks on failure)
-- **Latest commit:** `d52d910` on main (pushed) — update this after each commit
+- **Latest commit:** `f571196` on main (pushed) — update this after each commit
 - **E2E gate tests:** 2 comprehensive gate test suites — admin full-lifecycle (25 tests) + financial operations (25 tests), both 100% green
 - **Pre-commit hook:** `npm run lint` + `npm run build` + `npx vitest run` run automatically before every commit
 - **GitHub CI:** ESLint → TypeScript → Vitest → Build — [status badge](https://github.com/masonwells1/CRX_Manager_V1.0/actions/workflows/ci.yml) ✅ green (all steps blocking)
@@ -82,24 +82,24 @@ Use this table to check **"does this feature already exist?"** before building a
 | Domain | Pages | Key Capabilities |
 |--------|-------|-----------------|
 | **Dashboard** | `/` | KPIs, today's jobs, recent activity, integrity alerts |
-| **Customers** | `/customers`, `/customers/:id` | Master list, tiered pricing (1-4), addresses, credit limits, finance charge settings, season summary, bulk import |
-| **Products** | `/products`, `/products/:id` | Catalog with 3-tier pricing, EPA registration, RUP status, signal words, unit conversions, cost history, bulk import/pricing import |
-| **Quotes** | `/quotes`, `/quotes/new`, `/quotes/:id` | Multi-section builder, tiered pricing, commission splits, margin calcs, PDF generation, versioning, convert to order, bulk import |
-| **Orders** | `/orders`, `/orders/new`, `/orders/:id` | Direct creation or from quote, line-item management, fulfillment tracking, credit limit alerts, bulk import |
-| **Deliveries** | `/deliveries`, `/deliveries/new`, `/deliveries/:id`, `/delivery-remainders` | Driver assignment, confirm→complete flow, signature capture, photo upload (10 max), GPS, partial delivery remainders, quick delivery (atomic order+delivery+invoice), batch cancel, driver dashboard |
-| **Receiving** | `/receiving`, `/receiving/quick` | PO receiving with per-item condition/lot/notes, receiving dashboard with summary cards, quick receive (auto-match to oldest POs), photo attachments |
-| **Inventory** | `/inventory`, `/cycle-counts` | Real-time stock levels, low stock alerts, holds, adjustments, warehouse tracking, cycle counts with variance |
-| **Purchase Orders** | `/purchase-orders`, `/purchase-orders/new`, `/purchase-orders/:id` | Vendor PO creation, two-step receive modal, receiving history, auto-cost update |
-| **Invoices** | `/invoices`, `/invoices/:id` | Auto-generate from deliveries, 3 PDF layouts, batch print, batch void, write-off, post/unpost |
-| **Payments** | `/payments`, `/payment-allocation`, `/prepayments` | Check recording, unified allocation across invoices, prepay credits, auto-apply |
+| **Customers** | `/customers`, `/customers/:id` | Master list, tiered pricing (1-4), addresses, credit limits, finance charge settings, season summary, bulk import, bulk select/delete/CSV/PDF export |
+| **Products** | `/products`, `/products/:id` | Catalog with 3-tier pricing, EPA registration, RUP status, signal words, unit conversions, cost history, bulk import/pricing import, bulk select/delete/CSV/PDF export |
+| **Quotes** | `/quotes`, `/quotes/new`, `/quotes/:id` | Multi-section builder, tiered pricing, commission splits, margin calcs, PDF generation, versioning, convert to order, bulk import, bulk select/delete/CSV/PDF export |
+| **Orders** | `/orders`, `/orders/new`, `/orders/:id` | Direct creation or from quote, line-item management, fulfillment tracking, credit limit alerts, bulk import, bulk select/delete/CSV/PDF export |
+| **Deliveries** | `/deliveries`, `/deliveries/new`, `/deliveries/:id`, `/delivery-remainders` | Driver assignment, confirm→complete flow, signature capture, photo upload (10 max), GPS, partial delivery remainders, quick delivery (atomic order+delivery+invoice), batch cancel, driver dashboard, bulk select/CSV/PDF export |
+| **Receiving** | `/receiving`, `/receiving/quick` | PO receiving with per-item condition/lot/notes, receiving dashboard with summary cards, quick receive (auto-match to oldest POs), photo attachments, bulk select/delete/CSV/PDF export |
+| **Inventory** | `/inventory`, `/cycle-counts` | Real-time stock levels, low stock alerts, holds, adjustments, warehouse tracking, cycle counts with variance, CSV/PDF export |
+| **Purchase Orders** | `/purchase-orders`, `/purchase-orders/new`, `/purchase-orders/:id` | Vendor PO creation, two-step receive modal, receiving history, auto-cost update, bulk select/delete/CSV/PDF export |
+| **Invoices** | `/invoices`, `/invoices/:id` | Auto-generate from deliveries, 3 PDF layouts, batch print, batch void, write-off, post/unpost, bulk select/delete/CSV/PDF export |
+| **Payments** | `/payments`, `/payment-allocation`, `/prepayments` | Check recording, unified allocation across invoices, prepay credits, auto-apply, CSV/PDF export (both tabs) |
 | **AR & Finance** | `/ar-aging`, `/month-end`, `/commission-payments`, `/customer-transactions` | Aging buckets (current/30/60/90+), finance charges, statements, period close, commission posting, transaction review |
-| **Jobs** | `/jobs`, `/jobs/:id` | Application scheduling, applicator/vehicle assignment, recipe loading, complete→application record, transfer to invoice |
-| **Blend Tickets** | `/blend-tickets`, `/blend-tickets/:id` | OCR upload (Google Vision AI + Tesseract.js), manual creation, product extraction, approve/reject, link to orders |
+| **Jobs** | `/jobs`, `/jobs/:id` | Application scheduling, applicator/vehicle assignment, recipe loading, complete→application record, transfer to invoice, bulk select/delete/CSV/PDF export |
+| **Blend Tickets** | `/blend-tickets`, `/blend-tickets/:id` | OCR upload (Google Vision AI + Tesseract.js), manual creation, product extraction, approve/reject, link to orders, bulk select/delete/CSV/PDF export |
 | **Recipes** | `/recipes` | Reusable blend recipe templates, product ratios, create job from recipe |
-| **Fields** | `/fields`, `/fields/:id` | Mapbox satellite maps, polygon draw tools, bulk import (shapefile/KML/GeoJSON with proj4 reprojection) |
+| **Fields** | `/fields`, `/fields/:id` | Mapbox satellite maps, polygon draw tools, bulk import (shapefile/KML/GeoJSON with proj4 reprojection), bulk select/delete/CSV/PDF export |
 | **Compliance** | `/compliance` | Applicator license tracking, RUP product flags, expiry alerts |
-| **Returns** | `/returns` | RMA workflow (request→approve→receive→credit), restocking, credit memos |
-| **Vehicles** | `/vehicles`, `/vehicles/:id` | Ground/air equipment CRUD, capacity, registration, FAA/DOT numbers |
+| **Returns** | `/returns` | RMA workflow (request→approve→receive→credit), restocking, credit memos, bulk select/soft-delete/CSV/PDF export |
+| **Vehicles** | `/vehicles`, `/vehicles/:id` | Ground/air equipment CRUD, capacity, registration, FAA/DOT numbers, bulk select/delete/CSV/PDF export |
 | **Reports** | `/reports` | 14 reports: logbook (4 views), P&L, gross sales, commission balance, chemical history, inventory cost, year-end summary. CSV/PDF export. |
 | **Team Board** | `/team-board` | Kanban: notes/todos/announcements, comments, tags, real-time updates |
 | **Other** | `/notifications`, `/settings`, `/application-records`, `/brand-vs-generic`, `/crop-programs`, `/rebates` | Notification center, admin settings/user management, application records log, ingredient mapping, crop programs, rebate claims |
@@ -112,7 +112,7 @@ Use this table to check **"does this feature already exist?"** before building a
 - **Frontend:** React 18 + TypeScript + Vite
 - **Backend:** Supabase (PostgreSQL + Auth + Edge Functions + Realtime + Storage)
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
-- **Testing:** Vitest (791 unit tests, 48 files) + Playwright (351 E2E tests, 33 spec files in `tests/e2e/`)
+- **Testing:** Vitest (829 unit tests, 49 files) + Playwright (351 E2E tests, 33 spec files in `tests/e2e/`)
 - **Deployment:** Vercel → https://croprxsolutions.app (live), configured via `vercel.json`
 - **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid + @turf/bbox
 - **Geo Import:** shapefile (parse .shp/.dbf/.shx), proj4 (coordinate reprojection), togeojson-with-extended-style (KML→GeoJSON)
@@ -125,7 +125,7 @@ Use this table to check **"does this feature already exist?"** before building a
 ```bash
 npm run dev          # Start dev server (http://localhost:5173)
 npm run build        # Production build
-npx vitest run       # Run 791 unit tests (48 test files)
+npx vitest run       # Run 829 unit tests (49 test files)
 npm run typecheck    # TypeScript error check
 npm run lint         # ESLint
 npm run test:e2e     # Run Playwright E2E tests
@@ -172,11 +172,12 @@ src/
     useRealtimeSubscription.ts # Supabase realtime wrapper
     usePageMeta.ts         # Page title/meta
     useOCRProcessor.ts     # OCR processing hook
+    useRowSelection.tsx    # Bulk row selection + createCheckboxColumn (used on 15 list pages)
   pages/               # 48 page components (lazy-loaded from App.tsx)
   components/
     auth/              # LoginPage, ProtectedRoute
     layout/            # AppLayout, Sidebar, TopBar
-    ui/                # Badge, Button, Card, DataTable, Modal, Input, Select, Skeleton, Toast, etc.
+    ui/                # Badge, Button, Card, DataTable, Modal, Input, Select, Skeleton, Toast, BulkActionBar, BulkDeleteConfirmModal, etc.
     map/               # MapContainer, DrawControl, FieldMarkers (Mapbox satellite maps)
     fields/            # BulkFieldImport (shapefile/KML/GeoJSON wizard), AttributeMappingStep, ImportPreviewMap
     blendtickets/      # BulkTicketUpload
@@ -872,10 +873,15 @@ Test every feature as each role:
 - Delivery integrity (S20): two-step confirm→complete flow (StartDeliveryModal with inventory check warning), items locked to order (read-only in edit mode), order context columns (Ordered/Prev. Delivered/This Delivery/Remaining After), quick delivery modal (customer search + product picker → atomic order+delivery+invoice), is_quick_delivery flag on deliveries + invoices
 - Delivery PDF: `src/lib/deliveryPdf.ts` — batch support, delivered vs planned columns, partial delivery amber highlight
 - Receiving PDF: `src/lib/receivingPdf.ts` — CRX green header, condition color-coding, batch support
+- Bulk operations pattern: `useRowSelection` hook + `createCheckboxColumn` + `BulkActionBar` (auto-hides when 0 selected) + `BulkDeleteConfirmModal`. Used on 6 pages (Products, Customers, Jobs, Quotes, PurchaseOrders, BlendTickets). Other pages (Orders, Vehicles, Fields, Returns, ReceivingLog) use the same pattern directly.
+- Smart fallback export pattern: `const rows = selected.size > 0 ? selectedRows : filtered;` — exports selected if any, otherwise all filtered. Used in Invoices, Deliveries, Payments, InventoryPage.
+- Soft delete pattern: `.update({ deleted_at: new Date().toISOString() })` + filter `.is('deleted_at', null)`. Used by Returns, Invoices. All other pages use hard delete (`.delete()`).
+- Hand-rolled checkbox selection: Invoices and Deliveries use custom `Set<string>` state with `toggleSelect`/`toggleAll` instead of `useRowSelection` hook (pre-existing pattern, kept for stability).
+- InventoryPage uses `EditableDataTable` (inline editing) — no checkbox column support, so export-only (CSV + PDF always visible, no row selection).
 
 ### Build & Type Checking
 - `npm run build` for full build verification (pre-commit hook runs this automatically)
-- `npx vitest run` for 766 unit tests (pre-commit hook runs this automatically)
+- `npx vitest run` for 829 unit tests (pre-commit hook runs this automatically)
 - `npx tsc --noEmit` for type checking only
 - `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI test environments (unit tests mock Supabase)
 - **TypeScript is strict-clean (0 errors)** — CI enforces `npx tsc --noEmit` as a blocking step
@@ -924,7 +930,7 @@ Test every feature as each role:
 | — | TypeScript Strict Cleanup: 148 → 0 errors (Supabase join casts, jsPDF types, GeoJSON, ReactNode chains) | Feb 23 |
 | — | Admin Full-Lifecycle E2E Gate Test: 25 Playwright tests (quote→return, inventory ops, team board) | Feb 23 |
 | — | Financial Operations E2E Gate Test: 25 tests (invoices, payments, PO receiving, cycle counts, commissions) | Feb 23-24 |
-| — | Bulk Operations: row selection + bulk delete/void/cancel across 8 pages (BulkActionBar, useRowSelection) | Feb 24 |
+| — | Bulk Operations: row selection + bulk delete/void/cancel + CSV/PDF export across all 15 list pages (BulkActionBar, useRowSelection, exportToCSV, downloadReportPdf). Smart fallback pattern: exports selected rows if any, otherwise all filtered data. Soft delete for Returns/Invoices (deleted_at), hard delete for others. | Feb 24 |
 | — | DB fixes: commissions denormalized columns, cycle_counts FK→profiles, PostgREST schema cache | Feb 24 |
 
 ---
