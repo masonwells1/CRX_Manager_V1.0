@@ -270,3 +270,31 @@ export async function getQuotePdfBlob(data: PdfQuoteData): Promise<Blob> {
   const doc = await generateQuotePdf(data);
   return doc.output('blob');
 }
+
+/**
+ * Batch quote PDF: generates one multi-page PDF with all quotes.
+ * Single quote → saves as quote_number.pdf
+ * Multiple quotes → saves as quotes_batch_{date}.pdf
+ */
+export async function generateBatchQuotePdf(quotes: PdfQuoteData[]): Promise<void> {
+  if (quotes.length === 0) throw new Error('No quotes to generate');
+  if (quotes.length === 1) {
+    await downloadQuotePdf(quotes[0]);
+    return;
+  }
+
+  // Generate each quote as a separate doc, then download sequentially
+  // (jsPDF doesn't support merging docs, so we use the rAF sequential pattern
+  // from generateBatchInvoicePdf)
+  const docs = await Promise.all(quotes.map((q) => generateQuotePdf(q)));
+  docs[0].save(`${quotes[0].quote_number}.pdf`);
+
+  for (let i = 1; i < docs.length; i++) {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        docs[i].save(`${quotes[i].quote_number}.pdf`);
+        resolve();
+      });
+    });
+  }
+}

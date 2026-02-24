@@ -1,16 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload, FileUp } from 'lucide-react';
+import { Plus, Upload, FileUp, Download, FileText, Trash2, Eye, EyeOff } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EditableDataTable, { type EditableColumn } from '../components/ui/EditableDataTable';
 import Badge from '../components/ui/Badge';
+import BulkActionBar from '../components/ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import BulkPricingImport from '../components/products/BulkPricingImport';
 import BulkProductImport from '../components/products/BulkProductImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
+import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
+import { exportToCSV, fmtCSV } from '../lib/csvExport';
+import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import type { Product } from '../types';
 
 export default function Products() {
@@ -25,6 +30,12 @@ export default function Products() {
   const [vendors, setVendors] = useState<string[]>([]);
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
   const [bulkProductImportOpen, setBulkProductImportOpen] = useState(false);
+  const [deactivateModalOpen, setDeactivateModalOpen] = useState(false);
+  const [deactivating, setDeactivating] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [showSensitive, setShowSensitive] = useState(false);
+
+  const canBulkAction = role === 'admin' || role === 'sales_rep';
 
   useEffect(() => {
     fetchProducts();
@@ -60,8 +71,217 @@ export default function Products() {
 
   const isAdmin = role === 'admin';
 
+  const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
+    useRowSelection({
+      data: filtered,
+      getId: (p) => p.id,
+      isSelectable: (p) => p.is_active,
+    });
+
+  const checkboxCol = useMemo(
+    () => createCheckboxColumn<Product>(selected, toggleSelect, (p) => p.id, (p) => p.is_active),
+    [selected, toggleSelect]
+  );
+
+  const fmt = (n: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
+
+  const handleExportCSV = () => {
+    const fmtMargin = (v: unknown) => v != null ? `${(Number(v) * 100).toFixed(1)}%` : '';
+    const baseCols = [
+      { key: 'product_name', header: 'Product Name' },
+      { key: 'sku', header: 'SKU' },
+      { key: 'category', header: 'Category' },
+      { key: 'vendor', header: 'Vendor' },
+    ];
+    const priceCols = isAdmin
+      ? [
+          { key: 'current_cost', header: 'Cost', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier1_price', header: 'T1 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier1_margin', header: 'T1 Margin %', format: fmtMargin },
+          { key: 'tier2_price', header: 'T2 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier2_margin', header: 'T2 Margin %', format: fmtMargin },
+          { key: 'tier3_price', header: 'T3 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier3_margin', header: 'T3 Margin %', format: fmtMargin },
+        ]
+      : [
+          { key: 'tier1_price', header: 'T1 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier2_price', header: 'T2 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier3_price', header: 'T3 Price', format: (v: unknown) => fmtCSV(v as number) },
+        ];
+    exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
+      ...baseCols,
+      ...priceCols,
+      { key: 'is_active', header: 'Status', format: (v: unknown) => v ? 'Active' : 'Inactive' },
+    ], 'products');
+    toast('success', `Exported ${selectedRows.length} product(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      const fmtMarginPdf = (v: unknown) => v != null ? String(v) : '';
+      // Preprocess data with synthetic margin strings (reportPdf format only gets value, not row)
+      const pdfData = selectedRows.map((p) => ({
+        ...p,
+        _t1_margin_str: p.tier1_margin != null ? `${(p.tier1_margin * 100).toFixed(1)}%` : '',
+        _t2_margin_str: p.tier2_margin != null ? `${(p.tier2_margin * 100).toFixed(1)}%` : '',
+        _t3_margin_str: p.tier3_margin != null ? `${(p.tier3_margin * 100).toFixed(1)}%` : '',
+      }));
+      const basePdfCols: ReportPdfColumn[] = [
+        { header: 'Product', key: 'product_name' },
+        { header: 'SKU', key: 'sku', format: (v) => String(v || '-') },
+        { header: 'Category', key: 'category', format: (v) => String(v || '-') },
+      ];
+      const pricePdfCols: ReportPdfColumn[] = isAdmin
+        ? [
+            { header: 'Cost', key: 'current_cost', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T1 Price', key: 'tier1_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T1 Margin', key: '_t1_margin_str', align: 'right', format: fmtMarginPdf },
+            { header: 'T2 Price', key: 'tier2_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T2 Margin', key: '_t2_margin_str', align: 'right', format: fmtMarginPdf },
+            { header: 'T3 Price', key: 'tier3_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T3 Margin', key: '_t3_margin_str', align: 'right', format: fmtMarginPdf },
+          ]
+        : [
+            { header: 'T1 Price', key: 'tier1_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T2 Price', key: 'tier2_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T3 Price', key: 'tier3_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+          ];
+      await downloadReportPdf({
+        title: 'Products',
+        subtitle: `${selectedRows.length} product(s) selected`,
+        columns: [...basePdfCols, ...pricePdfCols, { header: 'Status', key: 'is_active', format: (v) => v ? 'Active' : 'Inactive' }],
+        data: pdfData as unknown as Record<string, unknown>[],
+        orientation: isAdmin ? 'landscape' : 'portrait',
+      });
+      toast('success', `Downloaded PDF with ${selectedRows.length} product(s)`);
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  const handleDeactivate = async () => {
+    setDeactivating(true);
+    try {
+      const ids = selectedRows.map((p) => p.id);
+      const { error } = await supabase
+        .from('products')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Deactivated ${ids.length} product(s)`);
+        clearSelection();
+        fetchProducts();
+      }
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setDeactivating(false);
+    setDeactivateModalOpen(false);
+  };
+
+  const bulkActions = [
+    { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
+    { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'deactivate', label: 'Deactivate', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeactivateModalOpen(true), variant: 'danger' as const },
+  ];
+
   const categoryOptions = categories.map((c) => ({ value: c, label: c }));
   const vendorOptions = vendors.map((v) => ({ value: v, label: v }));
+
+  /** Build an editRender for a tier column that shows margin input + computed price preview */
+  const createTierEditRender = (tierNum: 1 | 2 | 3) => {
+    const marginKey = `tier${tierNum}_margin` as keyof Product & string;
+    const priceKey = `tier${tierNum}_price` as keyof Product & string;
+
+    return (
+      row: Product,
+      getCellValue: (colKey: string) => unknown,
+      setCellValue: (colKey: string, value: unknown) => void
+    ) => {
+      const cost = Number(getCellValue('current_cost')) || 0;
+      const marginRaw = getCellValue(marginKey);
+      const margin = marginRaw != null ? Number(marginRaw) : null;
+
+      if (!showSensitive || cost <= 0) {
+        // No margin editing when sensitive is hidden or no cost — fall back to direct price input
+        const price = getCellValue(priceKey);
+        return (
+          <input
+            type="number"
+            value={price != null ? String(price) : ''}
+            min={0}
+            step="0.01"
+            onChange={(e) => {
+              const raw = e.target.value;
+              setCellValue(priceKey, raw === '' ? null : parseFloat(raw));
+            }}
+            className="w-full px-2 py-1 text-sm text-right font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
+          />
+        );
+      }
+
+      // Compute price from margin for live preview
+      const computedPrice =
+        margin != null && margin > 0 && margin < 1
+          ? Math.round((cost / (1 - margin)) * 100) / 100
+          : null;
+
+      return (
+        <div className="space-y-1">
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              value={margin != null ? String(Math.round(margin * 10000) / 100) : ''}
+              min={0}
+              max={99.9}
+              step="0.1"
+              placeholder="—"
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === '') {
+                  setCellValue(marginKey, null);
+                } else {
+                  const pct = parseFloat(raw);
+                  const decimal = pct / 100;
+                  setCellValue(marginKey, decimal);
+                  // Compute and set price for live preview + save
+                  if (decimal > 0 && decimal < 1 && cost > 0) {
+                    setCellValue(priceKey, Math.round((cost / (1 - decimal)) * 100) / 100);
+                  }
+                }
+              }}
+              className="w-16 px-1 py-1 text-sm text-right font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
+            />
+            <span className="text-xs text-gray-400">%</span>
+          </div>
+          {computedPrice != null ? (
+            <div className="text-xs font-mono text-gray-500">{fmt(computedPrice)}</div>
+          ) : (
+            // No valid margin — allow direct price edit
+            <input
+              type="number"
+              value={getCellValue(priceKey) != null ? String(getCellValue(priceKey)) : ''}
+              min={0}
+              step="0.01"
+              onChange={(e) => {
+                const raw = e.target.value;
+                setCellValue(priceKey, raw === '' ? null : parseFloat(raw));
+              }}
+              className="w-full px-1 py-1 text-xs font-mono border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
+            />
+          )}
+          {computedPrice != null && (
+            <div className="text-[10px] text-crx-green">auto from margin</div>
+          )}
+        </div>
+      );
+    };
+  };
 
   const handleBulkSave = async (changes: Map<string, Record<string, unknown>>) => {
     try {
@@ -112,7 +332,7 @@ export default function Products() {
     }
   };
 
-  const columns: EditableColumn<Product>[] = [
+  const dataColumns: EditableColumn<Product>[] = [
     {
       key: 'product_name',
       header: 'Product Name',
@@ -142,7 +362,7 @@ export default function Products() {
       editType: 'select',
       editOptions: vendorOptions,
     },
-    ...(isAdmin
+    ...(isAdmin && showSensitive
       ? [
           {
             key: 'current_cost',
@@ -165,13 +385,16 @@ export default function Products() {
       header: 'T1 Price',
       sortable: true,
       editable: isAdmin,
-      editType: 'number',
-      editMin: 0,
-      editStep: '0.01',
+      editRender: isAdmin ? createTierEditRender(1) : undefined,
       render: (row) => (
-        <span className="font-mono text-sm">
-          {row.tier1_price != null ? `$${Number(row.tier1_price).toFixed(2)}` : '-'}
-        </span>
+        <div>
+          <span className="font-mono text-sm">
+            {row.tier1_price != null ? `$${Number(row.tier1_price).toFixed(2)}` : '-'}
+          </span>
+          {isAdmin && showSensitive && row.tier1_margin != null && (
+            <div className="text-[11px] text-gray-400">{(row.tier1_margin * 100).toFixed(1)}% net</div>
+          )}
+        </div>
       ),
     },
     {
@@ -179,13 +402,16 @@ export default function Products() {
       header: 'T2 Price',
       sortable: true,
       editable: isAdmin,
-      editType: 'number',
-      editMin: 0,
-      editStep: '0.01',
+      editRender: isAdmin ? createTierEditRender(2) : undefined,
       render: (row) => (
-        <span className="font-mono text-sm">
-          {row.tier2_price != null ? `$${Number(row.tier2_price).toFixed(2)}` : '-'}
-        </span>
+        <div>
+          <span className="font-mono text-sm">
+            {row.tier2_price != null ? `$${Number(row.tier2_price).toFixed(2)}` : '-'}
+          </span>
+          {isAdmin && showSensitive && row.tier2_margin != null && (
+            <div className="text-[11px] text-gray-400">{(row.tier2_margin * 100).toFixed(1)}% net</div>
+          )}
+        </div>
       ),
     },
     {
@@ -193,13 +419,16 @@ export default function Products() {
       header: 'T3 Price',
       sortable: true,
       editable: isAdmin,
-      editType: 'number',
-      editMin: 0,
-      editStep: '0.01',
+      editRender: isAdmin ? createTierEditRender(3) : undefined,
       render: (row) => (
-        <span className="font-mono text-sm">
-          {row.tier3_price != null ? `$${Number(row.tier3_price).toFixed(2)}` : '-'}
-        </span>
+        <div>
+          <span className="font-mono text-sm">
+            {row.tier3_price != null ? `$${Number(row.tier3_price).toFixed(2)}` : '-'}
+          </span>
+          {isAdmin && showSensitive && row.tier3_margin != null && (
+            <div className="text-[11px] text-gray-400">{(row.tier3_margin * 100).toFixed(1)}% net</div>
+          )}
+        </div>
       ),
     },
     {
@@ -215,29 +444,45 @@ export default function Products() {
     },
   ];
 
+  const columns: EditableColumn<Product>[] = canBulkAction
+    ? [checkboxCol as unknown as EditableColumn<Product>, ...dataColumns]
+    : dataColumns;
+
   return (
     <div className="space-y-4">
-      {isAdmin && (
-        <div className="flex justify-end gap-2">
-          <Button
-            variant="secondary"
-            icon={<FileUp className="w-4 h-4" />}
-            onClick={() => setBulkProductImportOpen(true)}
-          >
-            Import Products
-          </Button>
-          <Button
-            variant="secondary"
-            icon={<Upload className="w-4 h-4" />}
-            onClick={() => setBulkImportOpen(true)}
-          >
-            Update Pricing
-          </Button>
-          <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/products/new')}>
-            Add Product
-          </Button>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex-1 flex items-center gap-3">
+          <h1 className="text-xl font-semibold font-heading text-nav-dark">Products</h1>
+          {canBulkAction && (
+            <BulkActionBar
+              selectedCount={selectedCount}
+              actions={bulkActions}
+              onDeselectAll={clearSelection}
+            />
+          )}
         </div>
-      )}
+        {isAdmin && (
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              icon={<FileUp className="w-4 h-4" />}
+              onClick={() => setBulkProductImportOpen(true)}
+            >
+              Import Products
+            </Button>
+            <Button
+              variant="secondary"
+              icon={<Upload className="w-4 h-4" />}
+              onClick={() => setBulkImportOpen(true)}
+            >
+              Update Pricing
+            </Button>
+            <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/products/new')}>
+              Add Product
+            </Button>
+          </div>
+        )}
+      </div>
 
       <Card padding={false}>
         <div className="p-5">
@@ -261,6 +506,16 @@ export default function Products() {
             loading={loading}
             canEdit={isAdmin}
             onSave={handleBulkSave}
+            headerActions={isAdmin ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={showSensitive ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                onClick={() => setShowSensitive((v) => !v)}
+              >
+                {showSensitive ? 'Hide' : 'Margins'}
+              </Button>
+            ) : undefined}
             filters={
               <>
                 <select
@@ -283,6 +538,14 @@ export default function Products() {
                     <option key={v} value={v}>{v}</option>
                   ))}
                 </select>
+                {canBulkAction && filtered.length > 0 && (
+                  <button
+                    onClick={toggleAll}
+                    className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+                  >
+                    {allSelected ? 'Deselect All' : 'Select All'}
+                  </button>
+                )}
               </>
             }
           />
@@ -305,6 +568,16 @@ export default function Products() {
           fetchProducts();
           setBulkProductImportOpen(false);
         }}
+      />
+
+      <BulkDeleteConfirmModal
+        open={deactivateModalOpen}
+        onClose={() => setDeactivateModalOpen(false)}
+        count={selectedCount}
+        entityName="product"
+        actionWord="deactivate"
+        onConfirm={handleDeactivate}
+        loading={deactivating}
       />
     </div>
   );

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Send, Ban, Printer, Mail, Zap } from 'lucide-react';
+import { Plus, FileText, Check, Send, Ban, Printer, Mail, Zap, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -11,6 +11,7 @@ import { supabase, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { exportToCSV } from '../lib/csvExport';
 import BatchVoidModal from '../components/invoices/BatchVoidModal';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
 import { generateBatchInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
@@ -72,6 +73,8 @@ export default function Invoices() {
   const [printing, setPrinting] = useState(false);
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [showBatchPrintDialog, setShowBatchPrintDialog] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     fetchInvoices();
@@ -122,7 +125,8 @@ export default function Invoices() {
   const selectedInvoices = invoices.filter((i) => selected.has(i.id));
   const selectedPostable = selectedInvoices.filter((i) => ['draft', 'unposted'].includes(i.status));
   const selectedVoidable = selectedInvoices.filter((i) => i.status === 'posted');
-  const selectableStatuses = ['draft', 'unposted', 'posted'];
+  const selectedDeletable = selectedInvoices.filter((i) => ['draft', 'voided'].includes(i.status));
+  const selectableStatuses = ['draft', 'unposted', 'posted', 'voided'];
 
   // Batch post
   const handleBatchPost = async () => {
@@ -286,6 +290,28 @@ export default function Invoices() {
     setPrinting(false);
   };
 
+  const handleBatchDelete = async () => {
+    setDeleting(true);
+    try {
+      const ids = selectedDeletable.map((i) => i.id);
+      const { error } = await supabase
+        .from('invoices')
+        .update({ deleted_at: new Date().toISOString() })
+        .in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Deleted ${ids.length} invoice(s)`);
+        setSelected(new Set());
+        fetchInvoices();
+      }
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setDeleting(false);
+    setShowDeleteModal(false);
+  };
+
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -445,6 +471,15 @@ export default function Invoices() {
               >
                 Email
               </Button>
+              {selectedDeletable.length > 0 && (
+                <Button
+                  variant="danger"
+                  icon={<Trash2 className="w-4 h-4" />}
+                  onClick={() => setShowDeleteModal(true)}
+                >
+                  Delete {selectedDeletable.length}
+                </Button>
+              )}
             </>
           )}
           <Button
@@ -596,6 +631,16 @@ export default function Invoices() {
         hasShares={anySelectedHasShares}
         onPrint={handleBatchPrint}
         loading={printing}
+      />
+
+      {/* Batch Delete Modal */}
+      <BulkDeleteConfirmModal
+        open={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        count={selectedDeletable.length}
+        entityName="invoice"
+        onConfirm={handleBatchDelete}
+        loading={deleting}
       />
     </div>
   );

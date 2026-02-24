@@ -12,6 +12,7 @@ import {
   MapPin,
   Clock,
   Zap,
+  Download,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -23,6 +24,7 @@ import { supabase, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
+import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import type { Delivery, Profile } from '../types';
 
 /* ─── Row type ─── */
@@ -400,6 +402,20 @@ export default function Deliveries() {
     setRescheduling(false);
   };
 
+  const handleExportCSV = () => {
+    exportToCSV(selectedDeliveries as unknown as Record<string, unknown>[], [
+      { key: 'delivery_number', header: 'Delivery #' },
+      { key: 'customer_name', header: 'Customer' },
+      { key: 'driver_name', header: 'Driver' },
+      { key: 'scheduled_date', header: 'Scheduled', format: (v) => fmtDateCSV(v as string) },
+      { key: 'priority', header: 'Priority' },
+      { key: 'status', header: 'Status' },
+      { key: 'item_count', header: 'Items' },
+      { key: 'completed_at', header: 'Completed', format: (v) => fmtDateCSV(v as string) },
+    ], 'deliveries');
+    toast('success', `Exported ${selectedDeliveries.length} delivery(ies) to CSV`);
+  };
+
   /* ─── Driver Dashboard View ─── */
   if (isDriver) {
     const myToday = deliveries.filter(
@@ -658,6 +674,13 @@ export default function Deliveries() {
         <div className="flex gap-2 flex-wrap justify-end">
           {selected.size > 0 && (
             <>
+              <Button
+                variant="secondary"
+                icon={<Download className="w-4 h-4" />}
+                onClick={handleExportCSV}
+              >
+                Export CSV
+              </Button>
               <Button
                 variant="secondary"
                 icon={<Printer className="w-4 h-4" />}

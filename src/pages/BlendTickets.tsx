@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus, LinkIcon } from 'lucide-react';
+import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus, LinkIcon, Download, Trash2 } from 'lucide-react';
 import { supabase } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useOCRProcessor } from '../hooks/useOCRProcessor';
@@ -10,15 +10,23 @@ import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import EmptyState from '../components/ui/EmptyState';
 import Skeleton from '../components/ui/Skeleton';
+import BulkActionBar from '../components/ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { BulkTicketUpload } from '../components/blendtickets/BulkTicketUpload';
 import { ManualTicketCreate } from '../components/blendtickets/ManualTicketCreate';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { usePageMeta } from '../hooks/usePageMeta';
+import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
+import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
+import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
+import { sanitizeError } from '../lib/errorSanitizer';
+import { useToast } from '../components/ui/Toast';
 import type { BlendTicket, Customer } from '../types';
 
 export function BlendTickets() {
   usePageMeta();
-  useAuth();
+  const { role } = useAuth();
+  const { toast } = useToast();
   const [tickets, setTickets] = useState<BlendTicket[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,7 +37,11 @@ export function BlendTickets() {
   const [reviewFilter, setReviewFilter] = useState<string>('all');
   const [linkFilter, setLinkFilter] = useState<string>('all');
   const [paymentFilter, setPaymentFilter] = useState<string>('all');
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
+  const canBulkAction = role === 'admin' || role === 'sales_rep';
   const { isProcessing, processedCount } = useOCRProcessor(true);
 
   useEffect(() => {
@@ -86,6 +98,92 @@ export function BlendTickets() {
     return matchesSearch && matchesStatus && matchesReview && matchesLink && matchesPayment;
   });
 
+  const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
+    useRowSelection({
+      data: filteredTickets,
+      getId: (t) => t.id,
+    });
+
+  const checkboxCol = useMemo(
+    () => createCheckboxColumn<BlendTicket>(selected, toggleSelect, (t) => t.id),
+    [selected, toggleSelect]
+  );
+
+  const handleExportCSV = () => {
+    exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
+      { key: 'ticket_number', header: 'Ticket #' },
+      { key: 'customer', header: 'Customer', format: (v) => {
+        const c = v as { farm_name?: string } | undefined;
+        return c?.farm_name || '-';
+      }},
+      { key: 'ticket_date', header: 'Date', format: (v) => fmtDateCSV(v as string) },
+      { key: 'driver_name', header: 'Driver' },
+      { key: 'status', header: 'Status' },
+      { key: 'review_status', header: 'Review' },
+      { key: 'order_link_status', header: 'Order Link' },
+      { key: 'payment_status', header: 'Payment' },
+      { key: 'ocr_confidence_score', header: 'Confidence %' },
+    ], 'blend_tickets');
+    toast('success', `Exported ${selectedRows.length} ticket(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      const pdfCols: ReportPdfColumn[] = [
+        { header: 'Ticket #', key: 'ticket_number' },
+        { header: 'Customer', key: 'customer', format: (v) => {
+          const c = v as { farm_name?: string } | undefined;
+          return c?.farm_name || '-';
+        }},
+        { header: 'Date', key: 'ticket_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+        { header: 'Driver', key: 'driver_name', format: (v) => String(v || '-') },
+        { header: 'Status', key: 'status' },
+        { header: 'Review', key: 'review_status' },
+        { header: 'Payment', key: 'payment_status' },
+        { header: 'Confidence', key: 'ocr_confidence_score', align: 'right', format: (v) => `${v}%` },
+      ];
+      await downloadReportPdf({
+        title: 'Blend Tickets',
+        subtitle: `${selectedRows.length} ticket(s) selected`,
+        columns: pdfCols,
+        data: selectedRows as unknown as Record<string, unknown>[],
+      });
+      toast('success', `Downloaded PDF with ${selectedRows.length} ticket(s)`);
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const ids = selectedRows.map((t) => t.id);
+      const { error } = await supabase
+        .from('blend_tickets')
+        .update({ deleted_at: new Date().toISOString() })
+        .in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Deleted ${ids.length} ticket(s)`);
+        clearSelection();
+        loadData();
+      }
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setDeleting(false);
+    setDeleteModalOpen(false);
+  };
+
+  const bulkActions = [
+    { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
+    { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'delete', label: 'Delete Tickets', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
+  ];
+
   function getStatusBadge(status: string) {
     const variants: Record<string, { variant: 'default' | 'warning' | 'success' | 'error'; icon: typeof Clock }> = {
       pending: { variant: 'default', icon: Clock },
@@ -120,7 +218,7 @@ export function BlendTickets() {
     );
   }
 
-  const columns = [
+  const dataColumns: Column<BlendTicket>[] = [
     {
       key: 'ticket_number',
       header: 'Ticket #',
@@ -227,6 +325,8 @@ export function BlendTickets() {
     },
   ];
 
+  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -238,8 +338,8 @@ export function BlendTickets() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex-1 flex items-center gap-3">
           <FileText className="h-8 w-8 text-gray-700" />
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Blend Tickets</h1>
@@ -247,6 +347,13 @@ export function BlendTickets() {
               Upload and manage blend ticket images with automatic OCR processing
             </p>
           </div>
+          {canBulkAction && (
+            <BulkActionBar
+              selectedCount={selectedCount}
+              actions={bulkActions}
+              onDeselectAll={clearSelection}
+            />
+          )}
         </div>
         <div className="flex items-center gap-3">
           {isProcessing && (
@@ -370,6 +477,15 @@ export function BlendTickets() {
                 <option value="no_charge">No Charge</option>
               </select>
             </div>
+
+            {canBulkAction && filteredTickets.length > 0 && (
+              <button
+                onClick={toggleAll}
+                className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+              >
+                {allSelected ? 'Deselect All' : 'Select All'}
+              </button>
+            )}
           </div>
         </div>
 
@@ -392,12 +508,21 @@ export function BlendTickets() {
             }
           />
         ) : (
-          <DataTable
-            columns={columns as Column<BlendTicket>[]}
+          <DataTable<BlendTicket>
+            columns={columns}
             data={filteredTickets}
           />
         )}
       </Card>
+
+      <BulkDeleteConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        count={selectedCount}
+        entityName="blend ticket"
+        onConfirm={handleDelete}
+        loading={deleting}
+      />
     </div>
   );
 }

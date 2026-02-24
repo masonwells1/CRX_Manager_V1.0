@@ -545,4 +545,131 @@ describe('EditableDataTable', () => {
       expect(screen.getByTestId('custom-action')).toBeInTheDocument();
     });
   });
+
+  // ── 8. editRender ─────────────────────────────────────────────────
+  describe('editRender', () => {
+    it('shows editRender content in edit mode, not in view mode', () => {
+      const customColumns: EditableColumn<TestProduct>[] = [
+        { key: 'name', header: 'Name' },
+        {
+          key: 'price',
+          header: 'Price',
+          editable: true,
+          render: (row) => <span>${row.price}</span>,
+          editRender: (_row, _get, _set) => (
+            <div data-testid="custom-edit-cell">Custom editor</div>
+          ),
+        },
+      ];
+      const { rerender } = render(
+        <EditableDataTable data={testData} columns={customColumns} rowKey="id" canEdit />
+      );
+      // View mode: editRender NOT shown
+      expect(screen.queryByTestId('custom-edit-cell')).not.toBeInTheDocument();
+      expect(screen.getByText('$1000')).toBeInTheDocument();
+
+      // Enter edit mode
+      fireEvent.click(screen.getByText('Edit'));
+      // editRender IS shown
+      expect(screen.getAllByTestId('custom-edit-cell').length).toBe(3);
+      // Normal render is NOT shown
+      expect(screen.queryByText('$1000')).not.toBeInTheDocument();
+
+      // Cancel edit mode: editRender gone again
+      fireEvent.click(screen.getByText('Cancel'));
+      rerender(
+        <EditableDataTable data={testData} columns={customColumns} rowKey="id" canEdit />
+      );
+      expect(screen.queryByTestId('custom-edit-cell')).not.toBeInTheDocument();
+    });
+
+    it('getCellValue reflects dirty state from sibling columns', () => {
+      const customColumns: EditableColumn<TestProduct>[] = [
+        {
+          key: 'name',
+          header: 'Name',
+          editable: true,
+          editType: 'text',
+        },
+        {
+          key: 'price',
+          header: 'Price',
+          editable: true,
+          editRender: (_row, getCellValue, _setCellValue) => {
+            const name = getCellValue('name');
+            return <span data-testid="price-cell">name={String(name)}</span>;
+          },
+        },
+      ];
+      render(
+        <EditableDataTable
+          data={testData}
+          columns={customColumns}
+          rowKey="id"
+          canEdit
+          onSave={vi.fn()}
+        />
+      );
+      fireEvent.click(screen.getByText('Edit'));
+
+      // Before any edits, getCellValue reads original
+      const cells = screen.getAllByTestId('price-cell');
+      expect(cells[0]).toHaveTextContent('name=Product A');
+
+      // Edit sibling column (name)
+      const nameInput = screen.getByDisplayValue('Product A');
+      fireEvent.change(nameInput, { target: { value: 'Dirty Name' } });
+
+      // getCellValue now returns dirty value
+      const updatedCells = screen.getAllByTestId('price-cell');
+      expect(updatedCells[0]).toHaveTextContent('name=Dirty Name');
+    });
+
+    it('setCellValue marks row dirty and increments Save count', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined);
+      const customColumns: EditableColumn<TestProduct>[] = [
+        { key: 'name', header: 'Name' },
+        {
+          key: 'price',
+          header: 'Price',
+          editable: true,
+          editRender: (row, _get, setCellValue) => (
+            <button
+              data-testid={`set-price-${row.id}`}
+              onClick={() => setCellValue('price', 9999)}
+            >
+              Set price
+            </button>
+          ),
+        },
+      ];
+      render(
+        <EditableDataTable
+          data={testData}
+          columns={customColumns}
+          rowKey="id"
+          canEdit
+          onSave={onSave}
+        />
+      );
+      fireEvent.click(screen.getByText('Edit'));
+
+      // Save disabled (no dirty rows)
+      expect(screen.getByText('Save').closest('button')).toBeDisabled();
+
+      // Click custom setCellValue button for row 1
+      fireEvent.click(screen.getByTestId('set-price-1'));
+
+      // Save count updated
+      expect(screen.getByText(/Save \(1\)/)).toBeInTheDocument();
+
+      // Save and verify the dirty data
+      fireEvent.click(screen.getByText(/Save/).closest('button')!);
+      await waitFor(() => {
+        expect(onSave).toHaveBeenCalledTimes(1);
+      });
+      const changesMap = onSave.mock.calls[0][0] as Map<string, Record<string, unknown>>;
+      expect(changesMap.get('1')).toEqual({ price: 9999 });
+    });
+  });
 });

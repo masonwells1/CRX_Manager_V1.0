@@ -21,6 +21,12 @@ export interface EditableColumn<T> {
   editStep?: string;
   /** Format display value (e.g. currency formatting) */
   formatValue?: (value: unknown) => string;
+  /** Custom render for edit mode — overrides editType when provided */
+  editRender?: (
+    row: T,
+    getCellValue: (colKey: string) => unknown,
+    setCellValue: (colKey: string, value: unknown) => void
+  ) => ReactNode;
 }
 
 interface EditableDataTableProps<T> {
@@ -166,6 +172,15 @@ export default function EditableDataTable<T extends Record<string, any>>({
   };
 
   const renderEditCell = (row: T, col: EditableColumn<T>) => {
+    // Custom edit renderer takes priority over built-in editType
+    if (col.editRender) {
+      return col.editRender(
+        row,
+        (colKey) => getCellValue(row, colKey),
+        (colKey, val) => setCellValue(row, colKey, val)
+      );
+    }
+
     const value = getCellValue(row, col.key);
 
     if (col.editType === 'toggle') {

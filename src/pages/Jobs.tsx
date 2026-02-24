@@ -1,13 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus } from 'lucide-react';
+import { Plus, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
+import BulkActionBar from '../components/ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
+import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
+import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
+import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
+import { sanitizeError } from '../lib/errorSanitizer';
 import type { Job, JobStatus } from '../types';
 
 type JobRow = Job & {
@@ -55,6 +62,7 @@ function getPresetDates(preset: string): { start: string; end: string } {
 export default function Jobs() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { role } = useAuth();
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<JobStatus | ''>('');
@@ -62,6 +70,12 @@ export default function Jobs() {
   const [endDate, setEndDate] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const canBulkAction = role === 'admin' || role === 'sales_rep';
+  const DELETABLE: JobStatus[] = ['scheduled', 'in_progress', 'completed'];
 
   useEffect(() => {
     fetchCustomers();
@@ -131,7 +145,89 @@ export default function Jobs() {
     }
   };
 
-  const columns: Column<JobRow>[] = [
+  const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
+    useRowSelection({
+      data: jobs,
+      getId: (j) => j.id,
+      isSelectable: (j) => DELETABLE.includes(j.status),
+    });
+
+  const checkboxCol = useMemo(
+    () => createCheckboxColumn<JobRow>(selected, toggleSelect, (j) => j.id, (j) => DELETABLE.includes(j.status)),
+    [selected, toggleSelect]
+  );
+
+  const fmtCents = (cents: number) =>
+    `$${(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
+
+  const handleExportCSV = () => {
+    exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
+      { key: 'job_number', header: 'Job #' },
+      { key: 'job_date', header: 'Date', format: (v) => fmtDateCSV(v as string) },
+      { key: 'status', header: 'Status' },
+      { key: 'customer_name', header: 'Customer' },
+      { key: 'applicator_name', header: 'Applicator' },
+      { key: 'total_acres', header: 'Acres', format: (v) => fmtCSV(v as number) },
+      { key: 'vehicle_name', header: 'Vehicle' },
+      { key: 'total_price_cents', header: 'Price', format: (v) => v ? fmtCSV((v as number) / 100) : '' },
+    ], 'jobs');
+    toast('success', `Exported ${selectedRows.length} job(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      const pdfCols: ReportPdfColumn[] = [
+        { header: 'Job #', key: 'job_number' },
+        { header: 'Date', key: 'job_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+        { header: 'Status', key: 'status' },
+        { header: 'Customer', key: 'customer_name' },
+        { header: 'Applicator', key: 'applicator_name' },
+        { header: 'Acres', key: 'total_acres', align: 'right', format: (v) => v ? Number(v).toLocaleString() : '-' },
+        { header: 'Price', key: 'total_price_cents', align: 'right', format: (v) => v ? fmtCents(Number(v)) : '-' },
+      ];
+      await downloadReportPdf({
+        title: 'Job Schedule',
+        subtitle: `${selectedRows.length} job(s) selected`,
+        columns: pdfCols,
+        data: selectedRows as unknown as Record<string, unknown>[],
+      });
+      toast('success', `Downloaded PDF with ${selectedRows.length} job(s)`);
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const ids = selectedRows.map((j) => j.id);
+      const { error } = await supabase
+        .from('jobs')
+        .update({ deleted_at: new Date().toISOString() })
+        .in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Deleted ${ids.length} job(s)`);
+        clearSelection();
+        fetchJobs();
+      }
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setDeleting(false);
+    setDeleteModalOpen(false);
+  };
+
+  const bulkActions = [
+    { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
+    { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'delete', label: 'Delete Jobs', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
+  ];
+
+  const dataColumns: Column<JobRow>[] = [
     {
       key: 'job_number',
       header: 'Job #',
@@ -197,16 +293,28 @@ export default function Jobs() {
     },
   ];
 
+  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
   return (
     <div className="space-y-6">
-      <SplitHeading title="Job" accent="Schedule">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex-1 flex items-center gap-3">
+          <SplitHeading title="Job" accent="Schedule" />
+          {canBulkAction && (
+            <BulkActionBar
+              selectedCount={selectedCount}
+              actions={bulkActions}
+              onDeselectAll={clearSelection}
+            />
+          )}
+        </div>
         <Button
           icon={<Plus className="w-4 h-4" />}
           onClick={() => navigate('/jobs/new')}
         >
           New Job
         </Button>
-      </SplitHeading>
+      </div>
 
       {/* Filters */}
       <Card>
@@ -289,9 +397,28 @@ export default function Jobs() {
             emptyTitle="No jobs found"
             emptyDescription="Create your first job to get started with scheduling."
             loading={loading}
+            filters={
+              canBulkAction && jobs.length > 0 ? (
+                <button
+                  onClick={toggleAll}
+                  className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+                >
+                  {allSelected ? 'Deselect All' : 'Select All'}
+                </button>
+              ) : undefined
+            }
           />
         </div>
       </Card>
+
+      <BulkDeleteConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        count={selectedCount}
+        entityName="job"
+        onConfirm={handleDelete}
+        loading={deleting}
+      />
     </div>
   );
 }

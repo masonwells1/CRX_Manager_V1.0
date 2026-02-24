@@ -7,14 +7,22 @@ import {
   Clock,
   PackageCheck,
   CheckCircle2,
+  Download,
+  XCircle,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import BulkActionBar from '../components/ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
+import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
+import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
+import { sanitizeError } from '../lib/errorSanitizer';
 import BulkPOImport from '../components/purchase-orders/BulkPOImport';
 import type { PurchaseOrder } from '../types';
 
@@ -26,8 +34,12 @@ export default function PurchaseOrders() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [importOpen, setImportOpen] = useState(false);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const isAdmin = role === 'admin';
+  const canBulkAction = role === 'admin' || role === 'sales_rep';
 
   useEffect(() => {
     fetchPOs();
@@ -66,7 +78,21 @@ export default function PurchaseOrders() {
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
-  const columns: Column<PurchaseOrder>[] = [
+  const CANCELLABLE = ['draft', 'submitted'];
+
+  const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
+    useRowSelection({
+      data: filtered,
+      getId: (p) => p.id,
+      isSelectable: (p) => CANCELLABLE.includes(p.status),
+    });
+
+  const checkboxCol = useMemo(
+    () => createCheckboxColumn<PurchaseOrder>(selected, toggleSelect, (p) => p.id, (p) => CANCELLABLE.includes(p.status)),
+    [selected, toggleSelect]
+  );
+
+  const dataColumns: Column<PurchaseOrder>[] = [
     {
       key: 'po_number',
       header: 'PO #',
@@ -108,11 +134,87 @@ export default function PurchaseOrders() {
     },
   ];
 
+  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
+  // ─── Bulk action handlers ───────────────────────────────────
+  const handleExportCSV = () => {
+    exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
+      { key: 'po_number', header: 'PO #' },
+      { key: 'vendor', header: 'Vendor' },
+      { key: 'status', header: 'Status' },
+      { key: 'total_cost', header: 'Total Cost', format: (v) => fmtCSV(v as number) },
+      { key: 'submitted_date', header: 'Submitted', format: (v) => fmtDateCSV(v as string) },
+      { key: 'expected_delivery_date', header: 'Expected Delivery', format: (v) => fmtDateCSV(v as string) },
+    ], 'purchase_orders');
+    toast('success', `Exported ${selectedRows.length} PO(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      const pdfCols: ReportPdfColumn[] = [
+        { header: 'PO #', key: 'po_number' },
+        { header: 'Vendor', key: 'vendor' },
+        { header: 'Status', key: 'status' },
+        { header: 'Total Cost', key: 'total_cost', align: 'right', format: (v) => fmt(Number(v)) },
+        { header: 'Submitted', key: 'submitted_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+        { header: 'Expected', key: 'expected_delivery_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+      ];
+      await downloadReportPdf({
+        title: 'Purchase Orders',
+        subtitle: `${selectedRows.length} PO(s) selected`,
+        columns: pdfCols,
+        data: selectedRows as unknown as Record<string, unknown>[],
+      });
+      toast('success', `Downloaded PDF with ${selectedRows.length} PO(s)`);
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    try {
+      const ids = selectedRows.map((p) => p.id);
+      const { error } = await supabase
+        .from('purchase_orders')
+        .update({ status: 'cancelled' })
+        .in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Cancelled ${ids.length} purchase order(s)`);
+        clearSelection();
+        fetchPOs();
+      }
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setCancelling(false);
+    setCancelModalOpen(false);
+  };
+
+  const bulkActions = [
+    { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
+    { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'cancel', label: 'Cancel POs', icon: <XCircle className="w-4 h-4" />, onClick: () => setCancelModalOpen(true), variant: 'danger' as const },
+  ];
+
   return (
     <div className="space-y-4">
       {/* Header + Actions */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Purchase Orders</h1>
+        <div className="flex-1 flex items-center gap-3">
+          <h1 className="text-xl font-semibold font-heading text-nav-dark">Purchase Orders</h1>
+          {canBulkAction && (
+            <BulkActionBar
+              selectedCount={selectedCount}
+              actions={bulkActions}
+              onDeselectAll={clearSelection}
+            />
+          )}
+        </div>
         {isAdmin && (
           <div className="flex gap-2">
             <Button
@@ -221,6 +323,14 @@ export default function PurchaseOrders() {
                     Clear
                   </button>
                 )}
+                {canBulkAction && filtered.length > 0 && (
+                  <button
+                    onClick={toggleAll}
+                    className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+                  >
+                    {allSelected ? 'Deselect All' : 'Select All'}
+                  </button>
+                )}
               </div>
             }
           />
@@ -231,6 +341,16 @@ export default function PurchaseOrders() {
         open={importOpen}
         onClose={() => setImportOpen(false)}
         onSuccess={() => { setImportOpen(false); fetchPOs(); }}
+      />
+
+      <BulkDeleteConfirmModal
+        open={cancelModalOpen}
+        onClose={() => setCancelModalOpen(false)}
+        count={selectedCount}
+        entityName="purchase order"
+        actionWord="cancel"
+        onConfirm={handleCancel}
+        loading={cancelling}
       />
     </div>
   );

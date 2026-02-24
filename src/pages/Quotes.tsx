@@ -1,15 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload, Copy } from 'lucide-react';
+import { Plus, Upload, Copy, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import BulkActionBar from '../components/ui/BulkActionBar';
+import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
+import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
+import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
+import { sanitizeError } from '../lib/errorSanitizer';
 import type { Quote } from '../types';
 
 export default function Quotes() {
@@ -20,6 +26,12 @@ export default function Quotes() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const { toast } = useToast();
   const { profile } = useAuth();
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const canBulkAction = profile?.role === 'admin' || profile?.role === 'sales_rep';
+  const DELETABLE = ['draft', 'sent', 'revised'];
 
   // === GAP FIX #7: Duplicate a quote ===
   const handleDuplicate = async (quoteId: string, e: React.MouseEvent) => {
@@ -71,7 +83,92 @@ export default function Quotes() {
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
-  const columns: Column<Quote>[] = [
+  const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
+    useRowSelection({
+      data: filtered,
+      getId: (q) => q.id,
+      isSelectable: (q) => DELETABLE.includes(q.status),
+    });
+
+  const checkboxCol = useMemo(
+    () => createCheckboxColumn<Quote>(selected, toggleSelect, (q) => q.id, (q) => DELETABLE.includes(q.status)),
+    [selected, toggleSelect]
+  );
+
+  // ─── Bulk action handlers ───────────────────────────────────
+  const handleExportCSV = () => {
+    exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
+      { key: 'quote_number', header: 'Quote #' },
+      { key: 'customer_name', header: 'Customer', format: (v) => {
+        const c = v as { farm_name?: string } | undefined;
+        return c?.farm_name || '-';
+      }},
+      { key: 'status', header: 'Status' },
+      { key: 'tier', header: 'Tier' },
+      { key: 'total_price', header: 'Total', format: (v) => fmtCSV(v as number) },
+      { key: 'created_at', header: 'Created', format: (v) => fmtDateCSV(v as string) },
+      { key: 'expires_at', header: 'Expires', format: (v) => fmtDateCSV(v as string) },
+    ], 'quotes');
+    toast('success', `Exported ${selectedRows.length} quote(s) to CSV`);
+  };
+
+  const handleExportPDF = async () => {
+    setExporting(true);
+    try {
+      const pdfCols: ReportPdfColumn[] = [
+        { header: 'Quote #', key: 'quote_number' },
+        { header: 'Customer', key: 'customer_name', format: (v) => {
+          const c = v as { farm_name?: string } | undefined;
+          return c?.farm_name || '-';
+        }},
+        { header: 'Status', key: 'status' },
+        { header: 'Tier', key: 'tier', format: (v) => `Tier ${v}` },
+        { header: 'Total', key: 'total_price', align: 'right', format: (v) => fmt(Number(v)) },
+        { header: 'Created', key: 'created_at', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+        { header: 'Expires', key: 'expires_at', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
+      ];
+      await downloadReportPdf({
+        title: 'Quotes',
+        subtitle: `${selectedRows.length} quote(s) selected`,
+        columns: pdfCols,
+        data: selectedRows as unknown as Record<string, unknown>[],
+      });
+      toast('success', `Downloaded PDF with ${selectedRows.length} quote(s)`);
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      const ids = selectedRows.map((q) => q.id);
+      const { error } = await supabase
+        .from('quotes')
+        .update({ deleted_at: new Date().toISOString() })
+        .in('id', ids);
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', `Deleted ${ids.length} quote(s)`);
+        clearSelection();
+        fetchQuotes();
+      }
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setDeleting(false);
+    setDeleteModalOpen(false);
+  };
+
+  const bulkActions = [
+    { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
+    { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'delete', label: 'Delete Quotes', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
+  ];
+
+  const dataColumns: Column<Quote>[] = [
     {
       key: 'quote_number',
       header: 'Quote #',
@@ -132,19 +229,33 @@ export default function Quotes() {
     },
   ];
 
+  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
   return (
     <div className="space-y-4">
-      <div className="flex justify-end gap-2">
-        <Button
-          variant="secondary"
-          icon={<Upload className="w-4 h-4" />}
-          onClick={() => setImportModalOpen(true)}
-        >
-          Bulk Import
-        </Button>
-        <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/quotes/new')}>
-          New Quote
-        </Button>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex-1 flex items-center gap-3">
+          <h1 className="text-xl font-semibold font-heading text-nav-dark">Quotes</h1>
+          {canBulkAction && (
+            <BulkActionBar
+              selectedCount={selectedCount}
+              actions={bulkActions}
+              onDeselectAll={clearSelection}
+            />
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="secondary"
+            icon={<Upload className="w-4 h-4" />}
+            onClick={() => setImportModalOpen(true)}
+          >
+            Bulk Import
+          </Button>
+          <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/quotes/new')}>
+            New Quote
+          </Button>
+        </div>
       </div>
 
       <BulkQuoteImport
@@ -171,24 +282,51 @@ export default function Quotes() {
             }
             loading={loading}
             filters={
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                aria-label="Filter by quote status"
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-              >
-                <option value="">All Statuses</option>
-                <option value="draft">Draft</option>
-                <option value="sent">Sent</option>
-                <option value="revised">Revised</option>
-                <option value="accepted">Accepted</option>
-                <option value="declined">Declined</option>
-                <option value="expired">Expired</option>
-              </select>
+              <div className="flex gap-2 items-center flex-wrap">
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label="Filter by quote status"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">All Statuses</option>
+                  <option value="draft">Draft</option>
+                  <option value="sent">Sent</option>
+                  <option value="revised">Revised</option>
+                  <option value="accepted">Accepted</option>
+                  <option value="declined">Declined</option>
+                  <option value="expired">Expired</option>
+                </select>
+                {statusFilter && (
+                  <button
+                    onClick={() => setStatusFilter('')}
+                    className="text-xs text-crx-green hover:underline"
+                  >
+                    Clear
+                  </button>
+                )}
+                {canBulkAction && filtered.length > 0 && (
+                  <button
+                    onClick={toggleAll}
+                    className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
+                  >
+                    {allSelected ? 'Deselect All' : 'Select All'}
+                  </button>
+                )}
+              </div>
             }
           />
         </div>
       </Card>
+
+      <BulkDeleteConfirmModal
+        open={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        count={selectedCount}
+        entityName="quote"
+        onConfirm={handleDelete}
+        loading={deleting}
+      />
     </div>
   );
 }
