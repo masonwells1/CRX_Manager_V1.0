@@ -8,19 +8,21 @@
 - **Owner:** masonwells1 (beginner, 0 code experience -- explain things simply)
 
 ## Current State (as of 2026-02-24)
-- **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import + Safety Audit + Quick Receive + Codebase Audit + Lint Cleanup + E2E Gate Tests
+- **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import + Safety Audit + Quick Receive + Codebase Audit + Lint Cleanup + E2E Gate Tests + Comprehensive Test Gap Closure (8 sprints)
 - **Deployed to:** Vercel → **https://croprxsolutions.app** (live)
-- **Test coverage:** 829 unit tests (Vitest, 49 test files) + 351 Playwright E2E tests (33 spec files)
+- **Test coverage:** 1,105 unit tests (Vitest, 67 test files) + 424 Playwright E2E tests (35 spec files, 370 passing, 42 pre-existing failures)
 - **77+ migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
 - **ESLint:** 0 errors (fully lint-clean)
 - **TypeScript:** 0 strict type errors (enforced in CI — blocks on failure)
-- **Latest commit:** `f571196` on main (pushed) — update this after each commit
+- **Latest commit:** update this after each commit
 - **E2E gate tests:** 2 comprehensive gate test suites — admin full-lifecycle (25 tests) + financial operations (25 tests), both 100% green
+- **E2E bulk operations:** 31 tests covering bulk select/deselect/export CSV/PDF/delete across Products, Customers, Orders, Jobs
 - **Pre-commit hook:** `npm run lint` + `npm run build` + `npx vitest run` run automatically before every commit
 - **GitHub CI:** ESLint → TypeScript → Vitest → Build — [status badge](https://github.com/masonwells1/CRX_Manager_V1.0/actions/workflows/ci.yml) ✅ green (all steps blocking)
 - **Multi-computer workflow:** Owner works from multiple machines — repo is single source of truth
 - **Supabase Project ID:** `rhyzpcqhnizqbxphqdkr`
+- **E2E pre-existing failures:** 42 tests (31 missing role accounts + 10 heading selectors + 1 timing). See `docs/E2E_FAILURES_TO_FIX.md`
 
 ## Architecture Rules -- Follow These
 1. **Database changes MUST use migrations** -- create files in `supabase/migrations/`, never modify tables directly
@@ -112,7 +114,7 @@ Use this table to check **"does this feature already exist?"** before building a
 - **Frontend:** React 18 + TypeScript + Vite
 - **Backend:** Supabase (PostgreSQL + Auth + Edge Functions + Realtime + Storage)
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
-- **Testing:** Vitest (829 unit tests, 49 files) + Playwright (351 E2E tests, 33 spec files in `tests/e2e/`)
+- **Testing:** Vitest (1,105 unit tests, 67 files) + Playwright (424 E2E tests, 35 spec files in `tests/e2e/`)
 - **Deployment:** Vercel → https://croprxsolutions.app (live), configured via `vercel.json`
 - **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid + @turf/bbox
 - **Geo Import:** shapefile (parse .shp/.dbf/.shx), proj4 (coordinate reprojection), togeojson-with-extended-style (KML→GeoJSON)
@@ -125,7 +127,7 @@ Use this table to check **"does this feature already exist?"** before building a
 ```bash
 npm run dev          # Start dev server (http://localhost:5173)
 npm run build        # Production build
-npx vitest run       # Run 829 unit tests (49 test files)
+npx vitest run       # Run 1,105 unit tests (67 test files)
 npm run typecheck    # TypeScript error check
 npm run lint         # ESLint
 npm run test:e2e     # Run Playwright E2E tests
@@ -197,7 +199,7 @@ supabase/
   migrations/          # All database migrations (SQL, chronological order)
   functions/           # Edge Functions: create-user, process-blend-ticket, process-document, seed-admin, setup-blend-tickets-storage
 tests/
-  e2e/                 # 31 Playwright E2E spec files (all pages covered)
+  e2e/                 # 35 Playwright E2E spec files (all pages + bulk operations + gate tests)
 ```
 
 ### Pages (49 total)
@@ -881,7 +883,7 @@ Test every feature as each role:
 
 ### Build & Type Checking
 - `npm run build` for full build verification (pre-commit hook runs this automatically)
-- `npx vitest run` for 829 unit tests (pre-commit hook runs this automatically)
+- `npx vitest run` for 1,105 unit tests (pre-commit hook runs this automatically)
 - `npx tsc --noEmit` for type checking only
 - `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI test environments (unit tests mock Supabase)
 - **TypeScript is strict-clean (0 errors)** — CI enforces `npx tsc --noEmit` as a blocking step
@@ -932,6 +934,7 @@ Test every feature as each role:
 | — | Financial Operations E2E Gate Test: 25 tests (invoices, payments, PO receiving, cycle counts, commissions) | Feb 23-24 |
 | — | Bulk Operations: row selection + bulk delete/void/cancel + CSV/PDF export across all 15 list pages (BulkActionBar, useRowSelection, exportToCSV, downloadReportPdf). Smart fallback pattern: exports selected rows if any, otherwise all filtered data. Soft delete for Returns/Invoices (deleted_at), hard delete for others. | Feb 24 |
 | — | DB fixes: commissions denormalized columns, cycle_counts FK→profiles, PostgREST schema cache | Feb 24 |
+| — | Test Coverage Gap Closure (8 sprints): 275 new unit tests (22 new files) + 31 new E2E bulk-ops tests. Covers reportPdf, deliveryPdf, offlineQueue, hooks (useUnsavedChanges, useRealtimeSubscription, useOCRProcessor), AuthContext, 9 modal components, imageCompression, sentry. Fixed login() helper for session persistence. | Feb 24 |
 
 ---
 

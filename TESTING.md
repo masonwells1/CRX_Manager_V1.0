@@ -6,8 +6,8 @@ This guide will walk you through testing the application. No coding experience n
 
 | Metric | Count |
 |--------|-------|
-| **Unit tests** | 766 (Vitest, 45 test files in `src/`) |
-| **E2E specs** | 31 Playwright spec files (in `tests/e2e/`) |
+| **Unit tests** | 1,105 (Vitest, 67 test files in `src/`) |
+| **E2E specs** | 35 Playwright spec files (424 tests in `tests/e2e/`) |
 | **Pre-commit hook** | Runs `npm run build` + `npm test` before every commit — blocks if anything fails |
 
 ## Table of Contents
@@ -159,7 +159,7 @@ Unit tests check individual pieces of logic (calculations, PDF generation, data 
 npm test
 ```
 
-This runs all 766 unit tests across 45 test files. Takes about 10-20 seconds.
+This runs all 1,105 unit tests across 67 test files. Takes about 10-20 seconds.
 
 ### Running Tests in Watch Mode
 
@@ -182,7 +182,7 @@ This keeps running and automatically re-tests when you save a file. Great during
 
 Every time you commit code, the pre-commit hook automatically runs:
 1. `npm run build` — ensures the app compiles
-2. `npm test` — ensures all 766 unit tests pass
+2. `npm test` — ensures all 1,105 unit tests pass
 
 If either fails, the commit is **blocked**. You must fix the issue before committing.
 
@@ -507,7 +507,7 @@ npm run lint         # Run ESLint
 
 ### Unit Tests (Vitest)
 ```bash
-npm test                  # Run all 766 unit tests
+npm test                  # Run all 1,105 unit tests
 npm run test:watch        # Run unit tests in watch mode
 ```
 

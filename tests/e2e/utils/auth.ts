@@ -7,7 +7,17 @@ export const TEST_USER = {
 
 export async function login(page: Page, email = TEST_USER.email, password = TEST_USER.password) {
   await page.goto('/login');
-  await page.fill('input[type="email"]', email);
+
+  // If already authenticated, /login may redirect to / immediately
+  const emailInput = page.locator('input[type="email"]');
+  const isLoginPage = await emailInput.isVisible({ timeout: 3000 }).catch(() => false);
+
+  if (!isLoginPage) {
+    // Already logged in — session cookie is still valid
+    return;
+  }
+
+  await emailInput.fill(email);
   await page.fill('input[type="password"]', password);
   await page.click('button[type="submit"]');
   await page.waitForURL('/');
