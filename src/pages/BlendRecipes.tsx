@@ -371,7 +371,7 @@ export default function BlendRecipes() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Blend Recipes</h1>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Blend Recipes</h2>
         <Button icon={<Plus className="w-4 h-4" />} onClick={() => openEditor()}>
           New Recipe
         </Button>

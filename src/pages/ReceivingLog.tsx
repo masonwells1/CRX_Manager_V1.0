@@ -302,7 +302,7 @@ export default function ReceivingLog() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold font-heading text-nav-dark">Receiving Log</h1>
+          <h2 className="text-xl font-semibold font-heading text-nav-dark">Receiving Log</h2>
           {canBulkAction && <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />}
         </div>
         <button

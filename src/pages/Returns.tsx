@@ -493,7 +493,7 @@ export default function Returns() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold font-heading text-nav-dark">Returns / RMA</h1>
+          <h2 className="text-xl font-semibold font-heading text-nav-dark">Returns / RMA</h2>
           {canBulkAction && <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />}
         </div>
         <Button icon={<Plus className="w-4 h-4" />} onClick={openCreate}>

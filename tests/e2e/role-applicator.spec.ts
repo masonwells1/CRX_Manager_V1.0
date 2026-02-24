@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
-const APPLICATOR_EMAIL = 'testapplicator@croprxsolutions.com';
-const APPLICATOR_PASSWORD = 'TestApplicator123!';
+const APPLICATOR_EMAIL = process.env.E2E_APPLICATOR_EMAIL || 'testapplicator@croprxsolutions.com';
+const APPLICATOR_PASSWORD = process.env.E2E_APPLICATOR_PASSWORD || 'TestApplicator123!';
 
 /**
  * Applicator Role Restriction Tests

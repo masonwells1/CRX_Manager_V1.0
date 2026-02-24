@@ -219,7 +219,7 @@ export default function Orders() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-nav-dark">Orders</h1>
+          <h2 className="text-2xl font-bold text-nav-dark">Orders</h2>
           {canBulkAction && (
             <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />
           )}

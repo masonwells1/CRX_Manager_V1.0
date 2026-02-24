@@ -369,9 +369,9 @@ export default function QuickReceive() {
 
       <div className="flex items-center gap-3">
         <PackageCheck className="w-6 h-6 text-crx-green" />
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">
           Quick <span className="split-heading-accent">Receive</span>
-        </h1>
+        </h2>
         {step !== 'add_items' && step !== 'success' && (
           <Badge variant="default">Step 2 of 2</Badge>
         )}

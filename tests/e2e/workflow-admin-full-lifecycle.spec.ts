@@ -137,7 +137,12 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
     }
     const rateInput = page.locator('input[aria-label="Actual rate"]').first();
     if (await rateInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await rateInput.fill('32');
+      await rateInput.fill('2');
+    }
+    // S2-1 validation requires rate_unit when actual_rate > 0
+    const rateUnitSelect = page.locator('select[aria-label="Rate unit"]').first();
+    if (await rateUnitSelect.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await rateUnitSelect.selectOption({ index: 1 }); // first real unit (e.g., Gal)
     }
 
     // Add second item
@@ -169,7 +174,12 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
     }
     const rateInputs = page.locator('input[aria-label="Actual rate"]');
     if (await rateInputs.nth(1).isVisible({ timeout: 2000 }).catch(() => false)) {
-      await rateInputs.nth(1).fill('16');
+      await rateInputs.nth(1).fill('1');
+    }
+    // S2-1 validation requires rate_unit when actual_rate > 0
+    const rateUnitSelects = page.locator('select[aria-label="Rate unit"]');
+    if (await rateUnitSelects.nth(1).isVisible({ timeout: 2000 }).catch(() => false)) {
+      await rateUnitSelects.nth(1).selectOption({ index: 1 }); // first real unit
     }
 
     // Save as draft
@@ -215,6 +225,13 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
   // T3: Convert quote to order
   test('T3: Convert quote to order redirects to order detail', async ({ page }) => {
     test.skip(!state.quoteUrl, 'No quote URL from T1');
+
+    // Capture console errors to diagnose conversion failures
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+
     await page.goto(state.quoteUrl.replace(/.*localhost:\d+/, ''));
     await waitForPage(page, 3000);
 
@@ -229,23 +246,34 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
     await expect(createOrderBtn).toBeVisible({ timeout: 5000 });
     await createOrderBtn.click();
 
-    // The convert RPC does saveQuote('accepted') + convert_quote_to_order.
-    // A React Router "Unsaved Changes" blocker may fire — click "Leave" if it appears.
-    const leaveBtn = page.locator('button:has-text("Leave")');
+    // Wait for conversion: URL changes to /orders/:id, handling potential
+    // UnsavedChangesModal that may fire before navigation completes.
+    // Use sequential approach instead of Promise.race to avoid premature resolution.
     try {
-      await leaveBtn.click({ timeout: 8000 });
+      await page.waitForURL(/\/orders\/[0-9a-f]{8}-/, { timeout: 15000 });
     } catch {
-      // No "Unsaved Changes" dialog — RPC cleared dirty state correctly
+      // If URL didn't change, check for UnsavedChangesModal "Leave" button
+      const leaveBtn = page.locator('button:has-text("Leave")');
+      if (await leaveBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await leaveBtn.click();
+        await page.waitForURL(/\/orders\/[0-9a-f]{8}-/, { timeout: 15000 });
+      } else {
+        // Conversion may still be in progress — give more time
+        await page.waitForURL(/\/orders\/[0-9a-f]{8}-/, { timeout: 30000 });
+      }
     }
 
-    // Wait for redirect to /orders/:id
-    await expect(page).toHaveURL(/\/orders\/.+/, { timeout: 30000 });
     state.orderUrl = page.url();
 
     // Capture order number
     const bodyText = await page.textContent('body');
     const oMatch = bodyText?.match(/ORD-\d+-\d+/);
     if (oMatch) state.orderNumber = oMatch[0];
+
+    // Log console errors if conversion failed for debugging
+    if (!state.orderUrl.includes('/orders/')) {
+      console.log('T3 console errors:', consoleErrors);
+    }
     expect(state.orderUrl).toContain('/orders/');
   });
 

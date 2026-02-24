@@ -275,7 +275,7 @@ export default function Payments() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Payments & A/R</h1>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Payments & A/R</h2>
         <div className="flex gap-2">
           <Button
             variant="secondary"

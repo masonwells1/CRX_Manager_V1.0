@@ -232,7 +232,7 @@ export default function MonthEndClose() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold font-heading text-nav-dark">Month-End Close</h1>
+          <h2 className="text-xl font-semibold font-heading text-nav-dark">Month-End Close</h2>
           <p className="text-sm text-secondary mt-1">Review and close accounting periods</p>
         </div>
         <div className="flex gap-2">

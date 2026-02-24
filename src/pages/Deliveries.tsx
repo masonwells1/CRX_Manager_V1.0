@@ -522,7 +522,7 @@ export default function Deliveries() {
       <div className="space-y-6 bg-gray-900 -m-4 sm:-m-6 p-4 sm:p-6 min-h-screen">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h1 className="text-xl font-bold text-white">My Deliveries</h1>
+          <h2 className="text-xl font-bold text-white">My Deliveries</h2>
           <div className="flex items-center gap-2">
             {canQuickDeliver && (
               <Button
@@ -700,7 +700,7 @@ export default function Deliveries() {
     <div className="space-y-4">
       {/* Header + Actions */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Deliveries</h1>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Deliveries</h2>
         <div className="flex gap-2 flex-wrap justify-end">
           <Button
             variant="secondary"

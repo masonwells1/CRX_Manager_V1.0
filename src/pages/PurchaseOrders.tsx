@@ -206,7 +206,7 @@ export default function PurchaseOrders() {
       {/* Header + Actions */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-3">
-          <h1 className="text-xl font-semibold font-heading text-nav-dark">Purchase Orders</h1>
+          <h2 className="text-xl font-semibold font-heading text-nav-dark">Purchase Orders</h2>
           {canBulkAction && (
             <BulkActionBar
               selectedCount={selectedCount}

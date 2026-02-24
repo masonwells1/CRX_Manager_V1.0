@@ -342,7 +342,7 @@ export function BlendTickets() {
         <div className="flex-1 flex items-center gap-3">
           <FileText className="h-8 w-8 text-gray-700" />
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Blend Tickets</h1>
+            <h2 className="text-3xl font-bold text-gray-900">Blend Tickets</h2>
             <p className="text-gray-600 mt-1">
               Upload and manage blend ticket images with automatic OCR processing
             </p>

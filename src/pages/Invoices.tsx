@@ -463,7 +463,7 @@ export default function Invoices() {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Invoices</h1>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Invoices</h2>
         <div className="flex gap-2 flex-wrap justify-end">
           {selected.size > 0 && profile?.role === 'admin' && (
             <>

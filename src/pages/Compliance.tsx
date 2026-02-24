@@ -312,7 +312,7 @@ export default function Compliance() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Compliance</h1>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Compliance</h2>
         {tab === 'licenses' && (
           <Button icon={<Plus className="w-4 h-4" />} onClick={openAdd}>
             Add License

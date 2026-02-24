@@ -198,7 +198,7 @@ export default function PrepaymentManager() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold font-heading text-nav-dark">Prepayment Manager</h1>
+          <h2 className="text-xl font-semibold font-heading text-nav-dark">Prepayment Manager</h2>
           <p className="text-sm text-secondary mt-1">Apply prepay credits to outstanding invoices</p>
         </div>
         <div className="flex gap-2">

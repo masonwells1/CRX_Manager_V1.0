@@ -235,7 +235,7 @@ export default function Quotes() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-3">
-          <h1 className="text-xl font-semibold font-heading text-nav-dark">Quotes</h1>
+          <h2 className="text-xl font-semibold font-heading text-nav-dark">Quotes</h2>
           {canBulkAction && (
             <BulkActionBar
               selectedCount={selectedCount}

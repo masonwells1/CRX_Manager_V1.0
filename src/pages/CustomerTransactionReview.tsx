@@ -149,7 +149,7 @@ export default function CustomerTransactionReview() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-semibold font-heading text-nav-dark">Customer Transaction Review</h1>
+      <h2 className="text-xl font-semibold font-heading text-nav-dark">Customer Transaction Review</h2>
 
       <ReportShell
         onDateChange={handleDateChange}

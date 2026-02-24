@@ -417,7 +417,7 @@ export default function Rebates() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Manufacturer Rebates</h1>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Manufacturer Rebates</h2>
         <div className="flex gap-2">
           {tab === 'programs' && isAdmin && (
             <Button icon={<Plus className="w-4 h-4" />} onClick={openAddProgram}>

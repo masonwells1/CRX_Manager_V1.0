@@ -283,7 +283,7 @@ export default function CommissionPayments() {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Commission Payments</h1>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Commission Payments</h2>
         <div className="flex gap-2">
           <Button
             variant="secondary"

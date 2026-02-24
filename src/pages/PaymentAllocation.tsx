@@ -310,7 +310,7 @@ export default function PaymentAllocation() {
     <div className="space-y-4">
       {/* Header */}
       <div>
-        <h1 className="text-xl font-semibold font-heading text-nav-dark">Apply Payments</h1>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Apply Payments</h2>
         <p className="text-sm text-secondary mt-1">
           Allocate a check across multiple invoices. Any remainder becomes a prepay credit.
         </p>
