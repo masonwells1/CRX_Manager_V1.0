@@ -35,11 +35,13 @@
 8. **Use the Supabase client from `src/lib/db.ts`** -- never create additional clients
 9. **Activity logging:** Call `logActivity()` from `src/lib/activityLogger.ts` for important user actions
 10. **Idempotency:** Use `generateIdempotencyKey()` for critical write operations (order creation, delivery completion, etc.)
-11. **Keep docs accurate** -- When adding/changing features, update these files before committing:
-    - `CLAUDE.md` → Current State (page/test/migration counts), Feature Inventory table, Pages table, Database Tables, RPC list, Edge Functions, Documentation Index
+11. **Mandatory pre-commit doc review (EVERY commit, no exceptions)** -- Before committing, review what changed and update ANY doc that is now stale:
+    - `CLAUDE.md` → Current State stats, Feature Inventory, Pages table, Database Tables, RPC list, Edge Functions, Code Patterns, Documentation Index
     - `README.md` → Features section, Current State stats
     - `TESTING.md` → Quick Facts (test counts), "What Unit Tests Cover" list (if adding test files)
     - `DEPLOYMENT.md` → Environment variables (if adding new env vars), Edge Function list (if adding functions)
+    - `docs/CHANGELOG.md` → Append entry for any significant work completed
+    - **Also remove stale info** — if a page/table/RPC/feature was deleted, remove its references from all docs. No dead entries.
 
 ---
 
