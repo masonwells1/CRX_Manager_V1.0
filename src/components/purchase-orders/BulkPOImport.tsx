@@ -8,7 +8,6 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
-import { fuzzyMatchProduct } from '../../lib/ocrParser';
 import type { Product } from '../../types';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
@@ -179,8 +178,6 @@ function extractLineItems(text: string, lines: string[]): ParsedPOItem[] {
   // Strategy 2: Generic tabular parsing
   // Look for lines that have a product description followed by numeric values
   // Common patterns: "Product Name  10  25.50  255.00" or "Product Name  10 GL  $25.50  $255.00"
-  const unitPatterns = /\b(GL|GAL|GALLON|LB|LBS|OZ|QT|QUART|PT|PINT|CASE|EA|EACH|TON|BAG|JUG|DRUM|TOTE)\b/i;
-
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.length < 5) continue;
@@ -562,7 +559,6 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
   const totalMatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => i.matched_product).length, 0) ?? 0;
   const totalUnmatched = parsedPOs?.reduce((sum, po) => sum + po.items.filter((i) => !i.matched_product).length, 0) ?? 0;
-  const totalItems = totalMatched + totalUnmatched;
   const importablePOs = parsedPOs?.filter((po) => po.items.some((i) => i.matched_product && i.quantity_ordered > 0)).length ?? 0;
 
   const filteredProducts = products.filter((p) => {
