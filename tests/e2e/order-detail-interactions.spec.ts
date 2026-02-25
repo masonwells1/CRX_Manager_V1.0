@@ -88,7 +88,7 @@ test.describe('Order Detail Interactions', () => {
 
     if (hasNumberInput) {
       // Store original value, change it, verify change accepted
-      const originalValue = await numberInput.inputValue();
+      const _originalValue = await numberInput.inputValue();
       await numberInput.clear();
       await numberInput.fill('99.50');
       await waitForPage(page, 500);
@@ -99,7 +99,7 @@ test.describe('Order Detail Interactions', () => {
       // Fallback: look for any editable input and modify it
       const anyInput = page.locator('input:not([disabled]):not([readonly])').first();
       await expect(anyInput).toBeVisible({ timeout: 5000 });
-      const originalValue = await anyInput.inputValue();
+      const _originalValue = await anyInput.inputValue();
       await anyInput.clear();
       await anyInput.fill('test-edit-' + RUN_ID);
       const newValue = await anyInput.inputValue();
@@ -288,7 +288,7 @@ test.describe('Order Detail Interactions', () => {
     await waitForPage(page, 1500);
 
     // Verify more inputs appeared (edit mode active)
-    const inputsDuringEdit = await page.locator('input:not([disabled]):not([readonly]):not([type="search"]):not([type="hidden"])').count();
+    const _inputsDuringEdit = await page.locator('input:not([disabled]):not([readonly]):not([type="search"]):not([type="hidden"])').count();
 
     // Click Cancel / Discard to exit edit mode
     const cancelButton = page.locator('button:has-text("Cancel"), button:has-text("Discard"), button:has-text("Cancel Edit")').first();

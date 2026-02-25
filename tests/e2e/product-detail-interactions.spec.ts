@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
-const RUN_ID = Date.now().toString(36);
+const _RUN_ID = Date.now().toString(36);
 const waitForPage = (page: import('@playwright/test').Page, ms: number) => page.waitForTimeout(ms);
 
 test.describe('Product Detail Interactions', () => {
@@ -21,7 +21,7 @@ test.describe('Product Detail Interactions', () => {
 
     // Grab the product name text before clicking
     const productNameCell = tableRow.locator('td').first();
-    const productName = await productNameCell.textContent();
+    const _productName = await productNameCell.textContent();
 
     // Click the first row to navigate to detail
     await tableRow.click();
@@ -62,7 +62,7 @@ test.describe('Product Detail Interactions', () => {
 
     // Check for common product fields: name, EPA, manufacturer, description
     const nameInput = page.locator('input[name="name"], input[placeholder*="name" i], label:has-text("Product Name") + input, label:has-text("Product Name") ~ input, label:has-text("Name") + input').first();
-    const nameVisible = await nameInput.isVisible({ timeout: 5000 }).catch(() => false);
+    const _nameVisible = await nameInput.isVisible({ timeout: 5000 }).catch(() => false);
 
     // At minimum, there should be several editable inputs on the page
     expect(inputCount).toBeGreaterThanOrEqual(3);
@@ -209,7 +209,7 @@ test.describe('Product Detail Interactions', () => {
     const historyContent = page.locator(
       'text=/\\$\\d/, text=/\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/, text=/cost/i'
     ).first();
-    const contentVisible = await historyContent.isVisible({ timeout: 5000 }).catch(() => false);
+    const _contentVisible = await historyContent.isVisible({ timeout: 5000 }).catch(() => false);
 
     // The page should have either an explicit cost history section or cost-related data
     const pageText = await page.textContent('body') || '';

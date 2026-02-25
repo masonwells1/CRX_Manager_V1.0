@@ -256,7 +256,7 @@ test.describe('Bulk Operations — Customers', () => {
     if (!(await selectAllBtn.isVisible({ timeout: 3000 }).catch(() => false))) return;
 
     await selectAllBtn.click();
-    await expect(page.locator('text=/\\d+ selected/')).toBeVisible({ timeout: 3000 });
+    const _afterSecondClick = await expect(page.locator('text=/\\d+ selected/')).toBeVisible({ timeout: 3000 });
     await expect(page.locator('button:has-text("Deselect All")')).toBeVisible({ timeout: 3000 });
   });
 

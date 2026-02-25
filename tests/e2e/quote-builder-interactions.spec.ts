@@ -226,7 +226,7 @@ test.describe('Quote Builder Interactions', () => {
     const qtyInput = page.locator(
       'input[type="number"][name*="qty" i], input[type="number"][name*="quantity" i], input[type="number"][placeholder*="qty" i], input[type="number"][aria-label*="qty" i], input[type="number"][aria-label*="quantity" i]'
     ).first();
-    let qtyVisible = await qtyInput.isVisible({ timeout: 5000 }).catch(() => false);
+    const qtyVisible = await qtyInput.isVisible({ timeout: 5000 }).catch(() => false);
 
     if (!qtyVisible) {
       // Try broader number inputs in the items area
@@ -272,7 +272,7 @@ test.describe('Quote Builder Interactions', () => {
     const priceInput = page.locator(
       'input[type="number"][name*="price" i], input[type="number"][name*="rate" i], input[type="number"][placeholder*="price" i], input[type="number"][aria-label*="price" i], input[name*="price" i]'
     ).first();
-    let priceVisible = await priceInput.isVisible({ timeout: 5000 }).catch(() => false);
+    const priceVisible = await priceInput.isVisible({ timeout: 5000 }).catch(() => false);
 
     if (!priceVisible) {
       // Try finding any number input that looks like price (second or third number input)
@@ -380,7 +380,7 @@ test.describe('Quote Builder Interactions', () => {
       const splitInputs = page.locator(
         'input[name*="commission" i], input[name*="split" i], input[placeholder*="%" i]'
       );
-      const splitCount = await splitInputs.count().catch(() => 0);
+      const _splitCount = await splitInputs.count().catch(() => 0);
       // Commission section is visible - that's the core assertion
       expect(commVisible).toBeTruthy();
     } else {

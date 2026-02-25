@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
-const RUN_ID = Date.now().toString(36);
+const _RUN_ID = Date.now().toString(36);
 const waitForPage = (page: import('@playwright/test').Page, ms: number) => page.waitForTimeout(ms);
 
 test.describe('Settings Interactions', () => {
@@ -65,7 +65,7 @@ test.describe('Settings Interactions', () => {
     ).first();
 
     let targetInput = phoneInput;
-    let isPhoneVisible = await phoneInput.isVisible({ timeout: 5000 }).catch(() => false);
+    const isPhoneVisible = await phoneInput.isVisible({ timeout: 5000 }).catch(() => false);
     if (!isPhoneVisible) {
       targetInput = emailInput;
     }
@@ -174,13 +174,13 @@ test.describe('Settings Interactions', () => {
     const passwordInput = modal.locator(
       'input[name="password"], input[type="password"], input[placeholder*="Password" i]'
     ).first();
-    const hasPassword = await passwordInput.isVisible({ timeout: 3000 }).catch(() => false);
+    const _hasPassword = await passwordInput.isVisible({ timeout: 3000 }).catch(() => false);
 
     // Check for role select
     const roleSelect = modal.locator(
       'select, [role="combobox"], [class*="select" i]'
     ).first();
-    const hasRole = await roleSelect.isVisible({ timeout: 3000 }).catch(() => false);
+    const _hasRole = await roleSelect.isVisible({ timeout: 3000 }).catch(() => false);
 
     // At least name and email should be present
     expect(hasName || hasEmail).toBeTruthy();
@@ -244,7 +244,7 @@ test.describe('Settings Interactions', () => {
         const selectText = await roleSelect.textContent().catch(() => '');
         const optionTexts = await modal.locator('select option, [role="option"]').allTextContents().catch(() => []);
         const allText = (selectText || '') + optionTexts.join(' ');
-        const hasRoleOptions = /admin|sales|driver|applicator/i.test(allText);
+        const _hasRoleOptions = /admin|sales|driver|applicator/i.test(allText);
         // Role select found - this is the expected behavior
         expect(hasRoleSelect).toBeTruthy();
       }
@@ -373,7 +373,7 @@ test.describe('Settings Interactions', () => {
 
     // Verify no uncaught errors (page rendered cleanly)
     const errorBoundary = page.locator('text=/something went wrong/i, text=/error/i').first();
-    const hasError = await errorBoundary.isVisible({ timeout: 1000 }).catch(() => false);
+    const _hasError = await errorBoundary.isVisible({ timeout: 1000 }).catch(() => false);
     // We check the error text is NOT a prominent error boundary message
     // (small mentions of "error" in normal content are fine)
     const errorBoundaryFull = page.locator('[class*="error-boundary" i], [class*="ErrorBoundary"]').first();

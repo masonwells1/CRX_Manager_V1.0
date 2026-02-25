@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
-const RUN_ID = Date.now().toString(36);
+const _RUN_ID = Date.now().toString(36);
 const waitForPage = (page: import('@playwright/test').Page, ms: number) => page.waitForTimeout(ms);
 
 test.describe('Notifications Interactions', () => {
@@ -51,7 +51,7 @@ test.describe('Notifications Interactions', () => {
     } else {
       // No unread notifications — also check for unread card styling
       const unreadCards = page.locator('[class*="bg-crx-green-tint"]');
-      const unreadCardCount = await unreadCards.count().catch(() => 0);
+      const _unreadCardCount = await unreadCards.count().catch(() => 0);
       // Either we found unread cards or all are read — both valid
       const heading = page.locator('h1, h2, [class*="heading"]').filter({ hasText: /notification/i });
       await expect(heading.first()).toBeVisible({ timeout: 5000 });
@@ -94,14 +94,14 @@ test.describe('Notifications Interactions', () => {
     const cardCount = await cards.count().catch(() => 0);
 
     if (cardCount > 0) {
-      const currentUrl = page.url();
+      const _currentUrl = page.url();
 
       // Click the first notification card
       await cards.first().click({ timeout: 10000 });
       await waitForPage(page, 3000);
 
       // Should navigate to the related entity OR mark as read (if no related entity)
-      const newUrl = page.url();
+      const _newUrl = page.url();
       const bodyText = await page.textContent('body') || '';
       expect(bodyText).not.toContain('Something went wrong');
     } else {

@@ -50,7 +50,7 @@ test.describe('Month-End Close', () => {
   test('ME5: Summary cards show period metrics', async ({ page }) => {
     // Month-end often shows summary cards: total invoiced, total collected, etc.
     const cards = page.locator('.bg-white.rounded, .bg-white.shadow, [class*="card"]');
-    const cardCount = await cards.count();
+    const _cardCount = await cards.count();
     // At minimum the page rendered without errors
     const bodyText = await page.textContent('body') || '';
     expect(bodyText).not.toContain('Something went wrong');

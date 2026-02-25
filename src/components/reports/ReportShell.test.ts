@@ -3,7 +3,7 @@
  *
  * Tests the crop-season boundaries (July 1 → June 30) and all 5 presets.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 // getPresetDates is not exported, so we test it through the component's behavior.
 // However, since it's a pure function inlined in ReportShell, we'll extract and test

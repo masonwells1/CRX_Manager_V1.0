@@ -141,7 +141,7 @@ test.describe('Compliance — Licenses Tab', () => {
 
     // Check for summary/alert cards
     const cards = page.locator('.bg-white, [class*="card"], [class*="alert"], [class*="summary"]');
-    const cardCount = await cards.count();
+    const _cardCount = await cards.count();
     // At minimum the page loaded without errors
     const bodyText = await page.textContent('body');
     expect(bodyText).not.toContain('Something went wrong');

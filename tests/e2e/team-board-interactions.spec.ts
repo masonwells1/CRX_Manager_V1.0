@@ -427,10 +427,10 @@ test.describe('Team Board Interactions', () => {
     const activityEntries = page.locator(
       '[class*="activity" i], [class*="feed" i], [class*="timeline" i], [class*="log" i], [class*="entry" i]'
     );
-    const entryCount = await activityEntries.count().catch(() => 0);
+    const _entryCount = await activityEntries.count().catch(() => 0);
 
     const emptyState = page.locator('text=/no activity|no recent|nothing yet|empty/i').first();
-    const emptyVisible = await emptyState.isVisible().catch(() => false);
+    const _emptyVisible = await emptyState.isVisible().catch(() => false);
 
     // Either activity entries or an empty state should be present
     // The page should be functional either way

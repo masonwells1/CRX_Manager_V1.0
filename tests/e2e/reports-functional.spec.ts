@@ -198,7 +198,7 @@ test.describe('Reports — Sub-Reports & Export', () => {
 
     // Click through available sub-tabs — check each individually since not all may exist
     const subTabLabels = ['Inventory', 'Chemical', 'Application', 'Price List'];
-    let clicked = 0;
+    let _clicked = 0;
     for (const label of subTabLabels) {
       const tab = page.locator(`button:has-text("${label}")`).first();
       if (await tab.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -206,7 +206,7 @@ test.describe('Reports — Sub-Reports & Export', () => {
         await waitForPage(page, 2000);
         const bodyText = await page.textContent('body') || '';
         expect(bodyText).not.toContain('Something went wrong');
-        clicked++;
+        _clicked++;
       }
     }
     // At least the operational tab loaded without error

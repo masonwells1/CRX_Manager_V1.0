@@ -16,7 +16,7 @@ test.describe('Inline Editing Interactions', () => {
     await waitForPage(page, 3000);
 
     // Find and click the Edit / Edit Mode toggle or button
-    const editToggle =
+    const _editToggle =
       page.locator('button:has-text("Edit Mode")').first()
         ?? page.locator('button:has-text("Edit")').first();
 
@@ -96,7 +96,7 @@ test.describe('Inline Editing Interactions', () => {
     // Alternative: check if any row has amber-related styles
     if (!hasDirtyRow) {
       // Fallback: look for any visual indication of a modified row
-      const anyHighlightedRow = await page.locator('table tbody tr').first().evaluate((el) => {
+      const _anyHighlightedRow = await page.locator('table tbody tr').first().evaluate((el) => {
         const style = window.getComputedStyle(el);
         const bg = style.backgroundColor;
         // Check for amber/yellow-ish background (not white/transparent)
@@ -166,7 +166,7 @@ test.describe('Inline Editing Interactions', () => {
     // Edit a cell
     const cellInput = page.locator('table td input[type="text"], table td input[type="number"], table td input:not([type="checkbox"])').first();
     await expect(cellInput).toBeVisible({ timeout: 10000 });
-    const originalValue = await cellInput.inputValue();
+    const _originalValue = await cellInput.inputValue();
     await cellInput.click();
     await cellInput.fill(`Discard-${RUN_ID}`);
 
@@ -237,21 +237,21 @@ test.describe('Inline Editing Interactions', () => {
       return values;
     };
 
-    const initialValues = await getFirstColumnValues();
+    const _initialValues = await getFirstColumnValues();
 
     // Click the header to sort
     await sortableHeader.click();
     await waitForPage(page, 1000);
 
     // Check for sort indicator (arrow, icon, or class change)
-    const hasSortIndicator = await page.locator('th [class*="sort"], th svg, th [class*="arrow"], th [class*="asc"], th [class*="desc"]')
+    const _hasSortIndicator = await page.locator('th [class*="sort"], th svg, th [class*="arrow"], th [class*="asc"], th [class*="desc"]')
       .first().isVisible({ timeout: 3000 }).catch(() => false);
 
     // Click again to toggle sort direction
     await sortableHeader.click();
     await waitForPage(page, 1000);
 
-    const afterSecondClick = await getFirstColumnValues();
+    const _afterSecondClick = await getFirstColumnValues();
 
     // At minimum, the column header was clickable and the page didn't crash
     // Sort may or may not visibly change order depending on data

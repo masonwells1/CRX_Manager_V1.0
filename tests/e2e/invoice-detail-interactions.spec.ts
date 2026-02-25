@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
-const RUN_ID = Date.now().toString(36);
+const _RUN_ID = Date.now().toString(36);
 const waitForPage = (page: import('@playwright/test').Page, ms: number) => page.waitForTimeout(ms);
 
 test.describe('Invoice Detail Interactions', () => {
@@ -174,7 +174,7 @@ test.describe('Invoice Detail Interactions', () => {
       const errorToast = page.locator(
         '[class*="error"], [class*="Error"], [role="alert"]:has-text("error"), [class*="toast"]:has-text("error")'
       ).first();
-      const hasError = await errorToast.isVisible({ timeout: 2000 }).catch(() => false);
+      const _hasError = await errorToast.isVisible({ timeout: 2000 }).catch(() => false);
 
       // Either no error appeared, or the save worked silently
       // Some invoices might show validation — that's okay too

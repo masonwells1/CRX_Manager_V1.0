@@ -142,7 +142,7 @@ test.describe('Customer Detail Interactions', () => {
       await expect(commissionSection).toBeVisible();
       // Check for percentage values or rep names nearby
       const percentages = page.locator(':text("%")');
-      const hasPercentages = await percentages.first().isVisible({ timeout: 3000 }).catch(() => false);
+      const _hasPercentages = await percentages.first().isVisible({ timeout: 3000 }).catch(() => false);
       // Commission section may show percentages or rep names
       expect(commissionVisible).toBeTruthy();
     } else {
