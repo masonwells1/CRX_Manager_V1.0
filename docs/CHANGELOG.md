@@ -4,7 +4,11 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
-## 2026-02-25 — Test Coverage Expansion
+## 2026-02-25 — Test Suite Audit & Coverage Expansion
+- Audited all 67 unit test files — zero stale imports, zero dead tests
+- Removed duplicate `pdfGeneration.test.ts` (894 lines, duplicated by 3 individual PDF test files)
+- Added 11 new unit test files: SignatureCanvas, ActivityFeed, CommentsSection, 8 bulk import components
+- Net result: 80 test files, 1,122 unit tests (all passing)
 - 60 math & business logic verification E2E tests
 - 95 real UI interaction E2E tests across 10 pages
 - 14 new test files closing coverage gaps (47 unit + 68 E2E tests)

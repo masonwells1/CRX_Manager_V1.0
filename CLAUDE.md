@@ -10,7 +10,7 @@
 ## Current State (as of 2026-02-24)
 - **All hardening & features:** COMPLETE through Sprint 20 + Bulk Field Import + Safety Audit + Quick Receive + Codebase Audit + Lint Cleanup + E2E Gate Tests + Comprehensive Test Gap Closure (8 sprints)
 - **Deployed to:** Vercel → **https://croprxsolutions.app** (live)
-- **Test coverage:** 1,105 unit tests (Vitest, 67 test files) + 424 Playwright E2E tests (35 spec files, 370 passing, 42 pre-existing failures)
+- **Test coverage:** 1,122 unit tests (Vitest, 80 test files) + 424 Playwright E2E tests (35 spec files, 370 passing, 42 pre-existing failures)
 - **77+ migrations** applied to remote Supabase, **72+ tables**, **~110 RPC functions**
 - **49 pages**, 50+ components
 - **ESLint:** 0 errors (fully lint-clean)
@@ -116,7 +116,7 @@ Use this table to check **"does this feature already exist?"** before building a
 - **Frontend:** React 18 + TypeScript + Vite
 - **Backend:** Supabase (PostgreSQL + Auth + Edge Functions + Realtime + Storage)
 - **Styling:** Tailwind CSS with custom theme (crx-green brand color)
-- **Testing:** Vitest (1,105 unit tests, 67 files) + Playwright (424 E2E tests, 35 spec files in `tests/e2e/`)
+- **Testing:** Vitest (1,122 unit tests, 80 files) + Playwright (424 E2E tests, 35 spec files in `tests/e2e/`)
 - **Deployment:** Vercel → https://croprxsolutions.app (live), configured via `vercel.json`
 - **Mapping:** Mapbox GL JS + react-map-gl + @mapbox/mapbox-gl-draw + @turf/area + @turf/centroid + @turf/bbox
 - **Geo Import:** shapefile (parse .shp/.dbf/.shx), proj4 (coordinate reprojection), togeojson-with-extended-style (KML→GeoJSON)
@@ -129,7 +129,7 @@ Use this table to check **"does this feature already exist?"** before building a
 ```bash
 npm run dev          # Start dev server (http://localhost:5173)
 npm run build        # Production build
-npx vitest run       # Run 1,105 unit tests (67 test files)
+npx vitest run       # Run 1,122 unit tests (80 test files)
 npm run typecheck    # TypeScript error check
 npm run lint         # ESLint
 npm run test:e2e     # Run Playwright E2E tests
@@ -885,7 +885,7 @@ Test every feature as each role:
 
 ### Build & Type Checking
 - `npm run build` for full build verification (pre-commit hook runs this automatically)
-- `npx vitest run` for 1,105 unit tests (pre-commit hook runs this automatically)
+- `npx vitest run` for 1,122 unit tests (pre-commit hook runs this automatically)
 - `npx tsc --noEmit` for type checking only
 - `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI test environments (unit tests mock Supabase)
 - **TypeScript is strict-clean (0 errors)** — CI enforces `npx tsc --noEmit` as a blocking step

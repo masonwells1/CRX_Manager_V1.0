@@ -50,7 +50,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 | `npm run dev` | Start development server (port 5173) |
 | `npm run build` | Build for production |
 | `npm run preview` | Preview production build locally |
-| `npm test` | Run all 1,105 unit tests |
+| `npm test` | Run all 1,122 unit tests |
 | `npm run test:watch` | Run unit tests in watch mode |
 | `npm run typecheck` | Check TypeScript errors |
 | `npm run lint` | Run ESLint |
@@ -128,7 +128,7 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environme
 ## Current State
 
 - **49 pages**, 50+ components, fully lazy-loaded
-- **1,105 unit tests** (67 test files) + **35 E2E spec files** (424 tests)
+- **1,122 unit tests** (80 test files) + **35 E2E spec files** (424 tests)
 - **72+ database tables**, ~110 RPC functions, 77 migrations
 - **0 ESLint errors**, 0 TypeScript errors
 - **Pre-commit hook** blocks commits if build or tests fail
