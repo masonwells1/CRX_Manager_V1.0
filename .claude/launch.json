@@ -3,9 +3,15 @@
   "configurations": [
     {
       "name": "dev",
-      "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd /d C:\\Users\\pc\\CRX_Manager_V1.0 && npm run dev"],
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
       "port": 5173
+    },
+    {
+      "name": "preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "preview"],
+      "port": 4173
     }
   ]
 }
