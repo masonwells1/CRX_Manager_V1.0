@@ -63,7 +63,7 @@ describe('useUnsavedChanges', () => {
   it('does not add beforeunload listener when isDirty=false', () => {
     renderHook(() => useUnsavedChanges(false));
     const beforeUnloadCalls = addSpy.mock.calls.filter(
-      (call) => call[0] === 'beforeunload'
+      (call: [string, ...unknown[]]) => call[0] === 'beforeunload'
     );
     expect(beforeUnloadCalls).toHaveLength(0);
   });
@@ -86,7 +86,7 @@ describe('useUnsavedChanges', () => {
   it('beforeunload handler calls preventDefault', () => {
     renderHook(() => useUnsavedChanges(true));
     const handler = addSpy.mock.calls.find(
-      (call) => call[0] === 'beforeunload'
+      (call: [string, ...unknown[]]) => call[0] === 'beforeunload'
     )?.[1] as EventListener;
     expect(handler).toBeDefined();
 
