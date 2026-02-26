@@ -32,7 +32,7 @@ const CropPrograms = lazy(() => import('./pages/CropPrograms'));
 const TeamBoard = lazy(() => import('./pages/TeamBoard'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
-const Payments = lazy(() => import('./pages/Payments'));
+// Payments.tsx removed — PaymentAllocation is now the sole payment page at /payments
 const Fields = lazy(() => import('./pages/Fields'));
 const FieldDetail = lazy(() => import('./pages/FieldDetail'));
 const BlendTickets = lazy(() => import('./pages/BlendTickets').then(m => ({ default: m.BlendTickets })));
@@ -129,7 +129,7 @@ const router = createBrowserRouter([
           { path: 'brand-vs-generic', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><BrandVsGeneric /></ProtectedRoute> },
           { path: 'reports', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Reports /></ProtectedRoute> },
           { path: 'crop-programs', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CropPrograms /></ProtectedRoute> },
-          { path: 'payments', element: <ProtectedRoute allowedRoles={['admin']}><Payments /></ProtectedRoute> },
+          { path: 'payments', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PaymentAllocation /></ProtectedRoute> },
           { path: 'ar-aging', element: <ProtectedRoute allowedRoles={['admin']}><ARaging /></ProtectedRoute> },
           { path: 'compliance', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Compliance /></ProtectedRoute> },
           { path: 'rebates', element: <ProtectedRoute allowedRoles={['admin']}><Rebates /></ProtectedRoute> },
@@ -154,8 +154,7 @@ const router = createBrowserRouter([
           { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><PrepaymentManager /></ProtectedRoute> },
           { path: 'settings', element: <ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute> },
 
-          // Admin + Sales Rep
-          { path: 'payment-allocation', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PaymentAllocation /></ProtectedRoute> },
+          // payment-allocation route removed — now served at /payments
         ],
       },
       { path: '*', element: <Navigate to="/" replace /> },

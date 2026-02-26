@@ -194,11 +194,10 @@ draft -> posted -> void
 - `prepay_applications` — prepay credit applications to invoices
 
 ### Source files
-- `src/pages/Payments.tsx` — payment recording
-- `src/pages/PaymentAllocation.tsx` — allocate payments to invoices
+- `src/pages/PaymentAllocation.tsx` — unified payment entry (route: `/payments`)
 
 ### Rules
-- Payments update `orders.total_paid` and `orders.balance_due`.
+- Payments are allocated to invoices via `allocate_payment` RPC. AR is tracked on invoices (single source of truth).
 - Payment allocation links specific payment amounts to specific invoice line items.
 - Prepay credits can be auto-applied to oldest unpaid invoices.
 - All payment activity is logged in `financial_audit_log`.

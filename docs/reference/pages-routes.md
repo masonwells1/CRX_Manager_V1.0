@@ -32,8 +32,7 @@
 | `/application-records` | ApplicationRecords | Read-only list of all chemical applications (from jobs + blend tickets) |
 | `/invoices` | Invoices | Invoice list (unposted/posted), batch print, batch void, quick delivery filter |
 | `/invoices/:id` | InvoiceDetail | Invoice detail, post/unpost, print PDF, write-off |
-| `/payments` | Payments | Payment recording and listing |
-| `/payment-allocation` | PaymentAllocation | Unified payment allocation to invoices |
+| `/payments` | PaymentAllocation | Unified payment entry — allocate checks to invoices, remainder becomes prepay |
 | `/ar-aging` | ARaging | AR aging report, generate finance charges |
 | `/month-end` | MonthEndClose | Admin-only. Period status, checklist, batch statements, "Roll the Month" |
 | `/commission-payments` | CommissionPayments | Admin-only. Create from unpaid commissions, post workflow |

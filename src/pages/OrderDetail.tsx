@@ -1,7 +1,7 @@
 /**
  * OrderDetail.tsx — View and edit orders after creation
  * GAP FIX #13: Edit Orders After Creation
- * Also shows payment/balance info (Gap #2 tie-in)
+ * AR derived from linked invoices (single source of truth).
  */
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -16,7 +16,7 @@ import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
-import type { Order, OrderItem, Customer } from '../types';
+import type { Order, OrderItem, Customer, Invoice } from '../types';
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -26,6 +26,7 @@ export default function OrderDetail() {
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Related blend tickets
@@ -84,6 +85,15 @@ export default function OrderDetail() {
         }
       });
       setRelatedTickets(Array.from(uniqueTickets.values()));
+
+      // Load linked invoices (AR single source of truth)
+      const { data: invoiceData } = await supabase
+        .from('invoices')
+        .select('*')
+        .eq('order_id', id!)
+        .not('status', 'in', '("voided","cancelled")')
+        .order('invoice_number');
+      setInvoices(invoiceData || []);
     }
     setLoading(false);
   };
@@ -198,8 +208,13 @@ export default function OrderDetail() {
 
   const sections = [...new Set((editing ? editItems : items).map((i) => i.section_name || 'General'))];
   const displayItems = editing ? editItems : items;
-  const totalPaid = Number(order.total_paid) || 0;
-  const balanceDue = Number(order.balance_due) || (order.total_price - totalPaid);
+  // AR derived from invoices (single source of truth — never use order.total_paid / balance_due)
+  const totalInvoicedCents = invoices.reduce((sum, inv) => sum + (inv.total_amount_cents || 0), 0);
+  const totalPaidCents = invoices.reduce((sum, inv) => sum + (inv.paid_amount_cents || 0) + (inv.prepay_applied_cents || 0), 0);
+  const balanceCents = invoices.reduce((sum, inv) => sum + (inv.balance_cents || 0), 0);
+  const totalInvoiced = totalInvoicedCents / 100;
+  const totalPaid = totalPaidCents / 100;
+  const balanceDue = balanceCents / 100;
 
   return (
     <div className="space-y-4">
@@ -291,8 +306,12 @@ export default function OrderDetail() {
           </div>
         </div>
 
-        {/* Payment summary row */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mt-4 pt-4 border-t border-gray-100">
+        {/* AR summary — derived from linked invoices (single source of truth) */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4 pt-4 border-t border-gray-100">
+          <div>
+            <p className="text-xs text-secondary">Total Invoiced</p>
+            <p className="text-sm font-medium text-nav-dark">{fmt(totalInvoiced)}</p>
+          </div>
           <div>
             <p className="text-xs text-secondary">Amount Paid</p>
             <p className="text-sm font-medium text-crx-green">{fmt(totalPaid)}</p>
@@ -303,17 +322,70 @@ export default function OrderDetail() {
               {fmt(Math.max(0, balanceDue))}
             </p>
           </div>
-          <div>
+          <div className="flex items-end">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => navigate('/payments')}
             >
-              View Payments →
+              Record Payment →
             </Button>
           </div>
         </div>
       </Card>
+
+      {/* Linked Invoices */}
+      {invoices.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <FileText className="w-5 h-5 text-crx-green" />
+            <h3 className="font-semibold text-nav-dark">Linked Invoices</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Invoice #</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Type</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Status</th>
+                  <th className="px-4 py-2 text-right font-medium text-secondary">Total</th>
+                  <th className="px-4 py-2 text-right font-medium text-secondary">Paid</th>
+                  <th className="px-4 py-2 text-right font-medium text-secondary">Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map((inv) => (
+                  <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                    <td className="px-4 py-2">
+                      <button
+                        onClick={() => navigate(`/invoices/${inv.id}`)}
+                        className="text-crx-green hover:underline font-medium"
+                      >
+                        {inv.invoice_number}
+                      </button>
+                    </td>
+                    <td className="px-4 py-2 text-secondary capitalize">
+                      {inv.invoice_type.replace('_', ' ')}
+                    </td>
+                    <td className="px-4 py-2">
+                      <Badge variant={inv.status === 'posted' ? 'success' : inv.status === 'draft' ? 'default' : 'warning'} size="sm">
+                        {inv.status}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2 text-right font-mono">{fmt(inv.total_amount_cents / 100)}</td>
+                    <td className="px-4 py-2 text-right font-mono text-crx-green">
+                      {fmt((inv.paid_amount_cents + inv.prepay_applied_cents) / 100)}
+                    </td>
+                    <td className={`px-4 py-2 text-right font-mono font-semibold ${inv.balance_cents > 0 ? 'text-red-600' : 'text-crx-green'}`}>
+                      {fmt(inv.balance_cents / 100)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {sections.map((section) => (
         <Card key={section} padding={false}>

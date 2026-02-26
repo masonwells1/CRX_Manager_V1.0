@@ -17,7 +17,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'quotes', label: 'Quotes', category: 'Sales', roles: ['admin', 'sales_rep'] },
   { key: 'orders', label: 'Orders', category: 'Sales', roles: ['admin', 'sales_rep'] },
   { key: 'invoices', label: 'Invoices', category: 'Sales', roles: ['admin', 'sales_rep'] },
-  { key: 'payments', label: 'Payments', category: 'Sales', roles: ['admin'] },
+  { key: 'payments', label: 'Payments', category: 'Sales', roles: ['admin', 'sales_rep'] },
 
   // Customers
   { key: 'customers', label: 'Customers', category: 'Customers', roles: ['admin', 'sales_rep'] },
@@ -46,7 +46,6 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
 
   // Finance
   { key: 'ar-aging', label: 'AR Aging', category: 'Finance', roles: ['admin'] },
-  { key: 'payment-allocation', label: 'Apply Payments', category: 'Finance', roles: ['admin', 'sales_rep'] },
   { key: 'prepayments', label: 'Prepayments', category: 'Finance', roles: ['admin'] },
   { key: 'commission-payments', label: 'Commission Pay', category: 'Finance', roles: ['admin'] },
   { key: 'customer-transactions', label: 'Transactions', category: 'Finance', roles: ['admin'] },

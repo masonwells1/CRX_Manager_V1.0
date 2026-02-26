@@ -1,9 +1,10 @@
 /**
- * PaymentAllocation — Unified check-entry page.
+ * Payments — Unified payment entry page (formerly PaymentAllocation).
  * Select a customer, enter a check amount, allocate to invoices (auto or manual),
  * any remainder becomes prepay credit. Calls allocate_payment RPC.
  *
  * Sprint 16: Unified Payment Allocation
+ * AR Single Source of Truth: This is now the sole payment entry point.
  */
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import {
@@ -310,7 +311,7 @@ export default function PaymentAllocation() {
     <div className="space-y-4">
       {/* Header */}
       <div>
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Apply Payments</h2>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Payments</h2>
         <p className="text-sm text-secondary mt-1">
           Allocate a check across multiple invoices. Any remainder becomes a prepay credit.
         </p>

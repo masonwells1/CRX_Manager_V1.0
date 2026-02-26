@@ -72,7 +72,7 @@ To copy them: read each `.md` file (except README.md) from `docs/claude-memory/`
 - Accepted quotes convert to orders via `convert_quote_to_order()`
 
 ### Order: `confirmed -> partially_fulfilled -> fulfilled -> cancelled`
-- `total_paid` and `balance_due` track AR
+- AR derived from linked invoices (orders.total_paid / balance_due are deprecated)
 - Commission records created per order per recipient
 
 ### Delivery: `scheduled -> in_progress -> completed -> cancelled`

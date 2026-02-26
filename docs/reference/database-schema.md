@@ -15,9 +15,9 @@
 - `quote_sections` - Sections within a quote (section_name, sort_order)
 - `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals)
 - `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)
-- `orders` - Confirmed orders (order_number, status, totals, total_paid, balance_due, order_date)
+- `orders` - Confirmed orders (order_number, status, totals, order_date). Note: total_paid/balance_due columns are DEPRECATED — AR is tracked via invoices.
 - `order_items` - Order line items (quantity_delivered, quantity_remaining)
-- `payments` - AR tracking (order_id, amount, payment_method, reference_number)
+- `payments` - Legacy payment records (DEPRECATED — use allocation_sets + invoice_line_allocations instead)
 - `commissions` - Per-order per-recipient (split_percentage, commission_amount, status, paid_date)
 
 ## Inventory

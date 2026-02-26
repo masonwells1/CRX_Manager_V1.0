@@ -194,8 +194,10 @@ export interface Order {
   total_profit: number;
   total_margin_pct: number;
   order_date: string;
-  total_paid: number;
-  balance_due: number;
+  /** @deprecated Use invoice-derived AR instead. Column is no longer maintained. */
+  total_paid?: number;
+  /** @deprecated Use invoice-derived AR instead. Column is no longer maintained. */
+  balance_due?: number;
   season: number | null;
   salesman_id: string | null;
   deleted_at: string | null;

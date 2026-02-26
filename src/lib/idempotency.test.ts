@@ -25,7 +25,7 @@ describe('generateIdempotencyKey', () => {
   });
 
   it('includes the user ID', () => {
-    const key = generateIdempotencyKey('record_payment', 'abc-def');
+    const key = generateIdempotencyKey('allocate_payment', 'abc-def');
     expect(key).toContain(':abc-def:');
   });
 

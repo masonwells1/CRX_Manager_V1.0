@@ -51,14 +51,7 @@ interface CompleteDeliveryParams {
   p_quantities?: Record<string, number>; // optional jsonb
 }
 
-interface RecordPaymentParams {
-  p_order_id: string;
-  p_amount: number;
-  p_method: string;
-  p_reference: string | null;
-  p_note: string | null;
-  p_performed_by: string;
-}
+// RecordPaymentParams removed — RPC is deprecated
 
 interface SaveQuoteParams {
   p_quote_id: string | null;
@@ -308,19 +301,7 @@ describe('RPC contract: complete_delivery', () => {
   });
 });
 
-describe('RPC contract: record_payment', () => {
-  it('accepts valid params', () => {
-    const params = assertShape<RecordPaymentParams>({
-      p_order_id: 'order-uuid',
-      p_amount: 500.00,
-      p_method: 'check',
-      p_reference: 'CHK-1234',
-      p_note: null,
-      p_performed_by: 'user-uuid',
-    });
-    expect(params.p_amount).toBeGreaterThan(0);
-  });
-});
+// record_payment contract removed — RPC is deprecated. Use allocate_payment instead.
 
 describe('RPC contract: save_quote', () => {
   it('accepts valid params for new quote', () => {

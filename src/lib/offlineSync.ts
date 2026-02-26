@@ -69,7 +69,7 @@ async function executeAction(action: PendingAction): Promise<void> {
   // All operations follow the same pattern: call supabase.rpc with params
   const rpcOperations: Record<string, string> = {
     complete_delivery: 'complete_delivery',
-    record_payment: 'record_payment',
+    allocate_payment: 'allocate_payment',
     receive_po_items: 'receive_po_items',
     update_order_items: 'update_order_items',
     complete_job: 'complete_job',
