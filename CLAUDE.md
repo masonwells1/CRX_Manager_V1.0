@@ -182,22 +182,20 @@ Used for: `team_notes`, `team_note_comments`, `notifications`, `note_activity_lo
 
 ---
 
-## Documentation Maintenance
+## Documentation Maintenance (Fully Automatic)
 
-### Automated Hook
-A `PreToolUse` hook in `.claude/settings.json` fires before every `git commit`.
-If the commit includes structural changes (new pages, migrations, RPCs, etc.), Claude is reminded to check and update docs before committing.
+### How It Works
+A `PreToolUse` hook in `.claude/settings.json` fires automatically before every `git commit`.
+If the commit includes structural changes (new pages, migrations, RPCs, etc.), Claude is **blocked from committing** until it:
+1. Counts actual pages, migrations, and Edge Functions
+2. Compares to what CLAUDE.md and reference docs say
+3. Fixes any stale counts or missing entries
+4. Includes the doc updates in the commit
 
-### Manual Audit
-Run `/update-docs` anytime to perform a full documentation audit. It counts pages, migrations, Edge Functions, and test files, compares to what the docs say, checks for missing entries, fixes drift, and prints a summary table.
+**The user does not need to do anything.** This is fully hands-off.
 
-### Quick Count Commands
-```bash
-grep -c "lazy(" src/App.tsx              # Page count
-ls supabase/migrations/*.sql | wc -l     # Migration count
-ls -d supabase/functions/*/ | wc -l      # Edge Function count
-find src -name "*.test.ts" -o -name "*.test.tsx" | wc -l  # Test file count
-```
+### Optional: Manual Audit
+Run `/update-docs` for a full audit anytime (not required — the commit hook handles it).
 
 ---
 
