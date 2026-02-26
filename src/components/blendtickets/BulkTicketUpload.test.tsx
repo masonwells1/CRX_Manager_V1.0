@@ -49,10 +49,11 @@ vi.mock('../../lib/imageCompression', () => ({
 }));
 
 import { BulkTicketUpload } from './BulkTicketUpload';
+import type { Customer } from '../../types';
 
 describe('BulkTicketUpload', () => {
   const defaultProps = {
-    customers: [{ id: 'c1', farm_name: 'Smith Farm' }] as Array<{ id: string; farm_name: string }>,
+    customers: [{ id: 'c1', farm_name: 'Smith Farm' }] as unknown as Customer[],
     onUploadComplete: vi.fn(),
   };
 

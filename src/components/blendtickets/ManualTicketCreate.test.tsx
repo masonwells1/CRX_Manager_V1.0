@@ -40,10 +40,11 @@ vi.mock('../../lib/blendMathValidator', () => ({
 }));
 
 import { ManualTicketCreate } from './ManualTicketCreate';
+import type { Customer } from '../../types';
 
 describe('ManualTicketCreate', () => {
   const defaultProps = {
-    customers: [{ id: 'c1', farm_name: 'Smith Farm' }] as Array<{ id: string; farm_name: string }>,
+    customers: [{ id: 'c1', farm_name: 'Smith Farm' }] as unknown as Customer[],
     onComplete: vi.fn(),
   };
 
