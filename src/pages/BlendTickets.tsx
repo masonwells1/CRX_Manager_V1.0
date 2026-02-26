@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus, LinkIcon, Download, Trash2 } from 'lucide-react';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useOCRProcessor } from '../hooks/useOCRProcessor';
 import Button from '../components/ui/Button';
@@ -62,6 +62,7 @@ export function BlendTickets() {
             salesman:profiles!blend_tickets_salesman_id_fkey(id, full_name),
             images:blend_ticket_images(count)
           `)
+          .is('deleted_at', null)
           .order('created_at', { ascending: false })
           .limit(500),
         supabase
@@ -160,17 +161,15 @@ export function BlendTickets() {
     setDeleting(true);
     try {
       const ids = selectedRows.map((t) => t.id);
-      const { error } = await supabase
+      const result = await supabase
         .from('blend_tickets')
         .update({ deleted_at: new Date().toISOString() })
-        .in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Deleted ${ids.length} ticket(s)`);
-        clearSelection();
-        loadData();
-      }
+        .in('id', ids)
+        .select();
+      checkMutationResult(result, 'Delete blend tickets');
+      toast('success', `Deleted ${ids.length} ticket(s)`);
+      clearSelection();
+      loadData();
     } catch (err) {
       toast('error', sanitizeError(err));
     }
