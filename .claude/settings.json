@@ -1,12 +1,37 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You are starting a new session on the CRX Manager project. Do these steps automatically and silently:\n\n1. Read CLAUDE.md from the project root\n2. Read docs/workflows/SAFE_DEVELOPMENT_RULES.md\n\nAfter reading both files, briefly confirm you've loaded the CRX Manager context and are ready to help.\n\nCRITICAL CONTEXT: The project owner (Mason) has ZERO coding experience. You must:\n- Always explain what you're doing in plain English (no jargon)\n- Always write a plan and show it BEFORE making changes\n- Always wait for explicit approval before modifying any files\n- Never assume he understands code terminology — define it if you use it\n- If something could break existing features, say so clearly before proceeding"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "prompt",
+            "prompt": "You are a safety gate for Bash commands on the CRX Manager project. Examine the command below.\n\nBLOCK these dangerous commands (respond with decision:block):\n- git push --force, git push -f, or any force push variant\n- git reset --hard\n- git checkout . or git restore . (discards ALL uncommitted changes)\n- git clean -f (deletes untracked files permanently)\n- Any command with --no-verify (bypasses safety hooks)\n- rm -rf on src/, supabase/, docs/, or the project root\n- npm uninstall on core packages (react, @supabase/supabase-js, vite, typescript)\n- Any command that would modify an EXISTING file inside supabase/migrations/ (editing old migrations is forbidden — only new files are allowed)\n- git add .env or committing any .env file\n\nALLOW all other commands (respond with decision:allow).\n\nWhen blocking, explain in plain English why the command is dangerous and what to do instead.\n\nCommand: $ARGUMENTS"
+          },
+          {
+            "type": "prompt",
             "prompt": "You are a documentation drift detector. Examine the Bash command below.\n\nIF the command is NOT a 'git commit' command, respond exactly: {\"decision\":\"allow\"}\n\nIF the command IS a 'git commit' command, analyze the commit message and any staged files context.\n\nIf the commit likely includes STRUCTURAL changes (any of these):\n- New page added (lazy import in App.tsx)\n- New migration file (supabase/migrations/)\n- New Edge Function (supabase/functions/)\n- New database table or RPC function\n- New test files added\n- Routes changed\n\nThen respond: {\"decision\":\"block\",\"reason\":\"AUTOMATIC DOC DRIFT CHECK — Do NOT ask the user anything. Do this yourself right now:\\n\\n1. Run: grep -c 'lazy(' src/App.tsx\\n2. Run: ls supabase/migrations/*.sql | wc -l\\n3. Run: ls -d supabase/functions/*/ | wc -l\\n4. Read CLAUDE.md line 11 and compare the counts to what you just found\\n5. If any count is wrong, fix it in CLAUDE.md\\n6. If you added a new migration, add it to docs/reference/migration-history.md\\n7. If you added a new page, add it to docs/reference/pages-routes.md\\n8. If you added a new RPC or table via migration, add it to docs/reference/rpc-functions.md or docs/reference/database-schema.md\\n9. Stage any doc changes with git add\\n10. Then retry the commit with the doc updates included\\n\\nDo all of this silently and automatically. The user should not have to do anything.\"}\n\nIf the commit is clearly minor (CSS tweaks, typo fixes, config-only, doc-only changes), respond: {\"decision\":\"allow\"}\n\nWhen in doubt, block — it's better to check docs than to miss drift.\n\nCommand: $ARGUMENTS"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You just wrote or edited a file. Check if this was a database migration file (path contains 'supabase/migrations/').\n\nIF the file IS a migration (supabase/migrations/*.sql):\nRespond: {\"decision\":\"block\",\"reason\":\"MIGRATION SAFETY CHECK — You just created a database migration. Before continuing, you MUST do these steps:\\n\\n1. Update the TypeScript interface in src/types/index.ts to match the schema change\\n2. Check if any existing components need updates for the new/changed columns\\n3. After updating types, run npm run typecheck to verify everything compiles\\n\\nDo NOT proceed to other tasks until these steps are complete. Tell the user what you're updating and why.\"}\n\nIF the file is NOT a migration:\nRespond: {\"decision\":\"allow\"}\n\nFile path: $TOOL_INPUT"
           }
         ]
       }

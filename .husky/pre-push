@@ -1,0 +1,27 @@
+echo "🛡️ Pre-push safety check..."
+echo ""
+echo "Running TypeScript type check..."
+npm run typecheck 2>&1
+TC_EXIT=$?
+
+if [ $TC_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ TYPE CHECK FAILED — push blocked."
+  echo "Fix TypeScript errors before pushing to GitHub."
+  exit 1
+fi
+
+echo ""
+echo "Running build check..."
+npm run build 2>&1
+BUILD_EXIT=$?
+
+if [ $BUILD_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ BUILD FAILED — push blocked."
+  echo "Fix build errors before pushing to GitHub."
+  exit 1
+fi
+
+echo ""
+echo "✅ Type check and build passed — pushing to GitHub."
