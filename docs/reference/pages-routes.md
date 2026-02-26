@@ -1,0 +1,54 @@
+# Pages & Routes Reference (49 total)
+
+| Route | Page | Description |
+|-------|------|-------------|
+| `/` | Dashboard | KPIs, today's jobs, recent activity |
+| `/products` | Products | Product catalog with search/filter, bulk import |
+| `/products/:id` | ProductDetail | Product CRUD (pricing tiers, EPA info, RUP status) |
+| `/customers` | Customers | Customer list with search/filter, bulk import |
+| `/customers/:id` | CustomerDetail | Profile, addresses, credit limit, transaction review, finance charge settings, season summary |
+| `/quotes` | Quotes | Quote list with status filters |
+| `/quotes/new` | QuoteBuilder | Multi-line quote with tiered pricing, commission splits, PDF |
+| `/quotes/:id` | QuoteBuilder | Edit existing quote |
+| `/orders` | Orders | Order list with status badges |
+| `/orders/new` | NewOrder | Direct order creation (bypasses quote) |
+| `/orders/:id` | OrderDetail | Order detail with status transitions, convert to invoice |
+| `/inventory` | InventoryPage | Inventory levels, low-stock alerts, cost valuation |
+| `/deliveries` | Deliveries | Delivery management + driver dashboard + batch actions + quick delivery (~900 lines) |
+| `/deliveries/new` | NewDelivery | Create delivery from order |
+| `/deliveries/:id` | DeliveryDetail | Full lifecycle: confirm, edit, cancel, photos, issues, remainders, order context (~1350 lines) |
+| `/delivery-remainders` | DeliveryRemainders | Pending remainder items across all customers |
+| `/blend-tickets` | BlendTickets | OCR ticket processing with image upload |
+| `/blend-tickets/:id` | BlendTicketDetail | Ticket review, approve/reject, create application record |
+| `/purchase-orders` | PurchaseOrders | PO list with status filters |
+| `/purchase-orders/new` | NewPurchaseOrder | Create PO from vendor catalog |
+| `/purchase-orders/:id` | PurchaseOrderDetail | PO detail with two-step receive modal + receiving history (~823 lines) |
+| `/receiving` | ReceivingLog | Receiving dashboard with summary cards, filters, searchable log |
+| `/receiving/quick` | QuickReceive | 3-step wizard: vendor+products -> auto-match to oldest open POs -> confirm |
+| `/jobs` | Jobs | Job list with date/status/customer filters |
+| `/jobs/:id` | JobDetail | Full job editor: fields on map, chemicals, vehicle/applicator, complete, transfer to invoice |
+| `/vehicles` | Vehicles | Vehicle CRUD (ground/air), capacity, registration |
+| `/vehicles/:id` | VehicleDetail | Single vehicle edit form |
+| `/application-records` | ApplicationRecords | Read-only list of all chemical applications (from jobs + blend tickets) |
+| `/invoices` | Invoices | Invoice list (unposted/posted), batch print, batch void, quick delivery filter |
+| `/invoices/:id` | InvoiceDetail | Invoice detail, post/unpost, print PDF, write-off |
+| `/payments` | Payments | Payment recording and listing |
+| `/payment-allocation` | PaymentAllocation | Unified payment allocation to invoices |
+| `/ar-aging` | ARaging | AR aging report, generate finance charges |
+| `/month-end` | MonthEndClose | Admin-only. Period status, checklist, batch statements, "Roll the Month" |
+| `/commission-payments` | CommissionPayments | Admin-only. Create from unpaid commissions, post workflow |
+| `/customer-transactions` | CustomerTransactionReview | Admin-only. Per-customer transaction history with running balance |
+| `/prepayments` | PrepaymentManager | Admin-only. Prepay balances, auto-apply to oldest invoices |
+| `/reports` | Reports | 14 reports: 4 logbook, 6 financial, 4 operational. CSV/PDF export. |
+| `/fields` | Fields | Field list with Mapbox map view + bulk import (shapefile/KML/GeoJSON) |
+| `/fields/:id` | FieldDetail | Field CRUD with polygon drawing on satellite map |
+| `/recipes` | BlendRecipes | Reusable blend recipe management, create job from recipe |
+| `/cycle-counts` | CycleCounts | Inventory cycle counting with variance tracking |
+| `/returns` | Returns | Returns/RMA workflow (request -> approve -> receive -> credit) |
+| `/brand-vs-generic` | BrandVsGeneric | Ingredient mapping: branded vs generic |
+| `/crop-programs` | CropPrograms | Seasonal crop program management |
+| `/compliance` | Compliance | Applicator license tracking, RUP product list |
+| `/rebates` | Rebates | Manufacturer rebate programs and claim management |
+| `/team-board` | TeamBoard | Kanban board: notes/todos/announcements, comments, real-time |
+| `/notifications` | Notifications | User notification center |
+| `/settings` | SettingsPage | Admin only: company settings, user management |
