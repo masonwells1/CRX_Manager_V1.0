@@ -2,24 +2,17 @@
 
 These are backup copies of the Claude Code auto-memory files. They get loaded into Claude's context across sessions.
 
-## How to Sync to a New Computer
+## Do I Need These?
 
-**Option 1: Run the script (easiest)**
-```
-scripts\sync-memory.bat
-```
-Double-click it or run it from the terminal. It copies all memory files to the right place.
+**Mostly no.** `CLAUDE.md` (which is in the repo and loads automatically) already has all the rules, red lines, patterns, and architecture info. These memory files just add extra convenience like your name, setup tips, and lessons learned.
 
-**Option 2: Tell Claude**
-Open Claude Code in the repo and say:
+## Setting Up a New Computer (One-Time)
+
+Just open Claude Code in the repo folder and say:
+
 > "Copy the files from docs/claude-memory/ into your memory directory"
 
-**Option 3: Manual copy**
-Copy all `.md` files (except this README) into:
-```
-%USERPROFILE%\.claude\projects\C--\memory\
-```
-(If `C--` doesn't exist, check `%USERPROFILE%\.claude\projects\` for the correct folder name)
+That's it. Claude handles the rest. No terminal, no scripts, no commands to remember.
 
 ## What Syncs Automatically (no action needed)
 
@@ -29,7 +22,7 @@ These are IN the git repo and sync with `git pull`:
 - `CLAUDE.md` — all project rules, red lines, patterns
 - `docs/reference/` — 6 detailed reference docs
 
-## What Needs the One-Time Sync (above)
+## What the One-Time Setup Copies
 
 These are Claude Code system files that live OUTSIDE the repo:
 - `MEMORY.md` — core context (user info, project basics)
@@ -37,5 +30,9 @@ These are Claude Code system files that live OUTSIDE the repo:
 - `doc-rules.md` — pre-commit doc review checklist
 - `setup-guide.md` — environment setup
 - `project-details.md` — full feature map
+
+## Alternative: Script or Manual Copy
+
+If you prefer, there's also `scripts\sync-memory.bat` you can double-click, or manually copy all `.md` files (except this README) into `%USERPROFILE%\.claude\projects\C--\memory\`.
 
 **Note:** Even without these memory files, Claude still has `CLAUDE.md` (loaded automatically from the repo) which covers all the critical rules, red lines, and patterns. The memory files just add convenience context.
