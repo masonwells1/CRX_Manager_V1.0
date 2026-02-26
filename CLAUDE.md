@@ -7,6 +7,12 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
+## Session Start Checklist
+At the start of each session, silently check if `docs/claude-memory/MEMORY.md` has a matching file at the Claude Code memory directory. If memory files appear to be missing (i.e., no MEMORY.md context was loaded), proactively tell the user:
+> "It looks like your memory files aren't set up on this computer yet. Want me to copy them over? (Just say yes)"
+
+To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
+
 ## Current State (2026-02-25)
 - 49 pages, 72+ tables, ~110 RPCs, 77+ migrations
 - 1,122 unit tests + 424 E2E tests (370 passing, 42 pre-existing failures)
