@@ -1,0 +1,34 @@
+echo "🔍 Running ESLint..."
+npm run lint 2>&1
+LINT_EXIT=$?
+
+if [ $LINT_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ LINT FAILED — commit blocked. Fix lint errors first."
+  exit 1
+fi
+
+echo ""
+echo "🔨 Running build check..."
+npm run build 2>&1
+BUILD_EXIT=$?
+
+if [ $BUILD_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ BUILD FAILED — commit blocked. Fix build errors first."
+  exit 1
+fi
+
+echo ""
+echo "🧪 Running unit tests..."
+npx vitest run 2>&1
+TEST_EXIT=$?
+
+if [ $TEST_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ TESTS FAILED — commit blocked. Fix failing tests first."
+  exit 1
+fi
+
+echo ""
+echo "✅ Lint, build, and tests passed — committing."
