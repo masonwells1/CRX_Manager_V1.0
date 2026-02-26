@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You are a documentation drift detector. Examine the Bash command below.\n\nIF the command is NOT a 'git commit' command, respond exactly: {\"decision\":\"allow\"}\n\nIF the command IS a 'git commit' command, analyze the commit message and any staged files context.\n\nIf the commit likely includes STRUCTURAL changes (any of these):\n- New page added (lazy import in App.tsx)\n- New migration file (supabase/migrations/)\n- New Edge Function (supabase/functions/)\n- New database table or RPC function\n- New test files added\n- Routes changed\n\nThen respond: {\"decision\":\"block\",\"reason\":\"Doc drift check: This commit includes structural changes. Before committing, please verify documentation is up to date. Run these quick checks:\\n\\n  grep -c 'lazy(' src/App.tsx    (page count → CLAUDE.md + pages-routes.md)\\n  ls supabase/migrations/*.sql | wc -l    (migration count → CLAUDE.md + migration-history.md)\\n  ls -d supabase/functions/*/ | wc -l    (Edge Function count → CLAUDE.md)\\n\\nUpdate any stale counts or missing entries in CLAUDE.md and docs/reference/ files, then include those doc changes in this commit. Or run /update-docs for a full audit.\"}\n\nIf the commit is clearly minor (CSS tweaks, typo fixes, config-only, doc-only changes), respond: {\"decision\":\"allow\"}\n\nWhen in doubt, block — it's better to check docs than to miss drift.\n\nCommand: $ARGUMENTS"
+          }
+        ]
+      }
+    ]
+  }
+}
