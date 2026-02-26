@@ -31,5 +31,4 @@ Things that have bitten us before. Check here before debugging mysterious issues
 - jsPDF mocks must include ALL methods used — missing mocks cause silent test failures
 
 ## Business Logic
-- Money pattern: all cents as bigint — display divides by 100, store multiplied by 100
-- Season runs July 1 to June 30 — all YTD calcs use this
+- See CLAUDE.md "Hard Red Lines" for money (bigint cents) and season (July 1-June 30) rules

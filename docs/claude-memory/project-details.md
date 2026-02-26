@@ -3,15 +3,11 @@
 ## What It Is
 A business management system for **Crop RX Solutions**, an agricultural product distributor selling crop protection chemicals, fertilizers, etc. to farmers. It handles the full business cycle: quoting, ordering, delivering, invoicing, paying, and reporting.
 
-## Tech Stack
-- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS, React Router v7
-- **Backend/DB:** Supabase (PostgreSQL, Auth, Storage, Realtime, Edge Functions)
-- **Testing:** Vitest (1,105+ unit tests) + Playwright (424 E2E tests)
-- **Deployment:** Vercel -> https://croprxsolutions.app
+## Additional Libraries (not listed in CLAUDE.md)
 - **Maps:** Mapbox GL JS + react-map-gl (satellite imagery, field polygon drawing)
 - **PDF:** jsPDF + jspdf-autotable (client-side generation)
 - **OCR:** Google Vision AI via Supabase Edge Function + Tesseract.js fallback
-- **Other:** signature_pad v5, Lucide React icons, proj4 (coordinate reprojection)
+- **Other:** signature_pad v5, proj4 (coordinate reprojection)
 
 ## User Roles
 | Role | What They Do |
@@ -61,39 +57,15 @@ A business management system for **Crop RX Solutions**, an agricultural product 
 - **Crop Programs** — Seasonal crop program management
 - **Rebates** — Manufacturer rebate claims
 
-## Database Summary
-- **72+ tables** with Row Level Security on all tables
-- **~110 RPC functions** (atomic saves, sequential numbers, reporting, financial workflows)
-- **77+ migration files** applied to Supabase
-- All money stored as **bigint cents** (e.g., total_amount_cents)
-- Season: **July 1 to June 30**
-
 ## Scripts
 ```bash
 npm run dev          # Dev server (localhost:5173)
 npm run build        # Production build
-npx vitest run       # 1,105+ unit tests
+npx vitest run       # Unit tests
 npm run typecheck    # TypeScript check
 npm run lint         # ESLint
 npm run test:e2e     # Playwright E2E tests
 npm run test:e2e:ui  # Interactive Playwright UI
-```
-
-## Key Files
-- `src/App.tsx` — Routes and auth (lazy-loaded pages)
-- `src/contexts/AuthContext.tsx` — Auth state
-- `src/lib/db.ts` — Supabase client
-- `src/types/index.ts` — All TypeScript interfaces
-- `supabase/migrations/` — Database migrations
-- `supabase/functions/` — 5 Edge Functions
-- `tests/e2e/` — Playwright test specs
-- `CLAUDE.md` — Complete project reference (schema, RPCs, business logic, patterns)
-
-## Environment Variables
-```
-VITE_SUPABASE_URL=<supabase-project-url>
-VITE_SUPABASE_ANON_KEY=<supabase-anon-key>
-VITE_MAPBOX_TOKEN=pk.<your-mapbox-token>
 ```
 
 ## Test User
