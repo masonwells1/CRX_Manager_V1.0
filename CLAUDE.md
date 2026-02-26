@@ -223,3 +223,20 @@ Run `/update-docs` for a full audit anytime (not required — the commit hook ha
 - `README.md` — Project overview, quick start
 - `TESTING.md` — Testing guide (beginner-friendly)
 - `DEPLOYMENT.md` — Vercel setup, env vars, Edge Function secrets
+
+---
+
+## Workflow Documentation
+
+Detailed workflow guides and safety checklists are in `docs/workflows/`:
+
+- `QUOTE_TO_DELIVERY.md` — Full business pipeline reference
+- `INVENTORY_RULES.md` — Inventory calculations and transaction rules
+- `DATABASE_CHANGE_CHECKLIST.md` — Step-by-step for any schema changes
+- `RLS_SECURITY_GUIDE.md` — Row Level Security patterns and debugging
+- `SAFE_DEVELOPMENT_RULES.md` — READ THIS EVERY SESSION — mandatory safety rules
+- `UI_PATTERNS.md` — Frontend patterns and conventions
+
+Copy-paste prompt templates for common tasks: `docs/PROMPT_TEMPLATES.md`
+
+**At the start of every session, read `docs/workflows/SAFE_DEVELOPMENT_RULES.md` before making any changes.**
