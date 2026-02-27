@@ -16,7 +16,7 @@ import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
-import type { Order, OrderItem, Customer, Invoice } from '../types';
+import type { Order, OrderItem, Customer, Invoice, Delivery } from '../types';
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -27,6 +27,7 @@ export default function OrderDetail() {
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [deliveries, setDeliveries] = useState<(Delivery & { driver_name?: string })[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Related blend tickets
@@ -85,6 +86,19 @@ export default function OrderDetail() {
         }
       });
       setRelatedTickets(Array.from(uniqueTickets.values()));
+
+      // Load linked deliveries
+      const { data: deliveryData } = await supabase
+        .from('deliveries')
+        .select('*, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+        .eq('order_id', id!)
+        .order('scheduled_date');
+      setDeliveries(
+        (deliveryData || []).map((d: Delivery & { driver?: { full_name: string } | null }) => ({
+          ...d,
+          driver_name: d.driver?.full_name || undefined,
+        }))
+      );
 
       // Load linked invoices (AR single source of truth)
       const { data: invoiceData } = await supabase
@@ -333,6 +347,53 @@ export default function OrderDetail() {
           </div>
         </div>
       </Card>
+
+      {/* Linked Deliveries */}
+      {deliveries.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <Truck className="w-5 h-5 text-crx-green" />
+            <h3 className="font-semibold text-nav-dark">Linked Deliveries</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Delivery #</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Status</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Driver</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Scheduled</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deliveries.map((del) => (
+                  <tr key={del.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                    <td className="px-4 py-2">
+                      <button
+                        onClick={() => navigate(`/deliveries/${del.id}`)}
+                        className="text-crx-green hover:underline font-medium"
+                      >
+                        {del.delivery_number}
+                      </button>
+                    </td>
+                    <td className="px-4 py-2">
+                      <Badge variant={statusToBadgeVariant[del.status] || 'default'} size="sm">
+                        {del.status.replace('_', ' ')}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2 text-secondary">
+                      {del.driver_name || 'Unassigned'}
+                    </td>
+                    <td className="px-4 py-2 text-secondary">
+                      {new Date(del.scheduled_date).toLocaleDateString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {/* Linked Invoices */}
       {invoices.length > 0 && (

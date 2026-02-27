@@ -18,6 +18,7 @@ import type { Order } from '../types';
 
 interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
+  invoiced_pct: number;
 }
 
 export default function Orders() {
@@ -70,10 +71,25 @@ export default function Orders() {
       itemsByOrder[item.order_id].delivered += item.quantity_delivered || 0;
     });
 
+    // Fetch invoice totals per order for invoiced %
+    const { data: invoiceData } = await supabase
+      .from('invoices')
+      .select('order_id, total_amount_cents')
+      .not('status', 'in', '("voided","cancelled")');
+    const invoicedByOrder: Record<string, number> = {};
+    (invoiceData || []).forEach((inv: { order_id: string | null; total_amount_cents: number }) => {
+      if (inv.order_id) {
+        invoicedByOrder[inv.order_id] = (invoicedByOrder[inv.order_id] || 0) + (inv.total_amount_cents || 0);
+      }
+    });
+
     const enriched = ((ordersData || []) as Order[]).map((o) => {
       const counts = itemsByOrder[o.id] || { needed: 0, delivered: 0 };
       const pct = counts.needed > 0 ? Math.round((counts.delivered / counts.needed) * 100) : 0;
-      return { ...o, fulfillment_pct: pct };
+      const orderCents = Math.round((o.total_price || 0) * 100);
+      const invCents = invoicedByOrder[o.id] || 0;
+      const invPct = orderCents > 0 ? Math.round((invCents / orderCents) * 100) : 0;
+      return { ...o, fulfillment_pct: pct, invoiced_pct: Math.min(invPct, 100) };
     });
 
     setOrders(enriched);
@@ -104,6 +120,7 @@ export default function Orders() {
       { key: 'total_price', header: 'Total', format: (v) => fmtCSV(v) },
       { key: 'order_date', header: 'Order Date', format: (v) => fmtDateCSV(v) },
       { key: 'fulfillment_pct', header: 'Fulfillment %', format: (v) => `${v}%` },
+      { key: 'invoiced_pct', header: 'Invoiced %', format: (v) => `${v}%` },
     ], 'orders');
     toast('success', `Exported ${selectedRows.length} order(s) to CSV`);
   };
@@ -125,6 +142,7 @@ export default function Orders() {
           { header: 'Total', key: 'total_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
           { header: 'Date', key: 'order_date', format: (v) => v ? new Date(String(v)).toLocaleDateString() : '-' },
           { header: 'Fulfillment', key: 'fulfillment_pct', align: 'right', format: (v) => `${v}%` },
+          { header: 'Invoiced', key: 'invoiced_pct', align: 'right', format: (v) => `${v}%` },
         ],
         data: pdfData as unknown as Record<string, unknown>[],
         orientation: 'landscape',
@@ -208,6 +226,22 @@ export default function Orders() {
             />
           </div>
           <span className="text-xs text-secondary">{row.fulfillment_pct}%</span>
+        </div>
+      ),
+    },
+    {
+      key: 'invoiced_pct',
+      header: 'Invoiced',
+      sortable: true,
+      render: (row) => (
+        <div className="flex items-center gap-2">
+          <div className="w-20 h-2 bg-gray-100 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all"
+              style={{ width: `${row.invoiced_pct}%` }}
+            />
+          </div>
+          <span className="text-xs text-secondary">{row.invoiced_pct}%</span>
         </div>
       ),
     },

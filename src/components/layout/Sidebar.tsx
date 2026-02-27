@@ -113,12 +113,17 @@ const navigation: NavEntry[] = [
     type: 'category',
     category: {
       id: 'products',
-      label: 'Products',
+      label: 'Products & Inventory',
       icon: <Package className="w-5 h-5" />,
       items: [
         { path: '/products', label: 'Products', icon: <Package className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/brand-vs-generic', label: 'Brand vs Generic', icon: <Scale className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/recipes', label: 'Blend Recipes', icon: <Beaker className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/purchase-orders', label: 'Supplier POs', icon: <ShoppingCart className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/returns', label: 'Returns', icon: <RotateCcw className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },
   },
@@ -141,21 +146,6 @@ const navigation: NavEntry[] = [
   {
     type: 'category',
     category: {
-      id: 'inventory',
-      label: 'Inventory',
-      icon: <Warehouse className="w-5 h-5" />,
-      items: [
-        { path: '/inventory', label: 'Inventory', icon: <Warehouse className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/cycle-counts', label: 'Cycle Counts', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin'] },
-        { path: '/purchase-orders', label: 'Supplier POs', icon: <ShoppingCart className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/receiving', label: 'Receiving', icon: <PackageCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-        { path: '/returns', label: 'Returns', icon: <RotateCcw className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
-      ],
-    },
-  },
-  {
-    type: 'category',
-    category: {
       id: 'finance',
       label: 'Finance',
       icon: <DollarSign className="w-5 h-5" />,
@@ -166,31 +156,18 @@ const navigation: NavEntry[] = [
         { path: '/customer-transactions', label: 'Transactions', icon: <CreditCard className="w-4 h-4" />, roles: ['admin'] },
         { path: '/month-end', label: 'Month-End', icon: <CalendarCheck className="w-4 h-4" />, roles: ['admin'] },
         { path: '/rebates', label: 'Rebates', icon: <BadgeDollarSign className="w-4 h-4" />, roles: ['admin'] },
-      ],
-    },
-  },
-  {
-    type: 'category',
-    category: {
-      id: 'reports',
-      label: 'Reports',
-      icon: <BarChart3 className="w-5 h-5" />,
-      items: [
         { path: '/reports', label: 'Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/compliance', label: 'Compliance', icon: <ShieldCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },
   },
   {
-    type: 'category',
-    category: {
-      id: 'team',
-      label: 'Team',
+    type: 'standalone',
+    link: {
+      id: 'team-board',
+      path: '/team-board',
+      label: 'Team Board',
       icon: <MessageSquare className="w-5 h-5" />,
-      items: [
-        { path: '/team-board', label: 'Team Board', icon: <MessageSquare className="w-4 h-4" /> },
-        { path: '/notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
-      ],
     },
   },
   {

@@ -115,6 +115,9 @@ export default function DeliveryDetail() {
   // Order context for items display
   const [orderItemContext, setOrderItemContext] = useState<Record<string, { ordered: number; delivered: number; remaining: number }>>({});
 
+  // Parent order for cross-link
+  const [parentOrder, setParentOrder] = useState<{ id: string; order_number: string } | null>(null);
+
   const isDriver = role === 'driver';
   const isAdminOrRep = role === 'admin' || role === 'sales_rep';
   const canEdit = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
@@ -168,15 +171,22 @@ export default function DeliveryDetail() {
 
         // Fetch order item context for items display
         if (del.order_id) {
-          const { data: oiData, error: oiError } = await supabase
-            .from('order_items')
-            .select('id, total_units_needed, quantity_delivered, quantity_remaining')
-            .eq('order_id', del.order_id);
-          if (oiError) {
-            toast('error', sanitizeError(oiError));
-          } else if (oiData) {
+          const [oiRes, orderRes] = await Promise.all([
+            supabase
+              .from('order_items')
+              .select('id, total_units_needed, quantity_delivered, quantity_remaining')
+              .eq('order_id', del.order_id),
+            supabase
+              .from('orders')
+              .select('id, order_number')
+              .eq('id', del.order_id)
+              .maybeSingle(),
+          ]);
+          if (oiRes.error) {
+            toast('error', sanitizeError(oiRes.error));
+          } else if (oiRes.data) {
             const ctx: Record<string, { ordered: number; delivered: number; remaining: number }> = {};
-            oiData.forEach((oi: { id: string; total_units_needed: number; quantity_delivered: number; quantity_remaining: number }) => {
+            oiRes.data.forEach((oi: { id: string; total_units_needed: number; quantity_delivered: number; quantity_remaining: number }) => {
               ctx[oi.id] = {
                 ordered: oi.total_units_needed,
                 delivered: oi.quantity_delivered,
@@ -185,6 +195,7 @@ export default function DeliveryDetail() {
             });
             setOrderItemContext(ctx);
           }
+          setParentOrder(orderRes.data as { id: string; order_number: string } | null);
         }
 
         // Fetch remainders for completed deliveries
@@ -907,7 +918,20 @@ export default function DeliveryDetail() {
                 </Badge>
               )}
             </h2>
-            <p className="text-sm text-secondary mt-1">{customer?.farm_name}</p>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-sm text-secondary">{customer?.farm_name}</span>
+              {parentOrder && (
+                <>
+                  <span className="text-gray-300">·</span>
+                  <button
+                    onClick={() => navigate(`/orders/${parentOrder.id}`)}
+                    className="text-sm text-crx-green hover:underline font-medium"
+                  >
+                    {parentOrder.order_number}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {canConfirm && !editing && (
@@ -950,7 +974,7 @@ export default function DeliveryDetail() {
               onClick={() =>
                 downloadDeliveryPdf({
                   delivery_number: delivery.delivery_number,
-                  order_number: delivery.order_id || '-',
+                  order_number: parentOrder?.order_number || '-',
                   customer_name: customer?.farm_name || 'Customer',
                   customer_address: address
                     ? [address.address_line, address.city, address.state, address.zip].filter(Boolean).join(', ')

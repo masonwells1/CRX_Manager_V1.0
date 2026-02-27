@@ -108,6 +108,9 @@ export default function InvoiceDetail() {
   const [payNotes, setPayNotes] = useState('');
   const [payingInvoice, setPayingInvoice] = useState(false);
 
+  // Parent order context
+  const [parentOrder, setParentOrder] = useState<{ id: string; order_number: string } | null>(null);
+
   // Post loading
   const [posting, setPosting] = useState(false);
 
@@ -145,6 +148,18 @@ export default function InvoiceDetail() {
 
     setInvoice(data as Invoice);
     setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
+
+    // Fetch parent order for breadcrumb
+    if (data.order_id) {
+      const { data: orderData } = await supabase
+        .from('orders')
+        .select('id, order_number')
+        .eq('id', data.order_id)
+        .maybeSingle();
+      setParentOrder(orderData as { id: string; order_number: string } | null);
+    } else {
+      setParentOrder(null);
+    }
 
     // Fetch items
     const { data: itemData } = await supabase
@@ -492,6 +507,22 @@ export default function InvoiceDetail() {
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
+            <div className="flex items-center gap-1.5 text-sm">
+              <button onClick={() => navigate('/invoices')} className="text-secondary hover:text-crx-green transition-colors">
+                Invoices
+              </button>
+              {parentOrder && (
+                <>
+                  <span className="text-gray-300">/</span>
+                  <button
+                    onClick={() => navigate(`/orders/${parentOrder.id}`)}
+                    className="text-crx-green hover:underline font-medium"
+                  >
+                    {parentOrder.order_number}
+                  </button>
+                </>
+              )}
+            </div>
             <h1 className="text-xl font-semibold font-heading text-nav-dark">
               {isNew ? 'New Invoice' : invoice.invoice_number}
             </h1>
