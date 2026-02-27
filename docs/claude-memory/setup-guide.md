@@ -3,8 +3,8 @@
 ## Current Environment
 - OS: Windows 10/11
 - Node.js: v24.13.0, npm: 11.6.2
-- Git: 2.52.0
-- GitHub CLI: 2.86.0 (at "C:\Program Files\GitHub CLI\gh.exe")
+- Git: 2.53.0
+- GitHub CLI: at "C:\Program Files\GitHub CLI\gh.exe"
 
 ## Prerequisites
 1. **Node.js** (v18+ required, currently using v24.13.0)

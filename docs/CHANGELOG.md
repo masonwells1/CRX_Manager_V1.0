@@ -4,11 +4,20 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-02-27 — Business Logic Audit Fixes
+- SQL migration `20260312200000`: inventory hold auto-release trigger (declined/expired/accepted), `post_invoice()` period enforcement, `save_customer()` commission split validation, `create_quick_delivery()` inventory pre-check with FOR UPDATE locks, `convert_quote_to_order()` explicit hold release
+- Added `checkMutationResult()` silent RLS failure detection on 13 pages
+- Offline sync conflict detection via `snapshotAt` / `entityTable` / `entityId` fields
+- Realtime subscription `disabled` prop — prevents null-filter subscriptions
+- InventoryPage `freeQty` formula fix (subtracts prebooked from available)
+- Updated 3 test files (offlineSync, useRealtimeSubscription, businessLogicEnhancements) — 1,121 tests all passing
+- Commits: `f1278ab`
+
 ## 2026-02-25 — Test Suite Audit & Coverage Expansion
 - Audited all 67 unit test files — zero stale imports, zero dead tests
 - Removed duplicate `pdfGeneration.test.ts` (894 lines, duplicated by 3 individual PDF test files)
 - Added 11 new unit test files: SignatureCanvas, ActivityFeed, CommentsSection, 8 bulk import components
-- Net result: 80 test files, 1,122 unit tests (all passing)
+- Net result: 80 test files, 1,121 unit tests (all passing)
 - 60 math & business logic verification E2E tests
 - 95 real UI interaction E2E tests across 10 pages
 - 14 new test files closing coverage gaps (47 unit + 68 E2E tests)

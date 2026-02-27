@@ -376,10 +376,10 @@ describe('A2.7: Inventory hold release on quote status change', () => {
     expect(shouldRelease).toBe(false);
   });
 
-  it('trigger does NOT fire on status change to accepted', () => {
+  it('trigger DOES fire on status change to accepted (deactivates holds without restoring inventory)', () => {
     const newStatus = 'accepted';
-    const shouldRelease = ['declined', 'expired'].includes(newStatus);
-    expect(shouldRelease).toBe(false);
+    const shouldFire = ['declined', 'expired', 'accepted'].includes(newStatus);
+    expect(shouldFire).toBe(true);
   });
 });
 

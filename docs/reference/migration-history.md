@@ -47,3 +47,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 41 | 20260226200000 | Receiving system enhancements |
 | 42 | 20260227200000 | Delivery integrity & quick delivery |
 | 43+ | Various | Safety audit, page permissions, business logic, dashboard alerts, Quick Receive |
+| 44 | 20260312200000 | Business logic audit fixes: inventory hold auto-release trigger (declined/expired/accepted), `post_invoice()` period enforcement via `check_period_open()`, `save_customer()` commission split validation (must sum to 100%), `create_quick_delivery()` inventory pre-check with `FOR UPDATE` locks, `convert_quote_to_order()` explicit hold release |

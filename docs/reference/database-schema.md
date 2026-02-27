@@ -23,7 +23,7 @@
 ## Inventory
 - `inventory` - Stock per product per location (quantity_available, quantity_prebooked, quantity_on_order, reorder_point, min_stock_level)
 - `inventory_transactions` - Audit trail (transaction_type: received/booked/delivered/returned/adjusted/transferred)
-- `inventory_holds` - Reserved inventory (quantity, hold_type: manual/crop_program, expires_at, is_active)
+- `inventory_holds` - Reserved inventory (quantity, hold_type: manual/crop_program, expires_at, is_active, source_id — links to quote for auto-release on accept/decline/expire)
 - `purchase_orders` - Supplier POs (po_number, vendor, status, total_cost)
 - `purchase_order_items` - PO line items (quantity_ordered, quantity_received, unit_cost)
 

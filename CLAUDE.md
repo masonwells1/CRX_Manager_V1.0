@@ -13,9 +13,9 @@ At the start of each session, silently check if `docs/claude-memory/MEMORY.md` h
 
 To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
 
-## Current State (2026-02-25)
-- 49 pages, 72+ tables, ~110 RPCs, 77+ migrations
-- 1,122 unit tests + 424 E2E tests (370 passing, 42 pre-existing failures)
+## Current State (2026-02-27)
+- 49 pages, 72+ tables, ~110 RPCs, 80+ migrations
+- 1,121 unit tests (80 files) + 424 E2E tests (370 passing, 42 pre-existing failures)
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 
@@ -68,8 +68,9 @@ To copy them: read each `.md` file (except README.md) from `docs/claude-memory/`
 ## Business Logic Lifecycles
 
 ### Quote: `draft -> sent -> revised -> accepted -> declined -> expired`
-- `is_planned` flag reserves inventory through holds
-- Accepted quotes convert to orders via `convert_quote_to_order()`
+- `is_planned` flag reserves inventory through holds (linked via `source_id`)
+- Accepted quotes convert to orders via `convert_quote_to_order()` — holds released on accept
+- Declined/expired quotes auto-release holds AND restore `quantity_available` via trigger
 
 ### Order: `confirmed -> partially_fulfilled -> fulfilled -> cancelled`
 - AR derived from linked invoices (orders.total_paid / balance_due are deprecated)
@@ -78,9 +79,10 @@ To copy them: read each `.md` file (except README.md) from `docs/claude-memory/`
 ### Delivery: `scheduled -> in_progress -> completed -> cancelled`
 - **Two-step flow:** `confirm_delivery()` then `complete_delivery()`
 - Items locked to order quantities — only logistics editable
-- Quick Delivery: `create_quick_delivery()` = atomic order + delivery + draft invoice
+- Quick Delivery: `create_quick_delivery()` = atomic order + delivery + draft invoice; includes inventory pre-check with `FOR UPDATE` locks
 
 ### Invoice: `draft -> posted -> void`
+- `post_invoice()` calls `check_period_open()` — rejects if accounting period is closed
 - Posted invoices lock amounts and start AR aging
 - `balance_cents` tracks remaining after payments/credits
 - All changes logged to `financial_audit_log`
@@ -111,6 +113,7 @@ To copy them: read each `.md` file (except README.md) from `docs/claude-memory/`
 
 ### Commission Logic
 - `commission_split` stored as JSONB: `{ splits: [{ recipient, percentage }] }`
+- `save_customer()` validates splits sum to exactly 100% (server-side enforcement)
 - Status: `pending -> paid` (with paid_date)
 
 ---
@@ -157,8 +160,9 @@ checkMutationResult(result, 'Update customer');
 All require `ALLOWED_ORIGIN` env var for production CORS.
 
 ## Realtime Subscriptions
-Hook: `useRealtimeSubscription({ table, event, filter, onInsert, onUpdate, onDelete })`
-Used for: `team_notes`, `team_note_comments`, `notifications`, `note_activity_log`
+Hook: `useRealtimeSubscription({ table, event, filter, onInsert, onUpdate, onDelete, disabled })`
+- `disabled?: boolean` — when true, skips channel creation (no-op). Convenience hooks pass `disabled: !noteId` to prevent null-filter subscriptions.
+- Used for: `team_notes`, `team_note_comments`, `notifications`, `note_activity_log`
 
 ## Storage Buckets
 - **blend-ticket-images** — Private, RLS-protected
@@ -211,7 +215,7 @@ Run `/update-docs` for a full audit anytime (not required — the commit hook ha
 |-----|----------|
 | `docs/reference/database-schema.md` | 72 tables + RLS policy matrix |
 | `docs/reference/rpc-functions.md` | ~110 RPCs + helpers + triggers |
-| `docs/reference/migration-history.md` | 77+ migration entries |
+| `docs/reference/migration-history.md` | 80+ migration entries |
 | `docs/reference/pages-routes.md` | 49 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |

@@ -65,6 +65,18 @@
 - Uses proj4 for coordinate reprojection
 - ParsedImportField type in `src/types/index.ts`
 
+## Mutation Safety Pattern
+- `checkMutationResult(data, error, context)` from `src/lib/businessLogicEnhancements.ts` — detects silent RLS failures (0 rows affected despite no error). Used on 13 pages after any Supabase `.insert()` / `.update()` / `.delete()` call.
+- Pattern: `const { data, error } = await supabase.from('table').update(…).select(); checkMutationResult(data, error, 'Updating delivery');`
+
+## Offline Conflict Detection
+- `PendingAction` in `src/lib/offlineQueue.ts` has optional `snapshotAt`, `entityTable`, `entityId` fields
+- `syncPendingActions()` in `src/lib/offlineSync.ts` compares `snapshotAt` timestamp against the entity's `updated_at` before replaying — returns `conflicts: string[]` array for stale-data warnings
+
+## Realtime Subscription Disabled Pattern
+- `useRealtimeSubscription({ table, disabled?: boolean })` — when `disabled` is true, hook skips channel creation entirely (no-op)
+- Convenience hooks (`useRealtimeComments`, `useRealtimeActivity`) pass `disabled: !noteId` so null noteId doesn't create a subscription with an undefined filter
+
 ## Build Notes
 - `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI
 - Supabase join inference: joined FK tables infer as arrays — use `as unknown as TargetType[]`

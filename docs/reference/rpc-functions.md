@@ -1,16 +1,16 @@
 # RPC Functions Reference (~110 total)
 
 ## Atomic Save/Delete
-- `save_quote()`, `save_job()`, `save_customer()`, `save_blend_ticket()`, `save_purchase_order()`, `delete_purchase_order()`, `duplicate_quote()`
+- `save_quote()`, `save_job()`, `save_customer()` — validates commission splits sum to 100%, `save_blend_ticket()`, `save_purchase_order()`, `delete_purchase_order()`, `duplicate_quote()`
 
 ## Order & Delivery
-- `convert_quote_to_order()`, `create_direct_order()`, `cancel_order()`, `update_order_items()`
+- `convert_quote_to_order()` — also releases inventory holds linked to the quote, `create_direct_order()`, `cancel_order()`, `update_order_items()`
 - `confirm_delivery()` — scheduled -> in_progress transition
 - `complete_delivery()` — requires in_progress, creates remainder rows for partial deliveries
 - `edit_delivery()` — logistics only, items param ignored (locked to order)
 - `cancel_delivery()`, `batch_cancel_deliveries()`, `reassign_delivery()`
 - `create_followup_delivery()`, `get_customer_delivery_remainders()`
-- `create_quick_delivery()` — atomic order + delivery + draft invoice in one transaction
+- `create_quick_delivery()` — atomic order + delivery + draft invoice in one transaction; includes inventory pre-check with `FOR UPDATE` locks to prevent overselling
 
 ## Inventory & Receiving
 - `adjust_inventory()`, `receive_po_items()` — per-item condition/lot/notes/storage, creates receiving_records
@@ -56,5 +56,9 @@ is_driver()     -- SECURITY DEFINER STABLE
 is_applicator() -- SECURITY DEFINER STABLE
 ```
 
-## Database Trigger
+## Database Triggers
 - **`on_auth_user_created`** - After INSERT on `auth.users`, calls `handle_new_user()` which auto-creates a `profiles` row using `raw_user_meta_data` (full_name, role defaults to 'sales_rep').
+- **`release_holds_on_quote_status_change`** - After UPDATE on `quotes`, fires when status changes to `declined`, `expired`, or `accepted`. Deactivates linked inventory holds (via `source_id`). For declined/expired: also restores `quantity_available`. For accepted: deactivates holds only (inventory stays allocated for the resulting order).
+
+## Invoice Posting
+- `post_invoice()` — now calls `check_period_open()` before posting; raises error if the invoice's accounting period is closed.

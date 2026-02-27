@@ -61,8 +61,14 @@ Test every feature as each role:
 - Negative inventory (receive more than expected)
 - Expired quotes (auto-expire logic)
 - Zero-quantity orders
-- Commission splits that don't sum to 100%
+- Commission splits that don't sum to 100% — `save_customer()` now rejects server-side
 - Concurrent hold creation exceeding available inventory
 - Bulk imports with invalid data
 - PDF generation with very long product names
 - Delivery for cancelled order
+- Quick delivery when inventory is insufficient — `create_quick_delivery()` pre-checks with `FOR UPDATE` locks
+- Invoice posting in closed accounting period — `post_invoice()` calls `check_period_open()`, raises error
+- Quote acceptance releases inventory holds (deactivates without restoring qty)
+- Quote decline/expiry releases inventory holds AND restores `quantity_available`
+- Silent RLS failures — `checkMutationResult()` catches 0-row mutations that Supabase doesn't flag as errors
+- Offline sync conflict detection — stale `snapshotAt` vs server `updated_at` returns conflict warnings

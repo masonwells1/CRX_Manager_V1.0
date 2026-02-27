@@ -17,7 +17,7 @@ A business management system for **Crop RX Solutions**, an agricultural product 
 | **Driver** | Assigned deliveries, confirm/complete with signature/photos, quick deliveries, issue reporting |
 | **Applicator** | Assigned jobs, record applied info (weather, gallons), view customers/products/fields/recipes |
 
-## Feature Map (49 pages)
+## Feature Map (48 pages)
 
 ### Core Business
 - **Customers** — Farm accounts, tiered pricing (1-4), addresses, credit limits, finance charges, season summary, bulk import
@@ -33,7 +33,7 @@ A business management system for **Crop RX Solutions**, an agricultural product 
 
 ### Financial
 - **Invoices** — Auto-generate from deliveries, 3 PDF layouts, batch print/void, write-offs, post/unpost
-- **Payments** — Check recording, unified allocation across invoices, prepay credits, auto-apply
+- **Payments** — Unified allocation across invoices (single entry point), prepay credits, auto-apply oldest-first
 - **AR & Finance** — Aging buckets (current/30/60/90+), finance charges, statements, period close, commission posting, transaction review
 - **Month-End Close** — Period locking, batch statements, checklist
 

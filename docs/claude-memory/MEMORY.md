@@ -8,37 +8,38 @@
 ## Project: CRX_Manager_V1.0
 - **What:** Agricultural product distribution management for Crop RX Solutions
 - **Repo:** https://github.com/masonwells1/CRX_Manager_V1.0
-- **Local path:** C:\Users\pc\CRX_Manager_V1.0
 - **Live:** https://croprxsolutions.app
 - **Stack:** React 18, TypeScript, Vite, Tailwind CSS, Supabase, Vercel
 - **Supabase project:** rhyzpcqhnizqbxphqdkr
 - **Admin user:** mason@croprxsolutions.com (UUID: 22c1fc50-4d2a-4baa-8ff8-341c0c7edd4f)
 
-## Current Stats (2026-02-25)
-- 49 pages, 72+ tables, ~110 RPCs, 77+ migrations
-- 1,122 unit tests + 424 E2E tests (370 passing)
-- CI green, 0 lint/TS errors, pre-commit hook active
+## Current Stats (2026-02-27)
+- 48 pages, 80 migrations, 5 Edge Functions
+- 1,121 unit tests (80 files) + 61 E2E spec files
+- CI green, 0 lint/TS errors, Husky pre-commit + pre-push hooks
+- Dependabot configured for npm + GitHub Actions
 
-## What's Next
-1. Fix ~42 E2E failures (docs/E2E_FAILURES_TO_FIX.md)
-2. User acceptance testing with real data
-3. Verify Edge Function secrets in production
+## Recent Key Changes
+- `Payments.tsx` deleted — `PaymentAllocation` is sole payment page at `/payments`
+- AR derived from invoices only (orders.total_paid/balance_due deprecated)
+- Migration `20260311200000_invoice_ar_single_source.sql` rewrites 9 RPCs
 
 ## Critical Reminders
 - **gh CLI bash path:** `"/c/Program Files/GitHub CLI/gh.exe"`
 - **Season:** July 1 to June 30
 - **Money:** all bigint cents (display / 100, store * 100)
+- **`tail` not available** — don't pipe to tail on Windows
 
 ## Topic Files (read when relevant)
 | File | Contents |
 |------|----------|
-| `project-details.md` | Features, pages, database, scripts, env vars |
+| `project-details.md` | Features, pages, scripts, env vars |
 | `setup-guide.md` | New computer setup + environment versions |
 | `lessons.md` | Gotchas and key lessons learned |
 | `doc-rules.md` | Pre-commit doc review checklist + update rules |
 
 ## Repo Docs
-- `CLAUDE.md` — Full project reference (schema, RPCs, patterns)
+- `CLAUDE.md` — Architecture rules, red lines, business logic, common patterns
+- `docs/reference/` — database-schema, rpc-functions, migration-history, pages-routes, code-patterns, qa-testing
+- `docs/workflows/` — SAFE_DEVELOPMENT_RULES, DATABASE_CHANGE_CHECKLIST, INVENTORY_RULES, QUOTE_TO_DELIVERY, RLS_SECURITY_GUIDE, UI_PATTERNS
 - `docs/CHANGELOG.md` — Sprint history
-- `docs/E2E_FAILURES_TO_FIX.md` — E2E failure tracking
-- `docs/plans/2026-02-23-price-list-versioning-design.md` — Future design
