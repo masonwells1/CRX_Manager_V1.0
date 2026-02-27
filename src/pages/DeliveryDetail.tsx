@@ -13,7 +13,7 @@ import Modal from '../components/ui/Modal';
 import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
+import { supabase, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
@@ -514,10 +514,12 @@ export default function DeliveryDetail() {
             const { data: urlData } = supabase.storage
               .from('delivery-signatures')
               .getPublicUrl(filePath);
-            await supabase
+            const sigResult = await supabase
               .from('deliveries')
               .update({ signature_url: urlData.publicUrl })
-              .eq('id', id!);
+              .eq('id', id!)
+              .select();
+            checkMutationResult(sigResult, 'Update delivery signature');
           }
         } catch (sigErr) {
           console.warn('Signature upload failed:', sigErr);

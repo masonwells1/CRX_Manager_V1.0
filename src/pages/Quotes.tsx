@@ -10,7 +10,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -144,17 +144,15 @@ export default function Quotes() {
     setDeleting(true);
     try {
       const ids = selectedRows.map((q) => q.id);
-      const { error } = await supabase
+      const result = await supabase
         .from('quotes')
         .update({ deleted_at: new Date().toISOString() })
-        .in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Deleted ${ids.length} quote(s)`);
-        clearSelection();
-        fetchQuotes();
-      }
+        .in('id', ids)
+        .select();
+      checkMutationResult(result, 'Delete quotes');
+      toast('success', `Deleted ${ids.length} quote(s)`);
+      clearSelection();
+      fetchQuotes();
     } catch (err) {
       toast('error', sanitizeError(err));
     }

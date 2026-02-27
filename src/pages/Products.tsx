@@ -11,7 +11,7 @@ import BulkPricingImport from '../components/products/BulkPricingImport';
 import BulkProductImport from '../components/products/BulkProductImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
@@ -168,17 +168,15 @@ export default function Products() {
     setDeactivating(true);
     try {
       const ids = selectedRows.map((p) => p.id);
-      const { error } = await supabase
+      const result = await supabase
         .from('products')
         .update({ is_active: false, updated_at: new Date().toISOString() })
-        .in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Deactivated ${ids.length} product(s)`);
-        clearSelection();
-        fetchProducts();
-      }
+        .in('id', ids)
+        .select();
+      checkMutationResult(result, 'Deactivate products');
+      toast('success', `Deactivated ${ids.length} product(s)`);
+      clearSelection();
+      fetchProducts();
     } catch (err) {
       toast('error', sanitizeError(err));
     }
@@ -315,12 +313,12 @@ export default function Products() {
         }
 
         // Update product
-        const { error } = await supabase
+        const updateResult = await supabase
           .from('products')
           .update({ ...fields, updated_at: new Date().toISOString() })
-          .eq('id', productId);
-
-        if (error) throw error;
+          .eq('id', productId)
+          .select();
+        checkMutationResult(updateResult, 'Update product');
       }
 
       toast('success', `Updated ${changes.size} product(s)`);

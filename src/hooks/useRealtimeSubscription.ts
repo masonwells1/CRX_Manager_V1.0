@@ -9,6 +9,7 @@ interface SubscriptionConfig {
   table: string;
   event?: 'INSERT' | 'UPDATE' | 'DELETE' | '*';
   filter?: string;
+  disabled?: boolean;
   onInsert?: SubscriptionCallback;
   onUpdate?: SubscriptionCallback;
   onDelete?: SubscriptionCallback;
@@ -28,6 +29,8 @@ export function useRealtimeSubscription(config: SubscriptionConfig) {
   onDeleteRef.current = config.onDelete;
 
   useEffect(() => {
+    if (config.disabled) return;
+
     let channel: RealtimeChannel;
 
     const setupSubscription = () => {
@@ -67,7 +70,7 @@ export function useRealtimeSubscription(config: SubscriptionConfig) {
         supabase.removeChannel(channel);
       }
     };
-  }, [config.table, config.event, config.filter]);
+  }, [config.table, config.event, config.filter, config.disabled]);
 }
 
 export function useRealtimeNotes(onNotesChange: () => void) {
@@ -81,6 +84,7 @@ export function useRealtimeComments(noteId: string | null, onCommentsChange: () 
   useRealtimeSubscription({
     table: 'team_note_comments',
     filter: noteId ? `note_id=eq.${noteId}` : undefined,
+    disabled: !noteId,
     onChange: onCommentsChange,
   });
 }
@@ -97,6 +101,7 @@ export function useRealtimeActivity(noteId: string | null, onActivityChange: () 
   useRealtimeSubscription({
     table: 'note_activity_log',
     filter: noteId ? `note_id=eq.${noteId}` : undefined,
+    disabled: !noteId,
     onChange: onActivityChange,
   });
 }

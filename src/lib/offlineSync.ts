@@ -20,7 +20,7 @@ export const MAX_RETRIES = 3;
  * Also cleans up stale/failed actions to prevent IndexedDB bloat.
  * Returns the number of successfully synced actions.
  */
-export async function syncPendingActions(): Promise<{ synced: number; failed: number; cleaned: number }> {
+export async function syncPendingActions(): Promise<{ synced: number; failed: number; cleaned: number; conflicts: string[] }> {
   // Cleanup: remove permanently failed + stale actions first
   const cleanedFailed = await clearFailedActions(MAX_RETRIES);
   const cleanedStale = await clearStaleActions();
@@ -29,6 +29,7 @@ export async function syncPendingActions(): Promise<{ synced: number; failed: nu
   const actions = await getPendingActions();
   let synced = 0;
   let failed = 0;
+  const conflicts: string[] = [];
 
   for (const action of actions) {
     try {
@@ -42,6 +43,19 @@ export async function syncPendingActions(): Promise<{ synced: number; failed: nu
         : typeof errObj?.message === 'string'
           ? errObj.message
           : 'Unknown error';
+
+      // Track conflicts separately so UI can show them
+      if (errMsg.startsWith('Conflict:')) {
+        conflicts.push(errMsg);
+        await updateAction({
+          ...action,
+          retryCount: MAX_RETRIES, // Mark as permanently failed
+          lastError: errMsg,
+        });
+        failed++;
+        continue;
+      }
+
       const newRetryCount = action.retryCount + 1;
 
       await updateAction({
@@ -56,7 +70,7 @@ export async function syncPendingActions(): Promise<{ synced: number; failed: nu
     }
   }
 
-  return { synced, failed, cleaned };
+  return { synced, failed, cleaned, conflicts };
 }
 
 /**
@@ -65,6 +79,23 @@ export async function syncPendingActions(): Promise<{ synced: number; failed: nu
  */
 async function executeAction(action: PendingAction): Promise<void> {
   const { operation, params } = action;
+
+  // Conflict detection: if we captured a snapshot, check for server-side changes
+  if (action.snapshotAt && action.entityTable && action.entityId) {
+    const { data } = await supabase
+      .from(action.entityTable)
+      .select('updated_at')
+      .eq('id', action.entityId)
+      .single();
+
+    if (data && new Date(data.updated_at) > new Date(action.snapshotAt)) {
+      throw new Error(
+        `Conflict: ${action.entityTable} ${action.entityId} was modified ` +
+        `while offline (server: ${data.updated_at}, queued: ${action.snapshotAt}). ` +
+        `Action '${operation}' skipped to prevent data loss.`
+      );
+    }
+  }
 
   // All operations follow the same pattern: call supabase.rpc with params
   const rpcOperations: Record<string, string> = {

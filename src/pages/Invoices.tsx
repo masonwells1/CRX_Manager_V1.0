@@ -7,7 +7,7 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
@@ -296,17 +296,15 @@ export default function Invoices() {
     setDeleting(true);
     try {
       const ids = selectedDeletable.map((i) => i.id);
-      const { error } = await supabase
+      const result = await supabase
         .from('invoices')
         .update({ deleted_at: new Date().toISOString() })
-        .in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Deleted ${ids.length} invoice(s)`);
-        setSelected(new Set());
-        fetchInvoices();
-      }
+        .in('id', ids)
+        .select();
+      checkMutationResult(result, 'Delete invoices');
+      toast('success', `Deleted ${ids.length} invoice(s)`);
+      setSelected(new Set());
+      fetchInvoices();
     } catch (err) {
       toast('error', sanitizeError(err));
     }

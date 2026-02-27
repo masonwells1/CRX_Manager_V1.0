@@ -11,7 +11,7 @@ import SplitHeading from '../components/ui/SplitHeading';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { Vehicle, VehicleType, VehicleStatus } from '../types';
@@ -111,14 +111,11 @@ export default function Vehicles() {
     setDeleting(true);
     try {
       const ids = selectedRows.map((v) => v.id);
-      const { error } = await supabase.from('vehicles').delete().in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Deleted ${ids.length} vehicle(s)`);
-        clearSelection();
-        fetchVehicles();
-      }
+      const result = await supabase.from('vehicles').delete().in('id', ids).select();
+      checkMutationResult(result, 'Delete vehicles');
+      toast('success', `Deleted ${ids.length} vehicle(s)`);
+      clearSelection();
+      fetchVehicles();
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }

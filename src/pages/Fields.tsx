@@ -10,7 +10,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { Field } from '../types';
@@ -115,14 +115,11 @@ export default function Fields() {
     setDeleting(true);
     try {
       const ids = selectedRows.map((f) => f.id);
-      const { error } = await supabase.from('fields').delete().in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Deleted ${ids.length} field(s)`);
-        clearSelection();
-        fetchFields();
-      }
+      const result = await supabase.from('fields').delete().in('id', ids).select();
+      checkMutationResult(result, 'Delete fields');
+      toast('success', `Deleted ${ids.length} field(s)`);
+      clearSelection();
+      fetchFields();
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }

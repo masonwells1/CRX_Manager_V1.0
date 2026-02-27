@@ -11,7 +11,7 @@ import BulkOrderImport from '../components/orders/BulkOrderImport';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { Order } from '../types';
@@ -158,14 +158,11 @@ export default function Orders() {
     setDeleting(true);
     try {
       const ids = selectedRows.map((o) => o.id);
-      const { error } = await supabase.from('orders').delete().in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Deleted ${ids.length} order(s)`);
-        clearSelection();
-        fetchOrders();
-      }
+      const result = await supabase.from('orders').delete().in('id', ids).select();
+      checkMutationResult(result, 'Delete orders');
+      toast('success', `Deleted ${ids.length} order(s)`);
+      clearSelection();
+      fetchOrders();
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }

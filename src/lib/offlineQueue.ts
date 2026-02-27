@@ -15,6 +15,12 @@ export interface PendingAction {
   createdAt: string;
   retryCount: number;
   lastError?: string;
+  /** Entity table for conflict detection (e.g. 'deliveries', 'orders') */
+  entityTable?: string;
+  /** Entity primary key for conflict detection */
+  entityId?: string;
+  /** Entity updated_at when action was queued — used to detect server-side changes */
+  snapshotAt?: string;
 }
 
 /**

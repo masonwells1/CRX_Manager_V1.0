@@ -196,7 +196,8 @@ export default function BlendRecipes() {
 
       // Sync items: delete all existing, insert fresh
       if (editId) {
-        await supabase.from('blend_recipe_items').delete().eq('recipe_id', editId);
+        const deleteResult = await supabase.from('blend_recipe_items').delete().eq('recipe_id', editId).select();
+        checkMutationResult(deleteResult, 'Delete recipe items');
       }
 
       if (recipeId && editItems.length > 0) {

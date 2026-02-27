@@ -18,7 +18,7 @@ import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
@@ -177,17 +177,15 @@ export default function PurchaseOrders() {
     setCancelling(true);
     try {
       const ids = selectedRows.map((p) => p.id);
-      const { error } = await supabase
+      const result = await supabase
         .from('purchase_orders')
         .update({ status: 'cancelled' })
-        .in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Cancelled ${ids.length} purchase order(s)`);
-        clearSelection();
-        fetchPOs();
-      }
+        .in('id', ids)
+        .select();
+      checkMutationResult(result, 'Cancel purchase orders');
+      toast('success', `Cancelled ${ids.length} purchase order(s)`);
+      clearSelection();
+      fetchPOs();
     } catch (err) {
       toast('error', sanitizeError(err));
     }

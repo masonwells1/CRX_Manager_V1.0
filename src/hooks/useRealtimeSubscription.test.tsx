@@ -166,13 +166,10 @@ describe('useRealtimeComments', () => {
     );
   });
 
-  it('subscribes without filter when noteId is null', () => {
+  it('does not subscribe when noteId is null (disabled)', () => {
     renderHook(() => useRealtimeComments(null, vi.fn()));
-    expect(mockChannel.on).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ table: 'team_note_comments', filter: undefined }),
-      expect.any(Function),
-    );
+    expect(supabase.channel).not.toHaveBeenCalled();
+    expect(mockChannel.on).not.toHaveBeenCalled();
   });
 });
 
@@ -201,12 +198,9 @@ describe('useRealtimeActivity', () => {
     );
   });
 
-  it('subscribes without filter when noteId is null', () => {
+  it('does not subscribe when noteId is null (disabled)', () => {
     renderHook(() => useRealtimeActivity(null, vi.fn()));
-    expect(mockChannel.on).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ table: 'note_activity_log', filter: undefined }),
-      expect.any(Function),
-    );
+    expect(supabase.channel).not.toHaveBeenCalled();
+    expect(mockChannel.on).not.toHaveBeenCalled();
   });
 });

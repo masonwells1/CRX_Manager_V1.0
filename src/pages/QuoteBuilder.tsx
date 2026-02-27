@@ -21,7 +21,7 @@ import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
@@ -810,7 +810,8 @@ export default function QuoteBuilder() {
       toast('error', errMsg);
       // Bug #29 fix: Revert quote status to 'sent' since conversion failed
       try {
-        await supabase.from('quotes').update({ status: 'sent' }).eq('id', savedId);
+        const revertResult = await supabase.from('quotes').update({ status: 'sent' }).eq('id', savedId).select();
+        checkMutationResult(revertResult, 'Revert quote status');
         setStatus('sent');
       } catch {
         // Best effort — status revert failed
