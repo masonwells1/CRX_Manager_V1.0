@@ -14,7 +14,7 @@ At the start of each session, silently check if `docs/claude-memory/MEMORY.md` h
 To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
 
 ## Current State (2026-02-27)
-- 49 pages, 72+ tables, ~110 RPCs, 80+ migrations
+- 49 pages, 72+ tables, ~110 RPCs, 83 migrations
 - 1,121 unit tests (80 files) + 424 E2E tests (370 passing, 42 pre-existing failures)
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest

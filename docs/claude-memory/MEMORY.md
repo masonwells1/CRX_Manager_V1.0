@@ -14,7 +14,7 @@
 - **Admin user:** mason@croprxsolutions.com (UUID: 22c1fc50-4d2a-4baa-8ff8-341c0c7edd4f)
 
 ## Current Stats (2026-02-27)
-- 48 pages, 80 migrations, 5 Edge Functions
+- 48 pages, 83 migrations, 5 Edge Functions
 - 1,121 unit tests (80 files) + 61 E2E spec files
 - CI green, 0 lint/TS errors, Husky pre-commit + pre-push hooks
 - Dependabot configured for npm + GitHub Actions
@@ -23,6 +23,8 @@
 - `Payments.tsx` deleted — `PaymentAllocation` is sole payment page at `/payments`
 - AR derived from invoices only (orders.total_paid/balance_due deprecated)
 - Migration `20260311200000_invoice_ar_single_source.sql` rewrites 9 RPCs
+- Migration `20260315200000_emergency_rpc_fixes.sql` — fixes 9 RPCs crashing on wrong column refs
+- Migration `20260315200001_accounting_and_integrity_fixes.sql` — period enforcement in 10 RPCs, FOR UPDATE locks, audit log expansion, cycle count guards, return dedup
 
 ## Critical Reminders
 - **gh CLI bash path:** `"/c/Program Files/GitHub CLI/gh.exe"`

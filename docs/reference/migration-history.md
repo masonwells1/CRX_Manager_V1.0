@@ -1,4 +1,4 @@
-# Migration History (77+ migrations)
+# Migration History (83 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -48,3 +48,5 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 42 | 20260227200000 | Delivery integrity & quick delivery |
 | 43+ | Various | Safety audit, page permissions, business logic, dashboard alerts, Quick Receive |
 | 44 | 20260312200000 | Business logic audit fixes: inventory hold auto-release trigger (declined/expired/accepted), `post_invoice()` period enforcement via `check_period_open()`, `save_customer()` commission split validation (must sum to 100%), `create_quick_delivery()` inventory pre-check with `FOR UPDATE` locks, `convert_quote_to_order()` explicit hold release |
+| 45 | 20260315200000 | Emergency RPC fixes: 9 broken functions with wrong column references (allocate_payment, cancel_delivery, auto_expire_quotes, cancel_order, check_customer_credit_limit, create_quick_delivery schema fixes) |
+| 46 | 20260315200001 | Accounting integrity & hardening: expand audit log CHECK constraints, period enforcement in 10 financial RPCs, FOR UPDATE locks, void_invoice 4-bug fix, commission season convention, cycle count guards, return processing dedup |
