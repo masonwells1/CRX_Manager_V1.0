@@ -19,17 +19,31 @@ ALTER TABLE financial_audit_log
 ALTER TABLE financial_audit_log
   ADD CONSTRAINT financial_audit_log_operation_type_check
   CHECK (operation_type IN (
-    -- Original types
+    -- Invoice operations
     'invoice_created', 'invoice_posted', 'invoice_voided',
-    'invoice_cancelled', 'payment_recorded', 'split_modified',
-    'prepay_created', 'prepay_applied', 'split_invoices_generated',
-    -- New types for this migration
-    'write_off_applied',
+    'invoice_cancelled', 'invoice_updated', 'invoice_deleted',
+    -- Payment operations
+    'payment_recorded', 'payment_allocation', 'payment_voided',
+    -- Split operations
+    'split_modified', 'split_invoices_generated',
+    -- Prepay operations
+    'prepay_created', 'prepay_applied', 'prepay_credit_created',
     'prepay_batch_applied',
-    'commission_payment_created',
-    'commission_payment_posted',
-    'finance_charge',
-    'return_credit_issued',
+    -- Write-off operations
+    'write_off_recorded', 'write_off_reversed', 'write_off_applied',
+    -- Finance charge operations
+    'finance_charge', 'finance_charge_generated', 'finance_charge_voided',
+    -- Credit memo operations
+    'credit_memo_created', 'credit_memo_applied',
+    -- Return operations
+    'return_created', 'return_approved', 'return_received', 'return_credit_issued',
+    -- Order/delivery operations
+    'order_updated', 'delivery_updated',
+    -- Batch operations
+    'batch_post', 'batch_void', 'batch_payment',
+    -- Commission operations (new)
+    'commission_payment_created', 'commission_payment_posted',
+    -- Cycle count (new)
     'cycle_count_completed'
   ));
 
@@ -53,8 +67,11 @@ ALTER TABLE financial_audit_log
 ALTER TABLE financial_audit_log
   ADD CONSTRAINT financial_audit_log_entity_type_check
   CHECK (entity_type IN (
-    'invoice', 'payment', 'split', 'prepay',
-    'commission_payment', 'write_off', 'return', 'cycle_count'
+    'invoice', 'payment', 'split', 'prepay', 'prepay_credit',
+    'customer', 'order', 'delivery', 'write_off', 'finance_charge',
+    'credit_memo', 'return', 'allocation_set', 'void', 'batch',
+    -- New types from this migration
+    'commission_payment', 'cycle_count'
   ));
 
 
