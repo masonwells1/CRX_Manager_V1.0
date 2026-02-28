@@ -22,9 +22,9 @@ Complete reference for inventory management, calculations, and transaction handl
 
 ## Season Date
 
-**Season runs July 1 to June 30.** All YTD calculations use this boundary, NOT calendar year.
+**Season runs October 1 to September 30.** All YTD calculations use this boundary, NOT calendar year.
 
-Example: "Delivered YTD" means total delivered since July 1 of the current season.
+Example: "Delivered YTD" means total delivered since October 1 of the current season.
 
 ---
 
@@ -56,7 +56,7 @@ Total on Floor = quantity_available (what's physically in the warehouse)
 ```
 Delivered YTD = SUM(quantity) from inventory_transactions
   WHERE transaction_type = 'delivered'
-  AND created_at >= season start date (July 1)
+  AND created_at >= season start date (October 1)
 ```
 
 ---
@@ -185,5 +185,5 @@ Physical inventory verification process.
 - [ ] Test with edge cases: zero stock, negative variance, concurrent holds
 - [ ] Verify that receiving updates both PO items AND inventory levels
 - [ ] Check cost_history creation when PO cost differs from product cost
-- [ ] Remember: season is July 1 to June 30 for all YTD calculations
+- [ ] Remember: season is October 1 to September 30 for all YTD calculations
 - [ ] All money values are bigint cents (store * 100, display / 100)

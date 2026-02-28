@@ -28,7 +28,7 @@
 
 ## Critical Reminders
 - **gh CLI bash path:** `"/c/Program Files/GitHub CLI/gh.exe"`
-- **Season:** July 1 to June 30
+- **Season:** October 1 to September 30
 - **Money:** all bigint cents (display / 100, store * 100)
 - **`tail` not available** — don't pipe to tail on Windows
 

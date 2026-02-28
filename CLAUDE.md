@@ -50,7 +50,7 @@ To copy them: read each `.md` file (except README.md) from `docs/claude-memory/`
 - **NEVER create invoices without an order** — invoices always link to an order
 - **NEVER bypass `check_period_open()`** — closed periods prevent backdated transactions
 - **NEVER allow non-admin users to access month-end close, commissions, or settings**
-- **Season runs July 1 to June 30** — all YTD calculations use this
+- **Season runs October 1 to September 30** — all YTD calculations use this
 
 ### Code Quality
 - **NEVER remove the pre-commit hook** — it runs lint + build + test
