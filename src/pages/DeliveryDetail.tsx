@@ -69,6 +69,9 @@ export default function DeliveryDetail() {
   const [remainders, setRemainders] = useState<DeliveryRemainder[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Signature signed URL (generated on demand for privacy)
+  const [signedSignatureUrl, setSignedSignatureUrl] = useState<string | null>(null);
+
   // Driver completion state
   const [signedBy, setSignedBy] = useState('');
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
@@ -211,6 +214,16 @@ export default function DeliveryDetail() {
               ...r,
               product_name: r.product?.product_name || 'Unknown',
             })) as DeliveryRemainder[]);
+          }
+
+          // Generate signed URL for signature (privacy: no permanent public URLs)
+          if (del.signature_url) {
+            const { data: signedData } = await supabase.storage
+              .from('delivery-signatures')
+              .createSignedUrl(del.signature_url, 3600); // 1 hour expiry
+            if (signedData?.signedUrl) {
+              setSignedSignatureUrl(signedData.signedUrl);
+            }
           }
         }
       } catch {
@@ -511,12 +524,11 @@ export default function DeliveryDetail() {
             .from('delivery-signatures')
             .upload(filePath, blob, { upsert: true, contentType: 'image/png' });
           if (!uploadError) {
-            const { data: urlData } = supabase.storage
-              .from('delivery-signatures')
-              .getPublicUrl(filePath);
+            // Store the storage path (not a public URL) — signed URLs are
+            // generated on demand for privacy (signatures are PII)
             const sigResult = await supabase
               .from('deliveries')
-              .update({ signature_url: urlData.publicUrl })
+              .update({ signature_url: filePath })
               .eq('id', id!)
               .select();
             checkMutationResult(sigResult, 'Update delivery signature');
@@ -1205,12 +1217,12 @@ export default function DeliveryDetail() {
       )}
 
       {/* Signature display for completed deliveries */}
-      {delivery.status === 'completed' && delivery.signature_url && (
+      {delivery.status === 'completed' && delivery.signature_url && signedSignatureUrl && (
         <Card>
           <h3 className="text-lg font-semibold font-heading text-nav-dark mb-3">Signature</h3>
           <div className="flex items-start gap-4">
             <img
-              src={delivery.signature_url}
+              src={signedSignatureUrl}
               alt="Customer signature"
               className="border border-gray-200 rounded-lg max-w-xs"
             />
