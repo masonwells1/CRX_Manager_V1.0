@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Minus, Plus } from 'lucide-react';
+import { ArrowLeft, Minus, Plus, AlertTriangle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,6 +11,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
+import { checkRUPCompliance } from '../lib/rupCompliance';
 import type { Order, OrderItem, Customer, CustomerAddress, Profile } from '../types';
 
 interface DeliveryItemDraft {
@@ -20,6 +21,7 @@ interface DeliveryItemDraft {
   quantity: number;
   max_quantity: number;
   unit_size: string;
+  tote_number: string;
 }
 
 export default function NewDelivery() {
@@ -46,6 +48,7 @@ export default function NewDelivery() {
   const [saving, setSaving] = useState(false);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [rupWarnings, setRupWarnings] = useState<string[]>([]);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -130,6 +133,7 @@ export default function NewDelivery() {
         quantity: item.quantity_remaining,
         max_quantity: item.quantity_remaining,
         unit_size: item.unit_size || '',
+        tote_number: '',
       }));
     setDeliveryItems(drafts);
     setLoadingDetails(false);
@@ -157,12 +161,37 @@ export default function NewDelivery() {
     }
   }, [selectedOrderId, fetchOrderDetails]);
 
+  // RUP compliance check
+  useEffect(() => {
+    if (!customer || !deliveryItems.length) { setRupWarnings([]); return; }
+    const productIds = deliveryItems.map((i) => i.product_id).filter(Boolean);
+    if (!productIds.length) { setRupWarnings([]); return; }
+    let cancelled = false;
+    checkRUPCompliance(customer.id, productIds).then((res) => {
+      if (!cancelled) {
+        setRupWarnings(res.warnings);
+        if (res.warnings.length > 0) {
+          logActivity('rup_compliance_warning', `RUP products (${res.rupProductNames.join(', ')}) on delivery for customer without valid license`, profile?.id ?? '', 'customer', customer.id, customer.id);
+        }
+      }
+    });
+    return () => { cancelled = true; };
+  }, [customer, deliveryItems, profile?.id]);
+
   const updateItemQty = (orderItemId: string, qty: number) => {
     setDeliveryItems((prev) =>
       prev.map((item) =>
         item.order_item_id === orderItemId
           ? { ...item, quantity: Math.max(0, Math.min(qty, item.max_quantity)) }
           : item
+      )
+    );
+  };
+
+  const updateItemTote = (orderItemId: string, tote: string) => {
+    setDeliveryItems((prev) =>
+      prev.map((item) =>
+        item.order_item_id === orderItemId ? { ...item, tote_number: tote } : item
       )
     );
   };
@@ -259,6 +288,7 @@ export default function NewDelivery() {
       product_id: item.product_id,
       quantity: item.quantity,
       unit_size: item.unit_size || null,
+      tote_number: item.tote_number || null,
     }));
 
     const { error: itemError } = await supabase
@@ -390,6 +420,17 @@ export default function NewDelivery() {
         </div>
       </Card>
 
+      {rupWarnings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-800">
+              {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedOrderId && (
         <Card>
           <h3 className="text-lg font-semibold font-heading text-nav-dark mb-4">
@@ -422,6 +463,13 @@ export default function NewDelivery() {
                       Remaining: {item.max_quantity} {item.unit_size || 'units'}
                     </p>
                   </div>
+                  <input
+                    type="text"
+                    placeholder="Tote #"
+                    value={item.tote_number}
+                    onChange={(e) => updateItemTote(item.order_item_id, e.target.value)}
+                    className="w-28 px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  />
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => updateItemQty(item.order_item_id, item.quantity - 1)}

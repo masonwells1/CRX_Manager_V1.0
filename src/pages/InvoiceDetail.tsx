@@ -31,6 +31,7 @@ interface LineItem {
   unit_size: string | null;
   sort_order: number;
   notes: string | null;
+  tote_number: string | null;
 }
 
 const fmt = (cents: number) =>
@@ -179,6 +180,7 @@ export default function InvoiceDetail() {
           unit_size: it.unit_size ?? null,
           sort_order: it.sort_order,
           notes: it.notes as string | null,
+          tote_number: (it.tote_number as string) ?? null,
         })) as LineItem[]
       );
     }
@@ -790,6 +792,9 @@ export default function InvoiceDetail() {
                   <th className="pb-2 pr-4 w-24">Qty</th>
                   <th className="pb-2 pr-4 w-28">Unit Price</th>
                   <th className="pb-2 pr-4 w-28">Extended</th>
+                  {items.some((i) => i.tote_number) && (
+                    <th className="pb-2 pr-4">Tote #</th>
+                  )}
                   <th className="pb-2 w-10"></th>
                 </tr>
               </thead>
@@ -833,6 +838,9 @@ export default function InvoiceDetail() {
                       )}
                     </td>
                     <td className="py-2 pr-4 font-medium">{fmt(item.extended_cents)}</td>
+                    {items.some((i) => i.tote_number) && (
+                      <td className="py-2 pr-4 text-secondary">{item.tote_number || '-'}</td>
+                    )}
                     <td className="py-2">
                       {editable && (
                         <button
@@ -848,7 +856,7 @@ export default function InvoiceDetail() {
               </tbody>
               <tfoot>
                 <tr className="border-t border-gray-200 font-semibold">
-                  <td className="pt-3" colSpan={3}>
+                  <td className="pt-3" colSpan={items.some((i) => i.tote_number) ? 4 : 3}>
                     Total
                   </td>
                   <td className="pt-3">{fmt(totalCents)}</td>

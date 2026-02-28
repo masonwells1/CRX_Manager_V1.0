@@ -355,6 +355,7 @@ export default function Deliveries() {
             quantity: it.quantity as number,
             unit_size: (it.unit_size as string) || '-',
             quantity_delivered: it.quantity_delivered as number,
+            tote_number: (it.tote_number as string) || undefined,
           })),
         });
       }

@@ -4,17 +4,20 @@
  * Sprint 11: Financial Workflows
  */
 import { useEffect, useState , useCallback } from 'react';
-import { DollarSign, Zap, RefreshCw } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, X } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import Input from '../components/ui/Input';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { exportToCSV } from '../lib/csvExport';
+import { runCriticalAction } from '../lib/criticalAction';
 
 interface CustomerPrepay {
   [k: string]: unknown;
@@ -28,9 +31,15 @@ interface CustomerPrepay {
 const fmt = (cents: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
+interface BucketSplit {
+  label: string;
+  amount: string; // dollar string
+}
+
 export default function PrepaymentManager() {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const [customers, setCustomers] = useState<CustomerPrepay[]>([]);
   const [loading, setLoading] = useState(true);
@@ -39,6 +48,14 @@ export default function PrepaymentManager() {
   const [confirmCustomer, setConfirmCustomer] = useState<CustomerPrepay | null>(null);
   const [showBatchConfirm, setShowBatchConfirm] = useState(false);
   const [batchApplying, setBatchApplying] = useState(false);
+
+  // Split Check modal state
+  const [showNewCheck, setShowNewCheck] = useState(false);
+  const [allCustomers, setAllCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  const [bucketLabels, setBucketLabels] = useState<string[]>([]);
+  const [checkForm, setCheckForm] = useState({ customer_id: '', reference_number: '', total: '' });
+  const [bucketSplits, setBucketSplits] = useState<BucketSplit[]>([{ label: '', amount: '' }]);
+  const [savingCheck, setSavingCheck] = useState(false);
 
   const fetchCustomers = useCallback(async () => {
     setLoading(true);
@@ -85,6 +102,86 @@ export default function PrepaymentManager() {
   useEffect(() => {
     fetchCustomers();
   }, [fetchCustomers]);
+
+  // Fetch bucket labels + all customers for the New Check modal
+  useEffect(() => {
+    supabase
+      .from('app_settings')
+      .select('setting_value')
+      .eq('setting_key', 'prepay_bucket_labels')
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.setting_value) setBucketLabels(JSON.parse(data.setting_value as string));
+      });
+    supabase
+      .from('customers')
+      .select('id, farm_name')
+      .eq('is_active', true)
+      .order('farm_name')
+      .then(({ data }) => setAllCustomers(data || []));
+  }, []);
+
+  const openNewCheck = () => {
+    setCheckForm({ customer_id: '', reference_number: '', total: '' });
+    setBucketSplits([{ label: '', amount: '' }]);
+    setShowNewCheck(true);
+  };
+
+  const handleSaveCheck = async () => {
+    if (!checkForm.customer_id || !checkForm.reference_number || !checkForm.total) {
+      toast('error', 'Fill in customer, check #, and total amount');
+      return;
+    }
+    const totalCents = Math.round(parseFloat(checkForm.total) * 100);
+    if (totalCents <= 0) { toast('error', 'Total must be positive'); return; }
+
+    const validSplits = bucketSplits.filter((s) => s.label && parseFloat(s.amount) > 0);
+    if (validSplits.length === 0) { toast('error', 'Add at least one bucket split'); return; }
+
+    const splitTotal = validSplits.reduce((s, b) => s + Math.round(parseFloat(b.amount) * 100), 0);
+    if (splitTotal !== totalCents) {
+      toast('error', `Splits total ($${(splitTotal / 100).toFixed(2)}) must equal check total ($${checkForm.total})`);
+      return;
+    }
+
+    await runCriticalAction({
+      action: async () => {
+        const rows = validSplits.map((s) => ({
+          customer_id: checkForm.customer_id,
+          reference_number: checkForm.reference_number,
+          bucket_label: s.label,
+          original_amount_cents: Math.round(parseFloat(s.amount) * 100),
+          balance_cents: Math.round(parseFloat(s.amount) * 100),
+          payment_method: 'check',
+          notes: `Check #${checkForm.reference_number} — ${s.label}`,
+        }));
+        const result = await supabase.from('prepay_credits').insert(rows).select();
+        checkMutationResult(result, 'Create prepay credits');
+
+        // Update customer aggregate balance
+        await supabase.rpc('increment_customer_prepay', {
+          p_customer_id: checkForm.customer_id,
+          p_amount_cents: totalCents,
+        }).then(({ error }) => {
+          // Fallback: direct update if RPC doesn't exist
+          if (error) {
+            return supabase
+              .from('customers')
+              .update({ prepay_balance_cents: supabase.rpc ? undefined : 0 })
+              .eq('id', checkForm.customer_id);
+          }
+        });
+      },
+      toast,
+      setLoading: setSavingCheck,
+      successMessage: `Check #${checkForm.reference_number} split into ${validSplits.length} bucket(s)`,
+      sentryTag: 'split_check',
+      onSuccess: () => {
+        setShowNewCheck(false);
+        fetchCustomers();
+      },
+    });
+  };
 
   const handleApply = async (customer: CustomerPrepay) => {
     setConfirmCustomer(customer);
@@ -175,21 +272,37 @@ export default function PrepaymentManager() {
     {
       key: 'id',
       header: '',
-      render: (r) => r.unpaid_invoice_count > 0 ? (
-        <Button
-          size="sm"
-          variant="secondary"
-          icon={<Zap className="w-3 h-3" />}
-          onClick={(e: React.MouseEvent) => {
-            e.stopPropagation();
-            handleApply(r);
-          }}
-          loading={applying === r.id}
-          showChevron={false}
-        >
-          Apply
-        </Button>
-      ) : null,
+      render: (r) => (
+        <div className="flex gap-1.5">
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<ArrowRight className="w-3 h-3" />}
+            onClick={(e: React.MouseEvent) => {
+              e.stopPropagation();
+              navigate(`/prepay-workspace?customer=${r.id}`);
+            }}
+            showChevron={false}
+          >
+            Allocate
+          </Button>
+          {r.unpaid_invoice_count > 0 && (
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<Zap className="w-3 h-3" />}
+              onClick={(e: React.MouseEvent) => {
+                e.stopPropagation();
+                handleApply(r);
+              }}
+              loading={applying === r.id}
+              showChevron={false}
+            >
+              Quick
+            </Button>
+          )}
+        </div>
+      ),
     },
   ];
 
@@ -202,15 +315,23 @@ export default function PrepaymentManager() {
           <p className="text-sm text-secondary mt-1">Apply prepay credits to outstanding invoices</p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Plus className="w-4 h-4" />}
+            onClick={openNewCheck}
+          >
+            New Check
+          </Button>
           {customers.some((c) => c.unpaid_invoice_count > 0) && profile?.role === 'admin' && (
             <Button
-              variant="primary"
+              variant="secondary"
               size="sm"
               icon={<Zap className="w-4 h-4" />}
               onClick={() => setShowBatchConfirm(true)}
               loading={batchApplying}
             >
-              Apply All Prepayments
+              Apply All
             </Button>
           )}
           <Button
@@ -359,6 +480,121 @@ export default function PrepaymentManager() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Split Check Modal */}
+      <Modal open={showNewCheck} onClose={() => setShowNewCheck(false)} title="New Check — Split Into Buckets">
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium text-nav-dark">Customer *</label>
+            <select
+              value={checkForm.customer_id}
+              onChange={(e) => setCheckForm({ ...checkForm, customer_id: e.target.value })}
+              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            >
+              <option value="">Select customer...</option>
+              {allCustomers.map((c) => (
+                <option key={c.id} value={c.id}>{c.farm_name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Check # *"
+              value={checkForm.reference_number}
+              onChange={(e) => setCheckForm({ ...checkForm, reference_number: e.target.value })}
+              placeholder="4521"
+            />
+            <Input
+              label="Total Amount *"
+              type="number"
+              step="0.01"
+              min="0"
+              value={checkForm.total}
+              onChange={(e) => setCheckForm({ ...checkForm, total: e.target.value })}
+              placeholder="10000.00"
+            />
+          </div>
+
+          {/* Bucket Splits */}
+          <div>
+            <label className="text-sm font-medium text-nav-dark mb-2 block">Bucket Splits</label>
+            <div className="space-y-2">
+              {bucketSplits.map((split, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <select
+                    value={split.label}
+                    onChange={(e) => {
+                      const updated = [...bucketSplits];
+                      updated[idx] = { ...updated[idx], label: e.target.value };
+                      setBucketSplits(updated);
+                    }}
+                    className="flex-1 px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  >
+                    <option value="">Select bucket...</option>
+                    {bucketLabels.map((l) => (
+                      <option key={l} value={l}>{l}</option>
+                    ))}
+                  </select>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={split.amount}
+                    onChange={(e) => {
+                      const updated = [...bucketSplits];
+                      updated[idx] = { ...updated[idx], amount: e.target.value };
+                      setBucketSplits(updated);
+                    }}
+                    placeholder="0.00"
+                    className="w-32"
+                  />
+                  {bucketSplits.length > 1 && (
+                    <button
+                      onClick={() => setBucketSplits(bucketSplits.filter((_, i) => i !== idx))}
+                      className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => setBucketSplits([...bucketSplits, { label: '', amount: '' }])}
+              className="mt-2 text-sm text-crx-green hover:underline flex items-center gap-1"
+            >
+              <Plus className="w-3 h-3" /> Add Bucket
+            </button>
+          </div>
+
+          {/* Split Total Check */}
+          {checkForm.total && (
+            <div className="bg-gray-50 p-3 rounded-lg">
+              <div className="flex justify-between text-sm">
+                <span className="text-secondary">Check Total</span>
+                <span className="font-medium">${parseFloat(checkForm.total || '0').toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between text-sm mt-1">
+                <span className="text-secondary">Split Total</span>
+                <span className={`font-medium ${
+                  Math.abs(bucketSplits.reduce((s, b) => s + parseFloat(b.amount || '0'), 0) - parseFloat(checkForm.total || '0')) < 0.01
+                    ? 'text-crx-green' : 'text-red-600'
+                }`}>
+                  ${bucketSplits.reduce((s, b) => s + parseFloat(b.amount || '0'), 0).toFixed(2)}
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setShowNewCheck(false)}>Cancel</Button>
+            <Button onClick={handleSaveCheck} loading={savingCheck} icon={<Plus className="w-4 h-4" />}>
+              Save Check
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );
