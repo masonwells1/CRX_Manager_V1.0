@@ -4,6 +4,35 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-02-28 — Audit Remediation (4 phases, 21 tasks, branch `feature/audit-remediation`)
+
+### Phase 0: Finance Charge + Billing Split Fixes
+- Fixed finance charge compounding to exclude prior finance charges from the base amount
+- Added `FOR UPDATE` row-level locking on billing splits to prevent concurrent modification
+
+### Phase 1: Tote Tracking (Tasks 2-8)
+- Added `tote_number` and `is_non_returnable` columns to `delivery_items` schema
+- Threaded tote number through `complete_delivery` and `create_quick_delivery` RPCs
+- Added tote # input on NewDelivery, display on DeliveryDetail with non-returnable badge
+- Added Tote # column to delivery PDF export
+
+### Phase 2: RUP Compliance (Tasks 9-14)
+- Built `rupCompliance.ts` helper with 6 unit tests — checks license expiry, certification type, product registration
+- Added amber RUP warning banners to QuoteBuilder, NewOrder, NewDelivery, DeliveryDetail
+- Added RUP audit logging to `financial_audit_log` on order/delivery creation
+- Enhanced Compliance page filter chips with count badges and red "Overdue" highlighting
+
+### Phase 3: Prepay Bucket System (Tasks 15-20)
+- Added `bucket_label` column to `prepay_credits` with 8 seeded categories
+- Created `apply_prepay_to_invoice()` and `batch_apply_prepayments()` RPCs with `FOR UPDATE` locking
+- Built PrepayWorkspace page — split-panel allocator with two-phase commit pattern
+- Added Split Check modal to PrepaymentManager for bucket-based check entry
+- Added sidebar nav + route for PrepayWorkspace
+- Net result: 50 pages, 93 migrations, 1,380 unit tests (88 files), all passing
+- Commits: `6beef0c` through `e6c3477` (10 commits)
+
+---
+
 ## 2026-02-28 — Go-Live Hardening (5 sprints, branch `feature/go-live-hardening`)
 
 ### Sprint 1: Foundation Hardening

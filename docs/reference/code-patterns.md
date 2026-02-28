@@ -108,6 +108,27 @@
 - Client-side calculation is display-only hint; server result is authoritative
 - Prevents penny-rounding drift between JS floats and Postgres
 
+## RUP Compliance Pattern (Audit Remediation)
+- `checkRUPCompliance(items, customerLicenses)` in `src/lib/rupCompliance.ts` — 3 checks: license expiry, certification type match, product registration status
+- Returns `string[]` of warning messages — empty array means compliant
+- Used on 4 pages: QuoteBuilder, NewOrder, NewDelivery, DeliveryDetail — shown as amber warning banner
+- Audit logging: RUP warnings written to `financial_audit_log` on order/delivery creation
+- 6 unit tests in `src/lib/rupCompliance.test.ts`
+
+## Prepay Bucket Pattern (Audit Remediation)
+- `prepay_credits.bucket_label` — categorizes credits (e.g., "Corn Chemical", "Soybean Fungicide", "General")
+- 8 bucket labels seeded in `app_settings.prepay_bucket_labels`
+- Split Check modal on PrepaymentManager: creates one `prepay_credits` row per bucket split
+- PrepayWorkspace: split-panel allocator with two-phase commit — stage allocations in React state, commit atomically via `batch_apply_prepayments()` RPC
+- `apply_prepay_to_invoice()` uses `FOR UPDATE` row locks on both `prepay_credits` and `invoices` for concurrent safety
+
+## Tote Tracking Pattern (Audit Remediation)
+- `delivery_items.tote_number` (text, nullable) — tracks container/tote for each delivery item
+- `delivery_items.is_non_returnable` (boolean, default false) — flags items that don't need container return
+- Input on NewDelivery page, displayed on DeliveryDetail with non-returnable badge
+- Tote # column added to delivery PDF export via `deliveryPdf.ts`
+- Threaded through `complete_delivery()` and `create_quick_delivery()` RPCs
+
 ## Build Notes
 - `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI
 - Supabase join inference: joined FK tables infer as arrays — use `as unknown as TargetType[]`

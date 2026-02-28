@@ -1,4 +1,4 @@
-# Database Schema Reference (72 Tables)
+# Database Schema Reference (72+ Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -29,7 +29,7 @@
 
 ## Deliveries
 - `deliveries` - Delivery headers (delivery_number, order_id, assigned_driver, scheduled_date, status, signature_url, priority, delivery_window_start/end, cancelled_at/by, cancel_reason, issue_type, issue_notes, is_quick_delivery)
-- `delivery_items` - Items on delivery (order_item_id, product_id, quantity)
+- `delivery_items` - Items on delivery (order_item_id, product_id, quantity, tote_number, is_non_returnable)
 - `delivery_photos` - Driver-uploaded delivery photos (delivery_id, storage_path, image_url, uploaded_by)
 - `delivery_remainders` - Partial delivery remainder items (delivery_id, order_item_id, product_id, remainder_quantity, status: pending/scheduled/delivered/cancelled)
 
@@ -64,7 +64,7 @@
 - `allocation_sets` - Payment-to-invoice allocation groups (payment_id, allocated_at)
 - `order_line_allocations` - Payment portions applied to order items
 - `invoice_line_allocations` - Payment portions applied to invoice items
-- `prepay_credits` - Prepayment credits (customer_id, original_amount_cents, remaining_cents, source_payment_id)
+- `prepay_credits` - Prepayment credits (customer_id, original_amount_cents, remaining_cents, source_payment_id, reference_number, bucket_label)
 - `prepay_applications` - Prepay credit applications to invoices (credit_id, invoice_id, applied_cents)
 - `financial_audit_log` - Immutable audit trail (entity_type, entity_id, action, old_data/new_data jsonb, performed_by)
 

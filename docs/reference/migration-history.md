@@ -1,4 +1,4 @@
-# Migration History (83 migrations)
+# Migration History (93 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -50,3 +50,12 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 44 | 20260312200000 | Business logic audit fixes: inventory hold auto-release trigger (declined/expired/accepted), `post_invoice()` period enforcement via `check_period_open()`, `save_customer()` commission split validation (must sum to 100%), `create_quick_delivery()` inventory pre-check with `FOR UPDATE` locks, `convert_quote_to_order()` explicit hold release |
 | 45 | 20260315200000 | Emergency RPC fixes: 9 broken functions with wrong column references (allocate_payment, cancel_delivery, auto_expire_quotes, cancel_order, check_customer_credit_limit, create_quick_delivery schema fixes) |
 | 46 | 20260315200001 | Accounting integrity & hardening: expand audit log CHECK constraints, period enforcement in 10 financial RPCs, FOR UPDATE locks, void_invoice 4-bug fix, commission season convention, cycle count guards, return processing dedup |
+| 47 | 20260228200000 | Season calendar Oct-Sep convention |
+| 48 | 20260228210000 | Failed notifications table (failed_at, retry_count) |
+| 49 | 20260228220000 | Server-authoritative quote math (`calculate_quote_totals()` RPC with NUMERIC(15,4)) |
+| 50 | 20260228230000 | Signature privacy — `create_signed_url()` RPC for time-limited delivery photo access |
+| 51 | 20260301000000 | Audit Phase 0 fixes: finance charge compounding exclusion, billing split `FOR UPDATE` locks |
+| 52 | 20260301100000 | Tote tracking: `tote_number` and `is_non_returnable` columns on `delivery_items` |
+| 53 | 20260301100001 | Complete delivery tote copy: threads `tote_number` through `complete_delivery` and `create_quick_delivery` RPCs |
+| 54 | 20260301200000 | Prepay bucket system: `bucket_label` column on `prepay_credits`, 8 seeded bucket categories in `app_settings`, reference index |
+| 55 | 20260301200001 | Prepay application RPCs: `apply_prepay_to_invoice()` atomic allocation + `batch_apply_prepayments()` batch wrapper |

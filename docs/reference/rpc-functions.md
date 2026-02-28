@@ -1,4 +1,4 @@
-# RPC Functions Reference (~110 total)
+# RPC Functions Reference (~115 total)
 
 ## Atomic Save/Delete
 - `save_quote()`, `save_job()`, `save_customer()` — validates commission splits sum to 100%, `save_blend_ticket()`, `save_purchase_order()`, `delete_purchase_order()`, `duplicate_quote()`
@@ -6,7 +6,7 @@
 ## Order & Delivery
 - `convert_quote_to_order()` — also releases inventory holds linked to the quote, `create_direct_order()`, `cancel_order()`, `update_order_items()`
 - `confirm_delivery()` — scheduled -> in_progress transition
-- `complete_delivery()` — requires in_progress, creates remainder rows for partial deliveries
+- `complete_delivery()` — requires in_progress, creates remainder rows for partial deliveries, copies `tote_number` from delivery items
 - `edit_delivery()` — logistics only, items param ignored (locked to order)
 - `cancel_delivery()`, `batch_cancel_deliveries()`, `reassign_delivery()`
 - `create_followup_delivery()`, `get_customer_delivery_remainders()`
@@ -41,6 +41,8 @@
 - `create_commission_payment()`, `post_commission_payment()`
 - `apply_write_off()`, `generate_finance_charges()`
 - `get_customer_transaction_review()`, `apply_remaining_prepayments()`
+- `apply_prepay_to_invoice(credit_id, invoice_id, amount_cents, performed_by)` — atomic single allocation with `FOR UPDATE` locks, creates `prepay_applications` record, deducts from both balances, writes `financial_audit_log` entry
+- `batch_apply_prepayments(allocations jsonb, performed_by)` — batch wrapper iterating over JSON array, calls `apply_prepay_to_invoice` for each, returns total count and amount
 
 ## Geo / Maps
 - `get_fields_with_geojson()`, `get_field_geojson()`, `save_field_geometry()` — use `SET search_path = public, extensions` for PostGIS

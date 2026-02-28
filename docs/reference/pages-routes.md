@@ -1,4 +1,4 @@
-# Pages & Routes Reference (49 total)
+# Pages & Routes Reference (50 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -37,7 +37,8 @@
 | `/month-end` | MonthEndClose | Admin-only. Period status, checklist, batch statements, "Roll the Month" |
 | `/commission-payments` | CommissionPayments | Admin-only. Create from unpaid commissions, post workflow |
 | `/customer-transactions` | CustomerTransactionReview | Admin-only. Per-customer transaction history with running balance |
-| `/prepayments` | PrepaymentManager | Admin-only. Prepay balances, auto-apply to oldest invoices |
+| `/prepayments` | PrepaymentManager | Admin-only. Prepay balances, Split Check entry (bucket-labeled), auto-apply or allocate to workspace |
+| `/prepay-workspace` | PrepayWorkspace | Admin-only. Split-panel allocator: left=prepay buckets by check#, right=unpaid invoices. Two-phase commit via `batch_apply_prepayments()` |
 | `/reports` | Reports | 14 reports: 4 logbook, 6 financial, 4 operational. CSV/PDF export. |
 | `/fields` | Fields | Field list with Mapbox map view + bulk import (shapefile/KML/GeoJSON) |
 | `/fields/:id` | FieldDetail | Field CRUD with polygon drawing on satellite map |

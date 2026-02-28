@@ -14,11 +14,11 @@ At the start of each session, silently check if `docs/claude-memory/MEMORY.md` h
 To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
 
 ## Current State (2026-02-28)
-- 48 pages, 72+ tables, ~110 RPCs, 83 migrations
-- 1,374 unit tests (87 files) + 424 E2E tests (370 passing, 42 pre-existing failures)
+- 50 pages, 72+ tables, ~115 RPCs, 93 migrations
+- 1,380 unit tests (88 files) + 424 E2E tests (370 passing, 42 pre-existing failures)
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
-- Go-live hardening branch: `feature/go-live-hardening` (13 commits, 5 sprints)
+- Latest: audit remediation branch merged (10 commits, 4 phases, 21 tasks)
 
 ---
 
@@ -180,6 +180,7 @@ Hook: `useRealtimeSubscription({ table, event, filter, onInsert, onUpdate, onDel
 - `src/lib/activityLogger.ts` — Activity feed + notifications
 - `src/lib/metrics.ts` — Operational metrics: Sentry user context, navigation tracking, business events
 - `src/lib/reconciliation.ts` — Cross-entity data integrity checks (5 pure functions + DB wrapper)
+- `src/lib/rupCompliance.ts` — RUP compliance checker (license expiry, cert type, registration)
 - `src/hooks/useRowSelection.tsx` — Bulk row selection (used on 15 pages)
 - `src/hooks/useIdempotentAction.ts` — Retry-safe action hook with `crypto.randomUUID` keys
 - `supabase/migrations/` — Database migrations
@@ -217,10 +218,10 @@ Run `/update-docs` for a full audit anytime (not required — the commit hook ha
 
 | Doc | Contents |
 |-----|----------|
-| `docs/reference/database-schema.md` | 72 tables + RLS policy matrix |
-| `docs/reference/rpc-functions.md` | ~110 RPCs + helpers + triggers |
-| `docs/reference/migration-history.md` | 80+ migration entries |
-| `docs/reference/pages-routes.md` | 49 pages with routes |
+| `docs/reference/database-schema.md` | 72+ tables + RLS policy matrix |
+| `docs/reference/rpc-functions.md` | ~115 RPCs + helpers + triggers |
+| `docs/reference/migration-history.md` | 93 migration entries |
+| `docs/reference/pages-routes.md` | 50 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
 | `docs/CHANGELOG.md` | Sprint-by-sprint history |
