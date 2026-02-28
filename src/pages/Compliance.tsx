@@ -15,6 +15,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
 import { logActivity } from '../lib/activityLogger';
 import type { ApplicatorLicense } from '../types';
 
@@ -179,7 +180,6 @@ export default function Compliance() {
       toast('error', 'Fill in all required fields');
       return;
     }
-    setSaving(true);
 
     const cats = form.certification_categories
       .split(',')
@@ -198,30 +198,33 @@ export default function Compliance() {
       notes: form.notes || null,
     };
 
-    try {
-      if (editId) {
-        const result = await supabase
-          .from('applicator_licenses')
-          .update(payload)
-          .eq('id', editId)
-          .select();
-        checkMutationResult(result, 'Update license');
-        toast('success', 'License updated');
-      } else {
-        const result = await supabase
-          .from('applicator_licenses')
-          .insert(payload)
-          .select();
-        checkMutationResult(result, 'Create license');
-        toast('success', 'License added');
-        if (profile) logActivity('license_created', `Applicator license added for ${form.holder_name}`, profile.id);
-      }
-      setModalOpen(false);
-      fetchLicenses();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to save license');
-    }
-    setSaving(false);
+    await runCriticalAction({
+      action: async () => {
+        if (editId) {
+          const result = await supabase
+            .from('applicator_licenses')
+            .update(payload)
+            .eq('id', editId)
+            .select();
+          checkMutationResult(result, 'Update license');
+        } else {
+          const result = await supabase
+            .from('applicator_licenses')
+            .insert(payload)
+            .select();
+          checkMutationResult(result, 'Create license');
+          if (profile) logActivity('license_created', `Applicator license added for ${form.holder_name}`, profile.id);
+        }
+      },
+      toast,
+      setLoading: setSaving,
+      successMessage: editId ? 'License updated' : 'License added',
+      sentryTag: editId ? 'update_license' : 'create_license',
+      onSuccess: () => {
+        setModalOpen(false);
+        fetchLicenses();
+      },
+    });
   };
 
   const licenseColumns: Column<LicenseWithCustomer>[] = [
