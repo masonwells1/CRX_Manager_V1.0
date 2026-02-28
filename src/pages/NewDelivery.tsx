@@ -20,6 +20,7 @@ interface DeliveryItemDraft {
   quantity: number;
   max_quantity: number;
   unit_size: string;
+  tote_number: string;
 }
 
 export default function NewDelivery() {
@@ -130,6 +131,7 @@ export default function NewDelivery() {
         quantity: item.quantity_remaining,
         max_quantity: item.quantity_remaining,
         unit_size: item.unit_size || '',
+        tote_number: '',
       }));
     setDeliveryItems(drafts);
     setLoadingDetails(false);
@@ -163,6 +165,14 @@ export default function NewDelivery() {
         item.order_item_id === orderItemId
           ? { ...item, quantity: Math.max(0, Math.min(qty, item.max_quantity)) }
           : item
+      )
+    );
+  };
+
+  const updateItemTote = (orderItemId: string, tote: string) => {
+    setDeliveryItems((prev) =>
+      prev.map((item) =>
+        item.order_item_id === orderItemId ? { ...item, tote_number: tote } : item
       )
     );
   };
@@ -259,6 +269,7 @@ export default function NewDelivery() {
       product_id: item.product_id,
       quantity: item.quantity,
       unit_size: item.unit_size || null,
+      tote_number: item.tote_number || null,
     }));
 
     const { error: itemError } = await supabase
@@ -422,6 +433,13 @@ export default function NewDelivery() {
                       Remaining: {item.max_quantity} {item.unit_size || 'units'}
                     </p>
                   </div>
+                  <input
+                    type="text"
+                    placeholder="Tote #"
+                    value={item.tote_number}
+                    onChange={(e) => updateItemTote(item.order_item_id, e.target.value)}
+                    className="w-28 px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  />
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => updateItemQty(item.order_item_id, item.quantity - 1)}
