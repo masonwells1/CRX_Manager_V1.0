@@ -542,7 +542,7 @@ export default function DeliveryDetail() {
           .filter((r) => r.delivered < r.ordered);
 
         if (remainderItems.length > 0) {
-          notifyDeliveryRemainder(
+          await notifyDeliveryRemainder(
             delivery.id,
             delivery.delivery_number,
             delivery.order_id || '',

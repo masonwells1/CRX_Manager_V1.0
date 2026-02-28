@@ -117,6 +117,15 @@ export default function NewDelivery() {
       supabase.from('order_items').select('*').eq('order_id', orderId).order('section_name'),
     ]);
 
+    if (custRes.error) {
+      console.error('Failed to load customer:', custRes.error);
+      toast('error', 'Failed to load customer details.');
+    }
+    if (itemsRes.error) {
+      console.error('Failed to load order items:', itemsRes.error);
+      toast('error', 'Failed to load order items.');
+    }
+
     const cust = custRes.data as Customer | null;
     setCustomer(cust);
     const items = (itemsRes.data || []) as OrderItem[];

@@ -77,6 +77,15 @@ export default function NewOrder() {
       supabase.from('products').select('*').order('product_name'),
     ]);
 
+    if (customersRes.error) {
+      console.error('Failed to load customers:', customersRes.error);
+      toast('error', 'Failed to load customers. Please refresh.');
+    }
+    if (productsRes.error) {
+      console.error('Failed to load products:', productsRes.error);
+      toast('error', 'Failed to load products. Please refresh.');
+    }
+
     setCustomers(customersRes.data || []);
     setProducts(productsRes.data || []);
     setLoading(false);

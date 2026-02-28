@@ -164,11 +164,29 @@ export default function Dashboard() {
     // GAP FIX #17: Run automated notification checks (low stock, expiring quotes)
     runPeriodicNotificationChecks();
 
-    // T4: Check for delivery remainders pending 7+ / 14+ days (fire-and-forget)
-    void supabase.rpc('check_remainder_reminders');
+    // T4: Check for delivery remainders pending 7+ / 14+ days
+    try {
+      const { error: reminderErr } = await supabase.rpc('check_remainder_reminders');
+      if (reminderErr) throw reminderErr;
+    } catch (err) {
+      console.error('Remainder reminders check failed:', err);
+      supabase.rpc('log_failed_notification', {
+        p_notification_type: 'remainder_reminders',
+        p_error_message: err instanceof Error ? err.message : String(err),
+      });
+    }
 
-    // A2.7: Clean up holds from expired quotes (fire-and-forget)
-    void supabase.rpc('release_expired_quote_holds');
+    // A2.7: Clean up holds from expired quotes
+    try {
+      const { error: holdsErr } = await supabase.rpc('release_expired_quote_holds');
+      if (holdsErr) throw holdsErr;
+    } catch (err) {
+      console.error('Release expired holds failed:', err);
+      supabase.rpc('log_failed_notification', {
+        p_notification_type: 'release_expired_holds',
+        p_error_message: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
 
   const fmt = (n: number) =>

@@ -174,6 +174,19 @@ export default function QuoteBuilder() {
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('unit_conversions').select('*'),
     ]);
+
+    if (custRes.error) {
+      console.error('Failed to load customers:', custRes.error);
+      toast('error', 'Failed to load customers.');
+    }
+    if (prodRes.error) {
+      console.error('Failed to load products:', prodRes.error);
+      toast('error', 'Failed to load products.');
+    }
+    if (convRes.error) {
+      console.error('Failed to load unit conversions:', convRes.error);
+    }
+
     setCustomers((custRes.data || []) as Customer[]);
     setProducts((prodRes.data || []) as Product[]);
     setUnitConversions((convRes.data || []) as UnitConversion[]);
