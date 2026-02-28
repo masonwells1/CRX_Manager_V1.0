@@ -1,30 +1,27 @@
 /**
  * ReportShell.test.ts — Unit tests for getPresetDates() date range logic
  *
- * Tests the crop-season boundaries (July 1 → June 30) and all 5 presets.
+ * Tests the crop-season boundaries (October 1 → September 30) and all 5 presets.
  */
 import { describe, it, expect } from 'vitest';
+import { computeSeason, seasonStartDate, seasonEndDate } from '../../utils/season';
 
-// getPresetDates is not exported, so we test it through the component's behavior.
-// However, since it's a pure function inlined in ReportShell, we'll extract and test
-// the logic directly by re-implementing the same algorithm.
-//
-// This mirrors the exact logic from ReportShell.tsx lines 13-40.
+// getPresetDates is not exported from ReportShell, so we mirror its logic here
+// using the centralized season utility (same imports as ReportShell.tsx).
 function getPresetDates(preset: string, now: Date = new Date()): { start: string; end: string } {
-  const year = now.getFullYear();
-  const month = now.getMonth();
-
   switch (preset) {
-    case 'this_season':
-      return month >= 6
-        ? { start: `${year}-07-01`, end: `${year + 1}-06-30` }
-        : { start: `${year - 1}-07-01`, end: `${year}-06-30` };
-    case 'last_season':
-      return month >= 6
-        ? { start: `${year - 1}-07-01`, end: `${year}-06-30` }
-        : { start: `${year - 2}-07-01`, end: `${year - 1}-06-30` };
-    case 'ytd':
-      return { start: `${year}-01-01`, end: now.toISOString().split('T')[0] };
+    case 'this_season': {
+      const s = computeSeason(now);
+      return { start: seasonStartDate(s), end: seasonEndDate(s) };
+    }
+    case 'last_season': {
+      const s = computeSeason(now) - 1;
+      return { start: seasonStartDate(s), end: seasonEndDate(s) };
+    }
+    case 'ytd': {
+      const s = computeSeason(now);
+      return { start: seasonStartDate(s), end: now.toISOString().split('T')[0] };
+    }
     case 'last30': {
       const d = new Date(now.getTime() - 30 * 86400000);
       return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
@@ -40,60 +37,67 @@ function getPresetDates(preset: string, now: Date = new Date()): { start: string
 
 describe('getPresetDates', () => {
   describe('this_season', () => {
-    it('returns current crop year when date is in July (month >= 6)', () => {
-      // August 15, 2025 — second half of year → current season starts July 2025
-      const now = new Date(2025, 7, 15); // August (month 7)
+    it('returns current crop year when date is in October (month >= 9)', () => {
+      // October 15, 2025 — Oct-Dec → season 2026 starts Oct 2025
+      const now = new Date(2025, 9, 15); // October (month 9)
       const result = getPresetDates('this_season', now);
-      expect(result).toEqual({ start: '2025-07-01', end: '2026-06-30' });
+      expect(result).toEqual({ start: '2025-10-01', end: '2026-09-30' });
     });
 
-    it('returns previous crop year when date is in January (month < 6)', () => {
-      // February 24, 2026 — first half of year → season started July 2025
+    it('returns current crop year when date is in January (month < 9)', () => {
+      // February 24, 2026 — Jan-Sep → season 2026 started Oct 2025
       const now = new Date(2026, 1, 24); // February (month 1)
       const result = getPresetDates('this_season', now);
-      expect(result).toEqual({ start: '2025-07-01', end: '2026-06-30' });
+      expect(result).toEqual({ start: '2025-10-01', end: '2026-09-30' });
     });
 
-    it('returns current crop year when date is exactly July 1', () => {
-      const now = new Date(2025, 6, 1); // July 1 (month 6)
+    it('returns current crop year when date is exactly October 1', () => {
+      const now = new Date(2025, 9, 1); // October 1 (month 9)
       const result = getPresetDates('this_season', now);
-      expect(result).toEqual({ start: '2025-07-01', end: '2026-06-30' });
+      expect(result).toEqual({ start: '2025-10-01', end: '2026-09-30' });
     });
 
-    it('returns previous crop year when date is June 30 (last day before new season)', () => {
-      const now = new Date(2025, 5, 30); // June 30 (month 5)
+    it('returns current crop year when date is September 30 (last day of season)', () => {
+      const now = new Date(2026, 8, 30); // September 30 (month 8)
       const result = getPresetDates('this_season', now);
-      expect(result).toEqual({ start: '2024-07-01', end: '2025-06-30' });
+      expect(result).toEqual({ start: '2025-10-01', end: '2026-09-30' });
     });
   });
 
   describe('last_season', () => {
-    it('returns prior crop year when date is in second half', () => {
-      const now = new Date(2025, 9, 1); // October 2025
+    it('returns prior crop year when date is in Oct-Dec', () => {
+      const now = new Date(2025, 9, 1); // October 2025 → current season 2026
       const result = getPresetDates('last_season', now);
-      expect(result).toEqual({ start: '2024-07-01', end: '2025-06-30' });
+      expect(result).toEqual({ start: '2024-10-01', end: '2025-09-30' });
     });
 
-    it('returns two seasons ago when date is in first half', () => {
-      const now = new Date(2026, 2, 15); // March 2026
+    it('returns prior crop year when date is in Jan-Sep', () => {
+      const now = new Date(2026, 2, 15); // March 2026 → current season 2026
       const result = getPresetDates('last_season', now);
-      expect(result).toEqual({ start: '2024-07-01', end: '2025-06-30' });
+      expect(result).toEqual({ start: '2024-10-01', end: '2025-09-30' });
     });
   });
 
   describe('ytd', () => {
-    it('returns Jan 1 to today', () => {
-      const now = new Date(2026, 1, 24); // Feb 24, 2026
+    it('returns season start (Oct 1) to today for date in Jan-Sep', () => {
+      const now = new Date(2026, 1, 24); // Feb 24, 2026 → season 2026
       const result = getPresetDates('ytd', now);
-      expect(result.start).toBe('2026-01-01');
+      expect(result.start).toBe('2025-10-01');
       expect(result.end).toBe('2026-02-24');
     });
 
-    it('handles January 1 (start === end)', () => {
-      const now = new Date(2026, 0, 1); // Jan 1
+    it('returns season start to today for date in Oct-Dec', () => {
+      const now = new Date(2025, 10, 15); // Nov 15, 2025 → season 2026
       const result = getPresetDates('ytd', now);
-      expect(result.start).toBe('2026-01-01');
-      expect(result.end).toBe('2026-01-01');
+      expect(result.start).toBe('2025-10-01');
+      expect(result.end).toBe('2025-11-15');
+    });
+
+    it('handles October 1 (start === seasonStart)', () => {
+      const now = new Date(2025, 9, 1); // Oct 1, 2025
+      const result = getPresetDates('ytd', now);
+      expect(result.start).toBe('2025-10-01');
+      expect(result.end).toBe('2025-10-01');
     });
   });
 
@@ -130,17 +134,17 @@ describe('getPresetDates', () => {
   });
 
   describe('edge cases', () => {
-    it('handles December 31 correctly (month >= 6)', () => {
+    it('handles December 31 correctly (month >= 9)', () => {
       const now = new Date(2025, 11, 31); // Dec 31, 2025
       const thisSeason = getPresetDates('this_season', now);
-      expect(thisSeason).toEqual({ start: '2025-07-01', end: '2026-06-30' });
+      expect(thisSeason).toEqual({ start: '2025-10-01', end: '2026-09-30' });
 
       const lastSeason = getPresetDates('last_season', now);
-      expect(lastSeason).toEqual({ start: '2024-07-01', end: '2025-06-30' });
+      expect(lastSeason).toEqual({ start: '2024-10-01', end: '2025-09-30' });
     });
 
     it('handles leap year date in last30/last90', () => {
-      // March 1 in a leap year, 30 days back should be Jan 30
+      // March 1 in a leap year, 30 days back should be Jan 31
       const now = new Date(2024, 2, 1); // March 1, 2024 (leap year)
       const result = getPresetDates('last30', now);
       expect(result.end).toBe('2024-03-01');

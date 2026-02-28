@@ -8,27 +8,26 @@ import { useState, type ReactNode } from 'react';
 import { Download, FileText } from 'lucide-react';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
+import { computeSeason, seasonStartDate, seasonEndDate } from '../../utils/season';
 
-// Crop season = July 1 to June 30
+// Crop season = October 1 to September 30
 function getPresetDates(preset: string): { start: string; end: string } {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
 
   switch (preset) {
-    case 'this_season':
-      return month >= 6
-        ? { start: `${year}-07-01`, end: `${year + 1}-06-30` }
-        : { start: `${year - 1}-07-01`, end: `${year}-06-30` };
-    case 'last_season':
-      return month >= 6
-        ? { start: `${year - 1}-07-01`, end: `${year}-06-30` }
-        : { start: `${year - 2}-07-01`, end: `${year - 1}-06-30` };
-    case 'ytd':
-      // Season runs July 1 to June 30 — YTD starts from current season's July 1
-      return month >= 6
-        ? { start: `${year}-07-01`, end: now.toISOString().split('T')[0] }
-        : { start: `${year - 1}-07-01`, end: now.toISOString().split('T')[0] };
+    case 'this_season': {
+      const s = computeSeason(now);
+      return { start: seasonStartDate(s), end: seasonEndDate(s) };
+    }
+    case 'last_season': {
+      const s = computeSeason(now) - 1;
+      return { start: seasonStartDate(s), end: seasonEndDate(s) };
+    }
+    case 'ytd': {
+      // Season runs Oct 1 to Sep 30 — YTD starts from current season's Oct 1
+      const s = computeSeason(now);
+      return { start: seasonStartDate(s), end: now.toISOString().split('T')[0] };
+    }
     case 'last30': {
       const d = new Date(now.getTime() - 30 * 86400000);
       return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };

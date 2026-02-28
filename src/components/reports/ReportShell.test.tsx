@@ -98,9 +98,9 @@ describe('ReportShell', () => {
     expect(onDateChange).toHaveBeenCalledTimes(1);
 
     const [start, end] = onDateChange.mock.calls[0];
-    // Crop season is July-June, so start should be a July 1 and end a June 30
-    expect(start).toMatch(/^\d{4}-07-01$/);
-    expect(end).toMatch(/^\d{4}-06-30$/);
+    // Crop season is Oct-Sep, so start should be a Oct 1 and end a Sep 30
+    expect(start).toMatch(/^\d{4}-10-01$/);
+    expect(end).toMatch(/^\d{4}-09-30$/);
   });
 
   it('calls onDateChange with YTD dates when YTD preset is clicked', () => {
@@ -115,11 +115,11 @@ describe('ReportShell', () => {
     expect(onDateChange).toHaveBeenCalledTimes(1);
 
     const [start, end] = onDateChange.mock.calls[0];
-    // Season runs July 1 to June 30: YTD starts from current season's July 1
+    // Season runs Oct 1 to Sep 30: YTD starts from current season's Oct 1
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth();
-    const seasonStart = month >= 6 ? `${year}-07-01` : `${year - 1}-07-01`;
+    const seasonStart = month >= 9 ? `${year}-10-01` : `${year - 1}-10-01`;
     expect(start).toBe(seasonStart);
     // End should be today
     expect(end).toBe(now.toISOString().split('T')[0]);
