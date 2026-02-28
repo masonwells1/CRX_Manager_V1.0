@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { trackBusinessEvent } from '../lib/metrics';
 import type { Product, Customer } from '../types';
 
 interface LocalItem {
@@ -67,20 +68,29 @@ export default function NewOrder() {
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
   const [productSearch, setProductSearch] = useState('');
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     const [customersRes, productsRes] = await Promise.all([
       supabase.from('customers').select('*').order('farm_name'),
       supabase.from('products').select('*').order('product_name'),
     ]);
 
+    if (customersRes.error) {
+      console.error('Failed to load customers:', customersRes.error);
+      toast('error', 'Failed to load customers. Please refresh.');
+    }
+    if (productsRes.error) {
+      console.error('Failed to load products:', productsRes.error);
+      toast('error', 'Failed to load products. Please refresh.');
+    }
+
     setCustomers(customersRes.data || []);
     setProducts(productsRes.data || []);
     setLoading(false);
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const addItem = () => {
     setItems([...items, makeEmptyItem()]);
@@ -183,6 +193,10 @@ export default function NewOrder() {
         return;
       }
       toast('success', 'Order created successfully');
+      trackBusinessEvent('order_created', {
+        message: `Direct order ${orderNumber} created`,
+        data: { orderId: orderId!, orderNumber, itemCount: items.filter((i) => i.product_id).length },
+      });
 
       // Phase 3.3: Credit limit check — warn (not block) if exceeded
       if (customerId) {

@@ -116,7 +116,7 @@ export default function QuickDeliveryModal({
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [customerSearch, selectedCustomer]);
+  }, [customerSearch, selectedCustomer, toast]);
 
   const selectCustomer = useCallback((c: CustomerOption) => {
     setSelectedCustomer(c);

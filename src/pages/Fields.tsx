@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, MapPin, List, Map as MapIcon, Upload, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -40,11 +40,7 @@ export default function Fields() {
   const cropTypes = [...new Set(fields.map((f) => f.crop_type).filter(Boolean))] as string[];
   const counties = [...new Set(fields.map((f) => f.county).filter(Boolean))] as string[];
 
-  useEffect(() => {
-    fetchFields();
-  }, []);
-
-  const fetchFields = async () => {
+  const fetchFields = useCallback(async () => {
     const { data, error } = await supabase.rpc('get_fields_with_geojson');
 
     if (error) {
@@ -60,7 +56,11 @@ export default function Fields() {
     })) as unknown as FieldWithCustomer[];
     setFields(rows);
     setLoading(false);
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    fetchFields();
+  }, [fetchFields]);
 
   const filtered = fields.filter((f) => {
     if (cropFilter && f.crop_type !== cropFilter) return false;

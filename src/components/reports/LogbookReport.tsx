@@ -4,7 +4,7 @@
  *
  * Sprint 9: Reporting Engine
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Card from '../ui/Card';
 import DataTable, { type Column } from '../ui/DataTable';
 import Badge from '../ui/Badge';
@@ -70,16 +70,7 @@ export default function LogbookReport() {
     loadEntities();
   }, [tab]);
 
-  // Fetch report data
-  useEffect(() => {
-    if (tab === 'faa') {
-      if (startDate && endDate) fetchFAA();
-    } else {
-      if (entityId && startDate && endDate) fetchLogbook();
-    }
-  }, [tab, entityId, startDate, endDate]);
-
-  const fetchLogbook = async () => {
+  const fetchLogbook = useCallback(async () => {
     setLoading(true);
     const rpcName =
       tab === 'customer' ? 'get_logbook_by_customer' :
@@ -103,9 +94,9 @@ export default function LogbookReport() {
       setData((rows || []) as LogbookRow[]);
     }
     setLoading(false);
-  };
+  }, [tab, entityId, startDate, endDate, toast]);
 
-  const fetchFAA = async () => {
+  const fetchFAA = useCallback(async () => {
     setLoading(true);
     const { data: rows, error } = await supabase.rpc('get_logbook_faa', {
       p_start_date: startDate,
@@ -117,7 +108,16 @@ export default function LogbookReport() {
       setFaaData((rows || []) as FAALogbookRow[]);
     }
     setLoading(false);
-  };
+  }, [startDate, endDate, toast]);
+
+  // Fetch report data
+  useEffect(() => {
+    if (tab === 'faa') {
+      if (startDate && endDate) fetchFAA();
+    } else {
+      if (entityId && startDate && endDate) fetchLogbook();
+    }
+  }, [tab, entityId, startDate, endDate, fetchFAA, fetchLogbook]);
 
   const handleDateChange = (s: string, e: string) => {
     setStartDate(s);

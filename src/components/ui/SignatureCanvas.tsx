@@ -49,7 +49,7 @@ export default function SignatureCanvas({
     return () => {
       pad.off();
     };
-  }, [disabled]);
+  }, [disabled, onSignatureChange]);
 
   const handleClear = useCallback(() => {
     padRef.current?.clear();

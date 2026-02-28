@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { supabase } from '../lib/db';
+import { setUserContext, clearUserContext } from '../lib/metrics';
 import type { Profile, UserRole } from '../types';
 import type { Session } from '@supabase/supabase-js';
 
@@ -41,6 +42,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .maybeSingle();
       if (!error) {
         setProfile(data ?? null);
+        if (data) setUserContext(data.id, data.role ?? 'unknown');
         return;
       }
       console.error(`Profile fetch attempt ${attempt + 1} failed:`, error.message);
@@ -94,6 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     // Clear local state immediately so the UI goes to login
+    clearUserContext();
     setProfile(null);
     setSession(null);
     try {

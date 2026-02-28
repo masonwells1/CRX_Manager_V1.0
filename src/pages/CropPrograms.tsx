@@ -8,7 +8,7 @@
  *
  * Stored in app_settings as JSON (no new table needed).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { Plus, Copy, Pencil, Trash2, Sprout, Save, X, ChevronDown, ChevronUp } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -74,12 +74,7 @@ export default function CropPrograms() {
 
   const isAdmin = role === 'admin';
 
-  useEffect(() => {
-    fetchPrograms();
-    fetchProducts();
-  }, []);
-
-  const fetchPrograms = async () => {
+  const fetchPrograms = useCallback(async () => {
     const { data, error } = await supabase
       .from('app_settings')
       .select('*')
@@ -102,9 +97,9 @@ export default function CropPrograms() {
       }
     }
     setLoading(false);
-  };
+  }, [toast]);
 
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
       .select('*')
@@ -115,7 +110,12 @@ export default function CropPrograms() {
       console.error('Failed to load products for crop programs:', error.message);
     }
     setProducts((data || []) as Product[]);
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchPrograms();
+    fetchProducts();
+  }, [fetchPrograms, fetchProducts]);
 
   const savePrograms = async (updated: CropProgram[]) => {
     const { data: existing } = await supabase

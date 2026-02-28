@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -115,36 +115,7 @@ export default function Deliveries() {
   const canQuickDeliver = role === 'admin' || role === 'sales_rep';
   const isDriver = role === 'driver';
 
-  useEffect(() => {
-    fetchDeliveries();
-    fetchDrivers();
-    fetchCustomers();
-    fetchRemainderCount();
-  }, []);
-
-  // Fetch unassigned deliveries for driver dashboard
-  useEffect(() => {
-    if (!isDriver) return;
-    supabase
-      .from('deliveries')
-      .select('*, customer:customers(farm_name)')
-      .is('assigned_driver', null)
-      .in('status', ['scheduled'])
-      .order('scheduled_date')
-      .limit(20)
-      .then(({ data }) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rows = ((data || []) as any[]).map((d) => ({
-          ...d,
-          customer_name: d.customer?.farm_name || 'Unknown',
-          driver_name: 'Unassigned',
-          item_count: 0,
-        }));
-        setUnassigned(rows);
-      });
-  }, [isDriver, deliveries]);
-
-  const fetchDrivers = async () => {
+  const fetchDrivers = useCallback(async () => {
     const { data } = await supabase
       .from('profiles')
       .select('*')
@@ -152,9 +123,9 @@ export default function Deliveries() {
       .eq('is_active', true)
       .order('full_name');
     setDrivers((data || []) as Profile[]);
-  };
+  }, []);
 
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     const { data } = await supabase
       .from('customers')
       .select('id, farm_name')
@@ -162,17 +133,17 @@ export default function Deliveries() {
       .order('farm_name')
       .limit(500);
     setCustomers((data || []) as { id: string; farm_name: string }[]);
-  };
+  }, []);
 
-  const fetchRemainderCount = async () => {
+  const fetchRemainderCount = useCallback(async () => {
     const { count } = await supabase
       .from('delivery_remainders')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'pending');
     setRemainderCount(count || 0);
-  };
+  }, []);
 
-  const fetchDeliveries = async () => {
+  const fetchDeliveries = useCallback(async () => {
     let query = supabase
       .from('deliveries')
       .select('*, customer:customers(farm_name), driver:profiles!deliveries_assigned_driver_fkey(full_name)')
@@ -217,7 +188,36 @@ export default function Deliveries() {
 
     setDeliveries(rows);
     setLoading(false);
-  };
+  }, [isDriver, profile, toast]);
+
+  useEffect(() => {
+    fetchDeliveries();
+    fetchDrivers();
+    fetchCustomers();
+    fetchRemainderCount();
+  }, [fetchDeliveries, fetchDrivers, fetchCustomers, fetchRemainderCount]);
+
+  // Fetch unassigned deliveries for driver dashboard
+  useEffect(() => {
+    if (!isDriver) return;
+    supabase
+      .from('deliveries')
+      .select('*, customer:customers(farm_name)')
+      .is('assigned_driver', null)
+      .in('status', ['scheduled'])
+      .order('scheduled_date')
+      .limit(20)
+      .then(({ data }) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rows = ((data || []) as any[]).map((d) => ({
+          ...d,
+          customer_name: d.customer?.farm_name || 'Unknown',
+          driver_name: 'Unassigned',
+          item_count: 0,
+        }));
+        setUnassigned(rows);
+      });
+  }, [isDriver, deliveries]);
 
   /* ─── Summary stats ─── */
   const todayStr = today();

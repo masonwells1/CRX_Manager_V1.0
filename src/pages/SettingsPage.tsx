@@ -149,7 +149,7 @@ export default function SettingsPage() {
     }
     fetchSettings();
     fetchUsers();
-  }, [role]);
+  }, [role, navigate]);
 
   const fetchSettings = async () => {
     const { data } = await supabase.from('app_settings').select('*');

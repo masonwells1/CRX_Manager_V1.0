@@ -80,16 +80,7 @@ export default function FieldDetail() {
     setIsDirty(true);
   }, [field, billingSplits]);
 
-  useEffect(() => {
-    fetchCustomers();
-    if (!isNew && id) {
-      fetchField();
-    } else {
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
-    }
-  }, [id]);
-
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     const { data } = await supabase
       .from('customers')
       .select('id, farm_name')
@@ -97,9 +88,9 @@ export default function FieldDetail() {
       .order('farm_name')
       .limit(500);
     setCustomers((data || []) as Customer[]);
-  };
+  }, []);
 
-  const fetchField = async () => {
+  const fetchField = useCallback(async () => {
     const { data } = await supabase
       .from('fields')
       .select('*, customer:customers!fields_customer_id_fkey(farm_name)')
@@ -165,7 +156,16 @@ export default function FieldDetail() {
     }
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  };
+  }, [id]);
+
+  useEffect(() => {
+    fetchCustomers();
+    if (!isNew && id) {
+      fetchField();
+    } else {
+      setTimeout(() => { initialLoadDone.current = true; }, 0);
+    }
+  }, [id, isNew, fetchCustomers, fetchField]);
 
   const update = (key: string, value: unknown) => setField((f) => ({ ...f, [key]: value }));
 

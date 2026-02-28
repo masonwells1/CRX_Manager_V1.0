@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Minus, Plus } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -52,29 +52,7 @@ export default function NewDelivery() {
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
-  useEffect(() => {
-    if (!initialLoadDone.current) return;
-    setIsDirty(true);
-  }, [selectedOrderId, selectedAddressId, selectedDriverId, scheduledDate, scheduledTime, deliveryNotes, deliveryItems]);
-
-  useEffect(() => {
-    fetchOrders();
-    fetchDrivers();
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, []);
-
-  useEffect(() => {
-    if (selectedOrderId) {
-      fetchOrderDetails(selectedOrderId);
-    } else {
-      setOrderItems([]);
-      setCustomer(null);
-      setAddresses([]);
-      setDeliveryItems([]);
-    }
-  }, [selectedOrderId]);
-
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     const { data } = await supabase
       .from('orders')
       .select('*, customer:customers(farm_name)')
@@ -87,9 +65,9 @@ export default function NewDelivery() {
     }));
     setOrders(rows);
     setLoadingOrders(false);
-  };
+  }, []);
 
-  const fetchDrivers = async () => {
+  const fetchDrivers = useCallback(async () => {
     const { data } = await supabase
       .from('profiles')
       .select('*')
@@ -97,9 +75,9 @@ export default function NewDelivery() {
       .eq('is_active', true)
       .order('full_name');
     setDrivers((data || []) as Profile[]);
-  };
+  }, []);
 
-  const fetchOrderDetails = async (orderId: string) => {
+  const fetchOrderDetails = useCallback(async (orderId: string) => {
     setLoadingDetails(true);
     const { data: orderData } = await supabase
       .from('orders')
@@ -116,6 +94,15 @@ export default function NewDelivery() {
       supabase.from('customers').select('*').eq('id', orderData.customer_id).maybeSingle(),
       supabase.from('order_items').select('*').eq('order_id', orderId).order('section_name'),
     ]);
+
+    if (custRes.error) {
+      console.error('Failed to load customer:', custRes.error);
+      toast('error', 'Failed to load customer details.');
+    }
+    if (itemsRes.error) {
+      console.error('Failed to load order items:', itemsRes.error);
+      toast('error', 'Failed to load order items.');
+    }
 
     const cust = custRes.data as Customer | null;
     setCustomer(cust);
@@ -146,7 +133,29 @@ export default function NewDelivery() {
       }));
     setDeliveryItems(drafts);
     setLoadingDetails(false);
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [selectedOrderId, selectedAddressId, selectedDriverId, scheduledDate, scheduledTime, deliveryNotes, deliveryItems]);
+
+  useEffect(() => {
+    fetchOrders();
+    fetchDrivers();
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
+  }, [fetchOrders, fetchDrivers]);
+
+  useEffect(() => {
+    if (selectedOrderId) {
+      fetchOrderDetails(selectedOrderId);
+    } else {
+      setOrderItems([]);
+      setCustomer(null);
+      setAddresses([]);
+      setDeliveryItems([]);
+    }
+  }, [selectedOrderId, fetchOrderDetails]);
 
   const updateItemQty = (orderItemId: string, qty: number) => {
     setDeliveryItems((prev) =>

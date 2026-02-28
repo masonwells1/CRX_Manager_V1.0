@@ -7,7 +7,7 @@
  * with per-customer checkbox selection. Users can generate charges for
  * selected customers or all at once.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Zap, CheckSquare, Square } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
@@ -40,16 +40,7 @@ export default function FinanceChargePreviewModal({
   const [previews, setPreviews] = useState<FinanceChargePreview[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    if (open) {
-      fetchPreview();
-    } else {
-      setPreviews([]);
-      setSelected(new Set());
-    }
-  }, [open, asOfDate]);
-
-  const fetchPreview = async () => {
+  const fetchPreview = useCallback(async () => {
     setLoading(true);
     try {
       const { data, error } = await supabase.rpc('preview_finance_charges', {
@@ -64,7 +55,16 @@ export default function FinanceChargePreviewModal({
       toast('error', err instanceof Error ? err.message : 'Failed to load finance charge preview');
     }
     setLoading(false);
-  };
+  }, [asOfDate, toast]);
+
+  useEffect(() => {
+    if (open) {
+      fetchPreview();
+    } else {
+      setPreviews([]);
+      setSelected(new Set());
+    }
+  }, [open, asOfDate, fetchPreview]);
 
   const toggleSelect = (customerId: string) => {
     setSelected((prev) => {

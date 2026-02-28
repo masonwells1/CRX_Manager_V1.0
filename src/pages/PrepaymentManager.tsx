@@ -3,7 +3,7 @@
  *
  * Sprint 11: Financial Workflows
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { DollarSign, Zap, RefreshCw } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -40,11 +40,7 @@ export default function PrepaymentManager() {
   const [showBatchConfirm, setShowBatchConfirm] = useState(false);
   const [batchApplying, setBatchApplying] = useState(false);
 
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
-
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     setLoading(true);
 
     // Get customers with prepay balances
@@ -84,7 +80,11 @@ export default function PrepaymentManager() {
 
     setCustomers(enriched);
     setLoading(false);
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, [fetchCustomers]);
 
   const handleApply = async (customer: CustomerPrepay) => {
     setConfirmCustomer(customer);

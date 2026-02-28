@@ -4,7 +4,7 @@
  * Manages applicator licenses for customers (expiry tracking, alerts)
  * and provides a view of Restricted Use Pesticide (RUP) products.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { Plus, AlertTriangle, Award, Package } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -15,6 +15,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
 import { logActivity } from '../lib/activityLogger';
 import type { ApplicatorLicense } from '../types';
 
@@ -69,21 +70,7 @@ export default function Compliance() {
   });
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    fetchData();
-  }, [tab]);
-
-  const fetchData = async () => {
-    setLoading(true);
-    if (tab === 'licenses') {
-      await Promise.all([fetchLicenses(), fetchCustomers()]);
-    } else {
-      await fetchRUPProducts();
-    }
-    setLoading(false);
-  };
-
-  const fetchLicenses = async () => {
+  const fetchLicenses = useCallback(async () => {
     const { data, error } = await supabase
       .from('applicator_licenses')
       .select('*, customer:customers(farm_name)')
@@ -100,14 +87,14 @@ export default function Compliance() {
       farm_name: l.customer?.farm_name || 'Unknown',
     })) as unknown as LicenseWithCustomer[];
     setLicenses(mapped);
-  };
+  }, [toast]);
 
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     const { data } = await supabase.from('customers').select('id, farm_name').order('farm_name');
     setCustomers(data || []);
-  };
+  }, []);
 
-  const fetchRUPProducts = async () => {
+  const fetchRUPProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
       .select('id, product_name, sku, vendor, manufacturer, epa_registration, signal_word, is_active')
@@ -120,7 +107,21 @@ export default function Compliance() {
       return;
     }
     setRUPProducts((data || []) as RUPProduct[]);
-  };
+  }, [toast]);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    if (tab === 'licenses') {
+      await Promise.all([fetchLicenses(), fetchCustomers()]);
+    } else {
+      await fetchRUPProducts();
+    }
+    setLoading(false);
+  }, [tab, fetchLicenses, fetchCustomers, fetchRUPProducts]);
+
+  useEffect(() => {
+    fetchData();
+  }, [tab, fetchData]);
 
   const today = new Date().toISOString().split('T')[0];
   const thirtyDaysOut = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
@@ -179,7 +180,6 @@ export default function Compliance() {
       toast('error', 'Fill in all required fields');
       return;
     }
-    setSaving(true);
 
     const cats = form.certification_categories
       .split(',')
@@ -198,30 +198,33 @@ export default function Compliance() {
       notes: form.notes || null,
     };
 
-    try {
-      if (editId) {
-        const result = await supabase
-          .from('applicator_licenses')
-          .update(payload)
-          .eq('id', editId)
-          .select();
-        checkMutationResult(result, 'Update license');
-        toast('success', 'License updated');
-      } else {
-        const result = await supabase
-          .from('applicator_licenses')
-          .insert(payload)
-          .select();
-        checkMutationResult(result, 'Create license');
-        toast('success', 'License added');
-        if (profile) logActivity('license_created', `Applicator license added for ${form.holder_name}`, profile.id);
-      }
-      setModalOpen(false);
-      fetchLicenses();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to save license');
-    }
-    setSaving(false);
+    await runCriticalAction({
+      action: async () => {
+        if (editId) {
+          const result = await supabase
+            .from('applicator_licenses')
+            .update(payload)
+            .eq('id', editId)
+            .select();
+          checkMutationResult(result, 'Update license');
+        } else {
+          const result = await supabase
+            .from('applicator_licenses')
+            .insert(payload)
+            .select();
+          checkMutationResult(result, 'Create license');
+          if (profile) logActivity('license_created', `Applicator license added for ${form.holder_name}`, profile.id);
+        }
+      },
+      toast,
+      setLoading: setSaving,
+      successMessage: editId ? 'License updated' : 'License added',
+      sentryTag: editId ? 'update_license' : 'create_license',
+      onSuccess: () => {
+        setModalOpen(false);
+        fetchLicenses();
+      },
+    });
   };
 
   const licenseColumns: Column<LicenseWithCustomer>[] = [

@@ -1,5 +1,5 @@
-import { lazy, Suspense } from 'react';
-import { createBrowserRouter, RouterProvider, Navigate, Outlet } from 'react-router-dom';
+import { lazy, Suspense, useEffect, useRef } from 'react';
+import { createBrowserRouter, RouterProvider, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './components/ui/Toast';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -7,6 +7,7 @@ import LoginPage from './components/auth/LoginPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import AppLayout from './components/layout/AppLayout';
 import { checkEnvVars, EnvErrorScreen } from './components/EnvCheck';
+import { trackNavigation } from './lib/metrics';
 
 // Lazy-loaded pages — each page is only downloaded when the user navigates to it
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -68,12 +69,33 @@ function PageLoader() {
   );
 }
 
+/**
+ * Headless component that records a Sentry navigation breadcrumb
+ * every time the route changes.  Renders nothing.
+ */
+function NavigationTracker() {
+  const location = useLocation();
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    // Skip the initial mount — the page-load is already captured by Sentry
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    trackNavigation(location.pathname);
+  }, [location.pathname]);
+
+  return null;
+}
+
 // Root layout that wraps all routes with providers
 function RootLayout() {
   return (
     <AuthProvider>
       <ToastProvider>
         <ErrorBoundary>
+          <NavigationTracker />
           <Suspense fallback={<PageLoader />}>
             <Outlet />
           </Suspense>

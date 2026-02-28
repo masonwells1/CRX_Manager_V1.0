@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2, Download, FileText } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -117,12 +117,7 @@ export default function InventoryPage() {
     setExportingPdf(false);
   };
 
-  useEffect(() => {
-    fetchInventory();
-    fetchHolds();
-  }, []);
-
-  const fetchInventory = async () => {
+  const fetchInventory = useCallback(async () => {
     const { data, error } = await supabase
       .from('inventory')
       .select('*, product:products(product_name, inventory_unit, container_size, container_type)')
@@ -282,9 +277,9 @@ export default function InventoryPage() {
     setLocations(locs.sort());
     setInventory(rows);
     setLoading(false);
-  };
+  }, [toast]);
 
-  const fetchHolds = async () => {
+  const fetchHolds = useCallback(async () => {
     const { data, error } = await supabase
       .from('inventory_holds')
       .select(`
@@ -310,7 +305,12 @@ export default function InventoryPage() {
     })) as HoldWithRelations[];
 
     setHolds(holdRows);
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchInventory();
+    fetchHolds();
+  }, [fetchInventory, fetchHolds]);
 
   const fetchProducts = async () => {
     const { data, error } = await supabase

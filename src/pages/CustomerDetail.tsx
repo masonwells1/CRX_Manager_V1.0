@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -90,6 +90,29 @@ export default function CustomerDetail() {
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
+  const fetchCustomer = useCallback(async () => {
+    const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
+    if (data) {
+      setCustomer(data);
+      // Fetch parent customer name if set
+      if (data.parent_customer_id) {
+        const { data: parent } = await supabase
+          .from('customers')
+          .select('farm_name')
+          .eq('id', data.parent_customer_id)
+          .maybeSingle();
+        if (parent) setParentName(parent.farm_name);
+      }
+    }
+    setLoading(false);
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
+  }, [id]);
+
+  const fetchAddresses = useCallback(async () => {
+    const { data } = await supabase.from('customer_addresses').select('*').eq('customer_id', id).order('created_at');
+    setAddresses(data || []);
+  }, [id]);
+
   useEffect(() => {
     if (!initialLoadDone.current) return;
     setIsDirty(true);
@@ -107,38 +130,9 @@ export default function CustomerDetail() {
       // New customer — mark ready immediately
       setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
-  }, [id]);
+  }, [id, isNew, fetchCustomer, fetchAddresses]);
 
-  useEffect(() => {
-    if (!isNew && id && tab !== 'info') {
-      fetchTabData(tab);
-    }
-  }, [tab, id]);
-
-  const fetchCustomer = async () => {
-    const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
-    if (data) {
-      setCustomer(data);
-      // Fetch parent customer name if set
-      if (data.parent_customer_id) {
-        const { data: parent } = await supabase
-          .from('customers')
-          .select('farm_name')
-          .eq('id', data.parent_customer_id)
-          .maybeSingle();
-        if (parent) setParentName(parent.farm_name);
-      }
-    }
-    setLoading(false);
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
-  };
-
-  const fetchAddresses = async () => {
-    const { data } = await supabase.from('customer_addresses').select('*').eq('customer_id', id).order('created_at');
-    setAddresses(data || []);
-  };
-
-  const fetchTabData = async (selectedTab: string) => {
+  const fetchTabData = useCallback(async (selectedTab: string) => {
     setTabLoading(true);
     if (selectedTab === 'fields') {
       const { data, error: fieldError } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
@@ -244,7 +238,13 @@ export default function CustomerDetail() {
       }
     }
     setTabLoading(false);
-  };
+  }, [id]);
+
+  useEffect(() => {
+    if (!isNew && id && tab !== 'info') {
+      fetchTabData(tab);
+    }
+  }, [tab, id, isNew, fetchTabData]);
 
   const handleSave = async () => {
     if (!customer.farm_name) {

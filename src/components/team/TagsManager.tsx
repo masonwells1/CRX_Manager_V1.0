@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Tag, Plus, X, Check } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
@@ -41,11 +41,6 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    fetchAllTags();
-    fetchNoteTags();
-  }, [noteId]);
-
   const fetchAllTags = async () => {
     const { data } = await supabase
       .from('note_tags')
@@ -54,7 +49,7 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
     setAllTags((data || []) as NoteTag[]);
   };
 
-  const fetchNoteTags = async () => {
+  const fetchNoteTags = useCallback(async () => {
     const { data } = await supabase
       .from('team_note_tags')
       .select('tag_id, note_tags(*)')
@@ -64,7 +59,12 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
       const tags = data.map((d: Record<string, unknown>) => d.note_tags).filter(Boolean);
       setNoteTags(tags as NoteTag[]);
     }
-  };
+  }, [noteId]);
+
+  useEffect(() => {
+    fetchAllTags();
+    fetchNoteTags();
+  }, [noteId, fetchNoteTags]);
 
   const createTag = async () => {
     if (!newTagName.trim() || !profile) return;

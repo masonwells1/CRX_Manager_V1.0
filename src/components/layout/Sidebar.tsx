@@ -12,7 +12,6 @@ import {
   Scale,
   BarChart3,
   MessageSquare,
-  Bell,
   Settings,
   LogOut,
   X,

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -53,15 +53,7 @@ export default function VehicleDetail() {
     setIsDirty(true);
   }, [form]);
 
-  useEffect(() => {
-    if (!isNew && id) {
-      fetchVehicle();
-    } else {
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
-    }
-  }, [id]);
-
-  const fetchVehicle = async () => {
+  const fetchVehicle = useCallback(async () => {
     const { data, error } = await supabase
       .from('vehicles')
       .select('*')
@@ -87,7 +79,15 @@ export default function VehicleDetail() {
     });
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  };
+  }, [id, toast, navigate]);
+
+  useEffect(() => {
+    if (!isNew && id) {
+      fetchVehicle();
+    } else {
+      setTimeout(() => { initialLoadDone.current = true; }, 0);
+    }
+  }, [id, isNew, fetchVehicle]);
 
   const handleSave = async () => {
     if (!form.vehicle_name.trim()) {

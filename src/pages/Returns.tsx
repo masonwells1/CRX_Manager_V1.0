@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo , useCallback } from 'react';
 import { Plus, CheckCircle, XCircle, ArrowDownToLine, DollarSign, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -88,11 +88,7 @@ export default function Returns() {
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  useEffect(() => {
-    fetchReturns();
-  }, []);
-
-  const fetchReturns = async () => {
+  const fetchReturns = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('returns')
@@ -122,7 +118,11 @@ export default function Returns() {
     })) as unknown as ReturnRow[];
     setReturns(rows);
     setLoading(false);
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    fetchReturns();
+  }, [fetchReturns]);
 
   const loadCreateData = async () => {
     const [custRes, prodRes] = await Promise.all([

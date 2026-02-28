@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Plus, CheckCircle, XCircle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -68,12 +68,7 @@ export default function CycleCounts() {
 
   const isAdmin = role === 'admin';
 
-  useEffect(() => {
-    fetchCounts();
-    fetchWarehouses();
-  }, []);
-
-  const fetchCounts = async () => {
+  const fetchCounts = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('cycle_counts')
@@ -102,9 +97,9 @@ export default function CycleCounts() {
     })) as CountRow[];
     setCounts(rows);
     setLoading(false);
-  };
+  }, [toast]);
 
-  const fetchWarehouses = async () => {
+  const fetchWarehouses = useCallback(async () => {
     // Pull unique locations from inventory + warehouses table
     const [invRes, whRes] = await Promise.all([
       supabase.from('inventory').select('location'),
@@ -114,7 +109,12 @@ export default function CycleCounts() {
     const whLocs = (whRes.data || []).map((r: { name: string }) => r.name);
     const all = [...new Set([...invLocs, ...whLocs])].sort();
     setWarehouses(all);
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchCounts();
+    fetchWarehouses();
+  }, [fetchCounts, fetchWarehouses]);
 
   const filtered = counts.filter((c) => {
     if (statusFilter && c.status !== statusFilter) return false;

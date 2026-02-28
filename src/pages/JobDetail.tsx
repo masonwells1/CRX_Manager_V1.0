@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Save, Plus, Trash2, Check, FileText, Beaker } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -160,18 +160,6 @@ export default function JobDetail() {
     setIsDirty(true);
   }, [customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId, fieldRows, chemRows]);
 
-  useEffect(() => {
-    loadLookups();
-    if (!isNew && id) {
-      fetchJob();
-    } else {
-      // Check for recipe_id from search params
-      const recipeParam = searchParams.get('recipe_id');
-      if (recipeParam) setRecipeId(recipeParam);
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
-    }
-  }, [id]);
-
   const loadLookups = async () => {
     const [custResult, fieldResult, prodResult, vehicleResult, appResult, recipeResult] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
@@ -189,7 +177,7 @@ export default function JobDetail() {
     setRecipes((recipeResult.data || []) as BlendRecipe[]);
   };
 
-  const fetchJob = async () => {
+  const fetchJob = useCallback(async () => {
     const { data, error } = await supabase
       .from('jobs')
       .select(`
@@ -261,7 +249,19 @@ export default function JobDetail() {
 
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  };
+  }, [id, toast, navigate]);
+
+  useEffect(() => {
+    loadLookups();
+    if (!isNew && id) {
+      fetchJob();
+    } else {
+      // Check for recipe_id from search params
+      const recipeParam = searchParams.get('recipe_id');
+      if (recipeParam) setRecipeId(recipeParam);
+      setTimeout(() => { initialLoadDone.current = true; }, 0);
+    }
+  }, [id, fetchJob, isNew, searchParams]);
 
   // Computed
   const customerFields = allFields.filter(f => !customerId || f.customer_id === customerId);

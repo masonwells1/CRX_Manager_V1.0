@@ -25,6 +25,7 @@ import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { trackBusinessEvent } from '../lib/metrics';
 import { downloadQuotePdf } from '../lib/quotePdf';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import type {
@@ -153,31 +154,31 @@ export default function QuoteBuilder() {
   useEffect(() => {
     if (!initialLoadDone.current) return;
     setIsDirty(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
 
-  useEffect(() => {
-    fetchReferenceData();
-    if (isEditing && id) {
-      fetchQuote(id);
-    } else {
-      generateQuoteNumber().then(() => {
-        // Allow a tick for state to settle before tracking changes
-        setTimeout(() => { initialLoadDone.current = true; }, 0);
-      }).catch(() => { /* non-critical: quote number defaults handled inside generateQuoteNumber */ });
-    }
-  }, [id]);
-
-  const fetchReferenceData = async () => {
+  const fetchReferenceData = useCallback(async () => {
     const [custRes, prodRes, convRes] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('unit_conversions').select('*'),
     ]);
+
+    if (custRes.error) {
+      console.error('Failed to load customers:', custRes.error);
+      toast('error', 'Failed to load customers.');
+    }
+    if (prodRes.error) {
+      console.error('Failed to load products:', prodRes.error);
+      toast('error', 'Failed to load products.');
+    }
+    if (convRes.error) {
+      console.error('Failed to load unit conversions:', convRes.error);
+    }
+
     setCustomers((custRes.data || []) as Customer[]);
     setProducts((prodRes.data || []) as Product[]);
     setUnitConversions((convRes.data || []) as UnitConversion[]);
-  };
+  }, [toast]);
 
   const generateQuoteNumber = async () => {
     // Use server-side sequence to prevent race conditions
@@ -196,7 +197,7 @@ export default function QuoteBuilder() {
     }
   };
 
-  const fetchQuote = async (quoteId: string) => {
+  const fetchQuote = useCallback(async (quoteId: string) => {
     const [quoteRes, sectionsRes, itemsRes] = await Promise.all([
       supabase.from('quotes').select('*, customer:customers(*)').eq('id', quoteId).maybeSingle(),
       supabase.from('quote_sections').select('*').eq('quote_id', quoteId).order('sort_order'),
@@ -262,7 +263,19 @@ export default function QuoteBuilder() {
     setLoading(false);
     // Allow a tick for state to settle before tracking changes
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  };
+  }, [toast, navigate]);
+
+  useEffect(() => {
+    fetchReferenceData();
+    if (isEditing && id) {
+      fetchQuote(id);
+    } else {
+      generateQuoteNumber().then(() => {
+        // Allow a tick for state to settle before tracking changes
+        setTimeout(() => { initialLoadDone.current = true; }, 0);
+      }).catch(() => { /* non-critical: quote number defaults handled inside generateQuoteNumber */ });
+    }
+  }, [id, fetchQuote, fetchReferenceData, isEditing]);
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === customerId),
@@ -620,6 +633,10 @@ export default function QuoteBuilder() {
     if (result) {
       setIsDirty(false);
       toast('success', 'Quote saved as draft');
+      trackBusinessEvent(isEditing ? 'quote_updated' : 'quote_created', {
+        message: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'}`,
+        data: { quoteId: result, quoteNumber, customer: selectedCustomer?.farm_name ?? '' },
+      });
       // === GAP FIX #5: Log activity for quote created/updated ===
       if (profile) {
         await logActivity(
@@ -778,6 +795,10 @@ export default function QuoteBuilder() {
 
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string }>(data, 'convert_quote_to_order');
       toast('success', `Order ${result.order_number || ''} created`);
+      trackBusinessEvent('quote_converted_to_order', {
+        message: `Quote converted → Order ${result.order_number || ''}`,
+        data: { orderId: result.order_id ?? '', orderNumber: result.order_number ?? '', quoteId: savedId },
+      });
       notifyLargeOrder(result.order_id!, result.order_number || '', selectedCustomer?.farm_name || 'customer', totals.totalPrice);
 
       // Phase 3.3: Credit limit check — warn (not block) if exceeded

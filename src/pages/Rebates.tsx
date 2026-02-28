@@ -4,7 +4,7 @@
  * Track rebate programs from manufacturers, create claims against orders,
  * and reconcile payments received.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { Plus, DollarSign, TrendingUp, FileText } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -97,11 +97,6 @@ export default function Rebates() {
     fetchLookups();
   }, []);
 
-  useEffect(() => {
-    if (tab === 'programs') fetchPrograms();
-    else fetchClaims();
-  }, [tab]);
-
   const fetchLookups = async () => {
     const [prodRes, custRes, ordRes] = await Promise.all([
       supabase.from('products').select('id, product_name, vendor, manufacturer').eq('is_active', true).order('product_name'),
@@ -113,7 +108,7 @@ export default function Rebates() {
     setOrders(ordRes.data || []);
   };
 
-  const fetchPrograms = async () => {
+  const fetchPrograms = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('rebate_programs')
@@ -130,9 +125,9 @@ export default function Rebates() {
     })) as unknown as ProgramRow[];
     setPrograms(mapped);
     setLoading(false);
-  };
+  }, [toast]);
 
-  const fetchClaims = async () => {
+  const fetchClaims = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('rebate_claims')
@@ -153,7 +148,12 @@ export default function Rebates() {
     })) as unknown as ClaimRow[];
     setClaims(mapped);
     setLoading(false);
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    if (tab === 'programs') fetchPrograms();
+    else fetchClaims();
+  }, [tab, fetchPrograms, fetchClaims]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);

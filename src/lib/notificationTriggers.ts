@@ -8,9 +8,42 @@
  *
  * Notifications are created in the `notifications` table and shown
  * on the Notifications page.
+ *
+ * Failed notifications are logged to `failed_notifications` table
+ * for admin visibility and automatic retry.
  */
 import { supabase } from './db';
 import { createNotification, notifyAdmins } from './activityLogger';
+
+/**
+ * Log a notification failure to the failed_notifications table.
+ * This replaces silent console.error swallowing with persistent tracking.
+ */
+async function logNotificationFailure(
+  notificationType: string,
+  error: unknown,
+  entityType?: string,
+  entityId?: string,
+  payload?: Record<string, unknown>
+): Promise<void> {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+
+  // Always log to console for dev visibility
+  console.error(`Notification failed [${notificationType}]:`, errorMessage);
+
+  try {
+    await supabase.rpc('log_failed_notification', {
+      p_notification_type: notificationType,
+      p_entity_type: entityType || null,
+      p_entity_id: entityId || null,
+      p_error_message: errorMessage,
+      p_payload: payload || {},
+    });
+  } catch (logErr) {
+    // Last-resort: if even logging fails, console.error is all we have
+    console.error('Failed to log notification failure:', logErr);
+  }
+}
 
 /**
  * Check inventory for low-stock items and notify admins.
@@ -57,7 +90,9 @@ export async function checkLowStockNotifications() {
       );
     }
   } catch (err) {
-    console.error('Low stock notification check failed:', err);
+    await logNotificationFailure('low_stock', err, 'product', undefined, {
+      context: 'checkLowStockNotifications',
+    });
   }
 }
 
@@ -111,7 +146,9 @@ export async function checkExpiringQuoteNotifications() {
       );
     }
   } catch (err) {
-    console.error('Expiring quote notification check failed:', err);
+    await logNotificationFailure('quote_expiring', err, 'quote', undefined, {
+      context: 'checkExpiringQuoteNotifications',
+    });
   }
 }
 
@@ -136,7 +173,11 @@ export async function notifyDriverAssigned(
       deliveryId
     );
   } catch (err) {
-    console.error('Driver notification failed:', err);
+    await logNotificationFailure('delivery_assigned', err, 'delivery', deliveryId, {
+      context: 'notifyDriverAssigned',
+      driverId,
+      deliveryNumber,
+    });
   }
 }
 
@@ -171,7 +212,11 @@ export async function notifyOrderStatusChange(
       }
     }
   } catch (err) {
-    console.error('Order status notification failed:', err);
+    await logNotificationFailure('order_status', err, 'order', orderId, {
+      context: 'notifyOrderStatusChange',
+      orderNumber,
+      newStatus,
+    });
   }
 }
 
@@ -197,7 +242,11 @@ export async function notifyLargeOrder(
       orderId
     );
   } catch (err) {
-    console.error('Large order notification failed:', err);
+    await logNotificationFailure('large_order', err, 'order', orderId, {
+      context: 'notifyLargeOrder',
+      orderNumber,
+      totalPrice,
+    });
   }
 }
 
@@ -223,10 +272,16 @@ export async function notifyDamagedReceiving(
       p_po_id: poId,
     });
     if (error) {
-      console.error('Damaged receiving notification RPC error:', error.message);
+      await logNotificationFailure('damaged_receiving', error, 'purchase_order', poId, {
+        context: 'notifyDamagedReceiving_rpc',
+        poNumber,
+      });
     }
   } catch (err) {
-    console.error('Damaged receiving notification failed:', err);
+    await logNotificationFailure('damaged_receiving', err, 'purchase_order', poId, {
+      context: 'notifyDamagedReceiving',
+      poNumber,
+    });
   }
 }
 
@@ -251,7 +306,12 @@ export async function notifyCreditLimitExceeded(
       customerId
     );
   } catch (err) {
-    console.error('Credit limit notification failed:', err);
+    await logNotificationFailure('credit_limit_exceeded', err, 'customer', customerId, {
+      context: 'notifyCreditLimitExceeded',
+      customerName,
+      outstandingAR,
+      creditLimit,
+    });
   }
 }
 
@@ -292,7 +352,11 @@ export async function notifyDeliveryRemainder(
       }
     }
   } catch (err) {
-    console.error('Delivery remainder notification failed:', err);
+    await logNotificationFailure('delivery_remainder', err, 'delivery', deliveryId, {
+      context: 'notifyDeliveryRemainder',
+      deliveryNumber,
+      orderNumber,
+    });
   }
 }
 

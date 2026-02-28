@@ -4,7 +4,7 @@
  *
  * Sprint 10: Commission Payment Lifecycle
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { DollarSign, Send, Plus, Check, Clock } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -67,11 +67,7 @@ export default function CommissionPayments() {
   const [payNotes, setPayNotes] = useState('');
   const [creating, setCreating] = useState(false);
 
-  useEffect(() => {
-    fetchPayments();
-  }, []);
-
-  const fetchPayments = async () => {
+  const fetchPayments = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('commission_payments')
@@ -102,7 +98,11 @@ export default function CommissionPayments() {
 
     setPayments(rows);
     setLoading(false);
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    fetchPayments();
+  }, [fetchPayments]);
 
   const fetchUnpaid = async () => {
     const { data } = await supabase

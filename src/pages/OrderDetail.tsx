@@ -3,7 +3,7 @@
  * GAP FIX #13: Edit Orders After Creation
  * AR derived from linked invoices (single source of truth).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Truck, Pencil, Save, X, Trash2, FileText } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -44,11 +44,7 @@ export default function OrderDetail() {
 
   const isAdmin = role === 'admin';
 
-  useEffect(() => {
-    if (id) fetchOrder();
-  }, [id]);
-
-  const fetchOrder = async () => {
+  const fetchOrder = useCallback(async () => {
     const { data: orderData } = await supabase
       .from('orders')
       .select('*')
@@ -110,7 +106,11 @@ export default function OrderDetail() {
       setInvoices(invoiceData || []);
     }
     setLoading(false);
-  };
+  }, [id]);
+
+  useEffect(() => {
+    if (id) fetchOrder();
+  }, [id, fetchOrder]);
 
   const handleSaveEdits = async () => {
     if (!profile) return;

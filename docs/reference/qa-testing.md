@@ -72,3 +72,24 @@ Test every feature as each role:
 - Quote decline/expiry releases inventory holds AND restores `quantity_available`
 - Silent RLS failures — `checkMutationResult()` catches 0-row mutations that Supabase doesn't flag as errors
 - Offline sync conflict detection — stale `snapshotAt` vs server `updated_at` returns conflict warnings
+- Reconciliation checks — cross-entity data integrity (order totals, inventory ledger, invoice payments, balance formula, commission splits)
+
+## Reconciliation Checks (Sprint 5b)
+
+Cross-entity data integrity tests via `src/lib/reconciliation.ts`:
+
+| Check | What it verifies | Tolerance |
+|-------|-----------------|-----------|
+| Order Totals | `order.total_amount == SUM(qty × price)` across line items | ±1 cent |
+| Inventory Ledger | `quantity_available == SUM(received) - SUM(delivered) + SUM(returned) ± adjustments` | ±0.01 |
+| Invoice Payments | `paid_amount_cents == SUM(payment_allocations)` | ±1 cent |
+| Invoice Balance | `balance_cents == total - paid - prepay` (GENERATED ALWAYS sanity) | ±1 cent |
+| Commission Splits | Split percentages sum to exactly 100% per order | ±0.01% |
+
+**Test pattern:** Pure functions take typed arrays and return `Discrepancy[]` — testable without DB mocks. DB wrapper `runReconciliationChecks()` is thin: fetch + delegate.
+
+## Operational Metrics Testing (Sprint 5a)
+
+- `src/lib/metrics.test.ts` — 10 tests for Sentry wrapper functions
+- Uses `vi.mock('@sentry/react')` with individual `mockReset()` in `beforeEach`
+- Important: `vi.clearAllMocks()` only clears call history, NOT mock implementations — must use `.mockReset()` on each mock individually

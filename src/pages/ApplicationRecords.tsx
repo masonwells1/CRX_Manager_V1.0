@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 
 
 import Card from '../components/ui/Card';
@@ -50,14 +50,6 @@ export default function ApplicationRecords() {
   const [customerFilter, setCustomerFilter] = useState('');
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
 
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
-
-  useEffect(() => {
-    fetchRecords();
-  }, [startDate, endDate, customerFilter]);
-
   const fetchCustomers = async () => {
     const { data } = await supabase
       .from('customers')
@@ -67,7 +59,7 @@ export default function ApplicationRecords() {
     setCustomers((data || []) as { id: string; farm_name: string }[]);
   };
 
-  const fetchRecords = async () => {
+  const fetchRecords = useCallback(async () => {
     setLoading(true);
     let query = supabase
       .from('application_records')
@@ -104,7 +96,15 @@ export default function ApplicationRecords() {
     })) as AppRecordRow[];
     setRecords(rows);
     setLoading(false);
-  };
+  }, [startDate, endDate, customerFilter, toast]);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
+
+  useEffect(() => {
+    fetchRecords();
+  }, [startDate, endDate, customerFilter, fetchRecords]);
 
   const applyPreset = (preset: string) => {
     if (preset === 'all') {

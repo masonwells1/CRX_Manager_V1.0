@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
-test.describe('Products Page', () => {
+test.describe('Products Page', { tag: '@smoke' }, () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
     await page.goto('/products');

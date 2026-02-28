@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Plus, Trash2, Save } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -46,17 +46,7 @@ export default function NewPurchaseOrder() {
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
-  useEffect(() => {
-    if (!initialLoadDone.current) return;
-    setIsDirty(true);
-  }, [vendor, expectedDate, notes, items]);
-
-  useEffect(() => {
-    fetchProducts();
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, []);
-
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     const { data } = await supabase
       .from('products')
       .select('*')
@@ -66,7 +56,17 @@ export default function NewPurchaseOrder() {
     setProducts(prods);
     const uniqueVendors = [...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[];
     setVendors(uniqueVendors.sort());
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [vendor, expectedDate, notes, items]);
+
+  useEffect(() => {
+    fetchProducts();
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
+  }, [fetchProducts]);
 
   const addItem = () => {
     setItems((prev) => [

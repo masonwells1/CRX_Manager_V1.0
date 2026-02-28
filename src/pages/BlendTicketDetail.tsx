@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck } from 'lucide-react';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
@@ -69,29 +69,7 @@ export function BlendTicketDetail() {
     notes: '',
   });
 
-  useEffect(() => {
-    if (id) {
-      loadTicketData();
-    }
-  }, [id]);
-
-  useEffect(() => {
-    const ticketData = {
-      total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
-      total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
-      total_volume_unit: formData.total_volume_unit || null,
-    };
-    const productData = products.map(p => ({
-      product_name: p.product_name,
-      quantity: p.quantity,
-      unit: p.unit,
-      rate_per_acre: p.rate_per_acre,
-      rate_per_acre_unit: p.rate_per_acre_unit,
-    }));
-    setWarnings(validateBlendMath(ticketData, productData));
-  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
-
-  async function loadTicketData() {
+  const loadTicketData = useCallback(async () => {
     try {
       const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult, fieldsResult, linkedResult] = await Promise.all([
         supabase
@@ -186,7 +164,29 @@ export function BlendTicketDetail() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id]);
+
+  useEffect(() => {
+    if (id) {
+      loadTicketData();
+    }
+  }, [id, loadTicketData]);
+
+  useEffect(() => {
+    const ticketData = {
+      total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
+      total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
+      total_volume_unit: formData.total_volume_unit || null,
+    };
+    const productData = products.map(p => ({
+      product_name: p.product_name,
+      quantity: p.quantity,
+      unit: p.unit,
+      rate_per_acre: p.rate_per_acre,
+      rate_per_acre_unit: p.rate_per_acre_unit,
+    }));
+    setWarnings(validateBlendMath(ticketData, productData));
+  }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
 
   // Track dirty state from form changes
   useEffect(() => {

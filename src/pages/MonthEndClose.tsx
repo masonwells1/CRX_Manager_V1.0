@@ -4,7 +4,7 @@
  *
  * Sprint 10: Month-End Close
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Calendar, CheckCircle, AlertCircle, FileText, Download, Lock } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -70,11 +70,7 @@ export default function MonthEndClose() {
 
   const current = getCurrentPeriod();
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
 
     // Fetch existing periods
@@ -95,7 +91,11 @@ export default function MonthEndClose() {
     }
 
     setLoading(false);
-  };
+  }, [current.start, current.end]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const currentPeriodStatus = periods.find(
     (p) => p.period_start === current.start && p.period_end === current.end,

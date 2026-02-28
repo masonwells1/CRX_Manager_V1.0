@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { Plus, Trash2, Copy } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -9,6 +9,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
 import type { BlendRecipe, Product, RecipeType } from '../types';
 
 type RecipeRow = BlendRecipe & { item_count: number; creator_name: string };
@@ -68,12 +69,7 @@ export default function BlendRecipes() {
   });
   const [editItems, setEditItems] = useState<EditItem[]>([]);
 
-  useEffect(() => {
-    fetchRecipes();
-    fetchProducts();
-  }, []);
-
-  const fetchRecipes = async () => {
+  const fetchRecipes = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('blend_recipes')
@@ -95,16 +91,21 @@ export default function BlendRecipes() {
     })) as RecipeRow[];
     setRecipes(rows);
     setLoading(false);
-  };
+  }, [toast]);
 
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     const { data } = await supabase
       .from('products')
       .select('*')
       .eq('is_active', true)
       .order('product_name');
     setProducts(data || []);
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchRecipes();
+    fetchProducts();
+  }, [fetchRecipes, fetchProducts]);
 
   const filtered = recipes.filter((r) => {
     if (typeFilter && r.recipe_type !== typeFilter) return false;
@@ -159,130 +160,130 @@ export default function BlendRecipes() {
       return;
     }
 
-    setSaving(true);
-    try {
-      let recipeId = editId;
+    await runCriticalAction({
+      action: async () => {
+        let recipeId = editId;
 
-      if (editId) {
-        // Update existing
-        const result = await supabase
-          .from('blend_recipes')
-          .update({
-            name: form.name.trim(),
-            description: form.description || null,
-            recipe_type: form.recipe_type,
-            crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
-            timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
-          })
-          .eq('id', editId)
-          .select();
-        checkMutationResult(result, 'Update recipe');
-      } else {
-        // Insert new
-        const { data, error } = await supabase
+        if (editId) {
+          const result = await supabase
+            .from('blend_recipes')
+            .update({
+              name: form.name.trim(),
+              description: form.description || null,
+              recipe_type: form.recipe_type,
+              crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
+              timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
+            })
+            .eq('id', editId)
+            .select();
+          checkMutationResult(result, 'Update recipe');
+        } else {
+          const { data, error } = await supabase
+            .from('blend_recipes')
+            .insert({
+              name: form.name.trim(),
+              description: form.description || null,
+              recipe_type: form.recipe_type,
+              crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
+              timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
+            })
+            .select()
+            .single();
+          if (error) throw error;
+          recipeId = data.id;
+        }
+
+        // Sync items: delete all existing, insert fresh
+        if (editId) {
+          const deleteResult = await supabase.from('blend_recipe_items').delete().eq('recipe_id', editId).select();
+          checkMutationResult(deleteResult, 'Delete recipe items');
+        }
+
+        if (recipeId && editItems.length > 0) {
+          const itemsPayload = editItems.map((item, idx) => ({
+            recipe_id: recipeId,
+            product_id: item.product_id,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            unit: item.unit,
+            rate_per_acre: item.rate_per_acre,
+            sort_order: idx,
+            notes: item.notes || null,
+          }));
+          const { error: itemsError } = await supabase.from('blend_recipe_items').insert(itemsPayload);
+          if (itemsError) throw itemsError;
+        }
+      },
+      toast,
+      setLoading: setSaving,
+      successMessage: editId ? 'Recipe updated' : 'Recipe created',
+      sentryTag: editId ? 'update_recipe' : 'create_recipe',
+      onSuccess: () => {
+        setShowEditor(false);
+        fetchRecipes();
+      },
+    });
+  };
+
+  const handleDuplicate = async (recipe: RecipeRow) => {
+    await runCriticalAction({
+      action: async () => {
+        const { data: newRecipe, error } = await supabase
           .from('blend_recipes')
           .insert({
-            name: form.name.trim(),
-            description: form.description || null,
-            recipe_type: form.recipe_type,
-            crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
-            timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
+            name: `${recipe.name} (Copy)`,
+            description: recipe.description,
+            recipe_type: recipe.recipe_type,
+            crop_type: recipe.crop_type,
+            timing: recipe.timing,
           })
           .select()
           .single();
         if (error) throw error;
-        recipeId = data.id;
-      }
 
-      // Sync items: delete all existing, insert fresh
-      if (editId) {
-        const deleteResult = await supabase.from('blend_recipe_items').delete().eq('recipe_id', editId).select();
-        checkMutationResult(deleteResult, 'Delete recipe items');
-      }
+        const { data: items } = await supabase
+          .from('blend_recipe_items')
+          .select('*')
+          .eq('recipe_id', recipe.id)
+          .order('sort_order');
 
-      if (recipeId && editItems.length > 0) {
-        const itemsPayload = editItems.map((item, idx) => ({
-          recipe_id: recipeId,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: item.quantity,
-          unit: item.unit,
-          rate_per_acre: item.rate_per_acre,
-          sort_order: idx,
-          notes: item.notes || null,
-        }));
-        const { error: itemsError } = await supabase.from('blend_recipe_items').insert(itemsPayload);
-        if (itemsError) throw itemsError;
-      }
-
-      toast('success', editId ? 'Recipe updated' : 'Recipe created');
-      setShowEditor(false);
-      fetchRecipes();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to save recipe');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDuplicate = async (recipe: RecipeRow) => {
-    try {
-      // Create copy of recipe
-      const { data: newRecipe, error } = await supabase
-        .from('blend_recipes')
-        .insert({
-          name: `${recipe.name} (Copy)`,
-          description: recipe.description,
-          recipe_type: recipe.recipe_type,
-          crop_type: recipe.crop_type,
-          timing: recipe.timing,
-        })
-        .select()
-        .single();
-      if (error) throw error;
-
-      // Copy items
-      const { data: items } = await supabase
-        .from('blend_recipe_items')
-        .select('*')
-        .eq('recipe_id', recipe.id)
-        .order('sort_order');
-
-      if (items && items.length > 0) {
-        const copies = (items as RecipeItemDbRow[]).map((item) => ({
-          recipe_id: newRecipe.id,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: item.quantity,
-          unit: item.unit,
-          rate_per_acre: item.rate_per_acre,
-          sort_order: item.sort_order,
-          notes: item.notes,
-        }));
-        await supabase.from('blend_recipe_items').insert(copies);
-      }
-
-      toast('success', 'Recipe duplicated');
-      fetchRecipes();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to duplicate');
-    }
+        if (items && items.length > 0) {
+          const copies = (items as RecipeItemDbRow[]).map((item) => ({
+            recipe_id: newRecipe.id,
+            product_id: item.product_id,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            unit: item.unit,
+            rate_per_acre: item.rate_per_acre,
+            sort_order: item.sort_order,
+            notes: item.notes,
+          }));
+          await supabase.from('blend_recipe_items').insert(copies);
+        }
+      },
+      toast,
+      successMessage: 'Recipe duplicated',
+      sentryTag: 'duplicate_recipe',
+      onSuccess: () => fetchRecipes(),
+    });
   };
 
   const handleDelete = async (recipe: RecipeRow) => {
     if (!confirm(`Delete recipe "${recipe.name}"? This is a soft delete.`)) return;
-    try {
-      const result = await supabase
-        .from('blend_recipes')
-        .update({ deleted_at: new Date().toISOString() })
-        .eq('id', recipe.id)
-        .select();
-      checkMutationResult(result, 'Delete recipe');
-      toast('success', 'Recipe deleted');
-      fetchRecipes();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to delete');
-    }
+    await runCriticalAction({
+      action: async () => {
+        const result = await supabase
+          .from('blend_recipes')
+          .update({ deleted_at: new Date().toISOString() })
+          .eq('id', recipe.id)
+          .select();
+        checkMutationResult(result, 'Delete recipe');
+      },
+      toast,
+      successMessage: 'Recipe deleted',
+      sentryTag: 'delete_recipe',
+      onSuccess: () => fetchRecipes(),
+    });
   };
 
   const addItem = () => {

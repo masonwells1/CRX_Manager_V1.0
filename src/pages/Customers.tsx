@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Upload, Download, FileText, ToggleLeft } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -29,11 +29,7 @@ export default function Customers() {
   const [deactivating, setDeactivating] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
-
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     const { data, error } = await supabase
       .from('customers')
       .select('*')
@@ -47,7 +43,11 @@ export default function Customers() {
     }
     setCustomers((data || []) as Customer[]);
     setLoading(false);
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, [fetchCustomers]);
 
   const filtered = customers.filter((c) => {
     if (tierFilter && c.assigned_tier !== parseInt(tierFilter)) return false;

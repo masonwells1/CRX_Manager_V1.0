@@ -3,7 +3,7 @@
  *
  * Sprint 11: Financial Workflows
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -39,11 +39,7 @@ export default function CustomerTransactionReview() {
       .then(({ data: rows }) => setCustomers((rows || []) as { id: string; farm_name: string }[]));
   }, []);
 
-  useEffect(() => {
-    if (customerId && startDate && endDate) fetchData();
-  }, [customerId, startDate, endDate]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     const { data: rows, error } = await supabase.rpc('get_customer_transaction_review', {
       p_customer_id: customerId,
@@ -56,7 +52,11 @@ export default function CustomerTransactionReview() {
       setData((rows || []) as CustomerTransactionRow[]);
     }
     setLoading(false);
-  };
+  }, [customerId, startDate, endDate, toast]);
+
+  useEffect(() => {
+    if (customerId && startDate && endDate) fetchData();
+  }, [customerId, startDate, endDate, fetchData]);
 
   const customerName = customers.find((c) => c.id === customerId)?.farm_name || '';
 
