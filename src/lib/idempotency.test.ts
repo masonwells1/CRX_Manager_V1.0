@@ -5,12 +5,13 @@ describe('generateIdempotencyKey', () => {
   it('returns a string with the correct format', () => {
     const key = generateIdempotencyKey('create_order', 'user-123');
     const parts = key.split(':');
-    expect(parts).toHaveLength(4);
+    expect(parts).toHaveLength(3);
     expect(parts[0]).toBe('create_order');
     expect(parts[1]).toBe('user-123');
-    // parts[2] = timestamp (numeric), parts[3] = random string
-    expect(Number(parts[2])).toBeGreaterThan(0);
-    expect(parts[3].length).toBeGreaterThan(0);
+    // parts[2] = UUID (36 chars with hyphens)
+    expect(parts[2]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    );
   });
 
   it('generates unique keys on consecutive calls', () => {
@@ -37,5 +38,13 @@ describe('generateIdempotencyKey', () => {
   it('handles empty userId gracefully', () => {
     const key = generateIdempotencyKey('op', '');
     expect(key.startsWith('op::')).toBe(true);
+  });
+
+  it('uses cryptographically strong randomness (UUID format)', () => {
+    const key = generateIdempotencyKey('test', 'user');
+    const uuid = key.split(':')[2];
+    // UUID v4 has specific version/variant bits
+    expect(uuid[14]).toBe('4'); // version nibble
+    expect(['8', '9', 'a', 'b']).toContain(uuid[19]); // variant nibble
   });
 });
