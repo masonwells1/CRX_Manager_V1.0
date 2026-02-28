@@ -5,7 +5,7 @@
  */
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, Minus, X } from 'lucide-react';
+import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, X } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
