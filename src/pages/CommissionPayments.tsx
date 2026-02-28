@@ -67,10 +67,6 @@ export default function CommissionPayments() {
   const [payNotes, setPayNotes] = useState('');
   const [creating, setCreating] = useState(false);
 
-  useEffect(() => {
-    fetchPayments();
-  }, [fetchPayments]);
-
   const fetchPayments = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -103,6 +99,10 @@ export default function CommissionPayments() {
     setPayments(rows);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchPayments();
+  }, [fetchPayments]);
 
   const fetchUnpaid = async () => {
     const { data } = await supabase

@@ -50,14 +50,6 @@ export default function ApplicationRecords() {
   const [customerFilter, setCustomerFilter] = useState('');
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
 
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
-
-  useEffect(() => {
-    fetchRecords();
-  }, [startDate, endDate, customerFilter, fetchRecords]);
-
   const fetchCustomers = async () => {
     const { data } = await supabase
       .from('customers')
@@ -105,6 +97,14 @@ export default function ApplicationRecords() {
     setRecords(rows);
     setLoading(false);
   }, [startDate, endDate, customerFilter, toast]);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
+
+  useEffect(() => {
+    fetchRecords();
+  }, [startDate, endDate, customerFilter, fetchRecords]);
 
   const applyPreset = (preset: string) => {
     if (preset === 'all') {

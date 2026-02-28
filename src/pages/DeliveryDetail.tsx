@@ -128,10 +128,6 @@ export default function DeliveryDetail() {
   const isAssignedDriver = isDriver && profile?.id === delivery?.assigned_driver;
   const canConfirm = (isAdminOrRep || isAssignedDriver) && delivery?.status === 'scheduled';
 
-  useEffect(() => {
-    if (id) fetchDelivery();
-  }, [id, fetchDelivery]);
-
   const fetchDelivery = useCallback(async () => {
     const { data: delData, error: delError } = await supabase
       .from('deliveries')
@@ -232,6 +228,10 @@ export default function DeliveryDetail() {
     }
     setLoading(false);
   }, [id, toast]);
+
+  useEffect(() => {
+    if (id) fetchDelivery();
+  }, [id, fetchDelivery]);
 
   const updateDeliveryQty = (itemId: string, qty: number, max: number) => {
     setDeliveryQtys((prev) => ({ ...prev, [itemId]: Math.max(0, Math.min(qty, max)) }));

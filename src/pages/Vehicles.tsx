@@ -36,10 +36,6 @@ export default function Vehicles() {
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
-  useEffect(() => {
-    fetchVehicles();
-  }, [fetchVehicles]);
-
   const fetchVehicles = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -56,6 +52,10 @@ export default function Vehicles() {
     setVehicles((data || []) as Vehicle[]);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchVehicles();
+  }, [fetchVehicles]);
 
   const filtered = vehicles.filter((v) => {
     if (typeFilter && v.vehicle_type !== typeFilter) return false;

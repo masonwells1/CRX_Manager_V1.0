@@ -15,10 +15,6 @@ export default function Notifications() {
   const [notifications, setNotifications] = useState<NotificationType[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (profile) fetchNotifications();
-  }, [profile, fetchNotifications]);
-
   const fetchNotifications = useCallback(async () => {
     // Guard: Ensure profile is loaded
     if (!profile) {
@@ -35,6 +31,10 @@ export default function Notifications() {
     setNotifications((data || []) as NotificationType[]);
     setLoading(false);
   }, [profile]);
+
+  useEffect(() => {
+    if (profile) fetchNotifications();
+  }, [profile, fetchNotifications]);
 
   const markAsRead = async (notification: NotificationType) => {
     if (!notification.is_read) {

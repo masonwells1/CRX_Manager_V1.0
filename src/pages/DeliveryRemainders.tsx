@@ -44,10 +44,6 @@ export default function DeliveryRemainders() {
   const [customerFilter, setCustomerFilter] = useState('');
   const [creating, setCreating] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchRemainders();
-  }, [fetchRemainders]);
-
   const fetchRemainders = useCallback(async () => {
     const { data, error } = await supabase
       .from('delivery_remainders')
@@ -79,6 +75,10 @@ export default function DeliveryRemainders() {
     setRemainders(rows);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchRemainders();
+  }, [fetchRemainders]);
 
   const filtered = remainders.filter((r) => {
     if (statusFilter && r.status !== statusFilter) return false;

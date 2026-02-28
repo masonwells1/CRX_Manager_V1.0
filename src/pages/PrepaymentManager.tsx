@@ -40,10 +40,6 @@ export default function PrepaymentManager() {
   const [showBatchConfirm, setShowBatchConfirm] = useState(false);
   const [batchApplying, setBatchApplying] = useState(false);
 
-  useEffect(() => {
-    fetchCustomers();
-  }, [fetchCustomers]);
-
   const fetchCustomers = useCallback(async () => {
     setLoading(true);
 
@@ -85,6 +81,10 @@ export default function PrepaymentManager() {
     setCustomers(enriched);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, [fetchCustomers]);
 
   const handleApply = async (customer: CustomerPrepay) => {
     setConfirmCustomer(customer);

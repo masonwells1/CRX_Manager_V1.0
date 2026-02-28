@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
-test.describe('Page Navigation — all routes load without error', () => {
+test.describe('Page Navigation — all routes load without error', { tag: '@smoke' }, () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
   });

@@ -150,7 +150,7 @@ async function getQuoteSummaryTotals(
 /*  Tests                                                             */
 /* ------------------------------------------------------------------ */
 
-test.describe('Quote Pricing Math Verification', () => {
+test.describe('Quote Pricing Math Verification', { tag: '@smoke' }, () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
   });

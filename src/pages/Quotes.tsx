@@ -56,10 +56,6 @@ export default function Quotes() {
     }
   };
 
-  useEffect(() => {
-    fetchQuotes();
-  }, [fetchQuotes]);
-
   const fetchQuotes = useCallback(async () => {
     const { data, error } = await supabase
       .from('quotes')
@@ -75,6 +71,10 @@ export default function Quotes() {
     setQuotes((data || []) as Quote[]);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchQuotes();
+  }, [fetchQuotes]);
 
   const filtered = quotes.filter((q) => {
     if (statusFilter && q.status !== statusFilter) return false;

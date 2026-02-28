@@ -67,10 +67,6 @@ export default function NewOrder() {
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
   const [productSearch, setProductSearch] = useState('');
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
   const fetchData = useCallback(async () => {
     const [customersRes, productsRes] = await Promise.all([
       supabase.from('customers').select('*').order('farm_name'),
@@ -90,6 +86,10 @@ export default function NewOrder() {
     setProducts(productsRes.data || []);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const addItem = () => {
     setItems([...items, makeEmptyItem()]);

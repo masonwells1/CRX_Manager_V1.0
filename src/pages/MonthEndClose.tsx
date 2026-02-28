@@ -70,10 +70,6 @@ export default function MonthEndClose() {
 
   const current = getCurrentPeriod();
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
   const fetchData = useCallback(async () => {
     setLoading(true);
 
@@ -96,6 +92,10 @@ export default function MonthEndClose() {
 
     setLoading(false);
   }, [current.start, current.end]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
   const currentPeriodStatus = periods.find(
     (p) => p.period_start === current.start && p.period_end === current.end,

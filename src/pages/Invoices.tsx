@@ -78,10 +78,6 @@ export default function Invoices() {
   const [deleting, setDeleting] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
 
-  useEffect(() => {
-    fetchInvoices();
-  }, [fetchInvoices]);
-
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -106,6 +102,10 @@ export default function Invoices() {
     setInvoices(rows);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchInvoices();
+  }, [fetchInvoices]);
 
   const filtered = invoices.filter((inv) => {
     if (statusFilter && inv.status !== statusFilter) return false;

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
-test.describe('Authentication', () => {
+test.describe('Authentication', { tag: '@smoke' }, () => {
   test('should show login page when not authenticated', async ({ page }) => {
     await page.goto('/');
     // Auth check is async; wait for redirect

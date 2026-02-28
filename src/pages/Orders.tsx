@@ -35,10 +35,6 @@ export default function Orders() {
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
-  useEffect(() => {
-    fetchOrders();
-  }, [fetchOrders]);
-
   const fetchOrders = useCallback(async () => {
     const { data: ordersData, error: ordersError } = await supabase
       .from('orders')
@@ -95,6 +91,10 @@ export default function Orders() {
     setOrders(enriched);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchOrders();
+  }, [fetchOrders]);
 
   const filtered = orders.filter((o) => {
     if (statusFilter && o.status !== statusFilter) return false;

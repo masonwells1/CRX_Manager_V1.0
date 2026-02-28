@@ -74,14 +74,6 @@ export default function Jobs() {
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
-  useEffect(() => {
-    fetchCustomers();
-  }, [fetchCustomers]);
-
-  useEffect(() => {
-    fetchJobs();
-  }, [statusFilter, startDate, endDate, customerFilter, fetchJobs]);
-
   const fetchCustomers = useCallback(async () => {
     const { data } = await supabase
       .from('customers')
@@ -130,6 +122,14 @@ export default function Jobs() {
     setJobs(rows);
     setLoading(false);
   }, [statusFilter, startDate, endDate, customerFilter, toast]);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, [fetchCustomers]);
+
+  useEffect(() => {
+    fetchJobs();
+  }, [statusFilter, startDate, endDate, customerFilter, fetchJobs]);
 
   const applyPreset = (preset: string) => {
     if (preset === 'all') {

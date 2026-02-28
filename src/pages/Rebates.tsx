@@ -97,11 +97,6 @@ export default function Rebates() {
     fetchLookups();
   }, []);
 
-  useEffect(() => {
-    if (tab === 'programs') fetchPrograms();
-    else fetchClaims();
-  }, [tab, fetchPrograms, fetchClaims]);
-
   const fetchLookups = async () => {
     const [prodRes, custRes, ordRes] = await Promise.all([
       supabase.from('products').select('id, product_name, vendor, manufacturer').eq('is_active', true).order('product_name'),
@@ -154,6 +149,11 @@ export default function Rebates() {
     setClaims(mapped);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    if (tab === 'programs') fetchPrograms();
+    else fetchClaims();
+  }, [tab, fetchPrograms, fetchClaims]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);

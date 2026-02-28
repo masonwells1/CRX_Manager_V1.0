@@ -37,10 +37,6 @@ export default function Products() {
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
-  useEffect(() => {
-    fetchProducts();
-  }, [fetchProducts]);
-
   const fetchProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
@@ -62,6 +58,10 @@ export default function Products() {
     setVendors(vends.sort());
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchProducts();
+  }, [fetchProducts]);
 
   const filtered = products.filter((p) => {
     if (categoryFilter && p.category !== categoryFilter) return false;

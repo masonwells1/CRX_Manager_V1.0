@@ -74,11 +74,6 @@ export default function CropPrograms() {
 
   const isAdmin = role === 'admin';
 
-  useEffect(() => {
-    fetchPrograms();
-    fetchProducts();
-  }, [fetchPrograms, fetchProducts]);
-
   const fetchPrograms = useCallback(async () => {
     const { data, error } = await supabase
       .from('app_settings')
@@ -116,6 +111,11 @@ export default function CropPrograms() {
     }
     setProducts((data || []) as Product[]);
   }, []);
+
+  useEffect(() => {
+    fetchPrograms();
+    fetchProducts();
+  }, [fetchPrograms, fetchProducts]);
 
   const savePrograms = async (updated: CropProgram[]) => {
     const { data: existing } = await supabase

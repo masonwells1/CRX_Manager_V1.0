@@ -60,15 +60,6 @@ export default function ARaging() {
   const [seasonB, setSeasonB] = useState(currentSeason - 1);
   const [seasonData, setSeasonData] = useState<SeasonComparisonRow[]>([]);
 
-  useEffect(() => {
-    fetchCustomers();
-  }, []);
-
-  useEffect(() => {
-    if (tab === 'aging') fetchAging();
-    if (tab === 'season') fetchSeasonComparison();
-  }, [tab, asOfDate, seasonA, seasonB, fetchAging, fetchSeasonComparison]);
-
   const fetchCustomers = async () => {
     const { data } = await supabase
       .from('customers')
@@ -89,6 +80,29 @@ export default function ARaging() {
     setAgingData((data || []) as ARAgingRow[]);
     setLoading(false);
   }, [asOfDate, toast]);
+
+  const fetchSeasonComparison = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase.rpc('get_season_comparison', {
+      p_season_a: seasonA,
+      p_season_b: seasonB,
+    });
+    if (error) {
+      console.error('Season comparison error:', error.message);
+      toast('error', 'Failed to load season comparison');
+    }
+    setSeasonData((data || []) as SeasonComparisonRow[]);
+    setLoading(false);
+  }, [seasonA, seasonB, toast]);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'aging') fetchAging();
+    if (tab === 'season') fetchSeasonComparison();
+  }, [tab, asOfDate, seasonA, seasonB, fetchAging, fetchSeasonComparison]);
 
   const fetchStatement = async () => {
     if (!selectedCustomer) {
@@ -112,20 +126,6 @@ export default function ARaging() {
     setTab('statement');
     setLoading(false);
   };
-
-  const fetchSeasonComparison = useCallback(async () => {
-    setLoading(true);
-    const { data, error } = await supabase.rpc('get_season_comparison', {
-      p_season_a: seasonA,
-      p_season_b: seasonB,
-    });
-    if (error) {
-      console.error('Season comparison error:', error.message);
-      toast('error', 'Failed to load season comparison');
-    }
-    setSeasonData((data || []) as SeasonComparisonRow[]);
-    setLoading(false);
-  }, [seasonA, seasonB, toast]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);

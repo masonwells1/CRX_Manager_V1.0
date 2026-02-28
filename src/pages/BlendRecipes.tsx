@@ -69,11 +69,6 @@ export default function BlendRecipes() {
   });
   const [editItems, setEditItems] = useState<EditItem[]>([]);
 
-  useEffect(() => {
-    fetchRecipes();
-    fetchProducts();
-  }, [fetchRecipes, fetchProducts]);
-
   const fetchRecipes = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -106,6 +101,11 @@ export default function BlendRecipes() {
       .order('product_name');
     setProducts(data || []);
   }, []);
+
+  useEffect(() => {
+    fetchRecipes();
+    fetchProducts();
+  }, [fetchRecipes, fetchProducts]);
 
   const filtered = recipes.filter((r) => {
     if (typeFilter && r.recipe_type !== typeFilter) return false;

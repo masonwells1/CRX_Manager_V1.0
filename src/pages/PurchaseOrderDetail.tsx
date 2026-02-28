@@ -74,13 +74,6 @@ export default function PurchaseOrderDetail() {
   const isAdmin = role === 'admin';
   const canReceive = role === 'admin' || role === 'sales_rep';
 
-  useEffect(() => {
-    if (id) {
-      fetchPO();
-      fetchReceivingHistory();
-    }
-  }, [id, fetchPO, fetchReceivingHistory]);
-
   const fetchPO = useCallback(async () => {
     const { data: poData } = await supabase
       .from('purchase_orders')
@@ -117,6 +110,13 @@ export default function PurchaseOrderDetail() {
     }
     setHistoryLoading(false);
   }, [id]);
+
+  useEffect(() => {
+    if (id) {
+      fetchPO();
+      fetchReceivingHistory();
+    }
+  }, [id, fetchPO, fetchReceivingHistory]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);

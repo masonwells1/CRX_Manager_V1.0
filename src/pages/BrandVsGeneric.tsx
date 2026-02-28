@@ -14,10 +14,6 @@ export default function BrandVsGeneric() {
   const [genericProduct, setGenericProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    fetchProducts();
-  }, [fetchProducts]);
-
   const fetchProducts = useCallback(async () => {
     const { data } = await supabase
       .from('products')
@@ -47,6 +43,10 @@ export default function BrandVsGeneric() {
     }
     setLoading(false);
   }, [products, selectedProductId]);
+
+  useEffect(() => {
+    fetchProducts();
+  }, [fetchProducts]);
 
   useEffect(() => {
     if (selectedProductId) {

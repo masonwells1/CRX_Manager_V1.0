@@ -46,16 +46,6 @@ export default function NewPurchaseOrder() {
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
-  useEffect(() => {
-    if (!initialLoadDone.current) return;
-    setIsDirty(true);
-  }, [vendor, expectedDate, notes, items]);
-
-  useEffect(() => {
-    fetchProducts();
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [fetchProducts]);
-
   const fetchProducts = useCallback(async () => {
     const { data } = await supabase
       .from('products')
@@ -67,6 +57,16 @@ export default function NewPurchaseOrder() {
     const uniqueVendors = [...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[];
     setVendors(uniqueVendors.sort());
   }, []);
+
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [vendor, expectedDate, notes, items]);
+
+  useEffect(() => {
+    fetchProducts();
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
+  }, [fetchProducts]);
 
   const addItem = () => {
     setItems((prev) => [

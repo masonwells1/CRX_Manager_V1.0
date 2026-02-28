@@ -88,10 +88,6 @@ export default function Returns() {
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  useEffect(() => {
-    fetchReturns();
-  }, [fetchReturns]);
-
   const fetchReturns = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -123,6 +119,10 @@ export default function Returns() {
     setReturns(rows);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchReturns();
+  }, [fetchReturns]);
 
   const loadCreateData = async () => {
     const [custRes, prodRes] = await Promise.all([

@@ -52,28 +52,6 @@ export default function NewDelivery() {
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
-  useEffect(() => {
-    if (!initialLoadDone.current) return;
-    setIsDirty(true);
-  }, [selectedOrderId, selectedAddressId, selectedDriverId, scheduledDate, scheduledTime, deliveryNotes, deliveryItems]);
-
-  useEffect(() => {
-    fetchOrders();
-    fetchDrivers();
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [fetchOrders, fetchDrivers]);
-
-  useEffect(() => {
-    if (selectedOrderId) {
-      fetchOrderDetails(selectedOrderId);
-    } else {
-      setOrderItems([]);
-      setCustomer(null);
-      setAddresses([]);
-      setDeliveryItems([]);
-    }
-  }, [selectedOrderId, fetchOrderDetails]);
-
   const fetchOrders = useCallback(async () => {
     const { data } = await supabase
       .from('orders')
@@ -156,6 +134,28 @@ export default function NewDelivery() {
     setDeliveryItems(drafts);
     setLoadingDetails(false);
   }, [toast]);
+
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [selectedOrderId, selectedAddressId, selectedDriverId, scheduledDate, scheduledTime, deliveryNotes, deliveryItems]);
+
+  useEffect(() => {
+    fetchOrders();
+    fetchDrivers();
+    setTimeout(() => { initialLoadDone.current = true; }, 0);
+  }, [fetchOrders, fetchDrivers]);
+
+  useEffect(() => {
+    if (selectedOrderId) {
+      fetchOrderDetails(selectedOrderId);
+    } else {
+      setOrderItems([]);
+      setCustomer(null);
+      setAddresses([]);
+      setDeliveryItems([]);
+    }
+  }, [selectedOrderId, fetchOrderDetails]);
 
   const updateItemQty = (orderItemId: string, qty: number) => {
     setDeliveryItems((prev) =>

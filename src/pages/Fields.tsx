@@ -40,10 +40,6 @@ export default function Fields() {
   const cropTypes = [...new Set(fields.map((f) => f.crop_type).filter(Boolean))] as string[];
   const counties = [...new Set(fields.map((f) => f.county).filter(Boolean))] as string[];
 
-  useEffect(() => {
-    fetchFields();
-  }, [fetchFields]);
-
   const fetchFields = useCallback(async () => {
     const { data, error } = await supabase.rpc('get_fields_with_geojson');
 
@@ -61,6 +57,10 @@ export default function Fields() {
     setFields(rows);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchFields();
+  }, [fetchFields]);
 
   const filtered = fields.filter((f) => {
     if (cropFilter && f.crop_type !== cropFilter) return false;

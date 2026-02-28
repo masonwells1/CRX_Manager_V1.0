@@ -44,10 +44,6 @@ export default function OrderDetail() {
 
   const isAdmin = role === 'admin';
 
-  useEffect(() => {
-    if (id) fetchOrder();
-  }, [id, fetchOrder]);
-
   const fetchOrder = useCallback(async () => {
     const { data: orderData } = await supabase
       .from('orders')
@@ -111,6 +107,10 @@ export default function OrderDetail() {
     }
     setLoading(false);
   }, [id]);
+
+  useEffect(() => {
+    if (id) fetchOrder();
+  }, [id, fetchOrder]);
 
   const handleSaveEdits = async () => {
     if (!profile) return;

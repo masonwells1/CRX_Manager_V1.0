@@ -70,20 +70,6 @@ export default function Compliance() {
   });
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    fetchData();
-  }, [tab, fetchData]);
-
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    if (tab === 'licenses') {
-      await Promise.all([fetchLicenses(), fetchCustomers()]);
-    } else {
-      await fetchRUPProducts();
-    }
-    setLoading(false);
-  }, [tab, fetchLicenses, fetchCustomers, fetchRUPProducts]);
-
   const fetchLicenses = useCallback(async () => {
     const { data, error } = await supabase
       .from('applicator_licenses')
@@ -122,6 +108,20 @@ export default function Compliance() {
     }
     setRUPProducts((data || []) as RUPProduct[]);
   }, [toast]);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    if (tab === 'licenses') {
+      await Promise.all([fetchLicenses(), fetchCustomers()]);
+    } else {
+      await fetchRUPProducts();
+    }
+    setLoading(false);
+  }, [tab, fetchLicenses, fetchCustomers, fetchRUPProducts]);
+
+  useEffect(() => {
+    fetchData();
+  }, [tab, fetchData]);
 
   const today = new Date().toISOString().split('T')[0];
   const thirtyDaysOut = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];

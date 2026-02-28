@@ -64,21 +64,6 @@ export default function ProductDetail() {
     setIsDirty(true);
   }, [product]);
 
-  useEffect(() => {
-    if (!isNew && id) {
-      fetchProduct();
-      fetchCostHistory();
-    } else {
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
-    }
-  }, [id, isNew, fetchProduct, fetchCostHistory]);
-
-  useEffect(() => {
-    supabase.from('unit_conversions').select('*').order('unit').then(({ data }) => {
-      setUnitConversions((data || []) as UnitConversion[]);
-    });
-  }, []);
-
   const fetchProduct = useCallback(async () => {
     const { data } = await supabase.from('products').select('*').eq('id', id).maybeSingle();
     if (data) setProduct(data);
@@ -95,6 +80,21 @@ export default function ProductDetail() {
       .limit(20);
     setCostHistory(data || []);
   }, [id]);
+
+  useEffect(() => {
+    if (!isNew && id) {
+      fetchProduct();
+      fetchCostHistory();
+    } else {
+      setTimeout(() => { initialLoadDone.current = true; }, 0);
+    }
+  }, [id, isNew, fetchProduct, fetchCostHistory]);
+
+  useEffect(() => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data }) => {
+      setUnitConversions((data || []) as UnitConversion[]);
+    });
+  }, []);
 
   const handleSave = async () => {
     if (!product.product_name) {

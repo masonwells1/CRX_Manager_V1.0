@@ -82,10 +82,6 @@ export default function Dashboard() {
     cancelledPostedCount: 0,
   });
 
-  useEffect(() => {
-    fetchDashboard();
-  }, [role, fetchDashboard]);
-
   const fetchDashboard = useCallback(async () => {
     setLoading(true);
     try {
@@ -188,6 +184,10 @@ export default function Dashboard() {
       });
     }
   }, [toast]);
+
+  useEffect(() => {
+    fetchDashboard();
+  }, [role, fetchDashboard]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);

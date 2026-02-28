@@ -43,10 +43,6 @@ export default function PurchaseOrders() {
   const isAdmin = role === 'admin';
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
-  useEffect(() => {
-    fetchPOs();
-  }, [fetchPOs]);
-
   const fetchPOs = useCallback(async () => {
     const { data, error } = await supabase
       .from('purchase_orders')
@@ -62,6 +58,10 @@ export default function PurchaseOrders() {
     setPos((data || []) as PurchaseOrder[]);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchPOs();
+  }, [fetchPOs]);
 
   /* ─── Summary stats ─── */
   const counts = useMemo(() => {

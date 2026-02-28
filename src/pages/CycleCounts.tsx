@@ -68,11 +68,6 @@ export default function CycleCounts() {
 
   const isAdmin = role === 'admin';
 
-  useEffect(() => {
-    fetchCounts();
-    fetchWarehouses();
-  }, [fetchCounts, fetchWarehouses]);
-
   const fetchCounts = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -115,6 +110,11 @@ export default function CycleCounts() {
     const all = [...new Set([...invLocs, ...whLocs])].sort();
     setWarehouses(all);
   }, []);
+
+  useEffect(() => {
+    fetchCounts();
+    fetchWarehouses();
+  }, [fetchCounts, fetchWarehouses]);
 
   const filtered = counts.filter((c) => {
     if (statusFilter && c.status !== statusFilter) return false;

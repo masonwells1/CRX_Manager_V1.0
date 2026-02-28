@@ -115,35 +115,6 @@ export default function Deliveries() {
   const canQuickDeliver = role === 'admin' || role === 'sales_rep';
   const isDriver = role === 'driver';
 
-  useEffect(() => {
-    fetchDeliveries();
-    fetchDrivers();
-    fetchCustomers();
-    fetchRemainderCount();
-  }, [fetchDeliveries, fetchDrivers, fetchCustomers, fetchRemainderCount]);
-
-  // Fetch unassigned deliveries for driver dashboard
-  useEffect(() => {
-    if (!isDriver) return;
-    supabase
-      .from('deliveries')
-      .select('*, customer:customers(farm_name)')
-      .is('assigned_driver', null)
-      .in('status', ['scheduled'])
-      .order('scheduled_date')
-      .limit(20)
-      .then(({ data }) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rows = ((data || []) as any[]).map((d) => ({
-          ...d,
-          customer_name: d.customer?.farm_name || 'Unknown',
-          driver_name: 'Unassigned',
-          item_count: 0,
-        }));
-        setUnassigned(rows);
-      });
-  }, [isDriver, deliveries]);
-
   const fetchDrivers = useCallback(async () => {
     const { data } = await supabase
       .from('profiles')
@@ -218,6 +189,35 @@ export default function Deliveries() {
     setDeliveries(rows);
     setLoading(false);
   }, [isDriver, profile, toast]);
+
+  useEffect(() => {
+    fetchDeliveries();
+    fetchDrivers();
+    fetchCustomers();
+    fetchRemainderCount();
+  }, [fetchDeliveries, fetchDrivers, fetchCustomers, fetchRemainderCount]);
+
+  // Fetch unassigned deliveries for driver dashboard
+  useEffect(() => {
+    if (!isDriver) return;
+    supabase
+      .from('deliveries')
+      .select('*, customer:customers(farm_name)')
+      .is('assigned_driver', null)
+      .in('status', ['scheduled'])
+      .order('scheduled_date')
+      .limit(20)
+      .then(({ data }) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rows = ((data || []) as any[]).map((d) => ({
+          ...d,
+          customer_name: d.customer?.farm_name || 'Unknown',
+          driver_name: 'Unassigned',
+          item_count: 0,
+        }));
+        setUnassigned(rows);
+      });
+  }, [isDriver, deliveries]);
 
   /* ─── Summary stats ─── */
   const todayStr = today();

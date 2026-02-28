@@ -90,31 +90,6 @@ export default function CustomerDetail() {
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
-  useEffect(() => {
-    if (!initialLoadDone.current) return;
-    setIsDirty(true);
-  }, [customer, addresses]);
-
-  useEffect(() => {
-    // Fetch all customers for parent selector
-    void supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500)
-      .then(({ data }) => setAllCustomers((data || []) as { id: string; farm_name: string }[]));
-
-    if (!isNew && id) {
-      fetchCustomer();
-      fetchAddresses();
-    } else {
-      // New customer — mark ready immediately
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
-    }
-  }, [id, isNew, fetchCustomer, fetchAddresses]);
-
-  useEffect(() => {
-    if (!isNew && id && tab !== 'info') {
-      fetchTabData(tab);
-    }
-  }, [tab, id, isNew, fetchTabData]);
-
   const fetchCustomer = useCallback(async () => {
     const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
     if (data) {
@@ -137,6 +112,25 @@ export default function CustomerDetail() {
     const { data } = await supabase.from('customer_addresses').select('*').eq('customer_id', id).order('created_at');
     setAddresses(data || []);
   }, [id]);
+
+  useEffect(() => {
+    if (!initialLoadDone.current) return;
+    setIsDirty(true);
+  }, [customer, addresses]);
+
+  useEffect(() => {
+    // Fetch all customers for parent selector
+    void supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500)
+      .then(({ data }) => setAllCustomers((data || []) as { id: string; farm_name: string }[]));
+
+    if (!isNew && id) {
+      fetchCustomer();
+      fetchAddresses();
+    } else {
+      // New customer — mark ready immediately
+      setTimeout(() => { initialLoadDone.current = true; }, 0);
+    }
+  }, [id, isNew, fetchCustomer, fetchAddresses]);
 
   const fetchTabData = useCallback(async (selectedTab: string) => {
     setTabLoading(true);
@@ -245,6 +239,12 @@ export default function CustomerDetail() {
     }
     setTabLoading(false);
   }, [id]);
+
+  useEffect(() => {
+    if (!isNew && id && tab !== 'info') {
+      fetchTabData(tab);
+    }
+  }, [tab, id, isNew, fetchTabData]);
 
   const handleSave = async () => {
     if (!customer.farm_name) {

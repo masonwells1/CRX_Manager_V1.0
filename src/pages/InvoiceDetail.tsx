@@ -127,11 +127,6 @@ export default function InvoiceDetail() {
     fetchRef();
   }, []);
 
-  // Fetch existing invoice
-  useEffect(() => {
-    if (!isNew && id) fetchInvoice(id);
-  }, [id, isNew, fetchInvoice]);
-
   const fetchInvoice = useCallback(async (invoiceId: string) => {
     setLoading(true);
     const { data, error } = await supabase
@@ -198,6 +193,11 @@ export default function InvoiceDetail() {
 
     setLoading(false);
   }, [toast, navigate]);
+
+  // Fetch existing invoice
+  useEffect(() => {
+    if (!isNew && id) fetchInvoice(id);
+  }, [id, isNew, fetchInvoice]);
 
   // Product search
   const searchProducts = useCallback(async (q: string) => {

@@ -117,11 +117,6 @@ export default function InventoryPage() {
     setExportingPdf(false);
   };
 
-  useEffect(() => {
-    fetchInventory();
-    fetchHolds();
-  }, [fetchInventory, fetchHolds]);
-
   const fetchInventory = useCallback(async () => {
     const { data, error } = await supabase
       .from('inventory')
@@ -311,6 +306,11 @@ export default function InventoryPage() {
 
     setHolds(holdRows);
   }, []);
+
+  useEffect(() => {
+    fetchInventory();
+    fetchHolds();
+  }, [fetchInventory, fetchHolds]);
 
   const fetchProducts = async () => {
     const { data, error } = await supabase

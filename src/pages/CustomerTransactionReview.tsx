@@ -39,10 +39,6 @@ export default function CustomerTransactionReview() {
       .then(({ data: rows }) => setCustomers((rows || []) as { id: string; farm_name: string }[]));
   }, []);
 
-  useEffect(() => {
-    if (customerId && startDate && endDate) fetchData();
-  }, [customerId, startDate, endDate, fetchData]);
-
   const fetchData = useCallback(async () => {
     setLoading(true);
     const { data: rows, error } = await supabase.rpc('get_customer_transaction_review', {
@@ -57,6 +53,10 @@ export default function CustomerTransactionReview() {
     }
     setLoading(false);
   }, [customerId, startDate, endDate, toast]);
+
+  useEffect(() => {
+    if (customerId && startDate && endDate) fetchData();
+  }, [customerId, startDate, endDate, fetchData]);
 
   const customerName = customers.find((c) => c.id === customerId)?.farm_name || '';
 

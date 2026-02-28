@@ -29,10 +29,6 @@ export default function Customers() {
   const [deactivating, setDeactivating] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  useEffect(() => {
-    fetchCustomers();
-  }, [fetchCustomers]);
-
   const fetchCustomers = useCallback(async () => {
     const { data, error } = await supabase
       .from('customers')
@@ -48,6 +44,10 @@ export default function Customers() {
     setCustomers((data || []) as Customer[]);
     setLoading(false);
   }, [toast]);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, [fetchCustomers]);
 
   const filtered = customers.filter((c) => {
     if (tierFilter && c.assigned_tier !== parseInt(tierFilter)) return false;

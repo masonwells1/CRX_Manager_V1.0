@@ -80,15 +80,6 @@ export default function FieldDetail() {
     setIsDirty(true);
   }, [field, billingSplits]);
 
-  useEffect(() => {
-    fetchCustomers();
-    if (!isNew && id) {
-      fetchField();
-    } else {
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
-    }
-  }, [id, isNew, fetchCustomers, fetchField]);
-
   const fetchCustomers = useCallback(async () => {
     const { data } = await supabase
       .from('customers')
@@ -166,6 +157,15 @@ export default function FieldDetail() {
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
   }, [id]);
+
+  useEffect(() => {
+    fetchCustomers();
+    if (!isNew && id) {
+      fetchField();
+    } else {
+      setTimeout(() => { initialLoadDone.current = true; }, 0);
+    }
+  }, [id, isNew, fetchCustomers, fetchField]);
 
   const update = (key: string, value: unknown) => setField((f) => ({ ...f, [key]: value }));
 
