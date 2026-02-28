@@ -294,9 +294,11 @@ export default function QuoteBuilder() {
 
   const getTierPrice = useCallback(
     (product: Product, tierNum: number): number => {
-      if (tierNum === 1) return product.tier1_price || 0;
-      if (tierNum === 2) return product.tier2_price || 0;
-      return product.tier3_price || 0;
+      // Always fall back to tier1_price (never $0) when a tier price is missing
+      const t1 = product.tier1_price || 0;
+      if (tierNum === 1) return t1;
+      if (tierNum === 2) return product.tier2_price || t1;
+      return product.tier3_price || t1;
     },
     []
   );

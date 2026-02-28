@@ -210,7 +210,9 @@ export default function InventoryPage() {
       const onOrderQty = onOrderByProduct[item.product_id] || 0;
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
       const plannedQty = (holdsByProduct[item.product_id] || 0) + (plannedByProduct[item.product_id] || 0);
-      const freeQty = onOrderQty + item.quantity_available - plannedQty;
+      // Net Free = quantity_available - quantity_prebooked - planned_holds
+      // (on-order qty is NOT included — it's not physically in the warehouse yet)
+      const freeQty = item.quantity_available - item.quantity_prebooked - plannedQty;
       const deliveredYtd = deliveredByProduct[item.product_id] || 0;
       const reorderPt = item.reorder_point || 0;
       const minStock = item.min_stock_level || 0;

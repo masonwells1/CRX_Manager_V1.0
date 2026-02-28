@@ -115,10 +115,14 @@ describe('ReportShell', () => {
     expect(onDateChange).toHaveBeenCalledTimes(1);
 
     const [start, end] = onDateChange.mock.calls[0];
-    const year = new Date().getFullYear();
-    expect(start).toBe(`${year}-01-01`);
+    // Season runs July 1 to June 30: YTD starts from current season's July 1
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const seasonStart = month >= 6 ? `${year}-07-01` : `${year - 1}-07-01`;
+    expect(start).toBe(seasonStart);
     // End should be today
-    expect(end).toBe(new Date().toISOString().split('T')[0]);
+    expect(end).toBe(now.toISOString().split('T')[0]);
   });
 
   it('shows CSV export button when onExportCSV is provided', () => {

@@ -25,7 +25,10 @@ function getPresetDates(preset: string): { start: string; end: string } {
         ? { start: `${year - 1}-07-01`, end: `${year}-06-30` }
         : { start: `${year - 2}-07-01`, end: `${year - 1}-06-30` };
     case 'ytd':
-      return { start: `${year}-01-01`, end: now.toISOString().split('T')[0] };
+      // Season runs July 1 to June 30 — YTD starts from current season's July 1
+      return month >= 6
+        ? { start: `${year}-07-01`, end: now.toISOString().split('T')[0] }
+        : { start: `${year - 1}-07-01`, end: now.toISOString().split('T')[0] };
     case 'last30': {
       const d = new Date(now.getTime() - 30 * 86400000);
       return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
