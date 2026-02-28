@@ -4,6 +4,38 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-02-28 — Go-Live Hardening (5 sprints, branch `feature/go-live-hardening`)
+
+### Sprint 1: Foundation Hardening
+- **1a:** `crypto.randomUUID` for idempotency keys (replaces Math.random fallback), retry-safe `useIdempotentAction` hook, `db.ts` multi-tab session recovery via `detectSessionFromOtherTabs()`
+- **1b:** Server-authoritative quote math — `calculate_quote_totals()` RPC using `NUMERIC(15,4)`, client calculation is display-only hint
+- Commits: `c80bc3d`, `28b8a4e`
+
+### Sprint 2: Error Handling & Notifications
+- Notification failure tracking: `failed_at` + `retry_count` columns on notifications table
+- Read-path error handling: silent fallback prevents cascading UI crashes
+- Commit: `22b930b`
+
+### Sprint 3: Security & Testing Infrastructure
+- **3a:** Delivery signature privacy — `create_signed_url()` RPC for time-limited access, no public bucket URLs
+- **3b:** RLS integration contract tests — per-role verification (admin, sales_rep, driver, applicator) for orders, invoices, deliveries, commissions
+- **3c:** Schema integrity live DB tests — FK constraints, enum values, generated columns, RLS enabled check
+- Commits: `f421869`, `7640636`, `e5d70eb`
+
+### Sprint 4: Code Quality & CI
+- **4a:** Shared `runCriticalAction()` helper — consistent try/catch/toast pattern replacing scattered error handling
+- **4b:** Fixed all `react-hooks/exhaustive-deps` ESLint warnings
+- **4c:** E2E smoke tests added to CI workflow, fixed TDZ declaration ordering issues
+- Commits: `322e2aa`, `5994e2c`, `33ff198`
+
+### Sprint 5: Observability & Data Integrity
+- **5a:** Operational metrics via `src/lib/metrics.ts` — Sentry user context on login/logout, navigation tracking via headless `NavigationTracker` component, business event tracking (order_created, quote_created, quote_converted_to_order)
+- **5b:** Cross-entity reconciliation checks via `src/lib/reconciliation.ts` — 5 pure check functions (order totals, inventory ledger, invoice payments, invoice balance formula, commission splits) + DB wrapper `runReconciliationChecks()`
+- Net result: 1,374 unit tests (87 files), all passing. Build clean.
+- Commits: `7e33267`, `91314c4`
+
+---
+
 ## 2026-02-27 — Business Logic Audit Fixes
 - SQL migration `20260312200000`: inventory hold auto-release trigger (declined/expired/accepted), `post_invoice()` period enforcement, `save_customer()` commission split validation, `create_quick_delivery()` inventory pre-check with FOR UPDATE locks, `convert_quote_to_order()` explicit hold release
 - Added `checkMutationResult()` silent RLS failure detection on 13 pages

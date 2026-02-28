@@ -77,6 +77,37 @@
 - `useRealtimeSubscription({ table, disabled?: boolean })` — when `disabled` is true, hook skips channel creation entirely (no-op)
 - Convenience hooks (`useRealtimeComments`, `useRealtimeActivity`) pass `disabled: !noteId` so null noteId doesn't create a subscription with an undefined filter
 
+## Operational Metrics Pattern (Sprint 5a)
+- Fire-and-forget Sentry wrappers in `src/lib/metrics.ts`
+- `setUserContext(user)` / `clearUserContext()` — called from `AuthContext` on login/logout
+- `trackNavigation(from, to)` — called from `NavigationTracker` component in `App.tsx` (headless, uses `useLocation` + `useRef` to skip initial mount)
+- `trackBusinessEvent(name, data)` — called after key business actions (order_created, quote_created, quote_converted_to_order)
+- All functions are no-op safe (catch and log errors internally, never throw)
+
+## Reconciliation Checks Pattern (Sprint 5b)
+- Pure computation functions in `src/lib/reconciliation.ts` — testable without DB mocks
+- 5 checks: order totals vs line items, inventory ledger vs transactions, invoice payments vs allocations, invoice balance formula (GENERATED ALWAYS sanity), commission splits sum to 100%
+- Each check: takes typed arrays → returns `Discrepancy[]`
+- DB wrapper `runReconciliationChecks()` fetches from Supabase and delegates to pure functions
+- Tolerance: ±1 cent for money (TOLERANCE_CENTS), ±0.01 for quantities (liquid products have decimals)
+- Money always in cents (bigint-safe integers), display divides by 100
+
+## Critical Action Pattern (Sprint 4a)
+- `runCriticalAction({ action, successMessage, errorPrefix })` from shared helper
+- Replaces scattered try/catch/toast patterns across pages
+- Consistent error handling: logs error, shows toast with `errorPrefix + error.message`
+- Returns `{ success: boolean, data?, error? }`
+
+## Idempotency Pattern (Sprint 1a)
+- `generateIdempotencyKey()` uses `crypto.randomUUID()` (not Math.random fallback)
+- `useIdempotentAction` hook — retry-safe, prevents double-submit on network retries
+- `db.ts` includes multi-tab session recovery via `detectSessionFromOtherTabs()`
+
+## Server-Authoritative Math Pattern (Sprint 1b)
+- `calculate_quote_totals()` PostgreSQL RPC uses `NUMERIC(15,4)` for exact decimal math
+- Client-side calculation is display-only hint; server result is authoritative
+- Prevents penny-rounding drift between JS floats and Postgres
+
 ## Build Notes
 - `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI
 - Supabase join inference: joined FK tables infer as arrays — use `as unknown as TargetType[]`

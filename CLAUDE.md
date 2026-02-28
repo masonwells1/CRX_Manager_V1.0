@@ -13,11 +13,12 @@ At the start of each session, silently check if `docs/claude-memory/MEMORY.md` h
 
 To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
 
-## Current State (2026-02-27)
-- 49 pages, 72+ tables, ~110 RPCs, 83 migrations
-- 1,121 unit tests (80 files) + 424 E2E tests (370 passing, 42 pre-existing failures)
+## Current State (2026-02-28)
+- 48 pages, 72+ tables, ~110 RPCs, 83 migrations
+- 1,374 unit tests (87 files) + 424 E2E tests (370 passing, 42 pre-existing failures)
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
+- Go-live hardening branch: `feature/go-live-hardening` (13 commits, 5 sprints)
 
 ---
 
@@ -172,12 +173,15 @@ Hook: `useRealtimeSubscription({ table, event, filter, onInsert, onUpdate, onDel
 ---
 
 ## Key Entry Points
-- `src/App.tsx` — Routes (lazy-loaded), auth provider
-- `src/contexts/AuthContext.tsx` — Auth state (login, logout, role)
-- `src/lib/db.ts` — Supabase client + `checkMutationResult()`
+- `src/App.tsx` — Routes (lazy-loaded), auth provider, navigation tracking
+- `src/contexts/AuthContext.tsx` — Auth state (login, logout, role), Sentry user context
+- `src/lib/db.ts` — Supabase client + `checkMutationResult()` + multi-tab session recovery
 - `src/types/index.ts` — All TypeScript interfaces
 - `src/lib/activityLogger.ts` — Activity feed + notifications
+- `src/lib/metrics.ts` — Operational metrics: Sentry user context, navigation tracking, business events
+- `src/lib/reconciliation.ts` — Cross-entity data integrity checks (5 pure functions + DB wrapper)
 - `src/hooks/useRowSelection.tsx` — Bulk row selection (used on 15 pages)
+- `src/hooks/useIdempotentAction.ts` — Retry-safe action hook with `crypto.randomUUID` keys
 - `supabase/migrations/` — Database migrations
 - `supabase/functions/` — Edge Functions
 
