@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { FlaskConical } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import EmptyState from '../components/ui/EmptyState';
@@ -16,28 +16,18 @@ export default function BrandVsGeneric() {
 
   useEffect(() => {
     fetchProducts();
-  }, []);
+  }, [fetchProducts]);
 
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     const { data } = await supabase
       .from('products')
       .select('*')
       .eq('is_active', true)
       .order('product_name');
     setProducts((data || []) as Product[]);
-  };
+  }, []);
 
-  useEffect(() => {
-    if (selectedProductId) {
-      fetchComparison();
-    } else {
-      setSelectedProduct(null);
-      setMappings([]);
-      setGenericProduct(null);
-    }
-  }, [selectedProductId]);
-
-  const fetchComparison = async () => {
+  const fetchComparison = useCallback(async () => {
     setLoading(true);
     const prod = products.find((p) => p.id === selectedProductId) || null;
     setSelectedProduct(prod);
@@ -56,7 +46,17 @@ export default function BrandVsGeneric() {
       setGenericProduct(null);
     }
     setLoading(false);
-  };
+  }, [products, selectedProductId]);
+
+  useEffect(() => {
+    if (selectedProductId) {
+      fetchComparison();
+    } else {
+      setSelectedProduct(null);
+      setMappings([]);
+      setGenericProduct(null);
+    }
+  }, [selectedProductId, fetchComparison]);
 
   const fmt = (n: number | null) =>
     n != null

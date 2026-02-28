@@ -3,7 +3,7 @@
  * Also displays the count of pending actions waiting to sync.
  * Auto-syncs when the connection comes back.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { WifiOff, RefreshCw, CheckCircle2 } from 'lucide-react';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { getPendingCount } from '../../lib/offlineQueue';
@@ -22,13 +22,6 @@ export default function OfflineBanner() {
     return () => clearInterval(interval);
   }, []);
 
-  // Auto-sync when coming back online or when items are queued while online
-  useEffect(() => {
-    if (isOnline && pendingCount > 0 && !syncing) {
-      handleSync();
-    }
-  }, [isOnline, pendingCount]);
-
   async function checkPending() {
     try {
       const count = await getPendingCount();
@@ -38,7 +31,7 @@ export default function OfflineBanner() {
     }
   }
 
-  async function handleSync() {
+  const handleSync = useCallback(async () => {
     setSyncing(true);
     setSyncResult(null);
     try {
@@ -54,7 +47,14 @@ export default function OfflineBanner() {
       console.error('Sync failed:', error);
     }
     setSyncing(false);
-  }
+  }, []);
+
+  // Auto-sync when coming back online or when items are queued while online
+  useEffect(() => {
+    if (isOnline && pendingCount > 0 && !syncing) {
+      handleSync();
+    }
+  }, [isOnline, pendingCount, syncing, handleSync]);
 
   // Show nothing if online and no pending actions and no sync result
   if (isOnline && pendingCount === 0 && !syncResult) {

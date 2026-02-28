@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -107,15 +107,15 @@ export default function CustomerDetail() {
       // New customer — mark ready immediately
       setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
-  }, [id]);
+  }, [id, isNew, fetchCustomer, fetchAddresses]);
 
   useEffect(() => {
     if (!isNew && id && tab !== 'info') {
       fetchTabData(tab);
     }
-  }, [tab, id]);
+  }, [tab, id, isNew, fetchTabData]);
 
-  const fetchCustomer = async () => {
+  const fetchCustomer = useCallback(async () => {
     const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
     if (data) {
       setCustomer(data);
@@ -131,14 +131,14 @@ export default function CustomerDetail() {
     }
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  };
+  }, [id]);
 
-  const fetchAddresses = async () => {
+  const fetchAddresses = useCallback(async () => {
     const { data } = await supabase.from('customer_addresses').select('*').eq('customer_id', id).order('created_at');
     setAddresses(data || []);
-  };
+  }, [id]);
 
-  const fetchTabData = async (selectedTab: string) => {
+  const fetchTabData = useCallback(async (selectedTab: string) => {
     setTabLoading(true);
     if (selectedTab === 'fields') {
       const { data, error: fieldError } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
@@ -244,7 +244,7 @@ export default function CustomerDetail() {
       }
     }
     setTabLoading(false);
-  };
+  }, [id]);
 
   const handleSave = async () => {
     if (!customer.farm_name) {

@@ -4,7 +4,7 @@
  * Uses the get_ar_aging() and get_customer_statement() RPCs
  * to show aging buckets and generate printable customer statements.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { DollarSign, FileText, Printer, TrendingDown, TrendingUp, ArrowLeft, Zap, FileStack } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -67,7 +67,7 @@ export default function ARaging() {
   useEffect(() => {
     if (tab === 'aging') fetchAging();
     if (tab === 'season') fetchSeasonComparison();
-  }, [tab, asOfDate, seasonA, seasonB]);
+  }, [tab, asOfDate, seasonA, seasonB, fetchAging, fetchSeasonComparison]);
 
   const fetchCustomers = async () => {
     const { data } = await supabase
@@ -77,7 +77,7 @@ export default function ARaging() {
     setCustomers(data || []);
   };
 
-  const fetchAging = async () => {
+  const fetchAging = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase.rpc('get_ar_aging', {
       p_as_of_date: asOfDate,
@@ -88,7 +88,7 @@ export default function ARaging() {
     }
     setAgingData((data || []) as ARAgingRow[]);
     setLoading(false);
-  };
+  }, [asOfDate, toast]);
 
   const fetchStatement = async () => {
     if (!selectedCustomer) {
@@ -113,7 +113,7 @@ export default function ARaging() {
     setLoading(false);
   };
 
-  const fetchSeasonComparison = async () => {
+  const fetchSeasonComparison = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase.rpc('get_season_comparison', {
       p_season_a: seasonA,
@@ -125,7 +125,7 @@ export default function ARaging() {
     }
     setSeasonData((data || []) as SeasonComparisonRow[]);
     setLoading(false);
-  };
+  }, [seasonA, seasonB, toast]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);

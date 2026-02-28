@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Upload, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -37,9 +37,9 @@ export default function Orders() {
 
   useEffect(() => {
     fetchOrders();
-  }, []);
+  }, [fetchOrders]);
 
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     const { data: ordersData, error: ordersError } = await supabase
       .from('orders')
       .select('*, customer:customers(farm_name)')
@@ -94,7 +94,7 @@ export default function Orders() {
 
     setOrders(enriched);
     setLoading(false);
-  };
+  }, [toast]);
 
   const filtered = orders.filter((o) => {
     if (statusFilter && o.status !== statusFilter) return false;

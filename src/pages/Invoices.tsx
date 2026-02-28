@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, FileText, Check, Send, Ban, Printer, Mail, Zap, Trash2, Download } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -80,9 +80,9 @@ export default function Invoices() {
 
   useEffect(() => {
     fetchInvoices();
-  }, []);
+  }, [fetchInvoices]);
 
-  const fetchInvoices = async () => {
+  const fetchInvoices = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('invoices')
@@ -105,7 +105,7 @@ export default function Invoices() {
     })) as unknown as InvoiceRow[];
     setInvoices(rows);
     setLoading(false);
-  };
+  }, [toast]);
 
   const filtered = invoices.filter((inv) => {
     if (statusFilter && inv.status !== statusFilter) return false;

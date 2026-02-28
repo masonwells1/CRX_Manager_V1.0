@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { Plus, Trash2, Copy } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -72,9 +72,9 @@ export default function BlendRecipes() {
   useEffect(() => {
     fetchRecipes();
     fetchProducts();
-  }, []);
+  }, [fetchRecipes, fetchProducts]);
 
-  const fetchRecipes = async () => {
+  const fetchRecipes = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('blend_recipes')
@@ -96,16 +96,16 @@ export default function BlendRecipes() {
     })) as RecipeRow[];
     setRecipes(rows);
     setLoading(false);
-  };
+  }, [toast]);
 
-  const fetchProducts = async () => {
+  const fetchProducts = useCallback(async () => {
     const { data } = await supabase
       .from('products')
       .select('*')
       .eq('is_active', true)
       .order('product_name');
     setProducts(data || []);
-  };
+  }, []);
 
   const filtered = recipes.filter((r) => {
     if (typeFilter && r.recipe_type !== typeFilter) return false;

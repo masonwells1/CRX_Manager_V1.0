@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   PackageCheck,
@@ -58,17 +58,7 @@ export default function ReceivingLog() {
   const [staffProfiles, setStaffProfiles] = useState<Profile[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
 
-  useEffect(() => {
-    fetchData();
-    fetchStaff();
-  }, []);
-
-  /* Re-fetch when filters change */
-  useEffect(() => {
-    fetchData();
-  }, [vendorFilter, conditionFilter, receivedByFilter, dateFrom, dateTo]);
-
-  const fetchStaff = async () => {
+  const fetchStaff = useCallback(async () => {
     const { data } = await supabase
       .from('profiles')
       .select('*')
@@ -76,9 +66,9 @@ export default function ReceivingLog() {
       .eq('is_active', true)
       .order('full_name');
     setStaffProfiles((data || []) as Profile[]);
-  };
+  }, []);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     // Fetch summary
     try {
       const { data: sumData, error: sumError } = await supabase.rpc('get_receiving_summary');
@@ -122,7 +112,17 @@ export default function ReceivingLog() {
     }
 
     setLoading(false);
-  };
+  }, [vendorFilter, conditionFilter, receivedByFilter, dateFrom, dateTo, toast]);
+
+  useEffect(() => {
+    fetchData();
+    fetchStaff();
+  }, [fetchData, fetchStaff]);
+
+  /* Re-fetch when filters change */
+  useEffect(() => {
+    fetchData();
+  }, [vendorFilter, conditionFilter, receivedByFilter, dateFrom, dateTo, fetchData]);
 
   /* ─── Bulk selection ─── */
   const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Activity, CheckCircle2, XCircle, Edit, MessageCircle, UserPlus, Plus, Trash } from 'lucide-react';
 import { supabase } from '../../lib/db';
 import { useRealtimeActivity } from '../../hooks/useRealtimeSubscription';
@@ -24,11 +24,7 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    fetchActivities();
-  }, [noteId]);
-
-  const fetchActivities = async () => {
+  const fetchActivities = useCallback(async () => {
     let query = supabase
       .from('note_activity_log')
       .select('*, user:profiles!note_activity_log_user_id_fkey(full_name)')
@@ -42,7 +38,11 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
     const { data } = await query;
     setActivities((data || []) as ActivityEntry[]);
     setLoading(false);
-  };
+  }, [noteId, limit]);
+
+  useEffect(() => {
+    fetchActivities();
+  }, [fetchActivities]);
 
   useRealtimeActivity(noteId, fetchActivities);
 

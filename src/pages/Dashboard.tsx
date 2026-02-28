@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   DollarSign,
@@ -84,9 +84,9 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchDashboard();
-  }, [role]);
+  }, [role, fetchDashboard]);
 
-  const fetchDashboard = async () => {
+  const fetchDashboard = useCallback(async () => {
     setLoading(true);
     try {
       const { data: rpc, error } = await supabase.rpc('dashboard_summary');
@@ -187,7 +187,7 @@ export default function Dashboard() {
         p_error_message: err instanceof Error ? err.message : String(err),
       });
     }
-  };
+  }, [toast]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);

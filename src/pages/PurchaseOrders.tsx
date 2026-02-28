@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -26,6 +26,8 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import BulkPOImport from '../components/purchase-orders/BulkPOImport';
 import type { PurchaseOrder } from '../types';
 
+const CANCELLABLE = ['draft', 'submitted'];
+
 export default function PurchaseOrders() {
   const { role } = useAuth();
   const navigate = useNavigate();
@@ -43,9 +45,9 @@ export default function PurchaseOrders() {
 
   useEffect(() => {
     fetchPOs();
-  }, []);
+  }, [fetchPOs]);
 
-  const fetchPOs = async () => {
+  const fetchPOs = useCallback(async () => {
     const { data, error } = await supabase
       .from('purchase_orders')
       .select('*')
@@ -59,7 +61,7 @@ export default function PurchaseOrders() {
     }
     setPos((data || []) as PurchaseOrder[]);
     setLoading(false);
-  };
+  }, [toast]);
 
   /* ─── Summary stats ─── */
   const counts = useMemo(() => {
@@ -78,7 +80,7 @@ export default function PurchaseOrders() {
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
-  const CANCELLABLE = ['draft', 'submitted'];
+  // CANCELLABLE moved outside component body
 
   const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
     useRowSelection({

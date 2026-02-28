@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Bell, Check, Trash2, X } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
@@ -25,11 +25,25 @@ export default function NotificationsPanel() {
   const [loading, setLoading] = useState(true);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  const fetchNotifications = useCallback(async () => {
+    if (!profile) return;
+
+    const { data } = await supabase
+      .from('notifications')
+      .select('*')
+      .eq('user_id', profile.id)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    setNotifications((data || []) as Notification[]);
+    setLoading(false);
+  }, [profile]);
+
   useEffect(() => {
     if (profile) {
       fetchNotifications();
     }
-  }, [profile]);
+  }, [profile, fetchNotifications]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -46,20 +60,6 @@ export default function NotificationsPanel() {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [isOpen]);
-
-  const fetchNotifications = async () => {
-    if (!profile) return;
-
-    const { data } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', profile.id)
-      .order('created_at', { ascending: false })
-      .limit(20);
-
-    setNotifications((data || []) as Notification[]);
-    setLoading(false);
-  };
 
   useRealtimeNotifications(profile?.id || '', fetchNotifications);
 

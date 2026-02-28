@@ -153,22 +153,9 @@ export default function QuoteBuilder() {
   useEffect(() => {
     if (!initialLoadDone.current) return;
     setIsDirty(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
 
-  useEffect(() => {
-    fetchReferenceData();
-    if (isEditing && id) {
-      fetchQuote(id);
-    } else {
-      generateQuoteNumber().then(() => {
-        // Allow a tick for state to settle before tracking changes
-        setTimeout(() => { initialLoadDone.current = true; }, 0);
-      }).catch(() => { /* non-critical: quote number defaults handled inside generateQuoteNumber */ });
-    }
-  }, [id]);
-
-  const fetchReferenceData = async () => {
+  const fetchReferenceData = useCallback(async () => {
     const [custRes, prodRes, convRes] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
@@ -190,7 +177,7 @@ export default function QuoteBuilder() {
     setCustomers((custRes.data || []) as Customer[]);
     setProducts((prodRes.data || []) as Product[]);
     setUnitConversions((convRes.data || []) as UnitConversion[]);
-  };
+  }, [toast]);
 
   const generateQuoteNumber = async () => {
     // Use server-side sequence to prevent race conditions
@@ -209,7 +196,7 @@ export default function QuoteBuilder() {
     }
   };
 
-  const fetchQuote = async (quoteId: string) => {
+  const fetchQuote = useCallback(async (quoteId: string) => {
     const [quoteRes, sectionsRes, itemsRes] = await Promise.all([
       supabase.from('quotes').select('*, customer:customers(*)').eq('id', quoteId).maybeSingle(),
       supabase.from('quote_sections').select('*').eq('quote_id', quoteId).order('sort_order'),
@@ -275,7 +262,19 @@ export default function QuoteBuilder() {
     setLoading(false);
     // Allow a tick for state to settle before tracking changes
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  };
+  }, [toast, navigate]);
+
+  useEffect(() => {
+    fetchReferenceData();
+    if (isEditing && id) {
+      fetchQuote(id);
+    } else {
+      generateQuoteNumber().then(() => {
+        // Allow a tick for state to settle before tracking changes
+        setTimeout(() => { initialLoadDone.current = true; }, 0);
+      }).catch(() => { /* non-critical: quote number defaults handled inside generateQuoteNumber */ });
+    }
+  }, [id, fetchQuote, fetchReferenceData, isEditing]);
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === customerId),

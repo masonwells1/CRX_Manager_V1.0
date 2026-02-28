@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -55,6 +55,8 @@ function getPresetDates(preset: string): { start: string; end: string } {
   }
 }
 
+const DELETABLE: JobStatus[] = ['scheduled', 'in_progress', 'completed'];
+
 export default function Jobs() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -71,26 +73,25 @@ export default function Jobs() {
   const [exporting, setExporting] = useState(false);
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
-  const DELETABLE: JobStatus[] = ['scheduled', 'in_progress', 'completed'];
 
   useEffect(() => {
     fetchCustomers();
-  }, []);
+  }, [fetchCustomers]);
 
   useEffect(() => {
     fetchJobs();
-  }, [statusFilter, startDate, endDate, customerFilter]);
+  }, [statusFilter, startDate, endDate, customerFilter, fetchJobs]);
 
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     const { data } = await supabase
       .from('customers')
       .select('id, farm_name')
       .eq('is_active', true)
       .order('farm_name');
     setCustomers((data || []) as { id: string; farm_name: string }[]);
-  };
+  }, []);
 
-  const fetchJobs = async () => {
+  const fetchJobs = useCallback(async () => {
     setLoading(true);
     let query = supabase
       .from('jobs')
@@ -128,7 +129,7 @@ export default function Jobs() {
     })) as unknown as JobRow[];
     setJobs(rows);
     setLoading(false);
-  };
+  }, [statusFilter, startDate, endDate, customerFilter, toast]);
 
   const applyPreset = (preset: string) => {
     if (preset === 'all') {

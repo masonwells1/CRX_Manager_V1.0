@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, BellOff, CheckCheck } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -17,9 +17,9 @@ export default function Notifications() {
 
   useEffect(() => {
     if (profile) fetchNotifications();
-  }, [profile]);
+  }, [profile, fetchNotifications]);
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = useCallback(async () => {
     // Guard: Ensure profile is loaded
     if (!profile) {
       setLoading(false);
@@ -34,7 +34,7 @@ export default function Notifications() {
       .limit(200);
     setNotifications((data || []) as NotificationType[]);
     setLoading(false);
-  };
+  }, [profile]);
 
   const markAsRead = async (notification: NotificationType) => {
     if (!notification.is_read) {

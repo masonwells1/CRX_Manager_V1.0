@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, DollarSign } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -71,7 +71,7 @@ export default function ProductDetail() {
     } else {
       setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
-  }, [id]);
+  }, [id, isNew, fetchProduct, fetchCostHistory]);
 
   useEffect(() => {
     supabase.from('unit_conversions').select('*').order('unit').then(({ data }) => {
@@ -79,14 +79,14 @@ export default function ProductDetail() {
     });
   }, []);
 
-  const fetchProduct = async () => {
+  const fetchProduct = useCallback(async () => {
     const { data } = await supabase.from('products').select('*').eq('id', id).maybeSingle();
     if (data) setProduct(data);
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  };
+  }, [id]);
 
-  const fetchCostHistory = async () => {
+  const fetchCostHistory = useCallback(async () => {
     const { data } = await supabase
       .from('cost_history')
       .select('*')
@@ -94,7 +94,7 @@ export default function ProductDetail() {
       .order('changed_at', { ascending: false })
       .limit(20);
     setCostHistory(data || []);
-  };
+  }, [id]);
 
   const handleSave = async () => {
     if (!product.product_name) {

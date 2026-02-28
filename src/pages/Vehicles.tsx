@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Truck, Plane, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -38,9 +38,9 @@ export default function Vehicles() {
 
   useEffect(() => {
     fetchVehicles();
-  }, []);
+  }, [fetchVehicles]);
 
-  const fetchVehicles = async () => {
+  const fetchVehicles = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase
       .from('vehicles')
@@ -55,7 +55,7 @@ export default function Vehicles() {
     }
     setVehicles((data || []) as Vehicle[]);
     setLoading(false);
-  };
+  }, [toast]);
 
   const filtered = vehicles.filter((v) => {
     if (typeFilter && v.vehicle_type !== typeFilter) return false;

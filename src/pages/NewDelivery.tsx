@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Minus, Plus } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -61,7 +61,7 @@ export default function NewDelivery() {
     fetchOrders();
     fetchDrivers();
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, []);
+  }, [fetchOrders, fetchDrivers]);
 
   useEffect(() => {
     if (selectedOrderId) {
@@ -72,9 +72,9 @@ export default function NewDelivery() {
       setAddresses([]);
       setDeliveryItems([]);
     }
-  }, [selectedOrderId]);
+  }, [selectedOrderId, fetchOrderDetails]);
 
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     const { data } = await supabase
       .from('orders')
       .select('*, customer:customers(farm_name)')
@@ -87,9 +87,9 @@ export default function NewDelivery() {
     }));
     setOrders(rows);
     setLoadingOrders(false);
-  };
+  }, []);
 
-  const fetchDrivers = async () => {
+  const fetchDrivers = useCallback(async () => {
     const { data } = await supabase
       .from('profiles')
       .select('*')
@@ -97,9 +97,9 @@ export default function NewDelivery() {
       .eq('is_active', true)
       .order('full_name');
     setDrivers((data || []) as Profile[]);
-  };
+  }, []);
 
-  const fetchOrderDetails = async (orderId: string) => {
+  const fetchOrderDetails = useCallback(async (orderId: string) => {
     setLoadingDetails(true);
     const { data: orderData } = await supabase
       .from('orders')
@@ -155,7 +155,7 @@ export default function NewDelivery() {
       }));
     setDeliveryItems(drafts);
     setLoadingDetails(false);
-  };
+  }, [toast]);
 
   const updateItemQty = (orderItemId: string, qty: number) => {
     setDeliveryItems((prev) =>

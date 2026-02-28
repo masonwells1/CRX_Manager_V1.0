@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { MessageCircle, Send, Reply, Edit2, Trash2, X } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
@@ -51,7 +51,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
     setProfiles((data || []) as Profile[]);
   };
 
-  const fetchComments = async () => {
+  const fetchComments = useCallback(async () => {
     const { data } = await supabase
       .from('team_note_comments')
       .select('*, creator:profiles!team_note_comments_created_by_fkey(full_name)')
@@ -61,12 +61,12 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
 
     setComments((data || []) as Comment[]);
     setLoading(false);
-  };
+  }, [noteId]);
 
   useEffect(() => {
     fetchComments();
     fetchProfiles();
-  }, [noteId]);
+  }, [noteId, fetchComments]);
 
   useRealtimeComments(noteId, fetchComments);
 

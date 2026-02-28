@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Upload, Copy, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -18,6 +18,8 @@ import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import type { Quote } from '../types';
 
+const DELETABLE = ['draft', 'sent', 'revised'];
+
 export default function Quotes() {
   const navigate = useNavigate();
   const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -31,7 +33,6 @@ export default function Quotes() {
   const [exporting, setExporting] = useState(false);
 
   const canBulkAction = profile?.role === 'admin' || profile?.role === 'sales_rep';
-  const DELETABLE = ['draft', 'sent', 'revised'];
 
   // === GAP FIX #7: Duplicate a quote ===
   const handleDuplicate = async (quoteId: string, e: React.MouseEvent) => {
@@ -57,9 +58,9 @@ export default function Quotes() {
 
   useEffect(() => {
     fetchQuotes();
-  }, []);
+  }, [fetchQuotes]);
 
-  const fetchQuotes = async () => {
+  const fetchQuotes = useCallback(async () => {
     const { data, error } = await supabase
       .from('quotes')
       .select('*, customer:customers(farm_name)')
@@ -73,7 +74,7 @@ export default function Quotes() {
     }
     setQuotes((data || []) as Quote[]);
     setLoading(false);
-  };
+  }, [toast]);
 
   const filtered = quotes.filter((q) => {
     if (statusFilter && q.status !== statusFilter) return false;

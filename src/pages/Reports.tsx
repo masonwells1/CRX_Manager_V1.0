@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { Download, CheckCircle2, FileText } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -150,24 +150,8 @@ export default function Reports() {
       ; // non-critical: product filter dropdown stays empty on error
   }, []);
 
-  // ─── Fetch on tab/date change ───────────────────────────────
-  useEffect(() => {
-    if (category === 'profitability') fetchProfitability();
-    if (category === 'financial') fetchFinancial();
-    if (category === 'operational') fetchOperational();
-  }, [category, profitTab, financialTab, operationalTab, startDate, endDate, grossSalesGroupBy, chemProductId]);
-
-  // ─── PROFITABILITY fetchers (original logic) ────────────────
-  const fetchProfitability = async () => {
-    setLoading(true);
-    if (profitTab === 'customer') await fetchCustomerProfitability();
-    if (profitTab === 'product') await fetchProductProfitability();
-    if (profitTab === 'commission') await fetchCommissions();
-    if (profitTab === 'revenue') await fetchRevenue();
-    setLoading(false);
-  };
-
-  const fetchCustomerProfitability = async () => {
+  // ─── PROFITABILITY sub-fetchers ────────────────────────────
+  const fetchCustomerProfitability = useCallback(async () => {
     let query = supabase
       .from('orders')
       .select('total_price, total_profit, total_margin_pct, customer:customers(farm_name)');
@@ -190,9 +174,9 @@ export default function Reports() {
     }));
     result.sort((a, b) => b.total_revenue - a.total_revenue);
     setCustomerData(result);
-  };
+  }, [startDate, endDate, toast]);
 
-  const fetchProductProfitability = async () => {
+  const fetchProductProfitability = useCallback(async () => {
     let query = supabase
       .from('order_items')
       .select('product_name, total_price, profit, total_units_needed, order:orders!inner(order_date)');
@@ -215,9 +199,9 @@ export default function Reports() {
     }));
     result.sort((a, b) => b.total_revenue - a.total_revenue);
     setProductData(result);
-  };
+  }, [startDate, endDate, toast]);
 
-  const fetchCommissions = async () => {
+  const fetchCommissions = useCallback(async () => {
     let query = supabase.from('commissions').select('*').order('order_date', { ascending: false });
     if (!isAdmin && profile) query = query.eq('recipient_user_id', profile.id);
     if (startDate) query = query.gte('order_date', startDate);
@@ -226,9 +210,9 @@ export default function Reports() {
     if (error) { toast('error', 'Failed to load commissions.'); return; }
     setCommissionData((data || []) as CommissionRow[]);
     setSelectedCommissions(new Set());
-  };
+  }, [isAdmin, profile, startDate, endDate, toast]);
 
-  const fetchRevenue = async () => {
+  const fetchRevenue = useCallback(async () => {
     let query = supabase.from('orders').select('order_date, total_price, total_profit').order('order_date');
     if (startDate) query = query.gte('order_date', startDate);
     if (endDate) query = query.lte('order_date', endDate);
@@ -244,26 +228,27 @@ export default function Reports() {
       grouped[month].orders += 1;
     });
     setRevenueData(Object.values(grouped).sort((a, b) => b.month.localeCompare(a.month)));
-  };
+  }, [startDate, endDate, toast]);
 
-  // ─── FINANCIAL fetchers ─────────────────────────────────────
-  const fetchFinancial = async () => {
+  // ─── PROFITABILITY parent fetcher ────────────────────────────
+  const fetchProfitability = useCallback(async () => {
     setLoading(true);
-    if (financialTab === 'pnl') await fetchPnL();
-    if (financialTab === 'gross_sales') await fetchGrossSales();
-    if (financialTab === 'customer_balance') await fetchCustomerBalance();
-    if (financialTab === 'commission_balance') await fetchCommissionBalance();
+    if (profitTab === 'customer') await fetchCustomerProfitability();
+    if (profitTab === 'product') await fetchProductProfitability();
+    if (profitTab === 'commission') await fetchCommissions();
+    if (profitTab === 'revenue') await fetchRevenue();
     setLoading(false);
-  };
+  }, [profitTab, fetchCustomerProfitability, fetchProductProfitability, fetchCommissions, fetchRevenue]);
 
-  const fetchPnL = async () => {
+  // ─── FINANCIAL sub-fetchers ─────────────────────────────────
+  const fetchPnL = useCallback(async () => {
     if (!startDate || !endDate) { setPnlData([]); return; }
     const { data, error } = await supabase.rpc('get_bottom_line_pnl', { p_start_date: startDate, p_end_date: endDate });
     if (error) { toast('error', `P&L failed: ${error.message}`); return; }
     setPnlData((data || []) as PnLRow[]);
-  };
+  }, [startDate, endDate, toast]);
 
-  const fetchGrossSales = async () => {
+  const fetchGrossSales = useCallback(async () => {
     if (!startDate || !endDate) { setGrossSalesData([]); return; }
     const { data, error } = await supabase.rpc('get_gross_sales_report', {
       p_start_date: startDate,
@@ -272,33 +257,34 @@ export default function Reports() {
     });
     if (error) { toast('error', `Gross sales failed: ${error.message}`); return; }
     setGrossSalesData((data || []) as GrossSalesRow[]);
-  };
+  }, [startDate, endDate, grossSalesGroupBy, toast]);
 
-  const fetchCustomerBalance = async () => {
+  const fetchCustomerBalance = useCallback(async () => {
     const asOf = endDate || new Date().toISOString().split('T')[0];
     const { data, error } = await supabase.rpc('get_customer_balance_listing', { p_as_of_date: asOf });
     if (error) { toast('error', `Customer balance failed: ${error.message}`); return; }
     setCustBalanceData((data || []) as CustomerBalanceRow[]);
-  };
+  }, [endDate, toast]);
 
-  const fetchCommissionBalance = async () => {
+  const fetchCommissionBalance = useCallback(async () => {
     const asOf = endDate || new Date().toISOString().split('T')[0];
     const { data, error } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
     if (error) { toast('error', `Commission balance failed: ${error.message}`); return; }
     setCommBalanceData((data || []) as CommissionBalanceRow[]);
-  };
+  }, [endDate, toast]);
 
-  // ─── OPERATIONAL fetchers ───────────────────────────────────
-  const fetchOperational = async () => {
+  // ─── FINANCIAL parent fetcher ─────────────────────────────────
+  const fetchFinancial = useCallback(async () => {
     setLoading(true);
-    if (operationalTab === 'chemical_history') await fetchChemHistory();
-    if (operationalTab === 'inventory_cost') await fetchInventoryCost();
-    if (operationalTab === 'price_list') await fetchPriceList();
-    if (operationalTab === 'posted_applications') await fetchPostedApplications();
+    if (financialTab === 'pnl') await fetchPnL();
+    if (financialTab === 'gross_sales') await fetchGrossSales();
+    if (financialTab === 'customer_balance') await fetchCustomerBalance();
+    if (financialTab === 'commission_balance') await fetchCommissionBalance();
     setLoading(false);
-  };
+  }, [financialTab, fetchPnL, fetchGrossSales, fetchCustomerBalance, fetchCommissionBalance]);
 
-  const fetchChemHistory = async () => {
+  // ─── OPERATIONAL sub-fetchers ───────────────────────────────
+  const fetchChemHistory = useCallback(async () => {
     if (!chemProductId || !startDate || !endDate) { setChemHistoryData([]); return; }
     const { data, error } = await supabase.rpc('get_chemical_history', {
       p_product_id: chemProductId,
@@ -307,15 +293,15 @@ export default function Reports() {
     });
     if (error) { toast('error', `Chemical history failed: ${error.message}`); return; }
     setChemHistoryData((data || []) as ChemicalHistoryRow[]);
-  };
+  }, [chemProductId, startDate, endDate, toast]);
 
-  const fetchInventoryCost = async () => {
+  const fetchInventoryCost = useCallback(async () => {
     const { data, error } = await supabase.rpc('get_inventory_cost_report');
     if (error) { toast('error', `Inventory cost failed: ${error.message}`); return; }
     setInventoryCostData((data || []) as InventoryCostRow[]);
-  };
+  }, [toast]);
 
-  const fetchPriceList = async () => {
+  const fetchPriceList = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
       .select('product_name, sku, category, vendor, tier1_price, tier2_price, tier3_price, current_cost, product_form, container_type, container_size, unit_size')
@@ -324,9 +310,9 @@ export default function Reports() {
       .limit(500);
     if (error) { toast('error', 'Failed to load price list.'); return; }
     setPriceListData((data || []) as Record<string, unknown>[]);
-  };
+  }, [toast]);
 
-  const fetchPostedApplications = async () => {
+  const fetchPostedApplications = useCallback(async () => {
     let query = supabase
       .from('application_records')
       .select('record_number, application_date, customer:customers(farm_name), field:fields(field_name), applicator:profiles(full_name), total_acres, invoice_id, season')
@@ -343,7 +329,24 @@ export default function Reports() {
       field_name: r.field?.field_name || '-',
       applicator_name: r.applicator?.full_name || '-',
     })));
-  };
+  }, [startDate, endDate, toast]);
+
+  // ─── OPERATIONAL parent fetcher ───────────────────────────────
+  const fetchOperational = useCallback(async () => {
+    setLoading(true);
+    if (operationalTab === 'chemical_history') await fetchChemHistory();
+    if (operationalTab === 'inventory_cost') await fetchInventoryCost();
+    if (operationalTab === 'price_list') await fetchPriceList();
+    if (operationalTab === 'posted_applications') await fetchPostedApplications();
+    setLoading(false);
+  }, [operationalTab, fetchChemHistory, fetchInventoryCost, fetchPriceList, fetchPostedApplications]);
+
+  // ─── Fetch on tab/date change ───────────────────────────────
+  useEffect(() => {
+    if (category === 'profitability') fetchProfitability();
+    if (category === 'financial') fetchFinancial();
+    if (category === 'operational') fetchOperational();
+  }, [category, profitTab, financialTab, operationalTab, startDate, endDate, grossSalesGroupBy, chemProductId, fetchProfitability, fetchFinancial, fetchOperational]);
 
   // ─── YEAR-END fetchers / handlers ──────────────────────
   useEffect(() => {
@@ -352,7 +355,7 @@ export default function Reports() {
         .then(({ data }) => setYeCustomerOptions((data || []).map((r) => ({ id: r.id, name: r.farm_name }))))
         ; // non-critical: customer dropdown stays empty on error
     }
-  }, [category]);
+  }, [category, yeCustomerOptions.length]);
 
   const handleYeGenerate = async (season: number, options: YearEndSummaryOptions) => {
     setYeLoading(true);

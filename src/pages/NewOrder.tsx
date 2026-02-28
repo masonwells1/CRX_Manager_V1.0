@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -69,9 +69,9 @@ export default function NewOrder() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [fetchData]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     const [customersRes, productsRes] = await Promise.all([
       supabase.from('customers').select('*').order('farm_name'),
       supabase.from('products').select('*').order('product_name'),
@@ -89,7 +89,7 @@ export default function NewOrder() {
     setCustomers(customersRes.data || []);
     setProducts(productsRes.data || []);
     setLoading(false);
-  };
+  }, [toast]);
 
   const addItem = () => {
     setItems([...items, makeEmptyItem()]);

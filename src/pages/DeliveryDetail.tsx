@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff,
@@ -130,9 +130,9 @@ export default function DeliveryDetail() {
 
   useEffect(() => {
     if (id) fetchDelivery();
-  }, [id]);
+  }, [id, fetchDelivery]);
 
-  const fetchDelivery = async () => {
+  const fetchDelivery = useCallback(async () => {
     const { data: delData, error: delError } = await supabase
       .from('deliveries')
       .select('*')
@@ -231,7 +231,7 @@ export default function DeliveryDetail() {
       }
     }
     setLoading(false);
-  };
+  }, [id, toast]);
 
   const updateDeliveryQty = (itemId: string, qty: number, max: number) => {
     setDeliveryQtys((prev) => ({ ...prev, [itemId]: Math.max(0, Math.min(qty, max)) }));

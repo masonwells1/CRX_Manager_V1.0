@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck } from 'lucide-react';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
@@ -73,7 +73,7 @@ export function BlendTicketDetail() {
     if (id) {
       loadTicketData();
     }
-  }, [id]);
+  }, [id, loadTicketData]);
 
   useEffect(() => {
     const ticketData = {
@@ -91,7 +91,7 @@ export function BlendTicketDetail() {
     setWarnings(validateBlendMath(ticketData, productData));
   }, [products, formData.total_acres, formData.total_volume, formData.total_volume_unit]);
 
-  async function loadTicketData() {
+  const loadTicketData = useCallback(async () => {
     try {
       const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult, fieldsResult, linkedResult] = await Promise.all([
         supabase
@@ -186,7 +186,7 @@ export function BlendTicketDetail() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [id]);
 
   // Track dirty state from form changes
   useEffect(() => {

@@ -4,7 +4,7 @@
  * Manages applicator licenses for customers (expiry tracking, alerts)
  * and provides a view of Restricted Use Pesticide (RUP) products.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { Plus, AlertTriangle, Award, Package } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -72,9 +72,9 @@ export default function Compliance() {
 
   useEffect(() => {
     fetchData();
-  }, [tab]);
+  }, [tab, fetchData]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     if (tab === 'licenses') {
       await Promise.all([fetchLicenses(), fetchCustomers()]);
@@ -82,9 +82,9 @@ export default function Compliance() {
       await fetchRUPProducts();
     }
     setLoading(false);
-  };
+  }, [tab, fetchLicenses, fetchCustomers, fetchRUPProducts]);
 
-  const fetchLicenses = async () => {
+  const fetchLicenses = useCallback(async () => {
     const { data, error } = await supabase
       .from('applicator_licenses')
       .select('*, customer:customers(farm_name)')
@@ -101,14 +101,14 @@ export default function Compliance() {
       farm_name: l.customer?.farm_name || 'Unknown',
     })) as unknown as LicenseWithCustomer[];
     setLicenses(mapped);
-  };
+  }, [toast]);
 
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
     const { data } = await supabase.from('customers').select('id, farm_name').order('farm_name');
     setCustomers(data || []);
-  };
+  }, []);
 
-  const fetchRUPProducts = async () => {
+  const fetchRUPProducts = useCallback(async () => {
     const { data, error } = await supabase
       .from('products')
       .select('id, product_name, sku, vendor, manufacturer, epa_registration, signal_word, is_active')
@@ -121,7 +121,7 @@ export default function Compliance() {
       return;
     }
     setRUPProducts((data || []) as RUPProduct[]);
-  };
+  }, [toast]);
 
   const today = new Date().toISOString().split('T')[0];
   const thirtyDaysOut = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];

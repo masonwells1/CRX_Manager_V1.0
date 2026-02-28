@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef , useCallback } from 'react';
 import {
   Plus, CheckSquare, Square, Pin, PinOff, Clock, Pencil, Trash2,
   MessageCircle, Activity, LayoutGrid, User, History, ListChecks,
@@ -95,27 +95,11 @@ export default function TeamBoard() {
 
   const isAdmin = role === 'admin';
 
-  useEffect(() => {
-    fetchNotes();
-    fetchProfiles();
-
-    const noteId = searchParams.get('note');
-    if (noteId) {
-      openNoteDetail(noteId);
-    }
-  }, [searchParams]);
-
-  useEffect(() => {
-    if (viewTab === 'activity') {
-      fetchGlobalActivity();
-    }
-  }, [viewTab, activityDateFrom, activityDateTo, activityUser, activityAction]);
-
   useRealtimeNotes(() => {
     fetchNotes();
   });
 
-  const fetchProfiles = async () => {
+  const fetchProfiles = useCallback(async () => {
     const { data, error } = await supabase.from('profiles').select('*').eq('is_active', true).order('full_name');
     if (error) {
       console.error('Failed to load profiles:', error.message);
@@ -123,9 +107,9 @@ export default function TeamBoard() {
       return;
     }
     setProfiles((data || []) as Profile[]);
-  };
+  }, [toast]);
 
-  const fetchNotes = async () => {
+  const fetchNotes = useCallback(async () => {
     // Optimized: Fetch notes with completion info in a single query
     // Note: completed_by FK may be auto-named, so we use the column reference
     const { data: notesData, error: notesError } = await supabase
@@ -201,9 +185,9 @@ export default function TeamBoard() {
       setNotes([]);
     }
     setLoading(false);
-  };
+  }, [toast]);
 
-  const fetchGlobalActivity = async () => {
+  const fetchGlobalActivity = useCallback(async () => {
     setActivityLoading(true);
     let query = supabase
       .from('note_activity_log')
@@ -257,9 +241,9 @@ export default function TeamBoard() {
       setGlobalActivities([]);
     }
     setActivityLoading(false);
-  };
+  }, [activityDateFrom, activityDateTo, activityUser, activityAction, toast]);
 
-  const openNoteDetail = async (noteId: string) => {
+  const openNoteDetail = useCallback(async (noteId: string) => {
     let note = notes.find(n => n.id === noteId);
 
     // If not found in local state (e.g., page just loaded), fetch it directly
@@ -285,7 +269,23 @@ export default function TeamBoard() {
       setDetailModalOpen(true);
       setSearchParams({});
     }
-  };
+  }, [notes, setSearchParams]);
+
+  useEffect(() => {
+    fetchNotes();
+    fetchProfiles();
+
+    const noteId = searchParams.get('note');
+    if (noteId) {
+      openNoteDetail(noteId);
+    }
+  }, [searchParams, fetchNotes, fetchProfiles, openNoteDetail]);
+
+  useEffect(() => {
+    if (viewTab === 'activity') {
+      fetchGlobalActivity();
+    }
+  }, [viewTab, activityDateFrom, activityDateTo, activityUser, activityAction, fetchGlobalActivity]);
 
   // Track dirty state for note modal form
   useEffect(() => {

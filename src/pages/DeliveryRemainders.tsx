@@ -2,7 +2,7 @@
  * DeliveryRemainders — Shows all pending delivery remainder items across all customers.
  * Allows creating follow-up deliveries from grouped remainders.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, Truck, Package } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -46,9 +46,9 @@ export default function DeliveryRemainders() {
 
   useEffect(() => {
     fetchRemainders();
-  }, []);
+  }, [fetchRemainders]);
 
-  const fetchRemainders = async () => {
+  const fetchRemainders = useCallback(async () => {
     const { data, error } = await supabase
       .from('delivery_remainders')
       .select(`
@@ -78,7 +78,7 @@ export default function DeliveryRemainders() {
 
     setRemainders(rows);
     setLoading(false);
-  };
+  }, [toast]);
 
   const filtered = remainders.filter((r) => {
     if (statusFilter && r.status !== statusFilter) return false;

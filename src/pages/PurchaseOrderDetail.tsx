@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, PackageCheck, Pencil, Trash2, Download } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -79,9 +79,9 @@ export default function PurchaseOrderDetail() {
       fetchPO();
       fetchReceivingHistory();
     }
-  }, [id]);
+  }, [id, fetchPO, fetchReceivingHistory]);
 
-  const fetchPO = async () => {
+  const fetchPO = useCallback(async () => {
     const { data: poData } = await supabase
       .from('purchase_orders')
       .select('*')
@@ -97,9 +97,9 @@ export default function PurchaseOrderDetail() {
       setItems((itemsData || []) as PurchaseOrderItem[]);
     }
     setLoading(false);
-  };
+  }, [id]);
 
-  const fetchReceivingHistory = async () => {
+  const fetchReceivingHistory = useCallback(async () => {
     setHistoryLoading(true);
     const { data, error } = await supabase
       .from('receiving_records')
@@ -116,7 +116,7 @@ export default function PurchaseOrderDetail() {
       setReceivingHistory(rows as ReceivingRecord[]);
     }
     setHistoryLoading(false);
-  };
+  }, [id]);
 
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
