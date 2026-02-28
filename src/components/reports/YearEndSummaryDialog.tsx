@@ -7,6 +7,7 @@ import { useState } from 'react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { FileText } from 'lucide-react';
+import { computeSeason } from '../../utils/season';
 import type { YearEndSummaryOptions } from '../../lib/yearEndSummaryPdf';
 
 interface YearEndSummaryDialogProps {
@@ -22,8 +23,7 @@ interface YearEndSummaryDialogProps {
 }
 
 function getCurrentSeason() {
-  const now = new Date();
-  return now.getMonth() >= 6 ? now.getFullYear() + 1 : now.getFullYear();
+  return computeSeason();
 }
 
 export default function YearEndSummaryDialog({
@@ -76,7 +76,7 @@ export default function YearEndSummaryDialog({
           >
             {seasonOptions.map((s) => (
               <option key={s} value={s}>
-                {s} (Jul {s - 1} – Jun {s})
+                {s} (Oct {s - 1} – Sep {s})
               </option>
             ))}
           </select>

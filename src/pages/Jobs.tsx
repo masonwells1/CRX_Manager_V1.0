@@ -15,6 +15,7 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { getSeasonDates } from '../utils/season';
 import type { Job, JobStatus } from '../types';
 
 type JobRow = Job & {
@@ -32,10 +33,9 @@ const statusVariant: Record<JobStatus, BadgeVariant> = {
   invoiced: 'success',
 };
 
+// Crop season = October 1 to September 30
 function getPresetDates(preset: string): { start: string; end: string } {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
 
   switch (preset) {
     case 'today':
@@ -49,11 +49,7 @@ function getPresetDates(preset: string): { start: string; end: string } {
       return { start: startOfWeek.toISOString().split('T')[0], end: endOfWeek.toISOString().split('T')[0] };
     }
     case 'this_season':
-      if (month >= 6) {
-        return { start: `${year}-07-01`, end: `${year + 1}-06-30` };
-      } else {
-        return { start: `${year - 1}-07-01`, end: `${year}-06-30` };
-      }
+      return getSeasonDates(now);
     default:
       return { start: '', end: '' };
   }

@@ -13,6 +13,7 @@ import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
+import { computeSeason } from '../utils/season';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
 interface InventoryRow extends Inventory {
@@ -154,9 +155,8 @@ export default function InventoryPage() {
       .in('quote.status', ['draft', 'sent', 'revised']);
 
     const now = new Date();
-    const seasonStart = now.getMonth() >= 6
-      ? new Date(now.getFullYear(), 6, 1)
-      : new Date(now.getFullYear() - 1, 6, 1);
+    const season = computeSeason(now);
+    const seasonStart = new Date(season - 1, 9, 1); // Oct 1
 
     const deliveredFetch = supabase
       .from('inventory_transactions')

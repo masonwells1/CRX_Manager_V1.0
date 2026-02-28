@@ -17,6 +17,7 @@ import { downloadStatementPdf, downloadBatchStatements } from '../lib/statementP
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
 import FinanceChargePreviewModal from '../components/invoices/FinanceChargePreviewModal';
 import { useAuth } from '../contexts/AuthContext';
+import { computeSeason } from '../utils/season';
 import type { ARAgingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
 
 type TabKey = 'aging' | 'statement' | 'season';
@@ -54,9 +55,7 @@ export default function ARaging() {
   const [stmtCustomerName, setStmtCustomerName] = useState('');
 
   // Season Comparison
-  const currentYear = new Date().getFullYear();
-  const currentMonth = new Date().getMonth();
-  const currentSeason = currentMonth >= 6 ? currentYear + 1 : currentYear;
+  const currentSeason = computeSeason();
   const [seasonA, setSeasonA] = useState(currentSeason);
   const [seasonB, setSeasonB] = useState(currentSeason - 1);
   const [seasonData, setSeasonData] = useState<SeasonComparisonRow[]>([]);

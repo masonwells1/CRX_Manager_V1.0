@@ -10,6 +10,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { Download } from 'lucide-react';
+import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
 import type { ApplicationRecord } from '../types';
 
 type AppRecordRow = ApplicationRecord & {
@@ -20,24 +21,17 @@ type AppRecordRow = ApplicationRecord & {
   product_count: number;
 };
 
+// Crop season = October 1 to September 30
 function getPresetDates(preset: string): { start: string; end: string } {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth();
 
   switch (preset) {
     case 'this_season':
-      if (month >= 6) {
-        return { start: `${year}-07-01`, end: `${year + 1}-06-30` };
-      } else {
-        return { start: `${year - 1}-07-01`, end: `${year}-06-30` };
-      }
-    case 'last_season':
-      if (month >= 6) {
-        return { start: `${year - 1}-07-01`, end: `${year}-06-30` };
-      } else {
-        return { start: `${year - 2}-07-01`, end: `${year - 1}-06-30` };
-      }
+      return getSeasonDates(now);
+    case 'last_season': {
+      const s = computeSeason(now) - 1;
+      return { start: seasonStartDate(s), end: seasonEndDate(s) };
+    }
     case 'last30': {
       const d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
       return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };

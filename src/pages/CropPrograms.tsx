@@ -20,6 +20,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
+import { computeSeason } from '../utils/season';
 import type { Product } from '../types';
 
 interface ProgramItem {
@@ -45,9 +46,8 @@ interface CropProgram {
 
 const CROP_TYPES = ['Corn', 'Soybeans', 'Wheat', 'Cotton', 'Hay/Forage', 'Other'];
 function getSeasonChoices(): string[] {
-  const now = new Date();
-  // Season year = crop year ending June 30. If we're in Jul-Dec, current season is next calendar year.
-  const base = now.getMonth() >= 6 ? now.getFullYear() + 1 : now.getFullYear();
+  // Season year = crop year ending Sep 30. Uses centralized computeSeason().
+  const base = computeSeason();
   return [String(base - 1), String(base), String(base + 1)];
 }
 const SEASONS = getSeasonChoices();
