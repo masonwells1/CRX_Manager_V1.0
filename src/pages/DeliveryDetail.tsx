@@ -1004,6 +1004,7 @@ export default function DeliveryDetail() {
                     quantity: i.quantity,
                     quantity_delivered: delivery.status === 'completed' ? i.quantity_delivered : undefined,
                     unit_size: i.unit_size || '-',
+                    tote_number: (i as Record<string, unknown>).tote_number as string | null || undefined,
                   })),
                 })
               }
@@ -1251,6 +1252,9 @@ export default function DeliveryDetail() {
                   )}
                   <th className="px-4 py-3 text-right font-medium text-secondary">Remaining After</th>
                   <th className="px-4 py-3 text-left font-medium text-secondary">Unit</th>
+                  {items.some((i: Record<string, unknown>) => i.tote_number) && (
+                    <th className="px-4 py-3 text-left font-medium text-secondary">Tote #</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -1285,6 +1289,9 @@ export default function DeliveryDetail() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-secondary">{item.unit_size || '-'}</td>
+                      {items.some((i: Record<string, unknown>) => i.tote_number) && (
+                        <td className="px-4 py-3 text-secondary">{(item as Record<string, unknown>).tote_number as string || '-'}</td>
+                      )}
                     </tr>
                   );
                 })}

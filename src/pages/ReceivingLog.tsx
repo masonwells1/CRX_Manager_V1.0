@@ -256,9 +256,14 @@ export default function ReceivingLog() {
       header: 'Condition',
       sortable: true,
       render: (row) => (
-        <Badge variant={conditionVariant(row.condition)}>
-          {conditionLabel(row.condition)}
-        </Badge>
+        <div className="flex items-center gap-1.5">
+          <Badge variant={conditionVariant(row.condition)}>
+            {conditionLabel(row.condition)}
+          </Badge>
+          {row.is_non_returnable && (
+            <Badge variant="warning">Non-Returnable</Badge>
+          )}
+        </div>
       ),
     },
     {

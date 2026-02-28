@@ -402,6 +402,7 @@ export interface ReceivingRecord {
   storage_location: string;
   unit_size: string | null;
   created_at: string;
+  is_non_returnable?: boolean;
   // Joined fields from RPC
   po_number?: string;
   vendor?: string;

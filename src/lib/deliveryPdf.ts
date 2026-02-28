@@ -23,6 +23,7 @@ interface PdfDeliveryItem {
   quantity: number;
   unit_size: string;
   quantity_delivered?: number;
+  tote_number?: string | null;
 }
 
 export interface PdfDeliveryData {
@@ -115,25 +116,30 @@ function renderDeliveryPage(
   // Items table — show delivered vs planned for completed deliveries
   const isCompleted = data.status === 'completed';
   const hasDelivered = isCompleted && data.items.some((it) => it.quantity_delivered != null);
+  const hasTote = data.items.some((it) => it.tote_number);
 
-  const head = hasDelivered
-    ? [['Product', 'Planned', 'Delivered', 'Unit Size']]
-    : [['Product', 'Quantity', 'Unit Size']];
+  const head = (() => {
+    const cols = ['Product'];
+    if (hasDelivered) {
+      cols.push('Planned', 'Delivered');
+    } else {
+      cols.push('Quantity');
+    }
+    cols.push('Unit Size');
+    if (hasTote) cols.push('Tote #');
+    return [cols];
+  })();
 
   const rows = data.items.map((item) => {
+    const cols = [item.product_name];
     if (hasDelivered) {
-      return [
-        item.product_name,
-        fmt(item.quantity),
-        fmt(item.quantity_delivered ?? item.quantity),
-        item.unit_size || '-',
-      ];
+      cols.push(fmt(item.quantity), fmt(item.quantity_delivered ?? item.quantity));
+    } else {
+      cols.push(fmt(item.quantity));
     }
-    return [
-      item.product_name,
-      fmt(item.quantity),
-      item.unit_size || '-',
-    ];
+    cols.push(item.unit_size || '-');
+    if (hasTote) cols.push(item.tote_number || '-');
+    return cols;
   });
 
   autoTable(doc, {
