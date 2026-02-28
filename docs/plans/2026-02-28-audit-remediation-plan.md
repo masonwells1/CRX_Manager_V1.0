@@ -744,56 +744,37 @@ git commit -m "feat: add overdue license filter to Compliance page"
 
 ---
 
-## Phase 3: Product-Specific Prepay System (~2-3 sprints)
+## Phase 3: Bucket-Based Prepay System (~1-1.5 sprints)
 
-### Task 15: Schema migration for prepay enhancements
+### Task 15: Schema migration for bucket labels + seed data
 
 **Files:**
-- Create: `supabase/migrations/20260301200000_prepay_product_specific.sql`
+- Create: `supabase/migrations/20260301200000_prepay_bucket_system.sql`
 
 **Step 1: Write the migration**
 
 ```sql
--- Phase 3: Product-specific prepayment system
--- Enhances prepay_credits with optional product linkage and price locking
+-- Phase 3: Bucket-based prepay system
+-- Adds a soft label to prepay_credits for earmarking dollars by purpose.
+-- One check → multiple rows in prepay_credits, each with a bucket_label.
 
--- New columns on prepay_credits
+-- Single new column: a human-readable earmark label
 ALTER TABLE public.prepay_credits
-  ADD COLUMN IF NOT EXISTS prepay_type text NOT NULL DEFAULT 'general'
-    CHECK (prepay_type IN ('general', 'sku_specific', 'category', 'family'));
+  ADD COLUMN IF NOT EXISTS bucket_label text;
 
-ALTER TABLE public.prepay_credits
-  ADD COLUMN IF NOT EXISTS product_id uuid REFERENCES products(id);
+-- Seed predefined bucket categories into app_settings
+-- Bookkeeper picks from this dropdown; admin can add/edit labels
+INSERT INTO public.app_settings (setting_key, setting_value)
+VALUES (
+  'prepay_bucket_labels',
+  '["Corn Chemical","Soybean Chemical","Corn Fungicide","Soybean Fungicide","Nutritionals","Application","Parts/Service","General"]'
+)
+ON CONFLICT (setting_key) DO NOTHING;
 
-ALTER TABLE public.prepay_credits
-  ADD COLUMN IF NOT EXISTS product_category text;
-
-ALTER TABLE public.prepay_credits
-  ADD COLUMN IF NOT EXISTS product_family text;
-
-ALTER TABLE public.prepay_credits
-  ADD COLUMN IF NOT EXISTS locked_price_cents bigint;
-
-ALTER TABLE public.prepay_credits
-  ADD COLUMN IF NOT EXISTS locked_price_unit text;
-
-ALTER TABLE public.prepay_credits
-  ADD COLUMN IF NOT EXISTS locked_until date;
-
--- Validation: sku_specific requires product_id
--- category requires product_category
--- family requires product_family
--- general requires none of the above
--- (Enforced at RPC level, not as CHECK constraint, for flexibility)
-
--- Index for efficient lookups
-CREATE INDEX IF NOT EXISTS idx_prepay_credits_type
-  ON public.prepay_credits (customer_id, prepay_type)
+-- Index for grouping by check reference
+CREATE INDEX IF NOT EXISTS idx_prepay_credits_reference
+  ON public.prepay_credits (customer_id, reference_number)
   WHERE balance_cents > 0;
-
-CREATE INDEX IF NOT EXISTS idx_prepay_credits_product
-  ON public.prepay_credits (product_id)
-  WHERE product_id IS NOT NULL AND balance_cents > 0;
 ```
 
 **Step 2: Run migration**
@@ -802,27 +783,28 @@ CREATE INDEX IF NOT EXISTS idx_prepay_credits_product
 npx supabase db push
 ```
 
+Expected: ALTER TABLE + INSERT + CREATE INDEX all succeed.
+
 **Step 3: Commit**
 
 ```bash
-git add supabase/migrations/20260301200000_prepay_product_specific.sql
-git commit -m "feat: add product-specific columns to prepay_credits
+git add supabase/migrations/20260301200000_prepay_bucket_system.sql
+git commit -m "feat: add bucket_label to prepay_credits + seed bucket categories
 
-- prepay_type: general|sku_specific|category|family
-- product_id, product_category, product_family for targeting
-- locked_price_cents + locked_price_unit for price locks
-- locked_until for optional expiration"
+- prepay_credits.bucket_label: soft earmark label (e.g. 'Corn Chemical')
+- app_settings.prepay_bucket_labels: predefined dropdown options
+- Index on (customer_id, reference_number) for check grouping"
 ```
 
-### Task 16: Create apply_prepay_to_invoice() RPC
+### Task 16: Create apply_prepay_to_invoice() and batch RPCs
 
 **Files:**
 - Create: `supabase/migrations/20260301200001_prepay_application_rpcs.sql`
 
-**Step 1: Write the RPC**
+**Step 1: Write apply_prepay_to_invoice()**
 
 ```sql
--- Individual prepay-to-invoice application with full audit trail
+-- Apply a specific prepay bucket to a specific invoice with full audit trail
 
 CREATE OR REPLACE FUNCTION public.apply_prepay_to_invoice(
   p_prepay_credit_id uuid,
@@ -840,7 +822,7 @@ DECLARE
   v_invoice record;
   v_applied_id uuid;
 BEGIN
-  -- Lock and read the prepay credit
+  -- Lock and read the prepay credit (bucket)
   SELECT * INTO v_credit
     FROM public.prepay_credits
     WHERE id = p_prepay_credit_id
@@ -877,7 +859,7 @@ BEGIN
     p_prepay_credit_id, p_invoice_id, p_amount_cents, p_performed_by
   ) RETURNING id INTO v_applied_id;
 
-  -- Deduct from prepay credit
+  -- Deduct from prepay credit bucket
   UPDATE public.prepay_credits
     SET balance_cents = balance_cents - p_amount_cents,
         updated_at = now()
@@ -889,7 +871,7 @@ BEGIN
         updated_at = now()
     WHERE id = p_invoice_id;
 
-  -- Update customer prepay_balance_cents
+  -- Update customer aggregate prepay_balance_cents
   UPDATE public.customers
     SET prepay_balance_cents = prepay_balance_cents - p_amount_cents,
         updated_at = now()
@@ -904,8 +886,8 @@ BEGIN
       'prepay_credit_id', p_prepay_credit_id,
       'invoice_id', p_invoice_id,
       'amount_cents', p_amount_cents,
-      'prepay_type', v_credit.prepay_type,
-      'product_id', v_credit.product_id
+      'bucket_label', v_credit.bucket_label,
+      'check_reference', v_credit.reference_number
     )
   );
 
@@ -924,7 +906,7 @@ GRANT EXECUTE ON FUNCTION public.apply_prepay_to_invoice(uuid, uuid, bigint, uui
 **Step 2: Write batch_apply_prepayments()**
 
 ```sql
--- Batch apply multiple allocations atomically
+-- Batch apply multiple allocations atomically (for "Save Allocations" button)
 
 CREATE OR REPLACE FUNCTION public.batch_apply_prepayments(
   p_allocations jsonb,  -- [{prepay_credit_id, invoice_id, amount_cents}]
@@ -967,110 +949,9 @@ $$;
 GRANT EXECUTE ON FUNCTION public.batch_apply_prepayments(jsonb, uuid) TO authenticated;
 ```
 
-**Step 3: Write suggest_prepay_matching()**
+> **Note:** No `suggest_prepay_matching()` RPC needed. The bookkeeper manually allocates from labeled buckets — no auto-match algorithm.
 
-```sql
--- Suggest auto-match allocations for a customer (read-only, no side effects)
-
-CREATE OR REPLACE FUNCTION public.suggest_prepay_matching(
-  p_customer_id uuid
-)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = ''
-STABLE
-AS $$
-DECLARE
-  v_credit record;
-  v_invoice record;
-  v_suggestions jsonb[] := ARRAY[]::jsonb[];
-  v_remaining bigint;
-  v_apply_amount bigint;
-BEGIN
-  -- Process credits in priority order: sku_specific first, then category, then family, then general
-  FOR v_credit IN
-    SELECT pc.*, p.product_name, p.category AS p_category
-      FROM public.prepay_credits pc
-      LEFT JOIN public.products p ON p.id = pc.product_id
-      WHERE pc.customer_id = p_customer_id
-        AND pc.balance_cents > 0
-      ORDER BY
-        CASE pc.prepay_type
-          WHEN 'sku_specific' THEN 1
-          WHEN 'category' THEN 2
-          WHEN 'family' THEN 3
-          WHEN 'general' THEN 4
-        END,
-        pc.created_at
-  LOOP
-    v_remaining := v_credit.balance_cents;
-
-    -- Find matching invoices
-    FOR v_invoice IN
-      SELECT i.id AS invoice_id, i.invoice_number, i.balance_cents,
-             i.due_date, i.invoice_date
-        FROM public.invoices i
-        WHERE i.customer_id = p_customer_id
-          AND i.status = 'posted'
-          AND i.balance_cents > 0
-          AND i.deleted_at IS NULL
-          -- For sku_specific: invoice must contain that product
-          AND (v_credit.prepay_type != 'sku_specific' OR EXISTS (
-            SELECT 1 FROM public.invoice_items ii
-            WHERE ii.invoice_id = i.id AND ii.product_id = v_credit.product_id
-          ))
-          -- For category: invoice must contain a product in that category
-          AND (v_credit.prepay_type != 'category' OR EXISTS (
-            SELECT 1 FROM public.invoice_items ii
-            JOIN public.products pp ON pp.id = ii.product_id
-            WHERE ii.invoice_id = i.id AND pp.category = v_credit.product_category
-          ))
-          -- For family: invoice must contain a product in that family
-          AND (v_credit.prepay_type != 'family' OR EXISTS (
-            SELECT 1 FROM public.invoice_items ii
-            JOIN public.products pp ON pp.id = ii.product_id
-            WHERE ii.invoice_id = i.id AND pp.product_family = v_credit.product_family
-          ))
-        ORDER BY i.due_date NULLS LAST, i.invoice_date
-    LOOP
-      EXIT WHEN v_remaining <= 0;
-
-      v_apply_amount := LEAST(v_remaining, v_invoice.balance_cents);
-
-      v_suggestions := array_append(v_suggestions, jsonb_build_object(
-        'prepay_credit_id', v_credit.id,
-        'prepay_type', v_credit.prepay_type,
-        'product_name', v_credit.product_name,
-        'product_category', v_credit.product_category,
-        'product_family', v_credit.product_family,
-        'invoice_id', v_invoice.invoice_id,
-        'invoice_number', v_invoice.invoice_number,
-        'suggested_amount_cents', v_apply_amount,
-        'match_reason',
-          CASE v_credit.prepay_type
-            WHEN 'sku_specific' THEN 'SKU match: ' || COALESCE(v_credit.product_name, '')
-            WHEN 'category' THEN 'Category match: ' || COALESCE(v_credit.product_category, '')
-            WHEN 'family' THEN 'Family match: ' || COALESCE(v_credit.product_family, '')
-            WHEN 'general' THEN 'General credit (oldest invoice first)'
-          END
-      ));
-
-      v_remaining := v_remaining - v_apply_amount;
-    END LOOP;
-  END LOOP;
-
-  RETURN jsonb_build_object(
-    'customer_id', p_customer_id,
-    'suggestions', to_jsonb(v_suggestions)
-  );
-END;
-$$;
-
-GRANT EXECUTE ON FUNCTION public.suggest_prepay_matching(uuid) TO authenticated;
-```
-
-**Step 4: Run migration + commit**
+**Step 3: Run migration + commit**
 
 ```bash
 npx supabase db push
@@ -1078,42 +959,65 @@ git add supabase/migrations/20260301200001_prepay_application_rpcs.sql
 git commit -m "feat: add prepay application RPCs
 
 - apply_prepay_to_invoice(): atomic single-allocation with audit trail
-- batch_apply_prepayments(): atomic batch allocation
-- suggest_prepay_matching(): read-only auto-match proposals by type"
+- batch_apply_prepayments(): atomic batch allocation for Save button"
 ```
 
-### Task 17: Enhance PrepaymentManager create-credit form
+### Task 17: Add "Split Check" flow to PrepaymentManager
 
 **Files:**
 - Modify: `src/pages/PrepaymentManager.tsx`
 
-**Step 1: Add prepay type selector to create-credit UI**
+**Step 1: Fetch bucket labels from app_settings**
 
-When creating a new prepay credit, add fields:
-- **Type selector:** Radio group — General | Specific Product | Category | Product Family
-- **Product picker:** Autocomplete from products table (shown when type = `sku_specific`)
-- **Category dropdown:** Populated from distinct `products.category` values (shown when type = `category`)
-- **Family text field:** Free text (shown when type = `family`)
-- **Locked price + unit:** Two inputs — dollar amount and unit text (shown for `sku_specific` and `category`)
-- **Valid until date:** Date picker (optional)
+On mount, fetch the predefined bucket labels:
 
-**Step 2: Include new fields in the insert payload**
+```typescript
+const [bucketLabels, setBucketLabels] = useState<string[]>([]);
 
-When calling `create_prepay_credit()` or inserting into `prepay_credits`, include:
-- `prepay_type`
-- `product_id` (if sku_specific)
-- `product_category` (if category)
-- `product_family` (if family)
-- `locked_price_cents` (if applicable)
-- `locked_price_unit` (if applicable)
-- `locked_until` (if provided)
+useEffect(() => {
+  supabase
+    .from('app_settings')
+    .select('setting_value')
+    .eq('setting_key', 'prepay_bucket_labels')
+    .maybeSingle()
+    .then(({ data }) => {
+      if (data?.setting_value) {
+        setBucketLabels(JSON.parse(data.setting_value));
+      }
+    });
+}, []);
+```
 
-**Step 3: Verify build + commit**
+**Step 2: Add "New Check" button + modal**
+
+Create a modal for the "Split Check" flow:
+
+1. **Customer dropdown** — select which customer the check is for
+2. **Check # field** — text input for `reference_number`
+3. **Total amount** — dollar input for the full check amount
+4. **Bucket splits** — dynamic rows, each with:
+   - Bucket label dropdown (from `bucketLabels`)
+   - Dollar amount input
+   - Remove row button
+5. **"Add Bucket" button** — adds another split row
+6. **Validation:** Split amounts must sum to the total check amount
+7. **Save:** Creates one `prepay_credits` row per bucket split, all sharing the same `reference_number` and `customer_id`
+
+**Step 3: Update customer prepay_balance_cents**
+
+After inserting all prepay_credits rows, update `customers.prepay_balance_cents` by the total check amount. (Or rely on the existing `create_prepay_credit()` RPC if it already handles this — check and reuse.)
+
+**Step 4: Verify build + commit**
 
 ```bash
 npm run build
 git add src/pages/PrepaymentManager.tsx
-git commit -m "feat: add prepay type, product linkage, and price lock to credit creation"
+git commit -m "feat: add 'Split Check' flow to PrepaymentManager
+
+- New Check modal: enter check #, total, and split into labeled buckets
+- Bucket dropdown from app_settings.prepay_bucket_labels
+- Validation ensures splits sum to check total
+- Creates one prepay_credits row per bucket"
 ```
 
 ### Task 18: Create PrepayWorkspace page (split-panel allocator)
@@ -1121,30 +1025,31 @@ git commit -m "feat: add prepay type, product linkage, and price lock to credit 
 **Files:**
 - Create: `src/pages/PrepayWorkspace.tsx`
 
-This is the main bookkeeper workspace — a new page at route `/prepay-workspace`.
+This is the bookkeeper's main workspace — a new page at route `/prepay-workspace`.
 
 **Step 1: Create the page component**
 
 ```typescript
 /**
- * PrepayWorkspace — Split-panel bookkeeper workspace for allocating
- * prepay credits to unpaid invoices.
+ * PrepayWorkspace — Split-panel workspace for applying prepay buckets
+ * to unpaid invoices. Fully manual — bookkeeper has 100% control.
  *
- * Layout: Left panel (available funds) | Right panel (unpaid invoices)
- * Bottom toolbar: Auto-Match | Save Allocations | Reset
+ * Layout: Left panel (prepay buckets by check) | Right panel (unpaid invoices)
+ * Bottom toolbar: Save Allocations | Reset
  */
 ```
 
 **Key state:**
+
 ```typescript
 interface PendingAllocation {
-  prepay_credit_id: string;
+  prepay_credit_id: string;  // which bucket row
   invoice_id: string;
   amount_cents: number;
 }
 
 const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
-const [credits, setCredits] = useState<PrepayCredit[]>([]);
+const [buckets, setBuckets] = useState<PrepayBucket[]>([]);
 const [invoices, setInvoices] = useState<Invoice[]>([]);
 const [pendingAllocations, setPendingAllocations] = useState<PendingAllocation[]>([]);
 const [saving, setSaving] = useState(false);
@@ -1152,66 +1057,71 @@ const [saving, setSaving] = useState(false);
 
 **Step 2: Customer selector at top**
 
-Dropdown of customers who have either prepay balance > 0 OR unpaid invoices. When customer changes, fetch their credits and invoices.
+Dropdown of customers who have prepay balance > 0. When customer changes, fetch their prepay buckets and unpaid invoices.
 
-**Step 3: Left panel — Available Funds**
+**Step 3: Left panel — Prepay Buckets (grouped by check)**
 
-Show all `prepay_credits` with `balance_cents > 0` for selected customer. Each card shows:
-- Prepay type badge (General / SKU / Category / Family)
-- Product name or category (if applicable)
-- Locked price info (if applicable)
-- Current balance
-- "Apply ▶" button
+Query `prepay_credits` with `balance_cents > 0` for selected customer. Group by `reference_number` (check #). Each group shows:
+- Check # header with total remaining across all its buckets
+- Individual bucket cards underneath:
+  - Bucket label badge (e.g. "🌽 Corn Chemical")
+  - Remaining balance
+  - "Apply ▶" button
+
+When all buckets in a check group hit $0, show the check as "✅ Fully Applied".
 
 **Step 4: Right panel — Unpaid Invoices**
 
-Show all `invoices` with `status = 'posted'` and `balance_cents > 0` for selected customer. Each card shows:
-- Invoice number + total
-- Line item product summary (from `invoice_items`)
+Query `invoices` with `status = 'posted'` and `balance_cents > 0`. Each card shows:
+- Invoice number + total amount + remaining balance
 - Due date
-- Applied amount (from pending allocations)
+- Pending applied amount (from `pendingAllocations` state, shown live)
 - Color: green (fully covered), amber (partially), red (overdue)
 
 **Step 5: Apply flow**
 
-Clicking "Apply ▶" on a credit opens a mini-modal showing matching invoices. User enters amount per invoice. Amounts are added to `pendingAllocations` state.
+Clicking "Apply ▶" on a bucket opens a mini-modal:
+- Shows all unpaid invoices for this customer
+- Each invoice has a dollar input field
+- Bookkeeper enters how much of this bucket to apply to each invoice
+- "Apply Full" shortcut button applies entire bucket balance to one invoice
+- Amounts are added to `pendingAllocations` state (not committed yet)
 
-Both panels update live: credit shows reduced balance, invoice shows applied amount.
+Both panels update live as allocations are added.
 
-**Step 6: Auto-Match button**
+**Step 6: Save Allocations button**
 
-Calls `suggest_prepay_matching()` RPC, populates `pendingAllocations` with the suggestions. All amounts are EDITABLE — bookkeeper can adjust any number before saving.
+Calls `batch_apply_prepayments()` with all pending allocations. On success:
+- Shows toast with total applied
+- Refreshes bucket and invoice data
+- Clears pending state
 
-**Step 7: Save Allocations button**
+**Step 7: Reset button**
 
-Calls `batch_apply_prepayments()` with all pending allocations. On success, shows toast, refreshes data, clears pending state.
+Clears all `pendingAllocations`. No confirmation needed (nothing committed).
 
-**Step 8: Reset button**
-
-Clears all `pendingAllocations` back to empty. No confirmation needed (nothing has been committed).
-
-**Step 9: Verify build**
+**Step 8: Verify build**
 
 ```bash
 npm run build
 ```
 
-**Step 10: Commit**
+**Step 9: Commit**
 
 ```bash
 git add src/pages/PrepayWorkspace.tsx
 git commit -m "feat: add PrepayWorkspace split-panel prepay allocation page
 
-- Customer selector with prepay balance and unpaid invoice summary
-- Left panel: available prepay credits by type
-- Right panel: unpaid invoices with product summaries
-- Apply flow: click credit → select invoices → enter amounts
-- Auto-Match: calls suggest_prepay_matching() as editable proposals
+- Customer selector loads prepay buckets + unpaid invoices
+- Left panel: buckets grouped by check # with remaining balances
+- Right panel: unpaid invoices with due dates and live applied amounts
+- Apply flow: click bucket → enter amounts per invoice → all editable
 - Save Allocations: atomic batch commit via batch_apply_prepayments()
-- Reset: clears all pending work without committing"
+- Reset: clears all pending work without committing
+- Fully manual — no auto-matching, bookkeeper controls every dollar"
 ```
 
-### Task 19: Add route for PrepayWorkspace
+### Task 19: Add route + nav for PrepayWorkspace
 
 **Files:**
 - Modify: `src/App.tsx` (or wherever routes are defined)
@@ -1225,7 +1135,7 @@ git commit -m "feat: add PrepayWorkspace split-panel prepay allocation page
 
 **Step 2: Add nav link**
 
-In the Finance section of the sidebar, add "Prepay Workspace" link with appropriate icon.
+In the Finance section of the sidebar, add "Prepay Workspace" link with appropriate icon (e.g. `Wallet` or `ArrowLeftRight` from lucide-react).
 
 **Step 3: Verify build + commit**
 
@@ -1235,57 +1145,63 @@ git add src/App.tsx src/components/layout/Sidebar.tsx
 git commit -m "feat: add /prepay-workspace route and sidebar nav link"
 ```
 
-### Task 20: Update PrepaymentManager to link to workspace
+### Task 20: Link PrepaymentManager to workspace + update table
 
 **Files:**
 - Modify: `src/pages/PrepaymentManager.tsx`
 
-**Step 1: Add "Open Workspace" button**
+**Step 1: Add "Allocate" button per customer row**
 
-Next to each customer row's "Apply" button, add an "Allocate ▶" button that navigates to `/prepay-workspace?customer={id}`.
+Next to each customer row's existing "Apply" button, add an "Allocate ▶" button that navigates to `/prepay-workspace?customer={id}`.
 
-**Step 2: Keep legacy "Apply" as fallback**
+**Step 2: Show bucket breakdown in expanded row (optional enhancement)**
 
-The existing auto-apply button (`apply_remaining_prepayments()`) stays but gets a subtle "Quick Apply (legacy)" label. The new "Allocate ▶" button is primary.
+If time permits, add an expandable row that shows the customer's prepay buckets grouped by check. This lets the bookkeeper see the breakdown without leaving the page.
 
-**Step 3: Verify build + commit**
+**Step 3: Keep legacy "Apply" as fallback**
+
+The existing auto-apply button (`apply_remaining_prepayments()`) stays as a "Quick Apply" option. The new "Allocate ▶" button is primary and more prominent.
+
+**Step 4: Verify build + commit**
 
 ```bash
 npm run build
 git add src/pages/PrepaymentManager.tsx
-git commit -m "feat: link PrepaymentManager rows to PrepayWorkspace
+git commit -m "feat: link PrepaymentManager to PrepayWorkspace
 
 - 'Allocate' button navigates to /prepay-workspace?customer=id
-- Legacy 'Apply' button stays as quick fallback"
+- Legacy 'Quick Apply' button stays as fallback"
 ```
 
 ### Task 21: Integration testing
 
-**Files:**
-- Various test files
-
 **Step 1: Test the full flow manually**
 
-1. Create a prepay credit with `prepay_type = 'sku_specific'` and a product_id
-2. Create an invoice containing that product
-3. Open PrepayWorkspace for the customer
-4. Click Auto-Match → verify the suggestion matches the SKU credit to the correct invoice
-5. Adjust the amount → Save Allocations
-6. Verify: prepay_credits.balance_cents decreased, invoices.balance_cents decreased, prepay_applications row created
+1. Open PrepaymentManager → click "New Check"
+2. Select customer, enter Check #4521, total $10,000
+3. Split: $5,000 Corn Chemical + $3,000 Soybean Chemical + $2,000 Application
+4. Save → verify 3 `prepay_credits` rows created with correct bucket_labels
+5. Open PrepayWorkspace for the customer
+6. See 3 buckets under "Check #4521"
+7. Click "Apply ▶" on Corn Chemical bucket → apply $4,200 to INV-2026-0042
+8. Click "Apply ▶" on Soybean bucket → apply $1,800 to INV-2026-0043
+9. Click "Save Allocations"
+10. Verify: prepay_credits.balance_cents decreased, invoices.balance_cents decreased, prepay_applications rows created
+11. Check #4521 shows $800 remaining in Corn Chemical, $1,200 remaining in Soybean, $2,000 remaining in Application
 
 **Step 2: Test edge cases**
 
-- General credit applies to oldest invoices
-- Category credit only matches invoices with products in that category
-- Insufficient balance shows error
+- Over-apply: try applying more than bucket balance → should show error
+- Over-apply: try applying more than invoice balance → should show error
 - Reset clears all pending without committing
 - Concurrent saves are handled by FOR UPDATE locks
+- Bucket with $0 remaining doesn't show "Apply ▶" button
 
 **Step 3: Final commit**
 
 ```bash
 git add -A
-git commit -m "chore: audit remediation Phase 3 complete — product-specific prepay system"
+git commit -m "chore: audit remediation Phase 3 complete — bucket-based prepay system"
 ```
 
 ---
@@ -1308,12 +1224,12 @@ git commit -m "chore: audit remediation Phase 3 complete — product-specific pr
 | 12 | 2 | RUP warnings on delivery pages | 20 min |
 | 13 | 2 | RUP audit logging | 10 min |
 | 14 | 2 | Overdue license filter on Compliance | 15 min |
-| 15 | 3 | Prepay schema migration | 10 min |
-| 16 | 3 | Three new prepay RPCs | 45 min |
-| 17 | 3 | Enhanced create-credit form | 30 min |
-| 18 | 3 | PrepayWorkspace page (main effort) | 3-4 hours |
+| 15 | 3 | Prepay bucket schema + seed data | 10 min |
+| 16 | 3 | Two prepay application RPCs | 30 min |
+| 17 | 3 | "Split Check" flow on PrepaymentManager | 45 min |
+| 18 | 3 | PrepayWorkspace page (main effort) | 2-3 hours |
 | 19 | 3 | Route + nav for workspace | 10 min |
 | 20 | 3 | Link PrepaymentManager to workspace | 15 min |
 | 21 | 3 | Integration testing | 30 min |
 
-**Total:** ~8-10 hours of focused implementation work across 4 phases.
+**Total:** ~7-8 hours of focused implementation work across 4 phases.

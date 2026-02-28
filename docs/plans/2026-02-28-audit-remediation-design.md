@@ -122,120 +122,111 @@ None required — `products.is_rup` and `applicator_licenses.expiry_date` alread
 
 ---
 
-## Phase 3: Product-Specific Prepay System
+## Phase 3: Bucket-Based Prepay System (Simplified)
 
 ### Business Context
 
-CRX growers use three prepayment models:
-1. **SKU-specific** (most chemical sales) — prepay for exact product at locked price
-2. **Category** (70% of nutritionals/application work) — prepay for a product category at a price
-3. **General credit** — money on account, applies to anything
+CRX growers prepay with checks that the bookkeeper mentally splits into purpose buckets: "Corn Chemical", "Soybean Chemical", "Application", etc. The system should track these **dollar buckets** — not hard-coded product linkages or price locks.
 
-The bookkeeper must have **full manual control** over how prepay is applied. Auto-matching suggests allocations, but the bookkeeper reviews and confirms everything. They need an intuitive UI to drag/reassign allocations easily.
+**Key insight:** Prepay just tracks money. Price locks belong on quotes/orders (a separate concern). The prepay system earmarks dollars by label, and the bookkeeper manually applies those dollars to invoices.
 
 ### Schema Changes
 
 ```sql
--- Enhance prepay_credits with optional product linkage
-ALTER TABLE prepay_credits ADD COLUMN prepay_type text NOT NULL DEFAULT 'general'
-  CHECK (prepay_type IN ('general', 'sku_specific', 'category', 'family'));
-ALTER TABLE prepay_credits ADD COLUMN product_id uuid REFERENCES products(id);
-ALTER TABLE prepay_credits ADD COLUMN product_category text;
-ALTER TABLE prepay_credits ADD COLUMN product_family text;
-ALTER TABLE prepay_credits ADD COLUMN locked_price_cents bigint;
-ALTER TABLE prepay_credits ADD COLUMN locked_price_unit text;
-ALTER TABLE prepay_credits ADD COLUMN locked_until date;
+-- One new column on prepay_credits: a soft label for the earmark
+ALTER TABLE prepay_credits ADD COLUMN bucket_label text;
+
+-- Predefined bucket categories (admin-editable via app_settings)
+-- Seeded with: Corn Chemical, Soybean Chemical, Corn Fungicide,
+-- Nutritionals, Application, Parts/Service, General
+-- Stored as JSON array in app_settings.setting_value
+-- where setting_key = 'prepay_bucket_labels'
 ```
 
-### Prepay Application Workflow
+One check creates multiple `prepay_credits` rows:
 
-#### Step 1: Create Prepay Credit (existing page, enhanced)
+| reference_number | bucket_label     | original_amount_cents | balance_cents |
+|------------------|------------------|-----------------------|---------------|
+| Check #4521      | Corn Chemical    | 500000                | 500000        |
+| Check #4521      | Soybean Chemical | 300000                | 300000        |
+| Check #4521      | Application      | 200000                | 200000        |
 
-PrepaymentManager gets new fields when creating a credit:
-- **Type selector:** General | Specific Product | Category | Product Family
-- **Product picker:** shown for SKU-specific (autocomplete from products)
-- **Category dropdown:** shown for Category type
-- **Family text field:** shown for Family type
-- **Locked price + unit:** shown for SKU and Category types
-- **Valid until date:** optional expiration
+### Prepay Creation Workflow (existing page, enhanced)
 
-#### Step 2: Apply Prepayments (NEW "Payment Application" workspace)
+PrepaymentManager gets a new "Split Check" flow when creating a credit:
 
-This is the bookkeeper's main workspace. It replaces the current auto-apply behavior with a supervised, visual allocation tool.
+1. **Enter check info:** Check # (reference_number), total amount, customer
+2. **Split into buckets:** Add rows — each row has a bucket label (dropdown from predefined list) and a dollar amount
+3. **Amounts must sum to total:** Validation ensures splits add up to the check total
+4. **Save:** Creates one `prepay_credits` row per bucket, all sharing the same `reference_number`
+
+### Prepay Application Workspace (NEW page)
+
+This is the bookkeeper's main workspace for applying prepay dollars to invoices.
 
 **Layout: Split-panel design**
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Customer: [Dropdown]                    Period: [Date]  │
+│  Customer: [Dropdown]                                     │
 ├──────────────────────────┬──────────────────────────────┤
-│  AVAILABLE FUNDS         │  UNPAID INVOICES             │
+│  PREPAY BUCKETS          │  UNPAID INVOICES             │
 │  (left panel)            │  (right panel)               │
 │                          │                              │
+│  Check #4521             │  ┌─────────────────────────┐ │
+│  ┌─────────────────────┐ │  │ INV-2026-0042  $4,200  │ │
+│  │ 🌽 Corn Chemical    │ │  │ Due: Mar 15             │ │
+│  │ $5,000 remaining    │ │  │ [Applied: $0]           │ │
+│  │ [Apply ▶]           │ │  └─────────────────────────┘ │
+│  └─────────────────────┘ │                              │
 │  ┌─────────────────────┐ │  ┌─────────────────────────┐ │
-│  │ Prepay: Roundup     │ │  │ INV-2026-0042  $4,200  │ │
-│  │ $5,000 @ $50/gal    │ │  │ Items: Roundup, Gramoxone│
-│  │ [Apply ▶]           │ │  │ Due: Mar 15             │ │
+│  │ 🫘 Soybean Chemical │ │  │ INV-2026-0043  $1,800  │ │
+│  │ $3,000 remaining    │ │  │ Due: Mar 20             │ │
+│  │ [Apply ▶]           │ │  │ [Applied: $0]           │ │
+│  └─────────────────────┘ │  └─────────────────────────┘ │
+│  ┌─────────────────────┐ │                              │
+│  │ 🚜 Application      │ │  ┌─────────────────────────┐ │
+│  │ $2,000 remaining    │ │  │ INV-2026-0044  $950    │ │
+│  │ [Apply ▶]           │ │  │ Due: Apr 1              │ │
 │  └─────────────────────┘ │  │ [Applied: $0]           │ │
 │                          │  └─────────────────────────┘ │
-│  ┌─────────────────────┐ │                              │
-│  │ Prepay: General     │ │  ┌─────────────────────────┐ │
-│  │ $3,000              │ │  │ INV-2026-0043  $1,800  │ │
-│  │ [Apply ▶]           │ │  │ Items: Dry fertilizer   │ │
-│  └─────────────────────┘ │  │ Due: Mar 20             │ │
-│                          │  │ [Applied: $0]           │ │
-│  ┌─────────────────────┐ │  └─────────────────────────┘ │
-│  │ Check #4521         │ │                              │
-│  │ $2,500              │ │  ┌─────────────────────────┐ │
-│  │ [Apply ▶]           │ │  │ INV-2026-0044  $950    │ │
-│  └─────────────────────┘ │  │ Items: Parts/service    │ │
-│                          │  │ Due: Apr 1              │ │
-│  Balance: $10,500        │  │ [Applied: $0]           │ │
-│                          │  └─────────────────────────┘ │
-│                          │                              │
-│                          │  Outstanding: $6,950         │
+│  Check #4521: $10,000    │                              │
+│  Applied: $0             │  Outstanding: $6,950         │
+│  Remaining: $10,000      │                              │
 ├──────────────────────────┴──────────────────────────────┤
-│  [🔄 Auto-Match]  [💾 Save Allocations]  [↩ Reset]     │
+│  [💾 Save Allocations]  [↩ Reset]                       │
 └─────────────────────────────────────────────────────────┘
 ```
 
 **How it works:**
 
-1. **Select customer** from dropdown (shows customers with prepay balance or unpaid invoices)
-2. **Left panel** shows all available funds: prepay credits (by type with product info), undeposited checks, any unapplied payments
-3. **Right panel** shows all unpaid invoices, sorted by date, with line item product summary
-4. **Click "Apply ▶"** on a fund source → opens a mini-modal:
-   - Shows matching invoices (auto-highlighted if product matches)
-   - Enter dollar amount to apply to each invoice
-   - Or click "Apply Full" to use the entire amount on one invoice
-5. **Auto-Match button** runs the matching algorithm:
-   - SKU-specific prepay → matches invoices containing that product
-   - Category prepay → matches invoices containing products in that category
-   - General → oldest invoices first
-   - Shows proposed allocations as **editable** amounts — bookkeeper can adjust every number
-6. **Save Allocations** commits all pending allocations to `prepay_applications` table
-7. **Reset** clears all pending allocations back to starting state
+1. **Select customer** from dropdown
+2. **Left panel** shows all prepay buckets grouped by check #, with remaining balance
+3. **Right panel** shows all unpaid invoices sorted by date
+4. **Click "Apply ▶"** on a bucket → enter dollar amount → pick which invoice(s) to apply to
+5. **Everything is editable** until "Save Allocations" is clicked
+6. **Save Allocations** commits all pending allocations atomically
+7. **Reset** clears all pending allocations (nothing committed yet)
 
 **Key UX principles:**
-- Everything is reversible until "Save Allocations" is clicked
-- Auto-match is a SUGGESTION, not final — every amount is editable
-- Applied amounts show live on both panels as you work
-- Running balances update in real-time
+- Fully manual — bookkeeper has 100% control over every dollar
+- No auto-matching algorithm — the labels are informational, not enforcement
+- Running balances update live as you allocate
 - Color coding: green (fully paid), amber (partially paid), red (overdue)
+- When a check's buckets all hit $0, it's visually marked as "fully applied"
 
-#### Step 3: Reconciliation View
+### Reconciliation View
 
 After allocations are saved, the bookkeeper can see:
-- Full audit trail in `prepay_applications` (which credit → which invoice → amount → date → who)
+- Audit trail: which bucket → which invoice → amount → date → who
+- Check summary: Check #4521 → total $10K → $5K corn chem (applied to INV-42, INV-47) → $3K soybean (applied to INV-43) → $2K application (applied to INV-44)
 - Customer statement reflects applied prepay as line items
 - AR aging excludes prepay-covered portions
 
 ### RPC Changes
 
-**Replace `apply_remaining_prepayments()`** with:
-
 ```sql
--- New: Apply a specific prepay credit to a specific invoice
+-- Apply a specific prepay bucket to a specific invoice (existing pattern, unchanged)
 apply_prepay_to_invoice(
   p_prepay_credit_id uuid,
   p_invoice_id uuid,
@@ -243,26 +234,29 @@ apply_prepay_to_invoice(
   p_performed_by uuid
 ) RETURNS jsonb
 
--- New: Batch apply multiple allocations at once (for Save Allocations button)
+-- Batch apply multiple allocations at once (for Save Allocations button)
 batch_apply_prepayments(
   p_allocations jsonb,  -- [{prepay_credit_id, invoice_id, amount_cents}]
   p_performed_by uuid
 ) RETURNS jsonb
-
--- New: Suggest auto-match allocations (returns proposals, doesn't apply)
-suggest_prepay_matching(
-  p_customer_id uuid
-) RETURNS jsonb  -- [{prepay_credit_id, invoice_id, suggested_amount, match_reason}]
 ```
+
+**No `suggest_prepay_matching()` needed** — the bookkeeper manually allocates.
 
 **Keep `apply_remaining_prepayments()`** as legacy fallback but mark deprecated.
 
+### What This Does NOT Do
+
+- Does not enforce that "Corn Chemical" bucket can only apply to corn chemical invoices (soft label only)
+- Does not lock prices (that's a quote/order concern)
+- Does not auto-match — bookkeeper has full manual control
+- Does not track product-level inventory linkage (that's the tote/lot system in Phase 1)
+
 ### Test Strategy
 
-- Unit tests for `suggest_prepay_matching()` — SKU match, category match, general fallback
-- Unit tests for `apply_prepay_to_invoice()` — insufficient balance, already-applied, period checks
-- Unit tests for batch operations — partial success handling
-- E2E: Create prepay → create invoice → open workspace → auto-match → adjust → save → verify AR
+- Unit tests for `apply_prepay_to_invoice()` — insufficient balance, over-apply, concurrent access
+- Unit tests for batch operations — partial success handling, atomic rollback
+- E2E: Create check with splits → open workspace → allocate buckets to invoices → save → verify AR
 
 ---
 
@@ -271,7 +265,7 @@ suggest_prepay_matching(
 All schema changes are **additive** (new columns, new tables, new RPCs). No existing columns are removed or renamed. Rollback = drop the new columns/functions.
 
 **Backfill:**
-- Existing prepay_credits get `prepay_type = 'general'` (already the default)
+- Existing prepay_credits get `bucket_label = NULL` (treated as "General" / unlabeled)
 - Existing delivery_items get `tote_number = NULL` (already nullable)
 - No data migration needed
 
@@ -282,6 +276,6 @@ All schema changes are **additive** (new columns, new tables, new RPCs). No exis
 1. **Phase 0:** Quick SQL fixes (finance charge + billing split) — 1 migration, ~30 min
 2. **Phase 1:** Tote tracking — 1 migration + UI changes to 4 pages — ~1 sprint
 3. **Phase 2:** RUP warnings — helper + UI banners on 4 pages — ~0.5 sprint
-4. **Phase 3:** Product-specific prepay — schema + 3 RPCs + new workspace UI — ~2-3 sprints
+4. **Phase 3:** Bucket-based prepay — 1 column + seed data + 2 RPCs + workspace UI — ~1-1.5 sprints
 
-Total estimated effort: ~4-5 sprints
+Total estimated effort: ~3-4 sprints
