@@ -18,6 +18,7 @@ import { generateIdempotencyKey } from '../lib/idempotency';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDeliveryRemainder } from '../lib/notificationTriggers';
+import { checkRUPCompliance } from '../lib/rupCompliance';
 import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
@@ -68,6 +69,7 @@ export default function DeliveryDetail() {
   const [photos, setPhotos] = useState<DeliveryPhoto[]>([]);
   const [remainders, setRemainders] = useState<DeliveryRemainder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [rupWarnings, setRupWarnings] = useState<string[]>([]);
 
   // Signature signed URL (generated on demand for privacy)
   const [signedSignatureUrl, setSignedSignatureUrl] = useState<string | null>(null);
@@ -232,6 +234,18 @@ export default function DeliveryDetail() {
   useEffect(() => {
     if (id) fetchDelivery();
   }, [id, fetchDelivery]);
+
+  // RUP compliance check
+  useEffect(() => {
+    if (!customer || !items.length) return;
+    const productIds = items.map((i) => i.product_id).filter(Boolean);
+    if (!productIds.length) return;
+    let cancelled = false;
+    checkRUPCompliance(customer.id, productIds).then((res) => {
+      if (!cancelled) setRupWarnings(res.warnings);
+    });
+    return () => { cancelled = true; };
+  }, [customer, items]);
 
   const updateDeliveryQty = (itemId: string, qty: number, max: number) => {
     setDeliveryQtys((prev) => ({ ...prev, [itemId]: Math.max(0, Math.min(qty, max)) }));
@@ -707,6 +721,18 @@ export default function DeliveryDetail() {
               <p className="text-sm text-gray-400">{fullAddress}</p>
             </div>
           </a>
+
+          {/* RUP Compliance Warning */}
+          {rupWarnings.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="text-sm text-amber-800">
+                  {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Products */}
           <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">

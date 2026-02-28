@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Minus, Plus } from 'lucide-react';
+import { ArrowLeft, Minus, Plus, AlertTriangle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,6 +11,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
+import { checkRUPCompliance } from '../lib/rupCompliance';
 import type { Order, OrderItem, Customer, CustomerAddress, Profile } from '../types';
 
 interface DeliveryItemDraft {
@@ -47,6 +48,7 @@ export default function NewDelivery() {
   const [saving, setSaving] = useState(false);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [rupWarnings, setRupWarnings] = useState<string[]>([]);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -158,6 +160,23 @@ export default function NewDelivery() {
       setDeliveryItems([]);
     }
   }, [selectedOrderId, fetchOrderDetails]);
+
+  // RUP compliance check
+  useEffect(() => {
+    if (!customer || !deliveryItems.length) { setRupWarnings([]); return; }
+    const productIds = deliveryItems.map((i) => i.product_id).filter(Boolean);
+    if (!productIds.length) { setRupWarnings([]); return; }
+    let cancelled = false;
+    checkRUPCompliance(customer.id, productIds).then((res) => {
+      if (!cancelled) {
+        setRupWarnings(res.warnings);
+        if (res.warnings.length > 0) {
+          logActivity('rup_compliance_warning', `RUP products (${res.rupProductNames.join(', ')}) on delivery for customer without valid license`, profile?.id ?? '', 'customer', customer.id, customer.id);
+        }
+      }
+    });
+    return () => { cancelled = true; };
+  }, [customer, deliveryItems, profile?.id]);
 
   const updateItemQty = (orderItemId: string, qty: number) => {
     setDeliveryItems((prev) =>
@@ -400,6 +419,17 @@ export default function NewDelivery() {
           />
         </div>
       </Card>
+
+      {rupWarnings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-800">
+              {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedOrderId && (
         <Card>

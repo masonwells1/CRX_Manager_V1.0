@@ -389,20 +389,33 @@ export default function Compliance() {
           )}
 
           {/* Filter */}
-          <div className="flex gap-2">
-            {(['all', 'active', 'expiring', 'expired'] as const).map((f) => (
-              <button
-                key={f}
-                onClick={() => setLicenseFilter(f)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                  licenseFilter === f
-                    ? 'bg-crx-green text-white border-crx-green'
-                    : 'border-gray-200 text-secondary hover:border-crx-green hover:text-crx-green'
-                }`}
-              >
-                {f === 'all' ? 'All' : f === 'active' ? 'Valid' : f === 'expiring' ? 'Expiring Soon' : 'Expired'}
-              </button>
-            ))}
+          <div className="flex gap-2 flex-wrap">
+            {(['all', 'active', 'expiring', 'expired'] as const).map((f) => {
+              const label = f === 'all' ? 'All' : f === 'active' ? 'Valid' : f === 'expiring' ? 'Expiring Soon' : 'Overdue';
+              const count = f === 'expired' ? expiredCount : f === 'expiring' ? expiringCount : undefined;
+              return (
+                <button
+                  key={f}
+                  onClick={() => setLicenseFilter(f)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors flex items-center gap-1.5 ${
+                    licenseFilter === f
+                      ? 'bg-crx-green text-white border-crx-green'
+                      : f === 'expired' && expiredCount > 0
+                        ? 'border-red-200 text-red-600 hover:border-red-400 bg-red-50'
+                        : 'border-gray-200 text-secondary hover:border-crx-green hover:text-crx-green'
+                  }`}
+                >
+                  {label}
+                  {count !== undefined && count > 0 && (
+                    <span className={`inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full text-[10px] font-bold ${
+                      licenseFilter === f ? 'bg-white/20 text-white' : f === 'expired' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                    }`}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           <Card padding={false}>

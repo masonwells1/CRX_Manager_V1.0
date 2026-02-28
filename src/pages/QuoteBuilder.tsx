@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
+  AlertTriangle,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -27,6 +28,7 @@ import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
 import { downloadQuotePdf } from '../lib/quotePdf';
+import { checkRUPCompliance } from '../lib/rupCompliance';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import type {
   Quote,
@@ -144,6 +146,7 @@ export default function QuoteBuilder() {
   } | null>(null);
   const [productQuery, setProductQuery] = useState('');
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+  const [rupWarnings, setRupWarnings] = useState<string[]>([]);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -155,6 +158,23 @@ export default function QuoteBuilder() {
     if (!initialLoadDone.current) return;
     setIsDirty(true);
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
+
+  // RUP compliance check when customer or products change
+  useEffect(() => {
+    if (!customerId) { setRupWarnings([]); return; }
+    const productIds = sections.flatMap((s) => s.items.map((i) => i.product_id)).filter(Boolean);
+    if (!productIds.length) { setRupWarnings([]); return; }
+    let cancelled = false;
+    checkRUPCompliance(customerId, productIds).then((res) => {
+      if (!cancelled) {
+        setRupWarnings(res.warnings);
+        if (res.warnings.length > 0) {
+          logActivity('rup_compliance_warning', `RUP products (${res.rupProductNames.join(', ')}) on quote for customer without valid license`, profile?.id ?? '', 'customer', customerId, customerId);
+        }
+      }
+    });
+    return () => { cancelled = true; };
+  }, [customerId, sections, profile?.id]);
 
   const fetchReferenceData = useCallback(async () => {
     const [custRes, prodRes, convRes] = await Promise.all([
@@ -1000,6 +1020,17 @@ export default function QuoteBuilder() {
           />
         </div>
       </Card>
+
+      {rupWarnings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-800">
+              {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
+            </div>
+          </div>
+        </div>
+      )}
 
       {sections.map((sec) => {
         const isCollapsed = collapsedSections.has(sec._key);
