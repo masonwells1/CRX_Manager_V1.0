@@ -32,6 +32,7 @@ import {
   CalendarCheck,
   CreditCard,
   Wallet,
+  ArrowLeftRight,
   ChevronLeft,
   ChevronRight,
   PackageCheck,
@@ -151,6 +152,7 @@ const navigation: NavEntry[] = [
       items: [
         { path: '/ar-aging', label: 'AR Aging', icon: <Clock className="w-4 h-4" />, roles: ['admin'] },
         { path: '/prepayments', label: 'Prepayments', icon: <Wallet className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/prepay-workspace', label: 'Prepay Workspace', icon: <ArrowLeftRight className="w-4 h-4" />, roles: ['admin'] },
         { path: '/commission-payments', label: 'Commission Pay', icon: <Banknote className="w-4 h-4" />, roles: ['admin'] },
         { path: '/customer-transactions', label: 'Transactions', icon: <CreditCard className="w-4 h-4" />, roles: ['admin'] },
         { path: '/month-end', label: 'Month-End', icon: <CalendarCheck className="w-4 h-4" />, roles: ['admin'] },

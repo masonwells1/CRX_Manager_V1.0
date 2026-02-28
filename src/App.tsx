@@ -55,6 +55,7 @@ const MonthEndClose = lazy(() => import('./pages/MonthEndClose'));
 const CommissionPayments = lazy(() => import('./pages/CommissionPayments'));
 const CustomerTransactionReview = lazy(() => import('./pages/CustomerTransactionReview'));
 const PrepaymentManager = lazy(() => import('./pages/PrepaymentManager'));
+const PrepayWorkspace = lazy(() => import('./pages/PrepayWorkspace'));
 const PaymentAllocation = lazy(() => import('./pages/PaymentAllocation'));
 const DeliveryRemainders = lazy(() => import('./pages/DeliveryRemainders'));
 const ReceivingLog = lazy(() => import('./pages/ReceivingLog'));
@@ -174,6 +175,7 @@ const router = createBrowserRouter([
           { path: 'commission-payments', element: <ProtectedRoute allowedRoles={['admin']}><CommissionPayments /></ProtectedRoute> },
           { path: 'customer-transactions', element: <ProtectedRoute allowedRoles={['admin']}><CustomerTransactionReview /></ProtectedRoute> },
           { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><PrepaymentManager /></ProtectedRoute> },
+          { path: 'prepay-workspace', element: <ProtectedRoute allowedRoles={['admin']}><PrepayWorkspace /></ProtectedRoute> },
           { path: 'settings', element: <ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute> },
 
           // payment-allocation route removed — now served at /payments
