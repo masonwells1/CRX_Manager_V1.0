@@ -25,6 +25,7 @@ import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { trackBusinessEvent } from '../lib/metrics';
 import { downloadQuotePdf } from '../lib/quotePdf';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import type {
@@ -632,6 +633,10 @@ export default function QuoteBuilder() {
     if (result) {
       setIsDirty(false);
       toast('success', 'Quote saved as draft');
+      trackBusinessEvent(isEditing ? 'quote_updated' : 'quote_created', {
+        message: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'}`,
+        data: { quoteId: result, quoteNumber, customer: selectedCustomer?.farm_name ?? '' },
+      });
       // === GAP FIX #5: Log activity for quote created/updated ===
       if (profile) {
         await logActivity(
@@ -790,6 +795,10 @@ export default function QuoteBuilder() {
 
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string }>(data, 'convert_quote_to_order');
       toast('success', `Order ${result.order_number || ''} created`);
+      trackBusinessEvent('quote_converted_to_order', {
+        message: `Quote converted → Order ${result.order_number || ''}`,
+        data: { orderId: result.order_id ?? '', orderNumber: result.order_number ?? '', quoteId: savedId },
+      });
       notifyLargeOrder(result.order_id!, result.order_number || '', selectedCustomer?.farm_name || 'customer', totals.totalPrice);
 
       // Phase 3.3: Credit limit check — warn (not block) if exceeded

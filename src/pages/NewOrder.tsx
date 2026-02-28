@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { trackBusinessEvent } from '../lib/metrics';
 import type { Product, Customer } from '../types';
 
 interface LocalItem {
@@ -192,6 +193,10 @@ export default function NewOrder() {
         return;
       }
       toast('success', 'Order created successfully');
+      trackBusinessEvent('order_created', {
+        message: `Direct order ${orderNumber} created`,
+        data: { orderId: orderId!, orderNumber, itemCount: items.filter((i) => i.product_id).length },
+      });
 
       // Phase 3.3: Credit limit check — warn (not block) if exceeded
       if (customerId) {
