@@ -397,7 +397,6 @@ export default function FinancialDashboard() {
             <div className="flex items-end gap-1 h-48 mt-2">
               {data.monthlyRevenue.map((m) => {
                 const revenueHeight = (m.revenue / maxRevenue) * 100;
-                const _profitHeight = (m.profit / maxRevenue) * 100;
                 const monthLabel = m.month.length >= 7 ? m.month.slice(5, 7) : m.month;
                 return (
                   <div key={m.month} className="flex-1 flex flex-col items-center gap-1 group">
@@ -494,7 +493,10 @@ export default function FinancialDashboard() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {data.openArBalance > 0 && (
             <div
+              role="button"
+              tabIndex={0}
               onClick={() => navigate('/payments')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/payments'); }}
               className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-amber-100 transition-colors"
             >
               <DollarSign className="w-5 h-5 text-amber-600" />
@@ -506,7 +508,10 @@ export default function FinancialDashboard() {
           )}
           {data.customersOverCreditCount > 0 && (
             <div
+              role="button"
+              tabIndex={0}
               onClick={() => navigate('/customers')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/customers'); }}
               className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-red-100 transition-colors"
             >
               <AlertTriangle className="w-5 h-5 text-red-600" />

@@ -194,7 +194,10 @@ export default function Dashboard() {
               {data.upcomingDeliveries.map((del) => (
                 <div
                   key={del.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => navigate(`/deliveries/${del.id}`)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(`/deliveries/${del.id}`); }}
                   className="flex items-center justify-between p-3 rounded-lg hover:bg-crx-green-tint cursor-pointer transition-colors"
                 >
                   <div className="flex items-center gap-3">
@@ -213,7 +216,7 @@ export default function Dashboard() {
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-secondary">{del.scheduled_date}</span>
                     <Badge variant={statusToBadgeVariant[del.status] || 'default'}>
-                      {del.status.replace('_', ' ')}
+                      {del.status.replace(/_/g, ' ')}
                     </Badge>
                   </div>
                 </div>
@@ -254,7 +257,10 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {data.lowStockCount > 0 && (
             <div
+              role="button"
+              tabIndex={0}
               onClick={() => navigate('/inventory')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/inventory'); }}
               className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-amber-100 transition-colors"
             >
               <AlertTriangle className="w-5 h-5 text-amber-600" />
@@ -266,7 +272,10 @@ export default function Dashboard() {
           )}
           {data.driverIssuesCount > 0 && (
             <div
+              role="button"
+              tabIndex={0}
               onClick={() => navigate('/deliveries')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/deliveries'); }}
               className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-orange-100 transition-colors"
             >
               <Truck className="w-5 h-5 text-orange-600" />
@@ -278,7 +287,10 @@ export default function Dashboard() {
           )}
           {data.expiredHoldsCount > 0 && (
             <div
+              role="button"
+              tabIndex={0}
               onClick={() => navigate('/quotes')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/quotes'); }}
               className="bg-purple-50 border border-purple-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-purple-100 transition-colors"
             >
               <Warehouse className="w-5 h-5 text-purple-600" />
@@ -290,7 +302,10 @@ export default function Dashboard() {
           )}
           {data.cancelledPostedCount > 0 && (
             <div
+              role="button"
+              tabIndex={0}
               onClick={() => navigate('/invoices')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/invoices'); }}
               className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-red-100 transition-colors"
             >
               <FileText className="w-5 h-5 text-red-600" />

@@ -22,33 +22,23 @@ test.describe('Financial Dashboard', { tag: '@smoke' }, () => {
   });
 
   test('should show financial summary cards', async ({ page }) => {
-    // New summary cards
-    const summaryTexts = ['Prepay', 'Commission', 'Period'];
-    for (const text of summaryTexts) {
-      const el = page.getByText(new RegExp(text, 'i')).first();
-      if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await expect(el).toBeVisible();
-      }
-    }
+    // Prepay, Commission, and Period summary cards must be visible
+    await expect(page.getByText(/Prepay/i).first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/Commission/i).first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/Period/i).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('should show quick access links to financial pages', async ({ page }) => {
-    // Quick access grid should link to financial sub-pages
+    // Quick access grid must link to financial sub-pages
     const links = ['AR Aging', 'Prepayments', 'Month-End', 'Reports', 'Compliance'];
     for (const label of links) {
-      const link = page.getByText(label).first();
-      if (await link.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await expect(link).toBeVisible();
-      }
+      await expect(page.getByText(label).first()).toBeVisible({ timeout: 5000 });
     }
   });
 
-  test('should show monthly revenue chart when data exists', async ({ page }) => {
-    // Chart or "Monthly Revenue & Profit" header
-    const chart = page.getByText(/Monthly.*Revenue/i).first();
-    if (await chart.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await expect(chart).toBeVisible();
-    }
+  test('should show monthly revenue chart header', async ({ page }) => {
+    // Chart section header must be visible
+    await expect(page.getByText(/Monthly.*Revenue/i).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('should load without console errors', async ({ page }) => {

@@ -13,7 +13,17 @@ SET search_path = public
 AS $$
 DECLARE
   result jsonb;
+  _role  text;
 BEGIN
+  -- Admin-only guard: reject non-admin callers at the RPC level
+  _role := COALESCE(
+    current_setting('request.jwt.claims', true)::jsonb ->> 'user_role',
+    (SELECT role FROM public.profiles WHERE id = auth.uid())
+  );
+  IF _role IS DISTINCT FROM 'admin' THEN
+    RAISE EXCEPTION 'permission denied: admin role required';
+  END IF;
+
   WITH
   -- 1. Order aggregates: revenue, profit, margin
   order_agg AS (
@@ -63,23 +73,24 @@ BEGIN
     ) tc
   ),
 
-  -- 5. Open AR balance
+  -- 5. Open AR balance (from posted invoices — source of truth)
   ar AS (
-    SELECT COALESCE(SUM(GREATEST(balance_due, 0)), 0) AS balance
-    FROM orders
+    SELECT COALESCE(SUM(GREATEST(balance_cents, 0)), 0) / 100.0 AS balance
+    FROM invoices
+    WHERE status = 'posted'
   ),
 
-  -- 6. Customers over credit limit
+  -- 6. Customers over credit limit (from posted invoices — source of truth)
   over_credit AS (
     SELECT COUNT(*) AS cnt
     FROM customers c
     WHERE c.credit_limit_cents IS NOT NULL
       AND c.credit_limit_cents > 0
       AND (
-        SELECT COALESCE(SUM(GREATEST(o.balance_due, 0)), 0) * 100
-        FROM orders o
-        WHERE o.customer_id = c.id
-          AND o.status NOT IN ('cancelled', 'void')
+        SELECT COALESCE(SUM(GREATEST(i.balance_cents, 0)), 0)
+        FROM invoices i
+        WHERE i.customer_id = c.id
+          AND i.status = 'posted'
       ) > c.credit_limit_cents
   ),
 
@@ -113,7 +124,7 @@ BEGIN
   commission_owed AS (
     SELECT COALESCE(SUM(commission_amount), 0) AS total_owed
     FROM commissions
-    WHERE status = 'earned'
+    WHERE status = 'pending'
       AND paid_date IS NULL
   ),
 

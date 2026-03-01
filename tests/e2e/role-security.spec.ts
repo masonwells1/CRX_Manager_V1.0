@@ -39,6 +39,7 @@ test.describe('Role-Based Security — Admin Full Access', () => {
     { path: '/settings', name: 'Settings' },
     { path: '/payment-allocation', name: 'Payment Allocation' },
     { path: '/ar-aging', name: 'AR Aging' },
+    { path: '/financial-dashboard', name: 'Financial Dashboard' },
   ];
 
   for (const route of adminRoutes) {
@@ -65,6 +66,7 @@ test.describe('Role-Based Security — Route Protection Verification', () => {
       '/payment-allocation',
       '/ar-aging',
       '/month-end',
+      '/financial-dashboard',
     ];
 
     for (const route of financialRoutes) {
@@ -189,6 +191,12 @@ test.describe('Driver Role Restrictions', () => {
     await page.goto('/payment-allocation');
     await page.waitForTimeout(2000);
     expect(page.url()).not.toMatch(/\/payment-allocation($|\/)/);
+  });
+
+  test('driver cannot access /financial-dashboard — redirected', async ({ page }) => {
+    await page.goto('/financial-dashboard');
+    await page.waitForTimeout(2000);
+    expect(page.url()).not.toMatch(/\/financial-dashboard($|\/)/);
   });
 
   test('Quick Delivery button not visible to driver on deliveries page', async ({ page }) => {
