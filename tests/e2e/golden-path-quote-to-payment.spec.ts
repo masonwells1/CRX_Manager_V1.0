@@ -13,7 +13,7 @@ import { test, expect, Page } from '@playwright/test';
 import { login } from './utils/auth';
 import { parseDollars, waitForPageStable } from './utils/math-helpers';
 
-const RUN_ID = Date.now().toString(36);
+const _RUN_ID = Date.now().toString(36);
 
 /** Shared state across serial tests */
 const state = {
