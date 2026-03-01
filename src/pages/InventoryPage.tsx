@@ -14,6 +14,8 @@ import { downloadReportPdf } from '../lib/reportPdf';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { computeSeason } from '../utils/season';
+import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
+import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
 interface InventoryRow extends Inventory {
@@ -21,6 +23,8 @@ interface InventoryRow extends Inventory {
   inventory_unit: string | null;
   container_size: number | null;
   container_type: string | null;
+  vendor: string | null;
+  current_cost: number | null;
   total_on_floor: number;
   planned_qty: number;
   free_qty: number;
@@ -75,6 +79,18 @@ export default function InventoryPage() {
   const [productSearch, setProductSearch] = useState('');
   const [holdsExpanded, setHoldsExpanded] = useState(true);
 
+  // Transaction ledger modal
+  const [ledgerOpen, setLedgerOpen] = useState(false);
+  const [ledgerProductId, setLedgerProductId] = useState('');
+  const [ledgerProductName, setLedgerProductName] = useState('');
+
+  // Reorder filter chip
+  const [reorderFilter, setReorderFilter] = useState(false);
+
+  // Batch adjust
+  const [batchAdjustOpen, setBatchAdjustOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
   const isAdmin = role === 'admin';
   const [exportingPdf, setExportingPdf] = useState(false);
 
@@ -120,7 +136,7 @@ export default function InventoryPage() {
   const fetchInventory = useCallback(async () => {
     const { data, error } = await supabase
       .from('inventory')
-      .select('*, product:products(product_name, inventory_unit, container_size, container_type)')
+      .select('*, product:products(product_name, inventory_unit, container_size, container_type, vendor, current_cost)')
       .order('product_id');
 
     if (error) {
@@ -130,7 +146,7 @@ export default function InventoryPage() {
       return;
     }
 
-    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string; inventory_unit: string | null; container_size: number | null; container_type: string | null } | null; reorder_point: number; min_stock_level: number }>;
+    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string; inventory_unit: string | null; container_size: number | null; container_type: string | null; vendor: string | null; current_cost: number | null } | null; reorder_point: number; min_stock_level: number }>;
 
     const holdsFetch = supabase
       .from('inventory_holds')
@@ -200,7 +216,7 @@ export default function InventoryPage() {
     }
 
     const buildRow = (
-      item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string; inventory_unit?: string | null; container_size?: number | null; container_type?: string | null; reorder_point: number; min_stock_level: number },
+      item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string; inventory_unit?: string | null; container_size?: number | null; container_type?: string | null; vendor?: string | null; current_cost?: number | null; reorder_point: number; min_stock_level: number },
     ): InventoryRow => {
       const onOrderQty = onOrderByProduct[item.product_id] || 0;
       const totalOnFloor = item.quantity_available + item.quantity_prebooked;
@@ -226,6 +242,8 @@ export default function InventoryPage() {
         inventory_unit: item.inventory_unit || null,
         container_size: item.container_size || null,
         container_type: item.container_type || null,
+        vendor: item.vendor || null,
+        current_cost: item.current_cost || null,
         total_on_floor: totalOnFloor,
         planned_qty: plannedQty,
         free_qty: freeQty,
@@ -249,6 +267,8 @@ export default function InventoryPage() {
           inventory_unit: item.product?.inventory_unit || null,
           container_size: item.product?.container_size || null,
           container_type: item.product?.container_type || null,
+          vendor: item.product?.vendor || null,
+          current_cost: item.product?.current_cost || null,
           reorder_point: item.reorder_point || 0,
           min_stock_level: item.min_stock_level || 0,
         },
@@ -265,6 +285,8 @@ export default function InventoryPage() {
           location: '',
           unit_size: null,
           product_name: mp.product_name,
+          vendor: null,
+          current_cost: null,
           reorder_point: 0,
           min_stock_level: 0,
         },
@@ -626,8 +648,18 @@ export default function InventoryPage() {
 
   const filtered = inventory.filter((i) => {
     if (locationFilter && i.location !== locationFilter) return false;
+    if (reorderFilter && !i.is_low_stock) return false;
     return true;
   });
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const totalOnOrder = inventory.reduce((s, i) => s + i.quantity_on_order, 0);
   const totalOnFloor = inventory.reduce((s, i) => s + i.total_on_floor, 0);
@@ -635,6 +667,7 @@ export default function InventoryPage() {
   const totalPlanned = inventory.reduce((s, i) => s + i.planned_qty, 0);
   const totalCommitted = inventory.reduce((s, i) => s + i.quantity_prebooked, 0);
   const totalDeliveredYTD = inventory.reduce((s, i) => s + i.delivered_ytd, 0);
+  const totalValuation = inventory.reduce((sum, r) => sum + (r.quantity_available * (r.current_cost || 0)), 0);
 
   const netPositionColor = (n: number) => {
     if (n > 10) return 'text-emerald-600';
@@ -674,12 +707,40 @@ export default function InventoryPage() {
   };
 
   const columns: EditableColumn<InventoryRow>[] = [
+    ...(isAdmin ? [{
+      key: '_select' as const,
+      header: '',
+      sortable: false,
+      className: 'w-10',
+      render: (row: InventoryRow) => (
+        <input
+          type="checkbox"
+          checked={selectedIds.has(row.id)}
+          onChange={() => toggleSelect(row.id)}
+          className="rounded border-gray-300"
+        />
+      ),
+    } satisfies EditableColumn<InventoryRow>] : []),
     {
       key: 'product_name',
       header: 'Product',
       sortable: true,
       render: (row) => (
-        <span className="font-medium text-nav-dark">{row.product_name}</span>
+        <div className="flex items-center gap-1">
+          <span className="font-medium text-nav-dark">{row.product_name}</span>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setLedgerProductId(row.product_id);
+              setLedgerProductName(row.product_name);
+              setLedgerOpen(true);
+            }}
+            className="p-0.5 rounded hover:bg-gray-100 text-secondary hover:text-nav-dark transition-colors"
+            title="View transaction history"
+          >
+            <FileText className="w-3.5 h-3.5" />
+          </button>
+        </div>
       ),
     },
     {
@@ -733,6 +794,33 @@ export default function InventoryPage() {
         <span className="text-gray-500">{row.delivered_ytd.toFixed(1)}</span>
       ),
     },
+    ...(isAdmin ? [
+      {
+        key: 'current_cost' as const,
+        header: 'Unit Cost',
+        sortable: true,
+        className: 'text-right',
+        render: (row: InventoryRow) => (
+          <span className="text-sm text-secondary">
+            {row.current_cost != null ? `$${Number(row.current_cost).toFixed(2)}` : '-'}
+          </span>
+        ),
+      },
+      {
+        key: '_total_value' as const,
+        header: 'Value',
+        sortable: true,
+        className: 'text-right',
+        render: (row: InventoryRow) => {
+          const val = (row.current_cost || 0) * row.quantity_available;
+          return (
+            <span className="text-sm font-medium text-nav-dark">
+              {row.current_cost != null ? `$${val.toFixed(2)}` : '-'}
+            </span>
+          );
+        },
+      },
+    ] as EditableColumn<InventoryRow>[] : []),
     {
       key: 'location',
       header: 'Location',
@@ -802,13 +890,14 @@ export default function InventoryPage() {
       : []),
   ];
 
-  const summaryCards = [
+  const summaryCards: Array<{ label: string; value: number; color: string; icon: typeof Package; format?: 'currency' }> = [
     { label: 'On Order', value: totalOnOrder, color: 'bg-teal-50 text-teal-600', icon: Package },
     { label: 'Total on Floor', value: totalOnFloor, color: 'bg-blue-50 text-blue-600', icon: Package },
     { label: 'Net Position', value: totalFree, color: totalFree >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600', icon: Package },
     { label: 'Planned', value: totalPlanned, color: 'bg-amber-50 text-amber-600', icon: Package },
     { label: 'Committed', value: totalCommitted, color: 'bg-orange-50 text-orange-600', icon: Package },
     { label: 'Delivered YTD', value: totalDeliveredYTD, color: 'bg-gray-50 text-gray-600', icon: Package },
+    { label: 'Inventory Value', value: totalValuation, color: 'bg-emerald-50 text-emerald-600', icon: Package, format: 'currency' },
   ];
 
   const filteredProducts = products.filter((p) =>
@@ -824,6 +913,15 @@ export default function InventoryPage() {
         <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={handleExportPDF} loading={exportingPdf}>
           Download PDF
         </Button>
+        {isAdmin && selectedIds.size > 0 && (
+          <Button
+            variant="secondary"
+            icon={<Pencil className="w-4 h-4" />}
+            onClick={() => setBatchAdjustOpen(true)}
+          >
+            Adjust {selectedIds.size} Selected
+          </Button>
+        )}
         {isAdmin && (
           <>
             <Button icon={<Plus className="w-4 h-4" />} onClick={openHoldModal} variant="secondary">
@@ -837,7 +935,7 @@ export default function InventoryPage() {
       </div>
 
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
         {summaryCards.map((c) => (
           <Card key={c.label}>
             <div className={`w-10 h-10 rounded-lg ${c.color} flex items-center justify-center mb-3`}>
@@ -845,61 +943,87 @@ export default function InventoryPage() {
             </div>
             <p className="text-xs text-secondary">{c.label}</p>
             <p className="text-2xl font-semibold font-heading text-nav-dark">
-              {c.value.toLocaleString(undefined, { maximumFractionDigits: 1 })}
+              {c.format === 'currency'
+                ? `$${c.value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                : c.value.toLocaleString(undefined, { maximumFractionDigits: 1 })}
             </p>
           </Card>
         ))}
       </div>
 
-      {/* S5-3: Low Stock Alerts */}
+      {/* Enhanced Reorder Alerts — grouped by vendor */}
       {(() => {
         const lowStockItems = inventory.filter((i) => i.is_low_stock);
         if (lowStockItems.length === 0) return null;
+
+        // Group by vendor
+        const byVendor = new Map<string, InventoryRow[]>();
+        for (const item of lowStockItems) {
+          const vendor = item.vendor || 'No Vendor';
+          const group = byVendor.get(vendor) || [];
+          group.push(item);
+          byVendor.set(vendor, group);
+        }
+        const vendorGroups = [...byVendor.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
         return (
           <Card>
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-8 h-8 rounded-lg bg-red-50 flex items-center justify-center">
+            <div className="flex items-center gap-2 mb-1">
+              <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center">
                 <AlertTriangle className="w-4 h-4 text-red-600" />
               </div>
-              <h3 className="text-lg font-semibold text-nav-dark">
-                Low Stock Alerts ({lowStockItems.length})
-              </h3>
+              <div>
+                <h3 className="text-lg font-semibold text-red-700">
+                  ACTION REQUIRED — {lowStockItems.length} Product{lowStockItems.length !== 1 ? 's' : ''} Need Reordering
+                </h3>
+                <p className="text-xs text-secondary">
+                  {vendorGroups.length} vendor{vendorGroups.length !== 1 ? 's' : ''} affected
+                </p>
+              </div>
             </div>
-            <div className="space-y-2">
-              {lowStockItems.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between p-3 bg-red-50 border border-red-100 rounded-lg"
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-nav-dark truncate">{item.product_name}</p>
-                    <p className="text-xs text-secondary">
-                      {item.location || 'No location'} &middot; Unit: {item.inventory_unit || item.unit_size || '-'}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-6 text-sm">
-                    <div className="text-center">
-                      <p className="text-xs text-secondary">Available</p>
-                      <p className="font-semibold text-red-600">{item.quantity_available}</p>
+
+            {vendorGroups.map(([vendor, items]) => (
+              <div key={vendor} className="mt-4">
+                <p className="text-sm font-semibold text-nav-dark mb-2 border-b border-gray-200 pb-1">
+                  {vendor} ({items.length})
+                </p>
+                <div className="space-y-2">
+                  {items.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between p-3 bg-red-50 border border-red-100 rounded-lg"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-nav-dark truncate">{item.product_name}</p>
+                        <p className="text-xs text-secondary">
+                          {item.location || 'No location'} &middot; Unit: {item.inventory_unit || item.unit_size || '-'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-6 text-sm">
+                        <div className="text-center">
+                          <p className="text-xs text-secondary">Available</p>
+                          <p className="font-semibold text-red-600">{item.quantity_available}</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-xs text-secondary">Reorder Pt</p>
+                          <p className="font-semibold text-nav-dark">{item.reorder_point}</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-xs text-secondary">On Order</p>
+                          <p className="font-semibold text-teal-600">{item.quantity_on_order}</p>
+                        </div>
+                        <div className="text-center">
+                          <p className="text-xs text-secondary">Shortfall</p>
+                          <p className="font-semibold text-red-600">
+                            {Math.max(0, item.reorder_point - item.quantity_available - item.quantity_on_order)}
+                          </p>
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-center">
-                      <p className="text-xs text-secondary">Reorder Pt</p>
-                      <p className="font-semibold text-nav-dark">{item.reorder_point}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-xs text-secondary">On Order</p>
-                      <p className="font-semibold text-teal-600">{item.quantity_on_order}</p>
-                    </div>
-                    <div className="text-center">
-                      <p className="text-xs text-secondary">Shortfall</p>
-                      <p className="font-semibold text-red-600">
-                        {Math.max(0, item.reorder_point - item.quantity_available - item.quantity_on_order)}
-                      </p>
-                    </div>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </Card>
         );
       })()}
@@ -919,17 +1043,39 @@ export default function InventoryPage() {
             canEdit={isAdmin}
             onSave={handleBulkSave}
             filters={
-              <select
-                value={locationFilter}
-                onChange={(e) => setLocationFilter(e.target.value)}
-                aria-label="Filter by location"
-                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-              >
-                <option value="">All Locations</option>
-                {locations.map((l) => (
-                  <option key={l} value={l}>{l}</option>
-                ))}
-              </select>
+              <div className="flex gap-2 items-center flex-wrap">
+                <select
+                  value={locationFilter}
+                  onChange={(e) => setLocationFilter(e.target.value)}
+                  aria-label="Filter by location"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">All Locations</option>
+                  {locations.map((l) => (
+                    <option key={l} value={l}>{l}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setReorderFilter(!reorderFilter)}
+                  className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+                    reorderFilter
+                      ? 'bg-red-50 border-red-200 text-red-700 font-medium'
+                      : 'border-gray-200 text-secondary hover:border-red-200 hover:text-red-600'
+                  }`}
+                >
+                  Needs Reorder
+                  {(() => {
+                    const count = inventory.filter((i) => i.is_low_stock).length;
+                    return count > 0 ? (
+                      <span className={`ml-1.5 px-1.5 py-0.5 text-xs rounded-full ${
+                        reorderFilter ? 'bg-red-200 text-red-800' : 'bg-red-100 text-red-600'
+                      }`}>
+                        {count}
+                      </span>
+                    ) : null;
+                  })()}
+                </button>
+              </div>
             }
           />
         </div>
@@ -1212,6 +1358,29 @@ export default function InventoryPage() {
           </div>
         </div>
       </Modal>
+
+      <TransactionLedgerModal
+        open={ledgerOpen}
+        onClose={() => setLedgerOpen(false)}
+        productId={ledgerProductId}
+        productName={ledgerProductName}
+      />
+
+      <BatchAdjustModal
+        open={batchAdjustOpen}
+        onClose={() => setBatchAdjustOpen(false)}
+        items={inventory.filter((r) => selectedIds.has(r.id)).map((r) => ({
+          id: r.id,
+          product_id: r.product_id,
+          product_name: r.product_name,
+          quantity_available: r.quantity_available,
+        }))}
+        userId={profile?.id || ''}
+        onSuccess={() => {
+          setSelectedIds(new Set());
+          fetchInventory();
+        }}
+      />
     </div>
   );
 }
