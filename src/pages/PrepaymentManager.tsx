@@ -162,13 +162,21 @@ export default function PrepaymentManager() {
         await supabase.rpc('increment_customer_prepay', {
           p_customer_id: checkForm.customer_id,
           p_amount_cents: totalCents,
-        }).then(({ error }) => {
+        }).then(async ({ error }) => {
           // Fallback: direct update if RPC doesn't exist
           if (error) {
-            return supabase
+            const { data: custRow, error: fetchErr } = await supabase
               .from('customers')
-              .update({ prepay_balance_cents: 0 })
+              .select('prepay_balance_cents')
+              .eq('id', checkForm.customer_id)
+              .single();
+            if (fetchErr || !custRow) throw new Error('Failed to fetch current prepay balance');
+            const currentBalance = (custRow as { prepay_balance_cents: number }).prepay_balance_cents || 0;
+            const { error: updateErr } = await supabase
+              .from('customers')
+              .update({ prepay_balance_cents: currentBalance + totalCents })
               .eq('id', checkForm.customer_id);
+            if (updateErr) throw new Error('Failed to update prepay balance');
           }
         });
       },
