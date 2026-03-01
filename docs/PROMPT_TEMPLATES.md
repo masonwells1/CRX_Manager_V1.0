@@ -176,6 +176,152 @@ Tell me what you found — both issues and things that look good.
 
 ---
 
+## 8. Deep Analysis — Bug Hunt, Workflow Logic & Missing UI Audit
+
+**Use this:** When you want a thorough audit of the entire app for bugs, broken business logic, and missing UI. This is a multi-phase task — expect it to take a while.
+
+```
+I need you to perform a deep, systematic audit of CRX Manager to find bugs, flawed business workflow logic, and missing UI. This is a thorough investigation, not a quick scan.
+
+Before starting, read these files:
+1. CLAUDE.md (project root)
+2. docs/workflows/SAFE_DEVELOPMENT_RULES.md
+3. docs/workflows/QUOTE_TO_DELIVERY.md
+4. docs/workflows/INVENTORY_RULES.md
+5. docs/reference/database-schema.md
+6. docs/reference/rpc-functions.md
+7. docs/reference/pages-routes.md
+
+DO NOT fix anything yet. Only investigate and report. Work through each phase below and give me a numbered findings list at the end of each phase before moving to the next.
+
+---
+
+### PHASE 1: Business Workflow Logic Audit
+Trace each lifecycle end-to-end through the actual code (not just what CLAUDE.md says). For each workflow, read the relevant pages, RPCs, and triggers and check:
+
+**Quotes (draft -> sent -> revised -> accepted -> declined -> expired)**
+- Can a user skip statuses (e.g., go from draft straight to accepted)?
+- When a quote is accepted, does convert_quote_to_order() actually release inventory holds?
+- When a quote is declined or expired, does quantity_available actually get restored?
+- Can a user edit a quote after it's been sent or accepted?
+- Does the is_planned flag properly create/release inventory holds in all cases?
+- Are tier prices (tier 1/2/3) correctly inherited from customer and overridable?
+
+**Orders (confirmed -> partially_fulfilled -> fulfilled -> cancelled)**
+- Can an order be cancelled after partial fulfillment? What happens to delivered items?
+- Is AR (accounts receivable) correctly derived from linked invoices, not the deprecated total_paid field?
+- Are commission records actually created for every order? Check the commission_split JSONB validation.
+- Does cancelling an order restore inventory?
+
+**Deliveries (scheduled -> in_progress -> completed -> cancelled)**
+- Is the two-step confirm -> complete flow enforced in the UI? Can a user skip confirm?
+- Are delivery item quantities truly locked and uneditable?
+- Does Quick Delivery (create_quick_delivery) actually do the FOR UPDATE inventory lock?
+- What happens if two users try to complete the same delivery simultaneously?
+- Can a delivery be cancelled after completion?
+
+**Invoices (draft -> posted -> void)**
+- Does post_invoice() actually call check_period_open()? What error does the user see if the period is closed?
+- Can a user edit a posted invoice? (They shouldn't be able to)
+- Is balance_cents correctly updated after payments and credits?
+- Are all invoice changes logged to financial_audit_log?
+- Can a void invoice be un-voided? (It shouldn't)
+
+**Jobs (scheduled -> in_progress -> completed -> cancelled -> invoiced)**
+- Does job completion actually deduct inventory and create application_record?
+- Does transfer_job_to_invoice() work correctly?
+- Can a cancelled job be reactivated?
+
+**Purchase Orders (draft -> submitted -> partially_received -> fully_received -> cancelled)**
+- Does receiving update product cost when PO unit_cost differs?
+- Can a fully_received PO receive more items?
+- Are receiving_records created with proper lot/condition/notes?
+
+**Returns/RMA (requested -> approved -> received -> credited -> rejected)**
+- Is inventory restored when a return is received?
+- Is a credit actually issued? Does it reduce invoice balance_cents?
+
+**Month-End Close**
+- Does check_period_open() actually prevent ALL backdated transactions (invoices, payments, credits)?
+- Can a non-admin trigger month-end close?
+- Does closing generate statements?
+
+---
+
+### PHASE 2: Data Integrity & Race Conditions
+Read the actual RPC functions and triggers in the migrations. Check:
+
+- Are there any RPCs that modify inventory without using FOR UPDATE locks?
+- Can two simultaneous Quick Deliveries oversell the same product?
+- Are there any places where quantity_available could go negative?
+- Do all money fields use bigint cents? Search for any float/decimal money handling.
+- Are there any .update() or .delete() calls missing checkMutationResult()?
+- Are there any tables missing RLS policies? Cross-reference the actual DB schema.
+- Are there foreign key cascades that could accidentally delete important data?
+- Check for any N+1 query patterns (looping single queries instead of batch).
+
+---
+
+### PHASE 3: UI Completeness Audit
+Read each page component in src/pages/ and check:
+
+- **Missing CRUD operations:** Can the user Create, Read, Update, and Delete for every entity that should support it? Are any buttons missing or non-functional?
+- **Missing error states:** What happens when a Supabase query fails? Does the user see a helpful error or a blank screen?
+- **Missing loading states:** Are there pages that show no spinner/skeleton while data loads?
+- **Missing empty states:** What does the user see when a table has zero rows? Is it helpful or just blank?
+- **Missing confirmation dialogs:** Are destructive actions (delete, cancel, void) protected by a confirm dialog?
+- **Missing form validation:** Can the user submit forms with invalid data? Are required fields enforced?
+- **Missing permission checks:** Can non-admin users see or access pages they shouldn't (month-end close, commissions, settings)?
+- **Dead links or broken navigation:** Are there sidebar links that go nowhere or routes with no component?
+- **Missing pagination:** Are there list pages that load ALL records without pagination? (This will break with real data volumes)
+- **Mobile responsiveness:** Are there pages that are unusable on small screens?
+
+---
+
+### PHASE 4: Security Quick Scan
+- Are there any places where user input is inserted into raw SQL (injection risk)?
+- Are there any RLS policies using bare auth.uid() instead of (select auth.uid())?
+- Is the service_role key referenced anywhere in frontend code?
+- Are there any API calls that don't validate the user's role before performing admin actions?
+- Are there file uploads without size/type validation?
+
+---
+
+### PHASE 5: Cross-Entity Consistency
+- Read src/lib/reconciliation.ts — are the 5 integrity checks comprehensive? What's missing?
+- Are there orphaned records possible (e.g., invoice line items pointing to deleted orders)?
+- Can the season boundary (Oct 1 - Sep 30) cause YTD calculation bugs near the rollover?
+- Are there any places where "quantity" means different things in different contexts?
+
+---
+
+## OUTPUT FORMAT
+
+After completing all 5 phases, give me a single consolidated report:
+
+### Critical (data loss, money errors, security holes)
+[numbered list]
+
+### High (broken workflows, wrong calculations, missing enforcement)
+[numbered list]
+
+### Medium (missing UI, bad UX, missing validation)
+[numbered list]
+
+### Low (cosmetic, minor improvements, edge cases)
+[numbered list]
+
+For each finding, include:
+- **What:** One-line description of the issue
+- **Where:** Exact file path and line number (or RPC/table name)
+- **Why it matters:** What could go wrong for a real user
+- **Suggested fix:** Brief description (don't write the code yet)
+
+After the report, wait for me to tell you which items to fix. Do NOT start fixing anything until I approve.
+```
+
+---
+
 ## Tips for Using These Templates
 
 1. **Always start with Template 1** (Session Start) — this ensures Claude has the project context loaded
