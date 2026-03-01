@@ -150,6 +150,7 @@ const navigation: NavEntry[] = [
       label: 'Finance',
       icon: <DollarSign className="w-5 h-5" />,
       items: [
+        { path: '/financial-dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, roles: ['admin'] },
         { path: '/ar-aging', label: 'AR Aging', icon: <Clock className="w-4 h-4" />, roles: ['admin'] },
         { path: '/prepayments', label: 'Prepayments', icon: <Wallet className="w-4 h-4" />, roles: ['admin'] },
         { path: '/prepay-workspace', label: 'Prepay Workspace', icon: <ArrowLeftRight className="w-4 h-4" />, roles: ['admin'] },

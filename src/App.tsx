@@ -60,6 +60,7 @@ const PaymentAllocation = lazy(() => import('./pages/PaymentAllocation'));
 const DeliveryRemainders = lazy(() => import('./pages/DeliveryRemainders'));
 const ReceivingLog = lazy(() => import('./pages/ReceivingLog'));
 const QuickReceive = lazy(() => import('./pages/QuickReceive'));
+const FinancialDashboard = lazy(() => import('./pages/FinancialDashboard'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -171,6 +172,7 @@ const router = createBrowserRouter([
           { path: 'jobs/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><JobDetail /></ProtectedRoute> },
 
           // Admin only
+          { path: 'financial-dashboard', element: <ProtectedRoute allowedRoles={['admin']}><FinancialDashboard /></ProtectedRoute> },
           { path: 'month-end', element: <ProtectedRoute allowedRoles={['admin']}><MonthEndClose /></ProtectedRoute> },
           { path: 'commission-payments', element: <ProtectedRoute allowedRoles={['admin']}><CommissionPayments /></ProtectedRoute> },
           { path: 'customer-transactions', element: <ProtectedRoute allowedRoles={['admin']}><CustomerTransactionReview /></ProtectedRoute> },
