@@ -25,7 +25,7 @@
 - Smart fallback export: `const rows = selected.size > 0 ? selectedRows : filtered;` — exports selected if any, otherwise all filtered
 - Soft delete pattern: `.update({ deleted_at: new Date().toISOString() })` + filter `.is('deleted_at', null)`. Used by Returns, Invoices
 - Hand-rolled checkbox selection: Invoices and Deliveries use custom `Set<string>` state (pre-existing pattern, kept for stability)
-- InventoryPage uses `EditableDataTable` (inline editing) — no checkbox column, export-only
+- InventoryPage uses `EditableDataTable` (inline editing) — has checkbox column for batch adjust, transaction ledger per product, "Needs Reorder" filter chip
 
 ## PDF Generation
 - Invoice PDF: 3 layouts via `src/lib/invoicePdf.ts` (756 lines)
@@ -33,6 +33,7 @@
 - Year-end summary PDF: `src/lib/yearEndSummaryPdf.ts` (633 lines)
 - Delivery PDF: `src/lib/deliveryPdf.ts` — batch support, delivered vs planned columns, partial delivery amber highlight
 - Receiving PDF: `src/lib/receivingPdf.ts` — CRX green header, condition color-coding, batch support
+- Load Sheet PDF: `src/lib/loadSheetPdf.ts` — product summary table + per-stop tables, aggregates quantities across stops, tote number column
 - PDF text extraction uses `pdfjs-dist` (already installed), see `BulkOrderImport.tsx` for reference
 
 ## OCR & Matching
@@ -136,3 +137,39 @@
 - Known warning: vendor-mapbox chunk ~1,680KB (>500KB limit) — expected
 - react-map-gl v8: import from `'react-map-gl/mapbox'`, NOT bare `'react-map-gl'`
 - react-map-gl can't go in Vite manualChunks — only put `mapbox-gl`
+
+## Transaction Ledger Pattern (Inventory Improvements)
+- `TransactionLedgerModal` in `src/components/inventory/TransactionLedgerModal.tsx` — shows full transaction history per product
+- Queries `inventory_transactions` joined with `profiles` for performer names, ordered chronologically
+- `computeRunningBalance()` exported pure function — accumulates quantities for running balance column
+- Triggered via inline FileText icon button next to product name in InventoryPage table
+- 3 unit tests in `TransactionLedgerModal.test.ts`
+
+## Batch Inventory Adjustment Pattern (Inventory Improvements)
+- `BatchAdjustModal` in `src/components/inventory/BatchAdjustModal.tsx` — applies uniform delta to selected products
+- `buildAdjustmentCalls()` exported pure function — filters zero-delta items, builds RPC call array with idempotency keys
+- Uses `supabase.rpc('adjust_inventory', call)` per item with `generateIdempotencyKey()`
+- Selection via `Set<string>` state + checkbox column in `EditableDataTable`
+- "Adjust N Selected" button appears when `selectedIds.size > 0`
+- 3 unit tests in `BatchAdjustModal.test.ts`
+
+## Vendor-Grouped Reorder Alerts Pattern (Inventory Improvements)
+- Low-stock items grouped by `vendor` using `Map<string, InventoryRow[]>` in InventoryPage
+- "ACTION REQUIRED" heading with product count + vendor count
+- Per-vendor accordion showing product name, available qty, reorder point, on-order, shortfall
+- "Needs Reorder" filter chip with count badge — toggles `reorderFilter` state to show only `is_low_stock` items in table
+- Shortfall = `reorder_point - quantity_available`
+
+## Inventory Valuation Pattern (Inventory Improvements)
+- `current_cost` from products table joined into inventory query
+- "Inventory Value" summary card: `SUM(quantity_available × current_cost)` with currency format
+- "Unit Cost" and "Value" columns in table (admin-only visibility)
+- Currency formatting: `$` prefix with `.toLocaleString()` and 2 decimal places
+
+## Load Sheet PDF Pattern (Inventory Improvements)
+- `generateLoadSheetPdf()` in `src/lib/loadSheetPdf.ts` — generates pick list for warehouse staff
+- Product summary table: aggregates quantities across all stops by product name
+- Per-stop tables: delivery number, customer, items with quantities and tote numbers
+- Follows `deliveryPdf.ts` pattern: dynamic imports of jsPDF + jspdf-autotable, CRX brand colors
+- "Load Sheet" button on Deliveries page for scheduled deliveries
+- 6 unit tests in `loadSheetPdf.test.ts`
