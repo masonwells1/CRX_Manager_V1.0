@@ -275,7 +275,8 @@ test.describe('Month-End Close Enforcement', () => {
         !e.includes('ResizeObserver') &&
         !e.includes('net::ERR') &&
         !e.includes('favicon') &&
-        !e.includes('Failed to load resource')
+        !e.includes('Failed to load resource') &&
+        !e.includes('Profile fetch attempt')   // transient retry during login
     );
     expect(realErrors.length).toBe(0);
   });

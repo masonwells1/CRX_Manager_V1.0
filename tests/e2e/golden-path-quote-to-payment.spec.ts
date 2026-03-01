@@ -54,21 +54,22 @@ test.describe.serial('Golden Path: Quote → Payment', () => {
     expect(rowCount).toBeGreaterThan(0);
 
     // Pick the first customer row — extract name from first text cell
+    // Note: first column is a checkbox, so skip it (start at index 1)
     const firstRow = rows.first();
     const cells = firstRow.locator('td');
     const cellCount = await cells.count();
-    for (let c = 0; c < cellCount; c++) {
+    for (let c = 1; c < cellCount; c++) {
       const cellText = ((await cells.nth(c).textContent()) ?? '').trim();
-      if (cellText.length > 2 && !cellText.match(/^[\s✓✗☐☑]*$/)) {
+      if (cellText.length > 2 && !cellText.match(/^[\s✓✗☐☑-]*$/)) {
         state.customerName = cellText;
         break;
       }
     }
     expect(state.customerName.length).toBeGreaterThan(0);
 
-    // Click into the customer to capture the ID from URL
-    const link = firstRow.locator('a, td').first();
-    await link.click();
+    // Click the farm name cell (2nd column) to trigger onRowClick navigation
+    // The 1st column is a checkbox which doesn't navigate
+    await firstRow.locator('td').nth(1).click();
     await waitForPageStable(page);
 
     const url = page.url();
@@ -352,7 +353,8 @@ test.describe.serial('Golden Path: Quote → Payment', () => {
         !e.includes('ResizeObserver') &&
         !e.includes('net::ERR') &&
         !e.includes('favicon') &&
-        !e.includes('Failed to load resource')
+        !e.includes('Failed to load resource') &&
+        !e.includes('Profile fetch attempt')   // transient retry during login
     );
     expect(realErrors.length).toBe(0);
   });
