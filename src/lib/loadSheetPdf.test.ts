@@ -84,7 +84,7 @@ describe('generateLoadSheetPdf', () => {
     // Roundup should be 10 + 15 = 25, Atrazine should be 5
     const roundupRow = firstCallOpts.body.find((r: string[]) => r[0] === 'Roundup PowerMax');
     expect(roundupRow).toBeTruthy();
-    expect(Number(roundupRow[1])).toBe(25);
+    expect(Number(roundupRow![1])).toBe(25);
   });
 
   it('creates one per-stop table per delivery', async () => {
