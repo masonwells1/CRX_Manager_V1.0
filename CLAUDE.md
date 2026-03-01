@@ -15,10 +15,10 @@ To copy them: read each `.md` file (except README.md) from `docs/claude-memory/`
 
 ## Current State (2026-03-01)
 - 50 pages, 72+ tables, ~115 RPCs, 92 migrations
-- 1,380 unit tests (88 files) + 589 E2E tests (84 spec files, all passing)
+- 1,433 unit tests (92 files) + 589 E2E tests (84 spec files, all passing)
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
-- Latest: E2E coverage sprint — 23 new spec files (165 tests) covering 5 new features + 18 uncovered pages
+- Latest: Inventory & delivery improvements — load sheet PDF, transaction ledger, batch adjust, vendor-grouped reorder alerts, cost valuation columns
 
 ---
 

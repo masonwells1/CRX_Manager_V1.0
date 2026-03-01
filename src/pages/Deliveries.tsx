@@ -27,6 +27,7 @@ import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
+import { generateLoadSheetPdf } from '../lib/loadSheetPdf';
 import type { Delivery, Profile } from '../types';
 
 /* ─── Row type ─── */
@@ -97,6 +98,7 @@ export default function Deliveries() {
   const [cancelling, setCancelling] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [printing, setPrinting] = useState(false);
+  const [printingLoadSheet, setPrintingLoadSheet] = useState(false);
   const [showReschedule, setShowReschedule] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [rescheduling, setRescheduling] = useState(false);
@@ -373,6 +375,55 @@ export default function Deliveries() {
       toast('error', sanitizeError(err));
     }
     setPrinting(false);
+  };
+
+  const handlePrintLoadSheet = async () => {
+    setPrintingLoadSheet(true);
+    try {
+      // Use selected deliveries, or all filtered scheduled/in_progress for today
+      const rows = selected.size > 0
+        ? selectedDeliveries
+        : filtered.filter((d) => d.status === 'scheduled' || d.status === 'in_progress');
+
+      if (rows.length === 0) {
+        toast('error', 'No deliveries to include in load sheet');
+        setPrintingLoadSheet(false);
+        return;
+      }
+
+      // Fetch items for each delivery
+      const stops = [];
+      for (const del of rows) {
+        const { data: items } = await supabase
+          .from('delivery_items')
+          .select('*, product:products(product_name)')
+          .eq('delivery_id', del.id)
+          .order('sort_order');
+
+        const delAny = del as unknown as Record<string, unknown>;
+        stops.push({
+          delivery_number: del.delivery_number,
+          customer_name: del.customer_name,
+          customer_address: (delAny.delivery_address as string) || undefined,
+          driver_name: del.driver_name,
+          scheduled_date: del.scheduled_date,
+          priority: del.priority || 'normal',
+          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>).map((it) => ({
+            product_name: it.product?.product_name || (it.product_name as string) || 'Unknown',
+            quantity: it.quantity as number,
+            unit_size: (it.unit_size as string) || '-',
+            tote_number: (it.tote_number as string) || undefined,
+          })),
+        });
+      }
+
+      await generateLoadSheetPdf(stops);
+      toast('success', `Load sheet generated for ${stops.length} stop(s)`);
+    } catch (err: unknown) {
+      console.error('Load sheet failed:', err);
+      toast('error', sanitizeError(err));
+    }
+    setPrintingLoadSheet(false);
   };
 
   const handleBatchReschedule = async () => {
@@ -719,6 +770,15 @@ export default function Deliveries() {
             loading={exportingPdf}
           >
             Download PDF
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<FileText className="w-4 h-4" />}
+            onClick={handlePrintLoadSheet}
+            loading={printingLoadSheet}
+          >
+            {selected.size > 0 ? `Load Sheet (${selected.size})` : 'Load Sheet'}
           </Button>
           {selected.size > 0 && (
             <>

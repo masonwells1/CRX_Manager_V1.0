@@ -13,8 +13,8 @@
 | `/orders` | Orders | Order list with status badges |
 | `/orders/new` | NewOrder | Direct order creation (bypasses quote) |
 | `/orders/:id` | OrderDetail | Order detail with status transitions, convert to invoice |
-| `/inventory` | InventoryPage | Inventory levels, low-stock alerts, cost valuation |
-| `/deliveries` | Deliveries | Delivery management + driver dashboard + batch actions + quick delivery (~900 lines) |
+| `/inventory` | InventoryPage | Inventory levels, vendor-grouped reorder alerts, transaction ledger, batch adjust, cost valuation columns |
+| `/deliveries` | Deliveries | Delivery management + driver dashboard + batch actions + quick delivery + load sheet PDF (~900 lines) |
 | `/deliveries/new` | NewDelivery | Create delivery from order |
 | `/deliveries/:id` | DeliveryDetail | Full lifecycle: confirm, edit, cancel, photos, issues, remainders, order context (~1350 lines) |
 | `/delivery-remainders` | DeliveryRemainders | Pending remainder items across all customers |

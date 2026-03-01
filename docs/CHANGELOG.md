@@ -4,6 +4,46 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-01 — Inventory & Delivery Improvements (branch `feature/inventory-delivery-improvements`)
+
+### Load Sheet / Pick List PDF
+- New `src/lib/loadSheetPdf.ts` — generates warehouse pick list PDF for scheduled deliveries
+- Product summary table aggregates quantities across all stops by product name
+- Per-stop tables show delivery number, customer, items with quantities and tote numbers
+- "Load Sheet" button added to Deliveries page header
+- 6 unit tests in `loadSheetPdf.test.ts`
+
+### Inventory Transaction Ledger
+- New `src/components/inventory/TransactionLedgerModal.tsx` — full transaction history per product
+- Shows date, type (received/delivered/adjusted/returned/transferred/booked), quantity, running balance, performer, notes
+- Color-coded type icons and positive/negative quantity formatting
+- Inline FileText icon button next to each product name in inventory table
+- `computeRunningBalance()` pure function with 3 unit tests
+
+### Batch Inventory Adjustments
+- New `src/components/inventory/BatchAdjustModal.tsx` — apply uniform adjustment to selected products
+- Checkbox column added to inventory table for multi-selection
+- "Adjust N Selected" button appears in header when items selected
+- Preview list shows current → new quantities before confirmation
+- Uses `adjust_inventory` RPC with idempotency keys per item
+- `buildAdjustmentCalls()` pure function with 3 unit tests
+
+### Vendor-Grouped Reorder Alerts
+- Low-stock section redesigned: "ACTION REQUIRED" heading with vendor grouping
+- Products grouped by vendor using `Map<string, InventoryRow[]>`
+- Shows available qty, reorder point, on-order, and shortfall per product
+- "Needs Reorder" filter chip with count badge filters table to low-stock items only
+
+### Inventory Valuation Display
+- New "Inventory Value" summary card (7th card) showing `SUM(qty × unit_cost)` with currency format
+- "Unit Cost" and "Value" columns added to inventory table (admin-only)
+- `current_cost` field added to inventory query from products table
+
+- Net result: 1,433 unit tests (92 files), all passing
+- Commits: `8b84db9` through `9785041` (5 commits)
+
+---
+
 ## 2026-03-01 — E2E Coverage Sprint (branch `claude/add-playwright-tests-DjMo6`)
 
 - Added 23 new Playwright E2E spec files with 165 test cases, all passing
@@ -15,7 +55,7 @@ All significant development milestones, in reverse chronological order.
   - `finance-charge-fix.spec.ts` (8): Non-compounding finance charges on AR Aging
 - **Part 2 — Previously Uncovered Pages (18 files, 122 tests):**
   - ar-aging, application-records, commission-payments-crud, crop-programs, cycle-counts, delivery-remainders, quick-receive, returns-crud, rebates-page, new-delivery-page, new-order-page, new-purchase-order, purchase-order-detail, invoice-list-page, field-detail, job-detail, vehicle-detail, inventory-page
-- Net result: 84 E2E spec files, 589 total E2E tests, 1,380 unit tests (88 files)
+- Net result: 84 E2E spec files, 589 total E2E tests, 1,380 unit tests (88 files at that time)
 - Commits: `88b6086` (tests), `99c4d2d` (audit prompt), `61f38df` (test plan)
 
 ---

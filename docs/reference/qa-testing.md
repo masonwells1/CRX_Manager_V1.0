@@ -93,3 +93,10 @@ Cross-entity data integrity tests via `src/lib/reconciliation.ts`:
 - `src/lib/metrics.test.ts` — 10 tests for Sentry wrapper functions
 - Uses `vi.mock('@sentry/react')` with individual `mockReset()` in `beforeEach`
 - Important: `vi.clearAllMocks()` only clears call history, NOT mock implementations — must use `.mockReset()` on each mock individually
+
+## Inventory & Delivery Improvements Tests
+
+- `src/lib/loadSheetPdf.test.ts` — 6 tests: save filename, product summary table, quantity aggregation across stops, per-stop tables, custom filename, empty stops error
+- `src/components/inventory/TransactionLedgerModal.test.ts` — 3 tests: running balance computation (positive, negative, mixed quantities)
+- `src/components/inventory/BatchAdjustModal.test.ts` — 3 tests: RPC call creation per item, zero-delta filtering, reason inclusion
+- jsPDF mock pattern: must use `function JsPDFMock() { return mockDoc; }` (not arrow functions — arrow functions can't be `new`'d)
