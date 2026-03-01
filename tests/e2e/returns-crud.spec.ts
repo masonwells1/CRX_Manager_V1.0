@@ -66,8 +66,8 @@ test.describe('Returns', () => {
   });
 
   test('RT7: Bulk approve/reject buttons visible when rows selected', async ({ page }) => {
-    const bulkApprove = page.locator('button:has-text("Approve"), button:has-text("Bulk Approve")').first();
-    const bulkReject = page.locator('button:has-text("Reject"), button:has-text("Bulk Reject")').first();
+    const _bulkApprove = page.locator('button:has-text("Approve"), button:has-text("Bulk Approve")').first();
+    const _bulkReject = page.locator('button:has-text("Reject"), button:has-text("Bulk Reject")').first();
     // These may only appear after selecting rows
     const bodyText = await page.textContent('body') || '';
     expect(bodyText).not.toContain('Something went wrong');

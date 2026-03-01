@@ -23,18 +23,13 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { parseDollarsToCents } from '../lib/parseCents';
 import type { PaymentAllocationEntry, PaymentAllocationResult, InvoiceType } from '../types';
 
 /* ─── Helpers ──────────────────────────────────────────────────────────── */
 
 const fmt = (cents: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
-
-const parseDollarInput = (val: string): number => {
-  const cleaned = val.replace(/[^0-9.]/g, '');
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? 0 : Math.round(num * 100);
-};
 
 const toDollarDisplay = (cents: number): string => (cents / 100).toFixed(2);
 
@@ -189,7 +184,7 @@ export default function PaymentAllocation() {
 
   /* ── Allocation helpers ────────────────────────────────────────────── */
 
-  const checkCents = parseDollarInput(checkAmountInput);
+  const checkCents = parseDollarsToCents(checkAmountInput);
 
   const setAllocationForInvoice = useCallback((invoiceId: string, cents: number) => {
     setInvoices((prev) =>
@@ -546,7 +541,7 @@ export default function PaymentAllocation() {
                                     value={inv.allocated_cents > 0 ? toDollarDisplay(inv.allocated_cents) : ''}
                                     placeholder="0.00"
                                     onChange={(e) => {
-                                      const cents = parseDollarInput(e.target.value);
+                                      const cents = parseDollarsToCents(e.target.value);
                                       setAllocationForInvoice(inv.invoice_id, cents);
                                     }}
                                     className={`w-[120px] pl-5 pr-2 py-1.5 text-sm text-right border rounded-lg focus:outline-none focus:ring-2 ${

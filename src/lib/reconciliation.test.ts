@@ -5,6 +5,11 @@ import {
   checkInvoicePayments,
   checkInvoiceBalances,
   checkCommissionSplits,
+  checkQuoteHoldParity,
+  checkDeliveryInvoiceQuantityParity,
+  checkPrebookedInventory,
+  checkReturnCreditLinkage,
+  checkCustomerARConsistency,
   type OrderRow,
   type OrderItemRow,
   type InventoryRow,
@@ -12,6 +17,14 @@ import {
   type InvoiceRow,
   type PaymentAllocationRow,
   type CommissionRow,
+  type QuoteHoldRow,
+  type HoldRow,
+  type DeliveryItemCheckRow,
+  type InvoiceItemCheckRow,
+  type InventoryPrebookRow,
+  type OrderItemRemainingRow,
+  type ReturnCheckRow,
+  type CustomerARInvoiceRow,
 } from './reconciliation';
 
 // ── Check 1: Order Totals ───────────────────────────────────────
@@ -380,5 +393,334 @@ describe('checkCommissionSplits', () => {
 
     // 33.33 + 33.33 + 33.34 = 100.00
     expect(checkCommissionSplits(commissions)).toEqual([]);
+  });
+});
+
+// ── Check 6: Quote-Hold Parity ──────────────────────────────────
+
+describe('checkQuoteHoldParity', () => {
+  it('returns no discrepancies when all planned quotes have holds', () => {
+    const quotes: QuoteHoldRow[] = [
+      { id: 'q1', quote_number: 'Q-001', is_planned: true, status: 'draft' },
+    ];
+    const holds: HoldRow[] = [
+      { source_id: 'q1', is_active: true },
+    ];
+    expect(checkQuoteHoldParity(quotes, holds)).toEqual([]);
+  });
+
+  it('flags planned quote with no active holds', () => {
+    const quotes: QuoteHoldRow[] = [
+      { id: 'q1', quote_number: 'Q-001', is_planned: true, status: 'sent' },
+    ];
+    const holds: HoldRow[] = [];
+    const result = checkQuoteHoldParity(quotes, holds);
+    expect(result).toHaveLength(1);
+    expect(result[0].check).toBe('quote_hold_parity');
+    expect(result[0].entity).toBe('Q-001');
+    expect(result[0].expected).toBe(1);
+    expect(result[0].actual).toBe(0);
+  });
+
+  it('ignores non-planned quotes', () => {
+    const quotes: QuoteHoldRow[] = [
+      { id: 'q1', quote_number: 'Q-001', is_planned: false, status: 'draft' },
+    ];
+    const holds: HoldRow[] = [];
+    expect(checkQuoteHoldParity(quotes, holds)).toEqual([]);
+  });
+
+  it('ignores terminal-status quotes', () => {
+    const quotes: QuoteHoldRow[] = [
+      { id: 'q1', quote_number: 'Q-001', is_planned: true, status: 'accepted' },
+      { id: 'q2', quote_number: 'Q-002', is_planned: true, status: 'declined' },
+      { id: 'q3', quote_number: 'Q-003', is_planned: true, status: 'expired' },
+    ];
+    const holds: HoldRow[] = [];
+    expect(checkQuoteHoldParity(quotes, holds)).toEqual([]);
+  });
+
+  it('does not flag quote with inactive hold if another hold is active', () => {
+    const quotes: QuoteHoldRow[] = [
+      { id: 'q1', quote_number: 'Q-001', is_planned: true, status: 'revised' },
+    ];
+    const holds: HoldRow[] = [
+      { source_id: 'q1', is_active: false },
+      { source_id: 'q1', is_active: true },
+    ];
+    expect(checkQuoteHoldParity(quotes, holds)).toEqual([]);
+  });
+
+  it('flags quote with only inactive holds', () => {
+    const quotes: QuoteHoldRow[] = [
+      { id: 'q1', quote_number: 'Q-001', is_planned: true, status: 'draft' },
+    ];
+    const holds: HoldRow[] = [
+      { source_id: 'q1', is_active: false },
+    ];
+    const result = checkQuoteHoldParity(quotes, holds);
+    expect(result).toHaveLength(1);
+    expect(result[0].check).toBe('quote_hold_parity');
+  });
+
+  it('handles empty inputs', () => {
+    expect(checkQuoteHoldParity([], [])).toEqual([]);
+  });
+});
+
+// ── Check 7: Delivery-Invoice Quantity Parity ───────────────────
+
+describe('checkDeliveryInvoiceQuantityParity', () => {
+  it('returns no discrepancies when quantities match', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10 },
+    ];
+    const invoiceItems: InvoiceItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity: 10 },
+    ];
+    expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
+  });
+
+  it('flags mismatch between delivered and invoiced quantities', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 20 },
+    ];
+    const invoiceItems: InvoiceItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity: 10 },
+    ];
+    const result = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems);
+    expect(result).toHaveLength(1);
+    expect(result[0].check).toBe('delivery_invoice_qty_parity');
+    expect(result[0].expected).toBe(20); // delivered
+    expect(result[0].actual).toBe(10);   // invoiced
+    expect(result[0].delta).toBe(10);
+  });
+
+  it('aggregates multiple deliveries and invoices for same order+product', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 5 },
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 5 },
+    ];
+    const invoiceItems: InvoiceItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity: 10 },
+    ];
+    // 5 + 5 delivered = 10 invoiced → match
+    expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
+  });
+
+  it('checks different order+product combinations independently', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10 },
+      { order_id: 'o1', product_id: 'p2', quantity_delivered: 20 },
+    ];
+    const invoiceItems: InvoiceItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity: 10 }, // match
+      { order_id: 'o1', product_id: 'p2', quantity: 5 },  // mismatch
+    ];
+    const result = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems);
+    expect(result).toHaveLength(1);
+    expect(result[0].delta).toBe(15);
+  });
+
+  it('tolerates tiny quantity differences', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10.005 },
+    ];
+    const invoiceItems: InvoiceItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity: 10 },
+    ];
+    // diff = 0.005 < 0.01 tolerance
+    expect(checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems)).toEqual([]);
+  });
+
+  it('handles empty inputs', () => {
+    expect(checkDeliveryInvoiceQuantityParity([], [])).toEqual([]);
+  });
+
+  it('flags delivery items with no matching invoice items', () => {
+    const deliveryItems: DeliveryItemCheckRow[] = [
+      { order_id: 'o1', product_id: 'p1', quantity_delivered: 10 },
+    ];
+    const invoiceItems: InvoiceItemCheckRow[] = [];
+    const result = checkDeliveryInvoiceQuantityParity(deliveryItems, invoiceItems);
+    expect(result).toHaveLength(1);
+    expect(result[0].expected).toBe(10);
+    expect(result[0].actual).toBe(0);
+  });
+});
+
+// ── Check 8: Pre-booked Inventory ───────────────────────────────
+
+describe('checkPrebookedInventory', () => {
+  it('returns no discrepancies when prebooked matches order remaining', () => {
+    const inventory: InventoryPrebookRow[] = [
+      { id: 'inv1', product_id: 'p1', quantity_prebooked: 25 },
+    ];
+    const orderItems: OrderItemRemainingRow[] = [
+      { product_id: 'p1', quantity_remaining: 15 },
+      { product_id: 'p1', quantity_remaining: 10 },
+    ];
+    expect(checkPrebookedInventory(inventory, orderItems)).toEqual([]);
+  });
+
+  it('flags mismatch between prebooked and order remaining', () => {
+    const inventory: InventoryPrebookRow[] = [
+      { id: 'inv1', product_id: 'p1', quantity_prebooked: 50 },
+    ];
+    const orderItems: OrderItemRemainingRow[] = [
+      { product_id: 'p1', quantity_remaining: 20 },
+    ];
+    const result = checkPrebookedInventory(inventory, orderItems);
+    expect(result).toHaveLength(1);
+    expect(result[0].check).toBe('prebooked_inventory');
+    expect(result[0].expected).toBe(20);
+    expect(result[0].actual).toBe(50);
+    expect(result[0].delta).toBe(30);
+  });
+
+  it('handles product with prebooked but no open orders', () => {
+    const inventory: InventoryPrebookRow[] = [
+      { id: 'inv1', product_id: 'p1', quantity_prebooked: 10 },
+    ];
+    const orderItems: OrderItemRemainingRow[] = [];
+    const result = checkPrebookedInventory(inventory, orderItems);
+    expect(result).toHaveLength(1);
+    expect(result[0].expected).toBe(0);
+    expect(result[0].actual).toBe(10);
+  });
+
+  it('handles product with zero prebooked and no orders', () => {
+    const inventory: InventoryPrebookRow[] = [
+      { id: 'inv1', product_id: 'p1', quantity_prebooked: 0 },
+    ];
+    const orderItems: OrderItemRemainingRow[] = [];
+    expect(checkPrebookedInventory(inventory, orderItems)).toEqual([]);
+  });
+
+  it('tolerates tiny differences', () => {
+    const inventory: InventoryPrebookRow[] = [
+      { id: 'inv1', product_id: 'p1', quantity_prebooked: 10.005 },
+    ];
+    const orderItems: OrderItemRemainingRow[] = [
+      { product_id: 'p1', quantity_remaining: 10 },
+    ];
+    // diff = 0.005 < 0.01 tolerance
+    expect(checkPrebookedInventory(inventory, orderItems)).toEqual([]);
+  });
+
+  it('checks multiple products independently', () => {
+    const inventory: InventoryPrebookRow[] = [
+      { id: 'inv1', product_id: 'p1', quantity_prebooked: 10 },
+      { id: 'inv2', product_id: 'p2', quantity_prebooked: 99 }, // mismatch
+    ];
+    const orderItems: OrderItemRemainingRow[] = [
+      { product_id: 'p1', quantity_remaining: 10 },
+      { product_id: 'p2', quantity_remaining: 5 },
+    ];
+    const result = checkPrebookedInventory(inventory, orderItems);
+    expect(result).toHaveLength(1);
+    expect(result[0].entityId).toBe('inv2');
+  });
+});
+
+// ── Check 9: Return-Credit Linkage ──────────────────────────────
+
+describe('checkReturnCreditLinkage', () => {
+  it('returns no discrepancies when credited returns have credit invoices', () => {
+    const returns: ReturnCheckRow[] = [
+      { id: 'r1', return_number: 'RMA-001', status: 'credited', credit_invoice_id: 'inv1' },
+    ];
+    expect(checkReturnCreditLinkage(returns)).toEqual([]);
+  });
+
+  it('flags credited return with no credit invoice', () => {
+    const returns: ReturnCheckRow[] = [
+      { id: 'r1', return_number: 'RMA-001', status: 'credited', credit_invoice_id: null },
+    ];
+    const result = checkReturnCreditLinkage(returns);
+    expect(result).toHaveLength(1);
+    expect(result[0].check).toBe('return_credit_linkage');
+    expect(result[0].entity).toBe('RMA-001');
+    expect(result[0].expected).toBe(1);
+    expect(result[0].actual).toBe(0);
+  });
+
+  it('ignores non-credited returns without credit invoices', () => {
+    const returns: ReturnCheckRow[] = [
+      { id: 'r1', return_number: 'RMA-001', status: 'requested', credit_invoice_id: null },
+      { id: 'r2', return_number: 'RMA-002', status: 'approved', credit_invoice_id: null },
+      { id: 'r3', return_number: 'RMA-003', status: 'received', credit_invoice_id: null },
+      { id: 'r4', return_number: 'RMA-004', status: 'rejected', credit_invoice_id: null },
+    ];
+    expect(checkReturnCreditLinkage(returns)).toEqual([]);
+  });
+
+  it('handles empty returns list', () => {
+    expect(checkReturnCreditLinkage([])).toEqual([]);
+  });
+
+  it('checks multiple credited returns independently', () => {
+    const returns: ReturnCheckRow[] = [
+      { id: 'r1', return_number: 'RMA-001', status: 'credited', credit_invoice_id: 'inv1' }, // OK
+      { id: 'r2', return_number: 'RMA-002', status: 'credited', credit_invoice_id: null },    // BAD
+      { id: 'r3', return_number: 'RMA-003', status: 'credited', credit_invoice_id: 'inv3' }, // OK
+    ];
+    const result = checkReturnCreditLinkage(returns);
+    expect(result).toHaveLength(1);
+    expect(result[0].entityId).toBe('r2');
+  });
+});
+
+// ── Check 10: Customer AR Consistency ───────────────────────────
+
+describe('checkCustomerARConsistency', () => {
+  it('returns no discrepancies when all non-voided invoices have balance_cents', () => {
+    const invoices: CustomerARInvoiceRow[] = [
+      { id: 'i1', invoice_number: 'INV-001', customer_id: 'c1', balance_cents: 5000, status: 'posted' },
+      { id: 'i2', invoice_number: 'INV-002', customer_id: 'c1', balance_cents: 0, status: 'posted' },
+    ];
+    expect(checkCustomerARConsistency(invoices)).toEqual([]);
+  });
+
+  it('flags non-voided invoice with null balance_cents', () => {
+    const invoices: CustomerARInvoiceRow[] = [
+      { id: 'i1', invoice_number: 'INV-001', customer_id: 'c1', balance_cents: null, status: 'posted' },
+    ];
+    const result = checkCustomerARConsistency(invoices);
+    expect(result).toHaveLength(1);
+    expect(result[0].check).toBe('customer_ar_consistency');
+    expect(result[0].entity).toBe('INV-001');
+    expect(result[0].actual).toBe(-1); // sentinel for NULL
+  });
+
+  it('ignores voided invoices with null balance', () => {
+    const invoices: CustomerARInvoiceRow[] = [
+      { id: 'i1', invoice_number: 'INV-001', customer_id: 'c1', balance_cents: null, status: 'void' },
+    ];
+    expect(checkCustomerARConsistency(invoices)).toEqual([]);
+  });
+
+  it('handles draft invoices with null balance', () => {
+    const invoices: CustomerARInvoiceRow[] = [
+      { id: 'i1', invoice_number: 'INV-001', customer_id: 'c1', balance_cents: null, status: 'draft' },
+    ];
+    const result = checkCustomerARConsistency(invoices);
+    expect(result).toHaveLength(1);
+    expect(result[0].check).toBe('customer_ar_consistency');
+  });
+
+  it('handles empty invoices list', () => {
+    expect(checkCustomerARConsistency([])).toEqual([]);
+  });
+
+  it('checks multiple invoices across customers', () => {
+    const invoices: CustomerARInvoiceRow[] = [
+      { id: 'i1', invoice_number: 'INV-001', customer_id: 'c1', balance_cents: 5000, status: 'posted' },
+      { id: 'i2', invoice_number: 'INV-002', customer_id: 'c2', balance_cents: null, status: 'posted' },
+      { id: 'i3', invoice_number: 'INV-003', customer_id: 'c1', balance_cents: null, status: 'draft' },
+    ];
+    const result = checkCustomerARConsistency(invoices);
+    expect(result).toHaveLength(2);
+    expect(result.map((d) => d.entityId).sort()).toEqual(['i2', 'i3']);
   });
 });

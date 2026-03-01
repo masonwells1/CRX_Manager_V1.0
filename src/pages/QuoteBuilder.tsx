@@ -153,6 +153,12 @@ export default function QuoteBuilder() {
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
+  // Status-based guards
+  const currentStatus = status || 'draft';
+  const canEdit = ['draft', 'revised'].includes(currentStatus);
+  const canSend = ['draft', 'revised'].includes(currentStatus);
+  const canConvert = ['sent', 'revised'].includes(currentStatus);
+
   // Mark dirty whenever user changes form data (after initial load)
   useEffect(() => {
     if (!initialLoadDone.current) return;
@@ -763,7 +769,7 @@ export default function QuoteBuilder() {
           })),
         };
 
-        await supabase.from('quote_versions').insert({
+        const { error: versionError } = await supabase.from('quote_versions').insert({
           quote_id: result,
           version_number: versionNum,
           sent_by: profile.id,
@@ -772,6 +778,10 @@ export default function QuoteBuilder() {
           snapshot_data: snapshotData,
           notes: `Version ${versionNum} sent`,
         });
+        if (versionError) {
+          console.error('Failed to create quote version snapshot:', versionError);
+          toast('error', 'Quote sent but version snapshot failed. Contact admin.');
+        }
 
         // === GAP FIX #5: Log activity for quote sent ===
         await logActivity(
@@ -923,6 +933,7 @@ export default function QuoteBuilder() {
             showChevron={false}
             onClick={handleSaveDraft}
             loading={saving}
+            disabled={!canEdit && isEditing}
           >
             Save Draft
           </Button>
@@ -934,15 +945,17 @@ export default function QuoteBuilder() {
           >
             Download PDF
           </Button>
-          <Button
-            variant="primary"
-            icon={<Send className="w-4 h-4" />}
-            onClick={() => setConfirmSendOpen(true)}
-            loading={sending}
-          >
-            Send Quote
-          </Button>
-          {isEditing && (
+          {canSend && (
+            <Button
+              variant="primary"
+              icon={<Send className="w-4 h-4" />}
+              onClick={() => setConfirmSendOpen(true)}
+              loading={sending}
+            >
+              Send Quote
+            </Button>
+          )}
+          {isEditing && canConvert && (
             <Button
               variant="primary"
               icon={<ShoppingCart className="w-4 h-4" />}
@@ -954,6 +967,12 @@ export default function QuoteBuilder() {
           )}
         </div>
       </div>
+
+      {isEditing && !canEdit && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 text-sm">
+          This quote is in <strong>{currentStatus}</strong> status and cannot be edited.
+        </div>
+      )}
 
       <Card>
         <CardHeader title="Quote" accent="Details" />

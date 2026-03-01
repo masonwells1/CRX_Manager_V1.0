@@ -12,6 +12,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -368,8 +369,8 @@ export default function InvoiceDetail() {
 
   // Record payment
   const handlePayment = async () => {
-    const amountDollars = parseFloat(payAmount);
-    if (!amountDollars || amountDollars <= 0) {
+    const amountCents = parseDollarsToCents(payAmount);
+    if (amountCents <= 0) {
       toast('error', 'Enter a valid payment amount');
       return;
     }
@@ -378,14 +379,14 @@ export default function InvoiceDetail() {
       const idemKey = generateIdempotencyKey('record_invoice_payment', profile!.id);
       const { error } = await supabase.rpc('record_invoice_payment', {
         p_invoice_id: id,
-        p_amount_cents: Math.round(amountDollars * 100),
+        p_amount_cents: amountCents,
         p_payment_method: payMethod,
         p_reference_number: payRef || null,
         p_notes: payNotes || null,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      toast('success', `Payment of ${fmt(Math.round(amountDollars * 100))} recorded`);
+      toast('success', `Payment of ${fmt(amountCents)} recorded`);
       setShowPayModal(false);
       setPayAmount('');
       setPayRef('');

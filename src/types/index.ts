@@ -1076,6 +1076,7 @@ export interface Return {
   received_by: string | null;
   total_credit_cents: number;
   credit_invoice_id: string | null;
+  credited_by: string | null;
   requested_at: string;
   approved_at: string | null;
   received_at: string | null;
