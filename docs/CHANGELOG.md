@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-01 — E2E Coverage Sprint (branch `claude/add-playwright-tests-DjMo6`)
+
+- Added 23 new Playwright E2E spec files with 165 test cases, all passing
+- **Part 1 — New Feature Coverage (5 files, 43 tests):**
+  - `prepayment-manager-crud.spec.ts` (10): Split Check modal, bucket system, batch apply
+  - `prepay-workspace.spec.ts` (10): Split-panel allocator, customer selection, two-phase commit
+  - `tote-tracking.spec.ts` (8): Cross-page tote # on NewDelivery, DeliveryDetail, ReceivingLog, InvoiceDetail
+  - `rup-compliance-warnings.spec.ts` (7): RUP banners on QuoteBuilder, NewDelivery, DeliveryDetail, Compliance
+  - `finance-charge-fix.spec.ts` (8): Non-compounding finance charges on AR Aging
+- **Part 2 — Previously Uncovered Pages (18 files, 122 tests):**
+  - ar-aging, application-records, commission-payments-crud, crop-programs, cycle-counts, delivery-remainders, quick-receive, returns-crud, rebates-page, new-delivery-page, new-order-page, new-purchase-order, purchase-order-detail, invoice-list-page, field-detail, job-detail, vehicle-detail, inventory-page
+- Net result: 84 E2E spec files, 589 total E2E tests, 1,380 unit tests (88 files)
+- Commits: `88b6086` (tests), `99c4d2d` (audit prompt), `61f38df` (test plan)
+
+---
+
 ## 2026-02-28 — Audit Remediation (4 phases, 21 tasks, branch `feature/audit-remediation`)
 
 ### Phase 0: Finance Charge + Billing Split Fixes
@@ -28,7 +44,7 @@ All significant development milestones, in reverse chronological order.
 - Built PrepayWorkspace page — split-panel allocator with two-phase commit pattern
 - Added Split Check modal to PrepaymentManager for bucket-based check entry
 - Added sidebar nav + route for PrepayWorkspace
-- Net result: 50 pages, 93 migrations, 1,380 unit tests (88 files), all passing
+- Net result: 50 pages, 92 migrations, 1,380 unit tests (88 files), all passing
 - Commits: `6beef0c` through `e6c3477` (10 commits)
 
 ---

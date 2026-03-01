@@ -204,12 +204,18 @@ export default function MonthEndClose() {
       }
 
       toast('info', `Generating ${uniqueIds.length} year-end summary PDF(s)...`);
-      const summaries: YearEndSummaryData[] = [];
-      for (const cid of uniqueIds) {
-        const { data, error } = await supabase.rpc('get_customer_year_end_summary', { p_customer_id: cid, p_season: season });
-        if (error) { console.error(`Failed for ${cid}:`, error); continue; }
-        summaries.push(data as unknown as YearEndSummaryData);
+
+      // Batch RPC: single call replaces N individual calls
+      const { data: batchResult, error: batchError } = await supabase.rpc('get_batch_year_end_summaries', {
+        p_customer_ids: uniqueIds,
+        p_season: season,
+      });
+      if (batchError) {
+        toast('error', 'Failed to generate year-end summaries: ' + batchError.message);
+        setYeLoading(false);
+        return;
       }
+      const summaries = (batchResult as unknown as YearEndSummaryData[]) || [];
       await downloadBatchYearEndSummaries(summaries, options);
       toast('success', `Generated ${summaries.length} year-end summary PDF(s)`);
       setShowYeDialog(false);

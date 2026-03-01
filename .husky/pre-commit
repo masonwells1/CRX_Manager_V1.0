@@ -1,3 +1,4 @@
+#!/usr/bin/env sh
 echo "🔍 Running ESLint..."
 npm run lint 2>&1
 LINT_EXIT=$?

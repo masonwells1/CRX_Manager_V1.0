@@ -167,7 +167,7 @@ export default function PrepaymentManager() {
           if (error) {
             return supabase
               .from('customers')
-              .update({ prepay_balance_cents: supabase.rpc ? undefined : 0 })
+              .update({ prepay_balance_cents: 0 })
               .eq('id', checkForm.customer_id);
           }
         });

@@ -1,6 +1,6 @@
 # CRX Manager V1.0 — Agent Memory
 
-> **Last updated:** 2026-02-28 | **Commit:** `91314c4` (Go-live hardening complete — 5 sprints)
+> **Last updated:** 2026-03-01 | **Commit:** `88b6086` (E2E coverage sprint — 23 new spec files)
 
 ## Project
 
@@ -30,38 +30,42 @@ E2E_TEST_PASSWORD=Mwells0413
 
 ## Current State
 
-- **Branch:** `feature/go-live-hardening` (ready for merge to main)
-- **Commit:** `91314c4` — Sprint 5b: Cross-entity reconciliation checks
-- **Pages:** 48 | **Migrations:** 83 local SQL files | **Edge Functions:** 5
-- **Unit tests:** 1,374 passing (87 files) | **E2E specs:** 61 files
+- **Branch:** `main` (all feature branches merged; E2E sprint on `claude/add-playwright-tests-DjMo6`)
+- **Commit:** `88b6086` — E2E coverage sprint: 23 new spec files (165 tests)
+- **Pages:** 50 | **Migrations:** 92 local SQL files | **Edge Functions:** 5
+- **Unit tests:** 1,380 passing (88 files) | **E2E specs:** 84 files (589 tests, all passing)
 - **Build:** clean | **CI:** green | **Pre-commit:** lint + build + vitest
 - **Husky hooks:** pre-commit (lint+build+test) + pre-push
 - **Dependabot:** configured for npm + GitHub Actions
 
 ## Recent Changes (since Feb 25)
 
-### Go-Live Hardening (branch `feature/go-live-hardening`, 13 commits)
-- **Sprint 1a:** `crypto.randomUUID` for idempotency keys, retry-safe `useIdempotentAction` hook, `db.ts` multi-tab session recovery
-- **Sprint 1b:** Server-authoritative quote math via `calculate_quote_totals()` RPC using `NUMERIC(15,4)` precision
-- **Sprint 2:** Notification failure tracking (`failed_at`, `retry_count`), read-path error handling with silent fallback
-- **Sprint 3a:** Delivery signature privacy — signed URLs via `create_signed_url()` RPC, no more public bucket access
-- **Sprint 3b:** RLS integration contract tests — per-role verification for orders/invoices/deliveries/commissions
-- **Sprint 3c:** Schema integrity live DB tests — FK constraints, enum values, generated columns, RLS enabled
-- **Sprint 4a:** Shared `runCriticalAction()` helper — replaces scattered try/catch with consistent error handling + toast
-- **Sprint 4b:** Fixed all `react-hooks/exhaustive-deps` ESLint warnings across codebase
-- **Sprint 4c:** E2E smoke tests in CI workflow, fixed TDZ declaration ordering issues
-- **Sprint 5a:** Operational metrics via `src/lib/metrics.ts` — Sentry user context, navigation tracking, business event tracking
-- **Sprint 5b:** Cross-entity reconciliation checks via `src/lib/reconciliation.ts` — 5 pure check functions + DB wrapper
+### E2E Coverage Sprint (branch `claude/add-playwright-tests-DjMo6`, 3 commits)
+- 23 new Playwright E2E spec files with 165 test cases, all passing
+- Part 1 — 5 new feature specs (43 tests): prepayment-manager-crud, prepay-workspace, tote-tracking, rup-compliance-warnings, finance-charge-fix
+- Part 2 — 18 uncovered page specs (122 tests): ar-aging, application-records, commission-payments-crud, crop-programs, cycle-counts, delivery-remainders, quick-receive, returns-crud, rebates-page, new-delivery-page, new-order-page, new-purchase-order, purchase-order-detail, invoice-list-page, field-detail, job-detail, vehicle-detail, inventory-page
+- Total E2E: 84 spec files, 589 tests
+
+### Audit Remediation (branch `feature/audit-remediation`, 10 commits, merged to main)
+- **Phase 0:** Finance charge compounding fix (exclude prior charges), billing split `FOR UPDATE` locks
+- **Phase 1:** Tote tracking — `tote_number` + `is_non_returnable` on delivery_items, threaded through RPCs, UI on NewDelivery/DeliveryDetail/PDF
+- **Phase 2:** RUP compliance — `rupCompliance.ts` (6 tests), warning banners on 4 pages, audit logging, Compliance filter chips with count badges
+- **Phase 3:** Prepay buckets — `bucket_label` column, `apply_prepay_to_invoice()` + `batch_apply_prepayments()` RPCs, PrepayWorkspace page, Split Check modal
+- **New page:** `/prepay-workspace` (PrepayWorkspace) — split-panel allocator with two-phase commit
+- **New lib:** `src/lib/rupCompliance.ts` — RUP compliance checker
+- **5 new migrations:** 20260301000000 through 20260301200001
+
+### Go-Live Hardening (branch `feature/go-live-hardening`, 13 commits, merged)
+- Idempotency keys, server-authoritative quote math, notification failure tracking
+- Delivery signature privacy, RLS contract tests, schema integrity tests
+- `runCriticalAction()` shared helper, ESLint exhaustive-deps fixes, E2E CI
+- Operational metrics (Sentry), cross-entity reconciliation checks
 
 ### Earlier (Feb 25-27)
 - `Payments.tsx` DELETED — `PaymentAllocation` is sole payment page at `/payments`
 - AR derived from invoices only (orders.total_paid/balance_due deprecated)
-- Migration `20260312200000_business_logic_audit_fixes.sql` — hold release trigger, period enforcement, commission validation, inventory pre-check
-- `checkMutationResult()` added to 13 pages for silent RLS failure detection
-- Offline sync conflict detection via `snapshotAt` / `entityTable` / `entityId`
-- Realtime `disabled` prop prevents null-filter subscriptions
+- `checkMutationResult()` on 13 pages, offline sync conflict detection
 - Dependabot + Husky + `.nvmrc` + `.claude/settings.json` added
-- New docs structure: `docs/reference/`, `docs/workflows/`, `docs/claude-memory/`
 
 ## Where to Find Things
 
@@ -83,5 +87,5 @@ Detailed reference docs are in the repo — read on demand:
 
 These files in this memory directory record WHY certain decisions were made:
 - `audit-findings-2026-02-18.md` — 18 findings from production readiness audit
-- `migration-history.md` — Narrative of all 80+ migrations and their purpose
+- `migration-history.md` — Narrative of all 92 migrations and their purpose
 - `sprint-audit-details.md` — S18-S20 features + safety audit technical details
