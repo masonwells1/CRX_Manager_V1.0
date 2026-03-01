@@ -1,3 +1,4 @@
+#!/usr/bin/env sh
 echo "🛡️ Pre-push safety check..."
 echo ""
 echo "Running TypeScript type check..."
