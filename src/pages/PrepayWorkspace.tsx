@@ -19,6 +19,8 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
+import { generateIdempotencyKey } from '../lib/idempotency';
+import { parseDollarsToCents } from '../lib/parseCents';
 
 interface PrepayBucket {
   id: string;
@@ -141,7 +143,7 @@ export default function PrepayWorkspace() {
     const bucketRemaining = applyBucket.balance_cents - pendingByBucket(applyBucket.id);
 
     for (const [invoiceId, amountStr] of Object.entries(applyAmounts)) {
-      const cents = Math.round(parseFloat(amountStr || '0') * 100);
+      const cents = parseDollarsToCents(amountStr || '0');
       if (cents <= 0) continue;
       totalApplied += cents;
       newAllocations.push({
@@ -186,9 +188,11 @@ export default function PrepayWorkspace() {
     if (!pendingAllocations.length) return;
     await runCriticalAction({
       action: async () => {
+        const batchKey = generateIdempotencyKey('batch_apply_prepayments', profile!.id);
         const { data, error } = await supabase.rpc('batch_apply_prepayments', {
           p_allocations: pendingAllocations,
           p_performed_by: profile?.id,
+          p_idempotency_key: batchKey,
         });
         if (error) throw error;
         const result = data as { applied_count: number; total_applied_cents: number };

@@ -19,7 +19,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { ReceivingRecord, ReceivingSummary, Profile } from '../types';
@@ -175,14 +175,11 @@ export default function ReceivingLog() {
     setDeleting(true);
     try {
       const ids = selectedRows.map((r) => r.id);
-      const { error } = await supabase.from('receiving_records').delete().in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Deleted ${ids.length} record(s)`);
-        clearSelection();
-        fetchData();
-      }
+      const result = await supabase.from('receiving_records').delete().in('id', ids).select();
+      checkMutationResult(result, 'Delete receiving records');
+      toast('success', `Deleted ${ids.length} record(s)`);
+      clearSelection();
+      fetchData();
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }

@@ -10,6 +10,8 @@ import Input from '../ui/Input';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/db';
+import { generateIdempotencyKey } from '../../lib/idempotency';
+import { parseDollarsToCents } from '../../lib/parseCents';
 
 interface WriteOffModalProps {
   open: boolean;
@@ -38,12 +40,11 @@ export default function WriteOffModal({
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
-    const amountDollars = parseFloat(amount);
-    if (!amountDollars || amountDollars <= 0) {
+    const amountCents = parseDollarsToCents(amount);
+    if (amountCents <= 0) {
       toast('error', 'Enter a valid write-off amount');
       return;
     }
-    const amountCents = Math.round(amountDollars * 100);
     if (amountCents > balanceCents) {
       toast('error', `Write-off amount cannot exceed balance of ${fmt(balanceCents)}`);
       return;
@@ -55,11 +56,13 @@ export default function WriteOffModal({
 
     setSubmitting(true);
     try {
+      const idempotencyKey = generateIdempotencyKey('apply_write_off', profile!.id);
       const { error } = await supabase.rpc('apply_write_off', {
         p_invoice_id: invoiceId,
         p_amount_cents: amountCents,
         p_reason: reason.trim(),
         p_performed_by: profile?.id,
+        p_idempotency_key: idempotencyKey,
       });
       if (error) throw error;
       toast('success', `Write-off of ${fmt(amountCents)} applied to ${invoiceNumber}`);

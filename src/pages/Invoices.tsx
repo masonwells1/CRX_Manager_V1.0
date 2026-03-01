@@ -199,11 +199,14 @@ export default function Invoices() {
 
       for (const inv of selectedInvoices) {
         // Fetch customer details
-        const { data: cust } = await supabase
+        const { data: cust, error: custError } = await supabase
           .from('customers')
           .select('billing_address, city, state, zip, account_number, payment_terms')
           .eq('id', inv.customer_id)
           .single();
+        if (custError) {
+          console.warn(`Customer ${inv.customer_id} not found for invoice ${inv.invoice_number}, using defaults`);
+        }
 
         // Fetch items with product details
         const { data: items } = await supabase

@@ -170,7 +170,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
           .from('blend-ticket-images')
           .createSignedUrl(filePath, 60 * 60 * 24 * 365);
 
-        await supabase.from('blend_ticket_images').insert({
+        const { error: imgError } = await supabase.from('blend_ticket_images').insert({
           blend_ticket_id: ticket.id,
           storage_path: filePath,
           image_url: urlData?.signedUrl || filePath,
@@ -178,17 +178,19 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
           mime_type: compressedFile.type,
           upload_order: i + 1,
         });
+        if (imgError) throw imgError;
 
         setUploadProgress(Math.round(((i + 1) / images.length) * 100));
       }
 
-      await supabase.from('ocr_processing_queue').insert({
+      const { error: ocrError } = await supabase.from('ocr_processing_queue').insert({
         blend_ticket_id: ticket.id,
         status: 'pending',
         priority: 0,
         retry_count: 0,
         max_retries: 3,
       });
+      if (ocrError) throw ocrError;
 
       // Trigger server-side OCR processing via Edge Function (non-blocking)
       supabase.functions.invoke('process-blend-ticket', {

@@ -39,10 +39,11 @@
 ## Financial
 - `close_accounting_period()`, `check_period_open()`, `generate_batch_statements()`, `get_monthly_summary()`
 - `create_commission_payment()`, `post_commission_payment()`
-- `apply_write_off()`, `generate_finance_charges()`
+- `apply_write_off(invoice_id, amount_cents, reason, performed_by, idempotency_key?)` — writes off balance with idempotency guard, creates write-off record and audit log entry
+- `generate_finance_charges(performed_by, ...)` — admin-only (role check enforced in RPC body), generates finance charge invoices excluding prior charges
 - `get_customer_transaction_review()`, `apply_remaining_prepayments()`
 - `apply_prepay_to_invoice(credit_id, invoice_id, amount_cents, performed_by)` — atomic single allocation with `FOR UPDATE` locks, creates `prepay_applications` record, deducts from both balances, writes `financial_audit_log` entry
-- `batch_apply_prepayments(allocations jsonb, performed_by)` — batch wrapper iterating over JSON array, calls `apply_prepay_to_invoice` for each, returns total count and amount
+- `batch_apply_prepayments(allocations jsonb, performed_by, idempotency_key?)` — batch wrapper with idempotency guard, iterates over JSON array, calls `apply_prepay_to_invoice` for each, returns total count and amount
 
 ## Geo / Maps
 - `get_fields_with_geojson()`, `get_field_geojson()`, `save_field_geometry()` — use `SET search_path = public, extensions` for PostGIS

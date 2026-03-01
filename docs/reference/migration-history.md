@@ -1,4 +1,4 @@
-# Migration History (92 migrations)
+# Migration History (93 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -61,3 +61,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 55 | 20260301200001 | Prepay application RPCs: `apply_prepay_to_invoice()` atomic allocation + `batch_apply_prepayments()` batch wrapper |
 | 56 | 20260301300000 | New RPC `financial_dashboard_summary()` for Financial Dashboard — returns all financial KPIs (AR aging, revenue, payments, prepay balances, finance charges) |
 | 57 | 20260301300001 | Slim `dashboard_summary()` to operational-only — removes financial KPIs (now served by `financial_dashboard_summary()`) |
+| 58 | 20260316200000 | Additional audit gap fixes: idempotency on `apply_write_off` + `batch_apply_prepayments`, admin role check on `generate_finance_charges` |

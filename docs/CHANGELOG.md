@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Additional Audit Gap Remediation
+
+### RPC Hardening (migration `20260316200000`)
+- `apply_write_off`: added `p_idempotency_key` parameter with `check_idempotency`/`save_idempotency` guards
+- `batch_apply_prepayments`: added `p_idempotency_key` parameter with idempotency guards
+- `generate_finance_charges`: added admin role check (`profiles.role = 'admin'`) at RPC entry
+
+### Frontend Fixes
+- **WriteOffModal**: replaced `parseFloat` with `parseDollarsToCents()` for IEEE 754-safe money handling; passes idempotency key to RPC
+- **PrepayWorkspace**: replaced `parseFloat * 100` with `parseDollarsToCents()`; passes idempotency key to `batch_apply_prepayments`
+- **BulkTicketUpload**: added error checks on two fire-and-forget inserts (`blend_ticket_images`, `ocr_processing_queue`)
+- **ReceivingLog**: added `checkMutationResult()` to bulk delete with `.select()` validation
+- **Invoices**: added error/null check on `.single()` customer fetch in batch PDF print
+
+---
+
 ## 2026-03-01 — Inventory & Delivery Improvements (branch `feature/inventory-delivery-improvements`)
 
 ### Load Sheet / Pick List PDF

@@ -18,6 +18,10 @@ vi.mock('../../lib/db', () => ({
   supabase: { rpc: mockRpc },
 }));
 
+vi.mock('../../lib/idempotency', () => ({
+  generateIdempotencyKey: vi.fn().mockReturnValue('test-key-123'),
+}));
+
 vi.mock('../../contexts/AuthContext', () => ({
   useAuth: () => ({ profile: { id: 'user-1' }, role: 'admin' }),
 }));
@@ -109,6 +113,7 @@ describe('WriteOffModal', () => {
         p_amount_cents: 10000,
         p_reason: 'Bad debt',
         p_performed_by: 'user-1',
+        p_idempotency_key: 'test-key-123',
       });
     });
   });
