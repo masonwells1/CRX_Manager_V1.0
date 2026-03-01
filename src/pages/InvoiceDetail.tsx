@@ -250,6 +250,7 @@ export default function InvoiceDetail() {
         unit_size: product.unit_size,
         sort_order: prev.length,
         notes: null,
+        tote_number: null,
       },
     ]);
     setShowProductModal(false);

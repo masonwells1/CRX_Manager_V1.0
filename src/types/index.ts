@@ -314,6 +314,8 @@ export interface DeliveryItem {
   quantity_delivered: number;
   unit_size: string | null;
   notes: string | null;
+  tote_number: string | null;
+  is_non_returnable: boolean;
   product?: Product;
 }
 
