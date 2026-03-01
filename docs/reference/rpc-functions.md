@@ -48,7 +48,8 @@
 - `get_fields_with_geojson()`, `get_field_geojson()`, `save_field_geometry()` — use `SET search_path = public, extensions` for PostGIS
 
 ## Dashboard
-- `dashboard_summary()` — 8 queries consolidated into 1 RPC
+- `dashboard_summary()` — operational-only summary (inventory levels, deliveries, recent activity, integrity alerts). Slimmed from original 8-query version; financial KPIs moved to `financial_dashboard_summary()`
+- `financial_dashboard_summary()` — admin-only RPC returning all financial KPIs: AR aging buckets, revenue totals, payment activity, prepay balances, finance charge summary, period status. Powers the `/financial-dashboard` page
 
 ## Helper Functions (SQL)
 ```sql

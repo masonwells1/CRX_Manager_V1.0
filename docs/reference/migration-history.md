@@ -59,3 +59,5 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 53 | 20260301100001 | Complete delivery tote copy: threads `tote_number` through `complete_delivery` and `create_quick_delivery` RPCs |
 | 54 | 20260301200000 | Prepay bucket system: `bucket_label` column on `prepay_credits`, 8 seeded bucket categories in `app_settings`, reference index |
 | 55 | 20260301200001 | Prepay application RPCs: `apply_prepay_to_invoice()` atomic allocation + `batch_apply_prepayments()` batch wrapper |
+| 56 | 20260301300000 | New RPC `financial_dashboard_summary()` for Financial Dashboard — returns all financial KPIs (AR aging, revenue, payments, prepay balances, finance charges) |
+| 57 | 20260301300001 | Slim `dashboard_summary()` to operational-only — removes financial KPIs (now served by `financial_dashboard_summary()`) |
