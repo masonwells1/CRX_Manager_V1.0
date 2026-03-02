@@ -12,6 +12,7 @@ import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import Skeleton from '../components/ui/Skeleton';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -167,6 +168,7 @@ export function BlendTicketDetail() {
       requestAnimationFrame(() => { initialLoadDone.current = true; });
     } catch (error) {
       console.error('Error loading ticket:', error);
+      toast('error', 'Failed to load blend ticket. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -449,11 +451,16 @@ export function BlendTicketDetail() {
   }
 
   const [creatingAppRecord, setCreatingAppRecord] = useState(false);
+  const [appRecordConfirmOpen, setAppRecordConfirmOpen] = useState(false);
 
-  async function handleCreateApplicationRecord() {
+  function handleCreateApplicationRecord() {
     if (!ticket || !profile) return;
-    if (!confirm('Create an application record from this approved blend ticket? This action cannot be undone.')) return;
+    setAppRecordConfirmOpen(true);
+  }
 
+  async function executeCreateApplicationRecord() {
+    if (!ticket || !profile) return;
+    setAppRecordConfirmOpen(false);
     setCreatingAppRecord(true);
     try {
       const appRecKey = appRecordIdem.getKey();
@@ -1124,6 +1131,18 @@ export function BlendTicketDetail() {
         open={blocker.state === 'blocked'}
         onStay={() => blocker.reset?.()}
         onLeave={() => blocker.proceed?.()}
+      />
+
+      <ConfirmModal
+        open={appRecordConfirmOpen}
+        onClose={() => setAppRecordConfirmOpen(false)}
+        onConfirm={executeCreateApplicationRecord}
+        title="Create Application Record"
+        message="Create an application record from this approved blend ticket? This action cannot be undone."
+        confirmLabel="Create Record"
+        variant="info"
+        icon={ClipboardCheck}
+        loading={creatingAppRecord}
       />
     </div>
   );

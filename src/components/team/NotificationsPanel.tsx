@@ -201,10 +201,13 @@ export default function NotificationsPanel() {
                 {notifications.map((notification) => (
                   <div
                     key={notification.id}
+                    role="button"
+                    tabIndex={0}
                     className={`p-4 hover:bg-gray-50 transition-colors cursor-pointer group ${
                       !notification.is_read ? 'bg-blue-50/50' : ''
                     }`}
                     onClick={() => handleNotificationClick(notification)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleNotificationClick(notification); } }}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">

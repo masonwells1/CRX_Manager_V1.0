@@ -16,6 +16,7 @@ import { logActivity } from '../lib/activityLogger';
 import { computeSeason } from '../utils/season';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
 interface InventoryRow extends Inventory {
@@ -92,6 +93,9 @@ export default function InventoryPage() {
   // Batch adjust
   const [batchAdjustOpen, setBatchAdjustOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Delete confirm modal
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const isAdmin = role === 'admin';
   const [exportingPdf, setExportingPdf] = useState(false);
@@ -618,9 +622,14 @@ export default function InventoryPage() {
       return;
     }
 
-    if (!confirm('Are you sure you want to delete this inventory item? This action cannot be undone.')) {
-      return;
-    }
+    // Passed all safety checks — show confirm modal
+    setDeleteConfirmId(inventoryId);
+  };
+
+  const executeDelete = async () => {
+    if (!deleteConfirmId) return;
+    const target = inventory.find((i) => i.id === deleteConfirmId);
+    if (!target) return;
 
     // Audit trail: log the deletion before removing the row
     if (profile) {
@@ -638,7 +647,7 @@ export default function InventoryPage() {
       const deleteResult = await supabase
         .from('inventory')
         .delete()
-        .eq('id', inventoryId)
+        .eq('id', deleteConfirmId)
         .select();
       checkMutationResult(deleteResult, 'Delete inventory item');
 
@@ -647,6 +656,8 @@ export default function InventoryPage() {
     } catch (error: unknown) {
       console.error('Failed to delete inventory:', error);
       toast('error', sanitizeError(error));
+    } finally {
+      setDeleteConfirmId(null);
     }
   };
 
@@ -1384,6 +1395,17 @@ export default function InventoryPage() {
           setSelectedIds(new Set());
           fetchInventory();
         }}
+      />
+
+      <ConfirmModal
+        open={deleteConfirmId !== null}
+        onClose={() => setDeleteConfirmId(null)}
+        onConfirm={executeDelete}
+        title="Delete Inventory Item"
+        message="Are you sure you want to delete this inventory item? This action cannot be undone and will be recorded in the audit log."
+        confirmLabel="Delete Item"
+        variant="danger"
+        icon={Trash2}
       />
     </div>
   );
