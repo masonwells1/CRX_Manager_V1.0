@@ -13,12 +13,12 @@ At the start of each session, silently check if `docs/claude-memory/MEMORY.md` h
 
 To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
 
-## Current State (2026-03-01)
-- 50 pages, 72+ tables, ~115 RPCs, 93 migrations
-- 1,433 unit tests (92 files) + 589 E2E tests (84 spec files, all passing)
+## Current State (2026-03-02)
+- 50 pages, 72+ tables, ~115 RPCs, 107 migrations
+- 1,433 unit tests (92 files) + 589 E2E tests (98 spec files, all passing)
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
-- Latest: Inventory & delivery improvements — load sheet PDF, transaction ledger, batch adjust, vendor-grouped reorder alerts, cost valuation columns
+- Latest: Security audit remediation — auth.uid() enforcement, PO soft-delete, useIdempotencyKey hook
 
 ---
 
@@ -32,7 +32,7 @@ To copy them: read each `.md` file (except README.md) from `docs/claude-memory/`
 7. **Keep types in `src/types/index.ts`** — all shared interfaces go there
 8. **Use the Supabase client from `src/lib/db.ts`** — never create additional clients
 9. **Activity logging:** Call `logActivity()` from `src/lib/activityLogger.ts` for important user actions
-10. **Idempotency:** Use `generateIdempotencyKey()` for critical write operations
+10. **Idempotency:** Use `useIdempotencyKey()` hook (from `src/hooks/useIdempotencyKey.ts`) for critical write operations
 
 ---
 
@@ -220,13 +220,13 @@ Run `/update-docs` for a full audit anytime (not required — the commit hook ha
 |-----|----------|
 | `docs/reference/database-schema.md` | 72+ tables + RLS policy matrix |
 | `docs/reference/rpc-functions.md` | ~115 RPCs + helpers + triggers |
-| `docs/reference/migration-history.md` | 93 migration entries |
+| `docs/reference/migration-history.md` | 107 migration entries |
 | `docs/reference/pages-routes.md` | 50 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
 | `docs/CHANGELOG.md` | Sprint-by-sprint history |
-| `docs/E2E_FAILURES_TO_FIX.md` | Legacy E2E failure tracking (mostly resolved) |
 | `docs/plans/2026-02-23-price-list-versioning-design.md` | Future: price list versioning (NOT built) |
+| `docs/plans/2026-02-27-top-10-improvements-roadmap.md` | Future: UX improvements roadmap (deferred) |
 
 ## Other Repo Docs
 - `README.md` — Project overview, quick start

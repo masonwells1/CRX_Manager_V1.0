@@ -31,4 +31,4 @@ Things that have bitten us before. Check here before debugging mysterious issues
 - jsPDF mocks must include ALL methods used — missing mocks cause silent test failures
 
 ## Business Logic
-- See CLAUDE.md "Hard Red Lines" for money (bigint cents) and season (July 1-June 30) rules
+- See CLAUDE.md "Hard Red Lines" for money (bigint cents) and season (October 1-September 30) rules

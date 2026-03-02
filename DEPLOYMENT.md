@@ -12,57 +12,9 @@ Before deploying, ensure:
 - ✅ Supabase production database is ready
 - ✅ All migrations are applied
 
-## Deployment Options
+## Deployment
 
-### Option 1: Netlify (Alternative)
-
-#### Initial Setup
-
-1. **Create Netlify Account**
-   - Go to https://netlify.com
-   - Sign up with your GitHub account
-
-2. **Connect Repository**
-   - Click "Add new site" → "Import an existing project"
-   - Choose "GitHub"
-   - Select your repository
-   - Grant permissions if prompted
-
-3. **Configure Build Settings**
-   ```
-   Build command: npm run build
-   Publish directory: dist
-   ```
-
-4. **Add Environment Variables**
-   - Click "Show advanced" → "Add environment variable"
-   - Add these variables from your production Supabase project:
-     - `VITE_SUPABASE_URL`
-     - `VITE_SUPABASE_ANON_KEY`
-
-5. **Deploy**
-   - Click "Deploy site"
-   - Wait 2-3 minutes for initial deployment
-   - You'll get a URL like `https://random-name-123.netlify.app`
-
-#### Continuous Deployment
-
-After initial setup, Netlify automatically deploys when you push to GitHub:
-1. Make changes to your code
-2. Commit and push to GitHub
-3. Netlify automatically builds and deploys
-
-#### Custom Domain
-
-1. In Netlify, go to "Domain settings"
-2. Click "Add custom domain"
-3. Enter your domain name
-4. Follow DNS configuration instructions
-5. Wait for SSL certificate to be issued (automatic)
-
----
-
-### Option 2: Vercel (Current Deployment)
+### Vercel (Current Deployment)
 
 #### Initial Setup
 
@@ -145,7 +97,7 @@ VITE_SENTRY_DSN=https://your-sentry-dsn (optional)
 - [ ] All TODO comments addressed
 
 ### Testing
-- [ ] All unit tests pass (`npm test` — 766 tests)
+- [ ] All unit tests pass (`npm test` — 1,433 tests)
 - [ ] All E2E tests pass (`npm run test:e2e`)
 - [ ] Manual testing completed on staging
 - [ ] Mobile responsiveness verified
@@ -214,7 +166,7 @@ Edge Functions (`create-user`, `process-blend-ticket`, `process-document`) will 
    ```
 
 4. **Monitor Deployment**
-   - Watch build logs on Netlify/Vercel
+   - Watch build logs on Vercel
    - Check for any build errors
    - Verify deployment completes successfully
 
@@ -239,14 +191,6 @@ Edge Functions (`create-user`, `process-blend-ticket`, `process-document`) will 
 ## Rollback Procedure
 
 If something goes wrong after deployment:
-
-### Netlify Rollback
-
-1. Go to "Deploys" in Netlify dashboard
-2. Find the last working deployment
-3. Click the three dots (...)
-4. Click "Publish deploy"
-5. Previous version is now live
 
 ### Vercel Rollback
 
@@ -298,7 +242,7 @@ git push origin main              # Push the revert
 - Network requests
 - Performance metrics
 
-#### Netlify/Vercel Analytics
+#### Vercel Analytics
 - Visitor count
 - Page load times
 - Bandwidth usage
@@ -482,12 +426,11 @@ If you encounter issues during deployment:
 2. Review environment variables
 3. Verify database connectivity
 4. Test in staging environment
-5. Check Netlify/Vercel status pages
+5. Check Vercel status page
 6. Contact hosting support if needed
 
 ## Additional Resources
 
-- [Netlify Documentation](https://docs.netlify.com/)
 - [Vercel Documentation](https://vercel.com/docs)
 - [Supabase Documentation](https://supabase.com/docs)
 - [Vite Deployment Guide](https://vitejs.dev/guide/static-deploy.html)

@@ -1,13 +1,13 @@
 # Top 10 App Improvements Roadmap
 
-> Created: 2026-02-27 | Status: In Progress
+> Created: 2026-02-27 | Status: **Deferred** — revisit after v1.0 team launch
 
-## Currently Working On
+## Future Improvements (0 of 10 completed)
 
-- [x] **#1** Transaction Thread cross-links (Order ↔ Invoice ↔ Delivery)
+- [ ] **#1** Transaction Thread cross-links (Order ↔ Invoice ↔ Delivery)
 - [ ] **#2** Consolidate sidebar 9 → 6 categories
 
-## Up Next
+## Details
 
 ### #3 — Customer 360 View on CustomerDetail
 - Add tabs: Profile | Orders | Deliveries | Financials | Fields

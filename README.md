@@ -50,7 +50,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 | `npm run dev` | Start development server (port 5173) |
 | `npm run build` | Build for production |
 | `npm run preview` | Preview production build locally |
-| `npm test` | Run all 1,122 unit tests |
+| `npm test` | Run all 1,433 unit tests |
 | `npm run test:watch` | Run unit tests in watch mode |
 | `npm run typecheck` | Check TypeScript errors |
 | `npm run lint` | Run ESLint |
@@ -106,7 +106,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 
 ## Database
 
-72+ tables in Supabase PostgreSQL with Row Level Security (RLS) on all tables. ~110 RPC functions. 77 migration files in `supabase/migrations/`. 5 Edge Functions for user creation, OCR processing, and storage setup.
+72+ tables in Supabase PostgreSQL with Row Level Security (RLS) on all tables. ~115 RPC functions. 107 migration files in `supabase/migrations/`. 5 Edge Functions for user creation, OCR processing, and storage setup.
 
 See [CLAUDE.md](./CLAUDE.md) for the complete table list, RLS policy matrix, and RPC function inventory.
 
@@ -122,18 +122,17 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environme
 |------|----------|
 | [CLAUDE.md](./CLAUDE.md) | Complete project reference — architecture, schema, RPCs, business logic, feature inventory |
 | [TESTING.md](./TESTING.md) | Testing guide (beginner-friendly) — setup, running tests, troubleshooting |
-| [DEPLOYMENT.md](./DEPLOYMENT.md) | Deployment instructions — Vercel/Netlify setup, env vars, rollback |
-| [ENV_SETUP.md](./ENV_SETUP.md) | Environment variable setup guide |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Deployment instructions — Vercel setup, env vars, rollback |
 
 ## Current State
 
-- **49 pages**, 50+ components, fully lazy-loaded
-- **1,122 unit tests** (80 test files) + **35 E2E spec files** (424 tests)
-- **72+ database tables**, ~110 RPC functions, 77 migrations
+- **50 pages**, 50+ components, fully lazy-loaded
+- **1,433 unit tests** (92 test files) + **98 E2E spec files** (589 tests)
+- **72+ database tables**, ~115 RPC functions, 107 migrations
 - **0 ESLint errors**, 0 TypeScript errors
 - **Pre-commit hook** blocks commits if build or tests fail
 - **Deployed to Vercel** at [croprxsolutions.app](https://croprxsolutions.app) (live)
-- All hardening sprints (0-20) + safety audit + codebase audit: **Complete**
+- Security audit, codebase audit, all hardening sprints: **Complete**
 
 ## License
 
@@ -142,4 +141,4 @@ Private - All rights reserved
 ---
 
 **Version:** 1.0
-**Last Updated:** 2026-02-23
+**Last Updated:** 2026-03-02

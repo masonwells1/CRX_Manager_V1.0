@@ -6,8 +6,8 @@ This guide will walk you through testing the application. No coding experience n
 
 | Metric | Count |
 |--------|-------|
-| **Unit tests** | 1,122 (Vitest, 80 test files in `src/`) |
-| **E2E specs** | 35 Playwright spec files (424 tests in `tests/e2e/`) |
+| **Unit tests** | 1,433 (Vitest, 92 test files in `src/`) |
+| **E2E specs** | 98 Playwright spec files (589 tests in `tests/e2e/`) |
 | **Pre-commit hook** | Runs `npm run build` + `npm test` before every commit — blocks if anything fails |
 
 ## Table of Contents
@@ -159,7 +159,7 @@ Unit tests check individual pieces of logic (calculations, PDF generation, data 
 npm test
 ```
 
-This runs all 1,122 unit tests across 80 test files. Takes about 10-20 seconds.
+This runs all 1,433 unit tests across 92 test files. Takes about 10-20 seconds.
 
 ### Running Tests in Watch Mode
 
@@ -184,7 +184,7 @@ This keeps running and automatically re-tests when you save a file. Great during
 
 Every time you commit code, the pre-commit hook automatically runs:
 1. `npm run build` — ensures the app compiles
-2. `npm test` — ensures all 1,122 unit tests pass
+2. `npm test` — ensures all 1,433 unit tests pass
 
 If either fails, the commit is **blocked**. You must fix the issue before committing.
 
@@ -199,7 +199,7 @@ E2E (end-to-end) tests open a real browser and test the full application — log
 - **Login/Logout:** Can users log in and out?
 - **Customer Management:** Can you create, view, and search for customers?
 - **Permissions:** Can users access the pages they're supposed to?
-- **All 49 pages:** Every page is tested for loading and basic functionality
+- **All 50 pages:** Every page is tested for loading and basic functionality
 
 ### Running the Tests
 
@@ -306,35 +306,9 @@ Staging is a separate environment where you can test changes before deploying to
 2. Copy the Project URL and anon key
 3. Keep these handy for the next step
 
-#### Step 3: Deploy to Netlify
+#### Step 3: Deploy to Vercel
 
-Netlify is a free hosting service for web applications.
-
-1. Go to https://netlify.com and sign up (use GitHub login for easy setup)
-2. Click "Add new site" → "Import an existing project"
-3. Connect to your GitHub repository
-4. Choose your repository from the list
-5. Configure the build settings:
-   - **Build command:** `npm run build`
-   - **Publish directory:** `dist`
-6. Click "Show advanced" → "Add environment variable"
-7. Add your staging credentials:
-   - Variable: `VITE_SUPABASE_URL` → Value: [your staging URL]
-   - Variable: `VITE_SUPABASE_ANON_KEY` → Value: [your staging anon key]
-8. Click "Deploy site"
-
-After 2-3 minutes, your staging site will be live! Netlify will give you a URL like `https://random-name-123.netlify.app`
-
-#### Step 4: Test Your Staging Site
-
-1. Open the staging URL in your browser
-2. Try logging in
-3. Create a test customer, product, or order
-4. Verify everything works as expected
-
-### Alternative: Deploy to Vercel
-
-Vercel is another great option (similar to Netlify):
+Vercel is the hosting service used for this project.
 
 1. Go to https://vercel.com and sign up with GitHub
 2. Click "Add New Project"
@@ -343,8 +317,19 @@ Vercel is another great option (similar to Netlify):
    - **Framework Preset:** Vite
    - **Build Command:** `npm run build`
    - **Output Directory:** `dist`
-5. Add environment variables (same as Netlify)
+5. Click "Environment Variables" and add your staging credentials:
+   - `VITE_SUPABASE_URL` → [your staging URL]
+   - `VITE_SUPABASE_ANON_KEY` → [your staging anon key]
 6. Click "Deploy"
+
+After 2-3 minutes, your staging site will be live with a URL like `https://your-project.vercel.app`
+
+#### Step 4: Test Your Staging Site
+
+1. Open the staging URL in your browser
+2. Try logging in
+3. Create a test customer, product, or order
+4. Verify everything works as expected
 
 ---
 
@@ -440,7 +425,7 @@ npm install
 ### Problem: Tests pass locally but fail on staging
 
 **Possible causes:**
-1. Environment variables not set correctly on Netlify/Vercel
+1. Environment variables not set correctly on Vercel
 2. Staging database has different data/structure
 3. Migration didn't run on staging database
 
@@ -509,7 +494,7 @@ npm run lint         # Run ESLint
 
 ### Unit Tests (Vitest)
 ```bash
-npm test                  # Run all 1,122 unit tests
+npm test                  # Run all 1,433 unit tests
 npm run test:watch        # Run unit tests in watch mode
 ```
 

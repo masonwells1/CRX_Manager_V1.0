@@ -51,7 +51,7 @@
 ## Financial Patterns
 - AR aging uses Supabase RPC `get_ar_aging()` — handles both invoiced and uninvoiced orders
 - Customer statement uses RPC `get_customer_statement()` — running balance via window function
-- Season comparison uses RPC `get_season_comparison()` — YoY metrics (July 1-June 30 seasons)
+- Season comparison uses RPC `get_season_comparison()` — YoY metrics (October 1-September 30 seasons)
 - Financial audit log: immutable append-only table, logged via `financial_audit_log` inserts
 - Atomic operations: PostgreSQL RPCs with `FOR UPDATE` row locks for race-free multi-table writes
 
@@ -99,10 +99,11 @@
 - Consistent error handling: logs error, shows toast with `errorPrefix + error.message`
 - Returns `{ success: boolean, data?, error? }`
 
-## Idempotency Pattern (Sprint 1a)
-- `generateIdempotencyKey()` uses `crypto.randomUUID()` (not Math.random fallback)
+## Idempotency Pattern (Sprint 1a + Security Audit)
+- `useIdempotencyKey()` hook in `src/hooks/useIdempotencyKey.ts` — generates stable `crypto.randomUUID()` key per component mount
 - `useIdempotentAction` hook — retry-safe, prevents double-submit on network retries
 - `db.ts` includes multi-tab session recovery via `detectSessionFromOtherTabs()`
+- All 24 pages with write operations use `useIdempotencyKey()` (migrated from inline `generateIdempotencyKey()`)
 
 ## Server-Authoritative Math Pattern (Sprint 1b)
 - `calculate_quote_totals()` PostgreSQL RPC uses `NUMERIC(15,4)` for exact decimal math
