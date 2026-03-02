@@ -3,9 +3,9 @@ import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import { supabase } from '../../lib/db';
-import { generateIdempotencyKey } from '../../lib/idempotency';
 import { logActivity } from '../../lib/activityLogger';
 import { useToast } from '../ui/Toast';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 
 export interface AdjustmentItem {
   inventory_id: string;
@@ -27,6 +27,7 @@ export function buildAdjustmentCalls(
   items: AdjustmentItem[],
   reason: string,
   userId: string,
+  getKey: () => string = () => crypto.randomUUID(),
 ): RpcCall[] {
   return items
     .filter((it) => it.delta !== 0)
@@ -35,7 +36,7 @@ export function buildAdjustmentCalls(
       p_delta: it.delta,
       p_reason: reason,
       p_performed_by: userId,
-      p_idempotency_key: generateIdempotencyKey('batch_adjust', userId),
+      p_idempotency_key: getKey(),
     }));
 }
 
@@ -49,6 +50,7 @@ interface Props {
 
 export default function BatchAdjustModal({ open, onClose, items, userId, onSuccess }: Props) {
   const { toast } = useToast();
+  const batchAdjustIdem = useIdempotencyKey('batch_adjust', userId || '');
   const [reason, setReason] = useState('');
   const [uniformDelta, setUniformDelta] = useState('');
   const [saving, setSaving] = useState(false);
@@ -88,6 +90,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     }
 
     if (successCount > 0) {
+      batchAdjustIdem.resetKey();
       await logActivity(
         'inventory_batch_adjusted',
         `Batch adjusted ${successCount} product(s) by ${delta > 0 ? '+' : ''}${delta}: ${reason.trim()}`,

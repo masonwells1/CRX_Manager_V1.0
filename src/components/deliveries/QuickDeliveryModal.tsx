@@ -11,7 +11,7 @@ import Input from '../ui/Input';
 import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
-import { generateIdempotencyKey } from '../../lib/idempotency';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import type { Product, Profile } from '../../types';
 
 interface QuickItem {
@@ -44,6 +44,7 @@ export default function QuickDeliveryModal({
   const navigate = useNavigate();
   const { profile, role } = useAuth();
   const { toast } = useToast();
+  const quickDeliveryIdem = useIdempotencyKey('create_quick_delivery', profile?.id || '');
 
   // Customer search
   const [customerSearch, setCustomerSearch] = useState('');
@@ -205,7 +206,7 @@ export default function QuickDeliveryModal({
 
     setSubmitting(true);
     try {
-      const idemKey = generateIdempotencyKey('create_quick_delivery', profile?.id || '');
+      const key = quickDeliveryIdem.getKey();
       const { data, error } = await supabase.rpc('create_quick_delivery', {
         p_customer_id: selectedCustomer.id,
         p_items: items.map((i) => ({
@@ -218,10 +219,11 @@ export default function QuickDeliveryModal({
         p_scheduled_date: scheduledDate,
         p_delivery_notes: deliveryNotes || null,
         p_performed_by: profile?.id,
-        p_idempotency_key: idemKey,
+        p_idempotency_key: key,
       });
 
       if (error) throw error;
+      quickDeliveryIdem.resetKey();
 
       const result = data as { delivery_id: string; delivery_number: string; invoice_number: string };
       toast('success', `Quick delivery ${result.delivery_number} created with draft invoice ${result.invoice_number}`);

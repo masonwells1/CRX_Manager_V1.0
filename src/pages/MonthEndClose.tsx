@@ -13,7 +13,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { downloadBatchStatements } from '../lib/statementPdf';
 import { downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
@@ -57,6 +57,8 @@ function getCurrentPeriod(): { start: string; end: string; label: string } {
 export default function MonthEndClose() {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const closePeriodIdem = useIdempotencyKey('close_accounting_period', profile?.id || '');
+  const generateStatementsIdem = useIdempotencyKey('generate_batch_statements', profile?.id || '');
 
   const [periods, setPeriods] = useState<PeriodInfo[]>([]);
   const [summary, setSummary] = useState<MonthlySummary | null>(null);
@@ -140,13 +142,14 @@ export default function MonthEndClose() {
   const handleClose = async () => {
     setClosing(true);
     try {
-      const closeKey = generateIdempotencyKey('close_accounting_period', profile?.id || '');
+      const closeKey = closePeriodIdem.getKey();
       const { error } = await supabase.rpc('close_accounting_period', {
         p_period_end: current.end,
         p_performed_by: profile?.id,
         p_idempotency_key: closeKey,
       });
       if (error) throw error;
+      closePeriodIdem.resetKey();
       toast('success', `Period closed: ${current.label}`);
       setShowCloseModal(false);
       fetchData();
@@ -160,7 +163,7 @@ export default function MonthEndClose() {
     setShowStatementDialog(false);
     setGenerating(true);
     try {
-      const stmtKey = generateIdempotencyKey('generate_batch_statements', profile?.id || '');
+      const stmtKey = generateStatementsIdem.getKey();
       const { data, error } = await supabase.rpc('generate_batch_statements', {
         p_as_of_date: options.as_of_date,
         p_performed_by: profile?.id,
@@ -169,6 +172,7 @@ export default function MonthEndClose() {
       });
       if (error) throw error;
 
+      generateStatementsIdem.resetKey();
       const statements = assertRpcResult<DetailedStatementData[]>(data, 'generate_batch_statements');
       if (!statements || !Array.isArray(statements) || statements.length === 0) {
         toast('info', 'No customers have outstanding balances');

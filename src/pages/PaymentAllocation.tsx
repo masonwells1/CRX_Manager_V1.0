@@ -22,7 +22,7 @@ import Badge from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { PaymentAllocationEntry, PaymentAllocationResult, InvoiceType } from '../types';
 
@@ -73,6 +73,7 @@ interface CustomerOption {
 export default function PaymentAllocation() {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const allocatePaymentIdem = useIdempotencyKey('allocate_payment', profile?.id || '');
 
   // Customer search
   const [customerSearch, setCustomerSearch] = useState('');
@@ -257,7 +258,7 @@ export default function PaymentAllocation() {
           amount_cents: inv.allocated_cents,
         }));
 
-      const idemKey = generateIdempotencyKey('allocate_payment', profile.id);
+      const idemKey = allocatePaymentIdem.getKey();
       const { data, error } = await supabase.rpc('allocate_payment', {
         p_customer_id: selectedCustomer.id,
         p_total_cents: checkCents,
@@ -270,6 +271,7 @@ export default function PaymentAllocation() {
       });
 
       if (error) throw error;
+      allocatePaymentIdem.resetKey();
       const result = assertRpcResult<PaymentAllocationResult>(data, 'allocate_payment');
       setLastResult(result);
 

@@ -12,7 +12,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 
 interface RemainderRow {
   id: string;
@@ -38,6 +38,7 @@ export default function DeliveryRemainders() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const followupIdem = useIdempotencyKey('create_followup_delivery', profile?.id || '');
   const [remainders, setRemainders] = useState<RemainderRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('pending');
@@ -97,13 +98,14 @@ export default function DeliveryRemainders() {
   const handleCreateFollowup = async (deliveryId: string) => {
     setCreating(deliveryId);
     try {
-      const followupKey = generateIdempotencyKey('create_followup_delivery', profile?.id || '');
+      const key = followupIdem.getKey();
       const { data, error } = await supabase.rpc('create_followup_delivery', {
         p_original_delivery_id: deliveryId,
         p_performed_by: profile?.id,
-        p_idempotency_key: followupKey,
+        p_idempotency_key: key,
       });
       if (error) throw error;
+      followupIdem.resetKey();
       const followupResult = assertRpcResult<{ delivery_id: string; delivery_number: string; item_count: number }>(data, 'create_followup_delivery');
       toast('success', `Follow-up delivery ${followupResult.delivery_number} created with ${followupResult.item_count} item(s)`);
       navigate(`/deliveries/${followupResult.delivery_id}`);

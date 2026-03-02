@@ -19,7 +19,7 @@ import Badge from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
 import type {
   Product,
@@ -63,6 +63,7 @@ export default function QuickReceive() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
+  const receiveIdem = useIdempotencyKey('quick_receive', profile?.id || '');
 
   /* ─── step control ─── */
   type Step = 'add_items' | 'review' | 'success';
@@ -275,14 +276,15 @@ export default function QuickReceive() {
     }
 
     try {
-      const idemKey = generateIdempotencyKey('quick_receive', profile.id);
+      const key = receiveIdem.getKey();
       const { data, error } = await supabase.rpc('receive_po_items', {
         p_items: itemsPayload,
         p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
+        p_idempotency_key: key,
         p_allow_over_receive: true,
       });
       if (error) throw error;
+      receiveIdem.resetKey();
 
       // Notify if damaged
       const damagedItems = itemsPayload.filter((ip) => ip.condition !== 'good');

@@ -18,8 +18,8 @@ vi.mock('../../lib/db', () => ({
   supabase: { rpc: mockRpc },
 }));
 
-vi.mock('../../lib/idempotency', () => ({
-  generateIdempotencyKey: vi.fn().mockReturnValue('test-key-123'),
+vi.mock('../../hooks/useIdempotencyKey', () => ({
+  useIdempotencyKey: () => ({ getKey: () => 'test-key-123', resetKey: vi.fn() }),
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({

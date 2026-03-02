@@ -12,7 +12,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
@@ -23,6 +23,7 @@ export default function OrderDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { role, profile } = useAuth();
+  const updateOrderIdem = useIdempotencyKey('update_order_items', profile?.id || '');
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -124,7 +125,7 @@ export default function OrderDetail() {
         total_units_needed: item.total_units_needed,
       }));
 
-      const idemKey = generateIdempotencyKey('update_order_items', profile.id);
+      const idemKey = updateOrderIdem.getKey();
       const { error } = await supabase.rpc('update_order_items', {
         p_order_id: id!,
         p_items: itemsPayload,
@@ -134,6 +135,7 @@ export default function OrderDetail() {
 
       if (error) throw error;
 
+      updateOrderIdem.resetKey();
       toast('success', 'Order updated');
       setEditing(false);
       fetchOrder();

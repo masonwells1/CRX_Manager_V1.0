@@ -9,7 +9,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import type { CycleCount, CycleCountItem } from '../types';
 
@@ -48,6 +48,7 @@ interface CountItemDbRow {
 export default function CycleCounts() {
   const { profile, role } = useAuth();
   const { toast } = useToast();
+  const completeCycleCountIdem = useIdempotencyKey('complete_cycle_count', profile?.id || '');
   const [counts, setCounts] = useState<CountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -280,14 +281,15 @@ export default function CycleCounts() {
 
     setCompleting(true);
     try {
-      const completeKey = generateIdempotencyKey('complete_cycle_count', profile.id);
+      const key = completeCycleCountIdem.getKey();
       const { error } = await supabase.rpc('complete_cycle_count', {
         p_cycle_count_id: activeCount.id,
         p_completed_by: profile.id,
-        p_idempotency_key: completeKey,
+        p_idempotency_key: key,
       });
 
       if (error) throw error;
+      completeCycleCountIdem.resetKey();
 
       const varianceItems = countItems.filter((i) => i.variance && i.variance !== 0);
 

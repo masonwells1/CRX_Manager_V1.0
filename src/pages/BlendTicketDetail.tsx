@@ -2,7 +2,7 @@ import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck } from 'lucide-react';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
 import Button from '../components/ui/Button';
@@ -24,6 +24,11 @@ export function BlendTicketDetail() {
   const { profile } = useAuth();
   usePageMeta();
   const { toast } = useToast();
+  const saveIdem = useIdempotencyKey('save_blend_ticket', profile?.id || '');
+  const linkIdem = useIdempotencyKey('link_blend_ticket_to_order', profile?.id || '');
+  const unlinkIdem = useIdempotencyKey('unlink_blend_ticket_from_order', profile?.id || '');
+  const createOrderIdem = useIdempotencyKey('create_order_from_blend_ticket', profile?.id || '');
+  const appRecordIdem = useIdempotencyKey('create_application_record_from_blend_ticket', profile?.id || '');
 
   const [ticket, setTicket] = useState<BlendTicket | null>(null);
   const [images, setImages] = useState<BlendTicketImage[]>([]);
@@ -228,7 +233,7 @@ export function BlendTicketDetail() {
         rate_per_acre_unit: p.rate_per_acre_unit,
       }));
 
-      const saveKey = generateIdempotencyKey('save_blend_ticket', profile!.id);
+      const saveKey = saveIdem.getKey();
       const { error } = await supabase.rpc('save_blend_ticket', {
         p_ticket_id: ticket.id,
         p_ticket_payload: ticketPayload,
@@ -237,6 +242,7 @@ export function BlendTicketDetail() {
         p_idempotency_key: saveKey,
       });
       if (error) throw error;
+      saveIdem.resetKey();
 
       setIsDirty(false);
       await loadTicketData();
@@ -372,7 +378,7 @@ export function BlendTicketDetail() {
     if (!ticket || !selectedOrderId || !profile) return;
     setLinking(true);
     try {
-      const linkKey = generateIdempotencyKey('link_blend_ticket_to_order', profile.id);
+      const linkKey = linkIdem.getKey();
       const { data, error } = await supabase.rpc('link_blend_ticket_to_order', {
         p_blend_ticket_id: ticket.id,
         p_order_id: selectedOrderId,
@@ -380,6 +386,7 @@ export function BlendTicketDetail() {
         p_idempotency_key: linkKey,
       });
       if (error) throw error;
+      linkIdem.resetKey();
       const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; items_linked?: number }>(data, 'link_blend_ticket_to_order');
       if (!result.success) throw new Error(result.error);
       toast('success', `Linked to order ${result.order_number} (${result.items_linked} items matched)`);
@@ -396,13 +403,14 @@ export function BlendTicketDetail() {
     if (!ticket || !profile) return;
     if (!confirm('Unlink this blend ticket from its order? The order itself will not be deleted.')) return;
     try {
-      const unlinkKey = generateIdempotencyKey('unlink_blend_ticket_from_order', profile.id);
+      const unlinkKey = unlinkIdem.getKey();
       const { data, error } = await supabase.rpc('unlink_blend_ticket_from_order', {
         p_blend_ticket_id: ticket.id,
         p_performed_by: profile.id,
         p_idempotency_key: unlinkKey,
       });
       if (error) throw error;
+      unlinkIdem.resetKey();
       const result = assertRpcResult<{ success: boolean; error?: string }>(data, 'unlink_blend_ticket_from_order');
       if (!result.success) throw new Error(result.error);
       toast('success', 'Blend ticket unlinked from order');
@@ -416,7 +424,7 @@ export function BlendTicketDetail() {
     if (!ticket || !profile || !newOrderNumber.trim()) return;
     setLinking(true);
     try {
-      const createOrderKey = generateIdempotencyKey('create_order_from_blend_ticket', profile.id);
+      const createOrderKey = createOrderIdem.getKey();
       const { data, error } = await supabase.rpc('create_order_from_blend_ticket', {
         p_blend_ticket_id: ticket.id,
         p_order_number: newOrderNumber.trim(),
@@ -426,6 +434,7 @@ export function BlendTicketDetail() {
         p_idempotency_key: createOrderKey,
       });
       if (error) throw error;
+      createOrderIdem.resetKey();
       const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; order_id?: string; items_created?: number }>(data, 'create_order_from_blend_ticket');
       if (!result.success) throw new Error(result.error);
       toast('success', `Order ${result.order_number} created with ${result.items_created} items`);
@@ -446,13 +455,14 @@ export function BlendTicketDetail() {
 
     setCreatingAppRecord(true);
     try {
-      const appRecKey = generateIdempotencyKey('create_application_record_from_blend_ticket', profile.id);
+      const appRecKey = appRecordIdem.getKey();
       const { error } = await supabase.rpc('create_application_record_from_blend_ticket', {
         p_blend_ticket_id: ticket.id,
         p_performed_by: profile.id,
         p_idempotency_key: appRecKey,
       });
       if (error) throw error;
+      appRecordIdem.resetKey();
       logActivity('application_record_created', `Application record created from blend ticket ${ticket.ticket_number}`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
       toast('success', 'Application record created successfully');
     } catch (err: unknown) {

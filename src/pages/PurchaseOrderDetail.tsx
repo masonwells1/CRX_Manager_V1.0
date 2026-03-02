@@ -1,6 +1,6 @@
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, PackageCheck, Pencil, Trash2, Download } from 'lucide-react';
+import { ArrowLeft, PackageCheck, Pencil, Ban, Download } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -10,7 +10,7 @@ import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition } from '../types';
 
@@ -37,6 +37,9 @@ export default function PurchaseOrderDetail() {
   const navigate = useNavigate();
   const { role, profile } = useAuth();
   const { toast } = useToast();
+  const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const savePOIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
+  const cancelPOIdem = useIdempotencyKey('cancel_purchase_order', profile?.id || '');
   const [po, setPo] = useState<PurchaseOrder | null>(null);
   const [items, setItems] = useState<PurchaseOrderItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,7 +53,8 @@ export default function PurchaseOrderDetail() {
 
   /* Edit modal state */
   const [editOpen, setEditOpen] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
   const [editForm, setEditForm] = useState({
     vendor: '',
     status: 'draft' as POStatus,
@@ -170,13 +174,14 @@ export default function PurchaseOrderDetail() {
 
     setSaving(true);
     try {
-      const idemKey = generateIdempotencyKey('receive_po_items', profile.id);
+      const idemKey = receiveIdem.getKey();
       const { data, error } = await supabase.rpc('receive_po_items', {
         p_items: itemsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      receiveIdem.resetKey();
 
       toast('success', 'Items received and inventory updated');
 
@@ -295,7 +300,7 @@ export default function PurchaseOrderDetail() {
         quantity_received: item.quantity_received || 0,
       }));
 
-      const savePOKey = generateIdempotencyKey('save_purchase_order', profile.id);
+      const savePOKey = savePOIdem.getKey();
       const { error } = await supabase.rpc('save_purchase_order', {
         p_po_id: id,
         p_po_payload: {
@@ -311,6 +316,7 @@ export default function PurchaseOrderDetail() {
       });
 
       if (error) throw error;
+      savePOIdem.resetKey();
 
       toast('success', 'Purchase order updated');
       setEditOpen(false);
@@ -321,22 +327,26 @@ export default function PurchaseOrderDetail() {
     setSaving(false);
   };
 
-  const handleDelete = async () => {
+  const handleCancel = async () => {
     if (!po || !profile) return;
     setSaving(true);
 
     try {
-      const delPOKey = generateIdempotencyKey('delete_purchase_order', profile.id);
-      const { error } = await supabase.rpc('delete_purchase_order', {
+      const cancelKey = cancelPOIdem.getKey();
+      const { error } = await supabase.rpc('cancel_purchase_order', {
         p_po_id: id,
+        p_reason: cancelReason || 'Cancelled',
         p_performed_by: profile.id,
-        p_idempotency_key: delPOKey,
+        p_idempotency_key: cancelKey,
       });
 
       if (error) throw error;
+      cancelPOIdem.resetKey();
 
-      toast('success', 'Purchase order deleted');
-      navigate('/purchase-orders');
+      toast('success', 'Purchase order cancelled');
+      setCancelOpen(false);
+      setCancelReason('');
+      fetchPO();
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
@@ -384,14 +394,14 @@ export default function PurchaseOrderDetail() {
               Receive Items
             </Button>
           )}
-          {isAdmin && (
+          {isAdmin && po.status !== 'cancelled' && (
             <>
               <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
                 Edit
               </Button>
               {(po.status === 'draft' || po.status === 'submitted') && (
-                <Button variant="danger" icon={<Trash2 className="w-4 h-4" />} onClick={() => setDeleteOpen(true)}>
-                  Delete
+                <Button variant="danger" icon={<Ban className="w-4 h-4" />} onClick={() => setCancelOpen(true)}>
+                  Cancel PO
                 </Button>
               )}
             </>
@@ -437,6 +447,18 @@ export default function PurchaseOrderDetail() {
           </div>
         </div>
       </Card>
+
+      {/* Cancel Info Banner */}
+      {po.status === 'cancelled' && po.cancelled_at && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <p className="text-sm font-medium text-red-800">This purchase order was cancelled</p>
+          <p className="text-xs text-red-600 mt-1">
+            {new Date(po.cancelled_at).toLocaleDateString()} at{' '}
+            {new Date(po.cancelled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            {po.cancel_reason && <> &mdash; {po.cancel_reason}</>}
+          </p>
+        </div>
+      )}
 
       {/* Line Items */}
       <Card padding={false}>
@@ -822,19 +844,27 @@ export default function PurchaseOrderDetail() {
         </div>
       </Modal>
 
-      {/* Delete Modal */}
-      <Modal open={deleteOpen} onClose={() => setDeleteOpen(false)} title="Delete Purchase" accent="Order">
+      {/* Cancel PO Modal */}
+      <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancel Purchase" accent="Order">
         <div className="space-y-4">
           <p className="text-sm text-secondary">
-            Are you sure you want to delete <span className="font-medium text-nav-dark">{po.po_number}</span>?
-            This action cannot be undone.
+            Are you sure you want to cancel <span className="font-medium text-nav-dark">{po.po_number}</span>?
+            The PO will remain visible but marked as cancelled.
           </p>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Reason (optional)</label>
+            <Input
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="e.g. Duplicate order, vendor issue, etc."
+            />
+          </div>
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setDeleteOpen(false)}>
-              Cancel
+            <Button variant="secondary" onClick={() => setCancelOpen(false)}>
+              Keep PO
             </Button>
-            <Button variant="danger" onClick={handleDelete} loading={saving}>
-              Delete
+            <Button variant="danger" onClick={handleCancel} loading={saving}>
+              Cancel PO
             </Button>
           </div>
         </div>

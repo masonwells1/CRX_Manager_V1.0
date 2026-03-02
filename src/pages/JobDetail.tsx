@@ -12,7 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { supabase } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe } from '../types';
 
 interface JobDbRow {
@@ -101,6 +101,9 @@ export default function JobDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { role, profile } = useAuth();
+  const saveJobIdem = useIdempotencyKey('save_job', profile?.id || '');
+  const completeJobIdem = useIdempotencyKey('complete_job', profile?.id || '');
+  const transferJobIdem = useIdempotencyKey('transfer_job_to_invoice', profile?.id || '');
   const isNew = id === 'new';
   const isEditable = role === 'admin' || role === 'sales_rep';
 
@@ -316,7 +319,7 @@ export default function JobDetail() {
         sort_order: i,
       }));
 
-      const idemKey = generateIdempotencyKey('save_job', profile!.id);
+      const idemKey = saveJobIdem.getKey();
       const { data, error } = await supabase.rpc('save_job', {
         p_job_id: isNew ? null : id,
         p_job_payload: payload,
@@ -327,6 +330,7 @@ export default function JobDetail() {
       });
 
       if (error) throw error;
+      saveJobIdem.resetKey();
       const result = data as unknown as SaveJobResult;
 
       if (profile) logActivity(
@@ -352,7 +356,7 @@ export default function JobDetail() {
   const handleComplete = async () => {
     setCompleting(true);
     try {
-      const idemKey = generateIdempotencyKey('complete_job', profile!.id);
+      const idemKey = completeJobIdem.getKey();
       const { data, error } = await supabase.rpc('complete_job', {
         p_job_id: id,
         p_applied_info: appliedInfo,
@@ -360,6 +364,7 @@ export default function JobDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      completeJobIdem.resetKey();
       const result = data as unknown as CompleteJobResult;
       if (profile) logActivity('job_completed', `Job ${jobNumber} completed → App Record ${result.record_number}`, profile.id);
       toast('success', `Job completed! Application record ${result.record_number} created.`);
@@ -376,13 +381,14 @@ export default function JobDetail() {
     if (!confirm('Transfer this job to an invoice? This will create a new invoice from the job chemicals.')) return;
     setTransferring(true);
     try {
-      const idemKey = generateIdempotencyKey('transfer_job_to_invoice', profile!.id);
+      const idemKey = transferJobIdem.getKey();
       const { data, error } = await supabase.rpc('transfer_job_to_invoice', {
         p_job_id: id,
         p_performed_by: profile!.id,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      transferJobIdem.resetKey();
       const result = data as unknown as TransferJobResult;
       if (profile) logActivity('job_invoiced', `Job ${jobNumber} → Invoice ${result.invoice_number}`, profile.id);
       toast('success', `Invoice ${result.invoice_number} created`);

@@ -19,7 +19,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 
 interface PrepayBucket {
@@ -53,6 +53,7 @@ const fmt = (cents: number) =>
 export default function PrepayWorkspace() {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const batchApplyIdem = useIdempotencyKey('batch_apply_prepayments', profile?.id || '');
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const initialCustomerId = searchParams.get('customer') || '';
@@ -188,13 +189,14 @@ export default function PrepayWorkspace() {
     if (!pendingAllocations.length) return;
     await runCriticalAction({
       action: async () => {
-        const batchKey = generateIdempotencyKey('batch_apply_prepayments', profile!.id);
+        const key = batchApplyIdem.getKey();
         const { data, error } = await supabase.rpc('batch_apply_prepayments', {
           p_allocations: pendingAllocations,
           p_performed_by: profile?.id,
-          p_idempotency_key: batchKey,
+          p_idempotency_key: key,
         });
         if (error) throw error;
+        batchApplyIdem.resetKey();
         const result = data as { applied_count: number; total_applied_cents: number };
         toast('success', `Applied ${fmt(result.total_applied_cents)} across ${result.applied_count} allocation(s)`);
         setPendingAllocations([]);

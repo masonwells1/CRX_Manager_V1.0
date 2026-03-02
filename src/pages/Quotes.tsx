@@ -11,7 +11,7 @@ import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
@@ -28,6 +28,7 @@ export default function Quotes() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const { toast } = useToast();
   const { profile } = useAuth();
+  const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -38,16 +39,17 @@ export default function Quotes() {
   const handleDuplicate = async (quoteId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      const idemKey = generateIdempotencyKey('duplicate_quote', profile!.id);
+      const key = duplicateQuoteIdem.getKey();
       const { data: result, error } = await supabase.rpc('duplicate_quote', {
         p_source_quote_id: quoteId,
         p_performed_by: profile!.id,
-        p_idempotency_key: idemKey,
+        p_idempotency_key: key,
       });
       if (error) {
         toast('error', `Failed to duplicate quote: ${error.message}`);
         return;
       }
+      duplicateQuoteIdem.resetKey();
       const dupResult = assertRpcResult<{ quote_id: string; quote_number: string }>(result, 'duplicate_quote');
       toast('success', `Quote duplicated as ${dupResult.quote_number}`);
       navigate(`/quotes/${dupResult.quote_id}`);

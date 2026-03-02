@@ -11,7 +11,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
@@ -55,6 +55,10 @@ export default function InvoiceDetail() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
+  const saveIdem = useIdempotencyKey('save_invoice', profile?.id || '');
+  const postIdem = useIdempotencyKey('post_invoice', profile?.id || '');
+  const voidIdem = useIdempotencyKey('void_invoice', profile?.id || '');
+  const payIdem = useIdempotencyKey('record_invoice_payment', profile?.id || '');
   const isNew = id === 'new';
 
   // Invoice header
@@ -311,7 +315,7 @@ export default function InvoiceDetail() {
         notes: it.notes,
       }));
 
-      const idemKey = generateIdempotencyKey('save_invoice', profile!.id);
+      const idemKey = saveIdem.getKey();
       const { data, error } = await supabase.rpc('save_invoice', {
         p_invoice: payload,
         p_items: itemsPayload,
@@ -319,6 +323,7 @@ export default function InvoiceDetail() {
       });
 
       if (error) throw error;
+      saveIdem.resetKey();
 
       toast('success', isNew ? 'Invoice created' : 'Invoice saved');
       if (isNew && data) {
@@ -337,9 +342,10 @@ export default function InvoiceDetail() {
   const handlePost = async () => {
     setPosting(true);
     try {
-      const idemKey = generateIdempotencyKey('post_invoice', profile!.id);
+      const idemKey = postIdem.getKey();
       const { error } = await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey });
       if (error) throw error;
+      postIdem.resetKey();
       toast('success', 'Invoice posted');
       fetchInvoice(id!);
     } catch (err: unknown) {
@@ -352,13 +358,14 @@ export default function InvoiceDetail() {
   const handleVoid = async () => {
     setVoiding(true);
     try {
-      const idemKey = generateIdempotencyKey('void_invoice', profile!.id);
+      const idemKey = voidIdem.getKey();
       const { error } = await supabase.rpc('void_invoice', {
         p_invoice_id: id,
         p_void_reason: voidReason || 'Voided by admin',
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      voidIdem.resetKey();
       toast('success', 'Invoice voided');
       setShowVoidModal(false);
       fetchInvoice(id!);
@@ -377,7 +384,7 @@ export default function InvoiceDetail() {
     }
     setPayingInvoice(true);
     try {
-      const idemKey = generateIdempotencyKey('record_invoice_payment', profile!.id);
+      const idemKey = payIdem.getKey();
       const { error } = await supabase.rpc('record_invoice_payment', {
         p_invoice_id: id,
         p_amount_cents: amountCents,
@@ -387,6 +394,7 @@ export default function InvoiceDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      payIdem.resetKey();
       toast('success', `Payment of ${fmt(amountCents)} recorded`);
       setShowPayModal(false);
       setPayAmount('');

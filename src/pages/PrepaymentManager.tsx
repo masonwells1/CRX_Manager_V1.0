@@ -15,7 +15,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
 import { runCriticalAction } from '../lib/criticalAction';
 
@@ -40,6 +40,8 @@ export default function PrepaymentManager() {
   const { profile } = useAuth();
   const { toast } = useToast();
   const navigate = useNavigate();
+  const applyPrepayIdem = useIdempotencyKey('apply_remaining_prepayments', profile?.id || '');
+  const batchApplyIdem = useIdempotencyKey('batch_apply_all_prepayments', profile?.id || '');
 
   const [customers, setCustomers] = useState<CustomerPrepay[]>([]);
   const [loading, setLoading] = useState(true);
@@ -202,13 +204,14 @@ export default function PrepaymentManager() {
     setShowConfirm(false);
 
     try {
-      const applyKey = generateIdempotencyKey('apply_remaining_prepayments', profile?.id || '');
+      const applyKey = applyPrepayIdem.getKey();
       const { data, error } = await supabase.rpc('apply_remaining_prepayments', {
         p_customer_id: confirmCustomer.id,
         p_performed_by: profile?.id,
         p_idempotency_key: applyKey,
       });
       if (error) throw error;
+      applyPrepayIdem.resetKey();
       const result = assertRpcResult<{ applied_count: number; applied_cents: number; remaining_prepay_cents: number }>(data, 'apply_remaining_prepayments');
       toast(
         'success',
@@ -225,12 +228,13 @@ export default function PrepaymentManager() {
     setShowBatchConfirm(false);
     setBatchApplying(true);
     try {
-      const batchKey = generateIdempotencyKey('batch_apply_all_prepayments', profile?.id || '');
+      const batchKey = batchApplyIdem.getKey();
       const { data, error } = await supabase.rpc('batch_apply_all_prepayments', {
         p_performed_by: profile?.id,
         p_idempotency_key: batchKey,
       });
       if (error) throw error;
+      batchApplyIdem.resetKey();
       const result = assertRpcResult<{ total_customers: number; total_applied_cents: number; details: unknown[] }>(data, 'batch_apply_all_prepayments');
       if (result.total_customers === 0) {
         toast('info', 'No prepayments could be applied (no customers with both prepay credits and unpaid invoices)');

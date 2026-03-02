@@ -23,7 +23,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
@@ -114,6 +114,8 @@ export default function QuoteBuilder() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const saveQuoteIdem = useIdempotencyKey('save_quote', profile?.id || '');
+  const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   const isEditing = Boolean(id);
 
   const [loading, setLoading] = useState(isEditing);
@@ -628,7 +630,7 @@ export default function QuoteBuilder() {
     }));
 
     try {
-      const idemKey = generateIdempotencyKey('save_quote', profile.id);
+      const idemKey = saveQuoteIdem.getKey();
       const { data, error } = await supabase.rpc('save_quote', {
         p_quote_id: (quoteId && isEditing) ? quoteId : null,
         p_quote_payload: quotePayload,
@@ -642,6 +644,7 @@ export default function QuoteBuilder() {
         return null;
       }
 
+      saveQuoteIdem.resetKey();
       const savedQuoteId = data?.quote_id || quoteId;
       if (!quoteId || !isEditing) {
         setQuoteId(savedQuoteId);
@@ -814,7 +817,7 @@ export default function QuoteBuilder() {
 
     try {
       // Atomic RPC: order creation + items + inventory prebooking + commissions
-      const idemKey = generateIdempotencyKey('convert_quote_to_order', profile!.id);
+      const idemKey = convertQuoteIdem.getKey();
       const { data, error } = await supabase.rpc('convert_quote_to_order', {
         p_quote_id: savedId,
         p_performed_by: profile!.id,
@@ -823,6 +826,7 @@ export default function QuoteBuilder() {
 
       if (error) throw error;
 
+      convertQuoteIdem.resetKey();
       const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string }>(data, 'convert_quote_to_order');
       toast('success', `Order ${result.order_number || ''} created`);
       trackBusinessEvent('quote_converted_to_order', {

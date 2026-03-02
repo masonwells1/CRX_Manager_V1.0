@@ -56,8 +56,8 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
 }));
 
-vi.mock('../../lib/idempotency', () => ({
-  generateIdempotencyKey: () => 'test-idem-key',
+vi.mock('../../hooks/useIdempotencyKey', () => ({
+  useIdempotencyKey: () => ({ getKey: () => 'test-idem-key', resetKey: vi.fn() }),
 }));
 
 // ── Tests ────────────────────────────────────────────────────────────────

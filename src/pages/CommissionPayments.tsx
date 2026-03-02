@@ -14,7 +14,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
 
 interface CommissionPaymentRow {
@@ -50,6 +50,8 @@ const fmt = (n: number) =>
 export default function CommissionPayments() {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const createPaymentIdem = useIdempotencyKey('create_commission_payment', profile?.id || '');
+  const postPaymentIdem = useIdempotencyKey('post_commission_payment', profile?.id || '');
 
   const [tab, setTab] = useState<'unposted' | 'posted'>('unposted');
   const [payments, setPayments] = useState<CommissionPaymentRow[]>([]);
@@ -171,7 +173,7 @@ export default function CommissionPayments() {
     }
     setCreating(true);
     try {
-      const createKey = generateIdempotencyKey('create_commission_payment', profile?.id || '');
+      const createKey = createPaymentIdem.getKey();
       const { error } = await supabase.rpc('create_commission_payment', {
         p_commission_ids: Array.from(selectedCommissions),
         p_payment_method: payMethod,
@@ -182,6 +184,7 @@ export default function CommissionPayments() {
         p_idempotency_key: createKey,
       });
       if (error) throw error;
+      createPaymentIdem.resetKey();
       toast('success', `Commission payment created: ${fmt(selectedTotal)}`);
       setShowCreate(false);
       fetchPayments();
@@ -194,13 +197,14 @@ export default function CommissionPayments() {
   const handlePost = async (paymentId: string) => {
     setPosting(paymentId);
     try {
-      const postKey = generateIdempotencyKey('post_commission_payment', profile?.id || '');
+      const postKey = postPaymentIdem.getKey();
       const { error } = await supabase.rpc('post_commission_payment', {
         p_payment_id: paymentId,
         p_performed_by: profile?.id,
         p_idempotency_key: postKey,
       });
       if (error) throw error;
+      postPaymentIdem.resetKey();
       toast('success', 'Commission payment posted');
       fetchPayments();
     } catch (err: unknown) {

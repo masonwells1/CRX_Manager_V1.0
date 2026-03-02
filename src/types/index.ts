@@ -372,6 +372,9 @@ export interface PurchaseOrder {
   created_by: string;
   created_at: string;
   updated_at: string;
+  cancelled_at?: string | null;
+  cancelled_by?: string | null;
+  cancel_reason?: string | null;
 }
 
 export interface PurchaseOrderItem {

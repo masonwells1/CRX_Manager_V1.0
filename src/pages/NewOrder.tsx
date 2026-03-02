@@ -14,7 +14,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
 import type { Product, Customer } from '../types';
@@ -52,6 +52,7 @@ export default function NewOrder() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const createOrderIdem = useIdempotencyKey('create_direct_order', profile?.id || '');
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -164,7 +165,7 @@ export default function NewOrder() {
     setSaving(true);
 
     try {
-      const idemKey = generateIdempotencyKey('create_direct_order', profile.id);
+      const idemKey = createOrderIdem.getKey();
       const rpcItems = validItems.map((item) => ({
         product_id: item.product_id,
         product_name: item.product_name,
@@ -186,6 +187,7 @@ export default function NewOrder() {
 
       if (error) throw error;
 
+      createOrderIdem.resetKey();
       const orderId = (data as Record<string, unknown> | null)?.order_id as string | undefined;
       if (!orderId) {
         toast('error', 'Order creation failed — no order ID returned');

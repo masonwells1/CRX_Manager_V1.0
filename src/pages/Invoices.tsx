@@ -8,7 +8,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import BatchVoidModal from '../components/invoices/BatchVoidModal';
@@ -63,6 +63,8 @@ export default function Invoices() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
+  const batchPostIdem = useIdempotencyKey('batch_post_invoices', profile?.id || '');
+  const batchVoidIdem = useIdempotencyKey('batch_void_invoices', profile?.id || '');
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -140,7 +142,7 @@ export default function Invoices() {
 
     setPosting(true);
     try {
-      const postKey = generateIdempotencyKey('batch_post_invoices', profile!.id);
+      const postKey = batchPostIdem.getKey();
       const { data, error } = await supabase.rpc('batch_post_invoices', {
         p_invoice_ids: ids,
         p_idempotency_key: postKey,
@@ -149,6 +151,7 @@ export default function Invoices() {
         console.error('Batch post failed:', error.message);
         toast('error', sanitizeError(error));
       } else {
+        batchPostIdem.resetKey();
         toast('success', `Posted ${data} invoice(s)`);
         setSelected(new Set());
         fetchInvoices();
@@ -169,7 +172,7 @@ export default function Invoices() {
     }
 
     setVoiding(true);
-    const voidKey = generateIdempotencyKey('batch_void_invoices', profile?.id || '');
+    const voidKey = batchVoidIdem.getKey();
     const { data, error } = await supabase.rpc('batch_void_invoices', {
       p_invoice_ids: ids,
       p_void_reason: reason,
@@ -180,6 +183,7 @@ export default function Invoices() {
       console.error('Batch void failed:', error.message);
       toast('error', sanitizeError(error));
     } else {
+      batchVoidIdem.resetKey();
       toast('success', `Voided ${data} invoice(s)`);
       setSelected(new Set());
       fetchInvoices();

@@ -14,7 +14,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import type { Return, ReturnItem, Customer, Product, Order, ReturnStatus, ReturnReason, ReturnItemCondition } from '../types';
 
@@ -56,6 +56,9 @@ interface EditItem {
 
 export default function Returns() {
   const { profile, role } = useAuth();
+  const approveIdem = useIdempotencyKey('approve_return', profile?.id || '');
+  const receiveIdem = useIdempotencyKey('receive_return', profile?.id || '');
+  const creditIdem = useIdempotencyKey('issue_return_credit', profile?.id || '');
   const { toast } = useToast();
   const [returns, setReturns] = useState<ReturnRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -272,7 +275,7 @@ export default function Returns() {
   const handleApprove = async () => {
     if (!activeReturn || !profile) return;
     try {
-      const approveKey = generateIdempotencyKey('approve_return', profile.id);
+      const approveKey = approveIdem.getKey();
       const { error } = await supabase.rpc('approve_return', {
         p_return_id: activeReturn.id,
         p_approved_by: profile.id,
@@ -280,6 +283,7 @@ export default function Returns() {
       });
       if (error) throw error;
 
+      approveIdem.resetKey();
       await logActivity('return_approved', `Return ${activeReturn.return_number} approved`, profile.id, 'return', activeReturn.id);
       toast('success', 'Return approved');
       setShowDetail(false);
@@ -312,7 +316,7 @@ export default function Returns() {
   const handleReceive = async () => {
     if (!activeReturn || !profile) return;
     try {
-      const receiveKey = generateIdempotencyKey('receive_return', profile.id);
+      const receiveKey = receiveIdem.getKey();
       const { error } = await supabase.rpc('receive_return', {
         p_return_id: activeReturn.id,
         p_received_by: profile.id,
@@ -320,6 +324,7 @@ export default function Returns() {
       });
       if (error) throw error;
 
+      receiveIdem.resetKey();
       await logActivity('return_received', `Return ${activeReturn.return_number} received, inventory restocked`, profile.id, 'return', activeReturn.id);
       toast('success', 'Return received and inventory restocked');
       setShowDetail(false);
@@ -332,7 +337,7 @@ export default function Returns() {
   const handleIssueCredit = async () => {
     if (!activeReturn || !profile) return;
     try {
-      const creditKey = generateIdempotencyKey('issue_return_credit', profile.id);
+      const creditKey = creditIdem.getKey();
       const { error } = await supabase.rpc('issue_return_credit', {
         p_return_id: activeReturn.id,
         p_actor_id: profile.id,
@@ -340,6 +345,7 @@ export default function Returns() {
       });
       if (error) throw error;
 
+      creditIdem.resetKey();
       await logActivity('return_credited', `Credit issued for return ${activeReturn.return_number}`, profile.id, 'return', activeReturn.id);
       toast('success', 'Credit issued');
       setShowDetail(false);

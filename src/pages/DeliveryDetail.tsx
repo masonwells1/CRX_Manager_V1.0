@@ -14,7 +14,7 @@ import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDeliveryRemainder } from '../lib/notificationTriggers';
@@ -59,6 +59,11 @@ export default function DeliveryDetail() {
   const navigate = useNavigate();
   const { role, profile } = useAuth();
   const { toast } = useToast();
+  const editIdem = useIdempotencyKey('edit_delivery', profile?.id || '');
+  const cancelIdem = useIdempotencyKey('cancel_delivery', profile?.id || '');
+  const followupIdem = useIdempotencyKey('create_followup_delivery', profile?.id || '');
+  const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
+  const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [delivery, setDelivery] = useState<Delivery | null>(null);
@@ -295,7 +300,7 @@ export default function DeliveryDetail() {
     setSavingEdit(true);
 
     // Items are locked to the order — only save logistics changes
-    const idemKey = generateIdempotencyKey('edit_delivery', profile.id);
+    const idemKey = editIdem.getKey();
     const { error } = await supabase.rpc('edit_delivery', {
       p_delivery_id: id!,
       p_assigned_driver: editDriver || null,
@@ -313,6 +318,7 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
+      editIdem.resetKey();
       toast('success', 'Delivery updated');
       setEditing(false);
       fetchDelivery();
@@ -325,7 +331,7 @@ export default function DeliveryDetail() {
   const handleCancel = async () => {
     if (!profile) return;
     setCancelling(true);
-    const idemKey = generateIdempotencyKey('cancel_delivery', profile.id);
+    const idemKey = cancelIdem.getKey();
     const { data: cancelResult, error } = await supabase.rpc('cancel_delivery', {
       p_delivery_id: id!,
       p_cancel_reason: cancelReason.trim() || 'Cancelled',
@@ -335,6 +341,7 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
+      cancelIdem.resetKey();
       // Show detailed summary toast with cascade info
       const parts: string[] = ['Delivery cancelled.'];
       if (cancelResult?.items_restored > 0) parts.push(`Inventory restored for ${cancelResult.items_restored} item(s).`);
@@ -431,7 +438,7 @@ export default function DeliveryDetail() {
     if (!profile) return;
     setCreatingFollowup(true);
 
-    const idemKey = generateIdempotencyKey('create_followup_delivery', profile.id);
+    const idemKey = followupIdem.getKey();
     const { data, error } = await supabase.rpc('create_followup_delivery', {
       p_original_delivery_id: id!,
       p_performed_by: profile.id,
@@ -441,6 +448,7 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
+      followupIdem.resetKey();
       const result = assertRpcResult<{ delivery_id: string; delivery_number: string; item_count: number }>(data, 'create_followup_delivery');
       toast('success', `Follow-up delivery ${result.delivery_number} created with ${result.item_count} items`);
       navigate(`/deliveries/${result.delivery_id}`);
@@ -454,13 +462,14 @@ export default function DeliveryDetail() {
     if (!delivery || !profile) return;
     setConfirming(true);
     try {
-      const idemKey = generateIdempotencyKey('confirm_delivery', profile.id);
+      const idemKey = confirmIdem.getKey();
       const { error } = await supabase.rpc('confirm_delivery', {
         p_delivery_id: id!,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      confirmIdem.resetKey();
       toast('success', `Delivery ${delivery.delivery_number} started`);
       setStartModalOpen(false);
       fetchDelivery();
@@ -492,7 +501,7 @@ export default function DeliveryDetail() {
       ? Object.fromEntries(items.map((item) => [item.id, deliveryQtys[item.id] ?? item.quantity]))
       : null;
 
-    const idemKey = generateIdempotencyKey('complete_delivery', profile.id);
+    const idemKey = completeIdem.getKey();
     const rpcParams: Record<string, unknown> = {
       p_delivery_id: id!,
       p_signed_by: signedBy,
@@ -522,6 +531,7 @@ export default function DeliveryDetail() {
     try {
       const { error } = await supabase.rpc('complete_delivery', rpcParams);
       if (error) throw error;
+      completeIdem.resetKey();
 
       // Upload signature image if provided
       if (signatureDataUrl) {

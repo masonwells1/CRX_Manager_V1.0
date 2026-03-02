@@ -10,7 +10,7 @@ import Input from '../ui/Input';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/db';
-import { generateIdempotencyKey } from '../../lib/idempotency';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../../lib/parseCents';
 
 interface WriteOffModalProps {
@@ -35,6 +35,7 @@ export default function WriteOffModal({
 }: WriteOffModalProps) {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const writeOffIdem = useIdempotencyKey('apply_write_off', profile?.id || '');
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -56,15 +57,16 @@ export default function WriteOffModal({
 
     setSubmitting(true);
     try {
-      const idempotencyKey = generateIdempotencyKey('apply_write_off', profile!.id);
+      const key = writeOffIdem.getKey();
       const { error } = await supabase.rpc('apply_write_off', {
         p_invoice_id: invoiceId,
         p_amount_cents: amountCents,
         p_reason: reason.trim(),
         p_performed_by: profile?.id,
-        p_idempotency_key: idempotencyKey,
+        p_idempotency_key: key,
       });
       if (error) throw error;
+      writeOffIdem.resetKey();
       toast('success', `Write-off of ${fmt(amountCents)} applied to ${invoiceNumber}`);
       setAmount('');
       setReason('');

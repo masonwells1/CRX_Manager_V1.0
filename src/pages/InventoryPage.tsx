@@ -11,7 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { computeSeason } from '../utils/season';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
@@ -42,6 +42,8 @@ interface HoldWithRelations extends InventoryHold {
 
 export default function InventoryPage() {
   const { role, profile } = useAuth();
+  const receivePoIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
   const { toast } = useToast();
   const [inventory, setInventory] = useState<InventoryRow[]>([]);
   const [holds, setHolds] = useState<HoldWithRelations[]>([]);
@@ -532,7 +534,7 @@ export default function InventoryPage() {
     }
 
     try {
-      const idemKey = generateIdempotencyKey('receive_po_items', profile.id);
+      const idemKey = receivePoIdem.getKey();
       const { error } = await supabase.rpc('receive_po_items', {
         p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
         p_performed_by: profile.id,
@@ -540,6 +542,7 @@ export default function InventoryPage() {
       });
       if (error) throw error;
 
+      receivePoIdem.resetKey();
       toast('success', `Received ${qty} units`);
       setReceiveOpen(false);
       setReceiveQty('');
@@ -560,7 +563,7 @@ export default function InventoryPage() {
     if (!profile) return;
 
     try {
-      const idemKey = generateIdempotencyKey('adjust_inventory', profile.id);
+      const idemKey = adjustIdem.getKey();
       const { error } = await supabase.rpc('adjust_inventory', {
         p_inventory_id: selectedId,
         p_delta: qty,
@@ -570,6 +573,7 @@ export default function InventoryPage() {
       });
       if (error) throw error;
 
+      adjustIdem.resetKey();
       toast('success', `Adjusted by ${qty} units`);
       setAdjustOpen(false);
       setAdjustQty('');

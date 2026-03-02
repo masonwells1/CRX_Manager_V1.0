@@ -22,7 +22,7 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
@@ -76,6 +76,9 @@ const DATE_PRESETS = [
 
 export default function Deliveries() {
   const { role, profile } = useAuth();
+  const batchCancelIdem = useIdempotencyKey('batch_cancel_deliveries', profile?.id || '');
+  const batchRescheduleIdem = useIdempotencyKey('batch_reschedule_deliveries', profile?.id || '');
+  const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
   const navigate = useNavigate();
   const { toast } = useToast();
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
@@ -301,7 +304,7 @@ export default function Deliveries() {
     }
     setCancelling(true);
     try {
-      const cancelKey = generateIdempotencyKey('batch_cancel_deliveries', profile?.id || '');
+      const cancelKey = batchCancelIdem.getKey();
       const { data, error } = await supabase.rpc('batch_cancel_deliveries', {
         p_delivery_ids: ids,
         p_cancel_reason: reason,
@@ -312,6 +315,7 @@ export default function Deliveries() {
         console.error('Batch cancel failed:', error.message);
         toast('error', sanitizeError(error));
       } else {
+        batchCancelIdem.resetKey();
         toast('success', `Cancelled ${data} delivery(ies)`);
         setSelected(new Set());
         fetchDeliveries();
@@ -434,7 +438,7 @@ export default function Deliveries() {
     setRescheduling(true);
     try {
       const ids = selectedCancellable.map((d) => d.id);
-      const rescheduleKey = generateIdempotencyKey('batch_reschedule_deliveries', profile?.id || '');
+      const rescheduleKey = batchRescheduleIdem.getKey();
       const { error } = await supabase.rpc('batch_reschedule_deliveries', {
         p_delivery_ids: ids,
         p_new_date: rescheduleDate,
@@ -444,6 +448,7 @@ export default function Deliveries() {
       if (error) {
         toast('error', sanitizeError(error));
       } else {
+        batchRescheduleIdem.resetKey();
         toast('success', `Rescheduled ${ids.length} delivery(ies) to ${new Date(rescheduleDate).toLocaleDateString()}`);
         setSelected(new Set());
         setShowReschedule(false);
@@ -510,7 +515,7 @@ export default function Deliveries() {
 
     const handleTakeDelivery = async (deliveryId: string) => {
       try {
-        const reassignKey = generateIdempotencyKey('reassign_delivery', profile?.id || '');
+        const reassignKey = reassignIdem.getKey();
         const { error } = await supabase.rpc('reassign_delivery', {
           p_delivery_id: deliveryId,
           p_new_driver: profile?.id,
@@ -520,6 +525,7 @@ export default function Deliveries() {
         if (error) {
           toast('error', sanitizeError(error));
         } else {
+          reassignIdem.resetKey();
           toast('success', 'Delivery assigned to you');
           fetchDeliveries();
         }

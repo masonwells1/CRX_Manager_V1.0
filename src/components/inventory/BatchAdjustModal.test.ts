@@ -7,10 +7,6 @@ vi.mock('../../lib/db', () => ({
   sanitizeError: (e: unknown) => String(e),
 }));
 
-vi.mock('../../lib/idempotency', () => ({
-  generateIdempotencyKey: vi.fn().mockReturnValue('test-key-123'),
-}));
-
 vi.mock('../../lib/activityLogger', () => ({
   logActivity: vi.fn().mockResolvedValue(undefined),
 }));
