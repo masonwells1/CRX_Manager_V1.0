@@ -540,7 +540,7 @@ export default function InvoiceDetail() {
       <Breadcrumbs items={[
         { label: 'Invoices', href: '/invoices' },
         ...(parentOrder ? [{ label: parentOrder.order_number, href: `/orders/${parentOrder.id}` }] : []),
-        { label: isNew ? 'New Invoice' : invoice.invoice_number },
+        { label: isNew ? 'New Invoice' : invoice.invoice_number || 'Invoice' },
       ]} />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
