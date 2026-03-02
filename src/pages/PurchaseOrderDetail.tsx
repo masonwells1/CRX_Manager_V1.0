@@ -1,6 +1,6 @@
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, PackageCheck, Pencil, Ban, Download } from 'lucide-react';
+import { PackageCheck, Pencil, Ban, Download } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
+import Breadcrumbs from '../components/ui/Breadcrumbs';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition } from '../types';
 
 /* ─── Condition badge helpers ─── */
@@ -380,14 +381,12 @@ export default function PurchaseOrderDetail() {
   return (
     <div className="space-y-4">
       {/* Header */}
+      <Breadcrumbs items={[
+        { label: 'Purchase Orders', href: '/purchase-orders' },
+        { label: po.po_number || 'PO' },
+      ]} />
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => navigate('/purchase-orders')}
-          className="flex items-center gap-2 text-sm text-secondary hover:text-nav-dark transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Purchase Orders
-        </button>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">{po.po_number}</h2>
         <div className="flex items-center gap-2">
           {canReceive && (po.status === 'submitted' || po.status === 'partially_received') && (
             <Button icon={<PackageCheck className="w-4 h-4" />} onClick={openReceiveModal}>

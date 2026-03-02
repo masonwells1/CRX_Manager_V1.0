@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer,
+  Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import Badge from '../components/ui/Badge';
+import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
@@ -15,6 +15,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import Breadcrumbs from '../components/ui/Breadcrumbs';
 import WriteOffModal from '../components/invoices/WriteOffModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 
@@ -117,6 +118,12 @@ export default function InvoiceDetail() {
   // Parent order context
   const [parentOrder, setParentOrder] = useState<{ id: string; order_number: string } | null>(null);
 
+  // Related deliveries (cross-link via shared order)
+  const [relatedDeliveries, setRelatedDeliveries] = useState<Array<{
+    id: string; delivery_number: string; scheduled_date: string; status: string;
+    driver_name: string | null;
+  }>>([]);
+
   // Post loading
   const [posting, setPosting] = useState(false);
 
@@ -150,16 +157,33 @@ export default function InvoiceDetail() {
     setInvoice(data as Invoice);
     setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
 
-    // Fetch parent order for breadcrumb
+    // Fetch parent order for breadcrumb + related deliveries for cross-link
     if (data.order_id) {
-      const { data: orderData } = await supabase
-        .from('orders')
-        .select('id, order_number')
-        .eq('id', data.order_id)
-        .maybeSingle();
-      setParentOrder(orderData as { id: string; order_number: string } | null);
+      const [orderRes, delRes] = await Promise.all([
+        supabase
+          .from('orders')
+          .select('id, order_number')
+          .eq('id', data.order_id)
+          .maybeSingle(),
+        supabase
+          .from('deliveries')
+          .select('id, delivery_number, scheduled_date, status, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+          .eq('order_id', data.order_id)
+          .order('scheduled_date', { ascending: false }),
+      ]);
+      setParentOrder(orderRes.data as { id: string; order_number: string } | null);
+      setRelatedDeliveries(
+        (delRes.data || []).map((d: Record<string, unknown>) => ({
+          id: d.id as string,
+          delivery_number: d.delivery_number as string,
+          scheduled_date: d.scheduled_date as string,
+          status: d.status as string,
+          driver_name: (d.driver as { full_name: string } | null)?.full_name || null,
+        }))
+      );
     } else {
       setParentOrder(null);
+      setRelatedDeliveries([]);
     }
 
     // Fetch items
@@ -513,28 +537,14 @@ export default function InvoiceDetail() {
   return (
     <div className="space-y-4">
       {/* Header */}
+      <Breadcrumbs items={[
+        { label: 'Invoices', href: '/invoices' },
+        ...(parentOrder ? [{ label: parentOrder.order_number, href: `/orders/${parentOrder.id}` }] : []),
+        { label: isNew ? 'New Invoice' : invoice.invoice_number },
+      ]} />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/invoices')} className="text-secondary hover:text-nav-dark">
-            <ArrowLeft className="w-5 h-5" />
-          </button>
           <div>
-            <div className="flex items-center gap-1.5 text-sm">
-              <button onClick={() => navigate('/invoices')} className="text-secondary hover:text-crx-green transition-colors">
-                Invoices
-              </button>
-              {parentOrder && (
-                <>
-                  <span className="text-gray-300">/</span>
-                  <button
-                    onClick={() => navigate(`/orders/${parentOrder.id}`)}
-                    className="text-crx-green hover:underline font-medium"
-                  >
-                    {parentOrder.order_number}
-                  </button>
-                </>
-              )}
-            </div>
             <h1 className="text-xl font-semibold font-heading text-nav-dark">
               {isNew ? 'New Invoice' : invoice.invoice_number}
             </h1>
@@ -885,6 +895,53 @@ export default function InvoiceDetail() {
             <Ban className="w-4 h-4" />
             <span className="text-sm font-medium">Void Reason:</span>
             <span className="text-sm">{invoice.void_reason}</span>
+          </div>
+        </Card>
+      )}
+
+      {/* Related Deliveries (cross-link via shared order) */}
+      {relatedDeliveries.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <Truck className="w-5 h-5 text-crx-green" />
+            <h3 className="font-semibold text-nav-dark">Related Deliveries</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Delivery #</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Date</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Status</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Driver</th>
+                </tr>
+              </thead>
+              <tbody>
+                {relatedDeliveries.map((del) => (
+                  <tr key={del.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                    <td className="px-4 py-2">
+                      <button
+                        onClick={() => navigate(`/deliveries/${del.id}`)}
+                        className="text-crx-green hover:underline font-medium"
+                      >
+                        {del.delivery_number}
+                      </button>
+                    </td>
+                    <td className="px-4 py-2 text-secondary">
+                      {new Date(del.scheduled_date).toLocaleDateString()}
+                    </td>
+                    <td className="px-4 py-2">
+                      <Badge variant={statusToBadgeVariant[del.status] || 'default'} size="sm">
+                        {del.status.replace('_', ' ')}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2 text-secondary">
+                      {del.driver_name || 'Unassigned'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </Card>
       )}

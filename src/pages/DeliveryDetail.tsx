@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff,
   Minus, Plus, Pencil, Ban, Camera, UserPlus, AlertTriangle, RefreshCw,
-  PlayCircle, Lock, Zap,
+  PlayCircle, Lock, Zap, FileText,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -15,6 +15,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDeliveryRemainder } from '../lib/notificationTriggers';
@@ -53,6 +54,9 @@ const PRIORITY_BADGE: Record<string, BadgeVariant> = {
   high: 'warning',
   urgent: 'error',
 };
+
+const fmtCents = (cents: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function DeliveryDetail() {
   const { id } = useParams<{ id: string }>();
@@ -128,6 +132,12 @@ export default function DeliveryDetail() {
   // Parent order for cross-link
   const [parentOrder, setParentOrder] = useState<{ id: string; order_number: string } | null>(null);
 
+  // Related invoices (cross-link via shared order)
+  const [relatedInvoices, setRelatedInvoices] = useState<Array<{
+    id: string; invoice_number: string; invoice_date: string; status: string;
+    total_amount_cents: number;
+  }>>([]);
+
   const isDriver = role === 'driver';
   const isAdminOrRep = role === 'admin' || role === 'sales_rep';
   const canEdit = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
@@ -177,7 +187,7 @@ export default function DeliveryDetail() {
 
         // Fetch order item context for items display
         if (del.order_id) {
-          const [oiRes, orderRes] = await Promise.all([
+          const [oiRes, orderRes, invRes] = await Promise.all([
             supabase
               .from('order_items')
               .select('id, total_units_needed, quantity_delivered, quantity_remaining')
@@ -187,6 +197,11 @@ export default function DeliveryDetail() {
               .select('id, order_number')
               .eq('id', del.order_id)
               .maybeSingle(),
+            supabase
+              .from('invoices')
+              .select('id, invoice_number, invoice_date, status, total_amount_cents')
+              .eq('order_id', del.order_id)
+              .order('invoice_date', { ascending: false }),
           ]);
           if (oiRes.error) {
             toast('error', sanitizeError(oiRes.error));
@@ -202,6 +217,15 @@ export default function DeliveryDetail() {
             setOrderItemContext(ctx);
           }
           setParentOrder(orderRes.data as { id: string; order_number: string } | null);
+          setRelatedInvoices(
+            (invRes.data || []).map((inv: Record<string, unknown>) => ({
+              id: inv.id as string,
+              invoice_number: inv.invoice_number as string,
+              invoice_date: inv.invoice_date as string,
+              status: inv.status as string,
+              total_amount_cents: Number(inv.total_amount_cents || 0),
+            }))
+          );
         }
 
         // Fetch remainders for completed deliveries
@@ -948,13 +972,10 @@ export default function DeliveryDetail() {
 
   return (
     <div className="space-y-4">
-      <button
-        onClick={() => navigate('/deliveries')}
-        className="flex items-center gap-2 text-sm text-secondary hover:text-nav-dark transition-colors"
-      >
-        <ArrowLeft className="w-4 h-4" />
-        Back to Deliveries
-      </button>
+      <Breadcrumbs items={[
+        { label: 'Deliveries', href: '/deliveries' },
+        { label: delivery.delivery_number },
+      ]} />
 
       {/* Header Card */}
       <Card>
@@ -1526,6 +1547,53 @@ export default function DeliveryDetail() {
           </div>
         )}
       </Card>
+
+      {/* Related Invoices (cross-link via shared order) */}
+      {relatedInvoices.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-3">
+            <FileText className="w-5 h-5 text-crx-green" />
+            <h3 className="font-semibold text-nav-dark">Related Invoices</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Invoice #</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Date</th>
+                  <th className="px-4 py-2 text-left font-medium text-secondary">Status</th>
+                  <th className="px-4 py-2 text-right font-medium text-secondary">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {relatedInvoices.map((inv) => (
+                  <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                    <td className="px-4 py-2">
+                      <button
+                        onClick={() => navigate(`/invoices/${inv.id}`)}
+                        className="text-crx-green hover:underline font-medium"
+                      >
+                        {inv.invoice_number}
+                      </button>
+                    </td>
+                    <td className="px-4 py-2 text-secondary">
+                      {new Date(inv.invoice_date).toLocaleDateString()}
+                    </td>
+                    <td className="px-4 py-2">
+                      <Badge variant={statusToBadgeVariant[inv.status] || 'default'} size="sm">
+                        {inv.status}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2 text-right font-medium">
+                      {fmtCents(inv.total_amount_cents)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {/* Start Delivery Modal */}
       <StartDeliveryModal

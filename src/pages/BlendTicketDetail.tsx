@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck } from 'lucide-react';
+import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck } from 'lucide-react';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
@@ -16,6 +16,7 @@ import { usePageMeta } from '../hooks/usePageMeta';
 import { useToast } from '../components/ui/Toast';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { validateBlendMath } from '../lib/blendMathValidator';
+import Breadcrumbs from '../components/ui/Breadcrumbs';
 import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field } from '../types';
 
 export function BlendTicketDetail() {
@@ -494,12 +495,12 @@ export function BlendTicketDetail() {
 
   return (
     <div className="space-y-6">
+      <Breadcrumbs items={[
+        { label: 'Blend Tickets', href: '/blend-tickets' },
+        { label: ticket.ticket_number },
+      ]} />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" onClick={() => navigate('/blend-tickets')}>
-            <ArrowLeft className="h-4 w-4" />
-            Back
-          </Button>
           <div>
             <h1 className="text-3xl font-bold text-gray-900">{ticket.ticket_number}</h1>
             <p className="text-gray-600 mt-1">

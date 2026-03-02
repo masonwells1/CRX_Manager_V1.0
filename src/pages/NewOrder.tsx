@@ -162,6 +162,24 @@ export default function NewOrder() {
       return;
     }
 
+    // Duplicate order warning: check for recent orders for same customer
+    try {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      const { data: recentOrders } = await supabase
+        .from('orders')
+        .select('order_number, order_date')
+        .eq('customer_id', customerId)
+        .gte('order_date', sevenDaysAgo)
+        .order('order_date', { ascending: false })
+        .limit(1);
+      if (recentOrders && recentOrders.length > 0) {
+        const recent = recentOrders[0];
+        const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date).getTime()) / 86400000);
+        const ok = confirm(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Create another?`);
+        if (!ok) return;
+      }
+    } catch { /* ignore — don't block order creation if check fails */ }
+
     setSaving(true);
 
     try {

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft,
   Save,
   Send,
   ShoppingCart,
@@ -29,6 +28,7 @@ import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notification
 import { trackBusinessEvent } from '../lib/metrics';
 import { downloadQuotePdf } from '../lib/quotePdf';
 import { checkRUPCompliance } from '../lib/rupCompliance';
+import Breadcrumbs from '../components/ui/Breadcrumbs';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import type {
   Quote,
@@ -805,6 +805,26 @@ export default function QuoteBuilder() {
   };
 
   const handleConvertToOrder = async () => {
+    // Duplicate order warning: check for recent orders for same customer
+    if (customerId) {
+      try {
+        const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+        const { data: recentOrders } = await supabase
+          .from('orders')
+          .select('order_number, order_date')
+          .eq('customer_id', customerId)
+          .gte('order_date', sevenDaysAgo)
+          .order('order_date', { ascending: false })
+          .limit(1);
+        if (recentOrders && recentOrders.length > 0) {
+          const recent = recentOrders[0];
+          const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date).getTime()) / 86400000);
+          const ok = confirm(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Convert this quote to another order?`);
+          if (!ok) return;
+        }
+      } catch { /* ignore — don't block conversion if check fails */ }
+    }
+
     setConverting(true);
     setConfirmConvertOpen(false);
 
@@ -910,14 +930,12 @@ export default function QuoteBuilder() {
 
   return (
     <div className="space-y-4">
+      <Breadcrumbs items={[
+        { label: 'Quotes', href: '/quotes' },
+        { label: isEditing ? (quoteNumber || 'Quote') : 'New Quote' },
+      ]} />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/quotes')}
-            className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
           <h1 className="text-2xl font-semibold font-heading text-nav-dark">
             Quote <span className="split-heading-accent">Builder</span>
           </h1>

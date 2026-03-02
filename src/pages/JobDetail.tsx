@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Save, Plus, Trash2, Check, FileText, Beaker } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -13,6 +13,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { supabase } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import Breadcrumbs from '../components/ui/Breadcrumbs';
 import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe } from '../types';
 
 interface JobDbRow {
@@ -481,14 +482,11 @@ export default function JobDetail() {
       />
 
       {/* Header */}
+      <Breadcrumbs items={[
+        { label: 'Jobs', href: '/jobs' },
+        { label: isNew ? 'New Job' : (jobNumber || 'Job') },
+      ]} />
       <div className="flex items-center gap-4">
-        <button
-          onClick={() => navigate('/jobs')}
-          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          aria-label="Back to jobs"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-nav-dark">
             {isNew ? 'New Job' : jobNumber}

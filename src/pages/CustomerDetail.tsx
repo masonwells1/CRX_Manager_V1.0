@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle } from 'lucide-react';
+import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,6 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
+import Breadcrumbs from '../components/ui/Breadcrumbs';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field } from '../types';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
@@ -65,7 +66,7 @@ export default function CustomerDetail() {
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<'info' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'history'>('info');
+  const [tab, setTab] = useState<'info' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
 
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [orders, setOrders] = useState<(Order & { fulfillment_pct: number })[]>([]);
@@ -78,6 +79,16 @@ export default function CustomerDetail() {
   const [phoneError, setPhoneError] = useState('');
   const [showSummaryDialog, setShowSummaryDialog] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
+
+  // Financials tab state
+  interface AgingRow { customer_id: string; farm_name: string; current_amount: number; days_30: number; days_60: number; days_90: number; over_90: number; total_outstanding: number }
+  interface TxnRow { transaction_date: string; transaction_type: string; reference_number: string; amount_cents: number; running_balance: number }
+  interface PrepayRow { id: string; bucket_label: string; original_amount_cents: number; balance_cents: number }
+  const [aging, setAging] = useState<AgingRow | null>(null);
+  const [transactions, setTransactions] = useState<TxnRow[]>([]);
+  const [prepayCredits, setPrepayCredits] = useState<PrepayRow[]>([]);
+  const [financialsLoading, setFinancialsLoading] = useState(false);
+  const financialsFetched = useRef(false);
 
   // Parent customer search
   const [allCustomers, setAllCustomers] = useState<{ id: string; farm_name: string }[]>([]);
@@ -209,6 +220,23 @@ export default function CustomerDetail() {
         original_delivery_number: r.original_delivery?.delivery_number || '-',
       }));
       setCustomerRemainders(remainders as unknown as DeliveryRemainder[]);
+    } else if (selectedTab === 'financials') {
+      if (financialsFetched.current) { setTabLoading(false); return; }
+      setFinancialsLoading(true);
+      const today = new Date().toISOString().slice(0, 10);
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+      const [agingRes, txnRes, prepayRes] = await Promise.all([
+        supabase.rpc('get_ar_aging', { p_as_of_date: today }),
+        supabase.rpc('get_customer_statement', { p_customer_id: id, p_start_date: ninetyDaysAgo, p_end_date: today }),
+        supabase.from('prepay_credits').select('*').eq('customer_id', id!).gt('balance_cents', 0),
+      ]);
+      const allAging = (agingRes.data || []) as AgingRow[];
+      const myAging = allAging.find((a) => a.customer_id === id) || null;
+      setAging(myAging);
+      setTransactions((txnRes.data || []) as TxnRow[]);
+      setPrepayCredits((prepayRes.data || []) as PrepayRow[]);
+      financialsFetched.current = true;
+      setFinancialsLoading(false);
     } else if (selectedTab === 'history') {
       // GAP FIX #15: Fetch purchase history — all products this customer has ordered
       const { data: orderIds } = await supabase
@@ -353,7 +381,7 @@ export default function CustomerDetail() {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
   }
 
-  const tabs = ['info', 'fields', 'quotes', 'orders', 'deliveries', 'history'] as const;
+  const tabs = ['info', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
 
   const handleGenerateSummary = async (season: number, options: YearEndSummaryOptions) => {
     if (!id || isNew) return;
@@ -375,15 +403,14 @@ export default function CustomerDetail() {
 
   return (
     <div className="space-y-4">
+      <Breadcrumbs items={[
+        { label: 'Customers', href: '/customers' },
+        { label: isNew ? 'New Customer' : (customer.farm_name || 'Customer') },
+      ]} />
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/customers')} className="p-2 rounded-lg hover:bg-white hover:shadow-sm transition-all text-secondary">
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <h2 className="text-lg font-semibold font-heading text-nav-dark">
-            {isNew ? 'New Customer' : customer.farm_name}
-          </h2>
-        </div>
+        <h2 className="text-lg font-semibold font-heading text-nav-dark">
+          {isNew ? 'New Customer' : customer.farm_name}
+        </h2>
         {!isNew && (profile?.role === 'admin' || profile?.role === 'sales_rep') && (
           <Button
             variant="secondary"
@@ -970,6 +997,163 @@ export default function CustomerDetail() {
                 </table>
               </div>
             </Card>
+          )}
+        </div>
+      )}
+
+      {/* Financials Tab — Customer 360 */}
+      {tab === 'financials' && !isNew && (
+        <div className="space-y-4">
+          {financialsLoading || tabLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-24 bg-gray-100 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : (
+            <>
+              {/* Section A: AR Summary */}
+              <Card>
+                <CardHeader title="AR" accent="Summary" />
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-3">
+                  <div>
+                    <p className="text-xs text-secondary">Outstanding</p>
+                    <p className="text-lg font-semibold text-nav-dark">{fmt(aging?.total_outstanding || 0)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-secondary">Credit Limit</p>
+                    <p className="text-lg font-semibold text-nav-dark">{fmt((customer.credit_limit_cents || 0) / 100)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-secondary">Prepay Balance</p>
+                    <p className="text-lg font-semibold text-crx-green">{fmt(prepayCredits.reduce((s, c) => s + c.balance_cents, 0) / 100)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-secondary">Payment Terms</p>
+                    <p className="text-lg font-semibold text-nav-dark">{customer.payment_terms || 'N/A'}</p>
+                  </div>
+                </div>
+                {/* Credit utilization bar */}
+                {(customer.credit_limit_cents || 0) > 0 && (() => {
+                  const limitDollars = (customer.credit_limit_cents || 0) / 100;
+                  const outstandingDollars = aging?.total_outstanding || 0;
+                  const pct = Math.min((outstandingDollars / limitDollars) * 100, 100);
+                  const color = pct < 80 ? 'bg-green-500' : pct < 100 ? 'bg-amber-500' : 'bg-red-500';
+                  return (
+                    <div className="mt-3">
+                      <div className="flex justify-between text-xs text-secondary mb-1">
+                        <span>Credit Utilization</span>
+                        <span>{Math.round(pct)}%</span>
+                      </div>
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })()}
+              </Card>
+
+              {/* Section B: Aging Buckets */}
+              {aging && aging.total_outstanding > 0 && (
+                <Card>
+                  <CardHeader title="Aging" accent="Buckets" />
+                  {(() => {
+                    const buckets = [
+                      { label: 'Current', value: aging.current_amount, color: 'bg-green-500' },
+                      { label: '1-30', value: aging.days_30, color: 'bg-blue-500' },
+                      { label: '31-60', value: aging.days_60, color: 'bg-amber-500' },
+                      { label: '61-90', value: aging.days_90, color: 'bg-orange-500' },
+                      { label: '90+', value: aging.over_90, color: 'bg-red-500' },
+                    ];
+                    const total = aging.total_outstanding;
+                    return (
+                      <div className="mt-3">
+                        <div className="flex h-4 rounded-full overflow-hidden bg-gray-100">
+                          {buckets.map((b) => b.value > 0 && (
+                            <div key={b.label} className={`${b.color} transition-all`} style={{ width: `${(b.value / total) * 100}%` }} title={`${b.label}: ${fmt(b.value)}`} />
+                          ))}
+                        </div>
+                        <div className="flex justify-between mt-2 text-xs text-secondary">
+                          {buckets.map((b) => (
+                            <div key={b.label} className="text-center">
+                              <span className={`inline-block w-2 h-2 rounded-full ${b.color} mr-1`} />
+                              {b.label}<br />{fmt(b.value)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </Card>
+              )}
+
+              {/* Section C: Recent Transactions */}
+              <Card padding={false}>
+                <div className="p-5">
+                  <CardHeader title="Recent" accent="Transactions" />
+                  <p className="text-xs text-secondary mt-1">Last 90 days</p>
+                </div>
+                {transactions.length === 0 ? (
+                  <div className="px-5 pb-5"><p className="text-sm text-secondary">No transactions in the last 90 days.</p></div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-t border-b border-gray-100">
+                          <th className="px-5 py-3 text-left font-medium text-secondary">Date</th>
+                          <th className="px-4 py-3 text-left font-medium text-secondary">Type</th>
+                          <th className="px-4 py-3 text-left font-medium text-secondary">Reference</th>
+                          <th className="px-4 py-3 text-right font-medium text-secondary">Amount</th>
+                          <th className="px-4 py-3 text-right font-medium text-secondary">Balance</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {transactions.slice(0, 50).map((txn, idx) => (
+                          <tr key={idx} className="border-b border-gray-50">
+                            <td className="px-5 py-3">{new Date(txn.transaction_date).toLocaleDateString()}</td>
+                            <td className="px-4 py-3 capitalize">{txn.transaction_type}</td>
+                            <td className="px-4 py-3 font-mono text-xs">{txn.reference_number}</td>
+                            <td className={`px-4 py-3 text-right ${txn.amount_cents < 0 ? 'text-red-600' : 'text-nav-dark'}`}>
+                              {fmt(txn.amount_cents / 100)}
+                            </td>
+                            <td className="px-4 py-3 text-right">{fmt(txn.running_balance / 100)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Card>
+
+              {/* Section D: Prepay Credits */}
+              {prepayCredits.length > 0 && (
+                <Card padding={false}>
+                  <div className="p-5">
+                    <CardHeader title="Prepay" accent="Credits" />
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-t border-b border-gray-100">
+                          <th className="px-5 py-3 text-left font-medium text-secondary">Bucket</th>
+                          <th className="px-4 py-3 text-right font-medium text-secondary">Original</th>
+                          <th className="px-4 py-3 text-right font-medium text-secondary">Remaining</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {prepayCredits.map((c) => (
+                          <tr key={c.id} className="border-b border-gray-50">
+                            <td className="px-5 py-3 font-medium text-nav-dark">{c.bucket_label}</td>
+                            <td className="px-4 py-3 text-right">{fmt(c.original_amount_cents / 100)}</td>
+                            <td className="px-4 py-3 text-right text-crx-green font-medium">{fmt(c.balance_cents / 100)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
+            </>
           )}
         </div>
       )}

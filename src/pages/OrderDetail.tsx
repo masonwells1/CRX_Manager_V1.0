@@ -5,7 +5,7 @@
  */
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Truck, Pencil, Save, X, Trash2, FileText } from 'lucide-react';
+import { Truck, Pencil, Save, X, Trash2, FileText } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -16,6 +16,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import Breadcrumbs from '../components/ui/Breadcrumbs';
 import type { Order, OrderItem, Customer, Invoice, Delivery } from '../types';
 
 export default function OrderDetail() {
@@ -234,14 +235,12 @@ export default function OrderDetail() {
 
   return (
     <div className="space-y-4">
+      <Breadcrumbs items={[
+        { label: 'Orders', href: '/orders' },
+        { label: order?.order_number || 'Order' },
+      ]} />
       <div className="flex items-center justify-between">
-        <button
-          onClick={() => navigate('/orders')}
-          className="flex items-center gap-2 text-sm text-secondary hover:text-nav-dark transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to Orders
-        </button>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">{order?.order_number || 'Order'}</h2>
         <div className="flex gap-2">
           {editing ? (
             <>
