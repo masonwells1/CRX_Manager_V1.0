@@ -29,7 +29,7 @@
     "jspdf": "^4.1.0",
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.344.0",
-    "mapbox-gl": "^3.18.1",
+    "mapbox-gl": "^3.19.0",
     "pdfjs-dist": "^5.4.624",
     "proj4": "^2.20.2",
     "react": "^18.3.1",
