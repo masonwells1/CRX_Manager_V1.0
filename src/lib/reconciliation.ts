@@ -596,10 +596,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       discrepancies: disc,
       entitiesChecked: orders.length,
     });
-  } catch {
+  } catch (err) {
     checks.push({
       name: 'Order Totals',
-      description: 'Order total matches SUM(qty × price) of line items',
+      description: `Order total matches SUM(qty × price) of line items [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
@@ -634,10 +634,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       discrepancies: disc,
       entitiesChecked: inventory.length,
     });
-  } catch {
+  } catch (err) {
     checks.push({
       name: 'Inventory Ledger',
-      description: 'Inventory quantity matches transaction history running total',
+      description: `Inventory quantity matches transaction history running total [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
@@ -677,17 +677,18 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       discrepancies: balDisc,
       entitiesChecked: invoices.length,
     });
-  } catch {
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
     checks.push({
       name: 'Invoice Payments',
-      description: 'Invoice paid_amount_cents matches SUM of payment allocations',
+      description: `Invoice paid_amount_cents matches SUM of payment allocations [ERROR: ${errMsg}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
     });
     checks.push({
       name: 'Invoice Balance Formula',
-      description: 'balance_cents = total - paid - prepay (GENERATED ALWAYS sanity check)',
+      description: `balance_cents = total - paid - prepay (GENERATED ALWAYS sanity check) [ERROR: ${errMsg}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
@@ -710,10 +711,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       discrepancies: disc,
       entitiesChecked: new Set(commissions.map((c) => c.order_id)).size,
     });
-  } catch {
+  } catch (err) {
     checks.push({
       name: 'Commission Splits',
-      description: 'Commission split percentages sum to 100% per order',
+      description: `Commission split percentages sum to 100% per order [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
@@ -743,10 +744,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       discrepancies: disc,
       entitiesChecked: quotes.filter((q) => q.is_planned && ACTIVE_QUOTE_STATUSES.has(q.status)).length,
     });
-  } catch {
+  } catch (err) {
     checks.push({
       name: 'Quote-Hold Parity',
-      description: 'Planned quotes in active statuses have at least one active inventory hold',
+      description: `Planned quotes in active statuses have at least one active inventory hold [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
@@ -786,10 +787,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         ...invoiceItems.map((i) => `${i.order_id}::${i.product_id}`),
       ]).size,
     });
-  } catch {
+  } catch (err) {
     checks.push({
       name: 'Delivery-Invoice Quantity Parity',
-      description: 'Total delivered quantity matches total invoiced quantity per order+product',
+      description: `Total delivered quantity matches total invoiced quantity per order+product [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
@@ -819,10 +820,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       discrepancies: disc,
       entitiesChecked: inventoryPrebook.length,
     });
-  } catch {
+  } catch (err) {
     checks.push({
       name: 'Pre-booked Inventory',
-      description: 'Inventory quantity_prebooked matches SUM of open order quantity_remaining per product',
+      description: `Inventory quantity_prebooked matches SUM of open order quantity_remaining per product [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
@@ -846,10 +847,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       discrepancies: disc,
       entitiesChecked: returns.filter((r) => r.status === 'credited').length,
     });
-  } catch {
+  } catch (err) {
     checks.push({
       name: 'Return-Credit Linkage',
-      description: 'Credited returns have a linked credit invoice',
+      description: `Credited returns have a linked credit invoice [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
@@ -873,10 +874,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       discrepancies: disc,
       entitiesChecked: arInvoices.filter((i) => i.status !== 'void').length,
     });
-  } catch {
+  } catch (err) {
     checks.push({
       name: 'Customer AR Consistency',
-      description: 'Non-voided invoices have non-null balance_cents',
+      description: `Non-voided invoices have non-null balance_cents [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,

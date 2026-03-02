@@ -101,7 +101,7 @@ test.describe.serial('Stream 1 — Inventory', () => {
     const tableBeforeVisible = await page.locator('table').first().isVisible({ timeout: 5000 }).catch(() => false);
     expect(tableBeforeVisible).toBe(true);
 
-    const rowsBefore = await page.locator('table tbody tr').count();
+    const _rowsBefore = await page.locator('table tbody tr').count();
 
     // Find and click the "Needs Reorder" chip
     const reorderChip = page

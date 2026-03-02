@@ -127,7 +127,7 @@ export async function extractSummaryCards(page: Page): Promise<Map<string, strin
 
   for (let i = 0; i < Math.min(count, 20); i++) {
     const card = cardEls.nth(i);
-    const text = ((await card.textContent()) ?? '').trim();
+    const _text = ((await card.textContent()) ?? '').trim();
 
     // Try to split label from value — look for small text (label) and large text (value)
     const label = card.locator('.text-sm, .text-xs, .text-gray-500, .text-gray-600, .text-muted-foreground').first();

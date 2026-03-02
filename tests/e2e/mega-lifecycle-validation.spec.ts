@@ -25,7 +25,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { login } from './utils/auth';
 import {
-  parseDollars,
+  parseDollars as _parseDollars,
   waitForPageStable,
   assertCentsEqual,
 } from './utils/math-helpers';
@@ -40,7 +40,7 @@ import {
   checkInvoicePayments,
   checkInvoiceBalances,
   checkCommissionSplits,
-  checkDeliveryInvoiceQuantityParity,
+  checkDeliveryInvoiceQuantityParity as _checkDeliveryInvoiceQuantityParity,
   checkCustomerARConsistency,
 } from './golive/utils/reconciliation-checks';
 
@@ -118,12 +118,12 @@ async function clickButton(page: Page, text: string, timeout = 10000) {
   await btn.click();
 }
 
-async function selectOption(page: Page, label: string, value: string) {
+async function _selectOption(page: Page, _label: string, value: string) {
   const select = page.locator(`select`).filter({ has: page.locator(`option:has-text("${value}")`) }).first();
   await select.selectOption({ label: value });
 }
 
-async function waitForToast(page: Page, substring: string, timeout = 15000) {
+async function _waitForToast(page: Page, substring: string, timeout = 15000) {
   await expect(
     page.locator('[class*="toast"], [role="status"], [role="alert"]')
       .filter({ hasText: substring })
@@ -131,7 +131,7 @@ async function waitForToast(page: Page, substring: string, timeout = 15000) {
   ).toBeVisible({ timeout });
 }
 
-async function waitForNav(page: Page, urlPattern: RegExp, timeout = 15000) {
+async function _waitForNav(page: Page, urlPattern: RegExp, timeout = 15000) {
   await page.waitForURL(urlPattern, { timeout });
   await waitForPageStable(page);
 }
@@ -141,7 +141,7 @@ async function waitForNav(page: Page, urlPattern: RegExp, timeout = 15000) {
  * that appears when isDirty state hasn't cleared before navigation.
  * Returns the captured toast text (if any) for parsing entity IDs.
  */
-async function handlePostSaveNav(
+async function _handlePostSaveNav(
   page: Page,
   urlPattern: RegExp,
   toastPattern?: RegExp,
@@ -278,7 +278,7 @@ test.describe.serial('Mega Lifecycle Validation', () => {
     const costInputs = page.locator('input[type="number"]');
     const costCount = await costInputs.count();
     for (let i = 0; i < costCount; i++) {
-      const val = await costInputs.nth(i).inputValue();
+      const _val = await costInputs.nth(i).inputValue();
       // Find the cost input (not the qty one)
       if (i > 0) {
         await costInputs.nth(i).fill(String(state.poUnitCost));
@@ -312,8 +312,8 @@ test.describe.serial('Mega Lifecycle Validation', () => {
     }
 
     // 3. Check URL — might have navigated to detail page
-    let url = page.url();
-    let poMatch = url.match(/\/purchase-orders\/([0-9a-f-]+)/);
+    const url = page.url();
+    const poMatch = url.match(/\/purchase-orders\/([0-9a-f-]+)/);
 
     // 4. If still on /new, look up PO by number from DB and navigate
     if (!poMatch && state.poNumber) {
@@ -1260,7 +1260,7 @@ test.describe.serial('Mega Lifecycle Validation', () => {
     if (!state.directOrderId) test.skip();
     await nav(page, '/');
 
-    const result = await supabaseRpc(page, 'cancel_order', {
+    await supabaseRpc(page, 'cancel_order', {
       p_order_id: state.directOrderId,
       p_reason: 'Test cancellation for lifecycle validation',
     });
@@ -1431,9 +1431,9 @@ test.describe.serial('Mega Lifecycle Validation', () => {
     await nav(page, '/');
 
     // Attempt to generate finance charges via RPC
-    const result = await supabaseRpc(page, 'generate_finance_charges', {
+    await supabaseRpc(page, 'generate_finance_charges', {
       p_as_of_date: TS,
-    }).catch((e: Error) => {
+    }).catch((_e: Error) => {
       // May fail if no overdue invoices — that's OK
       return null;
     });
@@ -1465,7 +1465,7 @@ test.describe.serial('Mega Lifecycle Validation', () => {
     const userId = profileData?.user?.id;
 
     // Insert a cycle count record directly
-    const ccResult = await supabaseRest(page, 'POST',
+    await supabaseRest(page, 'POST',
       'cycle_counts',
       {
         status: 'completed',

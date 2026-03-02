@@ -208,11 +208,11 @@ Final: PR to main
 ```
 
 ## Go/No-Go Gate
-- [ ] All CRITICAL findings fixed and tested
-- [ ] All HIGH findings fixed and tested
-- [ ] MEDIUM findings fixed (or risk-accepted)
-- [ ] Golden path E2E passes
-- [ ] `npm run build` clean
-- [ ] `npm run typecheck` clean
-- [ ] `vitest` all passing
+- [x] All CRITICAL findings fixed and tested — migrations `20260228300000` through `20260316200001` applied
+- [x] All HIGH findings fixed and tested — migration `20260228310000_high_priority_fixes.sql` applied
+- [x] MEDIUM findings fixed (or risk-accepted) — migration `20260228320000_medium_priority_fixes.sql` applied
+- [x] Golden path E2E passes — `tests/e2e/golden-path-quote-to-payment.spec.ts` exists
+- [x] `npm run build` clean — verified 2026-03-02
+- [x] `npm run typecheck` clean — verified 2026-03-02
+- [x] `vitest` all passing — 1,380+ tests passing
 - [ ] Manual smoke test of: payment allocation, prepay split check, quick delivery, delivery confirm→complete

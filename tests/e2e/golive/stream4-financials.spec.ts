@@ -23,7 +23,7 @@ import {
   extractTableRows,
   extractSummaryCards,
   parseDollars,
-  assertCentsEqual,
+  assertCentsEqual as _assertCentsEqual,
   collectConsoleErrors,
 } from './utils/golive-helpers';
 
@@ -238,7 +238,7 @@ test.describe.serial('Stream 4 — Financials', () => {
 
     // Try to find Total Outstanding from cards
     let totalArText = '';
-    let bucketTexts: string[] = [];
+    const bucketTexts: string[] = [];
 
     for (const [label, value] of cards) {
       const lowerLabel = label.toLowerCase();
@@ -496,7 +496,7 @@ test.describe.serial('Stream 4 — Financials', () => {
     // Look for transaction-related content
     // The customer detail page has tabs: info, fields, quotes, orders, deliveries, history
     // Also there's a separate CustomerTransactionReview page at /customer-transactions
-    const bodyText = (await page.locator('body').textContent()) ?? '';
+    const _bodyText = (await page.locator('body').textContent()) ?? '';
 
     // Check if we can see a history tab or transaction content
     const historyTab = page.locator('button:has-text("history"), button:has-text("History")').first();

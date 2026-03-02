@@ -26,14 +26,14 @@ import {
 
 test.describe.serial('Stream 6 — Purchasing', () => {
   let page: Page;
-  let consoleErrors: string[];
+  let _consoleErrors: string[];
 
   // ---------------------------------------------------------------------------
   // PO1: Login
   // ---------------------------------------------------------------------------
   test('PO1: Login', async ({ browser }) => {
     page = await browser.newPage();
-    consoleErrors = collectConsoleErrors(page);
+    _consoleErrors = collectConsoleErrors(page);
     await login(page);
     await page.waitForTimeout(2000);
 
