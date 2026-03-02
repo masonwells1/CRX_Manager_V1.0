@@ -480,7 +480,7 @@ export default function NewDelivery() {
                     <input
                       type="number"
                       value={item.quantity}
-                      onChange={(e) => updateItemQty(item.order_item_id, parseInt(e.target.value) || 0)}
+                      onChange={(e) => updateItemQty(item.order_item_id, parseFloat(e.target.value) || 0)}
                       className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       min="0"
                       max={item.max_quantity}
