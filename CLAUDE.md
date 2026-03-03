@@ -15,7 +15,7 @@ To copy them: read each `.md` file (except README.md) from `docs/claude-memory/`
 
 ## Current State (2026-03-02)
 - 50 pages, 72+ tables, ~115 RPCs, 107 migrations
-- 1,433 unit tests (92 files) + 589 E2E tests (98 spec files, all passing)
+- 1,433 unit tests (92 files) + 589 E2E tests (84 spec files) + 95-step mega-workflow serial spec, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 - Latest: Security audit remediation — auth.uid() enforcement, PO soft-delete, useIdempotencyKey hook
@@ -185,6 +185,23 @@ Hook: `useRealtimeSubscription({ table, event, filter, onInsert, onUpdate, onDel
 - `src/hooks/useIdempotentAction.ts` — Retry-safe action hook with `crypto.randomUUID` keys
 - `supabase/migrations/` — Database migrations
 - `supabase/functions/` — Edge Functions
+
+---
+
+## Schema Gotchas (Non-Obvious Column Names)
+- `commissions.commission_amount` is `numeric` (dollars) — NOT `amount_cents bigint` (legacy, predates cents convention)
+- `returns` table: `requested_by` (not `created_by`), status `'requested'` (not `'pending'`), no `delivery_id` column
+- `return_items`: references `order_item_id` only (not `delivery_item_id`)
+- `invoice_items.extended_cents` (not `line_total_cents`)
+- `create_direct_order` RPC returns `{ order_id }` not `{ id }`, requires `p_order_date` (no default)
+- `complete_delivery` RPC requires `p_signed_by uuid`
+
+---
+
+## E2E Testing Notes
+- Mega-workflow spec: `tests/e2e/mega-workflow.spec.ts` (95 serial steps, ~10.5 min, report in `MEGA-TEST-REPORT.md`)
+- In `test.describe.serial()` suites, use `page.once('dialog')` — `page.on` accumulates handlers across steps
+- After 90+ serial steps, avoid `waitForTimeout()` — browser resources are strained; use `waitForLoadState('networkidle')` instead
 
 ---
 
