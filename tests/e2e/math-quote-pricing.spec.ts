@@ -77,9 +77,17 @@ async function extractQuoteLineItems(page: Page): Promise<QuoteLineItem[]> {
         ? parseDollars((await cells.nth(colPriceUnit).textContent()) ?? '') / 100
         : 0;
 
-      const totalUnitsNeeded = colUnitsNeeded >= 0
-        ? parseQuantity((await cells.nth(colUnitsNeeded).textContent()) ?? '')
-        : 0;
+      // "Units Needed" column renders an <input type="number"> element, not plain text.
+      // textContent() on the td returns '' because the value lives in the input DOM attribute.
+      // We must call inputValue() on the input element to get the displayed number.
+      const totalUnitsNeeded = await (async (): Promise<number> => {
+        if (colUnitsNeeded < 0) return 0;
+        const inputEl = cells.nth(colUnitsNeeded).locator('input');
+        if ((await inputEl.count()) > 0) {
+          return parseQuantity(await inputEl.inputValue());
+        }
+        return parseQuantity((await cells.nth(colUnitsNeeded).textContent()) ?? '');
+      })();
 
       const totalPrice = colTotal >= 0
         ? parseDollars((await cells.nth(colTotal).textContent()) ?? '') / 100
@@ -131,7 +139,15 @@ async function getQuoteSummaryTotals(
   }
 
   // Margin
-  const marginEl = page.locator('text=Margin, text=Overall Margin, text=Avg Margin').first();
+  // IMPORTANT: 'text=X, text=Y' is NOT valid Playwright syntax — commas are not "or" for text=.
+  // QuoteBuilder uses "Overall Margin" as the label in the totals card.
+  // DO NOT add a plain 'text=Margin' fallback — it matches the "Margin" column header in the
+  // line-items <table> (which appears earlier in DOM order). The <th> parent is a <tr> with no
+  // .font-mono child, causing parent traversal to return nothing and marginPct to stay 0.
+  const marginEl = page
+    .locator('text=Overall Margin')
+    .or(page.locator('text=Avg Margin'))
+    .first();
   const marginVisible = await marginEl.isVisible({ timeout: 3000 }).catch(() => false);
   if (marginVisible) {
     const parent = marginEl.locator('..');
