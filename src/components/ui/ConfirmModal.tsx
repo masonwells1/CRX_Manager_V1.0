@@ -1,4 +1,4 @@
-import { AlertTriangle, Trash2, ToggleLeft, ClipboardCheck, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, Trash2, ClipboardCheck, type LucideIcon } from 'lucide-react';
 import Modal from './Modal';
 import Button from './Button';
 
