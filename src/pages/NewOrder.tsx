@@ -60,7 +60,7 @@ export default function NewOrder() {
   const [saving, setSaving] = useState(false);
 
   const [customerId, setCustomerId] = useState('');
-  const [orderNumber, setOrderNumber] = useState('');
+  const [orderName, setOrderName] = useState('');
   const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);
@@ -123,6 +123,16 @@ export default function NewOrder() {
   const selectProduct = (product: Product) => {
     if (!selectedItemKey) return;
 
+    // Look up customer tier for price auto-fill
+    const customer = customers.find((c) => c.id === customerId);
+    const tierNum = customer?.assigned_tier || 1;
+    const tierPrice =
+      tierNum === 1
+        ? product.tier1_price || 0
+        : tierNum === 2
+          ? product.tier2_price || 0
+          : product.tier3_price || 0;
+
     setItems(
       items.map((item) => {
         if (item._key !== selectedItemKey) return item;
@@ -130,6 +140,7 @@ export default function NewOrder() {
           ...item,
           product_id: product.id,
           product_name: product.product_name,
+          price_per_unit: tierPrice,
           unit_cost: product.current_cost || 0,
           unit_size: product.unit_size || null,
         };
@@ -143,11 +154,6 @@ export default function NewOrder() {
   const handleSave = async () => {
     if (!customerId) {
       toast('error', 'Please select a customer');
-      return;
-    }
-
-    if (!orderNumber.trim()) {
-      toast('error', 'Please enter an order number');
       return;
     }
 
@@ -194,9 +200,9 @@ export default function NewOrder() {
       }));
 
       const { data, error } = await supabase.rpc('create_direct_order', {
-        p_order_number: orderNumber,
         p_customer_id: customerId,
         p_order_date: orderDate,
+        p_order_name: orderName || null,
         p_notes: notes || null,
         p_items: rpcItems,
         p_performed_by: profile.id,
@@ -214,8 +220,8 @@ export default function NewOrder() {
       }
       toast('success', 'Order created successfully');
       trackBusinessEvent('order_created', {
-        message: `Direct order ${orderNumber} created`,
-        data: { orderId: orderId!, orderNumber, itemCount: items.filter((i) => i.product_id).length },
+        message: `Direct order created${orderName ? ` (${orderName})` : ''}`,
+        data: { orderId: orderId!, orderName: orderName || null, itemCount: items.filter((i) => i.product_id).length },
       });
 
       // Phase 3.3: Credit limit check — warn (not block) if exceeded
@@ -302,13 +308,14 @@ export default function NewOrder() {
 
             <div>
               <label className="block text-sm font-medium text-nav-dark mb-1">
-                Order Number *
+                Order Name
               </label>
               <Input
-                value={orderNumber}
-                onChange={(e) => setOrderNumber(e.target.value)}
-                placeholder="e.g., ORD-2024-001"
+                value={orderName}
+                onChange={(e) => setOrderName(e.target.value)}
+                placeholder="e.g., Corn Burndown"
               />
+              <p className="text-xs text-secondary mt-1">Optional — order number is auto-generated</p>
             </div>
 
             <div>

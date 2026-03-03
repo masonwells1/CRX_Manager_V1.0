@@ -177,6 +177,8 @@ export interface QuoteItem {
   profit: number;
   total_price: number;
   net_margin: number;
+  calc_mode: string | null;
+  price_unit: string | null;
   product?: Product;
 }
 
@@ -185,6 +187,7 @@ export type OrderStatus = 'confirmed' | 'partially_fulfilled' | 'fulfilled' | 'c
 export interface Order {
   id: string;
   order_number: string;
+  order_name: string | null;
   quote_id: string | null;
   customer_id: string;
   status: OrderStatus;
