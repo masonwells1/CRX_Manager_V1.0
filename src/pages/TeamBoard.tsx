@@ -528,6 +528,8 @@ export default function TeamBoard() {
   const renderCard = (note: ExtendedTeamNote, showCheckbox: boolean, showCompletionDetails: boolean = false) => (
     <div
       key={note.id}
+      role="button"
+      tabIndex={0}
       className={`p-4 rounded-lg border transition-colors group cursor-pointer ${
         note.is_completed
           ? 'border-gray-100 bg-gray-50/50 opacity-75'
@@ -539,6 +541,7 @@ export default function TeamBoard() {
         setSelectedNote(note);
         setDetailModalOpen(true);
       }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedNote(note); setDetailModalOpen(true); } }}
     >
       <div className="flex items-start gap-3">
         {showCheckbox && (
@@ -721,8 +724,11 @@ export default function TeamBoard() {
       {/* ── Stats Bar ── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div
+          role="button"
+          tabIndex={0}
           className={`bg-white rounded-xl border p-3 cursor-pointer transition-all ${viewTab === 'board' ? 'border-crx-green ring-1 ring-crx-green/20' : 'border-gray-100 hover:border-gray-200'}`}
           onClick={() => setViewTab('board')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setViewTab('board'); } }}
         >
           <div className="flex items-center gap-2 mb-1">
             <LayoutGrid className="w-4 h-4 text-blue-500" />
@@ -731,8 +737,11 @@ export default function TeamBoard() {
           <p className="text-xl font-semibold font-heading text-nav-dark">{stats.total}</p>
         </div>
         <div
+          role="button"
+          tabIndex={0}
           className={`bg-white rounded-xl border p-3 cursor-pointer transition-all ${viewTab === 'board' && !filters.showCompleted ? 'border-crx-green ring-1 ring-crx-green/20' : 'border-gray-100 hover:border-gray-200'}`}
           onClick={() => { setViewTab('board'); setFilters(f => ({ ...f, showCompleted: false })); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setViewTab('board'); setFilters(f => ({ ...f, showCompleted: false })); } }}
         >
           <div className="flex items-center gap-2 mb-1">
             <ListChecks className="w-4 h-4 text-amber-500" />
@@ -741,8 +750,11 @@ export default function TeamBoard() {
           <p className="text-xl font-semibold font-heading text-nav-dark">{stats.open}</p>
         </div>
         <div
+          role="button"
+          tabIndex={0}
           className={`bg-white rounded-xl border p-3 cursor-pointer transition-all ${viewTab === 'my_tasks' ? 'border-crx-green ring-1 ring-crx-green/20' : 'border-gray-100 hover:border-gray-200'}`}
           onClick={() => setViewTab('my_tasks')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setViewTab('my_tasks'); } }}
         >
           <div className="flex items-center gap-2 mb-1">
             <User className="w-4 h-4 text-crx-green" />
@@ -751,8 +763,11 @@ export default function TeamBoard() {
           <p className="text-xl font-semibold font-heading text-crx-green">{stats.myTasks}</p>
         </div>
         <div
+          role="button"
+          tabIndex={0}
           className="bg-white rounded-xl border border-gray-100 hover:border-gray-200 p-3 cursor-pointer transition-all"
           onClick={() => { setViewTab('board'); setFilters(f => ({ ...f, showCompleted: false, priorities: ['urgent', 'high'] })); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setViewTab('board'); setFilters(f => ({ ...f, showCompleted: false, priorities: ['urgent', 'high'] })); } }}
         >
           <div className="flex items-center gap-2 mb-1">
             <AlertTriangle className="w-4 h-4 text-red-500" />
@@ -763,8 +778,11 @@ export default function TeamBoard() {
           </p>
         </div>
         <div
+          role="button"
+          tabIndex={0}
           className={`bg-white rounded-xl border p-3 cursor-pointer transition-all ${viewTab === 'completed' ? 'border-crx-green ring-1 ring-crx-green/20' : 'border-gray-100 hover:border-gray-200'}`}
           onClick={() => setViewTab('completed')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setViewTab('completed'); } }}
         >
           <div className="flex items-center gap-2 mb-1">
             <CheckSquare className="w-4 h-4 text-green-500" />
@@ -774,8 +792,11 @@ export default function TeamBoard() {
           <p className="text-[10px] text-crx-green mt-0.5">+{stats.completedThisWeek} this week</p>
         </div>
         <div
+          role="button"
+          tabIndex={0}
           className={`bg-white rounded-xl border p-3 cursor-pointer transition-all ${viewTab === 'activity' ? 'border-crx-green ring-1 ring-crx-green/20' : 'border-gray-100 hover:border-gray-200'}`}
           onClick={() => setViewTab('activity')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setViewTab('activity'); } }}
         >
           <div className="flex items-center gap-2 mb-1">
             <Activity className="w-4 h-4 text-purple-500" />

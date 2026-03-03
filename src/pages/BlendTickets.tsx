@@ -80,6 +80,7 @@ export function BlendTickets() {
       setCustomers(customersResult.data || []);
     } catch (error) {
       console.error('Error loading data:', error);
+      toast('error', 'Failed to load blend tickets. Please try again.');
     } finally {
       setLoading(false);
     }

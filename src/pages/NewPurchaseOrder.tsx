@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, Trash2, Save } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
+import Skeleton from '../components/ui/Skeleton';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -40,6 +41,7 @@ export default function NewPurchaseOrder() {
   const [saving, setSaving] = useState(false);
   const [productSearchOpen, setProductSearchOpen] = useState<string | null>(null);
   const [productQuery, setProductQuery] = useState('');
+  const [productsLoading, setProductsLoading] = useState(true);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -56,6 +58,7 @@ export default function NewPurchaseOrder() {
     setProducts(prods);
     const uniqueVendors = [...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[];
     setVendors(uniqueVendors.sort());
+    setProductsLoading(false);
   }, []);
 
   useEffect(() => {
@@ -198,6 +201,17 @@ export default function NewPurchaseOrder() {
       (p.vendor && p.vendor.toLowerCase().includes(q))
     );
   });
+
+  if (productsLoading) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-5 w-48" />
+        <Skeleton className="h-48 w-full rounded-xl" />
+        <Skeleton className="h-64 w-full rounded-xl" />
+        <Skeleton className="h-10 w-48 ml-auto" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

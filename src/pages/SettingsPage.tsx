@@ -1,12 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Save, UserPlus, Pencil, Shield } from 'lucide-react';
+import { Save, UserPlus, Pencil, Shield, Users } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import SplitHeading from '../components/ui/SplitHeading';
+import Skeleton from '../components/ui/Skeleton';
+import EmptyState from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
@@ -141,14 +144,15 @@ export default function SettingsPage() {
   const [editIsActive, setEditIsActive] = useState(true);
   const [editDeniedPages, setEditDeniedPages] = useState<string[]>([]);
   const [savingUser, setSavingUser] = useState(false);
+  const [deactivateConfirmOpen, setDeactivateConfirmOpen] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true);
 
   useEffect(() => {
     if (role !== 'admin') {
       navigate('/');
       return;
     }
-    fetchSettings();
-    fetchUsers();
+    Promise.all([fetchSettings(), fetchUsers()]).finally(() => setPageLoading(false));
   }, [role, navigate]);
 
   const fetchSettings = async () => {
@@ -292,7 +296,17 @@ export default function SettingsPage() {
 
   const handleEditUser = async () => {
     if (!editingUser) return;
-    if (editIsActive === false && !confirm('Deactivate this user? They will be locked out.')) return;
+    // If deactivating, show confirm modal first
+    if (editIsActive === false && editingUser.is_active === true) {
+      setDeactivateConfirmOpen(true);
+      return;
+    }
+    await executeEditUser();
+  };
+
+  const executeEditUser = async () => {
+    if (!editingUser) return;
+    setDeactivateConfirmOpen(false);
     setSavingUser(true);
     try {
       const { data, error } = await supabase.rpc('admin_update_profile', {
@@ -328,6 +342,17 @@ export default function SettingsPage() {
   };
 
   if (role !== 'admin') return null;
+
+  if (pageLoading) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-10 w-48" />
+        <Skeleton className="h-48 w-full rounded-xl" />
+        <Skeleton className="h-64 w-full rounded-xl" />
+        <Skeleton className="h-32 w-full rounded-xl" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -371,6 +396,18 @@ export default function SettingsPage() {
           }
         />
         <div className="overflow-x-auto">
+          {users.length === 0 ? (
+            <EmptyState
+              icon={<Users className="w-6 h-6 text-gray-400" />}
+              title="No users found"
+              description="Add your first team member to get started."
+              action={
+                <Button size="sm" icon={<UserPlus className="w-4 h-4" />} onClick={() => setUserModalOpen(true)}>
+                  Add User
+                </Button>
+              }
+            />
+          ) : (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100">
@@ -420,6 +457,7 @@ export default function SettingsPage() {
               ))}
             </tbody>
           </table>
+          )}
         </div>
       </Card>
 
@@ -531,6 +569,16 @@ export default function SettingsPage() {
           </div>
         </div>
       </Modal>
+
+      <ConfirmModal
+        open={deactivateConfirmOpen}
+        onClose={() => setDeactivateConfirmOpen(false)}
+        onConfirm={executeEditUser}
+        title="Deactivate User"
+        message={`Deactivate ${editName}? They will be locked out and unable to sign in.`}
+        confirmLabel="Deactivate"
+        variant="warning"
+      />
     </div>
   );
 }

@@ -50,6 +50,8 @@ interface LocalSection {
   items: LocalItem[];
 }
 
+type CalcMode = 'rate_acres' | 'units_direct';
+
 interface LocalItem {
   _key: string;
   id?: string;
@@ -70,6 +72,8 @@ interface LocalItem {
   total_price: number;
   net_margin: number;
   product?: Product;
+  calc_mode: CalcMode;
+  price_unit: string | null;
 }
 
 let keyCounter = 0;
@@ -96,6 +100,8 @@ function makeEmptyItem(): LocalItem {
     profit: 0,
     total_price: 0,
     net_margin: 0,
+    calc_mode: 'rate_acres',
+    price_unit: null,
   };
 }
 
@@ -284,6 +290,8 @@ export default function QuoteBuilder() {
           total_price: item.total_price,
           net_margin: item.net_margin,
           product: item.product,
+          calc_mode: (item as Record<string, unknown>).calc_mode as CalcMode || 'rate_acres',
+          price_unit: (item as Record<string, unknown>).price_unit as string | null || null,
         })),
     }));
 
@@ -350,21 +358,50 @@ export default function QuoteBuilder() {
       if (!product) return item;
 
       const pricePerUnit = getTierPrice(product, tierNum);
+      const inventoryUnitFactorOz = getConversionFactor(product.inventory_unit);
+
+      if (item.calc_mode === 'units_direct') {
+        // User entered total_units_needed directly — skip rate×acres computation
+        const totalInventoryUnits = item.total_units_needed || 0;
+        const totalPrice = pricePerUnit * totalInventoryUnits;
+        const profit = (pricePerUnit - (product.current_cost || 0)) * totalInventoryUnits;
+        const netMargin = totalPrice > 0 ? profit / totalPrice : 0;
+
+        // Back-calculate oz/acre and $/acre if acres provided
+        const acres = item.acres || 0;
+        let ozPerAcre: number | null = item.oz_per_acre;
+        let pricePerAcre: number | null = item.price_per_acre;
+        if (acres > 0 && inventoryUnitFactorOz > 0) {
+          const totalOz = totalInventoryUnits * inventoryUnitFactorOz;
+          ozPerAcre = Math.round((totalOz / acres) * 100) / 100;
+          pricePerAcre = Math.round((totalPrice / acres) * 100) / 100;
+        }
+
+        return {
+          ...item,
+          price_per_unit: pricePerUnit,
+          current_cost: product.current_cost || 0,
+          oz_per_acre: ozPerAcre,
+          price_per_acre: pricePerAcre,
+          total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
+          total_price: Math.round(totalPrice * 100) / 100,
+          profit: Math.round(profit * 100) / 100,
+          net_margin: Math.round(netMargin * 100 * 100) / 100,
+        };
+      }
+
+      // Default: rate_acres mode
       const actualRate = item.actual_rate || 0;
       const acres = item.acres || 0;
 
-      // Convert application rate to oz using the rate_unit's conversion factor
       const rateUnitFactorOz = getConversionFactor(item.rate_unit);
       const rateInOz = actualRate * rateUnitFactorOz;
       const ozPerAcre = rateInOz;
 
-      // Convert oz to inventory units using the product's inventory_unit factor
-      const inventoryUnitFactorOz = getConversionFactor(product.inventory_unit);
       const totalInventoryUnits = inventoryUnitFactorOz > 0
         ? (acres * rateInOz) / inventoryUnitFactorOz
         : 0;
 
-      // Price is per inventory unit
       const pricePerAcre = inventoryUnitFactorOz > 0
         ? pricePerUnit * (rateInOz / inventoryUnitFactorOz)
         : 0;
@@ -381,7 +418,7 @@ export default function QuoteBuilder() {
         total_units_needed: Math.round(totalInventoryUnits * 100) / 100,
         total_price: Math.round(totalPrice * 100) / 100,
         profit: Math.round(profit * 100) / 100,
-        net_margin: Math.round(netMargin * 100 * 100) / 100, // Store as percentage (e.g. 20.00 = 20%)
+        net_margin: Math.round(netMargin * 100 * 100) / 100,
       };
     },
     [products, getTierPrice, getConversionFactor]
@@ -432,8 +469,10 @@ export default function QuoteBuilder() {
               price_per_unit: pricePerUnit,
               current_cost: product.current_cost || 0,
               suggested_rate: product.suggested_rate || null,
+              actual_rate: product.rate_per_acre ?? item.actual_rate ?? null,
               rate_unit: product.rate_unit || null,
               unit_size: product.inventory_unit || product.unit_size || null,
+              price_unit: product.inventory_unit || null,
             };
             return recalcItem(updated, tier);
           }),
@@ -535,6 +574,16 @@ export default function QuoteBuilder() {
     for (const sec of sections) {
       for (const item of sec.items) {
         if (!item.product_id) continue;
+        // In units_direct mode, only total_units_needed is required
+        if (item.calc_mode === 'units_direct') {
+          if ((item.total_units_needed ?? 0) <= 0) {
+            const prod = item.product || products.find((p) => p.id === item.product_id);
+            toast('error', `"${prod?.product_name || 'An item'}" in "${sec.section_name}" has no units needed set.`);
+            return null;
+          }
+          continue;
+        }
+        // rate_acres mode: both rate and acres are required
         if ((item.acres ?? 0) === 0 && (item.actual_rate ?? 0) === 0) {
           const prod = item.product || products.find((p) => p.id === item.product_id);
           toast('error', `"${prod?.product_name || 'An item'}" in "${sec.section_name}" has no rate or acres set.`);
@@ -543,10 +592,10 @@ export default function QuoteBuilder() {
       }
     }
 
-    // S2-1: Validate rate_unit is set for all items with a rate
+    // S2-1: Validate rate_unit is set for all items with a rate (rate_acres mode only)
     for (const sec of sections) {
       for (const item of sec.items) {
-        if (!item.product_id) continue;
+        if (!item.product_id || item.calc_mode === 'units_direct') continue;
         if ((item.actual_rate ?? 0) > 0 && !item.rate_unit) {
           toast('error', 'Please select a rate unit for all items with a rate');
           return null;
@@ -554,10 +603,10 @@ export default function QuoteBuilder() {
       }
     }
 
-    // S2-2: Validate rate and acres are both set when either is provided
+    // S2-2: Validate rate and acres are both set when either is provided (rate_acres mode only)
     for (const sec of sections) {
       for (const item of sec.items) {
-        if (!item.product_id) continue;
+        if (!item.product_id || item.calc_mode === 'units_direct') continue;
         const hasRate = (item.actual_rate ?? 0) > 0;
         const hasAcres = (item.acres ?? 0) > 0;
         if (hasRate && !hasAcres) {
@@ -626,6 +675,8 @@ export default function QuoteBuilder() {
           profit: item.profit,
           total_price: item.total_price,
           net_margin: item.net_margin,
+          calc_mode: item.calc_mode || 'rate_acres',
+          price_unit: item.price_unit || null,
         })),
     }));
 
@@ -710,6 +761,7 @@ export default function QuoteBuilder() {
             acres: i.acres || 0,
             total_units_needed: i.total_units_needed || 0,
             price_per_unit: i.price_per_unit,
+            price_unit: i.price_unit || undefined,
             total_price: i.total_price,
           })),
       })),
@@ -768,6 +820,8 @@ export default function QuoteBuilder() {
                 total_price: i.total_price,
                 profit: i.profit,
                 net_margin: i.net_margin,
+                calc_mode: i.calc_mode,
+                price_unit: i.price_unit,
               })),
           })),
         };
@@ -1212,8 +1266,31 @@ export default function QuoteBuilder() {
                                 </button>
                               )}
                             </td>
-                            <td className="px-3 py-2 font-mono">
-                              {fmt(item.price_per_unit)}
+                            <td className="px-3 py-2">
+                              <div className="font-mono">{fmt(item.price_per_unit)}</div>
+                              <select
+                                value={item.price_unit || ''}
+                                onChange={(e) =>
+                                  updateItem(sec._key, item._key, {
+                                    price_unit: e.target.value || null,
+                                  })
+                                }
+                                aria-label="Price unit"
+                                className="w-20 px-1 py-0.5 text-xs border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green mt-0.5"
+                              >
+                                <option value="">--</option>
+                                {unitConversions
+                                  .filter((uc) => {
+                                    const form = prod?.product_form;
+                                    if (!form) return true;
+                                    return uc.unit_type === form || uc.unit_type === 'both';
+                                  })
+                                  .map((uc) => (
+                                    <option key={uc.id} value={uc.unit}>
+                                      per {uc.unit}
+                                    </option>
+                                  ))}
+                              </select>
                             </td>
                             <td className="px-3 py-2 font-mono text-secondary">
                               {fmt(item.current_cost)}
@@ -1230,6 +1307,7 @@ export default function QuoteBuilder() {
                                     actual_rate: e.target.value
                                       ? parseFloat(e.target.value)
                                       : null,
+                                    calc_mode: 'rate_acres',
                                   })
                                 }
                                 aria-label="Actual rate"
@@ -1272,6 +1350,9 @@ export default function QuoteBuilder() {
                                     acres: e.target.value
                                       ? parseFloat(e.target.value)
                                       : null,
+                                    calc_mode: item.calc_mode === 'units_direct'
+                                      ? 'units_direct' // keep units_direct if typing acres alongside units
+                                      : 'rate_acres',
                                   })
                                 }
                                 aria-label="Acres"
@@ -1290,10 +1371,27 @@ export default function QuoteBuilder() {
                                 ? fmt(item.price_per_acre)
                                 : '-'}
                             </td>
-                            <td className="px-3 py-2 font-mono text-secondary">
-                              {item.total_units_needed != null
-                                ? item.total_units_needed.toFixed(2)
-                                : '-'}
+                            <td className="px-3 py-2">
+                              <input
+                                type="number"
+                                value={item.total_units_needed ?? ''}
+                                onChange={(e) =>
+                                  updateItem(sec._key, item._key, {
+                                    total_units_needed: e.target.value
+                                      ? parseFloat(e.target.value)
+                                      : null,
+                                    calc_mode: 'units_direct',
+                                  })
+                                }
+                                aria-label="Units needed"
+                                className={`w-20 px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green font-mono ${
+                                  item.calc_mode === 'units_direct'
+                                    ? 'border-crx-green bg-crx-green-tint'
+                                    : 'border-gray-200'
+                                }`}
+                                step="any"
+                                min={0}
+                              />
                             </td>
                             <td className="px-3 py-2 font-mono font-medium text-nav-dark">
                               {fmt(item.total_price)}

@@ -5,6 +5,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -68,6 +69,7 @@ export default function BlendRecipes() {
     timing: '',
   });
   const [editItems, setEditItems] = useState<EditItem[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<RecipeRow | null>(null);
 
   const fetchRecipes = useCallback(async () => {
     setLoading(true);
@@ -268,14 +270,19 @@ export default function BlendRecipes() {
     });
   };
 
-  const handleDelete = async (recipe: RecipeRow) => {
-    if (!confirm(`Delete recipe "${recipe.name}"? This is a soft delete.`)) return;
+  const handleDelete = (recipe: RecipeRow) => {
+    setDeleteTarget(recipe);
+  };
+
+  const executeDeleteRecipe = async () => {
+    if (!deleteTarget) return;
+    setDeleteTarget(null);
     await runCriticalAction({
       action: async () => {
         const result = await supabase
           .from('blend_recipes')
           .update({ deleted_at: new Date().toISOString() })
-          .eq('id', recipe.id)
+          .eq('id', deleteTarget.id)
           .select();
         checkMutationResult(result, 'Delete recipe');
       },
@@ -560,6 +567,16 @@ export default function BlendRecipes() {
           </div>
         </div>
       </Modal>
+
+      <ConfirmModal
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={executeDeleteRecipe}
+        title="Delete Recipe"
+        message={`Delete recipe "${deleteTarget?.name}"? This is a soft delete and can be reversed.`}
+        confirmLabel="Delete Recipe"
+        variant="danger"
+      />
     </div>
   );
 }

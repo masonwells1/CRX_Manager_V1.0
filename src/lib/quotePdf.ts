@@ -31,6 +31,7 @@ interface PdfQuoteItem {
   acres: number;
   total_units_needed: number;
   inventory_unit?: string;
+  price_unit?: string;
   price_per_unit: number;
   total_price: number;
 }
@@ -163,7 +164,7 @@ export async function generateQuotePdf(data: PdfQuoteData) {
       `${item.actual_rate} ${item.rate_unit}`,
       item.acres.toLocaleString(),
       `${item.total_units_needed.toLocaleString()}${item.inventory_unit ? ' ' + item.inventory_unit : ''}`,
-      fmt(item.price_per_unit),
+      `${fmt(item.price_per_unit)}${item.price_unit || item.inventory_unit ? '/' + (item.price_unit || item.inventory_unit) : ''}`,
       fmt(item.total_price),
     ]);
 
@@ -226,12 +227,7 @@ export async function generateQuotePdf(data: PdfQuoteData) {
   doc.setTextColor(...CRX_GREEN);
   doc.text(fmt(data.totals.totalPrice), totalsX + 188, y + 20, { align: 'right' });
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(...GRAY);
-  doc.text(`Estimated profit: ${fmt(data.totals.totalProfit)}  •  Margin: ${data.totals.avgMargin.toFixed(1)}%`, totalsX + 12, y + 40);
-
-  y += 70;
+  y += 50;
 
   // ─── Footer notes ─────────────────────────────────────────
   if (data.footer_notes) {
@@ -250,7 +246,7 @@ export async function generateQuotePdf(data: PdfQuoteData) {
   doc.setFontSize(7);
   doc.setTextColor(160, 160, 160);
   doc.text(
-    'Crop RX Solutions  •  Robinson, IL  •  Prices valid for the period shown above. Subject to product availability.',
+    'Crop RX Solutions  •  www.croprxsolutions.com  •  Prices valid for the period shown above. Subject to product availability.',
     pageW / 2,
     footerY,
     { align: 'center' }

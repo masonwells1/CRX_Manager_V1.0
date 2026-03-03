@@ -7,6 +7,7 @@ import {
   validateCommissionSplits,
   convertToGlLb,
   type CalcItem,
+  type CalcMode,
 } from './quoteCalc';
 import type { Product, UnitConversion } from '../types';
 
@@ -314,6 +315,134 @@ describe('recalcItem', () => {
     expect(result.total_units_needed).toBe(10);
     // 10 × 40 = $400
     expect(result.total_price).toBe(400);
+  });
+
+  // ── Regression: 24D Ester bug report (quote 2026-0271) ─────────────
+  // Bug: price/acre showed $464 when it should be ~$3.26. Root cause was
+  // rate_unit not auto-populating from product, so user entering "16" with
+  // wrong rate_unit caused massive overcalculation.
+  it('REGRESSION: 24D Ester — 16 fl oz/acre on 500 acres at $26.10/gal', () => {
+    const product = makeProduct({
+      product_name: '24D Ester',
+      inventory_unit: 'Gallon',
+      tier1_price: 26.10,
+      current_cost: 26.10, // at-cost example
+      product_form: 'liquid',
+      rate_per_acre: 16,
+      rate_unit: 'fl oz',
+    });
+    const item = makeItem({
+      actual_rate: 16,
+      rate_unit: 'fl oz',
+      acres: 500,
+    });
+
+    const result = recalcItem(item, product, 1, conversions);
+
+    // 16 fl oz × 1 = 16 oz/acre
+    expect(result.oz_per_acre).toBe(16);
+    // 500 × 16 / 128 = 62.5 gallons
+    expect(result.total_units_needed).toBe(62.5);
+    // $26.10 × (16/128) = $3.26/acre
+    expect(result.price_per_acre).toBeCloseTo(3.26, 1);
+    // $26.10 × 62.5 = $1,631.25
+    expect(result.total_price).toBe(1631.25);
+    // Price per acre should NOT be anywhere near $464
+    expect(result.price_per_acre).toBeLessThan(5);
+  });
+
+  it('REGRESSION: detects wrong rate_unit mismatch (16 entered but unit is Pint not fl oz)', () => {
+    // This is the ACTUAL bug scenario — user types "16" meaning oz but rate_unit is "Pint"
+    const product = makeProduct({
+      inventory_unit: 'Gallon',
+      tier1_price: 26.10,
+      current_cost: 26.10,
+    });
+    const item = makeItem({
+      actual_rate: 16,
+      rate_unit: 'Pint', // WRONG — user meant fl oz
+      acres: 500,
+    });
+
+    const result = recalcItem(item, product, 1, conversions);
+
+    // 16 Pint × 16 oz/Pint = 256 oz/acre — MUCH too high
+    expect(result.oz_per_acre).toBe(256);
+    // This would produce 1000 gallons and $26,100 — way too expensive
+    expect(result.total_units_needed).toBe(1000);
+    expect(result.total_price).toBe(26100);
+    // price_per_acre = $26.10 × (256/128) = $52.20 — clearly wrong for 24D
+    expect(result.price_per_acre).toBeCloseTo(52.2, 1);
+  });
+
+  // ── units_direct mode ───────────────────────────────────────────────
+  it('units_direct: calculates price from total_units_needed directly', () => {
+    const product = makeProduct({ tier1_price: 20, current_cost: 10, inventory_unit: 'Gallon' });
+    const item = makeItem({
+      calc_mode: 'units_direct' as CalcMode,
+      total_units_needed: 25,
+      actual_rate: null,
+      rate_unit: null,
+      acres: null,
+    });
+    const result = recalcItem(item, product, 1, conversions);
+
+    expect(result.total_units_needed).toBe(25);
+    expect(result.total_price).toBe(500);  // 25 × $20
+    expect(result.profit).toBe(250);       // 25 × ($20 - $10)
+    expect(result.net_margin).toBe(50);    // 250/500 = 50%
+  });
+
+  it('units_direct: back-calculates oz/acre and $/acre when acres provided', () => {
+    const product = makeProduct({ tier1_price: 20, current_cost: 10, inventory_unit: 'Gallon' });
+    const item = makeItem({
+      calc_mode: 'units_direct' as CalcMode,
+      total_units_needed: 25,
+      acres: 100,
+      actual_rate: null,
+      rate_unit: null,
+    });
+    const result = recalcItem(item, product, 1, conversions);
+
+    // 25 gal × 128 oz/gal = 3200 oz total, / 100 acres = 32 oz/acre
+    expect(result.oz_per_acre).toBe(32);
+    // $500 / 100 acres = $5/acre
+    expect(result.price_per_acre).toBe(5);
+    expect(result.total_price).toBe(500);
+  });
+
+  it('units_direct: handles zero units', () => {
+    const product = makeProduct({ tier1_price: 20, inventory_unit: 'Gallon' });
+    const item = makeItem({
+      calc_mode: 'units_direct' as CalcMode,
+      total_units_needed: 0,
+      actual_rate: null,
+      rate_unit: null,
+      acres: null,
+    });
+    const result = recalcItem(item, product, 1, conversions);
+
+    expect(result.total_price).toBe(0);
+    expect(result.profit).toBe(0);
+    expect(result.net_margin).toBe(0);
+  });
+
+  it('units_direct: works for dry products', () => {
+    const product = makeProduct({ tier1_price: 3, current_cost: 1.50, inventory_unit: 'Lb', product_form: 'dry' });
+    const item = makeItem({
+      calc_mode: 'units_direct' as CalcMode,
+      total_units_needed: 100,
+      acres: 50,
+      actual_rate: null,
+      rate_unit: null,
+    });
+    const result = recalcItem(item, product, 1, conversions);
+
+    expect(result.total_units_needed).toBe(100);
+    expect(result.total_price).toBe(300);   // 100 × $3
+    expect(result.profit).toBe(150);        // 100 × ($3 - $1.50)
+    // 100 lb × 16 oz/lb = 1600 oz total, / 50 acres = 32 oz/acre
+    expect(result.oz_per_acre).toBe(32);
   });
 });
 
