@@ -290,8 +290,8 @@ export default function QuoteBuilder() {
           total_price: item.total_price,
           net_margin: item.net_margin,
           product: item.product,
-          calc_mode: (item as Record<string, unknown>).calc_mode as CalcMode || 'rate_acres',
-          price_unit: (item as Record<string, unknown>).price_unit as string | null || null,
+          calc_mode: (item.calc_mode as CalcMode) || 'rate_acres',
+          price_unit: item.price_unit || null,
         })),
     }));
 

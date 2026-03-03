@@ -7,7 +7,7 @@
  */
 import { test, expect, Page } from '@playwright/test';
 import { login } from './utils/auth';
-import { parseDollars, waitForPageStable, assertCentsEqual } from './utils/math-helpers';
+import { waitForPageStable, assertCentsEqual } from './utils/math-helpers';
 import { supabaseRest, supabaseRpc, asArray } from './golive/utils/supabase-helpers';
 
 const RUN = Date.now().toString(36).toUpperCase();
@@ -39,7 +39,7 @@ async function nav(page: Page, path: string) {
   await waitForPageStable(page, 2000);
 }
 
-async function btn(page: Page, name: string | RegExp, timeout = 15000) {
+async function _btn(page: Page, name: string | RegExp, timeout = 15000) {
   const b = page.getByRole('button', { name }).first();
   await expect(b).toBeVisible({ timeout });
   await b.click();
@@ -627,7 +627,7 @@ test.describe.serial('Mega Workflow (95 Steps)', () => {
     expect(S.orderQty).toBeGreaterThan(0);
   });
 
-  test('Step 28: Verify order total matches quote total', async ({ page }) => {
+  test('Step 28: Verify order total matches quote total', async ({ page: _page }) => {
     if (!S.orderId || !S.quoteTotalCents) test.skip();
     // Allow up to $2 rounding difference
     assertCentsEqual(S.orderTotalCents as number, S.quoteTotalCents as number, 200,
