@@ -21,21 +21,25 @@ CREATE TABLE IF NOT EXISTS payments (
 
 ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "payments_select" ON payments;
 CREATE POLICY "payments_select" ON payments FOR SELECT TO authenticated
   USING (is_admin() OR is_sales_rep());
 
+DROP POLICY IF EXISTS "payments_insert" ON payments;
 CREATE POLICY "payments_insert" ON payments FOR INSERT TO authenticated
   WITH CHECK (is_admin() OR is_sales_rep());
 
+DROP POLICY IF EXISTS "payments_update" ON payments;
 CREATE POLICY "payments_update" ON payments FOR UPDATE TO authenticated
   USING (is_admin());
 
+DROP POLICY IF EXISTS "payments_delete" ON payments;
 CREATE POLICY "payments_delete" ON payments FOR DELETE TO authenticated
   USING (is_admin());
 
-CREATE INDEX idx_payments_order ON payments(order_id);
-CREATE INDEX idx_payments_customer ON payments(customer_id);
-CREATE INDEX idx_payments_date ON payments(payment_date);
+CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id);
+CREATE INDEX IF NOT EXISTS idx_payments_customer ON payments(customer_id);
+CREATE INDEX IF NOT EXISTS idx_payments_date ON payments(payment_date);
 
 -- ==========================================
 -- 2. ADD paid_date AND paid_note TO COMMISSIONS (Gap #9)

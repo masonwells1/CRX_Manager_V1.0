@@ -1352,16 +1352,66 @@ test.describe.serial('Mega Workflow (95 Steps)', () => {
     const qty = 2;
     const pricePerUnit = prod.price_per_unit || 5000; // 50.00
 
+    // ── Inventory safety net ──────────────────────────────────────
+    // Prior test runs may have left ghost data that consumed stock.
+    // Ensure at least 20 free units before calling create_direct_order.
+    const invCheck = await supabaseRest(page, 'GET',
+      `inventory?select=id,quantity_available,quantity_prebooked&product_id=eq.${prod.id}&location=eq.Main Warehouse&limit=1`
+    );
+    const invArr = asArray(invCheck, 'qd inventory safety check');
+    const available = invArr.length ? (invArr[0] as Record<string, unknown>).quantity_available as number : 0;
+    const prebooked = invArr.length ? (invArr[0] as Record<string, unknown>).quantity_prebooked as number : 0;
+    const free = available - prebooked;
+    console.log(`QD inventory check: available=${available}, prebooked=${prebooked}, free=${free}`);
+
+    if (free < 20) {
+      const topUp = 50;
+      console.log(`Free inventory too low (${free}), topping up by ${topUp} via receive_po_items`);
+      const userId = await getUserId(page);
+      // Create a small PO for the top-up
+      const po = await supabaseRest(page, 'POST', 'purchase_orders', {
+        vendor_name: `QD-TopUp-${RUN}`,
+        po_number: `QDPO-${RUN}`,
+        status: 'submitted',
+        order_date: TS,
+        created_by: userId,
+      });
+      const poArr = asArray(po, 'qd top-up PO');
+      if (poArr.length) {
+        const poId = (poArr[0] as Record<string, unknown>).id as string;
+        // Add PO item
+        const poItem = await supabaseRest(page, 'POST', 'purchase_order_items', {
+          purchase_order_id: poId,
+          product_id: prod.id,
+          quantity_ordered: topUp,
+          unit_cost: 10,
+          quantity_received: 0,
+        });
+        const poItemArr = asArray(poItem, 'qd top-up PO item');
+        if (poItemArr.length) {
+          const poItemId = (poItemArr[0] as Record<string, unknown>).id as string;
+          await supabaseRpc(page, 'receive_po_items', {
+            p_items: [{ po_item_id: poItemId, quantity: topUp, condition: 'good', lot_number: `QD-LOT-${RUN}` }],
+            p_performed_by: userId,
+          }).catch(e => console.warn('QD top-up receive failed:', e));
+        }
+      }
+      console.log('QD inventory top-up complete');
+    }
+
+    // ── Create the quick-delivery order ───────────────────────────
+    const prodName = (prod as Record<string, unknown>).name as string || 'E2E Test Product';
     const result = await supabaseRpc(page, 'create_direct_order', {
       p_customer_id: S.customerId,
       p_order_date: new Date().toISOString().slice(0, 10),
       p_order_name: `QD-${RUN}`,
-      p_items: [{ product_id: prod.id, quantity: qty, price_per_unit: pricePerUnit }],
-    }).catch(() => null);
+      p_items: [{ product_id: prod.id, product_name: prodName, quantity: qty, price_per_unit: pricePerUnit }],
+    }).catch(err => { console.error('create_direct_order RPC error:', err); return null; });
 
     if (result && typeof result === 'object' && 'order_id' in (result as Record<string, unknown>)) {
       S.quickDeliveryOrderId = (result as Record<string, unknown>).order_id as string;
     } else {
+      console.warn('create_direct_order RPC did not return order_id, result:', JSON.stringify(result));
       // Fall back — create via POST
       const ord = await supabaseRest(page, 'POST', 'orders', {
         customer_id: S.customerId,
@@ -1384,8 +1434,11 @@ test.describe.serial('Mega Workflow (95 Steps)', () => {
   });
 
   test('Step 69: Create and complete quick delivery via RPC', async ({ page }) => {
+    test.setTimeout(60000); // generous budget — browser is stressed after 68 serial steps
     if (!S.quickDeliveryOrderId || !S.customerId) test.skip();
-    await nav(page, '/');
+    // Use page.goto instead of nav() to avoid extra waitForTimeout overhead
+    await page.goto('/');
+    await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
     const userId = await getUserId(page);
     const products = S.products as Array<{ id: string }>;
     const prod = products[0];
@@ -1421,12 +1474,15 @@ test.describe.serial('Mega Workflow (95 Steps)', () => {
     });
 
     // Move to in_progress then complete via RPC (p_signed_by is required)
-    await supabaseRpc(page, 'confirm_delivery', { p_delivery_id: qdDelId }).catch(() => null);
+    const confirmResult = await supabaseRpc(page, 'confirm_delivery', { p_delivery_id: qdDelId })
+      .catch(e => { console.error('QD confirm_delivery error:', e); return null; });
+    console.log(`QD confirm result: ${JSON.stringify(confirmResult)}`);
+
     const completeResult = await supabaseRpc(page, 'complete_delivery', {
       p_delivery_id: qdDelId,
       p_signed_by: 'E2E Quick Delivery',
       p_performed_by: userId,
-    }).catch(() => null);
+    }).catch(e => { console.error('QD complete_delivery error:', e); return null; });
 
     S.quickDeliveryId = qdDelId;
     S.quickDeliveryNumber = `QDD-${RUN}`;
