@@ -22,6 +22,10 @@ Things that have bitten us before. Check here before debugging mysterious issues
 - PromiseLike (query builders) has `.then()` but NOT `.catch()` — use `void` prefix
 - `null` vs `undefined`: Supabase returns `null`, React props expect `undefined` — use `?? undefined`
 - db.ts uses fallback placeholder values so createClient() doesn't crash in CI
+- `allocation_sets` table: `entity_type/entity_id` are `NOT NULL` with no defaults + `UNIQUE(entity_type, entity_id, version)` — silently blocks multi-payment scenarios. Use `payments` table for recording invoice payments instead
+- `deliveries` table: column is `scheduled_date`, **NOT** `delivery_date`
+- `supabaseRpc` test helper does NOT check `resp.ok` — PostgREST HTTP 4xx errors return `{code, message}` JSON which is truthy; `if (result)` blocks silently pass even on DB failure
+- `payments.amount` is `numeric` dollars (not cents bigint) — DB RPCs convert: `(p_amount_cents / 100.0)::numeric(12,2)`
 
 ## TypeScript & Linting
 - ESLint `no-unused-vars` needs `varsIgnorePattern: '^_'` for intentionally-unused vars
@@ -29,6 +33,7 @@ Things that have bitten us before. Check here before debugging mysterious issues
 
 ## Testing
 - jsPDF mocks must include ALL methods used — missing mocks cause silent test failures
+- E2E `catch` clauses: use `catch(_e)` not `catch(e)` when the error param is unused — ESLint `no-unused-vars` enforces the `_` prefix pattern
 
 ## Business Logic
 - See CLAUDE.md "Hard Red Lines" for money (bigint cents) and season (October 1-September 30) rules

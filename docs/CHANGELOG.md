@@ -4,6 +4,25 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-03 — E2E Suite Expansion + DB Schema Fixes
+
+### New E2E Spec Files (37 tests)
+- `pricing-edge-cases.spec.ts` (12 tests): tier pricing, bulk price breaks, margin/cost validation, zero-cost guard rails
+- `concurrent-operations.spec.ts` (13 tests): race conditions, double-submit prevention, RLS tenant isolation, inventory ledger consistency
+- `period-close-accounting.spec.ts` (12 tests): period-close workflow, partial payments, commission tracking, balance accuracy
+
+### DB Fixes (required to unblock tests)
+- `record_invoice_payment`: rewrote to use `payments` table — `allocation_sets` had `entity_type/entity_id NOT NULL` with no defaults + `UNIQUE(entity_type, entity_id, version)` that silently broke all multi-payment scenarios
+- `close_accounting_period`: fixed `delivery_date` → `scheduled_date` column reference in deliveries subquery
+- `close_accounting_period`: fixed payments column reference (`amount_cents`)
+- `record_invoice_payment`: fixed column name mismatch (`amount_cents`)
+
+### Full Suite Result
+- 999 passed, 30 pre-existing failures (unrelated to DB changes), 21 skipped
+- 1,443 unit tests (93 files) + 626 E2E tests (102 spec files)
+
+---
+
 ## 2026-03-02 — Quote Builder, Order Creation & PDF Fixes
 
 ### Quote Builder Improvements

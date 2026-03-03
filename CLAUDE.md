@@ -13,12 +13,12 @@ At the start of each session, silently check if `docs/claude-memory/MEMORY.md` h
 
 To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
 
-## Current State (2026-03-02)
-- 50 pages, 72+ tables, ~115 RPCs, 107 migrations
-- 1,433 unit tests (92 files) + 589 E2E tests (84 spec files) + 95-step mega-workflow serial spec, all passing
+## Current State (2026-03-03)
+- 50 pages, 72+ tables, ~115 RPCs, 114 migrations
+- 1,443 unit tests (93 files) + 626 E2E tests (102 spec files), all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
-- Latest: Security audit remediation — auth.uid() enforcement, PO soft-delete, useIdempotencyKey hook
+- Latest: E2E suite expansion (37 new tests) + DB schema fixes (record_invoice_payment, close_accounting_period)
 
 ---
 
@@ -237,7 +237,7 @@ Run `/update-docs` for a full audit anytime (not required — the commit hook ha
 |-----|----------|
 | `docs/reference/database-schema.md` | 72+ tables + RLS policy matrix |
 | `docs/reference/rpc-functions.md` | ~115 RPCs + helpers + triggers |
-| `docs/reference/migration-history.md` | 107 migration entries |
+| `docs/reference/migration-history.md` | 114 migration entries |
 | `docs/reference/pages-routes.md` | 50 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
