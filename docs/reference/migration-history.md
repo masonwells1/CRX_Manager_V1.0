@@ -1,4 +1,4 @@
-# Migration History (93 migrations)
+# Migration History (96 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -62,3 +62,6 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 56 | 20260301300000 | New RPC `financial_dashboard_summary()` for Financial Dashboard — returns all financial KPIs (AR aging, revenue, payments, prepay balances, finance charges) |
 | 57 | 20260301300001 | Slim `dashboard_summary()` to operational-only — removes financial KPIs (now served by `financial_dashboard_summary()`) |
 | 58 | 20260316200000 | Additional audit gap fixes: idempotency on `apply_write_off` + `batch_apply_prepayments`, admin role check on `generate_finance_charges` |
+| 59 | 20260302100000 | Quote items: add `calc_mode` (rate_acres/units_direct) and `price_unit` columns for bidirectional calc + price unit override |
+| 60 | 20260302110000 | Orders: add `order_name` column, recreate `create_direct_order()` with auto-generated order numbers and order name support |
+| 61 | 20260302120000 | Save quote bidirectional calc: `save_quote()` branches on `calc_mode`, persists `calc_mode` + `price_unit` on items |

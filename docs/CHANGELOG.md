@@ -4,6 +4,32 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-02 — Quote Builder, Order Creation & PDF Fixes
+
+### Quote Builder Improvements
+- **Auto-fill rate & unit**: selecting a product now auto-populates `actual_rate` and `rate_unit` from product setup
+- **Bidirectional calc mode**: new `calc_mode` toggle — `rate_acres` (rate × acres → units) vs `units_direct` (type units directly)
+- **Editable Units Needed**: column is now an editable input; editing it switches to `units_direct` mode (green border indicator)
+- **Price unit override**: per-item dropdown to change display price unit (e.g., price per Gal vs per Qt)
+- **52 unit tests** including 24D Ester regression test verifying $3.26/acre at 16 oz/acre on 500 acres
+
+### Order Creation Fixes
+- **Auto-fill pricing**: selecting a product now pulls tier price from customer's assigned tier (tier1/2/3_price)
+- **Auto-generated order numbers**: removed manual order number input; `create_direct_order()` RPC now calls `generate_order_number()` server-side
+- **Order name field**: new optional "Order Name" field (e.g., "Corn Burndown") for easy identification
+
+### Quote PDF
+- **Removed profit/margin** from customer-facing PDF output
+- **Updated footer** with website URL (www.croprxsolutions.com)
+- **Price unit labels** shown in Price/Unit column
+
+### Migrations (3)
+- `20260302100000` — `quote_items.calc_mode` + `quote_items.price_unit` columns
+- `20260302110000` — `orders.order_name` column + updated `create_direct_order()` RPC
+- `20260302120000` — updated `save_quote()` RPC with bidirectional calc_mode support
+
+---
+
 ## 2026-03-16 — Additional Audit Gap Remediation
 
 ### RPC Hardening (migration `20260316200000`)
