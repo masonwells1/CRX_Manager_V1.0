@@ -68,11 +68,17 @@ export default function NewOrder() {
   const [showProductModal, setShowProductModal] = useState(false);
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
   const [productSearch, setProductSearch] = useState('');
+  const [inventoryByProduct, setInventoryByProduct] = useState<Record<string, { available: number; prebooked: number; onOrder: number }>>({});
 
   const fetchData = useCallback(async () => {
-    const [customersRes, productsRes] = await Promise.all([
+    const [customersRes, productsRes, inventoryRes, poRes] = await Promise.all([
       supabase.from('customers').select('*').order('farm_name'),
       supabase.from('products').select('*').order('product_name'),
+      supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked'),
+      supabase
+        .from('purchase_order_items')
+        .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
+        .in('purchase_orders.status', ['draft', 'submitted', 'partially_received']),
     ]);
 
     if (customersRes.error) {
@@ -83,6 +89,21 @@ export default function NewOrder() {
       console.error('Failed to load products:', productsRes.error);
       toast('error', 'Failed to load products. Please refresh.');
     }
+
+    // Build inventory lookup by product_id
+    const invMap: Record<string, { available: number; prebooked: number; onOrder: number }> = {};
+    for (const row of inventoryRes.data || []) {
+      const pid = row.product_id;
+      if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0, onOrder: 0 };
+      invMap[pid].available += Number(row.quantity_available);
+      invMap[pid].prebooked += Number(row.quantity_prebooked);
+    }
+    for (const poi of (poRes.data || []) as Array<{ product_id: string; quantity_ordered: number; quantity_received: number }>) {
+      const pid = poi.product_id;
+      if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0, onOrder: 0 };
+      invMap[pid].onOrder += Number(poi.quantity_ordered) - Number(poi.quantity_received);
+    }
+    setInventoryByProduct(invMap);
 
     setCustomers(customersRes.data || []);
     setProducts(productsRes.data || []);
@@ -495,7 +516,20 @@ export default function NewOrder() {
           />
 
           <div className="max-h-96 overflow-y-auto space-y-2">
-            {filteredProducts.map((product) => (
+            {filteredProducts.map((product) => {
+              const customer = customers.find((c) => c.id === customerId);
+              const tierNum = customer?.assigned_tier || 1;
+              const tierPrice =
+                tierNum === 1
+                  ? product.tier1_price || 0
+                  : tierNum === 2
+                    ? product.tier2_price || 0
+                    : product.tier3_price || 0;
+              const inv = inventoryByProduct[product.id];
+              const onFloor = inv ? inv.available : 0;
+              const netPos = inv ? inv.onOrder + inv.available - inv.prebooked : 0;
+
+              return (
               <button
                 key={product.id}
                 onClick={() => selectProduct(product)}
@@ -507,18 +541,25 @@ export default function NewOrder() {
                 )}
                 <div className="flex items-center gap-4 mt-2 text-xs text-secondary">
                   {product.unit_size && <span>Size: {product.unit_size}</span>}
-                  {product.current_cost && (
-                    <span>
-                      Cost:{' '}
+                  {tierPrice > 0 && (
+                    <span className="text-crx-green font-medium">
+                      Price:{' '}
                       {new Intl.NumberFormat('en-US', {
                         style: 'currency',
                         currency: 'USD',
-                      }).format(product.current_cost)}
+                      }).format(tierPrice)}
                     </span>
                   )}
+                  <span className={onFloor > 0 ? 'text-blue-600' : 'text-gray-400'}>
+                    On Floor: {onFloor.toLocaleString()}
+                  </span>
+                  <span className={netPos > 0 ? 'text-emerald-600' : netPos < 0 ? 'text-red-600' : 'text-gray-400'}>
+                    Net: {netPos.toLocaleString()}
+                  </span>
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
 
           {filteredProducts.length === 0 && (
