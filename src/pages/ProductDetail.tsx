@@ -366,6 +366,7 @@ export default function ProductDetail() {
                   <option value="Shuttle">Shuttle</option>
                   <option value="Bag">Bag</option>
                   <option value="Tote">Tote</option>
+                  <option value="Jar">Jar</option>
                   <option value="Ea">Ea</option>
                 </select>
               </div>
