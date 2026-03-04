@@ -154,6 +154,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const [uploadResults, setUploadResults] = useState<{ success: number; failed: number } | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
+  const [showRawText, setShowRawText] = useState<number | null>(null);
 
   // Product search state
   const [productSearchOpen, setProductSearchOpen] = useState<{ poIdx: number; itemIdx: number } | null>(null);
@@ -566,12 +567,30 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                         {/* Parse errors */}
                         {po.parse_errors.length > 0 && (
                           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                            <p className="text-xs font-medium text-amber-800 mb-1">Parse warnings:</p>
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-xs font-medium text-amber-800">Parse warnings:</p>
+                              <button
+                                onClick={() => setShowRawText(showRawText === poIdx ? null : poIdx)}
+                                className="text-xs text-amber-700 underline hover:text-amber-900"
+                              >
+                                {showRawText === poIdx ? 'Hide raw text' : 'Show raw text (debug)'}
+                              </button>
+                            </div>
                             <ul className="text-xs text-amber-700 space-y-0.5">
                               {po.parse_errors.map((err, i) => (
                                 <li key={i}>&bull; {err}</li>
                               ))}
                             </ul>
+                            {showRawText === poIdx && po.raw_text && (
+                              <pre className="mt-2 p-2 bg-white border border-amber-200 rounded text-xs text-gray-600 overflow-auto max-h-48 whitespace-pre-wrap font-mono">
+                                {po.raw_text || '(no text extracted — PDF may be a scanned image)'}
+                              </pre>
+                            )}
+                            {showRawText === poIdx && !po.raw_text && (
+                              <p className="mt-2 text-xs text-red-600 font-medium">
+                                No text could be extracted. This PDF is likely a scanned image. Use the Blend Tickets OCR feature or a text-based PDF export from your vendor.
+                              </p>
+                            )}
                           </div>
                         )}
 
