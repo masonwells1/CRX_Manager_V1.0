@@ -510,6 +510,43 @@ function parsePurchaseOrder(rawText: string, lines: string[]): { data: ParsedPur
     }
   }
 
+  // Strategy 3: Supplier order confirmation format (e.g. BASF/Shopify)
+  // Lines look like: "ZIDUA SC - 2.5 GAL  90 Gal  $508.56  $45,770.40  12037 E 1700th Ave..."
+  // Uses qty+unit as an anchor — product name is everything before it, price is first $X.XX after it.
+  // Works regardless of trailing ship-to address or strict column whitespace.
+  if (items.length === 0) {
+    const skipLine = /^\s*(product|item|description|qty|quantity|price|amount|total|unit|financing|ship\s*to|#|sub\s*total|grand\s*total|tax|freight|shipping|discount|balance|due)\s/i;
+    const unitPattern = /^([\s\S]*?)\b([\d,]+\.?\d*)\s+(Gal|Gallon|GL|LB|LBS|OZ|QT|Quart|PT|Pint|EA|Each|CASE|BAG|DRUM|TOTE|JUG)\b([\s\S]*)$/i;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.length < 5) continue;
+      if (skipLine.test(trimmed)) continue;
+
+      const m = trimmed.match(unitPattern);
+      if (!m) continue;
+
+      const productName = m[1].trim();
+      if (!productName || productName.length < 3) continue;
+
+      const priceMatch = m[4].match(/\$?\s*([\d,]+\.\d{2})/);
+      if (!priceMatch) continue;
+
+      const cleanQty = parseNumber(m[2]);
+      const cleanPrice = parseNumber(priceMatch[1]);
+      if (cleanQty <= 0 || cleanPrice <= 0) continue;
+
+      const rawUnit = m[3].toUpperCase();
+      const normalizedUnit = rawUnit === "GALLON" || rawUnit === "GAL" ? "GL" : rawUnit;
+      items.push({
+        product_name: productName.replace(/-\s*$/, "").trim(),
+        quantity: cleanQty,
+        unit_cost: cleanPrice,
+        unit_size: normalizedUnit,
+        notes: "",
+      });
+    }
+  }
+
   let confidence = 30;
   if (vendorName) confidence += 20;
   if (invoiceNumber) confidence += 20;
