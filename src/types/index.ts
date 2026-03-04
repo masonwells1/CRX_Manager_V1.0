@@ -1,6 +1,6 @@
 export type UserRole = 'admin' | 'sales_rep' | 'driver' | 'applicator';
 export type ProductForm = 'liquid' | 'dry';
-export type ContainerType = 'Jug' | 'Drum' | 'Pallet' | 'Mini-Bulk' | 'Shuttle' | 'Bag' | 'Tote' | 'Ea';
+export type ContainerType = 'Jug' | 'Drum' | 'Pallet' | 'Mini-Bulk' | 'Shuttle' | 'Bag' | 'Tote' | 'Ea' | 'Jar';
 export type UnitType = 'liquid' | 'dry' | 'both';
 
 export interface Profile {
