@@ -4,6 +4,39 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-04 — Math Test Suite: All 22 Tests Passing (PR #31)
+
+### Problem
+3 tests were failing/skipping in the math E2E suite (`math-invoice-verification.spec.ts`, `math-quote-pricing.spec.ts`): IV1 (skip), IV5 (fail), IV12 (skip), QP3 (skip), QP6 (skip).
+
+### Root Causes & Fixes
+
+**1. InvoiceDetail loading-race (IV1, IV5, IV12)**
+`InvoiceDetail.tsx` returns a pure spinner while `loading=true`. `waitForLoadState('networkidle')` fires after the Supabase fetch but before React re-renders, so tests read empty DOM and get `$0.00` for summary values. Fix: scope iteration to non-voided CS- rows + add explicit `text=Subtotal` waitFor before reading summary values.
+
+**2. `isVisible()` vs `count()` on off-screen rows (IV1)**
+CS-2026-0048 at DOM index 14 is below the scroll fold in a fixed-height table — `isVisible()` returned false even though the row was in the DOM. Fix: use `(await locator.count()) > 0`.
+
+**3. Playwright `.or()` DOM-order pitfall (QP6)**
+`text=Margin` matched `<th>Margin</th>` column header before `<p>Overall Margin</p>` in document order, causing `marginPct = 0` and QP6 to skip. Fix: use `.locator('text=Overall Margin').or(...'Avg Margin')` only.
+
+**4. QuoteBuilder `Units Needed` input (QP3)**
+Cell renders `<input type="number">` not plain text; `textContent()` returned `''`. Fix: use `inputValue()` on the input element.
+
+### Files Changed
+- `tests/e2e/math-invoice-verification.spec.ts` — IV1/IV5/IV12 fixes
+- `tests/e2e/math-quote-pricing.spec.ts` — QP3/QP6 fixes
+- `tests/e2e/00-seed-test-data.spec.ts` — seed spec (new)
+- `docs/2026-03-03-math-test-investigation.md` — full investigation findings
+
+### Migration
+- `20260319000000_fix_trigger_functions_search_path.sql`: adds `SET search_path TO 'public'` to 11 trigger functions so `_is_admin_override()` resolves correctly when fired from security-definer RPCs
+
+### Result
+All 22 math tests pass: 12 invoice verification (IV1–IV12) + 10 quote pricing (QP1–QP10).
+
+---
+
 ## 2026-03-03 — E2E Suite Expansion + DB Schema Fixes
 
 ### New E2E Spec Files (37 tests)
