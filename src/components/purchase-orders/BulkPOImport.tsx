@@ -87,12 +87,54 @@ async function extractTextFromPDF(file: File): Promise<string> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   let fullText = '';
+
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
-    const pageText = textContent.items.map((item: any) => item.str).join(' ');
-    fullText += pageText + '\n';
+    const items = textContent.items as Array<{ str: string; transform: number[]; width: number }>;
+
+    if (items.length === 0) continue;
+
+    // Group items into lines by their Y position (round to nearest 2px to handle minor baseline drift)
+    const lineMap = new Map<number, typeof items>();
+    for (const item of items) {
+      if (!item.str.trim()) continue;
+      const y = Math.round(item.transform[5] / 2) * 2;
+      if (!lineMap.has(y)) lineMap.set(y, []);
+      lineMap.get(y)!.push(item);
+    }
+
+    // Sort lines top-to-bottom (PDF y-axis is inverted)
+    const sortedYs = [...lineMap.keys()].sort((a, b) => b - a);
+
+    const pageLines: string[] = [];
+    for (const y of sortedYs) {
+      // Sort items within each line left-to-right by x position
+      const lineItems = lineMap.get(y)!.sort((a, b) => a.transform[4] - b.transform[4]);
+
+      let lineText = '';
+      let prevX = 0;
+      let prevWidth = 0;
+
+      for (const item of lineItems) {
+        const x = item.transform[4];
+        if (lineText) {
+          // Calculate the gap between end of last item and start of this item
+          const gap = x - (prevX + prevWidth);
+          // A gap > ~10 units typically represents a column separator in a table
+          lineText += gap > 10 ? '    ' : ' ';
+        }
+        lineText += item.str;
+        prevX = x;
+        prevWidth = item.width || 0;
+      }
+
+      if (lineText.trim()) pageLines.push(lineText);
+    }
+
+    fullText += pageLines.join('\n') + '\n';
   }
+
   return fullText;
 }
 
@@ -293,6 +335,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   const [uploadResults, setUploadResults] = useState<{ success: number; failed: number } | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
+  const [showRawText, setShowRawText] = useState<number | null>(null);
 
   // Product search state
   const [productSearchOpen, setProductSearchOpen] = useState<{ poIdx: number; itemIdx: number } | null>(null);
@@ -706,12 +749,30 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                         {/* Parse errors */}
                         {po.parse_errors.length > 0 && (
                           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                            <p className="text-xs font-medium text-amber-800 mb-1">Parse warnings:</p>
+                            <div className="flex items-center justify-between mb-1">
+                              <p className="text-xs font-medium text-amber-800">Parse warnings:</p>
+                              <button
+                                onClick={() => setShowRawText(showRawText === poIdx ? null : poIdx)}
+                                className="text-xs text-amber-700 underline hover:text-amber-900"
+                              >
+                                {showRawText === poIdx ? 'Hide raw text' : 'Show raw text (debug)'}
+                              </button>
+                            </div>
                             <ul className="text-xs text-amber-700 space-y-0.5">
                               {po.parse_errors.map((err, i) => (
                                 <li key={i}>&bull; {err}</li>
                               ))}
                             </ul>
+                            {showRawText === poIdx && po.raw_text && (
+                              <pre className="mt-2 p-2 bg-white border border-amber-200 rounded text-xs text-gray-600 overflow-auto max-h-48 whitespace-pre-wrap font-mono">
+                                {po.raw_text || '(no text extracted — PDF may be a scanned image)'}
+                              </pre>
+                            )}
+                            {showRawText === poIdx && !po.raw_text && (
+                              <p className="mt-2 text-xs text-red-600 font-medium">
+                                No text could be extracted. This PDF is likely a scanned image. Use the Blend Tickets OCR feature or a text-based PDF export from your vendor.
+                              </p>
+                            )}
                           </div>
                         )}
 
