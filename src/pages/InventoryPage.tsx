@@ -78,6 +78,7 @@ export default function InventoryPage() {
   const [addLocation, setAddLocation] = useState('Main Warehouse');
   const [addQty, setAddQty] = useState('');
   const [addUnitSize, setAddUnitSize] = useState('');
+  const [addUnitCost, setAddUnitCost] = useState('');
   const [adding, setAdding] = useState(false);
   const [productSearch, setProductSearch] = useState('');
   const [holdsExpanded, setHoldsExpanded] = useState(true);
@@ -374,6 +375,7 @@ export default function InventoryPage() {
     setAddLocation('Main Warehouse');
     setAddQty('');
     setAddUnitSize('');
+    setAddUnitCost('');
     setProductSearch('');
     setAddOpen(true);
   };
@@ -460,6 +462,7 @@ export default function InventoryPage() {
     }
     setAdding(true);
 
+    const unitCost = addUnitCost ? parseFloat(addUnitCost) : null;
     const { error } = await supabase.rpc('manual_inventory_add', {
       p_product_id: addProductId,
       p_location: addLocation || 'Main Warehouse',
@@ -467,6 +470,7 @@ export default function InventoryPage() {
       p_unit_size: addUnitSize || null,
       p_performed_by: profile?.id || null,
       p_notes: qty > 0 ? `Initial inventory record created with ${qty} units` : null,
+      p_unit_cost: unitCost && unitCost > 0 ? unitCost : null,
     });
 
     if (error) {
@@ -1306,6 +1310,20 @@ export default function InventoryPage() {
             onChange={(e) => setAddUnitSize(e.target.value)}
             placeholder="e.g. Gal, Qt, Lb"
           />
+          <div>
+            <Input
+              label="Unit Cost (optional)"
+              type="number"
+              min="0"
+              step="0.01"
+              value={addUnitCost}
+              onChange={(e) => setAddUnitCost(e.target.value)}
+              placeholder="e.g. 12.50"
+            />
+            <p className="text-xs text-secondary mt-1">
+              For record-keeping only — does not change the product's pricing or cost.
+            </p>
+          </div>
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setAddOpen(false)}>Cancel</Button>
             <Button onClick={handleAdd} disabled={adding}>
