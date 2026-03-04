@@ -90,6 +90,7 @@ export default function DeliveryDetail() {
   const [deliveryQtys, setDeliveryQtys] = useState<Record<string, number>>({});
   const [driverIssueType, setDriverIssueType] = useState<DeliveryIssueType>('none');
   const [driverIssueNotes, setDriverIssueNotes] = useState('');
+  const [autoInvoiceId, setAutoInvoiceId] = useState<string | null>(null);
   const isOnline = useOnlineStatus();
 
   // Edit mode state
@@ -553,7 +554,7 @@ export default function DeliveryDetail() {
     }
 
     try {
-      const { error } = await supabase.rpc('complete_delivery', rpcParams);
+      const { data: completeResult, error } = await supabase.rpc('complete_delivery', rpcParams);
       if (error) throw error;
       completeIdem.resetKey();
 
@@ -588,8 +589,20 @@ export default function DeliveryDetail() {
         }
       }
 
-      toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
-      logActivity('delivery_completed', `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}`, profile.id, 'delivery', delivery.id, delivery.customer_id);
+      // Show auto-invoice info if created
+      const autoInvoice = completeResult as { auto_invoice?: { invoice_id?: string; invoice_number?: string } } | null;
+      const invoiceNum = autoInvoice?.auto_invoice?.invoice_number;
+      const invoiceId = autoInvoice?.auto_invoice?.invoice_id;
+      if (invoiceId) setAutoInvoiceId(invoiceId);
+
+      if (invoiceNum) {
+        toast('success', isPartialDelivery
+          ? `Delivery completed (partial). Draft invoice ${invoiceNum} created.`
+          : `Delivery completed. Draft invoice ${invoiceNum} created.`);
+      } else {
+        toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
+      }
+      logActivity('delivery_completed', `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, profile.id, 'delivery', delivery.id, delivery.customer_id);
 
       // F15: Notify about delivery remainders
       if (isPartialDelivery) {
@@ -1253,6 +1266,27 @@ export default function DeliveryDetail() {
                 </p>
               )}
             </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Auto-created invoice banner */}
+      {delivery.status === 'completed' && autoInvoiceId && (
+        <Card>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <FileText className="w-5 h-5 text-crx-green" />
+              <p className="text-sm font-medium text-nav-dark">
+                A draft invoice was auto-created for this delivery.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              icon={<FileText className="w-4 h-4" />}
+              onClick={() => navigate(`/invoices/${autoInvoiceId}`)}
+            >
+              View Invoice
+            </Button>
           </div>
         </Card>
       )}

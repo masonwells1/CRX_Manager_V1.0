@@ -40,6 +40,9 @@ export default function OrderDetail() {
   const [editItems, setEditItems] = useState<OrderItem[]>([]);
   const [saving, setSaving] = useState(false);
 
+  // Create invoice
+  const [creatingInvoice, setCreatingInvoice] = useState(false);
+
   // Status change
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [newStatus, setNewStatus] = useState('');
@@ -199,6 +202,25 @@ export default function OrderDetail() {
     );
   };
 
+  const handleCreateInvoice = async () => {
+    if (!profile || !id) return;
+    setCreatingInvoice(true);
+    try {
+      const { data, error } = await supabase.rpc('create_invoice_from_order', {
+        p_order_id: id,
+        p_salesman_id: profile.id,
+      });
+      if (error) throw error;
+      const invoiceId = data as string;
+      toast('success', 'Draft invoice created');
+      navigate(`/invoices/${invoiceId}`);
+    } catch (error: unknown) {
+      console.error('Error creating invoice:', error);
+      toast('error', sanitizeError(error));
+    }
+    setCreatingInvoice(false);
+  };
+
   const fmt = (n: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
@@ -261,6 +283,17 @@ export default function OrderDetail() {
                   onClick={() => setEditing(true)}
                 >
                   Edit Order
+                </Button>
+              )}
+              {order.status !== 'cancelled' && order.status !== 'fulfilled' && (
+                <Button
+                  variant="secondary"
+                  icon={<FileText className="w-4 h-4" />}
+                  showChevron={false}
+                  onClick={handleCreateInvoice}
+                  loading={creatingInvoice}
+                >
+                  Create Invoice
                 </Button>
               )}
               <Button

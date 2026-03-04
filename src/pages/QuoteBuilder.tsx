@@ -11,6 +11,8 @@ import {
   ChevronUp,
   Download,
   AlertTriangle,
+  Pencil,
+  History,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -155,6 +157,9 @@ export default function QuoteBuilder() {
   const [productQuery, setProductQuery] = useState('');
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
+  const [quoteVersions, setQuoteVersions] = useState<{ id: string; version_number: number; sent_at: string; sent_by: string; snapshot_data: { totals?: { totalPrice?: number }; sections?: { items?: unknown[] }[] } }[]>([]);
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [revising, setRevising] = useState(false);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -296,6 +301,15 @@ export default function QuoteBuilder() {
     }));
 
     setSections(localSections.length > 0 ? localSections : [makeEmptySection(1)]);
+
+    // Fetch version history for this quote
+    const { data: versionsData } = await supabase
+      .from('quote_versions')
+      .select('id, version_number, sent_at, sent_by, snapshot_data')
+      .eq('quote_id', quoteId)
+      .order('version_number', { ascending: false });
+    setQuoteVersions(versionsData || []);
+
     setLoading(false);
     // Allow a tick for state to settle before tracking changes
     setTimeout(() => { initialLoadDone.current = true; }, 0);
@@ -854,8 +868,30 @@ export default function QuoteBuilder() {
       setStatus('sent');
       setIsDirty(false);
       toast('success', 'Quote sent successfully');
+
+      // Refresh version history
+      if (quoteId) {
+        const { data: versionsData } = await supabase
+          .from('quote_versions')
+          .select('id, version_number, sent_at, sent_by, snapshot_data')
+          .eq('quote_id', quoteId)
+          .order('version_number', { ascending: false });
+        setQuoteVersions(versionsData || []);
+      }
     }
     setSending(false);
+  };
+
+  const handleReviseQuote = async () => {
+    if (!quoteId) return;
+    setRevising(true);
+    const savedId = await saveQuote('revised');
+    if (savedId) {
+      setStatus('revised');
+      setIsDirty(false);
+      toast('success', 'Quote is now in revised mode — you can edit and re-send.');
+    }
+    setRevising(false);
   };
 
   const handleConvertToOrder = async () => {
@@ -901,8 +937,13 @@ export default function QuoteBuilder() {
       if (error) throw error;
 
       convertQuoteIdem.resetKey();
-      const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string }>(data, 'convert_quote_to_order');
+      const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[] }>(data, 'convert_quote_to_order');
       toast('success', `Order ${result.order_number || ''} created`);
+
+      // Show inventory warnings (non-blocking — order was still created)
+      if (result.warnings && result.warnings.length > 0) {
+        result.warnings.forEach((w) => toast('warning', `Inventory: ${w}`));
+      }
       trackBusinessEvent('quote_converted_to_order', {
         message: `Quote converted → Order ${result.order_number || ''}`,
         data: { orderId: result.order_id ?? '', orderNumber: result.order_number ?? '', quoteId: savedId },
@@ -1041,13 +1082,68 @@ export default function QuoteBuilder() {
               Convert to Order
             </Button>
           )}
+          {isEditing && currentStatus === 'sent' && (
+            <Button
+              variant="secondary"
+              icon={<Pencil className="w-4 h-4" />}
+              showChevron={false}
+              onClick={handleReviseQuote}
+              loading={revising}
+            >
+              Revise Quote
+            </Button>
+          )}
+          {isEditing && quoteVersions.length > 0 && (
+            <Button
+              variant="ghost"
+              icon={<History className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setShowVersionHistory(!showVersionHistory)}
+            >
+              Versions ({quoteVersions.length})
+            </Button>
+          )}
         </div>
       </div>
 
-      {isEditing && !canEdit && (
+      {isEditing && !canEdit && currentStatus !== 'sent' && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 text-sm">
           This quote is in <strong>{currentStatus}</strong> status and cannot be edited.
         </div>
+      )}
+
+      {isEditing && currentStatus === 'sent' && !canEdit && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-blue-800 text-sm flex items-center justify-between">
+          <span>This quote has been sent. Click <strong>Revise Quote</strong> to make changes, then re-send.</span>
+        </div>
+      )}
+
+      {showVersionHistory && quoteVersions.length > 0 && (
+        <Card>
+          <CardHeader title="Version" accent="History" />
+          <div className="divide-y divide-gray-100">
+            {quoteVersions.map((v) => {
+              const itemCount = v.snapshot_data?.sections?.reduce(
+                (sum: number, s: { items?: unknown[] }) => sum + (s.items?.length || 0), 0
+              ) || 0;
+              const totalPrice = v.snapshot_data?.totals?.totalPrice || 0;
+              return (
+                <div key={v.id} className="py-3 px-1 flex items-center justify-between">
+                  <div>
+                    <span className="font-medium text-nav-dark">v{v.version_number}</span>
+                    <span className="text-secondary text-sm ml-3">
+                      {new Date(v.sent_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    </span>
+                  </div>
+                  <div className="text-sm text-secondary">
+                    {itemCount} item{itemCount !== 1 ? 's' : ''} &middot;{' '}
+                    {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totalPrice)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
       )}
 
       <Card>
