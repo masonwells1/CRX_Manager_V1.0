@@ -1,6 +1,6 @@
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { PackageCheck, Pencil, Ban, Download } from 'lucide-react';
+import { PackageCheck, Pencil, Ban, Download, Send } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -328,6 +328,23 @@ export default function PurchaseOrderDetail() {
     setSaving(false);
   };
 
+  const handleSubmitPO = async () => {
+    if (!po || !profile) return;
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from('purchase_orders')
+        .update({ status: 'submitted', submitted_date: new Date().toISOString().split('T')[0] })
+        .eq('id', id);
+      if (error) throw error;
+      toast('success', `Purchase order ${po.po_number} submitted`);
+      fetchPO();
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setSaving(false);
+  };
+
   const handleCancel = async () => {
     if (!po || !profile) return;
     setSaving(true);
@@ -391,6 +408,11 @@ export default function PurchaseOrderDetail() {
           {canReceive && (po.status === 'submitted' || po.status === 'partially_received') && (
             <Button icon={<PackageCheck className="w-4 h-4" />} onClick={openReceiveModal}>
               Receive Items
+            </Button>
+          )}
+          {canReceive && po.status === 'draft' && (
+            <Button icon={<Send className="w-4 h-4" />} onClick={handleSubmitPO} loading={saving}>
+              Submit PO
             </Button>
           )}
           {canReceive && po.status !== 'cancelled' && (
