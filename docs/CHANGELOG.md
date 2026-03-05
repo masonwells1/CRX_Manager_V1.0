@@ -4,6 +4,48 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-05 — Financial Dashboard, Payment History, PO Improvements, Bug Fixes (PRs #31–#39)
+
+### New: PaymentHistory Page
+- `src/pages/PaymentHistory.tsx` — full payment history table with per-invoice allocation breakdown
+- Double-cast `Record → InvoiceAllocation` TypeScript fix
+
+### Financial Dashboard Enhancements
+- Inventory position cards added to dashboard
+- Prepay bucket edit/delete capability
+- New migrations: `20260321100000_dashboard_inventory_position.sql`, `20260321200000_prepay_edit_delete.sql`, `20260321300000_void_payment.sql`
+
+### Submit PO Button (PR #39)
+- Added "Submit PO" action button on `PurchaseOrderDetail.tsx`
+
+### MG/g Inventory Units + Jar Container (PRs #37/#38)
+- New inventory units: `MG` (milligrams) and `g` (grams)
+- New container type: `Jar`
+- Migration: `20260304210000_add_mg_g_units_and_jar_container.sql`
+
+### Inventory Floor Calculation + Order Product Selector (PR #32)
+- Fixed floor calculation that was underreporting available inventory
+- Customer tier price now shown in order product selector dropdown
+
+### Manual Inventory No-Cost Override Fix (PR #36)
+- Manual inventory add no longer overwrites existing product unit cost
+- Migration: `20260320210000_manual_inventory_no_cost_override.sql`
+
+### BulkPOImport PDF Extraction (PRs #33/#34)
+- Position-aware text reconstruction for more accurate supplier invoice parsing
+- Strategy 3 parser added to handle supplier order confirmation format
+
+### TypeScript + Misc Fixes (PR #35)
+- Decimal quantities on POs
+- Duplicate PO save prevention
+- Edit permissions corrected
+
+### Workflow Quote/Order/Invoice Fixes
+- Migration `20260320100000_workflow_quote_order_invoice_fixes.sql` (576-line comprehensive fix)
+- Migrations for close period payments column, record_invoice_payment column, delivery date, trigger search paths
+
+---
+
 ## 2026-03-04 — Math Test Suite: All 22 Tests Passing (PR #31)
 
 ### Problem

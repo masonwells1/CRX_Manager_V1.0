@@ -233,13 +233,22 @@ export default function NewOrder() {
       if (error) throw error;
 
       createOrderIdem.resetKey();
-      const orderId = (data as Record<string, unknown> | null)?.order_id as string | undefined;
+      const result = data as Record<string, unknown> | null;
+      const orderId = result?.order_id as string | undefined;
       if (!orderId) {
         toast('error', 'Order creation failed — no order ID returned');
         setSaving(false);
         return;
       }
       toast('success', 'Order created successfully');
+
+      // Show inventory warnings (non-blocking)
+      const warnings = result?.warnings as string[] | undefined;
+      if (warnings && warnings.length > 0) {
+        for (const w of warnings) {
+          toast('warning', 'Inventory: ' + w);
+        }
+      }
       trackBusinessEvent('order_created', {
         message: `Direct order created${orderName ? ` (${orderName})` : ''}`,
         data: { orderId: orderId!, orderName: orderName || null, itemCount: items.filter((i) => i.product_id).length },
@@ -265,7 +274,8 @@ export default function NewOrder() {
       navigate(`/orders/${orderId}`);
     } catch (err) {
       console.error('Error creating order:', err);
-      toast('error', 'Failed to create order: ' + (err instanceof Error ? err.message : String(err)));
+      const msg = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message || String(err);
+      toast('error', 'Failed to create order: ' + msg);
     } finally {
       setSaving(false);
     }

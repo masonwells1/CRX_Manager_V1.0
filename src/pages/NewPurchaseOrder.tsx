@@ -201,7 +201,8 @@ export default function NewPurchaseOrder() {
       navigate(`/purchase-orders/${returnedId || savedPoId}`, { replace: true });
     } catch (err: unknown) {
       console.error('Save error:', err);
-      toast('error', err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message || String(err);
+      toast('error', msg as string);
     }
     setSaving(false);
   };
