@@ -812,9 +812,10 @@ export default function DeliveryDetail() {
                         <input
                           type="number"
                           value={currentQty}
-                          onChange={(e) => updateDeliveryQty(item.id, parseInt(e.target.value) || 0, item.quantity)}
+                          onChange={(e) => updateDeliveryQty(item.id, parseFloat(e.target.value) || 0, item.quantity)}
                           className="w-16 text-center px-1 py-1.5 text-sm text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green"
                           min="0"
+                          step="any"
                           max={item.quantity}
                           aria-label={`Quantity for ${(item.product as unknown as { product_name: string })?.product_name || 'item'}`}
                         />
@@ -1420,9 +1421,10 @@ export default function DeliveryDetail() {
                     <input
                       type="number"
                       value={currentQty}
-                      onChange={(e) => updateDeliveryQty(item.id, parseInt(e.target.value) || 0, item.quantity)}
+                      onChange={(e) => updateDeliveryQty(item.id, parseFloat(e.target.value) || 0, item.quantity)}
                       className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       min="0"
+                      step="any"
                       max={item.quantity}
                     />
                     <button

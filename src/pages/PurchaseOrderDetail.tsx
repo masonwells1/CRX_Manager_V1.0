@@ -155,12 +155,12 @@ export default function PurchaseOrderDetail() {
     if (!profile) return;
 
     const itemsPayload = items
-      .filter((item) => parseInt(receiveItems[item.id]?.qty || '0') > 0)
+      .filter((item) => parseFloat(receiveItems[item.id]?.qty || '0') > 0)
       .map((item) => {
         const ri = receiveItems[item.id];
         return {
           po_item_id: item.id,
-          quantity: parseInt(ri.qty || '0'),
+          quantity: parseFloat(ri.qty || '0'),
           condition: ri.condition,
           lot_number: ri.lot_number || null,
           notes: ri.notes || null,
@@ -376,7 +376,7 @@ export default function PurchaseOrderDetail() {
   }
 
   /* Items with qty entered for review step */
-  const reviewItems = items.filter((item) => parseInt(receiveItems[item.id]?.qty || '0') > 0);
+  const reviewItems = items.filter((item) => parseFloat(receiveItems[item.id]?.qty || '0') > 0);
 
   return (
     <div className="space-y-4">
@@ -393,12 +393,12 @@ export default function PurchaseOrderDetail() {
               Receive Items
             </Button>
           )}
-          {isAdmin && po.status !== 'cancelled' && (
+          {canReceive && po.status !== 'cancelled' && (
             <>
               <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
                 Edit
               </Button>
-              {(po.status === 'draft' || po.status === 'submitted') && (
+              {isAdmin && (po.status === 'draft' || po.status === 'submitted') && (
                 <Button variant="danger" icon={<Ban className="w-4 h-4" />} onClick={() => setCancelOpen(true)}>
                   Cancel PO
                 </Button>
@@ -621,6 +621,7 @@ export default function PurchaseOrderDetail() {
                           <Input
                             type="number"
                             min="0"
+                            step="any"
                             max={String(remaining)}
                             value={ri.qty}
                             onChange={(e) => updateReceiveItem(item.id, 'qty', e.target.value)}
@@ -629,7 +630,7 @@ export default function PurchaseOrderDetail() {
                         </div>
                       </div>
 
-                      {parseInt(ri.qty || '0') > 0 && (
+                      {parseFloat(ri.qty || '0') > 0 && (
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-4 border-l-2 border-crx-green/30">
                           <div>
                             <label className="block text-xs text-secondary mb-1">Condition</label>

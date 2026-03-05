@@ -8,6 +8,7 @@ import Skeleton from '../components/ui/Skeleton';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import type { Product } from '../types';
@@ -39,6 +40,8 @@ export default function NewPurchaseOrder() {
   const [products, setProducts] = useState<Product[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [savedPoId, setSavedPoId] = useState<string | null>(null);
+  const [savedPoNumber, setSavedPoNumber] = useState<string | null>(null);
   const [productSearchOpen, setProductSearchOpen] = useState<string | null>(null);
   const [productQuery, setProductQuery] = useState('');
   const [productsLoading, setProductsLoading] = useState(true);
@@ -47,6 +50,7 @@ export default function NewPurchaseOrder() {
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
+  const saveIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
 
   const fetchProducts = useCallback(async () => {
     const { data } = await supabase
@@ -131,7 +135,6 @@ export default function NewPurchaseOrder() {
       toast('warning', `"${prod?.product_name || 'An item'}" has $0 unit cost — verify this is intentional`);
     }
 
-    // Guard: Ensure profile is loaded
     if (!profile) {
       toast('error', 'Please wait for profile to load');
       return;
@@ -139,56 +142,67 @@ export default function NewPurchaseOrder() {
 
     setSaving(true);
 
-    const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_po_number');
-    if (rpcError || !rpcNumber) {
-      toast('error', rpcError?.message || 'Failed to generate PO number');
-      setSaving(false);
-      return;
-    }
-    const poNumber = rpcNumber as string;
+    try {
+      // Only generate a PO number on first save
+      let poNumber = savedPoNumber;
+      if (!poNumber) {
+        const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_po_number');
+        if (rpcError || !rpcNumber) {
+          toast('error', rpcError?.message || 'Failed to generate PO number');
+          setSaving(false);
+          return;
+        }
+        poNumber = rpcNumber as string;
+      }
 
-    const { data: poData, error: poError } = await supabase
-      .from('purchase_orders')
-      .insert({
+      const poPayload = {
         po_number: poNumber,
         vendor: vendor.trim(),
         status: submitStatus,
         submitted_date: submitStatus === 'submitted' ? new Date().toISOString().split('T')[0] : null,
         expected_delivery_date: expectedDate || null,
-        total_cost: totalCost,
         notes: notes || null,
-        created_by: profile.id,
-      })
-      .select('id')
-      .maybeSingle();
+      };
 
-    if (poError || !poData) {
-      toast('error', poError?.message || 'Failed to create purchase order');
-      setSaving(false);
-      return;
+      const itemsPayload = validItems.map((i) => ({
+        product_id: i.product_id,
+        quantity_ordered: i.quantity_ordered,
+        unit_cost: i.unit_cost,
+        unit_size: i.unit_size || null,
+        quantity_received: 0,
+      }));
+
+      const idemKey = saveIdem.getKey();
+      const { data, error } = await supabase.rpc('save_purchase_order', {
+        p_po_id: savedPoId,
+        p_po_payload: poPayload,
+        p_items: itemsPayload,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+
+      if (error) throw error;
+      saveIdem.resetKey();
+
+      const isFirstSave = !savedPoId;
+      const returnedId = (data as { po_id: string })?.po_id;
+
+      if (isFirstSave && returnedId) {
+        setSavedPoId(returnedId);
+        setSavedPoNumber(poNumber);
+      }
+
+      setIsDirty(false);
+      toast('success',
+        submitStatus === 'submitted'
+          ? `Purchase order ${poNumber} submitted`
+          : isFirstSave ? `Draft ${poNumber} created` : `Draft ${poNumber} saved`
+      );
+      navigate(`/purchase-orders/${returnedId || savedPoId}`, { replace: true });
+    } catch (err: unknown) {
+      console.error('Save error:', err);
+      toast('error', err instanceof Error ? err.message : String(err));
     }
-
-    const itemInserts = validItems.map((i) => ({
-      purchase_order_id: poData.id,
-      product_id: i.product_id,
-      quantity_ordered: i.quantity_ordered,
-      unit_cost: i.unit_cost,
-      unit_size: i.unit_size || null,
-      quantity_received: 0,
-    }));
-
-    const { error: itemError } = await supabase
-      .from('purchase_order_items')
-      .insert(itemInserts);
-
-    if (itemError) {
-      toast('error', 'PO created but failed to add some items');
-    } else {
-      toast('success', `Purchase order ${poNumber} created`);
-    }
-
-    setIsDirty(false);
-    navigate(`/purchase-orders/${poData.id}`);
     setSaving(false);
   };
 
@@ -330,9 +344,10 @@ export default function NewPurchaseOrder() {
                             type="number"
                             value={item.quantity_ordered || ''}
                             onChange={(e) =>
-                              updateItem(item.key, 'quantity_ordered', parseInt(e.target.value) || 0)
+                              updateItem(item.key, 'quantity_ordered', parseFloat(e.target.value) || 0)
                             }
                             min="0"
+                            step="any"
                             className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green"
                           />
                         </td>
@@ -402,13 +417,13 @@ export default function NewPurchaseOrder() {
           onClick={() => handleSave('draft')}
           disabled={saving}
         >
-          Save as Draft
+          {savedPoId ? 'Save Draft' : 'Save as Draft'}
         </Button>
         <Button
           onClick={() => handleSave('submitted')}
           disabled={saving}
         >
-          {saving ? 'Creating...' : 'Submit PO'}
+          {saving ? 'Saving...' : 'Submit PO'}
         </Button>
       </div>
 
