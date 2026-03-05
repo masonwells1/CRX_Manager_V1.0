@@ -5,7 +5,7 @@
  */
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, X } from 'lucide-react';
+import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, X, ChevronDown, ChevronUp, Pencil, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -26,6 +26,19 @@ interface CustomerPrepay {
   prepay_balance_cents: number;
   unpaid_invoice_count: number;
   unpaid_balance_cents: number;
+}
+
+interface PrepayCredit {
+  id: string;
+  customer_id: string;
+  original_amount_cents: number;
+  balance_cents: number;
+  reference_number: string | null;
+  bucket_label: string | null;
+  notes: string | null;
+  payment_method: string | null;
+  source_type: string | null;
+  created_at: string;
 }
 
 const fmt = (cents: number) =>
@@ -50,6 +63,21 @@ export default function PrepaymentManager() {
   const [confirmCustomer, setConfirmCustomer] = useState<CustomerPrepay | null>(null);
   const [showBatchConfirm, setShowBatchConfirm] = useState(false);
   const [batchApplying, setBatchApplying] = useState(false);
+
+  // Individual credits drill-down
+  const [expandedCustomer, setExpandedCustomer] = useState<string | null>(null);
+  const [customerCredits, setCustomerCredits] = useState<PrepayCredit[]>([]);
+  const [loadingCredits, setLoadingCredits] = useState(false);
+
+  // Edit credit modal
+  const [editCredit, setEditCredit] = useState<PrepayCredit | null>(null);
+  const [editForm, setEditForm] = useState({ balance: '', reference_number: '', bucket_label: '', notes: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // Delete credit modal
+  const [deleteCredit, setDeleteCredit] = useState<PrepayCredit | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [savingDelete, setSavingDelete] = useState(false);
 
   // Split Check modal state
   const [showNewCheck, setShowNewCheck] = useState(false);
@@ -104,6 +132,112 @@ export default function PrepaymentManager() {
   useEffect(() => {
     fetchCustomers();
   }, [fetchCustomers]);
+
+  // Fetch individual credits for a customer
+  const fetchCredits = useCallback(async (customerId: string) => {
+    setLoadingCredits(true);
+    const { data, error } = await supabase
+      .from('prepay_credits')
+      .select('id, customer_id, original_amount_cents, balance_cents, reference_number, bucket_label, notes, payment_method, source_type, created_at')
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      toast('error', 'Failed to load credits');
+    } else {
+      setCustomerCredits((data || []) as PrepayCredit[]);
+    }
+    setLoadingCredits(false);
+  }, [toast]);
+
+  const toggleExpand = (customerId: string) => {
+    if (expandedCustomer === customerId) {
+      setExpandedCustomer(null);
+      setCustomerCredits([]);
+    } else {
+      setExpandedCustomer(customerId);
+      fetchCredits(customerId);
+    }
+  };
+
+  // Edit credit
+  const openEdit = (credit: PrepayCredit) => {
+    setEditCredit(credit);
+    setEditForm({
+      balance: (credit.balance_cents / 100).toFixed(2),
+      reference_number: credit.reference_number || '',
+      bucket_label: credit.bucket_label || '',
+      notes: credit.notes || '',
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editCredit) return;
+    const newBalanceCents = Math.round(parseFloat(editForm.balance) * 100);
+    if (isNaN(newBalanceCents) || newBalanceCents < 0) {
+      toast('error', 'Balance must be a non-negative number');
+      return;
+    }
+
+    await runCriticalAction({
+      action: async () => {
+        const { data, error } = await supabase.rpc('edit_prepay_credit', {
+          p_credit_id: editCredit.id,
+          p_new_balance_cents: newBalanceCents,
+          p_reference_number: editForm.reference_number || null,
+          p_bucket_label: editForm.bucket_label || null,
+          p_notes: editForm.notes || null,
+          p_performed_by: profile?.id,
+        });
+        if (error) throw error;
+        const result = data as { success: boolean };
+        if (!result?.success) throw new Error('Edit failed');
+      },
+      toast,
+      setLoading: setSavingEdit,
+      successMessage: `Updated prepay credit ${editCredit.reference_number || editCredit.id.slice(0, 8)}`,
+      sentryTag: 'edit_prepay_credit',
+      onSuccess: () => {
+        setEditCredit(null);
+        fetchCredits(editCredit.customer_id);
+        fetchCustomers();
+      },
+    });
+  };
+
+  // Delete credit
+  const openDelete = (credit: PrepayCredit) => {
+    setDeleteCredit(credit);
+    setDeleteReason('');
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteCredit || !deleteReason.trim()) {
+      toast('error', 'A reason is required to delete a prepay credit');
+      return;
+    }
+
+    await runCriticalAction({
+      action: async () => {
+        const { data, error } = await supabase.rpc('delete_prepay_credit', {
+          p_credit_id: deleteCredit.id,
+          p_reason: deleteReason.trim(),
+          p_performed_by: profile?.id,
+        });
+        if (error) throw error;
+        const result = data as { success: boolean };
+        if (!result?.success) throw new Error('Delete failed');
+      },
+      toast,
+      setLoading: setSavingDelete,
+      successMessage: `Deleted prepay credit ${deleteCredit.reference_number || deleteCredit.id.slice(0, 8)} (${fmt(deleteCredit.balance_cents)})`,
+      sentryTag: 'delete_prepay_credit',
+      onSuccess: () => {
+        setDeleteCredit(null);
+        fetchCredits(deleteCredit.customer_id);
+        fetchCustomers();
+      },
+    });
+  };
 
   // Fetch bucket labels + all customers for the New Check modal
   useEffect(() => {
@@ -255,7 +389,20 @@ export default function PrepaymentManager() {
   const totalUnpaid = customers.reduce((s, c) => s + c.unpaid_balance_cents, 0);
 
   const columns: Column<CustomerPrepay>[] = [
-    { key: 'farm_name', header: 'Customer', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.farm_name}</span> },
+    {
+      key: 'farm_name',
+      header: 'Customer',
+      sortable: true,
+      render: (r) => (
+        <button
+          onClick={(e) => { e.stopPropagation(); toggleExpand(r.id); }}
+          className="flex items-center gap-2 font-medium text-nav-dark hover:text-crx-green transition-colors text-left"
+        >
+          {expandedCustomer === r.id ? <ChevronUp className="w-4 h-4 text-secondary" /> : <ChevronDown className="w-4 h-4 text-secondary" />}
+          {r.farm_name}
+        </button>
+      ),
+    },
     {
       key: 'prepay_balance_cents',
       header: 'Prepay Balance',
@@ -427,8 +574,176 @@ export default function PrepaymentManager() {
             emptyDescription="No customers currently have prepay credit balances"
             loading={loading}
           />
+
+          {/* Expanded credits for selected customer */}
+          {expandedCustomer && (
+            <div className="mt-4 border-t border-gray-100 pt-4">
+              <h3 className="text-sm font-semibold text-nav-dark mb-3">
+                Individual Credits — {customers.find((c) => c.id === expandedCustomer)?.farm_name}
+              </h3>
+              {loadingCredits ? (
+                <p className="text-sm text-secondary py-4 text-center">Loading credits...</p>
+              ) : customerCredits.length === 0 ? (
+                <p className="text-sm text-secondary py-4 text-center">No prepay credit records found for this customer</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-100">
+                        <th className="text-left py-2 px-3 text-secondary font-medium">Date</th>
+                        <th className="text-left py-2 px-3 text-secondary font-medium">Ref #</th>
+                        <th className="text-left py-2 px-3 text-secondary font-medium">Bucket</th>
+                        <th className="text-right py-2 px-3 text-secondary font-medium">Original</th>
+                        <th className="text-right py-2 px-3 text-secondary font-medium">Balance</th>
+                        <th className="text-left py-2 px-3 text-secondary font-medium">Source</th>
+                        <th className="text-left py-2 px-3 text-secondary font-medium">Notes</th>
+                        <th className="text-right py-2 px-3 text-secondary font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {customerCredits.map((cr) => (
+                        <tr key={cr.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                          <td className="py-2 px-3 text-secondary">{new Date(cr.created_at).toLocaleDateString()}</td>
+                          <td className="py-2 px-3 font-medium">{cr.reference_number || '—'}</td>
+                          <td className="py-2 px-3">{cr.bucket_label ? <Badge variant="default">{cr.bucket_label}</Badge> : '—'}</td>
+                          <td className="py-2 px-3 text-right">{fmt(cr.original_amount_cents)}</td>
+                          <td className={`py-2 px-3 text-right font-medium ${cr.balance_cents > 0 ? 'text-crx-green' : 'text-secondary'}`}>
+                            {fmt(cr.balance_cents)}
+                          </td>
+                          <td className="py-2 px-3 text-secondary">{cr.source_type || cr.payment_method || '—'}</td>
+                          <td className="py-2 px-3 text-secondary max-w-[200px] truncate" title={cr.notes || ''}>{cr.notes || '—'}</td>
+                          <td className="py-2 px-3 text-right">
+                            {profile?.role === 'admin' && (
+                              <div className="flex justify-end gap-1">
+                                <button
+                                  onClick={() => openEdit(cr)}
+                                  className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                                  title="Edit credit"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                {cr.balance_cents > 0 && (
+                                  <button
+                                    onClick={() => openDelete(cr)}
+                                    className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                                    title="Delete credit"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </Card>
+
+      {/* Edit Credit Modal */}
+      <Modal open={!!editCredit} onClose={() => setEditCredit(null)} title="Edit Prepay Credit">
+        {editCredit && (
+          <div className="space-y-4">
+            <div className="bg-gray-50 p-3 rounded-lg text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-secondary">Credit ID</span>
+                <span className="font-mono text-xs">{editCredit.id.slice(0, 8)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-secondary">Current Balance</span>
+                <span className="font-medium text-crx-green">{fmt(editCredit.balance_cents)}</span>
+              </div>
+            </div>
+            <Input
+              label="Balance ($)"
+              type="number"
+              step="0.01"
+              min="0"
+              value={editForm.balance}
+              onChange={(e) => setEditForm({ ...editForm, balance: e.target.value })}
+            />
+            <Input
+              label="Reference #"
+              value={editForm.reference_number}
+              onChange={(e) => setEditForm({ ...editForm, reference_number: e.target.value })}
+              placeholder="Check or reference number"
+            />
+            <div>
+              <label className="text-sm font-medium text-nav-dark">Bucket Label</label>
+              <select
+                value={editForm.bucket_label}
+                onChange={(e) => setEditForm({ ...editForm, bucket_label: e.target.value })}
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              >
+                <option value="">No bucket</option>
+                {bucketLabels.map((l) => (
+                  <option key={l} value={l}>{l}</option>
+                ))}
+              </select>
+            </div>
+            <Input
+              label="Notes"
+              value={editForm.notes}
+              onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+              placeholder="Optional notes"
+            />
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="ghost" onClick={() => setEditCredit(null)}>Cancel</Button>
+              <Button onClick={handleSaveEdit} loading={savingEdit} icon={<Pencil className="w-4 h-4" />}>
+                Save Changes
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Delete Credit Confirmation Modal */}
+      <Modal open={!!deleteCredit} onClose={() => setDeleteCredit(null)} title="Delete Prepay Credit">
+        {deleteCredit && (
+          <div className="space-y-4">
+            <p className="text-sm text-secondary">
+              This will zero out the balance for this prepay credit. The record remains for audit purposes.
+            </p>
+            <div className="bg-red-50 p-3 rounded-lg text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-secondary">Reference</span>
+                <span className="font-medium">{deleteCredit.reference_number || deleteCredit.id.slice(0, 8)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-secondary">Bucket</span>
+                <span>{deleteCredit.bucket_label || '—'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-secondary">Balance to Remove</span>
+                <span className="font-medium text-red-600">{fmt(deleteCredit.balance_cents)}</span>
+              </div>
+            </div>
+            <Input
+              label="Reason *"
+              value={deleteReason}
+              onChange={(e) => setDeleteReason(e.target.value)}
+              placeholder="Why is this credit being deleted?"
+              required
+            />
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="ghost" onClick={() => setDeleteCredit(null)}>Cancel</Button>
+              <Button
+                onClick={handleConfirmDelete}
+                loading={savingDelete}
+                icon={<Trash2 className="w-4 h-4" />}
+                className="bg-red-600 hover:bg-red-700 text-white"
+              >
+                Delete Credit
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Batch Apply All Confirmation */}
       <Modal open={showBatchConfirm} onClose={() => setShowBatchConfirm(false)} title="Apply All Prepayments">

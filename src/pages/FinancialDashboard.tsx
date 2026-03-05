@@ -15,6 +15,10 @@ import {
   CalendarCheck,
   ChevronRight,
   Banknote,
+  Package,
+  Warehouse,
+  ClipboardCheck,
+  History,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
@@ -69,6 +73,10 @@ interface FinancialRpc {
   total_prepay_unallocated: number;
   total_commission_owed: number;
   current_period: CurrentPeriod;
+  po_unreceived_value: number;
+  floor_inventory_value: number;
+  floor_free_value: number;
+  committed_order_value: number;
 }
 
 interface FinancialData {
@@ -85,6 +93,10 @@ interface FinancialData {
   totalPrepayUnallocated: number;
   totalCommissionOwed: number;
   currentPeriod: CurrentPeriod;
+  poUnreceivedValue: number;
+  floorInventoryValue: number;
+  floorFreeValue: number;
+  committedOrderValue: number;
 }
 
 // --- Currency formatter ---
@@ -116,6 +128,7 @@ const quickLinks: QuickLink[] = [
   { label: 'AR Aging', path: '/ar-aging', icon: <BarChart3 className="w-5 h-5" /> },
   { label: 'Prepayments', path: '/prepayments', icon: <Banknote className="w-5 h-5" /> },
   { label: 'Prepay Workspace', path: '/prepay-workspace', icon: <Wallet className="w-5 h-5" /> },
+  { label: 'Payment History', path: '/payment-history', icon: <History className="w-5 h-5" /> },
   { label: 'Commission Pay', path: '/commission-payments', icon: <CreditCard className="w-5 h-5" /> },
   { label: 'Transactions', path: '/customer-transactions', icon: <ArrowLeftRight className="w-5 h-5" /> },
   { label: 'Month-End', path: '/month-end', icon: <CalendarCheck className="w-5 h-5" /> },
@@ -140,6 +153,10 @@ const defaultData: FinancialData = {
   totalPrepayUnallocated: 0,
   totalCommissionOwed: 0,
   currentPeriod: { name: '', status: 'open', days_remaining: 0 },
+  poUnreceivedValue: 0,
+  floorInventoryValue: 0,
+  floorFreeValue: 0,
+  committedOrderValue: 0,
 };
 
 // --- Component ---
@@ -179,6 +196,10 @@ export default function FinancialDashboard() {
         totalPrepayUnallocated: Number(d.total_prepay_unallocated) || 0,
         totalCommissionOwed: Number(d.total_commission_owed) || 0,
         currentPeriod: d.current_period || { name: '', status: 'open', days_remaining: 0 },
+        poUnreceivedValue: Number(d.po_unreceived_value) || 0,
+        floorInventoryValue: Number(d.floor_inventory_value) || 0,
+        floorFreeValue: Number(d.floor_free_value) || 0,
+        committedOrderValue: Number(d.committed_order_value) || 0,
       });
     } catch (err) {
       console.error('Financial dashboard load error:', err);
@@ -387,7 +408,55 @@ export default function FinancialDashboard() {
         </Card>
       </div>
 
-      {/* Section 3: Monthly Revenue & Profit Chart */}
+      {/* Section 3: Inventory Position */}
+      <div>
+        <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide mb-3">Inventory Position</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {/* On Order (POs) */}
+          <Card hover className="cursor-pointer" onClick={() => navigate('/purchase-orders')}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center">
+                <Package className="w-5 h-5 text-sky-600" />
+              </div>
+              <span className="text-sm text-secondary">On Order (POs)</span>
+            </div>
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{fmt(data.poUnreceivedValue)}</p>
+            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+              Unreceived supplier PO value <ChevronRight className="w-3 h-3" />
+            </p>
+          </Card>
+
+          {/* Floor Inventory */}
+          <Card hover className="cursor-pointer" onClick={() => navigate('/inventory')}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-teal-50 flex items-center justify-center">
+                <Warehouse className="w-5 h-5 text-teal-600" />
+              </div>
+              <span className="text-sm text-secondary">Floor Inventory</span>
+            </div>
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{fmt(data.floorInventoryValue)}</p>
+            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+              {fmt(data.floorFreeValue)} uncommitted <ChevronRight className="w-3 h-3" />
+            </p>
+          </Card>
+
+          {/* Committed Orders */}
+          <Card hover className="cursor-pointer" onClick={() => navigate('/orders')}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-violet-50 flex items-center justify-center">
+                <ClipboardCheck className="w-5 h-5 text-violet-600" />
+              </div>
+              <span className="text-sm text-secondary">Committed Orders</span>
+            </div>
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{fmt(data.committedOrderValue)}</p>
+            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+              Undelivered order value at cost <ChevronRight className="w-3 h-3" />
+            </p>
+          </Card>
+        </div>
+      </div>
+
+      {/* Section 4: Monthly Revenue & Profit Chart */}
       <Card>
         <CardHeader title="Monthly" accent="Revenue & Profit" />
         {data.monthlyRevenue.length === 0 ? (

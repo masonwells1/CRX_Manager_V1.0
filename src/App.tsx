@@ -57,6 +57,7 @@ const CustomerTransactionReview = lazy(() => import('./pages/CustomerTransaction
 const PrepaymentManager = lazy(() => import('./pages/PrepaymentManager'));
 const PrepayWorkspace = lazy(() => import('./pages/PrepayWorkspace'));
 const PaymentAllocation = lazy(() => import('./pages/PaymentAllocation'));
+const PaymentHistory = lazy(() => import('./pages/PaymentHistory'));
 const DeliveryRemainders = lazy(() => import('./pages/DeliveryRemainders'));
 const ReceivingLog = lazy(() => import('./pages/ReceivingLog'));
 const QuickReceive = lazy(() => import('./pages/QuickReceive'));
@@ -154,6 +155,7 @@ const router = createBrowserRouter([
           { path: 'reports', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Reports /></ProtectedRoute> },
           { path: 'crop-programs', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CropPrograms /></ProtectedRoute> },
           { path: 'payments', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PaymentAllocation /></ProtectedRoute> },
+          { path: 'payment-history', element: <ProtectedRoute allowedRoles={['admin']}><PaymentHistory /></ProtectedRoute> },
           { path: 'ar-aging', element: <ProtectedRoute allowedRoles={['admin']}><ARaging /></ProtectedRoute> },
           { path: 'compliance', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Compliance /></ProtectedRoute> },
           { path: 'rebates', element: <ProtectedRoute allowedRoles={['admin']}><Rebates /></ProtectedRoute> },
