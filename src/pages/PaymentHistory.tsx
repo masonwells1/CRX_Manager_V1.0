@@ -113,7 +113,7 @@ export default function PaymentHistory() {
       toast('error', 'Failed to load allocations');
     } else {
       const mapped: InvoiceAllocation[] = (data || []).map((row: Record<string, unknown>) => ({
-        ...(row as InvoiceAllocation),
+        ...(row as unknown as InvoiceAllocation),
         invoice_number: (row.invoices as { invoice_number: string } | null)?.invoice_number || '—',
         bill_to_farm_name: (row.customers as { farm_name: string } | null)?.farm_name || 'Unknown',
       }));
