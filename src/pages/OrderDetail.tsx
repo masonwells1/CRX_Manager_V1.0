@@ -48,6 +48,7 @@ export default function OrderDetail() {
   const [newStatus, setNewStatus] = useState('');
 
   const isAdmin = role === 'admin';
+  const canEdit = role === 'admin' || role === 'sales_rep';
 
   const fetchOrder = useCallback(async () => {
     const { data: orderData } = await supabase
@@ -275,7 +276,7 @@ export default function OrderDetail() {
             </>
           ) : (
             <>
-              {isAdmin && (
+              {canEdit && (
                 <Button
                   variant="secondary"
                   icon={<Pencil className="w-4 h-4" />}

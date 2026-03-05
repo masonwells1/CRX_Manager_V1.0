@@ -455,7 +455,7 @@ export default function InventoryPage() {
       toast('error', 'Please select a product');
       return;
     }
-    const qty = parseInt(addQty) || 0;
+    const qty = parseFloat(addQty) || 0;
     if (qty <= 0) {
       toast('error', 'Quantity must be greater than 0');
       return;
@@ -517,7 +517,7 @@ export default function InventoryPage() {
   };
 
   const handleReceive = async () => {
-    const qty = parseInt(receiveQty);
+    const qty = parseFloat(receiveQty);
     if (!qty || qty <= 0) {
       toast('error', 'Please enter a valid quantity');
       return;
@@ -564,7 +564,7 @@ export default function InventoryPage() {
   };
 
   const handleAdjust = async () => {
-    const qty = parseInt(adjustQty);
+    const qty = parseFloat(adjustQty);
     if (isNaN(qty) || qty === 0) {
       toast('error', 'Please enter a non-zero adjustment quantity');
       return;
@@ -1301,6 +1301,7 @@ export default function InventoryPage() {
             label="Initial Quantity"
             type="number"
             min="0"
+            step="any"
             value={addQty}
             onChange={(e) => setAddQty(e.target.value)}
           />
@@ -1356,7 +1357,8 @@ export default function InventoryPage() {
               <Input
                 label="Quantity Received"
                 type="number"
-                min="1"
+                min="0"
+                step="any"
                 value={receiveQty}
                 onChange={(e) => setReceiveQty(e.target.value)}
               />
@@ -1377,6 +1379,7 @@ export default function InventoryPage() {
           <Input
             label="Adjustment Quantity (+ or -)"
             type="number"
+            step="any"
             value={adjustQty}
             onChange={(e) => setAdjustQty(e.target.value)}
           />

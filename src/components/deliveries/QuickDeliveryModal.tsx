@@ -361,9 +361,10 @@ export default function QuickDeliveryModal({
                         <td className="px-3 py-2">
                           <input
                             type="number"
-                            min={1}
+                            min={0}
+                            step="any"
                             value={item.quantity}
-                            onChange={(e) => updateItemQty(item._key, parseInt(e.target.value) || 1)}
+                            onChange={(e) => updateItemQty(item._key, parseFloat(e.target.value) || 0)}
                             className="w-20 text-center px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
                           />
                         </td>
