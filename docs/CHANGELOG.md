@@ -4,6 +4,37 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-06 — Operational Dashboard Rebuild
+
+### New: Operational Dashboard (10-Section Command Center)
+- Complete rewrite of `src/pages/Dashboard.tsx` (~750 lines) — replaces basic 4-section dashboard with comprehensive operational command center
+- New RPC `operational_dashboard_summary()` — 25-CTE Supabase function returning all dashboard data in a single round-trip
+- Migration: `20260323100000_operational_dashboard_summary.sql`
+
+### Dashboard Sections
+1. **Quick Actions** (5 buttons) — New Order, New PO, Schedule Delivery, Inventory, Receiving
+2. **KPI Row** (4 cards) — Active Orders, Open Quotes, Pending Deliveries, Open POs
+3. **Team Board Preview** — Pinned/urgent/overdue/assigned action items (max 10)
+4. **Inventory Position** (3 cards) — Floor Stock, On Order, Committed (all in units)
+5. **Delivery Command Center** — 10 upcoming deliveries + 4 stat mini-cards (Today, This Week, Unassigned, Remainders)
+6. **Sales Pipeline** (3 cards) — Quote Pipeline, Orders (Season), Delivered (Season)
+7. **Operational Alerts** — 9 alert types with "All Clear" state when empty
+8. **Monthly Activity Chart** — 12-month triple-bar (Orders, Deliveries, POs Received)
+9. **Season Progress** — Progress bar (Oct 1–Sep 30) + Accounting Period status
+10. **Recent Activity** — 15 items with colored dots by type + relative timestamps
+
+### Navigation Updates
+- Sidebar label: "Dashboard" → "Operations"
+- Page header: "Operational Dashboard"
+- `usePageMeta` updated for `/` route
+- Financial Dashboard back-button text corrected
+
+### Role Visibility
+- Admin + Sales: all 10 sections
+- Drivers: Team Board, Deliveries, Alerts, Activity only
+
+---
+
 ## 2026-03-05 — Financial Dashboard, Payment History, PO Improvements, Bug Fixes (PRs #31–#39)
 
 ### New: PaymentHistory Page

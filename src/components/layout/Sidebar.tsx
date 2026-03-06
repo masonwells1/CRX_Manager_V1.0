@@ -78,7 +78,7 @@ const navigation: NavEntry[] = [
     link: {
       id: 'dashboard',
       path: '/',
-      label: 'Dashboard',
+      label: 'Operations',
       icon: <LayoutDashboard className="w-5 h-5" />,
     },
   },

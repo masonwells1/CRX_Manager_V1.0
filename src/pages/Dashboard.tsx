@@ -1,103 +1,317 @@
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  ShoppingCart,
   FileText,
-  Warehouse,
   Truck,
-  Users,
-  Plus,
-  ChevronRight,
-  Clock,
+  Package,
+  Warehouse,
+  ClipboardList,
+  ClipboardCheck,
   AlertTriangle,
+  Clock,
+  CalendarCheck,
+  ChevronRight,
+  Plus,
+  Pin,
+  User,
+  BarChart3,
+  CheckCircle2,
+  Circle,
+  Inbox,
+  Shield,
+  Timer,
+  Calendar,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
-import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
+import Button from '../components/ui/Button';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
 
-interface DashboardData {
+// --- Types ---
+
+interface MonthlyActivity {
+  month: string;
+  orders_created: number;
+  deliveries_completed: number;
+  pos_received: number;
+}
+
+interface UpcomingDelivery {
+  id: string;
+  delivery_number: string;
+  scheduled_date: string;
+  status: string;
+  customer_name: string | null;
+  driver_name: string | null;
+  assigned_driver: string | null;
+}
+
+interface ActivityItem {
+  id: string;
+  event_type: string;
+  description: string;
+  created_at: string;
+}
+
+interface TeamActionItem {
+  id: string;
+  title: string;
+  priority: string;
+  due_date: string | null;
+  note_type: string;
+  is_pinned: boolean;
+  assigned_to: string | null;
+  assignee_name: string | null;
+}
+
+interface OperationalRpc {
+  active_orders_count: number;
+  open_quotes_draft: number;
+  open_quotes_sent: number;
+  pending_deliveries_count: number;
+  open_pos_count: number;
+  team_action_items: TeamActionItem[];
+  inventory_available: number;
+  inventory_prebooked: number;
+  on_order_units: number;
+  on_order_po_count: number;
+  committed_units: number;
+  committed_order_count: number;
+  upcoming_deliveries: UpcomingDelivery[];
+  delivery_today: number;
+  delivery_this_week: number;
+  delivery_unassigned: number;
+  delivery_remainders_count: number;
+  quote_pipeline_draft: number;
+  quote_pipeline_sent: number;
+  quote_pipeline_accepted: number;
+  orders_ytd_total: number;
+  orders_this_month: number;
+  deliveries_completed_total: number;
+  deliveries_completed_this_month: number;
+  low_stock_count: number;
+  driver_issues_count: number;
+  expired_holds_count: number;
+  cancelled_posted_count: number;
+  expiring_quotes_count: number;
+  overdue_deliveries_count: number;
+  pos_expected_today_count: number;
+  expiring_licenses_count: number;
+  monthly_activity: MonthlyActivity[];
+  season_label: string;
+  season_days_remaining: number;
+  season_days_elapsed: number;
+  period_name: string;
+  period_status: string;
+  period_days_remaining: number;
+  recent_activity: ActivityItem[];
+}
+
+interface OperationalData {
+  activeOrdersCount: number;
+  openQuotesDraft: number;
+  openQuotesSent: number;
+  pendingDeliveriesCount: number;
+  openPosCount: number;
+  teamActionItems: TeamActionItem[];
   inventoryAvailable: number;
   inventoryPrebooked: number;
-  upcomingDeliveries: Array<{
-    id: string;
-    delivery_number: string;
-    scheduled_date: string;
-    status: string;
-    customer: { farm_name: string } | null;
-    driver: { full_name: string } | null;
-  }>;
-  recentActivity: Array<{
-    id: string;
-    event_type: string;
-    description: string;
-    created_at: string;
-  }>;
+  onOrderUnits: number;
+  onOrderPoCount: number;
+  committedUnits: number;
+  committedOrderCount: number;
+  upcomingDeliveries: UpcomingDelivery[];
+  deliveryToday: number;
+  deliveryThisWeek: number;
+  deliveryUnassigned: number;
+  deliveryRemaindersCount: number;
+  quotePipelineDraft: number;
+  quotePipelineSent: number;
+  quotePipelineAccepted: number;
+  ordersYtdTotal: number;
+  ordersThisMonth: number;
+  deliveriesCompletedTotal: number;
+  deliveriesCompletedThisMonth: number;
   lowStockCount: number;
-  // Phase 3.6: Integrity alert counts
   driverIssuesCount: number;
   expiredHoldsCount: number;
   cancelledPostedCount: number;
+  expiringQuotesCount: number;
+  overdueDeliveriesCount: number;
+  posExpectedTodayCount: number;
+  expiringLicensesCount: number;
+  monthlyActivity: MonthlyActivity[];
+  seasonLabel: string;
+  seasonDaysRemaining: number;
+  seasonDaysElapsed: number;
+  periodName: string;
+  periodStatus: string;
+  periodDaysRemaining: number;
+  recentActivity: ActivityItem[];
 }
+
+// --- Helpers ---
+
+/** Smart date label for delivery dates */
+function deliveryDateLabel(dateStr: string): { text: string; color: string } {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const date = new Date(dateStr + 'T00:00:00');
+  const diffDays = Math.round((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return { text: 'Today', color: 'text-crx-green font-semibold' };
+  if (diffDays === 1) return { text: 'Tomorrow', color: 'text-blue-600' };
+  if (diffDays < 0) return { text: `${Math.abs(diffDays)}d overdue`, color: 'text-red-600 font-semibold' };
+  if (diffDays <= 7) return { text: `In ${diffDays}d`, color: 'text-secondary' };
+  return { text: dateStr, color: 'text-secondary' };
+}
+
+/** Relative timestamp */
+function relativeTime(isoStr: string): string {
+  const now = Date.now();
+  const then = new Date(isoStr).getTime();
+  const diffMs = now - then;
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return 'Just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+  return new Date(isoStr).toLocaleDateString();
+}
+
+/** Color dot for activity event types */
+const eventTypeDot: Record<string, string> = {
+  order: 'bg-blue-500',
+  delivery: 'bg-crx-green',
+  inventory: 'bg-amber-500',
+  quote: 'bg-purple-500',
+  payment: 'bg-emerald-500',
+  invoice: 'bg-indigo-500',
+};
+
+/** Priority badge colors */
+const priorityBadge: Record<string, { bg: string; text: string }> = {
+  urgent: { bg: 'bg-red-100', text: 'text-red-700' },
+  high: { bg: 'bg-orange-100', text: 'text-orange-700' },
+  medium: { bg: 'bg-blue-100', text: 'text-blue-700' },
+  low: { bg: 'bg-gray-100', text: 'text-gray-600' },
+};
+
+// --- Default data ---
+
+const defaultData: OperationalData = {
+  activeOrdersCount: 0,
+  openQuotesDraft: 0,
+  openQuotesSent: 0,
+  pendingDeliveriesCount: 0,
+  openPosCount: 0,
+  teamActionItems: [],
+  inventoryAvailable: 0,
+  inventoryPrebooked: 0,
+  onOrderUnits: 0,
+  onOrderPoCount: 0,
+  committedUnits: 0,
+  committedOrderCount: 0,
+  upcomingDeliveries: [],
+  deliveryToday: 0,
+  deliveryThisWeek: 0,
+  deliveryUnassigned: 0,
+  deliveryRemaindersCount: 0,
+  quotePipelineDraft: 0,
+  quotePipelineSent: 0,
+  quotePipelineAccepted: 0,
+  ordersYtdTotal: 0,
+  ordersThisMonth: 0,
+  deliveriesCompletedTotal: 0,
+  deliveriesCompletedThisMonth: 0,
+  lowStockCount: 0,
+  driverIssuesCount: 0,
+  expiredHoldsCount: 0,
+  cancelledPostedCount: 0,
+  expiringQuotesCount: 0,
+  overdueDeliveriesCount: 0,
+  posExpectedTodayCount: 0,
+  expiringLicensesCount: 0,
+  monthlyActivity: [],
+  seasonLabel: '',
+  seasonDaysRemaining: 0,
+  seasonDaysElapsed: 0,
+  periodName: '',
+  periodStatus: 'open',
+  periodDaysRemaining: 0,
+  recentActivity: [],
+};
+
+// --- Component ---
 
 export default function Dashboard() {
   const { role } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<DashboardData>({
-    inventoryAvailable: 0,
-    inventoryPrebooked: 0,
-    upcomingDeliveries: [],
-    recentActivity: [],
-    lowStockCount: 0,
-    driverIssuesCount: 0,
-    expiredHoldsCount: 0,
-    cancelledPostedCount: 0,
-  });
+  const [data, setData] = useState<OperationalData>(defaultData);
 
   const fetchDashboard = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: rpc, error } = await supabase.rpc('dashboard_summary');
+      const { data: rpc, error } = await supabase.rpc('operational_dashboard_summary');
       if (error) throw error;
 
-      interface DashboardRpc {
-        inventory_available: number;
-        inventory_prebooked: number;
-        upcoming_deliveries: Array<{ id: string; delivery_number: string; scheduled_date: string; status: string; customer: string | { farm_name: string } | null; driver: string | { full_name: string } | null }>;
-        recent_activity: Array<{ id: string; event_type: string; description: string; created_at: string }>;
-        low_stock_count: number;
-        driver_issues_count: number;
-        expired_holds_count: number;
-        cancelled_posted_count: number;
-      }
-      const d = rpc as DashboardRpc;
+      const d = rpc as OperationalRpc;
 
       setData({
+        activeOrdersCount: Number(d.active_orders_count) || 0,
+        openQuotesDraft: Number(d.open_quotes_draft) || 0,
+        openQuotesSent: Number(d.open_quotes_sent) || 0,
+        pendingDeliveriesCount: Number(d.pending_deliveries_count) || 0,
+        openPosCount: Number(d.open_pos_count) || 0,
+        teamActionItems: d.team_action_items || [],
         inventoryAvailable: Number(d.inventory_available) || 0,
         inventoryPrebooked: Number(d.inventory_prebooked) || 0,
-        upcomingDeliveries: (d.upcoming_deliveries || []).map((del) => ({
-          id: del.id,
-          delivery_number: del.delivery_number,
-          scheduled_date: del.scheduled_date,
-          status: del.status,
-          customer: typeof del.customer === 'string' ? { farm_name: del.customer } : del.customer || null,
-          driver: typeof del.driver === 'string' ? { full_name: del.driver } : del.driver || null,
-        })),
-        recentActivity: (d.recent_activity || []).map((act) => ({
-          id: act.id,
-          event_type: act.event_type,
-          description: act.description,
-          created_at: act.created_at,
-        })),
+        onOrderUnits: Number(d.on_order_units) || 0,
+        onOrderPoCount: Number(d.on_order_po_count) || 0,
+        committedUnits: Number(d.committed_units) || 0,
+        committedOrderCount: Number(d.committed_order_count) || 0,
+        upcomingDeliveries: d.upcoming_deliveries || [],
+        deliveryToday: Number(d.delivery_today) || 0,
+        deliveryThisWeek: Number(d.delivery_this_week) || 0,
+        deliveryUnassigned: Number(d.delivery_unassigned) || 0,
+        deliveryRemaindersCount: Number(d.delivery_remainders_count) || 0,
+        quotePipelineDraft: Number(d.quote_pipeline_draft) || 0,
+        quotePipelineSent: Number(d.quote_pipeline_sent) || 0,
+        quotePipelineAccepted: Number(d.quote_pipeline_accepted) || 0,
+        ordersYtdTotal: Number(d.orders_ytd_total) || 0,
+        ordersThisMonth: Number(d.orders_this_month) || 0,
+        deliveriesCompletedTotal: Number(d.deliveries_completed_total) || 0,
+        deliveriesCompletedThisMonth: Number(d.deliveries_completed_this_month) || 0,
         lowStockCount: Number(d.low_stock_count) || 0,
         driverIssuesCount: Number(d.driver_issues_count) || 0,
         expiredHoldsCount: Number(d.expired_holds_count) || 0,
         cancelledPostedCount: Number(d.cancelled_posted_count) || 0,
+        expiringQuotesCount: Number(d.expiring_quotes_count) || 0,
+        overdueDeliveriesCount: Number(d.overdue_deliveries_count) || 0,
+        posExpectedTodayCount: Number(d.pos_expected_today_count) || 0,
+        expiringLicensesCount: Number(d.expiring_licenses_count) || 0,
+        monthlyActivity: (d.monthly_activity || []).map((m) => ({
+          month: m.month,
+          orders_created: Number(m.orders_created) || 0,
+          deliveries_completed: Number(m.deliveries_completed) || 0,
+          pos_received: Number(m.pos_received) || 0,
+        })),
+        seasonLabel: d.season_label || '',
+        seasonDaysRemaining: Number(d.season_days_remaining) || 0,
+        seasonDaysElapsed: Number(d.season_days_elapsed) || 0,
+        periodName: d.period_name || '',
+        periodStatus: d.period_status || 'open',
+        periodDaysRemaining: Number(d.period_days_remaining) || 0,
+        recentActivity: d.recent_activity || [],
       });
     } catch (err) {
       console.error('Dashboard load error:', err);
@@ -105,10 +319,9 @@ export default function Dashboard() {
     }
     setLoading(false);
 
-    // GAP FIX #17: Run automated notification checks (low stock, expiring quotes)
+    // Side-effects from original dashboard
     runPeriodicNotificationChecks();
 
-    // T4: Check for delivery remainders pending 7+ / 14+ days
     try {
       const { error: reminderErr } = await supabase.rpc('check_remainder_reminders');
       if (reminderErr) throw reminderErr;
@@ -120,7 +333,6 @@ export default function Dashboard() {
       });
     }
 
-    // A2.7: Clean up holds from expired quotes
     try {
       const { error: holdsErr } = await supabase.rpc('release_expired_quote_holds');
       if (holdsErr) throw holdsErr;
@@ -139,45 +351,412 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <SkeletonCard key={i} />
-        ))}
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <SkeletonCard key={i} />
+          ))}
+        </div>
       </div>
     );
   }
 
   const isAdmin = role === 'admin';
   const isDriver = role === 'driver';
+  const showFull = !isDriver; // Admin & Sales see everything
+
+  // Monthly chart calculations
+  const maxMonthlyValue = Math.max(
+    ...data.monthlyActivity.map((m) => Math.max(m.orders_created, m.deliveries_completed, m.pos_received)),
+    1,
+  );
+
+  // Season progress
+  const seasonTotalDays = data.seasonDaysElapsed + data.seasonDaysRemaining;
+  const seasonPercent = seasonTotalDays > 0 ? Math.round((data.seasonDaysElapsed / seasonTotalDays) * 100) : 0;
+
+  // Build operational alerts array (always visible, data-driven)
+  const alerts: Array<{
+    key: string;
+    count: number;
+    label: string;
+    sublabel: string;
+    icon: React.ReactNode;
+    bg: string;
+    border: string;
+    iconColor: string;
+    textColor: string;
+    subColor: string;
+    path: string;
+    driverVisible: boolean;
+  }> = [
+    {
+      key: 'overdue',
+      count: data.overdueDeliveriesCount,
+      label: 'Overdue Deliveries',
+      sublabel: `${data.overdueDeliveriesCount} past scheduled date`,
+      icon: <Timer className="w-5 h-5" />,
+      bg: 'bg-red-50', border: 'border-red-200',
+      iconColor: 'text-red-600', textColor: 'text-red-800', subColor: 'text-red-600',
+      path: '/deliveries',
+      driverVisible: true,
+    },
+    {
+      key: 'low_stock',
+      count: data.lowStockCount,
+      label: 'Low Stock',
+      sublabel: `${data.lowStockCount} item(s) below reorder point`,
+      icon: <AlertTriangle className="w-5 h-5" />,
+      bg: 'bg-amber-50', border: 'border-amber-200',
+      iconColor: 'text-amber-600', textColor: 'text-amber-800', subColor: 'text-amber-600',
+      path: '/inventory',
+      driverVisible: false,
+    },
+    {
+      key: 'driver_issues',
+      count: data.driverIssuesCount,
+      label: 'Driver Issues',
+      sublabel: `${data.driverIssuesCount} unresolved issue(s)`,
+      icon: <Truck className="w-5 h-5" />,
+      bg: 'bg-orange-50', border: 'border-orange-200',
+      iconColor: 'text-orange-600', textColor: 'text-orange-800', subColor: 'text-orange-600',
+      path: '/deliveries',
+      driverVisible: true,
+    },
+    {
+      key: 'expiring_quotes',
+      count: data.expiringQuotesCount,
+      label: 'Expiring Quotes',
+      sublabel: `${data.expiringQuotesCount} expiring within 3 days`,
+      icon: <Clock className="w-5 h-5" />,
+      bg: 'bg-yellow-50', border: 'border-yellow-200',
+      iconColor: 'text-yellow-600', textColor: 'text-yellow-800', subColor: 'text-yellow-600',
+      path: '/quotes',
+      driverVisible: false,
+    },
+    {
+      key: 'expired_holds',
+      count: data.expiredHoldsCount,
+      label: 'Stale Inventory Holds',
+      sublabel: `${data.expiredHoldsCount} expired quote(s) with active holds`,
+      icon: <Warehouse className="w-5 h-5" />,
+      bg: 'bg-purple-50', border: 'border-purple-200',
+      iconColor: 'text-purple-600', textColor: 'text-purple-800', subColor: 'text-purple-600',
+      path: '/quotes',
+      driverVisible: false,
+    },
+    {
+      key: 'cancelled_posted',
+      count: data.cancelledPostedCount,
+      label: 'Cancelled + Posted',
+      sublabel: `${data.cancelledPostedCount} cancelled with posted invoices`,
+      icon: <FileText className="w-5 h-5" />,
+      bg: 'bg-red-50', border: 'border-red-200',
+      iconColor: 'text-red-600', textColor: 'text-red-800', subColor: 'text-red-600',
+      path: '/invoices',
+      driverVisible: false,
+    },
+    {
+      key: 'unassigned',
+      count: data.deliveryUnassigned,
+      label: 'Unassigned Deliveries',
+      sublabel: `${data.deliveryUnassigned} need a driver`,
+      icon: <User className="w-5 h-5" />,
+      bg: 'bg-sky-50', border: 'border-sky-200',
+      iconColor: 'text-sky-600', textColor: 'text-sky-800', subColor: 'text-sky-600',
+      path: '/deliveries',
+      driverVisible: false,
+    },
+    {
+      key: 'pos_expected',
+      count: data.posExpectedTodayCount,
+      label: 'POs Expected Today',
+      sublabel: `${data.posExpectedTodayCount} PO(s) arriving today`,
+      icon: <Inbox className="w-5 h-5" />,
+      bg: 'bg-teal-50', border: 'border-teal-200',
+      iconColor: 'text-teal-600', textColor: 'text-teal-800', subColor: 'text-teal-600',
+      path: '/receiving',
+      driverVisible: false,
+    },
+    {
+      key: 'expiring_licenses',
+      count: data.expiringLicensesCount,
+      label: 'Expiring Licenses',
+      sublabel: `${data.expiringLicensesCount} within 30 days`,
+      icon: <Shield className="w-5 h-5" />,
+      bg: 'bg-indigo-50', border: 'border-indigo-200',
+      iconColor: 'text-indigo-600', textColor: 'text-indigo-800', subColor: 'text-indigo-600',
+      path: '/compliance',
+      driverVisible: false,
+    },
+  ];
+
+  // Filter alerts: only non-zero, and filter by role for drivers
+  const visibleAlerts = alerts.filter((a) => a.count > 0 && (showFull || a.driverVisible));
 
   return (
     <div className="space-y-6">
-      {!isDriver && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Card>
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Quick Actions (hidden from drivers)                       */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {(isAdmin || role === 'sales_rep') && (
+        <Card>
+          <CardHeader title="Quick" accent="Actions" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <button
+              onClick={() => navigate('/orders/new')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-blue-50 group-hover:bg-blue-100 flex items-center justify-center transition-colors">
+                <Plus className="w-5 h-5 text-blue-600" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">New Order</span>
+            </button>
+            <button
+              onClick={() => navigate('/purchase-orders/new')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-teal-50 group-hover:bg-teal-100 flex items-center justify-center transition-colors">
+                <Package className="w-5 h-5 text-teal-600" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">New PO</span>
+            </button>
+            <button
+              onClick={() => navigate('/deliveries/schedule')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-green-50 group-hover:bg-green-100 flex items-center justify-center transition-colors">
+                <Truck className="w-5 h-5 text-green-600" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">Schedule Delivery</span>
+            </button>
+            <button
+              onClick={() => navigate('/inventory')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-amber-50 group-hover:bg-amber-100 flex items-center justify-center transition-colors">
                 <Warehouse className="w-5 h-5 text-amber-600" />
               </div>
-              <span className="text-sm text-secondary">Inventory</span>
+              <span className="text-sm font-medium text-nav-dark">Inventory</span>
+            </button>
+            <button
+              onClick={() => navigate('/receiving')}
+              className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-lg bg-indigo-50 group-hover:bg-indigo-100 flex items-center justify-center transition-colors">
+                <Inbox className="w-5 h-5 text-indigo-600" />
+              </div>
+              <span className="text-sm font-medium text-nav-dark">Receiving</span>
+            </button>
+          </div>
+        </Card>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Section 1: Top KPI Row (hidden from drivers)              */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {showFull && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+          {/* Active Orders */}
+          <Card hover className="cursor-pointer" onClick={() => navigate('/orders')}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
+                <ShoppingCart className="w-5 h-5 text-blue-600" />
+              </div>
+              <span className="text-sm text-secondary">Active Orders</span>
+            </div>
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.activeOrdersCount}</p>
+            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+              Confirmed & partially fulfilled <ChevronRight className="w-3 h-3" />
+            </p>
+          </Card>
+
+          {/* Open Quotes */}
+          <Card hover className="cursor-pointer" onClick={() => navigate('/quotes')}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center">
+                <FileText className="w-5 h-5 text-purple-600" />
+              </div>
+              <span className="text-sm text-secondary">Open Quotes</span>
             </div>
             <p className="text-2xl font-semibold font-heading text-nav-dark">
-              {(data.inventoryAvailable + data.inventoryPrebooked).toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
+              {data.openQuotesDraft + data.openQuotesSent}
             </p>
-            <div className="flex gap-3 mt-1">
-              <span className="text-xs text-crx-green">{data.inventoryAvailable.toLocaleString()} available</span>
-              <span className="text-xs text-amber-600">{data.inventoryPrebooked.toLocaleString()} pre-booked</span>
+            <div className="flex gap-2 mt-1">
+              <Badge variant="draft">{data.openQuotesDraft} draft</Badge>
+              <Badge variant="sent">{data.openQuotesSent} sent</Badge>
             </div>
+          </Card>
+
+          {/* Pending Deliveries */}
+          <Card hover className="cursor-pointer" onClick={() => navigate('/deliveries')}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center">
+                <Truck className="w-5 h-5 text-green-600" />
+              </div>
+              <span className="text-sm text-secondary">Pending Deliveries</span>
+            </div>
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.pendingDeliveriesCount}</p>
+            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+              Scheduled & in progress <ChevronRight className="w-3 h-3" />
+            </p>
+          </Card>
+
+          {/* Open POs */}
+          <Card hover className="cursor-pointer" onClick={() => navigate('/purchase-orders')}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-teal-50 flex items-center justify-center">
+                <Package className="w-5 h-5 text-teal-600" />
+              </div>
+              <span className="text-sm text-secondary">Open POs</span>
+            </div>
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.openPosCount}</p>
+            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+              Submitted & partially received <ChevronRight className="w-3 h-3" />
+            </p>
           </Card>
         </div>
       )}
 
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Section 2: Team Board Action Items                        */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      <Card padding={false}>
+        <div className="p-5">
+          <CardHeader
+            title="Team Board"
+            accent="Action Items"
+            action={
+              <Button variant="ghost" size="sm" onClick={() => navigate('/team-board')}>
+                View Board
+              </Button>
+            }
+          />
+        </div>
+        {data.teamActionItems.length === 0 ? (
+          <div className="px-5 pb-5">
+            <div className="flex items-center gap-3 p-4 bg-crx-green-tint rounded-lg">
+              <CheckCircle2 className="w-5 h-5 text-crx-green" />
+              <p className="text-sm text-crx-green font-medium">All Clear — No urgent action items</p>
+            </div>
+          </div>
+        ) : (
+          <div className="px-5 pb-5 space-y-2">
+            {data.teamActionItems.map((item) => {
+              const isOverdue = item.due_date && new Date(item.due_date + 'T00:00:00') < new Date(new Date().toDateString());
+              const pBadge = priorityBadge[item.priority] || priorityBadge.low;
+              return (
+                <div
+                  key={item.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate('/team-board')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/team-board'); }}
+                  className="flex items-center justify-between p-3 rounded-lg hover:bg-crx-green-tint cursor-pointer transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {item.is_pinned ? (
+                      <Pin className="w-4 h-4 text-amber-500 shrink-0" />
+                    ) : (
+                      <Circle className="w-4 h-4 text-gray-300 shrink-0" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-nav-dark truncate">{item.title}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        {item.assignee_name && (
+                          <span className="text-xs text-secondary">{item.assignee_name}</span>
+                        )}
+                        {item.due_date && (
+                          <span className={`text-xs ${isOverdue ? 'text-red-600 font-semibold' : 'text-secondary'}`}>
+                            Due {item.due_date}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${pBadge.bg} ${pBadge.text}`}>
+                      {item.priority}
+                    </span>
+                    {isOverdue && (
+                      <Badge variant="danger">overdue</Badge>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Section 3: Inventory Position (hidden from drivers)       */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {showFull && (
+        <div>
+          <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide mb-3">Inventory Position</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Floor Stock */}
+            <Card hover className="cursor-pointer" onClick={() => navigate('/inventory')}>
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
+                  <Warehouse className="w-5 h-5 text-amber-600" />
+                </div>
+                <span className="text-sm text-secondary">Floor Stock</span>
+              </div>
+              <p className="text-2xl font-semibold font-heading text-nav-dark">
+                {(data.inventoryAvailable + data.inventoryPrebooked).toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
+              </p>
+              <div className="flex gap-3 mt-1">
+                <span className="text-xs text-crx-green">{data.inventoryAvailable.toLocaleString()} available</span>
+                <span className="text-xs text-amber-600">{data.inventoryPrebooked.toLocaleString()} pre-booked</span>
+              </div>
+            </Card>
+
+            {/* On Order */}
+            <Card hover className="cursor-pointer" onClick={() => navigate('/purchase-orders')}>
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-sky-50 flex items-center justify-center">
+                  <Package className="w-5 h-5 text-sky-600" />
+                </div>
+                <span className="text-sm text-secondary">On Order</span>
+              </div>
+              <p className="text-2xl font-semibold font-heading text-nav-dark">
+                {data.onOrderUnits.toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
+              </p>
+              <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+                Across {data.onOrderPoCount} open PO(s) <ChevronRight className="w-3 h-3" />
+              </p>
+            </Card>
+
+            {/* Committed */}
+            <Card hover className="cursor-pointer" onClick={() => navigate('/orders')}>
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-violet-50 flex items-center justify-center">
+                  <ClipboardCheck className="w-5 h-5 text-violet-600" />
+                </div>
+                <span className="text-sm text-secondary">Committed</span>
+              </div>
+              <p className="text-2xl font-semibold font-heading text-nav-dark">
+                {data.committedUnits.toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
+              </p>
+              <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+                Across {data.committedOrderCount} active order(s) <ChevronRight className="w-3 h-3" />
+              </p>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Section 4: Delivery Command Center                        */}
+      {/* ═══════════════════════════════════════════════════════════ */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2" padding={false}>
           <div className="p-5">
             <CardHeader
-              title="Upcoming"
-              accent="Deliveries"
+              title="Delivery"
+              accent="Command Center"
               action={
                 <Button variant="ghost" size="sm" onClick={() => navigate('/deliveries')}>
                   View All
@@ -191,156 +770,313 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="px-5 pb-5 space-y-2">
-              {data.upcomingDeliveries.map((del) => (
-                <div
-                  key={del.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => navigate(`/deliveries/${del.id}`)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(`/deliveries/${del.id}`); }}
-                  className="flex items-center justify-between p-3 rounded-lg hover:bg-crx-green-tint cursor-pointer transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center">
-                      <Truck className="w-4 h-4 text-blue-600" />
+              {data.upcomingDeliveries.map((del) => {
+                const dateInfo = deliveryDateLabel(del.scheduled_date);
+                return (
+                  <div
+                    key={del.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => navigate(`/deliveries/${del.id}`)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(`/deliveries/${del.id}`); }}
+                    className="flex items-center justify-between p-3 rounded-lg hover:bg-crx-green-tint cursor-pointer transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center">
+                        <Truck className="w-4 h-4 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-nav-dark">
+                          {del.customer_name || 'Unknown'}
+                        </p>
+                        <p className="text-xs text-secondary">
+                          {del.delivery_number} &middot; {del.driver_name || 'Unassigned'}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-nav-dark">
-                        {del.customer?.farm_name || 'Unknown'}
-                      </p>
-                      <p className="text-xs text-secondary">
-                        {del.delivery_number} &middot; {del.driver?.full_name || 'Unassigned'}
-                      </p>
+                    <div className="flex items-center gap-3">
+                      <span className={`text-xs ${dateInfo.color}`}>{dateInfo.text}</span>
+                      <Badge variant={statusToBadgeVariant[del.status] || 'default'}>
+                        {del.status.replace(/_/g, ' ')}
+                      </Badge>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-secondary">{del.scheduled_date}</span>
-                    <Badge variant={statusToBadgeVariant[del.status] || 'default'}>
-                      {del.status.replace(/_/g, ' ')}
-                    </Badge>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </Card>
 
-        <Card padding={false}>
-          <div className="p-5">
-            <CardHeader title="Recent" accent="Activity" />
-          </div>
-          {data.recentActivity.length === 0 ? (
-            <div className="px-5 pb-5">
-              <p className="text-sm text-secondary">No recent activity</p>
+        {/* Delivery stats mini-cards */}
+        <div className="grid grid-cols-2 gap-4">
+          <Card>
+            <div className="flex items-center gap-2 mb-2">
+              <Calendar className="w-4 h-4 text-crx-green" />
+              <span className="text-xs text-secondary">Today</span>
             </div>
-          ) : (
-            <div className="px-5 pb-5 space-y-3">
-              {data.recentActivity.map((act) => (
-                <div key={act.id} className="flex gap-3">
-                  <div className="w-2 h-2 rounded-full bg-crx-green mt-2 shrink-0" />
-                  <div>
-                    <p className="text-sm text-nav-dark">{act.description}</p>
-                    <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
-                      <Clock className="w-3 h-3" />
-                      {new Date(act.created_at).toLocaleDateString()}
-                    </p>
-                  </div>
-                </div>
-              ))}
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.deliveryToday}</p>
+          </Card>
+          <Card>
+            <div className="flex items-center gap-2 mb-2">
+              <CalendarCheck className="w-4 h-4 text-blue-600" />
+              <span className="text-xs text-secondary">This Week</span>
             </div>
-          )}
-        </Card>
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.deliveryThisWeek}</p>
+          </Card>
+          <Card>
+            <div className="flex items-center gap-2 mb-2">
+              <User className="w-4 h-4 text-orange-600" />
+              <span className="text-xs text-secondary">Unassigned</span>
+            </div>
+            <p className={`text-2xl font-semibold font-heading ${data.deliveryUnassigned > 0 ? 'text-orange-600' : 'text-nav-dark'}`}>
+              {data.deliveryUnassigned}
+            </p>
+          </Card>
+          <Card>
+            <div className="flex items-center gap-2 mb-2">
+              <ClipboardList className="w-4 h-4 text-purple-600" />
+              <span className="text-xs text-secondary">Remainders</span>
+            </div>
+            <p className={`text-2xl font-semibold font-heading ${data.deliveryRemaindersCount > 0 ? 'text-purple-600' : 'text-nav-dark'}`}>
+              {data.deliveryRemaindersCount}
+            </p>
+          </Card>
+        </div>
       </div>
 
-      {/* Operational alerts row */}
-      {!isDriver && (data.lowStockCount > 0 || data.driverIssuesCount > 0 || data.expiredHoldsCount > 0 || data.cancelledPostedCount > 0) && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {data.lowStockCount > 0 && (
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate('/inventory')}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/inventory'); }}
-              className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-amber-100 transition-colors"
-            >
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
-              <div>
-                <p className="text-sm font-semibold text-amber-800">Low Stock Alert</p>
-                <p className="text-xs text-amber-600">{data.lowStockCount} item(s) below reorder point</p>
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Section 5: Sales Pipeline Snapshot (hidden from drivers)  */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {showFull && (
+        <div>
+          <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide mb-3">Sales Pipeline</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Quote Pipeline */}
+            <Card hover className="cursor-pointer" onClick={() => navigate('/quotes')}>
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center">
+                  <FileText className="w-5 h-5 text-purple-600" />
+                </div>
+                <span className="text-sm text-secondary">Quote Pipeline</span>
               </div>
-            </div>
-          )}
-          {data.driverIssuesCount > 0 && (
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate('/deliveries')}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/deliveries'); }}
-              className="bg-orange-50 border border-orange-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-orange-100 transition-colors"
-            >
-              <Truck className="w-5 h-5 text-orange-600" />
-              <div>
-                <p className="text-sm font-semibold text-orange-800">Driver Issues</p>
-                <p className="text-xs text-orange-600">{data.driverIssuesCount} delivery(ies) with unresolved issues</p>
+              <div className="flex gap-2">
+                <Badge variant="draft">{data.quotePipelineDraft} draft</Badge>
+                <Badge variant="sent">{data.quotePipelineSent} sent</Badge>
+                <Badge variant="accepted">{data.quotePipelineAccepted} accepted</Badge>
               </div>
-            </div>
-          )}
-          {data.expiredHoldsCount > 0 && (
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate('/quotes')}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/quotes'); }}
-              className="bg-purple-50 border border-purple-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-purple-100 transition-colors"
-            >
-              <Warehouse className="w-5 h-5 text-purple-600" />
-              <div>
-                <p className="text-sm font-semibold text-purple-800">Stale Inventory Holds</p>
-                <p className="text-xs text-purple-600">{data.expiredHoldsCount} expired quote(s) with active holds</p>
+            </Card>
+
+            {/* Orders This Season */}
+            <Card hover className="cursor-pointer" onClick={() => navigate('/orders')}>
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
+                  <ShoppingCart className="w-5 h-5 text-blue-600" />
+                </div>
+                <span className="text-sm text-secondary">Orders (Season)</span>
               </div>
-            </div>
-          )}
-          {data.cancelledPostedCount > 0 && (
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate('/invoices')}
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate('/invoices'); }}
-              className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:bg-red-100 transition-colors"
-            >
-              <FileText className="w-5 h-5 text-red-600" />
-              <div>
-                <p className="text-sm font-semibold text-red-800">Cancelled + Posted</p>
-                <p className="text-xs text-red-600">{data.cancelledPostedCount} cancelled delivery(ies) with posted invoices</p>
+              <p className="text-2xl font-semibold font-heading text-nav-dark">{data.ordersYtdTotal}</p>
+              <p className="text-xs text-secondary mt-1">{data.ordersThisMonth} this month</p>
+            </Card>
+
+            {/* Deliveries Completed */}
+            <Card hover className="cursor-pointer" onClick={() => navigate('/deliveries')}>
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 rounded-lg bg-green-50 flex items-center justify-center">
+                  <CheckCircle2 className="w-5 h-5 text-green-600" />
+                </div>
+                <span className="text-sm text-secondary">Delivered (Season)</span>
               </div>
-            </div>
-          )}
+              <p className="text-2xl font-semibold font-heading text-nav-dark">{data.deliveriesCompletedTotal}</p>
+              <p className="text-xs text-secondary mt-1">{data.deliveriesCompletedThisMonth} this month</p>
+            </Card>
+          </div>
         </div>
       )}
 
-      {(isAdmin || role === 'sales_rep') && (
-        <Card>
-          <CardHeader title="Quick" accent="Actions" />
-          <div className="flex flex-wrap gap-3">
-            <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/quotes/new')}>
-              New Quote
-            </Button>
-            <Button variant="secondary" icon={<Users className="w-4 h-4" />} showChevron={false} onClick={() => navigate('/customers')}>
-              Customers
-            </Button>
-            {isAdmin && (
-              <>
-                <Button variant="secondary" icon={<Truck className="w-4 h-4" />} showChevron={false} onClick={() => navigate('/deliveries')}>
-                  Deliveries
-                </Button>
-                <Button variant="secondary" icon={<ChevronRight className="w-4 h-4" />} showChevron={false} onClick={() => navigate('/products')}>
-                  Update Costs
-                </Button>
-              </>
-            )}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Section 6: Operational Alerts (always visible)            */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      <div>
+        <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide mb-3">Operational Alerts</h2>
+        {visibleAlerts.length === 0 ? (
+          <div className="flex items-center gap-3 p-4 bg-crx-green-tint rounded-xl border border-crx-green/20">
+            <CheckCircle2 className="w-5 h-5 text-crx-green" />
+            <p className="text-sm text-crx-green font-medium">All Clear — No operational issues detected</p>
           </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {visibleAlerts.map((alert) => (
+              <div
+                key={alert.key}
+                role="button"
+                tabIndex={0}
+                onClick={() => navigate(alert.path)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(alert.path); }}
+                className={`${alert.bg} border ${alert.border} rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity`}
+              >
+                <span className={alert.iconColor}>{alert.icon}</span>
+                <div>
+                  <p className={`text-sm font-semibold ${alert.textColor}`}>{alert.label}</p>
+                  <p className={`text-xs ${alert.subColor}`}>{alert.sublabel}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Section 7: Monthly Activity Chart (hidden from drivers)   */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {showFull && (
+        <Card>
+          <CardHeader title="Monthly" accent="Activity" />
+          {data.monthlyActivity.length === 0 ? (
+            <p className="text-sm text-secondary">No monthly activity data available</p>
+          ) : (
+            <>
+              <div className="flex items-end gap-1 h-48 mt-2">
+                {data.monthlyActivity.map((m) => {
+                  const ordH = (m.orders_created / maxMonthlyValue) * 100;
+                  const delH = (m.deliveries_completed / maxMonthlyValue) * 100;
+                  const poH = (m.pos_received / maxMonthlyValue) * 100;
+                  const monthLabel = m.month.length >= 7 ? m.month.slice(5, 7) : m.month;
+                  return (
+                    <div key={m.month} className="flex-1 flex flex-col items-center gap-1 group">
+                      <div className="w-full flex items-end justify-center gap-px h-40 relative">
+                        {/* Orders bar */}
+                        <div
+                          className="flex-1 max-w-[10px] bg-blue-400 rounded-t"
+                          style={{ height: `${Math.max(ordH, m.orders_created > 0 ? 4 : 0)}%` }}
+                        />
+                        {/* Deliveries bar */}
+                        <div
+                          className="flex-1 max-w-[10px] bg-crx-green rounded-t"
+                          style={{ height: `${Math.max(delH, m.deliveries_completed > 0 ? 4 : 0)}%` }}
+                        />
+                        {/* POs bar */}
+                        <div
+                          className="flex-1 max-w-[10px] bg-teal-400 rounded-t"
+                          style={{ height: `${Math.max(poH, m.pos_received > 0 ? 4 : 0)}%` }}
+                        />
+                        {/* Tooltip */}
+                        <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-nav-dark text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                          O:{m.orders_created} D:{m.deliveries_completed} P:{m.pos_received}
+                        </div>
+                      </div>
+                      <span className="text-xs text-secondary">{monthLabel}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Legend */}
+              <div className="flex items-center gap-4 mt-3">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded bg-blue-400" />
+                  <span className="text-xs text-secondary">Orders</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded bg-crx-green" />
+                  <span className="text-xs text-secondary">Deliveries</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded bg-teal-400" />
+                  <span className="text-xs text-secondary">POs Received</span>
+                </div>
+              </div>
+            </>
+          )}
         </Card>
       )}
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Section 8: Season Progress Bar (hidden from drivers)      */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {showFull && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Season Progress */}
+          <Card>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-orange-50 flex items-center justify-center">
+                <BarChart3 className="w-5 h-5 text-orange-600" />
+              </div>
+              <div>
+                <span className="text-sm text-secondary">Season Progress</span>
+                <p className="text-lg font-semibold font-heading text-nav-dark">{data.seasonLabel}</p>
+              </div>
+            </div>
+            <div className="w-full bg-gray-100 rounded-full h-4 relative overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-crx-green to-emerald-400 h-4 rounded-full transition-all"
+                style={{ width: `${seasonPercent}%` }}
+              />
+              <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-nav-dark">
+                {seasonPercent}%
+              </span>
+            </div>
+            <div className="flex justify-between mt-2">
+              <span className="text-xs text-secondary">Oct 1</span>
+              <span className="text-xs text-secondary">{data.seasonDaysRemaining}d remaining</span>
+              <span className="text-xs text-secondary">Sep 30</span>
+            </div>
+          </Card>
+
+          {/* Accounting Period */}
+          <Card>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center">
+                <CalendarCheck className="w-5 h-5 text-indigo-600" />
+              </div>
+              <span className="text-sm text-secondary">Accounting Period</span>
+            </div>
+            <p className="text-lg font-semibold font-heading text-nav-dark">{data.periodName || 'N/A'}</p>
+            <div className="flex items-center gap-2 mt-2">
+              <Badge variant={data.periodStatus === 'open' ? 'success' : 'default'}>
+                {data.periodStatus}
+              </Badge>
+              {data.periodStatus === 'open' && (
+                <span className="text-xs text-secondary flex items-center gap-1">
+                  <Clock className="w-3 h-3" />
+                  {data.periodDaysRemaining}d remaining
+                </span>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════ */}
+      {/* Section 9: Recent Activity (improved)                     */}
+      {/* ═══════════════════════════════════════════════════════════ */}
+      <Card padding={false}>
+        <div className="p-5">
+          <CardHeader title="Recent" accent="Activity" />
+        </div>
+        {data.recentActivity.length === 0 ? (
+          <div className="px-5 pb-5">
+            <p className="text-sm text-secondary">No recent activity</p>
+          </div>
+        ) : (
+          <div className="px-5 pb-5 space-y-3">
+            {data.recentActivity.map((act) => {
+              const dotColor = eventTypeDot[act.event_type] || 'bg-gray-400';
+              return (
+                <div key={act.id} className="flex gap-3">
+                  <div className={`w-2 h-2 rounded-full ${dotColor} mt-2 shrink-0`} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-nav-dark">{act.description}</p>
+                    <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
+                      <Clock className="w-3 h-3" />
+                      {relativeTime(act.created_at)}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
     </div>
   );
 }

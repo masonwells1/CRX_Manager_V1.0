@@ -1,4 +1,4 @@
-# Migration History (96 migrations)
+# Migration History (116 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -65,3 +65,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 59 | 20260302100000 | Quote items: add `calc_mode` (rate_acres/units_direct) and `price_unit` columns for bidirectional calc + price unit override |
 | 60 | 20260302110000 | Orders: add `order_name` column, recreate `create_direct_order()` with auto-generated order numbers and order name support |
 | 61 | 20260302120000 | Save quote bidirectional calc: `save_quote()` branches on `calc_mode`, persists `calc_mode` + `price_unit` on items |
+| 62 | 20260323100000 | New RPC `operational_dashboard_summary()` — comprehensive 25-CTE function powering the rebuilt Operational Dashboard (KPIs, team board, inventory, deliveries, alerts, monthly chart, season progress, activity feed) |

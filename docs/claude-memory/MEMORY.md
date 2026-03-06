@@ -23,8 +23,8 @@ See `.env.example` in repo root for required variable names. Never commit actual
 ## Current State
 
 - **Branch:** `main`
-- **Pages:** 50 | **Migrations:** 107 | **Edge Functions:** 5
-- **Unit tests:** 1,433 passing (92 files) | **E2E specs:** 98 files (589 tests, all passing)
+- **Pages:** 50 | **Migrations:** 116 | **Edge Functions:** 5
+- **Unit tests:** 1,443 passing (93 files) | **E2E specs:** 102 files (626 tests, all passing)
 - **Build:** clean | **CI:** green | **Pre-commit:** lint + build + vitest
 - **Season:** October 1 to September 30
 

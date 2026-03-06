@@ -250,7 +250,7 @@ export default function FinancialDashboard() {
           Financial <span className="split-heading-accent">Dashboard</span>
         </h1>
         <Button variant="ghost" size="sm" onClick={() => navigate('/')}>
-          Operations Dashboard
+          Operational Dashboard
         </Button>
       </div>
 

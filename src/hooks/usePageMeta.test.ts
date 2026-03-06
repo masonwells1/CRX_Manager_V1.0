@@ -12,10 +12,10 @@ vi.mock('react-router-dom', () => ({
 import { usePageMeta } from './usePageMeta';
 
 describe('usePageMeta', () => {
-  it('returns Dashboard meta for / path', () => {
+  it('returns Operational Dashboard meta for / path', () => {
     mockPathname.pathname = '/';
     const { result } = renderHook(() => usePageMeta());
-    expect(result.current).toEqual({ title: 'Dashboard', accent: 'Overview' });
+    expect(result.current).toEqual({ title: 'Operational', accent: 'Dashboard' });
   });
 
   it('returns Product meta for /products path', () => {

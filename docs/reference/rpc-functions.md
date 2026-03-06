@@ -1,4 +1,4 @@
-# RPC Functions Reference (~115 total)
+# RPC Functions Reference (~116 total)
 
 ## Atomic Save/Delete
 - `save_quote()`, `save_job()`, `save_customer()` — validates commission splits sum to 100%, `save_blend_ticket()`, `save_purchase_order()`, `delete_purchase_order()`, `duplicate_quote()`
@@ -49,7 +49,8 @@
 - `get_fields_with_geojson()`, `get_field_geojson()`, `save_field_geometry()` — use `SET search_path = public, extensions` for PostGIS
 
 ## Dashboard
-- `dashboard_summary()` — operational-only summary (inventory levels, deliveries, recent activity, integrity alerts). Slimmed from original 8-query version; financial KPIs moved to `financial_dashboard_summary()`
+- `dashboard_summary()` — legacy operational summary (inventory levels, deliveries, recent activity, integrity alerts). Slimmed from original 8-query version; financial KPIs moved to `financial_dashboard_summary()`
+- `operational_dashboard_summary()` — comprehensive 25-CTE RPC powering the Operational Dashboard. Returns KPIs (active orders, open quotes, pending deliveries, open POs), team board action items, inventory position, upcoming deliveries, delivery stats, sales pipeline, 9 operational alert counts, 12-month activity chart data, season progress, accounting period status, and recent activity feed
 - `financial_dashboard_summary()` — admin-only RPC returning all financial KPIs: AR aging buckets, revenue totals, payment activity, prepay balances, finance charge summary, period status. Powers the `/financial-dashboard` page
 
 ## Helper Functions (SQL)
