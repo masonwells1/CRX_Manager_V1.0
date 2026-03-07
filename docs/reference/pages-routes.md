@@ -1,4 +1,4 @@
-# Pages & Routes Reference (50 total)
+# Pages & Routes Reference (55 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -40,6 +40,11 @@
 | `/prepayments` | PrepaymentManager | Admin-only. Prepay balances, Split Check entry (bucket-labeled), auto-apply or allocate to workspace |
 | `/prepay-workspace` | PrepayWorkspace | Admin-only. Split-panel allocator: left=prepay buckets by check#, right=unpaid invoices. Two-phase commit via `batch_apply_prepayments()` |
 | `/financial-dashboard` | FinancialDashboard | Admin-only. Financial KPIs: AR aging, revenue, payments, prepay balances, finance charges. Powered by `financial_dashboard_summary()` RPC |
+| `/payment-history` | PaymentHistory | Full payment history with per-invoice allocation breakdown |
+| `/accounts-payable` | AccountsPayable | Admin-only. AP Dashboard: total owed, due this week/month, overdue, aging buckets, vendor breakdown |
+| `/accounts-payable/bills` | VendorBills | Admin-only. Vendor bill list with status filtering (unpaid/partially paid/paid/overdue), search |
+| `/accounts-payable/bills/new` | NewVendorBill | Admin-only. Create vendor bill (manual or linked to PO), auto-calculate due date from payment terms |
+| `/accounts-payable/bills/:id` | VendorBillDetail | Admin-only. Bill detail, payment history, record payment, void bill |
 | `/reports` | Reports | 14 reports: 4 logbook, 6 financial, 4 operational. CSV/PDF export. |
 | `/fields` | Fields | Field list with Mapbox map view + bulk import (shapefile/KML/GeoJSON) |
 | `/fields/:id` | FieldDetail | Field CRUD with polygon drawing on satellite map |
@@ -48,7 +53,7 @@
 | `/returns` | Returns | Returns/RMA workflow (request -> approve -> receive -> credit) |
 | `/brand-vs-generic` | BrandVsGeneric | Ingredient mapping: branded vs generic |
 | `/crop-programs` | CropPrograms | Seasonal crop program management |
-| `/compliance` | Compliance | Applicator license tracking, RUP product list |
+| `/compliance` | Compliance | Applicator license tracking, RUP product list, RUP Sales Register (auto-generated from invoices, filterable, CSV export) |
 | `/rebates` | Rebates | Manufacturer rebate programs and claim management |
 | `/team-board` | TeamBoard | Kanban board: notes/todos/announcements, comments, real-time |
 | `/notifications` | Notifications | User notification center |

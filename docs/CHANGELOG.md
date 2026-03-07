@@ -4,6 +4,30 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-07 — Accounts Payable Module + RUP Sales Reporting
+
+### New: Accounts Payable (AP) Module
+- **Vendors table** — proper vendor entity with contact info, default payment terms (backfilled from existing PO/product data)
+- **Vendor Bills** — track bills from suppliers with payment terms, due dates, aging (unpaid/partially_paid/paid/voided)
+- **Vendor Payments** — record payments against bills (check/ACH/wire/credit card), auto-update balance and status
+- 5 RPCs: `create_vendor_bill()`, `record_vendor_payment()`, `void_vendor_bill()`, `get_ap_aging()`, `get_ap_dashboard_summary()`
+- 4 new pages: AP Dashboard (`/accounts-payable`), Vendor Bills list, New Vendor Bill form, Vendor Bill Detail with payment recording
+- Admin-only sidebar section under Finance
+- Migration: `20260307100000_accounts_payable_and_rup_reporting.sql`
+
+### New: RUP Sales Register (Compliance)
+- **`rup_sales_records` table** — auto-generated from invoices containing Restricted Use Pesticides
+- `generate_rup_sales_records()` — called automatically by `post_invoice()` for RUP line items, snapshots product/customer/license data
+- `get_rup_sales_register()` — filterable query for state reporting (date range, product, customer, compliance status)
+- Compliance status flagging: compliant (valid license), warning (expired), non_compliant (no license)
+- New "RUP Sales Register" tab on Compliance page with CSV export
+- All FIFRA Section 12 required fields captured
+
+### E2E Tests
+- `tests/e2e/accounts-payable.spec.ts` — 8 tests covering AP dashboard, bill lifecycle, void workflow, KPI cards, RUP compliance tab
+
+---
+
 ## 2026-03-06 — Operational Dashboard Rebuild
 
 ### New: Operational Dashboard (10-Section Command Center)

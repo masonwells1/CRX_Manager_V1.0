@@ -1,4 +1,4 @@
-# Migration History (116 migrations)
+# Migration History (123 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -66,3 +66,10 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 60 | 20260302110000 | Orders: add `order_name` column, recreate `create_direct_order()` with auto-generated order numbers and order name support |
 | 61 | 20260302120000 | Save quote bidirectional calc: `save_quote()` branches on `calc_mode`, persists `calc_mode` + `price_unit` on items |
 | 62 | 20260323100000 | New RPC `operational_dashboard_summary()` — comprehensive 25-CTE function powering the rebuilt Operational Dashboard (KPIs, team board, inventory, deliveries, alerts, monthly chart, season progress, activity feed) |
+| 63 | 20260304210000 | Add MG/g inventory units + Jar container type |
+| 64 | 20260319000000 | Fix trigger functions search_path for security |
+| 65 | 20260321100000 | Dashboard inventory position cards |
+| 66 | 20260321200000 | Prepay edit/delete RPCs |
+| 67 | 20260321300000 | Void payment RPC |
+| 68 | 20260322100000 | Inventory warn-not-block with net position (available - prebooked + on_order) |
+| 69 | 20260307100000 | **Accounts Payable + RUP Sales Reporting** — 4 new tables (`vendors`, `vendor_bills`, `vendor_payments`, `rup_sales_records`), 7 RPCs (`create_vendor_bill`, `record_vendor_payment`, `void_vendor_bill`, `get_ap_aging`, `get_ap_dashboard_summary`, `generate_rup_sales_records`, `get_rup_sales_register`), RLS policies, vendor backfill from existing PO/product data, `post_invoice()` enhanced to auto-generate RUP records |

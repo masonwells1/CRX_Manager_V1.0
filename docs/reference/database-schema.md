@@ -1,4 +1,4 @@
-# Database Schema Reference (72+ Tables)
+# Database Schema Reference (76+ Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -67,6 +67,12 @@
 - `prepay_credits` - Prepayment credits (customer_id, original_amount_cents, remaining_cents, source_payment_id, reference_number, bucket_label)
 - `prepay_applications` - Prepay credit applications to invoices (credit_id, invoice_id, applied_cents)
 - `financial_audit_log` - Immutable audit trail (entity_type, entity_id, action, old_data/new_data jsonb, performed_by)
+
+## Accounts Payable
+- `vendors` - Vendor master (name UNIQUE, contact_name, phone, email, address, default_payment_terms, default_payment_terms_days, notes, deleted_at)
+- `vendor_bills` - AP bills (vendor_id, purchase_order_id nullable, bill_number, bill_date, due_date, payment_terms, subtotal_cents, adjustment_cents, total_cents, paid_cents, balance_cents, status: unpaid/partially_paid/paid/voided, notes, created_by, deleted_at)
+- `vendor_payments` - Payments against vendor bills (vendor_bill_id, payment_date, amount_cents, payment_method: check/ach/wire/credit_card, reference_number, notes, created_by)
+- `rup_sales_records` - RUP compliance records auto-generated from invoices (invoice_id, invoice_item_id, order_id, customer_id, product_id, sale_date, product_name, epa_registration, quantity, unit, unit_price_cents, total_cents, buyer_name, buyer_certification_number/type/expiry, signal_word, compliance_status: compliant/warning/non_compliant, compliance_notes, season)
 
 ## Financial
 - `accounting_periods` - Month-end close tracking (status: open/closed)
@@ -161,3 +167,7 @@
 | applicator_licenses | Admin / Sales Rep | Admin | Admin | Admin |
 | rebate_programs | Admin | Admin | Admin | Admin |
 | rebate_claims | Admin | Admin | Admin | Admin |
+| vendors | All authenticated | Admin | Admin | Admin |
+| vendor_bills | Admin | Admin | Admin | Admin |
+| vendor_payments | Admin | Admin | - | - |
+| rup_sales_records | Admin | Admin | - | - |

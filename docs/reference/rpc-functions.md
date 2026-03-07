@@ -1,4 +1,4 @@
-# RPC Functions Reference (~116 total)
+# RPC Functions Reference (~123 total)
 
 ## Atomic Save/Delete
 - `save_quote()`, `save_job()`, `save_customer()` — validates commission splits sum to 100%, `save_blend_ticket()`, `save_purchase_order()`, `delete_purchase_order()`, `duplicate_quote()`
@@ -65,5 +65,16 @@ is_applicator() -- SECURITY DEFINER STABLE
 - **`on_auth_user_created`** - After INSERT on `auth.users`, calls `handle_new_user()` which auto-creates a `profiles` row using `raw_user_meta_data` (full_name, role defaults to 'sales_rep').
 - **`release_holds_on_quote_status_change`** - After UPDATE on `quotes`, fires when status changes to `declined`, `expired`, or `accepted`. Deactivates linked inventory holds (via `source_id`). For declined/expired: also restores `quantity_available`. For accepted: deactivates holds only (inventory stays allocated for the resulting order).
 
+## Accounts Payable
+- `create_vendor_bill(p_vendor_id, p_purchase_order_id, p_bill_number, p_bill_date, p_payment_terms, p_subtotal_cents, p_adjustment_cents, p_notes)` — creates vendor bill with auto-calculated due_date from payment terms (Net 15/30/45/60/90/Due on Receipt). Returns bill UUID. Backfills vendor from existing PO data if needed
+- `record_vendor_payment(p_vendor_bill_id, p_payment_date, p_amount_cents, p_payment_method, p_reference_number, p_notes)` — records payment against a bill, updates paid_cents/balance_cents, auto-transitions status (unpaid → partially_paid → paid). Validates amount ≤ balance
+- `void_vendor_bill(p_vendor_bill_id, p_reason)` — voids a bill (must not be 'paid'), sets status='voided', appends reason to notes
+- `get_ap_aging(p_as_of_date)` — AP aging report: Current / 31-60 / 61-90 / 90+ day buckets with vendor breakdown. Returns totals and per-vendor detail
+- `get_ap_dashboard_summary()` — KPI totals: total_owed, due_this_week, due_this_month, overdue_amount, bill counts, recent vendor bills
+
+## RUP Sales Reporting
+- `generate_rup_sales_records(p_invoice_id)` — auto-called after `post_invoice()` for invoices with RUP products. Creates rup_sales_records for each RUP line item, snapshots product/customer/license data, flags compliance_status (compliant/warning/non_compliant based on applicator license validity)
+- `get_rup_sales_register(p_start_date, p_end_date, p_product_id, p_customer_id, p_compliance_status)` — filterable register query for state reporting. Returns all FIFRA-required fields (date, product, EPA reg, qty, buyer cert)
+
 ## Invoice Posting
-- `post_invoice()` — now calls `check_period_open()` before posting; raises error if the invoice's accounting period is closed.
+- `post_invoice()` — now calls `check_period_open()` before posting; raises error if the invoice's accounting period is closed. Also triggers `generate_rup_sales_records()` for invoices containing RUP products.
