@@ -108,7 +108,6 @@ export default function NewVendorBill() {
         p_bill_number: billNumber.trim(),
         p_bill_date: billDate,
         p_payment_terms: paymentTerms || null,
-        p_payment_terms_days: paymentTermsDays,
         p_subtotal_cents: subtotalCents,
         p_adjustment_cents: adjustmentCents,
         p_notes: notes || null,
