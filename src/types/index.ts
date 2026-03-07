@@ -1665,6 +1665,111 @@ export interface YearEndShareRow {
   pricing_note: string | null;
 }
 
+// ── Accounts Payable ──────────────────────────────────────────────
+
+export interface Vendor {
+  id: string;
+  name: string;
+  contact_name: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  default_payment_terms: string | null;
+  default_payment_terms_days: number | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export type VendorBillStatus = 'unpaid' | 'partially_paid' | 'paid' | 'voided';
+
+export interface VendorBill {
+  id: string;
+  vendor_id: string;
+  purchase_order_id: string | null;
+  bill_number: string;
+  bill_date: string;
+  due_date: string;
+  payment_terms: string | null;
+  subtotal_cents: number;
+  adjustment_cents: number;
+  total_cents: number;
+  paid_cents: number;
+  balance_cents: number;
+  status: VendorBillStatus;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+  // Joined
+  vendor?: Vendor;
+  purchase_order?: PurchaseOrder;
+}
+
+export interface VendorPayment {
+  id: string;
+  vendor_bill_id: string;
+  payment_date: string;
+  amount_cents: number;
+  payment_method: string | null;
+  reference_number: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  // Joined
+  creator?: Profile;
+}
+
+export interface APAgingRow {
+  [k: string]: unknown;
+  vendor_id: string;
+  vendor_name: string;
+  current_amount: number;
+  days_31_60: number;
+  days_61_90: number;
+  over_90: number;
+  total_outstanding: number;
+  bill_count: number;
+}
+
+export interface APDashboardSummary {
+  total_owed_cents: number;
+  due_this_week_cents: number;
+  due_this_month_cents: number;
+  overdue_cents: number;
+  overdue_count: number;
+  unpaid_count: number;
+}
+
+export interface RUPSalesRecord {
+  [k: string]: unknown;
+  id: string;
+  invoice_id: string;
+  invoice_item_id: string | null;
+  order_id: string | null;
+  customer_id: string;
+  product_id: string;
+  sale_date: string;
+  product_name: string;
+  epa_registration: string | null;
+  quantity: number;
+  unit: string;
+  unit_price_cents: number | null;
+  total_cents: number | null;
+  buyer_name: string;
+  buyer_certification_number: string | null;
+  buyer_certification_type: string | null;
+  buyer_certification_expiry: string | null;
+  signal_word: string | null;
+  compliance_status: 'compliant' | 'warning' | 'non_compliant';
+  compliance_notes: string | null;
+  season: number | null;
+  invoice_number?: string;
+  created_at: string;
+}
+
 // ── Quick Receive ─────────────────────────────────────────────────
 
 export interface QuickReceiveItem {

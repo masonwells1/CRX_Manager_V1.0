@@ -1,0 +1,302 @@
+/**
+ * NewVendorBill.tsx — Create a new vendor bill
+ *
+ * Manual bill entry: vendor, bill #, date, due date, amount, payment terms.
+ * Option to link to existing PO (auto-fill vendor + amount).
+ * Uses the create_vendor_bill() RPC. Admin-only.
+ */
+import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import Input from '../components/ui/Input';
+import { useToast } from '../components/ui/Toast';
+import { supabase } from '../lib/db';
+import { sanitizeError } from '../lib/errorSanitizer';
+import type { Vendor, PurchaseOrder } from '../types';
+
+export default function NewVendorBill() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [saving, setSaving] = useState(false);
+
+  // Lookups
+  const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<(PurchaseOrder & { vendor_id_match?: string })[]>([]);
+
+  // Form
+  const [vendorId, setVendorId] = useState('');
+  const [purchaseOrderId, setPurchaseOrderId] = useState('');
+  const [billNumber, setBillNumber] = useState('');
+  const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
+  const [paymentTerms, setPaymentTerms] = useState('');
+  const [paymentTermsDays, setPaymentTermsDays] = useState(30);
+  const [subtotalDollars, setSubtotalDollars] = useState('');
+  const [adjustmentDollars, setAdjustmentDollars] = useState('0');
+  const [notes, setNotes] = useState('');
+
+  const fetchVendors = useCallback(async () => {
+    const { data } = await supabase
+      .from('vendors')
+      .select('*')
+      .is('deleted_at', null)
+      .order('name');
+    setVendors((data || []) as Vendor[]);
+  }, []);
+
+  const fetchPOs = useCallback(async () => {
+    const { data } = await supabase
+      .from('purchase_orders')
+      .select('*')
+      .in('status', ['submitted', 'partially_received', 'fully_received'])
+      .order('created_at', { ascending: false })
+      .limit(200);
+    setPurchaseOrders((data || []) as PurchaseOrder[]);
+  }, []);
+
+  useEffect(() => {
+    fetchVendors();
+    fetchPOs();
+  }, [fetchVendors, fetchPOs]);
+
+  // When vendor selected, apply default terms
+  useEffect(() => {
+    if (!vendorId) return;
+    const v = vendors.find((x) => x.id === vendorId);
+    if (v) {
+      if (v.default_payment_terms) setPaymentTerms(v.default_payment_terms);
+      if (v.default_payment_terms_days) setPaymentTermsDays(v.default_payment_terms_days);
+    }
+  }, [vendorId, vendors]);
+
+  // When PO selected, auto-fill vendor + amount
+  const handlePOSelect = (poId: string) => {
+    setPurchaseOrderId(poId);
+    if (!poId) return;
+
+    const po = purchaseOrders.find((p) => p.id === poId);
+    if (!po) return;
+
+    // Try to match vendor by name
+    const matchedVendor = vendors.find(
+      (v) => v.name.toLowerCase() === po.vendor.toLowerCase()
+    );
+    if (matchedVendor) {
+      setVendorId(matchedVendor.id);
+    }
+
+    // Auto-fill amount from PO total
+    if (po.total_cost > 0) {
+      setSubtotalDollars(po.total_cost.toFixed(2));
+    }
+  };
+
+  const handleSave = async () => {
+    if (!vendorId) { toast('error', 'Select a vendor'); return; }
+    if (!billNumber.trim()) { toast('error', 'Enter a bill number'); return; }
+    if (!subtotalDollars || Number(subtotalDollars) <= 0) { toast('error', 'Enter a valid amount'); return; }
+
+    setSaving(true);
+    try {
+      const subtotalCents = Math.round(Number(subtotalDollars) * 100);
+      const adjustmentCents = Math.round(Number(adjustmentDollars || 0) * 100);
+
+      const { data, error } = await supabase.rpc('create_vendor_bill', {
+        p_vendor_id: vendorId,
+        p_purchase_order_id: purchaseOrderId || null,
+        p_bill_number: billNumber.trim(),
+        p_bill_date: billDate,
+        p_payment_terms: paymentTerms || null,
+        p_payment_terms_days: paymentTermsDays,
+        p_subtotal_cents: subtotalCents,
+        p_adjustment_cents: adjustmentCents,
+        p_notes: notes || null,
+      });
+
+      if (error) throw error;
+
+      toast('success', 'Vendor bill created');
+      navigate(`/accounts-payable/bills/${data}`);
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setSaving(false);
+  };
+
+  const totalCents = Math.round(Number(subtotalDollars || 0) * 100) + Math.round(Number(adjustmentDollars || 0) * 100);
+  const fmt = (cents: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
+
+  // Calculate due date preview
+  const dueDate = (() => {
+    try {
+      const d = new Date(billDate);
+      d.setDate(d.getDate() + paymentTermsDays);
+      return d.toLocaleDateString();
+    } catch {
+      return '-';
+    }
+  })();
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <button onClick={() => navigate('/accounts-payable/bills')} className="text-crx-green hover:text-crx-green/70">
+          <ArrowLeft className="w-5 h-5" />
+        </button>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">New Vendor Bill</h2>
+      </div>
+
+      {/* Link to PO (optional) */}
+      <Card>
+        <h3 className="text-sm font-semibold text-nav-dark mb-3">Link to Purchase Order (Optional)</h3>
+        <select
+          value={purchaseOrderId}
+          onChange={(e) => handlePOSelect(e.target.value)}
+          className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+        >
+          <option value="">No linked PO</option>
+          {purchaseOrders.map((po) => (
+            <option key={po.id} value={po.id}>
+              {po.po_number} — {po.vendor} — ${po.total_cost.toFixed(2)}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs text-secondary mt-1">
+          Linking a PO auto-fills vendor and amount. You can still edit them.
+        </p>
+      </Card>
+
+      {/* Bill Details */}
+      <Card>
+        <h3 className="text-sm font-semibold text-nav-dark mb-3">Bill Details</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium text-nav-dark">Vendor *</label>
+            <select
+              value={vendorId}
+              onChange={(e) => setVendorId(e.target.value)}
+              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            >
+              <option value="">Select vendor...</option>
+              {vendors.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Bill Number *"
+              value={billNumber}
+              onChange={(e) => setBillNumber(e.target.value)}
+              placeholder="Vendor's invoice/bill #"
+            />
+            <Input
+              label="Bill Date"
+              type="date"
+              value={billDate}
+              onChange={(e) => setBillDate(e.target.value)}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm font-medium text-nav-dark">Payment Terms</label>
+              <select
+                value={paymentTerms}
+                onChange={(e) => {
+                  setPaymentTerms(e.target.value);
+                  const daysMap: Record<string, number> = {
+                    'Net 15': 15,
+                    'Net 30': 30,
+                    'Net 45': 45,
+                    'Net 60': 60,
+                    'Net 90': 90,
+                    'Due on Receipt': 0,
+                  };
+                  if (daysMap[e.target.value] !== undefined) {
+                    setPaymentTermsDays(daysMap[e.target.value]);
+                  }
+                }}
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              >
+                <option value="">Select...</option>
+                <option value="Due on Receipt">Due on Receipt</option>
+                <option value="Net 15">Net 15</option>
+                <option value="Net 30">Net 30</option>
+                <option value="Net 45">Net 45</option>
+                <option value="Net 60">Net 60</option>
+                <option value="Net 90">Net 90</option>
+              </select>
+            </div>
+            <Input
+              label="Days Until Due"
+              type="number"
+              value={String(paymentTermsDays)}
+              onChange={(e) => setPaymentTermsDays(Number(e.target.value))}
+            />
+          </div>
+
+          <p className="text-xs text-secondary">
+            Due date: <span className="font-semibold">{dueDate}</span>
+          </p>
+        </div>
+      </Card>
+
+      {/* Amount */}
+      <Card>
+        <h3 className="text-sm font-semibold text-nav-dark mb-3">Amount</h3>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Subtotal ($) *"
+              type="number"
+              step="0.01"
+              min="0"
+              value={subtotalDollars}
+              onChange={(e) => setSubtotalDollars(e.target.value)}
+              placeholder="0.00"
+            />
+            <Input
+              label="Adjustment ($)"
+              type="number"
+              step="0.01"
+              value={adjustmentDollars}
+              onChange={(e) => setAdjustmentDollars(e.target.value)}
+              placeholder="0.00 (negative for discount)"
+            />
+          </div>
+          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+            <span className="text-sm font-medium text-nav-dark">Total Amount</span>
+            <span className="text-lg font-semibold font-heading text-nav-dark">{fmt(totalCents)}</span>
+          </div>
+        </div>
+      </Card>
+
+      {/* Notes */}
+      <Card>
+        <Input
+          label="Notes"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Optional notes about this bill"
+        />
+      </Card>
+
+      {/* Actions */}
+      <div className="flex justify-end gap-3">
+        <Button variant="ghost" onClick={() => navigate('/accounts-payable/bills')}>
+          Cancel
+        </Button>
+        <Button onClick={handleSave} loading={saving}>
+          Create Bill
+        </Button>
+      </div>
+    </div>
+  );
+}

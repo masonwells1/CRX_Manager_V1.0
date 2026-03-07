@@ -1,14 +1,15 @@
 /**
- * Compliance.tsx — Applicator License & RUP Product Tracking
+ * Compliance.tsx — Applicator License, RUP Product & RUP Sales Tracking
  *
- * Manages applicator licenses for customers (expiry tracking, alerts)
- * and provides a view of Restricted Use Pesticide (RUP) products.
+ * Manages applicator licenses for customers (expiry tracking, alerts),
+ * provides a view of RUP products, and a RUP Sales Register for
+ * state regulatory compliance (FIFRA).
  */
-import { useEffect, useState , useCallback } from 'react';
-import { Plus, AlertTriangle, Award, Package } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { Plus, AlertTriangle, Award, Package, FileText, Download } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
-import Badge from '../components/ui/Badge';
+import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -17,9 +18,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { logActivity } from '../lib/activityLogger';
-import type { ApplicatorLicense } from '../types';
+import { exportToCSV, fmtCSV } from '../lib/csvExport';
+import type { ApplicatorLicense, RUPSalesRecord } from '../types';
 
-type TabKey = 'licenses' | 'rup_products';
+type TabKey = 'licenses' | 'rup_products' | 'rup_sales';
 
 interface LicenseWithCustomer extends ApplicatorLicense {
   [k: string]: unknown;
@@ -50,6 +52,17 @@ export default function Compliance() {
 
   // RUP Products
   const [rupProducts, setRUPProducts] = useState<RUPProduct[]>([]);
+
+  // RUP Sales Register
+  const [rupSales, setRUPSales] = useState<RUPSalesRecord[]>([]);
+  const [rupStartDate, setRUPStartDate] = useState(() => {
+    // Default: current season start (Oct 1 of previous year or current year)
+    const now = new Date();
+    const seasonYear = now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1;
+    return `${seasonYear}-10-01`;
+  });
+  const [rupEndDate, setRUPEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [rupComplianceFilter, setRUPComplianceFilter] = useState('');
 
   // Customers for dropdowns
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
@@ -109,15 +122,32 @@ export default function Compliance() {
     setRUPProducts((data || []) as RUPProduct[]);
   }, [toast]);
 
+  const fetchRUPSales = useCallback(async () => {
+    const { data, error } = await supabase.rpc('get_rup_sales_register', {
+      p_start_date: rupStartDate,
+      p_end_date: rupEndDate,
+      p_compliance_status: rupComplianceFilter || null,
+    });
+
+    if (error) {
+      toast('error', 'Failed to load RUP sales register');
+      console.error(error.message);
+      return;
+    }
+    setRUPSales((data || []) as RUPSalesRecord[]);
+  }, [rupStartDate, rupEndDate, rupComplianceFilter, toast]);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     if (tab === 'licenses') {
       await Promise.all([fetchLicenses(), fetchCustomers()]);
-    } else {
+    } else if (tab === 'rup_products') {
       await fetchRUPProducts();
+    } else if (tab === 'rup_sales') {
+      await fetchRUPSales();
     }
     setLoading(false);
-  }, [tab, fetchLicenses, fetchCustomers, fetchRUPProducts]);
+  }, [tab, fetchLicenses, fetchCustomers, fetchRUPProducts, fetchRUPSales]);
 
   useEffect(() => {
     fetchData();
@@ -312,6 +342,84 @@ export default function Compliance() {
     },
   ];
 
+  const complianceVariant: Record<string, BadgeVariant> = {
+    compliant: 'success',
+    warning: 'warning',
+    non_compliant: 'error',
+  };
+
+  const fmtCurrency = (cents: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
+
+  const rupSalesColumns: Column<RUPSalesRecord>[] = [
+    {
+      key: 'sale_date',
+      header: 'Date',
+      sortable: true,
+      render: (r) => new Date(r.sale_date).toLocaleDateString(),
+    },
+    {
+      key: 'buyer_name',
+      header: 'Buyer',
+      sortable: true,
+      render: (r) => <span className="font-medium text-nav-dark">{r.buyer_name}</span>,
+    },
+    {
+      key: 'product_name',
+      header: 'Product',
+      sortable: true,
+    },
+    {
+      key: 'epa_registration',
+      header: 'EPA Reg #',
+      render: (r) => r.epa_registration || '-',
+    },
+    {
+      key: 'quantity',
+      header: 'Qty',
+      render: (r) => <span className="font-mono">{r.quantity} {r.unit}</span>,
+    },
+    {
+      key: 'total_cents',
+      header: 'Total',
+      sortable: true,
+      render: (r) => <span className="font-mono text-sm">{fmtCurrency(r.total_cents)}</span>,
+    },
+    {
+      key: 'buyer_certification_number',
+      header: 'Cert #',
+      render: (r) => r.buyer_certification_number || <span className="text-red-500 text-xs">Missing</span>,
+    },
+    {
+      key: 'buyer_certification_expiry',
+      header: 'Cert Expiry',
+      render: (r) =>
+        r.buyer_certification_expiry
+          ? new Date(r.buyer_certification_expiry).toLocaleDateString()
+          : '-',
+    },
+    {
+      key: 'signal_word',
+      header: 'Signal',
+      render: (r) =>
+        r.signal_word ? (
+          <Badge variant={r.signal_word === 'Danger' ? 'error' : r.signal_word === 'Warning' ? 'warning' : 'default'}>
+            {r.signal_word}
+          </Badge>
+        ) : '-',
+    },
+    {
+      key: 'compliance_status',
+      header: 'Compliance',
+      sortable: true,
+      render: (r) => (
+        <Badge variant={complianceVariant[r.compliance_status] || 'default'}>
+          {r.compliance_status.replace(/_/g, ' ')}
+        </Badge>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -340,6 +448,14 @@ export default function Compliance() {
           }`}
         >
           <Package className="w-4 h-4" /> RUP Products
+        </button>
+        <button
+          onClick={() => setTab('rup_sales')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${
+            tab === 'rup_sales' ? 'bg-white text-nav-dark shadow-sm' : 'text-secondary hover:text-nav-dark'
+          }`}
+        >
+          <FileText className="w-4 h-4" /> RUP Sales Register
         </button>
       </div>
 
@@ -455,6 +571,127 @@ export default function Compliance() {
             />
           </div>
         </Card>
+      )}
+
+      {/* ========== RUP SALES REGISTER TAB ========== */}
+      {tab === 'rup_sales' && (
+        <>
+          {/* Filters */}
+          <Card>
+            <div className="flex items-end gap-4 flex-wrap">
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Start Date</label>
+                <input
+                  type="date"
+                  value={rupStartDate}
+                  onChange={(e) => setRUPStartDate(e.target.value)}
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">End Date</label>
+                <input
+                  type="date"
+                  value={rupEndDate}
+                  onChange={(e) => setRUPEndDate(e.target.value)}
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Compliance</label>
+                <select
+                  value={rupComplianceFilter}
+                  onChange={(e) => setRUPComplianceFilter(e.target.value)}
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">All</option>
+                  <option value="compliant">Compliant</option>
+                  <option value="warning">Warning</option>
+                  <option value="non_compliant">Non-Compliant</option>
+                </select>
+              </div>
+              <Button variant="secondary" size="sm" onClick={fetchRUPSales}>
+                Refresh
+              </Button>
+              <div className="ml-auto">
+                {rupSales.length > 0 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<Download className="w-4 h-4" />}
+                    onClick={() =>
+                      exportToCSV(
+                        rupSales as unknown as Record<string, unknown>[],
+                        [
+                          { key: 'sale_date', header: 'Sale Date' },
+                          { key: 'buyer_name', header: 'Buyer Name' },
+                          { key: 'product_name', header: 'Product' },
+                          { key: 'epa_registration', header: 'EPA Reg #' },
+                          { key: 'quantity', header: 'Quantity' },
+                          { key: 'unit', header: 'Unit' },
+                          { key: 'total_cents', header: 'Total ($)', format: (v) => fmtCSV((v as number) / 100) },
+                          { key: 'signal_word', header: 'Signal Word' },
+                          { key: 'buyer_certification_number', header: 'Cert #' },
+                          { key: 'buyer_certification_type', header: 'Cert Type' },
+                          { key: 'buyer_certification_expiry', header: 'Cert Expiry' },
+                          { key: 'compliance_status', header: 'Compliance' },
+                          { key: 'compliance_notes', header: 'Notes' },
+                        ],
+                        'rup_sales_register'
+                      )
+                    }
+                  >
+                    Export CSV
+                  </Button>
+                )}
+              </div>
+            </div>
+          </Card>
+
+          {/* Summary */}
+          {rupSales.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <Card>
+                <p className="text-xs text-secondary mb-1">Total Records</p>
+                <p className="text-2xl font-semibold font-heading text-nav-dark">{rupSales.length}</p>
+              </Card>
+              <Card>
+                <p className="text-xs text-secondary mb-1">Compliant</p>
+                <p className="text-2xl font-semibold font-heading text-crx-green">
+                  {rupSales.filter((r) => r.compliance_status === 'compliant').length}
+                </p>
+              </Card>
+              <Card>
+                <p className="text-xs text-secondary mb-1">Warnings</p>
+                <p className="text-2xl font-semibold font-heading text-yellow-600">
+                  {rupSales.filter((r) => r.compliance_status === 'warning').length}
+                </p>
+              </Card>
+              <Card>
+                <p className="text-xs text-secondary mb-1">Non-Compliant</p>
+                <p className="text-2xl font-semibold font-heading text-red-600">
+                  {rupSales.filter((r) => r.compliance_status === 'non_compliant').length}
+                </p>
+              </Card>
+            </div>
+          )}
+
+          {/* Data Table */}
+          <Card padding={false}>
+            <div className="p-5">
+              <DataTable<RUPSalesRecord>
+                columns={rupSalesColumns}
+                data={rupSales}
+                loading={loading}
+                searchable
+                searchPlaceholder="Search RUP sales..."
+                searchKeys={['buyer_name', 'product_name', 'epa_registration', 'buyer_certification_number']}
+                emptyTitle="No RUP sales records"
+                emptyDescription="RUP sales records are auto-generated when invoices with RUP products are posted."
+              />
+            </div>
+          </Card>
+        </>
       )}
 
       {/* ========== ADD/EDIT LICENSE MODAL ========== */}

@@ -62,6 +62,10 @@ const DeliveryRemainders = lazy(() => import('./pages/DeliveryRemainders'));
 const ReceivingLog = lazy(() => import('./pages/ReceivingLog'));
 const QuickReceive = lazy(() => import('./pages/QuickReceive'));
 const FinancialDashboard = lazy(() => import('./pages/FinancialDashboard'));
+const AccountsPayable = lazy(() => import('./pages/AccountsPayable'));
+const VendorBills = lazy(() => import('./pages/VendorBills'));
+const NewVendorBill = lazy(() => import('./pages/NewVendorBill'));
+const VendorBillDetail = lazy(() => import('./pages/VendorBillDetail'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -180,6 +184,10 @@ const router = createBrowserRouter([
           { path: 'customer-transactions', element: <ProtectedRoute allowedRoles={['admin']}><CustomerTransactionReview /></ProtectedRoute> },
           { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><PrepaymentManager /></ProtectedRoute> },
           { path: 'prepay-workspace', element: <ProtectedRoute allowedRoles={['admin']}><PrepayWorkspace /></ProtectedRoute> },
+          { path: 'accounts-payable', element: <ProtectedRoute allowedRoles={['admin']}><AccountsPayable /></ProtectedRoute> },
+          { path: 'accounts-payable/bills', element: <ProtectedRoute allowedRoles={['admin']}><VendorBills /></ProtectedRoute> },
+          { path: 'accounts-payable/bills/new', element: <ProtectedRoute allowedRoles={['admin']}><NewVendorBill /></ProtectedRoute> },
+          { path: 'accounts-payable/bills/:id', element: <ProtectedRoute allowedRoles={['admin']}><VendorBillDetail /></ProtectedRoute> },
           { path: 'settings', element: <ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute> },
 
           // payment-allocation route removed — now served at /payments
