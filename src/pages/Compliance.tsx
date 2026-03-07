@@ -383,7 +383,7 @@ export default function Compliance() {
       key: 'total_cents',
       header: 'Total',
       sortable: true,
-      render: (r) => <span className="font-mono text-sm">{fmtCurrency(r.total_cents)}</span>,
+      render: (r) => <span className="font-mono text-sm">{fmtCurrency(r.total_cents ?? 0)}</span>,
     },
     {
       key: 'buyer_certification_number',
