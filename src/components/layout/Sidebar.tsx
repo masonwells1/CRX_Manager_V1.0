@@ -160,6 +160,7 @@ const navigation: NavEntry[] = [
         { path: '/month-end', label: 'Month-End', icon: <CalendarCheck className="w-4 h-4" />, roles: ['admin'] },
         { path: '/rebates', label: 'Rebates', icon: <BadgeDollarSign className="w-4 h-4" />, roles: ['admin'] },
         { path: '/reports', label: 'Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/sales-reports', label: 'Sales Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/compliance', label: 'Compliance', icon: <ShieldCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },

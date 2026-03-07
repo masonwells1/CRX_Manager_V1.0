@@ -1443,6 +1443,47 @@ export interface ChemicalHistoryRow {
   notes: string | null;
 }
 
+export interface SalesDetailRow {
+  [k: string]: unknown;
+  order_date: string;
+  order_number: string;
+  customer_name: string;
+  customer_id: string;
+  product_name: string;
+  product_id: string;
+  sku: string;
+  category: string;
+  quantity: number;
+  unit: string;
+  unit_price: number;
+  total_price: number;
+  cost: number;
+  profit: number;
+  margin_pct: number;
+  sales_rep_name: string;
+  invoice_number: string | null;
+  season: number;
+}
+
+export interface SalesSummaryRow {
+  [k: string]: unknown;
+  group_key: string;
+  group_id: string | null;
+  total_quantity: number;
+  total_revenue: number;
+  total_cost: number;
+  total_profit: number;
+  margin_pct: number;
+  order_count: number;
+  line_count: number;
+}
+
+export interface FarmGroupMember {
+  id: string;
+  farm_name: string;
+  is_parent: boolean;
+}
+
 export interface CommissionBalanceRow {
   [k: string]: unknown;
   recipient_id: string | null;

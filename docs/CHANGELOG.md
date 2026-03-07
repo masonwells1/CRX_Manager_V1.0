@@ -4,6 +4,23 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-07 — Sales & Chemical History Reporting
+
+### New: Sales Reports Page (`/sales-reports`)
+- **5 report tabs**: Sales Detail (line-item), By Product, By Customer, By Month, By Sales Rep
+- **6 filters**: Date Range (with presets: This Season, Last Season, YTD, Last 30/90d), Product, Customer (multi-select), Sales Rep, Category, Season
+- **Customer View toggle** — hides cost, profit, margin, and sales rep columns for customer-facing exports
+- **Multi-customer selection** with searchable dropdown and chip-based display
+- **Farm group support** — auto-detects `parent_customer_id` links, "Include linked farms" toggle groups landlords + main farm into one report
+- **Summary cards**: Total Revenue, Total Profit (hidden in Customer View), Units Sold, Orders
+- **CSV + PDF export** — respects Customer View visibility (internal data excluded when toggled)
+- 3 new RPCs: `get_sales_detail_report()` (LATERAL JOIN to invoices), `get_sales_summary_report()` (CTE-based GROUP BY dimension), `get_customer_farm_group()` (recursive CTE for parent/child farm grouping)
+- Migration: `20260307200000_sales_reports.sql`
+- Route: `/sales-reports`, roles: admin + sales_rep
+- Sidebar: under Finance category between Reports and Compliance
+
+---
+
 ## 2026-03-07 — Accounts Payable Module + RUP Sales Reporting
 
 ### New: Accounts Payable (AP) Module

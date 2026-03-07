@@ -1,4 +1,4 @@
-# RPC Functions Reference (~123 total)
+# RPC Functions Reference (~126 total)
 
 ## Atomic Save/Delete
 - `save_quote()`, `save_job()`, `save_customer()` — validates commission splits sum to 100%, `save_blend_ticket()`, `save_purchase_order()`, `delete_purchase_order()`, `duplicate_quote()`
@@ -31,10 +31,15 @@
 - `next_job_number()` -> JOB-YYYY-NNNN
 - `next_commission_payment_number()` -> CP-YYYY-NNNN
 
-## Reporting (10 RPCs)
+## Reporting (13 RPCs)
 - `get_logbook_by_customer()`, `get_logbook_by_applicator()`, `get_logbook_by_field()`, `get_logbook_faa()`
 - `get_bottom_line_pnl()`, `get_gross_sales_report()`, `get_customer_balance_listing()`
 - `get_chemical_history()`, `get_commission_balance_report()`, `get_inventory_cost_report()`
+
+## Sales Reports (3 RPCs)
+- `get_sales_detail_report(p_start_date, p_end_date, p_product_id, p_customer_ids uuid[], p_sales_rep_id, p_category, p_season)` — line-item sales detail with LATERAL JOIN to invoices for invoice_number. Joins order_items → orders → customers → products → profiles. All filters optional
+- `get_sales_summary_report(p_group_by, p_start_date, p_end_date, p_product_id, p_customer_ids uuid[], p_sales_rep_id, p_category, p_season)` — aggregated sales grouped by dimension (product/customer/sales_rep/month/category). CTE-based with same filter set
+- `get_customer_farm_group(p_customer_id)` — recursive CTE that walks up parent_customer_id chain to find root parent, then returns parent + all direct children. Powers multi-customer farm group reporting
 
 ## Financial
 - `close_accounting_period()`, `check_period_open()`, `generate_batch_statements()`, `get_monthly_summary()`

@@ -1,4 +1,4 @@
-# Migration History (123 migrations)
+# Migration History (124 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -73,3 +73,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 67 | 20260321300000 | Void payment RPC |
 | 68 | 20260322100000 | Inventory warn-not-block with net position (available - prebooked + on_order) |
 | 69 | 20260307100000 | **Accounts Payable + RUP Sales Reporting** — 4 new tables (`vendors`, `vendor_bills`, `vendor_payments`, `rup_sales_records`), 7 RPCs (`create_vendor_bill`, `record_vendor_payment`, `void_vendor_bill`, `get_ap_aging`, `get_ap_dashboard_summary`, `generate_rup_sales_records`, `get_rup_sales_register`), RLS policies, vendor backfill from existing PO/product data, `post_invoice()` enhanced to auto-generate RUP records |
+| 70 | 20260307200000 | **Sales & Chemical History Reporting** — 3 new RPCs (`get_sales_detail_report` with LATERAL JOIN to invoices, `get_sales_summary_report` with CTE-based GROUP BY dimension, `get_customer_farm_group` recursive CTE for parent/child farm grouping). Powers new `/sales-reports` page |

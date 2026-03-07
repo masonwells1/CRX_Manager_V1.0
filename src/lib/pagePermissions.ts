@@ -55,6 +55,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
 
   // Reports
   { key: 'reports', label: 'Reports', category: 'Reports', roles: ['admin', 'sales_rep'] },
+  { key: 'sales-reports', label: 'Sales Reports', category: 'Reports', roles: ['admin', 'sales_rep'] },
   { key: 'compliance', label: 'Compliance', category: 'Reports', roles: ['admin', 'sales_rep'] },
 ];
 

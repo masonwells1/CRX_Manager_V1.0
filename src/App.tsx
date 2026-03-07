@@ -66,6 +66,7 @@ const AccountsPayable = lazy(() => import('./pages/AccountsPayable'));
 const VendorBills = lazy(() => import('./pages/VendorBills'));
 const NewVendorBill = lazy(() => import('./pages/NewVendorBill'));
 const VendorBillDetail = lazy(() => import('./pages/VendorBillDetail'));
+const SalesReports = lazy(() => import('./pages/SalesReports'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -157,6 +158,7 @@ const router = createBrowserRouter([
           { path: 'purchase-orders/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PurchaseOrderDetail /></ProtectedRoute> },
           { path: 'brand-vs-generic', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><BrandVsGeneric /></ProtectedRoute> },
           { path: 'reports', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Reports /></ProtectedRoute> },
+          { path: 'sales-reports', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><SalesReports /></ProtectedRoute> },
           { path: 'crop-programs', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CropPrograms /></ProtectedRoute> },
           { path: 'payments', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><PaymentAllocation /></ProtectedRoute> },
           { path: 'payment-history', element: <ProtectedRoute allowedRoles={['admin']}><PaymentHistory /></ProtectedRoute> },
