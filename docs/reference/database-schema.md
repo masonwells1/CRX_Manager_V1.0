@@ -171,3 +171,5 @@
 | vendor_bills | Admin | Admin | Admin | Admin |
 | vendor_payments | Admin | Admin | - | - |
 | rup_sales_records | Admin | Admin | - | - |
+| email_log | Admin | Admin | - | - |
+| ar_reminder_tracking | Admin | - | - | - |

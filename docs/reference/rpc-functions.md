@@ -81,5 +81,11 @@ is_applicator() -- SECURITY DEFINER STABLE
 - `generate_rup_sales_records(p_invoice_id)` — auto-called after `post_invoice()` for invoices with RUP products. Creates rup_sales_records for each RUP line item, snapshots product/customer/license data, flags compliance_status (compliant/warning/non_compliant based on applicator license validity)
 - `get_rup_sales_register(p_start_date, p_end_date, p_product_id, p_customer_id, p_compliance_status)` — filterable register query for state reporting. Returns all FIFRA-required fields (date, product, EPA reg, qty, buyer cert)
 
+## Email Infrastructure
+- `get_ar_reminder_candidates()` — admin-only. Returns customers with overdue invoices (30+ days) grouped by customer, with invoice details array, total_balance, and max_days_past_due. Only includes customers with email addresses on file. Built for future AR reminder cron job
+
 ## Invoice Posting
 - `post_invoice()` — now calls `check_period_open()` before posting; raises error if the invoice's accounting period is closed. Also triggers `generate_rup_sales_records()` for invoices containing RUP products.
+
+## Dashboard (updated)
+Note: `financial_dashboard_summary()` now includes 3 additional margin alert fields: `bottom_products_by_margin` (bottom 10 products by margin % this season), `bottom_customers_by_margin` (bottom 10 customers by margin % this season), `monthly_margin_trend` (last 12 months of margin % trend). Total CTEs: 16.
