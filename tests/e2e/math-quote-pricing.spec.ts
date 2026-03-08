@@ -464,8 +464,8 @@ test.describe('Quote Pricing Math Verification', { tag: '@smoke' }, () => {
     await waitForPageStable(page);
 
     const table = page.locator('table').first();
-    const tableVisible = await table.isVisible({ timeout: 5000 }).catch(() => false);
-    if (!tableVisible) return;
+    const detailTableVisible = await table.isVisible({ timeout: 5000 }).catch(() => false);
+    if (!detailTableVisible) return;
 
     const bodyRows = table.locator('tbody tr');
     const rowCount = await bodyRows.count();
