@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck,
+  Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck, Mail,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -14,7 +14,9 @@ import { supabase, sanitizeError } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
-import { downloadInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { downloadInvoicePdf, generateInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
+import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import WriteOffModal from '../components/invoices/WriteOffModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
@@ -94,6 +96,9 @@ export default function InvoiceDetail() {
   // Print PDF
   const [printing, setPrinting] = useState(false);
   const printingRef = useRef(false);
+
+  // Email invoice
+  const [emailing, setEmailing] = useState(false);
 
   // Write-off modal
   const [showWriteOff, setShowWriteOff] = useState(false);
@@ -431,6 +436,73 @@ export default function InvoiceDetail() {
     setPayingInvoice(false);
   };
 
+  // Build PDF data object (shared by print + email)
+  const buildInvoicePdfData = async (options?: InvoicePrintOptions): Promise<InvoicePdfData> => {
+    const { data: enrichedItems } = await supabase
+      .from('invoice_items')
+      .select('*, product:products(product_name, epa_registration, product_form)')
+      .eq('invoice_id', id)
+      .order('sort_order');
+
+    const cust = customers.find(c => c.id === invoice.customer_id);
+
+    return {
+      invoice_number: invoice.invoice_number || 'DRAFT',
+      invoice_date: invoice.invoice_date || new Date().toISOString().split('T')[0],
+      due_date: invoice.due_date || undefined,
+      invoice_type: invoice.invoice_type || 'chemical_sale',
+      status: invoice.status || 'draft',
+      customer_name: customerName,
+      customer_address: cust?.billing_address || undefined,
+      customer_city: cust?.city || undefined,
+      customer_state: cust?.state || undefined,
+      customer_zip: cust?.zip || undefined,
+      account_number: cust?.account_number || undefined,
+      payment_terms: cust?.payment_terms || undefined,
+      salesman_name: salespeople.find((s) => s.id === invoice.salesman_id)?.full_name,
+      purchase_order_ref: invoice.purchase_order_ref || undefined,
+      header_notes: invoice.header_notes || undefined,
+      footer_notes: invoice.footer_notes || undefined,
+      crop_type: invoice.crop_type || undefined,
+      field_names: invoice.field_names || undefined,
+      total_acres: invoice.total_acres || undefined,
+      applicator_name: invoice.applicator_name || undefined,
+      vehicle_name: invoice.vehicle_name || undefined,
+      application_date: invoice.application_date || undefined,
+      shares: shares.length > 0 ? shares.map(s => ({
+        customer_name: s.customer_name,
+        split_percentage: s.split_percentage,
+        acres: s.acres,
+        amount_cents: s.amount_cents,
+      })) : undefined,
+      items: (enrichedItems || []).map((it: Record<string, unknown> & { description?: string; product?: { product_name: string; epa_registration?: string | null; product_form?: string | null }; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null; rate_unit?: string | null; acres?: number | null; total_applied?: number | null }) => ({
+        description: it.description,
+        product_name: it.product?.product_name || it.description,
+        quantity: Number(it.quantity),
+        unit_size: it.unit_size || undefined,
+        unit_price_cents: it.unit_price_cents,
+        extended_cents: it.extended_cents,
+        cost_cents: it.cost_cents,
+        rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
+        rate_unit: it.rate_unit || null,
+        acres: it.acres ? Number(it.acres) : null,
+        total_applied: it.total_applied ? Number(it.total_applied) : null,
+        total_applied_unit: it.total_applied_unit || null,
+        total_applied_gl_lb: it.total_applied_gl_lb ? Number(it.total_applied_gl_lb) : null,
+        gl_lb_unit: it.gl_lb_unit || null,
+        epa_registration: it.epa_registration || it.product?.epa_registration || null,
+        is_application_fee: it.is_application_fee || false,
+        product_form: it.product_form || it.product?.product_form || null,
+      })) as InvoicePdfItem[],
+      total_amount_cents: invoice.total_amount_cents || items.reduce((s, i) => s + i.extended_cents, 0),
+      total_cost_cents: invoice.total_cost_cents || items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0),
+      paid_amount_cents: invoice.paid_amount_cents || 0,
+      prepay_applied_cents: invoice.prepay_applied_cents || 0,
+      balance_cents: invoice.balance_cents || 0,
+      options,
+    };
+  };
+
   // Print invoice PDF
   const handlePrint = async (options?: InvoicePrintOptions) => {
     // Ref-based guard prevents multiple concurrent executions (triple-fire from click propagation)
@@ -438,70 +510,7 @@ export default function InvoiceDetail() {
     printingRef.current = true;
     setPrinting(true);
     try {
-      // Fetch enriched item data for PDF (with EPA, rates, GL/LB)
-      const { data: enrichedItems } = await supabase
-        .from('invoice_items')
-        .select('*, product:products(product_name, epa_registration, product_form)')
-        .eq('invoice_id', id)
-        .order('sort_order');
-
-      const cust = customers.find(c => c.id === invoice.customer_id);
-
-      const pdfData: InvoicePdfData = {
-        invoice_number: invoice.invoice_number || 'DRAFT',
-        invoice_date: invoice.invoice_date || new Date().toISOString().split('T')[0],
-        due_date: invoice.due_date || undefined,
-        invoice_type: invoice.invoice_type || 'chemical_sale',
-        status: invoice.status || 'draft',
-        customer_name: customerName,
-        customer_address: cust?.billing_address || undefined,
-        customer_city: cust?.city || undefined,
-        customer_state: cust?.state || undefined,
-        customer_zip: cust?.zip || undefined,
-        account_number: cust?.account_number || undefined,
-        payment_terms: cust?.payment_terms || undefined,
-        salesman_name: salespeople.find((s) => s.id === invoice.salesman_id)?.full_name,
-        purchase_order_ref: invoice.purchase_order_ref || undefined,
-        header_notes: invoice.header_notes || undefined,
-        footer_notes: invoice.footer_notes || undefined,
-        crop_type: invoice.crop_type || undefined,
-        field_names: invoice.field_names || undefined,
-        total_acres: invoice.total_acres || undefined,
-        applicator_name: invoice.applicator_name || undefined,
-        vehicle_name: invoice.vehicle_name || undefined,
-        application_date: invoice.application_date || undefined,
-        shares: shares.length > 0 ? shares.map(s => ({
-          customer_name: s.customer_name,
-          split_percentage: s.split_percentage,
-          acres: s.acres,
-          amount_cents: s.amount_cents,
-        })) : undefined,
-        items: (enrichedItems || []).map((it: Record<string, unknown> & { description?: string; product?: { product_name: string; epa_registration?: string | null; product_form?: string | null }; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null; rate_unit?: string | null; acres?: number | null; total_applied?: number | null }) => ({
-          description: it.description,
-          product_name: it.product?.product_name || it.description,
-          quantity: Number(it.quantity),
-          unit_size: it.unit_size || undefined,
-          unit_price_cents: it.unit_price_cents,
-          extended_cents: it.extended_cents,
-          cost_cents: it.cost_cents,
-          rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
-          rate_unit: it.rate_unit || null,
-          acres: it.acres ? Number(it.acres) : null,
-          total_applied: it.total_applied ? Number(it.total_applied) : null,
-          total_applied_unit: it.total_applied_unit || null,
-          total_applied_gl_lb: it.total_applied_gl_lb ? Number(it.total_applied_gl_lb) : null,
-          gl_lb_unit: it.gl_lb_unit || null,
-          epa_registration: it.epa_registration || it.product?.epa_registration || null,
-          is_application_fee: it.is_application_fee || false,
-          product_form: it.product_form || it.product?.product_form || null,
-        })) as InvoicePdfItem[],
-        total_amount_cents: invoice.total_amount_cents || items.reduce((s, i) => s + i.extended_cents, 0),
-        total_cost_cents: invoice.total_cost_cents || items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0),
-        paid_amount_cents: invoice.paid_amount_cents || 0,
-        prepay_applied_cents: invoice.prepay_applied_cents || 0,
-        balance_cents: invoice.balance_cents || 0,
-        options,
-      };
+      const pdfData = await buildInvoicePdfData(options);
       await downloadInvoicePdf(pdfData);
       setShowPrintDialog(false);
       toast('success', 'Invoice PDF downloaded');
@@ -511,6 +520,63 @@ export default function InvoiceDetail() {
     } finally {
       setPrinting(false);
       printingRef.current = false;
+    }
+  };
+
+  // Email invoice with PDF attachment
+  const handleEmailInvoice = async () => {
+    const cust = customers.find(c => c.id === invoice.customer_id);
+    if (!cust?.email) {
+      toast('error', 'Customer does not have an email address on file');
+      return;
+    }
+    setEmailing(true);
+    try {
+      const pdfData = await buildInvoicePdfData();
+      const doc = await generateInvoicePdf(pdfData);
+      const base64 = pdfToBase64(doc);
+
+      const amountStr = ((invoice.balance_cents || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+      const html = buildEmailHtml(`
+        <h2 style="margin:0 0 16px;color:#111827;font-size:18px;">Invoice ${invoice.invoice_number || ''}</h2>
+        <p style="margin:0 0 8px;color:#374151;">Amount Due: <strong>${amountStr}</strong></p>
+        <p style="margin:0 0 8px;color:#374151;">Invoice Date: ${invoice.invoice_date || 'N/A'}</p>
+        ${invoice.due_date ? `<p style="margin:0 0 8px;color:#374151;">Due Date: ${invoice.due_date}</p>` : ''}
+        <p style="margin:16px 0 0;color:#374151;">Please find your invoice attached to this email.</p>
+        <p style="margin:8px 0 0;color:#6b7280;font-size:13px;">If you have questions about this invoice, please contact us.</p>
+      `);
+
+      const result = await sendEmail({
+        to: cust.email,
+        subject: `Invoice ${invoice.invoice_number || ''} from Crop RX Solutions`,
+        html,
+        email_type: 'invoice',
+        customer_id: invoice.customer_id,
+        idempotency_key: `invoice-email-${id}-${Date.now()}`,
+        attachments: [{
+          filename: `Invoice-${invoice.invoice_number || 'DRAFT'}.pdf`,
+          content: base64,
+        }],
+      });
+
+      if (result.success) {
+        toast('success', `Invoice emailed to ${cust.email}`);
+        logActivity(
+          'invoice_emailed',
+          `Invoice ${invoice.invoice_number} emailed to ${cust.email}`,
+          profile?.id || '',
+          'invoice',
+          id,
+          invoice.customer_id,
+        );
+      } else {
+        toast('error', result.error || 'Failed to send email');
+      }
+    } catch (err: unknown) {
+      console.error('Failed to email invoice:', err);
+      toast('error', sanitizeError(err));
+    } finally {
+      setEmailing(false);
     }
   };
 
@@ -579,6 +645,17 @@ export default function InvoiceDetail() {
               showChevron={false}
             >
               Print
+            </Button>
+          )}
+          {!isNew && invoice.status === 'posted' && isAdmin && (
+            <Button
+              variant="secondary"
+              icon={<Mail className="w-4 h-4" />}
+              onClick={handleEmailInvoice}
+              loading={emailing}
+              showChevron={false}
+            >
+              Email
             </Button>
           )}
           {!isNew && invoice.status === 'posted' && isAdmin && (

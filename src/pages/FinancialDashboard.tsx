@@ -26,6 +26,7 @@ import Button from '../components/ui/Button';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
+import type { BottomProduct, BottomCustomer, MonthlyMargin } from '../types';
 
 // --- Types ---
 
@@ -77,6 +78,9 @@ interface FinancialRpc {
   floor_inventory_value: number;
   floor_free_value: number;
   committed_order_value: number;
+  bottom_products_by_margin: BottomProduct[];
+  bottom_customers_by_margin: BottomCustomer[];
+  monthly_margin_trend: MonthlyMargin[];
 }
 
 interface FinancialData {
@@ -97,6 +101,9 @@ interface FinancialData {
   floorInventoryValue: number;
   floorFreeValue: number;
   committedOrderValue: number;
+  bottomProducts: BottomProduct[];
+  bottomCustomers: BottomCustomer[];
+  monthlyMarginTrend: MonthlyMargin[];
 }
 
 // --- Currency formatter ---
@@ -157,6 +164,9 @@ const defaultData: FinancialData = {
   floorInventoryValue: 0,
   floorFreeValue: 0,
   committedOrderValue: 0,
+  bottomProducts: [],
+  bottomCustomers: [],
+  monthlyMarginTrend: [],
 };
 
 // --- Component ---
@@ -200,6 +210,26 @@ export default function FinancialDashboard() {
         floorInventoryValue: Number(d.floor_inventory_value) || 0,
         floorFreeValue: Number(d.floor_free_value) || 0,
         committedOrderValue: Number(d.committed_order_value) || 0,
+        bottomProducts: (d.bottom_products_by_margin || []).map((p) => ({
+          product_name: p.product_name,
+          total_revenue: Number(p.total_revenue) || 0,
+          total_cost: Number(p.total_cost) || 0,
+          margin_pct: Number(p.margin_pct) || 0,
+          units_sold: Number(p.units_sold) || 0,
+        })),
+        bottomCustomers: (d.bottom_customers_by_margin || []).map((c) => ({
+          farm_name: c.farm_name,
+          total_revenue: Number(c.total_revenue) || 0,
+          total_cost: Number(c.total_cost) || 0,
+          margin_pct: Number(c.margin_pct) || 0,
+          order_count: Number(c.order_count) || 0,
+        })),
+        monthlyMarginTrend: (d.monthly_margin_trend || []).map((m) => ({
+          month: m.month,
+          revenue: Number(m.revenue) || 0,
+          cost: Number(m.cost) || 0,
+          margin_pct: Number(m.margin_pct) || 0,
+        })),
       });
     } catch (err) {
       console.error('Financial dashboard load error:', err);
@@ -241,6 +271,13 @@ export default function FinancialDashboard() {
 
   // Top customer max for progress bars
   const maxCustomerTotal = data.topCustomers.length > 0 ? data.topCustomers[0].total : 1;
+
+  // Margin color helpers
+  const marginTextColor = (pct: number) =>
+    pct < 10 ? 'text-red-600' : pct < 20 ? 'text-amber-600' : 'text-crx-green';
+  const marginBarColor = (pct: number) =>
+    pct < 10 ? 'bg-red-500' : pct < 20 ? 'bg-amber-500' : 'bg-emerald-500';
+  const maxMarginTrendRevenue = Math.max(...data.monthlyMarginTrend.map((m) => m.revenue), 1);
 
   return (
     <div className="space-y-6">
@@ -557,7 +594,97 @@ export default function FinancialDashboard() {
         )}
       </Card>
 
-      {/* Section 5: Financial Alerts */}
+      {/* Section 5: Margin Alerts */}
+      {(data.bottomProducts.length > 0 || data.bottomCustomers.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Low-Margin Products */}
+          {data.bottomProducts.length > 0 && (
+            <Card>
+              <CardHeader title="Low-Margin" accent="Products" />
+              <p className="text-xs text-secondary mb-3">Bottom 10 by margin % this season</p>
+              <div className="space-y-2">
+                {data.bottomProducts.map((p, idx) => (
+                  <div key={p.product_name} className="flex items-center gap-2">
+                    <span className="text-xs text-secondary w-5 text-right shrink-0">{idx + 1}.</span>
+                    <span className="text-sm text-nav-dark truncate flex-1 min-w-0">{p.product_name}</span>
+                    <span className="text-xs text-secondary shrink-0">{fmt(p.total_revenue)}</span>
+                    <Badge variant={p.margin_pct < 10 ? 'danger' : p.margin_pct < 20 ? 'warning' : 'success'}>
+                      {p.margin_pct.toFixed(1)}%
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Low-Margin Customers */}
+          {data.bottomCustomers.length > 0 && (
+            <Card>
+              <CardHeader title="Low-Margin" accent="Customers" />
+              <p className="text-xs text-secondary mb-3">Bottom 10 by margin % this season</p>
+              <div className="space-y-2">
+                {data.bottomCustomers.map((c, idx) => (
+                  <div key={c.farm_name} className="flex items-center gap-2">
+                    <span className="text-xs text-secondary w-5 text-right shrink-0">{idx + 1}.</span>
+                    <span className="text-sm text-nav-dark truncate flex-1 min-w-0">{c.farm_name}</span>
+                    <span className="text-xs text-secondary shrink-0">{c.order_count} orders</span>
+                    <Badge variant={c.margin_pct < 10 ? 'danger' : c.margin_pct < 20 ? 'warning' : 'success'}>
+                      {c.margin_pct.toFixed(1)}%
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Monthly Margin Trend */}
+      {data.monthlyMarginTrend.length > 0 && (
+        <Card>
+          <CardHeader title="Monthly" accent="Margin Trend" />
+          <div className="flex items-end gap-1 h-40 mt-2">
+            {data.monthlyMarginTrend.map((m) => {
+              const barHeight = (m.revenue / maxMarginTrendRevenue) * 100;
+              const monthLabel = m.month.length >= 7 ? m.month.slice(5, 7) : m.month;
+              return (
+                <div key={m.month} className="flex-1 flex flex-col items-center gap-1 group">
+                  <div className="w-full flex flex-col items-center justify-end h-32 relative">
+                    <div
+                      className={`w-full max-w-[32px] rounded-t ${marginBarColor(m.margin_pct)}`}
+                      style={{ height: `${barHeight}%` }}
+                    />
+                    <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-nav-dark text-white text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+                      {m.margin_pct.toFixed(1)}% &bull; {fmt(m.revenue)}
+                    </div>
+                  </div>
+                  <span className={`text-xs font-medium ${marginTextColor(m.margin_pct)}`}>
+                    {m.margin_pct.toFixed(0)}%
+                  </span>
+                  <span className="text-xs text-secondary">{monthLabel}</span>
+                </div>
+              );
+            })}
+          </div>
+          {/* Legend */}
+          <div className="flex items-center gap-4 mt-3">
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded bg-red-500" />
+              <span className="text-xs text-secondary">&lt;10%</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded bg-amber-500" />
+              <span className="text-xs text-secondary">10-20%</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded bg-emerald-500" />
+              <span className="text-xs text-secondary">&gt;20%</span>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Section 6: Financial Alerts */}
       {(data.openArBalance > 0 || data.customersOverCreditCount > 0) && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {data.openArBalance > 0 && (

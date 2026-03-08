@@ -1846,3 +1846,56 @@ export interface QuickReceiveMatchResult {
   lot_number: string | null;
   allocations: QuickReceiveAllocation[];
 }
+
+// ── Email Infrastructure ─────────────────────────────────────────────
+
+export type EmailType =
+  | 'invoice'
+  | 'statement'
+  | 'order_confirmed'
+  | 'delivery_completed'
+  | 'quote'
+  | 'ar_reminder'
+  | 'low_stock_alert'
+  | 'month_end_close';
+
+export interface EmailLog {
+  id: string;
+  customer_id: string | null;
+  recipient_email: string;
+  email_type: EmailType;
+  subject: string;
+  html_body: string | null;
+  attachment_name: string | null;
+  resend_message_id: string | null;
+  status: 'sent' | 'failed' | 'bounced';
+  error_message: string | null;
+  idempotency_key: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+// ── Financial Dashboard Margin Alerts ────────────────────────────────
+
+export interface BottomProduct {
+  product_name: string;
+  total_revenue: number;
+  total_cost: number;
+  margin_pct: number;
+  units_sold: number;
+}
+
+export interface BottomCustomer {
+  farm_name: string;
+  total_revenue: number;
+  total_cost: number;
+  margin_pct: number;
+  order_count: number;
+}
+
+export interface MonthlyMargin {
+  month: string;
+  revenue: number;
+  cost: number;
+  margin_pct: number;
+}
