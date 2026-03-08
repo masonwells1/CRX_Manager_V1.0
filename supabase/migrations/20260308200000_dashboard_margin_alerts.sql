@@ -188,16 +188,16 @@ BEGIN
     FROM (
       SELECT
         p.product_name,
-        COALESCE(SUM(oi.quantity_ordered * oi.price_per_unit), 0) AS total_revenue,
-        COALESCE(SUM(oi.quantity_ordered * oi.cost_per_unit), 0) AS total_cost,
+        COALESCE(SUM(oi.total_units_needed * oi.price_per_unit), 0) AS total_revenue,
+        COALESCE(SUM(oi.total_units_needed * oi.cost_per_unit), 0) AS total_cost,
         ROUND(
-          CASE WHEN SUM(oi.quantity_ordered * oi.price_per_unit) > 0
-            THEN ((SUM(oi.quantity_ordered * oi.price_per_unit) - SUM(oi.quantity_ordered * oi.cost_per_unit))
-                  / NULLIF(SUM(oi.quantity_ordered * oi.price_per_unit), 0)) * 100
+          CASE WHEN SUM(oi.total_units_needed * oi.price_per_unit) > 0
+            THEN ((SUM(oi.total_units_needed * oi.price_per_unit) - SUM(oi.total_units_needed * oi.cost_per_unit))
+                  / NULLIF(SUM(oi.total_units_needed * oi.price_per_unit), 0)) * 100
             ELSE 0
           END, 1
         ) AS margin_pct,
-        COALESCE(SUM(oi.quantity_ordered), 0) AS units_sold
+        COALESCE(SUM(oi.total_units_needed), 0) AS units_sold
       FROM order_items oi
       JOIN orders o ON o.id = oi.order_id
       JOIN products p ON p.id = oi.product_id
@@ -205,7 +205,7 @@ BEGIN
         AND o.status NOT IN ('cancelled', 'draft')
         AND compute_season(COALESCE(o.order_date, o.created_at::date)) = compute_season(CURRENT_DATE)
       GROUP BY p.id, p.product_name
-      HAVING SUM(oi.quantity_ordered * oi.price_per_unit) > 0
+      HAVING SUM(oi.total_units_needed * oi.price_per_unit) > 0
       ORDER BY margin_pct ASC
       LIMIT 10
     ) bp

@@ -18,27 +18,31 @@ test.describe('Financial Dashboard', { tag: '@smoke' }, () => {
   });
 
   test('should show AR aging summary', async ({ page }) => {
-    await expect(page.getByText(/AR Aging|Aging/i)).toBeVisible({ timeout: 5000 });
+    const main = page.locator('#main-content');
+    await expect(main.getByText(/AR Aging/i).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('should show financial summary cards', async ({ page }) => {
+    const main = page.locator('#main-content');
     // Prepay, Commission, and Period summary cards must be visible
-    await expect(page.getByText(/Prepay/i).first()).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText(/Commission/i).first()).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText(/Period/i).first()).toBeVisible({ timeout: 5000 });
+    await expect(main.getByText(/Prepay/i).first()).toBeVisible({ timeout: 5000 });
+    await expect(main.getByText(/Commission/i).first()).toBeVisible({ timeout: 5000 });
+    await expect(main.getByText(/Period/i).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('should show quick access links to financial pages', async ({ page }) => {
+    const main = page.locator('#main-content');
     // Quick access grid must link to financial sub-pages
     const links = ['AR Aging', 'Prepayments', 'Month-End', 'Reports', 'Compliance'];
     for (const label of links) {
-      await expect(page.getByText(label).first()).toBeVisible({ timeout: 5000 });
+      await expect(main.getByText(label).first()).toBeVisible({ timeout: 5000 });
     }
   });
 
   test('should show monthly revenue chart header', async ({ page }) => {
+    const main = page.locator('#main-content');
     // Chart section header must be visible
-    await expect(page.getByText(/Monthly.*Revenue/i).first()).toBeVisible({ timeout: 5000 });
+    await expect(main.getByText(/Monthly.*Revenue/i).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('should load without console errors', async ({ page }) => {

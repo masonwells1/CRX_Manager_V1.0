@@ -21,10 +21,11 @@ test.describe('Operational Dashboard', { tag: '@smoke' }, () => {
   });
 
   test('should show team board action items section', async ({ page }) => {
-    await expect(page.getByText('Team Board')).toBeVisible({ timeout: 5000 });
+    const main = page.locator('#main-content');
+    await expect(main.getByText('Team Board')).toBeVisible({ timeout: 5000 });
     // Either shows action items or "All Clear" message
-    const hasItems = await page.getByText('All Clear').isVisible().catch(() => false);
-    const hasBoard = await page.getByText('View Board').isVisible().catch(() => false);
+    const hasItems = await main.getByText('All Clear').isVisible().catch(() => false);
+    const hasBoard = await main.getByText('View Board').isVisible().catch(() => false);
     expect(hasItems || hasBoard).toBeTruthy();
   });
 
@@ -36,11 +37,12 @@ test.describe('Operational Dashboard', { tag: '@smoke' }, () => {
   });
 
   test('should show delivery command center', async ({ page }) => {
-    await expect(page.getByText('Delivery')).first().toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('Command Center')).toBeVisible();
+    const main = page.locator('#main-content');
+    await expect(main.getByText('Delivery').first()).toBeVisible({ timeout: 5000 });
+    await expect(main.getByText('Command Center')).toBeVisible();
     // Stat mini-cards
-    await expect(page.getByText('Today')).toBeVisible();
-    await expect(page.getByText('This Week')).toBeVisible();
+    await expect(main.getByText('Today')).toBeVisible();
+    await expect(main.getByText('This Week')).toBeVisible();
   });
 
   test('should show sales pipeline section', async ({ page }) => {
@@ -53,9 +55,10 @@ test.describe('Operational Dashboard', { tag: '@smoke' }, () => {
   });
 
   test('should show monthly activity chart', async ({ page }) => {
-    await expect(page.getByText('Monthly')).first().toBeVisible({ timeout: 5000 });
+    const main = page.locator('#main-content');
+    await expect(main.getByText('Monthly').first()).toBeVisible({ timeout: 5000 });
     // Chart legend
-    const ordersLegend = page.getByText('Orders').first();
+    const ordersLegend = main.getByText('Orders').first();
     await expect(ordersLegend).toBeVisible();
   });
 
@@ -66,16 +69,18 @@ test.describe('Operational Dashboard', { tag: '@smoke' }, () => {
   });
 
   test('should show recent activity feed', async ({ page }) => {
-    await expect(page.getByText('Recent').first()).toBeVisible({ timeout: 5000 });
+    const main = page.locator('#main-content');
+    await expect(main.getByText('Recent').first()).toBeVisible({ timeout: 5000 });
   });
 
   test('should show quick actions', async ({ page }) => {
-    await expect(page.getByText('Quick')).first().toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('New Order')).toBeVisible();
-    await expect(page.getByText('New PO')).toBeVisible();
-    await expect(page.getByText('Schedule Delivery')).toBeVisible();
-    await expect(page.getByText('Inventory').last()).toBeVisible();
-    await expect(page.getByText('Receiving')).toBeVisible();
+    const main = page.locator('#main-content');
+    await expect(main.getByText('Quick').first()).toBeVisible({ timeout: 5000 });
+    await expect(main.getByText('New Order')).toBeVisible();
+    await expect(main.getByText('New PO')).toBeVisible();
+    await expect(main.getByText('Schedule Delivery')).toBeVisible();
+    await expect(main.getByText('Inventory').last()).toBeVisible();
+    await expect(main.getByText('Receiving')).toBeVisible();
   });
 
   test('should NOT show financial data', async ({ page }) => {
