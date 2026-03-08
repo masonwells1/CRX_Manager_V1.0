@@ -131,6 +131,21 @@
 - Tote # column added to delivery PDF export via `deliveryPdf.ts`
 - Threaded through `complete_delivery()` and `create_quick_delivery()` RPCs
 
+## Email Integration Pattern (Track A)
+- **Service layer**: `src/lib/emailService.ts` — `sendEmail()`, `pdfToBase64()`, `buildEmailHtml()` (CRX-branded template)
+- **Edge Function**: `supabase/functions/send-email/index.ts` — Resend API, JWT auth, idempotency guard, base64 PDF attachments, `email_log` audit trail
+- **8 email types** (pre-defined enum): `invoice`, `statement`, `order_confirmed`, `delivery_completed`, `quote`, `ar_reminder`, `low_stock_alert`, `month_end_close`
+- **Graceful degradation**: Email sends are always wrapped in try/catch inside the primary action handler. Email failure never blocks the core business action (quote send, order confirm, delivery complete)
+- **Pages using email**:
+  - `InvoiceDetail.tsx` — "Email Invoice" button (admin, posted invoices only) with PDF attachment
+  - `QuoteBuilder.tsx` — auto-emails quote PDF on send (if customer has email)
+  - `OrderDetail.tsx` — auto-emails customer when order status → confirmed
+  - `DeliveryDetail.tsx` — auto-emails customer on delivery completion (includes delivered items, signature, photos)
+  - `ARaging.tsx` — "Send AR Reminders" button (admin) with dedup via `ar_reminder_tracking`, "Email Statements" button with PDF attachment per selected customer
+- **AR reminder dedup**: `ar_reminder_tracking` table has UNIQUE constraint on `(customer_id, reminder_level, sent_date)` — max one reminder per customer per level per day
+- **Idempotency**: All `sendEmail()` calls include an `idempotency_key` (checked in `email_log` by Edge Function before sending)
+- **Prerequisite**: Resend DNS verification (SPF/DKIM for `croprxsolutions.app`) + Edge Function secrets (`RESEND_API_KEY`, `FROM_EMAIL`, `ALLOWED_ORIGIN`)
+
 ## Build Notes
 - `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI
 - Supabase join inference: joined FK tables infer as arrays — use `as unknown as TargetType[]`

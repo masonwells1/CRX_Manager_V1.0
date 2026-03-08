@@ -82,7 +82,7 @@ is_applicator() -- SECURITY DEFINER STABLE
 - `get_rup_sales_register(p_start_date, p_end_date, p_product_id, p_customer_id, p_compliance_status)` — filterable register query for state reporting. Returns all FIFRA-required fields (date, product, EPA reg, qty, buyer cert)
 
 ## Email Infrastructure
-- `get_ar_reminder_candidates()` — admin-only. Returns customers with overdue invoices (30+ days) grouped by customer, with invoice details array, total_balance, and max_days_past_due. Only includes customers with email addresses on file. Built for future AR reminder cron job
+- `get_ar_reminder_candidates()` — admin-only. Returns customers with overdue invoices (30+ days) grouped by customer, with invoice details array, total_balance, and max_days_past_due. Only includes customers with email addresses on file. Called by "Send AR Reminders" button on ARaging.tsx
 
 ## Invoice Posting
 - `post_invoice()` — now calls `check_period_open()` before posting; raises error if the invoice's accounting period is closed. Also triggers `generate_rup_sales_records()` for invoices containing RUP products.

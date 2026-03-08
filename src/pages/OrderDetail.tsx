@@ -16,6 +16,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import type { Order, OrderItem, Customer, Invoice, Delivery } from '../types';
 
@@ -185,6 +186,76 @@ export default function OrderDetail() {
 
       logActivity('order_status_changed', `Order ${order.order_number} status changed to ${newStatus}`, profile.id, 'order', order.id, order.customer_id);
       notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by ?? undefined);
+
+      // === Email customer when order is confirmed ===
+      if (newStatus === 'confirmed' && customer?.email) {
+        try {
+          const itemSummary = items
+            .slice(0, 10)
+            .map((i) => `<tr>
+              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${i.product_name}</td>
+              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${i.total_units_needed}</td>
+              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${fmt(i.price_per_unit)}</td>
+            </tr>`)
+            .join('');
+          const moreItems = items.length > 10 ? `<p style="color:#64748b;font-size:12px;">...and ${items.length - 10} more item(s)</p>` : '';
+
+          const html = buildEmailHtml(`
+            <h2 style="color:#1e293b;margin:0 0 12px;">Order Confirmed</h2>
+            <p style="color:#475569;font-size:14px;line-height:1.6;">
+              Hi${customer.contact_name ? ` ${customer.contact_name}` : ''},
+            </p>
+            <p style="color:#475569;font-size:14px;line-height:1.6;">
+              Your order <strong>${order.order_number}</strong> has been confirmed and is being processed.
+            </p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+              <tr>
+                <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;color:#166534;">Order Number</td>
+                <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;font-weight:600;color:#166534;">${order.order_number}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Order Date</td>
+                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${new Date(order.order_date).toLocaleDateString()}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Total</td>
+                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${fmt(order.total_price)}</td>
+              </tr>
+            </table>
+            <h3 style="color:#1e293b;font-size:14px;margin:16px 0 8px;">Items</h3>
+            <table style="width:100%;border-collapse:collapse;">
+              <tr style="background:#f8fafc;">
+                <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:left;color:#64748b;">Product</th>
+                <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Qty</th>
+                <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Price/Unit</th>
+              </tr>
+              ${itemSummary}
+            </table>
+            ${moreItems}
+            <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
+              We'll notify you when deliveries are scheduled. Thank you for your business!
+            </p>
+          `);
+
+          const emailResult = await sendEmail({
+            to: customer.email,
+            subject: `Order ${order.order_number} Confirmed — Crop RX Solutions`,
+            html,
+            email_type: 'order_confirmed',
+            customer_id: order.customer_id,
+            idempotency_key: `order-confirmed-${order.id}-${Date.now()}`,
+          });
+
+          if (emailResult.success) {
+            toast('success', `Order confirmed and confirmation emailed to ${customer.email}`);
+          }
+          // If email fails, the status toast above already showed success
+        } catch (emailErr) {
+          console.warn('Order confirmation email failed:', emailErr);
+          // Status change already succeeded — don't show error for email
+        }
+      }
+
       setStatusModalOpen(false);
       fetchOrder();
     } catch (error: unknown) {

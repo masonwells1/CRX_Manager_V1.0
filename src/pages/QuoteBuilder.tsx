@@ -28,7 +28,8 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
-import { downloadQuotePdf } from '../lib/quotePdf';
+import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
+import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
@@ -867,7 +868,97 @@ export default function QuoteBuilder() {
 
       setStatus('sent');
       setIsDirty(false);
-      toast('success', 'Quote sent successfully');
+
+      // === Email quote PDF to customer if they have an email ===
+      if (selectedCustomer?.email && profile) {
+        try {
+          const pdfData = {
+            quote_number: quoteNumber,
+            customer_name: selectedCustomer.farm_name || 'Customer',
+            customer_email: selectedCustomer.email || undefined,
+            customer_phone: selectedCustomer.phone || undefined,
+            customer_address: selectedCustomer.billing_address || undefined,
+            sales_rep_name: profile.full_name || 'Sales Rep',
+            created_at: new Date().toISOString(),
+            expires_at: undefined,
+            valid_days: validDays,
+            tier,
+            header_notes: headerNotes || undefined,
+            footer_notes: footerNotes || undefined,
+            sections: sections.map((sec) => ({
+              section_name: sec.section_name,
+              section_notes: sec.section_notes || undefined,
+              items: sec.items
+                .filter((i) => i.product_id)
+                .map((i) => ({
+                  product_name: i.product?.product_name || '',
+                  actual_rate: i.actual_rate || 0,
+                  rate_unit: i.rate_unit || '',
+                  acres: i.acres || 0,
+                  total_units_needed: i.total_units_needed || 0,
+                  price_per_unit: i.price_per_unit,
+                  price_unit: i.price_unit || undefined,
+                  total_price: i.total_price,
+                })),
+            })),
+            totals: {
+              totalPrice: totals.totalPrice,
+              totalCost: totals.totalCost,
+              totalProfit: totals.totalProfit,
+              avgMargin: totals.totalMarginPct,
+            },
+          };
+          const doc = await generateQuotePdf(pdfData);
+          const base64 = pdfToBase64(doc);
+          const html = buildEmailHtml(`
+            <h2 style="color:#1e293b;margin:0 0 12px;">Quote ${quoteNumber}</h2>
+            <p style="color:#475569;font-size:14px;line-height:1.6;">
+              Hi${selectedCustomer.contact_name ? ` ${selectedCustomer.contact_name}` : ''},
+            </p>
+            <p style="color:#475569;font-size:14px;line-height:1.6;">
+              Please find your quote from Crop RX Solutions attached.
+            </p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+              <tr>
+                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Quote Number</td>
+                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${quoteNumber}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Total</td>
+                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${fmt(totals.totalPrice)}</td>
+              </tr>
+              <tr>
+                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Valid For</td>
+                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;color:#1e293b;">${validDays} days</td>
+              </tr>
+            </table>
+            <p style="color:#475569;font-size:14px;line-height:1.6;">
+              If you have any questions, please don't hesitate to reach out.
+            </p>
+          `);
+
+          const emailResult = await sendEmail({
+            to: selectedCustomer.email,
+            subject: `Quote ${quoteNumber} from Crop RX Solutions`,
+            html,
+            email_type: 'quote',
+            customer_id: customerId,
+            idempotency_key: `quote-email-${result}-${Date.now()}`,
+            attachments: [{ filename: `Quote-${quoteNumber}.pdf`, content: base64 }],
+          });
+
+          if (emailResult.success) {
+            toast('success', `Quote sent and emailed to ${selectedCustomer.email}`);
+          } else {
+            toast('success', 'Quote sent (email delivery failed — check email log)');
+          }
+        } catch (emailErr) {
+          console.warn('Quote email failed:', emailErr);
+          toast('success', 'Quote sent (email could not be sent)');
+        }
+      } else {
+        toast('success', 'Quote sent successfully');
+      }
 
       // Refresh version history
       if (quoteId) {

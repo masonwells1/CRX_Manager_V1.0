@@ -8,15 +8,15 @@
 | `/customers` | Customers | Customer list with search/filter, bulk import |
 | `/customers/:id` | CustomerDetail | Profile, addresses, credit limit, transaction review, finance charge settings, season summary |
 | `/quotes` | Quotes | Quote list with status filters |
-| `/quotes/new` | QuoteBuilder | Multi-line quote with tiered pricing, commission splits, PDF |
+| `/quotes/new` | QuoteBuilder | Multi-line quote with tiered pricing, commission splits, PDF, auto-emails PDF to customer on send |
 | `/quotes/:id` | QuoteBuilder | Edit existing quote |
 | `/orders` | Orders | Order list with status badges |
 | `/orders/new` | NewOrder | Direct order creation (bypasses quote) |
-| `/orders/:id` | OrderDetail | Order detail with status transitions, convert to invoice |
+| `/orders/:id` | OrderDetail | Order detail with status transitions, convert to invoice, auto-emails customer on order confirmed |
 | `/inventory` | InventoryPage | Inventory levels, vendor-grouped reorder alerts, transaction ledger, batch adjust, cost valuation columns |
 | `/deliveries` | Deliveries | Delivery management + driver dashboard + batch actions + quick delivery + load sheet PDF (~900 lines) |
 | `/deliveries/new` | NewDelivery | Create delivery from order |
-| `/deliveries/:id` | DeliveryDetail | Full lifecycle: confirm, edit, cancel, photos, issues, remainders, order context (~1350 lines) |
+| `/deliveries/:id` | DeliveryDetail | Full lifecycle: confirm, edit, cancel, photos, issues, remainders, order context, auto-emails customer on completion (~1350 lines) |
 | `/delivery-remainders` | DeliveryRemainders | Pending remainder items across all customers |
 | `/blend-tickets` | BlendTickets | OCR ticket processing with image upload |
 | `/blend-tickets/:id` | BlendTicketDetail | Ticket review, approve/reject, create application record |
@@ -33,7 +33,7 @@
 | `/invoices` | Invoices | Invoice list (unposted/posted), batch print, batch void, quick delivery filter |
 | `/invoices/:id` | InvoiceDetail | Invoice detail, post/unpost, print PDF, write-off |
 | `/payments` | PaymentAllocation | Unified payment entry — allocate checks to invoices, remainder becomes prepay |
-| `/ar-aging` | ARaging | AR aging report, generate finance charges |
+| `/ar-aging` | ARaging | AR aging report, generate finance charges, Send AR Reminders (admin), Email Batch Statements (PDF attachment) |
 | `/month-end` | MonthEndClose | Admin-only. Period status, checklist, batch statements, "Roll the Month" |
 | `/commission-payments` | CommissionPayments | Admin-only. Create from unpaid commissions, post workflow |
 | `/customer-transactions` | CustomerTransactionReview | Admin-only. Per-customer transaction history with running balance |

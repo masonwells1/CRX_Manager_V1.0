@@ -5,7 +5,7 @@
  * to show aging buckets and generate printable customer statements.
  */
 import { useEffect, useState , useCallback } from 'react';
-import { DollarSign, FileText, Printer, TrendingDown, TrendingUp, ArrowLeft, Zap, FileStack } from 'lucide-react';
+import { DollarSign, FileText, Printer, TrendingDown, TrendingUp, ArrowLeft, Zap, FileStack, Mail, Send } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -13,7 +13,9 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
-import { downloadStatementPdf, downloadBatchStatements } from '../lib/statementPdf';
+import { downloadStatementPdf, downloadBatchStatements, generateStatementPdf } from '../lib/statementPdf';
+import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
+import { logActivity } from '../lib/activityLogger';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
 import FinanceChargePreviewModal from '../components/invoices/FinanceChargePreviewModal';
 import { useAuth } from '../contexts/AuthContext';
@@ -37,6 +39,11 @@ export default function ARaging() {
   const [selectedCustomers, setSelectedCustomers] = useState<Set<string>>(new Set());
   const [showBatchStatementDialog, setShowBatchStatementDialog] = useState(false);
   const [batchPrinting, setBatchPrinting] = useState(false);
+
+  // AR Reminder emails
+  const [sendingReminders, setSendingReminders] = useState(false);
+  // Batch email statements
+  const [emailingStatements, setEmailingStatements] = useState(false);
 
   // Aging
   const [agingData, setAgingData] = useState<ARAgingRow[]>([]);
@@ -431,6 +438,222 @@ export default function ARaging() {
     setBatchPrinting(false);
   };
 
+  // === A5: Send AR Reminders to all overdue customers ===
+  const handleSendARReminders = async () => {
+    if (!profile) return;
+    if (!confirm('Send AR reminder emails to all customers with 30+ day overdue invoices?')) return;
+    setSendingReminders(true);
+    try {
+      const { data, error } = await supabase.rpc('get_ar_reminder_candidates');
+      if (error) throw error;
+
+      const candidates = (data || []) as Array<{
+        customer_id: string;
+        farm_name: string;
+        email: string;
+        total_balance_cents: number;
+        max_days_past_due: number;
+        invoices: Array<{ invoice_number: string; balance_cents: number; days_past_due: number }>;
+      }>;
+
+      if (candidates.length === 0) {
+        toast('info', 'No customers with 30+ day overdue invoices');
+        setSendingReminders(false);
+        return;
+      }
+
+      let sent = 0;
+      let skipped = 0;
+      const fmtCents = (c: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(c / 100);
+
+      for (const cust of candidates) {
+        const reminderLevel = cust.max_days_past_due >= 90 ? 90 : cust.max_days_past_due >= 60 ? 60 : 30;
+
+        // Check dedup — skip if already sent today at this level
+        const { data: existing } = await supabase
+          .from('ar_reminder_tracking')
+          .select('id')
+          .eq('customer_id', cust.customer_id)
+          .eq('reminder_level', reminderLevel)
+          .eq('sent_date', new Date().toISOString().slice(0, 10))
+          .maybeSingle();
+
+        if (existing) {
+          skipped++;
+          continue;
+        }
+
+        const invoiceRows = cust.invoices
+          .map((inv) => `<tr>
+            <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${inv.invoice_number}</td>
+            <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${fmtCents(inv.balance_cents)}</td>
+            <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${inv.days_past_due} days</td>
+          </tr>`)
+          .join('');
+
+        const urgencyColor = reminderLevel >= 90 ? '#dc2626' : reminderLevel >= 60 ? '#d97706' : '#2563eb';
+        const urgencyLabel = reminderLevel >= 90 ? 'URGENT' : reminderLevel >= 60 ? 'Past Due' : 'Reminder';
+
+        const html = buildEmailHtml(`
+          <h2 style="color:#1e293b;margin:0 0 12px;">Account ${urgencyLabel}</h2>
+          <p style="color:#475569;font-size:14px;line-height:1.6;">
+            Dear ${cust.farm_name},
+          </p>
+          <p style="color:#475569;font-size:14px;line-height:1.6;">
+            Our records show an outstanding balance of
+            <strong style="color:${urgencyColor};">${fmtCents(cust.total_balance_cents)}</strong>
+            on your account. Please see the details below:
+          </p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr style="background:#f8fafc;">
+              <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:left;color:#64748b;">Invoice</th>
+              <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Balance</th>
+              <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Days Past Due</th>
+            </tr>
+            ${invoiceRows}
+            <tr style="background:#f8fafc;">
+              <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;">Total</td>
+              <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;text-align:right;color:${urgencyColor};">${fmtCents(cust.total_balance_cents)}</td>
+              <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;"></td>
+            </tr>
+          </table>
+          <p style="color:#475569;font-size:14px;line-height:1.6;">
+            Please remit payment at your earliest convenience. If you have already sent payment,
+            please disregard this notice.
+          </p>
+          <p style="color:#475569;font-size:14px;line-height:1.6;">
+            Questions? Contact us at 618-843-0413 or reply to this email.
+          </p>
+        `);
+
+        try {
+          const emailResult = await sendEmail({
+            to: cust.email,
+            subject: `${urgencyLabel}: Outstanding Balance — Crop RX Solutions`,
+            html,
+            email_type: 'ar_reminder',
+            customer_id: cust.customer_id,
+            idempotency_key: `ar-reminder-${cust.customer_id}-${reminderLevel}-${new Date().toISOString().slice(0, 10)}`,
+          });
+
+          if (emailResult.success) {
+            // Track in ar_reminder_tracking for dedup
+            await supabase.from('ar_reminder_tracking').insert({
+              customer_id: cust.customer_id,
+              reminder_level: reminderLevel,
+              sent_date: new Date().toISOString().slice(0, 10),
+              email_log_id: emailResult.email_log_id || null,
+            });
+            sent++;
+          }
+        } catch {
+          // Skip individual failures, continue with next
+          skipped++;
+        }
+      }
+
+      logActivity('ar_reminders_sent', `Sent ${sent} AR reminder(s) to overdue customers (${skipped} skipped/deduped)`, profile.id, 'system');
+      toast('success', `Sent ${sent} AR reminder(s)${skipped > 0 ? `, ${skipped} skipped (already sent today)` : ''}`);
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to send AR reminders');
+    }
+    setSendingReminders(false);
+  };
+
+  // === A6: Email batch statements to selected customers ===
+  const handleEmailBatchStatements = async (options: StatementOptions) => {
+    setShowBatchStatementDialog(false);
+    setEmailingStatements(true);
+    try {
+      let sent = 0;
+      let noEmail = 0;
+      const fmtCents = (c: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(c / 100);
+
+      for (const custId of selectedCustomers) {
+        const { data, error } = await supabase.rpc('get_detailed_statement_data', {
+          p_customer_id: custId,
+          p_as_of_date: options.as_of_date,
+          p_mode: options.mode,
+        });
+        if (error) {
+          console.error(`Statement data error for ${custId}:`, error.message);
+          continue;
+        }
+
+        const stmtData = data as DetailedStatementData;
+        if (!stmtData || !stmtData.transactions || stmtData.transactions.length === 0) continue;
+
+        const custEmail = stmtData.customer.email;
+        if (!custEmail) {
+          noEmail++;
+          continue;
+        }
+
+        // Generate PDF and convert to base64
+        const doc = await generateStatementPdf(stmtData, options);
+        const base64 = pdfToBase64(doc);
+
+        const html = buildEmailHtml(`
+          <h2 style="color:#1e293b;margin:0 0 12px;">Monthly Statement</h2>
+          <p style="color:#475569;font-size:14px;line-height:1.6;">
+            Dear ${stmtData.customer.farm_name},
+          </p>
+          <p style="color:#475569;font-size:14px;line-height:1.6;">
+            Please find your account statement attached. Your current balance is
+            <strong>${fmtCents(stmtData.outstanding_balance_cents)}</strong>.
+          </p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr>
+              <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Account</td>
+              <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${stmtData.customer.farm_name}</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Statement Date</td>
+              <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${options.as_of_date}</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Open Invoices</td>
+              <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${stmtData.transactions.length}</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Balance Due</td>
+              <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:700;color:${stmtData.outstanding_balance_cents > 0 ? '#dc2626' : '#16a34a'};">${fmtCents(stmtData.outstanding_balance_cents)}</td>
+            </tr>
+          </table>
+          <p style="color:#475569;font-size:14px;line-height:1.6;">
+            Please remit payment at your earliest convenience. Questions? Contact us at 618-843-0413.
+          </p>
+        `);
+
+        try {
+          const emailResult = await sendEmail({
+            to: custEmail,
+            subject: `Statement of Account — Crop RX Solutions`,
+            html,
+            email_type: 'statement',
+            customer_id: custId,
+            idempotency_key: `statement-email-${custId}-${options.as_of_date}-${Date.now()}`,
+            attachments: [{
+              filename: `Statement-${stmtData.customer.farm_name.replace(/[^a-zA-Z0-9]/g, '_')}-${options.as_of_date}.pdf`,
+              content: base64,
+            }],
+          });
+          if (emailResult.success) sent++;
+        } catch {
+          // Skip individual failures
+        }
+      }
+
+      if (profile) {
+        logActivity('batch_statements_emailed', `Emailed ${sent} statement(s)${noEmail > 0 ? ` (${noEmail} had no email)` : ''}`, profile.id, 'system');
+      }
+      toast('success', `Emailed ${sent} statement(s)${noEmail > 0 ? ` — ${noEmail} customer(s) had no email on file` : ''}`);
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to email batch statements');
+    }
+    setEmailingStatements(false);
+  };
+
   const seasonOptions = Array.from({ length: 5 }, (_, i) => currentSeason - i);
 
   return (
@@ -439,25 +662,51 @@ export default function ARaging() {
         <h2 className="text-xl font-semibold font-heading text-nav-dark">AR Aging & Statements</h2>
         <div className="flex gap-2">
           {selectedCustomers.size > 0 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<FileStack className="w-4 h-4" />}
-              onClick={() => setShowBatchStatementDialog(true)}
-              loading={batchPrinting}
-            >
-              Batch Statements ({selectedCustomers.size})
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<FileStack className="w-4 h-4" />}
+                onClick={() => setShowBatchStatementDialog(true)}
+                loading={batchPrinting}
+              >
+                Batch Print ({selectedCustomers.size})
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Mail className="w-4 h-4" />}
+                onClick={() => {
+                  if (confirm(`Email statements to ${selectedCustomers.size} selected customer(s)?`)) {
+                    handleEmailBatchStatements({ mode: 'summary', show_shares: true, as_of_date: asOfDate });
+                  }
+                }}
+                loading={emailingStatements}
+              >
+                Email Statements ({selectedCustomers.size})
+              </Button>
+            </>
           )}
           {profile?.role === 'admin' && (
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<Zap className="w-4 h-4" />}
-              onClick={() => setShowFinanceChargePreview(true)}
-            >
-              Preview Finance Charges
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Send className="w-4 h-4" />}
+                onClick={handleSendARReminders}
+                loading={sendingReminders}
+              >
+                Send AR Reminders
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Zap className="w-4 h-4" />}
+                onClick={() => setShowFinanceChargePreview(true)}
+              >
+                Preview Finance Charges
+              </Button>
+            </>
           )}
         </div>
       </div>

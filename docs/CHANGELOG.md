@@ -4,6 +4,29 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-08 — Track A: Complete Email Integration
+
+### Email Infrastructure (built earlier same day)
+- `email_log` table (audit trail with idempotency), `ar_reminder_tracking` table (dedup)
+- `get_ar_reminder_candidates()` RPC, `email_type` enum (8 types)
+- Edge Function: `supabase/functions/send-email/index.ts` — Resend-powered, JWT auth, idempotency guard, base64 PDF attachments
+- Frontend email service: `src/lib/emailService.ts` — `sendEmail()`, `pdfToBase64()`, `buildEmailHtml()` (CRX-branded HTML template)
+- Invoice Email button on `InvoiceDetail.tsx` (admin, posted invoices only)
+- Financial Dashboard margin alerts (bottom 10 products/customers, monthly trend chart)
+- Migrations: `20260308100000_email_infrastructure.sql`, `20260308200000_dashboard_margin_alerts.sql`
+
+### Track A: Wire Email Into All Customer Touchpoints (A1–A6)
+- **A1: Resend DNS** — SPF/DKIM setup instructions for `croprxsolutions.app` (manual step)
+- **A2: Quote Email** (`QuoteBuilder.tsx`) — auto-emails quote PDF to customer on send. Generates same PDF as download, converts to base64, attaches to branded HTML email. Falls back gracefully if customer has no email or send fails
+- **A3: Order Confirmed Email** (`OrderDetail.tsx`) — auto-emails customer when order status → confirmed. Includes order number, date, item summary table (up to 10 items). Email failure doesn't block status change
+- **A4: Delivery Completed Email** (`DeliveryDetail.tsx`) — auto-emails customer on delivery completion. Includes delivered items table, partial delivery note, signature info, photo count. Email failure doesn't block completion
+- **A5: AR Reminders** (`ARaging.tsx`) — "Send AR Reminders" admin button. Calls `get_ar_reminder_candidates()` RPC, determines reminder level (30/60/90 day), checks dedup via `ar_reminder_tracking` table, sends urgency-colored HTML email with overdue invoice table. Logs activity
+- **A6: Batch Email Statements** (`ARaging.tsx`) — "Email Statements (N)" button (visible when customers are selected). For each selected customer: generates statement PDF, converts to base64, sends branded HTML email with PDF attachment. Logs activity
+- **Pattern**: All email sends use graceful degradation — email failure never blocks the core business action
+- **No new migration** — all DB objects already existed from earlier same-day migration
+
+---
+
 ## 2026-03-07 — Sales & Chemical History Reporting
 
 ### New: Sales Reports Page (`/sales-reports`)
