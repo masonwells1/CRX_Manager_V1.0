@@ -24,10 +24,10 @@ test.describe('Financial Dashboard', { tag: '@smoke' }, () => {
 
   test('should show financial summary cards', async ({ page }) => {
     const main = page.locator('#main-content');
-    // Prepay, Commission, and Period summary cards must be visible
+    // Prepay, Commission, and Month-End summary cards must be visible
     await expect(main.getByText(/Prepay/i).first()).toBeVisible({ timeout: 5000 });
     await expect(main.getByText(/Commission/i).first()).toBeVisible({ timeout: 5000 });
-    await expect(main.getByText(/Period/i).first()).toBeVisible({ timeout: 5000 });
+    await expect(main.getByText(/Month-End/i).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('should show quick access links to financial pages', async ({ page }) => {
