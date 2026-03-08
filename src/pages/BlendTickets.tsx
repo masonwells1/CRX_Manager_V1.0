@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus, LinkIcon, Download, Trash2 } from 'lucide-react';
 import { supabase, checkMutationResult } from '../lib/db';
@@ -44,11 +44,7 @@ export function BlendTickets() {
   const canBulkAction = role === 'admin' || role === 'sales_rep';
   const { isProcessing, processedCount } = useOCRProcessor(true);
 
-  useEffect(() => {
-    loadData();
-  }, [processedCount]);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
     try {
       const [ticketsResult, customersResult] = await Promise.all([
         supabase
@@ -84,7 +80,11 @@ export function BlendTickets() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [toast]);
+
+  useEffect(() => {
+    loadData();
+  }, [processedCount, loadData]);
 
   const filteredTickets = tickets.filter(ticket => {
     const matchesSearch =

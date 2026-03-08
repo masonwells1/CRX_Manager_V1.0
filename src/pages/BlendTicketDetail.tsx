@@ -172,7 +172,7 @@ export function BlendTicketDetail() {
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, toast]);
 
   useEffect(() => {
     if (id) {
