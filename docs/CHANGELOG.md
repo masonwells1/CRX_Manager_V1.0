@@ -4,6 +4,21 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-09 — Product Setup UX Improvements
+
+### New: Combobox Component (`src/components/ui/Combobox.tsx`)
+- Reusable dropdown with type-to-filter + accept new values (no external dependencies)
+- Keyboard navigation (ArrowUp/Down/Enter/Escape), click-outside-to-close, ARIA attributes
+- Matches Input.tsx styling; uses `onMouseDown` with `preventDefault()` to prevent blur/click race
+
+### ProductDetail Page Restructure
+- **Combobox dropdowns** for Vendor, Manufacturer, Category — fetches distinct values from existing products on mount, still accepts free-text new entries
+- **Removed `unit_size`** from form — legacy field replaced by `container_size` + `container_unit` (data preserved in DB)
+- **Grouped sections** with dividers and helper text: Product Form → Container (size+unit+type in one row) → Inventory Unit → Application Rates
+- No SQL migration needed (UI-only changes)
+
+---
+
 ## 2026-03-08 — Track A: Complete Email Integration
 
 ### Email Infrastructure (built earlier same day)

@@ -4,7 +4,7 @@
 |-------|------|-------------|
 | `/` | Dashboard | KPIs, today's jobs, recent activity |
 | `/products` | Products | Product catalog with search/filter, bulk import |
-| `/products/:id` | ProductDetail | Product CRUD (pricing tiers, EPA info, RUP status) |
+| `/products/:id` | ProductDetail | Product CRUD (pricing tiers, EPA info, RUP status). Combobox dropdowns for Vendor/Manufacturer/Category. Grouped sections: Product Form → Container (size+unit+type) → Inventory Unit → Application Rates |
 | `/customers` | Customers | Customer list with search/filter, bulk import |
 | `/customers/:id` | CustomerDetail | Profile, addresses, credit limit, transaction review, finance charge settings, season summary |
 | `/quotes` | Quotes | Quote list with status filters |

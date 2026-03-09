@@ -17,6 +17,7 @@
 - Modal component accepts `size="large"` prop
 - Tab-based page layout used in: ARaging (3 tabs), Compliance (2 tabs), Rebates (2 tabs), InventoryPage, BlendRecipes
 - Commission split editor: `src/components/ui/CommissionSplitEditor.tsx`
+- Combobox component: `src/components/ui/Combobox.tsx` — dropdown with type-to-filter + accept new values. Used for Vendor, Manufacturer, Category on ProductDetail. Props: `value`, `onChange(string)`, `options: string[]`, `label`, `disabled`, `placeholder`
 
 ## Bulk Operations Pattern
 - `useRowSelection` hook + `createCheckboxColumn` + `BulkActionBar` (auto-hides when 0 selected) + `BulkDeleteConfirmModal`

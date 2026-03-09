@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, DollarSign } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
+import Combobox from '../components/ui/Combobox';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
@@ -48,6 +49,9 @@ export default function ProductDetail() {
   });
   const [costHistory, setCostHistory] = useState<CostHistory[]>([]);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
+  const [vendorOptions, setVendorOptions] = useState<string[]>([]);
+  const [manufacturerOptions, setManufacturerOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [costModal, setCostModal] = useState(false);
@@ -93,6 +97,16 @@ export default function ProductDetail() {
   useEffect(() => {
     supabase.from('unit_conversions').select('*').order('unit').then(({ data }) => {
       setUnitConversions((data || []) as UnitConversion[]);
+    });
+    // Fetch distinct values for combobox dropdowns
+    supabase.from('products').select('category, vendor, manufacturer').then(({ data }) => {
+      if (!data) return;
+      const cats = [...new Set(data.map((p) => p.category).filter(Boolean) as string[])].sort();
+      const vends = [...new Set(data.map((p) => p.vendor).filter(Boolean) as string[])].sort();
+      const mfrs = [...new Set(data.map((p) => p.manufacturer).filter(Boolean) as string[])].sort();
+      setCategoryOptions(cats);
+      setVendorOptions(vends);
+      setManufacturerOptions(mfrs);
     });
   }, []);
 
@@ -255,14 +269,14 @@ export default function ProductDetail() {
         <div className="lg:col-span-2 space-y-4">
           <Card>
             <CardHeader title="Product" accent="Information" />
+
+            {/* Basic Info */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Product Name" required value={product.product_name || ''} onChange={(e) => update('product_name', e.target.value)} disabled={!isAdmin} />
               <Input label="SKU" value={product.sku || ''} onChange={(e) => update('sku', e.target.value)} disabled={!isAdmin} />
-              <Input label="Category" value={product.category || ''} onChange={(e) => update('category', e.target.value)} disabled={!isAdmin} />
-              <Input label="Vendor" value={product.vendor || ''} onChange={(e) => update('vendor', e.target.value)} disabled={!isAdmin} />
-              <Input label="Manufacturer" value={product.manufacturer || ''} onChange={(e) => update('manufacturer', e.target.value)} disabled={!isAdmin} />
-              <Input label="Container Size" type="number" value={product.container_size ?? ''} onChange={(e) => update('container_size', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
-              <Input label="Unit Size" value={product.unit_size || ''} onChange={(e) => update('unit_size', e.target.value)} disabled={!isAdmin} />
+              <Combobox label="Category" value={product.category || ''} onChange={(v) => update('category', v)} options={categoryOptions} disabled={!isAdmin} placeholder="Type or select..." />
+              <Combobox label="Vendor" value={product.vendor || ''} onChange={(v) => update('vendor', v)} options={vendorOptions} disabled={!isAdmin} placeholder="Type or select..." />
+              <Combobox label="Manufacturer" value={product.manufacturer || ''} onChange={(v) => update('manufacturer', v)} options={manufacturerOptions} disabled={!isAdmin} placeholder="Type or select..." />
               <Input label="EPA Registration" value={product.epa_registration || ''} onChange={(e) => update('epa_registration', e.target.value)} disabled={!isAdmin} placeholder="e.g., 34704-69" />
               <div className="flex items-center gap-4">
                 <label className="flex items-center gap-2 cursor-pointer">
@@ -290,14 +304,18 @@ export default function ProductDetail() {
                   <option value="Caution">Caution</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-secondary mb-1">Product Form</label>
+            </div>
+
+            {/* Product Form */}
+            <div className="border-t border-gray-100 pt-4 mt-4">
+              <p className="text-xs font-semibold text-secondary uppercase tracking-wide">Product Form</p>
+              <p className="text-xs text-gray-400 mt-0.5 mb-3">Determines which units are available below</p>
+              <div className="max-w-xs">
                 <select
                   value={product.product_form || ''}
                   onChange={(e) => {
                     const form = e.target.value || null;
                     update('product_form', form);
-                    // Clear unit fields if form changes to prevent mismatches
                     if (form !== product.product_form) {
                       setProduct((p) => ({ ...p, product_form: form as Product['product_form'], inventory_unit: null, container_unit: null }));
                     }
@@ -310,8 +328,62 @@ export default function ProductDetail() {
                   <option value="dry">Dry</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-secondary mb-1">Inventory Unit</label>
+            </div>
+
+            {/* Container — grouped as one row */}
+            <div className="border-t border-gray-100 pt-4 mt-4">
+              <p className="text-xs font-semibold text-secondary uppercase tracking-wide">Container</p>
+              <p className="text-xs text-gray-400 mt-0.5 mb-3">Size, unit, and type (e.g. 2.5 Gal Jug)</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <Input label="Size" type="number" value={product.container_size ?? ''} onChange={(e) => update('container_size', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} placeholder="e.g. 2.5" />
+                <div>
+                  <label className="block text-sm font-medium text-secondary mb-1">Unit</label>
+                  <select
+                    value={product.container_unit || ''}
+                    onChange={(e) => update('container_unit', e.target.value || null)}
+                    disabled={!isAdmin}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                  >
+                    <option value="">-- Select --</option>
+                    {unitConversions
+                      .filter((uc) => {
+                        const form = product.product_form;
+                        if (!form) return true;
+                        return uc.unit_type === form || uc.unit_type === 'both';
+                      })
+                      .map((uc) => (
+                        <option key={uc.id} value={uc.unit}>{uc.unit}</option>
+                      ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-secondary mb-1">Type</label>
+                  <select
+                    value={product.container_type || ''}
+                    onChange={(e) => update('container_type', e.target.value || null)}
+                    disabled={!isAdmin}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+                  >
+                    <option value="">-- Select --</option>
+                    <option value="Jug">Jug</option>
+                    <option value="Drum">Drum</option>
+                    <option value="Pallet">Pallet</option>
+                    <option value="Mini-Bulk">Mini-Bulk</option>
+                    <option value="Shuttle">Shuttle</option>
+                    <option value="Bag">Bag</option>
+                    <option value="Tote">Tote</option>
+                    <option value="Jar">Jar</option>
+                    <option value="Ea">Ea</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Inventory Unit */}
+            <div className="border-t border-gray-100 pt-4 mt-4">
+              <p className="text-xs font-semibold text-secondary uppercase tracking-wide">Inventory Unit</p>
+              <p className="text-xs text-gray-400 mt-0.5 mb-3">Unit used for tracking inventory quantities (e.g. Gal, Lb)</p>
+              <div className="max-w-xs">
                 <select
                   value={product.inventory_unit || ''}
                   onChange={(e) => update('inventory_unit', e.target.value || null)}
@@ -330,51 +402,21 @@ export default function ProductDetail() {
                     ))}
                 </select>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-secondary mb-1">Container Unit</label>
-                <select
-                  value={product.container_unit || ''}
-                  onChange={(e) => update('container_unit', e.target.value || null)}
-                  disabled={!isAdmin}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
-                >
-                  <option value="">-- Select --</option>
-                  {unitConversions
-                    .filter((uc) => {
-                      const form = product.product_form;
-                      if (!form) return true;
-                      return uc.unit_type === form || uc.unit_type === 'both';
-                    })
-                    .map((uc) => (
-                      <option key={uc.id} value={uc.unit}>{uc.unit}</option>
-                    ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-secondary mb-1">Container Type</label>
-                <select
-                  value={product.container_type || ''}
-                  onChange={(e) => update('container_type', e.target.value || null)}
-                  disabled={!isAdmin}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
-                >
-                  <option value="">-- Select --</option>
-                  <option value="Jug">Jug</option>
-                  <option value="Drum">Drum</option>
-                  <option value="Pallet">Pallet</option>
-                  <option value="Mini-Bulk">Mini-Bulk</option>
-                  <option value="Shuttle">Shuttle</option>
-                  <option value="Bag">Bag</option>
-                  <option value="Tote">Tote</option>
-                  <option value="Jar">Jar</option>
-                  <option value="Ea">Ea</option>
-                </select>
-              </div>
-              <Input label="Suggested Rate" value={product.suggested_rate || ''} onChange={(e) => update('suggested_rate', e.target.value)} disabled={!isAdmin} />
-              <Input label="Rate Per Acre" type="number" value={product.rate_per_acre ?? ''} onChange={(e) => update('rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
-              <Input label="Rate Unit" value={product.rate_unit || ''} onChange={(e) => update('rate_unit', e.target.value)} disabled={!isAdmin} />
             </div>
-            <div className="mt-4">
+
+            {/* Application Rates */}
+            <div className="border-t border-gray-100 pt-4 mt-4">
+              <p className="text-xs font-semibold text-secondary uppercase tracking-wide">Application Rates</p>
+              <p className="text-xs text-gray-400 mt-0.5 mb-3">Per-acre application information</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <Input label="Suggested Rate" value={product.suggested_rate || ''} onChange={(e) => update('suggested_rate', e.target.value)} disabled={!isAdmin} />
+                <Input label="Rate Per Acre" type="number" value={product.rate_per_acre ?? ''} onChange={(e) => update('rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)} disabled={!isAdmin} />
+                <Input label="Rate Unit" value={product.rate_unit || ''} onChange={(e) => update('rate_unit', e.target.value)} disabled={!isAdmin} />
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="border-t border-gray-100 pt-4 mt-4">
               <label className="block text-sm font-medium text-secondary mb-1">Notes</label>
               <textarea
                 value={product.notes || ''}
