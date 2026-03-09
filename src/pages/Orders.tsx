@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload, Download, FileText, Trash2 } from 'lucide-react';
+import { Plus, Upload, Download, FileText, Trash2, Users } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -19,6 +19,7 @@ import type { Order } from '../types';
 interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
   invoiced_pct: number;
+  farm_group_name: string | null;
 }
 
 export default function Orders() {
@@ -38,7 +39,7 @@ export default function Orders() {
   const fetchOrders = useCallback(async () => {
     const { data: ordersData, error: ordersError } = await supabase
       .from('orders')
-      .select('*, customer:customers(farm_name)')
+      .select('*, customer:customers(farm_name, parent_customer_id)')
       .order('order_date', { ascending: false })
       .limit(500);
 
@@ -79,13 +80,30 @@ export default function Orders() {
       }
     });
 
+    // Fetch parent customer names for farm group labels
+    const parentIds = [...new Set(
+      (ordersData || [])
+        .map((o: Record<string, unknown>) => (o.customer as { parent_customer_id?: string })?.parent_customer_id)
+        .filter(Boolean) as string[]
+    )];
+    const parentNameMap: Record<string, string> = {};
+    if (parentIds.length > 0) {
+      const { data: parents } = await supabase
+        .from('customers')
+        .select('id, farm_name')
+        .in('id', parentIds);
+      (parents || []).forEach((p) => { parentNameMap[p.id] = p.farm_name; });
+    }
+
     const enriched = ((ordersData || []) as Order[]).map((o) => {
       const counts = itemsByOrder[o.id] || { needed: 0, delivered: 0 };
       const pct = counts.needed > 0 ? Math.round((counts.delivered / counts.needed) * 100) : 0;
       const orderCents = Math.round((o.total_price || 0) * 100);
       const invCents = invoicedByOrder[o.id] || 0;
       const invPct = orderCents > 0 ? Math.round((invCents / orderCents) * 100) : 0;
-      return { ...o, fulfillment_pct: pct, invoiced_pct: Math.min(invPct, 100) };
+      const cust = o.customer as unknown as { farm_name: string; parent_customer_id: string | null } | null;
+      const farmGroupName = cust?.parent_customer_id ? parentNameMap[cust.parent_customer_id] || null : null;
+      return { ...o, fulfillment_pct: pct, invoiced_pct: Math.min(invPct, 100), farm_group_name: farmGroupName };
     });
 
     setOrders(enriched);
@@ -186,7 +204,20 @@ export default function Orders() {
     {
       key: 'customer',
       header: 'Customer',
-      render: (row) => (row.customer as unknown as { farm_name: string })?.farm_name || '-',
+      render: (row) => {
+        const name = (row.customer as unknown as { farm_name: string })?.farm_name || '-';
+        return (
+          <div>
+            <span>{name}</span>
+            {row.farm_group_name && (
+              <div className="flex items-center gap-1 mt-0.5">
+                <Users className="w-3 h-3 text-blue-500 flex-shrink-0" />
+                <span className="text-xs text-blue-600">{row.farm_group_name}</span>
+              </div>
+            )}
+          </div>
+        );
+      },
     },
     {
       key: 'status',
@@ -274,7 +305,7 @@ export default function Orders() {
             columns={columns}
             searchable
             searchPlaceholder="Search orders..."
-            searchKeys={['order_number']}
+            searchKeys={['order_number', 'farm_group_name']}
             onRowClick={(row) => navigate(`/orders/${row.id}`)}
             emptyTitle="No orders yet"
             emptyDescription="Orders are created from accepted quotes"

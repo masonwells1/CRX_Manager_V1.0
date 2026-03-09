@@ -14,6 +14,7 @@ import {
   Zap,
   Download,
   FileText,
+  Users,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -35,6 +36,7 @@ interface DeliveryRow extends Delivery {
   customer_name: string;
   driver_name: string;
   item_count: number;
+  farm_group_name: string | null;
 }
 
 /* ─── Helpers ─── */
@@ -151,7 +153,7 @@ export default function Deliveries() {
   const fetchDeliveries = useCallback(async () => {
     let query = supabase
       .from('deliveries')
-      .select('*, customer:customers(farm_name), driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+      .select('*, customer:customers(farm_name, parent_customer_id), driver:profiles!deliveries_assigned_driver_fkey(full_name)')
       .order('scheduled_date', { ascending: false })
       .limit(500);
 
@@ -181,14 +183,30 @@ export default function Deliveries() {
       });
     }
 
+    // Fetch parent customer names for farm group labels
+    const parentIds = [...new Set(
+      (delData || [])
+        .map((d: Record<string, unknown>) => (d.customer as { parent_customer_id?: string })?.parent_customer_id)
+        .filter(Boolean) as string[]
+    )];
+    const parentNameMap: Record<string, string> = {};
+    if (parentIds.length > 0) {
+      const { data: parents } = await supabase
+        .from('customers')
+        .select('id, farm_name')
+        .in('id', parentIds);
+      (parents || []).forEach((p) => { parentNameMap[p.id] = p.farm_name; });
+    }
+
     const rows = ((delData || []) as Array<Delivery & {
-      customer: { farm_name: string } | null;
+      customer: { farm_name: string; parent_customer_id: string | null } | null;
       driver: { full_name: string } | null;
     }>).map((d) => ({
       ...d,
       customer_name: d.customer?.farm_name || 'Unknown',
       driver_name: d.driver?.full_name || 'Unassigned',
       item_count: countMap[d.id] || 0,
+      farm_group_name: d.customer?.parent_customer_id ? parentNameMap[d.customer.parent_customer_id] || null : null,
     }));
 
     setDeliveries(rows);
@@ -205,23 +223,32 @@ export default function Deliveries() {
   // Fetch unassigned deliveries for driver dashboard
   useEffect(() => {
     if (!isDriver) return;
-    supabase
-      .from('deliveries')
-      .select('*, customer:customers(farm_name)')
-      .is('assigned_driver', null)
-      .in('status', ['scheduled'])
-      .order('scheduled_date')
-      .limit(20)
-      .then(({ data }) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const rows = ((data || []) as any[]).map((d) => ({
-          ...d,
-          customer_name: d.customer?.farm_name || 'Unknown',
-          driver_name: 'Unassigned',
-          item_count: 0,
-        }));
-        setUnassigned(rows);
-      });
+    (async () => {
+      const { data } = await supabase
+        .from('deliveries')
+        .select('*, customer:customers(farm_name, parent_customer_id)')
+        .is('assigned_driver', null)
+        .in('status', ['scheduled'])
+        .order('scheduled_date')
+        .limit(20);
+      const pIds = [...new Set(
+        (data || []).map((d: Record<string, unknown>) => (d.customer as { parent_customer_id?: string })?.parent_customer_id).filter(Boolean) as string[]
+      )];
+      const pMap: Record<string, string> = {};
+      if (pIds.length > 0) {
+        const { data: parents } = await supabase.from('customers').select('id, farm_name').in('id', pIds);
+        (parents || []).forEach((p) => { pMap[p.id] = p.farm_name; });
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rows = ((data || []) as any[]).map((d) => ({
+        ...d,
+        customer_name: d.customer?.farm_name || 'Unknown',
+        driver_name: 'Unassigned',
+        item_count: 0,
+        farm_group_name: d.customer?.parent_customer_id ? pMap[d.customer.parent_customer_id] || null : null,
+      }));
+      setUnassigned(rows);
+    })();
   }, [isDriver, deliveries]);
 
   /* ─── Summary stats ─── */
@@ -545,6 +572,12 @@ export default function Deliveries() {
           <Badge variant={statusToBadgeVariant[d.status] || 'default'}>{d.status.replace('_', ' ')}</Badge>
         </div>
         <p className="text-gray-300 text-sm">{d.customer_name}</p>
+        {d.farm_group_name && (
+          <div className="flex items-center gap-1">
+            <Users className="w-3 h-3 text-blue-400 flex-shrink-0" />
+            <span className="text-xs text-blue-400">{d.farm_group_name}</span>
+          </div>
+        )}
         {(d as unknown as Record<string, unknown>).delivery_address ? (
           <div className="flex items-center gap-2 text-gray-400 text-xs">
             <MapPin className="w-3 h-3" />
@@ -645,6 +678,12 @@ export default function Deliveries() {
                     <Badge variant="warning">Unassigned</Badge>
                   </div>
                   <p className="text-gray-300 text-sm">{d.customer_name}</p>
+                  {d.farm_group_name && (
+                    <div className="flex items-center gap-1">
+                      <Users className="w-3 h-3 text-blue-400 flex-shrink-0" />
+                      <span className="text-xs text-blue-400">{d.farm_group_name}</span>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 text-gray-400 text-xs">
                     <Calendar className="w-3 h-3" />
                     <span>{new Date(d.scheduled_date).toLocaleDateString()}</span>
@@ -703,6 +742,17 @@ export default function Deliveries() {
       key: 'customer_name',
       header: 'Customer',
       sortable: true,
+      render: (row) => (
+        <div>
+          <span>{row.customer_name}</span>
+          {row.farm_group_name && (
+            <div className="flex items-center gap-1 mt-0.5">
+              <Users className="w-3 h-3 text-blue-500 flex-shrink-0" />
+              <span className="text-xs text-blue-600">{row.farm_group_name}</span>
+            </div>
+          )}
+        </div>
+      ),
     },
     {
       key: 'driver_name',
@@ -922,7 +972,7 @@ export default function Deliveries() {
             columns={columns}
             searchable
             searchPlaceholder="Search deliveries..."
-            searchKeys={['delivery_number', 'customer_name', 'driver_name']}
+            searchKeys={['delivery_number', 'customer_name', 'driver_name', 'farm_group_name']}
             onRowClick={(row) => navigate(`/deliveries/${row.id}`)}
             emptyTitle="No deliveries"
             emptyDescription="Schedule a delivery from an order"

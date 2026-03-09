@@ -4,6 +4,27 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-09 — Farm Group Labels on Orders & Deliveries
+
+### Orders List Page (`src/pages/Orders.tsx`)
+- Customer column now shows blue "Farm Group: [Parent Name]" label for linked customers
+- Expanded Supabase query to fetch `parent_customer_id`, batch-resolves parent farm names
+- Search bar includes `farm_group_name` so staff can search by parent farm
+
+### Deliveries List Page (`src/pages/Deliveries.tsx`)
+- Same farm group label on Customer column in admin data table
+- DriverCard (mobile driver view) shows blue farm group label under customer name
+- Unassigned delivery cards also display the label
+- Search bar includes `farm_group_name` for filtering
+- Both main and unassigned delivery queries fetch parent customer info
+
+### Why
+- `parent_customer_id` existed on `customers` table but was only used in Sales Reports
+- Warehouse staff had no visual way to know which orders/deliveries belong to the same farm group
+- This is a read-only display change — no logic or billing changes
+
+---
+
 ## 2026-03-09 — Product Setup UX Improvements
 
 ### New: Combobox Component (`src/components/ui/Combobox.tsx`)
