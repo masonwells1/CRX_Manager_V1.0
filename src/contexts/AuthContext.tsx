@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { supabase } from '../lib/db';
 import { setUserContext, clearUserContext } from '../lib/metrics';
 import type { Profile, UserRole } from '../types';
@@ -68,7 +68,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      // TOKEN_REFRESHED fires periodically and on tab-switch — never unmount the
+      // page for it, otherwise the user loses all unsaved form data.
+      if (event === 'TOKEN_REFRESHED') {
+        setSession(s);
+        return;
+      }
+
+      // INITIAL_SESSION is handled by getSession() above — skip the duplicate.
+      if (event === 'INITIAL_SESSION') return;
+
+      // SIGNED_IN / SIGNED_OUT — these are real auth changes that justify a
+      // loading state because the user/role may be different.
       setLoading(true);
       setSession(s);
       if (s?.user) {
@@ -81,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         })();
       } else {
         setProfile(null);
+        clearUserContext();
         setLoading(false);
       }
     });
@@ -88,13 +101,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  const signIn = async (email: string, password: string) => {
+  const signIn = useCallback(async (email: string, password: string) => {
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) return { error: error.message };
     return { error: null };
-  };
+  }, []);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     // Clear local state immediately so the UI goes to login
     clearUserContext();
     setProfile(null);
@@ -106,21 +119,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // so user still gets redirected to login. Session cookie will
       // expire naturally on its own.
     }
-  };
+  }, []);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        session,
-        profile,
-        role: profile?.role ?? null,
-        deniedPages: profile?.denied_pages ?? [],
-        loading,
-        signIn,
-        signOut,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  // Memoize the context value so child components only re-render when
+  // actual auth data changes — not on every AuthProvider render.
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      session,
+      profile,
+      role: profile?.role ?? null,
+      deniedPages: profile?.denied_pages ?? [],
+      loading,
+      signIn,
+      signOut,
+    }),
+    [session, profile, loading, signIn, signOut],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

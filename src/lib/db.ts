@@ -10,7 +10,20 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    // Keep the session alive across page reloads and tab switches
+    persistSession: true,
+    // Automatically refresh the token before it expires — prevents
+    // the user from being kicked out mid-workflow
+    autoRefreshToken: true,
+    // Detect OAuth/magic-link tokens in the URL after redirect
+    detectSessionInUrl: true,
+    // Use localStorage so the session survives tab switches and
+    // browser restarts (default, but explicit for clarity)
+    storage: window.localStorage,
+  },
+});
 
 /**
  * Check a Supabase mutation result for silent RLS failures.

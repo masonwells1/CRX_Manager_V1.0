@@ -4,6 +4,23 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-09 — Fix: Tab-Switch No Longer Resets Page Data
+
+### AuthContext (`src/contexts/AuthContext.tsx`)
+- `onAuthStateChange` now filters by event type — `TOKEN_REFRESHED` silently updates the session without setting `loading: true`
+- `INITIAL_SESSION` events are skipped (already handled by `getSession()` on mount)
+- Only real auth changes (`SIGNED_IN`, `SIGNED_OUT`) trigger the full loading state
+- `signIn` and `signOut` wrapped in `useCallback` for stable references
+- Context value wrapped in `useMemo` to prevent unnecessary child re-renders
+
+### Why
+- Supabase's JS client automatically refreshes tokens when the browser tab regains focus
+- The old code set `loading: true` on every auth event, which caused `ProtectedRoute` to unmount the entire page tree
+- This destroyed all unsaved form data, scroll position, and local component state
+- Now only actual sign-in/sign-out events cause a full reload — token refreshes are invisible to the user
+
+---
+
 ## 2026-03-09 — Farm Group Labels on Orders & Deliveries
 
 ### Orders List Page (`src/pages/Orders.tsx`)

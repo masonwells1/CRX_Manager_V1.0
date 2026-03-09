@@ -276,22 +276,49 @@ describe('AuthContext', () => {
       expect(result.current.loading).toBe(false);
     });
 
-    it('refreshes profile on TOKEN_REFRESHED event', async () => {
+    it('updates session silently on TOKEN_REFRESHED (no loading flash)', async () => {
+      // Start with a real session so we can verify loading stays false
       const session = makeSession();
-      const profile = makeProfile({ full_name: 'Refreshed User' });
+      const profile = makeProfile();
+      mockGetSession.mockResolvedValue({ data: { session }, error: null });
       mockProfileQuery({ data: profile, error: null });
 
       const { result } = renderHook(() => useAuth(), { wrapper });
       await act(async () => {});
       await act(async () => {});
+      await act(async () => {});
 
+      expect(result.current.loading).toBe(false);
+
+      // Simulate a token refresh with a new access token
+      const refreshedSession = makeSession({ access_token: 'new-token-xyz' });
       await act(async () => {
-        triggerAuthChange('TOKEN_REFRESHED', session);
+        triggerAuthChange('TOKEN_REFRESHED', refreshedSession);
+      });
+
+      // Session should update BUT loading should never have been set to true
+      expect(result.current.session?.access_token).toBe('new-token-xyz');
+      expect(result.current.loading).toBe(false);
+      // Profile stays the same — no re-fetch needed for a token refresh
+      expect(result.current.profile?.full_name).toBe('Test User');
+    });
+
+    it('skips INITIAL_SESSION (handled by getSession)', async () => {
+      const session = makeSession();
+      mockProfileQuery({ data: makeProfile(), error: null });
+
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await act(async () => {});
+      await act(async () => {});
+
+      // Trigger INITIAL_SESSION — should be a no-op
+      await act(async () => {
+        triggerAuthChange('INITIAL_SESSION', session);
       });
       await act(async () => {});
-      await act(async () => {});
 
-      expect(result.current.profile?.full_name).toBe('Refreshed User');
+      // Loading should still be false (not flipped to true)
+      expect(result.current.loading).toBe(false);
     });
   });
 
