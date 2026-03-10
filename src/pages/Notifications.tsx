@@ -5,12 +5,14 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EmptyState from '../components/ui/EmptyState';
 import SplitHeading from '../components/ui/SplitHeading';
+import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import type { Notification as NotificationType } from '../types';
 
 export default function Notifications() {
   const { profile } = useAuth();
+  const { toast } = useToast();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<NotificationType[]>([]);
   const [loading, setLoading] = useState(true);
