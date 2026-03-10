@@ -393,7 +393,10 @@ export default function InventoryPage() {
     setHoldOpen(true);
   };
 
+  const [creatingHold, setCreatingHold] = useState(false);
+
   const handleCreateHold = async () => {
+    if (creatingHold) return;
     if (!holdProductId) {
       toast('error', 'Please select a product');
       return;
@@ -414,6 +417,7 @@ export default function InventoryPage() {
       }
     }
 
+    setCreatingHold(true);
     const { error } = await supabase.from('inventory_holds').insert({
       product_id: holdProductId,
       customer_id: holdCustomerId || null,
@@ -432,6 +436,7 @@ export default function InventoryPage() {
       fetchInventory();
       fetchHolds();
     }
+    setCreatingHold(false);
   };
 
   const handleReleaseHold = async (holdId: string) => {
@@ -638,7 +643,7 @@ export default function InventoryPage() {
 
     // Audit trail: log the deletion before removing the row
     if (profile) {
-      await supabase.from('inventory_transactions').insert({
+      const { error: auditErr } = await supabase.from('inventory_transactions').insert({
         product_id: target.product_id,
         transaction_type: 'adjusted',
         quantity: -(target.quantity_available || 0),
@@ -646,6 +651,11 @@ export default function InventoryPage() {
         performed_by: profile.id,
         notes: `Inventory record deleted (had ${target.quantity_available} available)`,
       });
+      if (auditErr) {
+        toast('error', 'Failed to create audit trail — delete aborted');
+        setDeleteConfirmId(null);
+        return;
+      }
     }
 
     try {
@@ -1251,7 +1261,7 @@ export default function InventoryPage() {
 
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={() => setHoldOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreateHold}>Create Hold</Button>
+            <Button onClick={handleCreateHold} loading={creatingHold}>Create Hold</Button>
           </div>
         </div>
       </Modal>

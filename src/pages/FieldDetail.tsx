@@ -335,6 +335,15 @@ export default function FieldDetail() {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
   }
 
+  if (!isNew && !field.id) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 space-y-4">
+        <p className="text-secondary text-lg">Field not found</p>
+        <Button variant="secondary" onClick={() => navigate('/fields')}>Back to Fields</Button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">

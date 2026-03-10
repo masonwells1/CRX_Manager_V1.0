@@ -381,6 +381,15 @@ export default function CustomerDetail() {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
   }
 
+  if (!isNew && !customer.id) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 space-y-4">
+        <p className="text-secondary text-lg">Customer not found</p>
+        <Button variant="secondary" onClick={() => navigate('/customers')}>Back to Customers</Button>
+      </div>
+    );
+  }
+
   const tabs = ['info', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
 
   const handleGenerateSummary = async (season: number, options: YearEndSummaryOptions) => {

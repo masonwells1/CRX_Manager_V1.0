@@ -308,11 +308,12 @@ export default function PrepaymentManager() {
               .single();
             if (fetchErr || !custRow) throw new Error('Failed to fetch current prepay balance');
             const currentBalance = (custRow as { prepay_balance_cents: number }).prepay_balance_cents || 0;
-            const { error: updateErr } = await supabase
+            const updateResult = await supabase
               .from('customers')
               .update({ prepay_balance_cents: currentBalance + totalCents })
-              .eq('id', checkForm.customer_id);
-            if (updateErr) throw new Error('Failed to update prepay balance');
+              .eq('id', checkForm.customer_id)
+              .select();
+            checkMutationResult(updateResult, 'Update prepay balance');
           }
         });
       },

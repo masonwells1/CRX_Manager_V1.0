@@ -13,7 +13,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
@@ -244,7 +244,8 @@ export default function NewOrder() {
 
       // Save customer PO# if provided
       if (customerPoNumber.trim() && orderId) {
-        await supabase.from('orders').update({ customer_po_number: customerPoNumber.trim() }).eq('id', orderId);
+        const poResult = await supabase.from('orders').update({ customer_po_number: customerPoNumber.trim() }).eq('id', orderId).select();
+        checkMutationResult(poResult, 'Update customer PO number');
       }
 
       toast('success', 'Order created successfully');

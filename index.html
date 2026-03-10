@@ -18,7 +18,17 @@
     <link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Loading spinner — shown until React mounts and replaces this content -->
+      <div class="crx-loading" style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;background:#F9F7F2;font-family:Inter,system-ui,sans-serif">
+        <svg width="48" height="48" viewBox="0 0 48 48" style="animation:crx-spin 1s linear infinite">
+          <circle cx="24" cy="24" r="20" fill="none" stroke="#28A26A" stroke-width="4" stroke-dasharray="80 40" stroke-linecap="round"/>
+        </svg>
+        <p style="margin-top:16px;color:#28A26A;font-size:14px;font-weight:500">Loading Crop RX...</p>
+        <style>@keyframes crx-spin{to{transform:rotate(360deg)}}</style>
+      </div>
+    </div>
+    <script src="/sw-doctor.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

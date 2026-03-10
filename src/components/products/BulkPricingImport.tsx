@@ -3,6 +3,7 @@ import { Upload, CheckCircle, XCircle, AlertCircle, Sparkles } from 'lucide-reac
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
+import { useAuth } from '../../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 
@@ -27,6 +28,7 @@ interface ValidationResult {
 }
 
 export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPricingImportProps) {
+  const { profile } = useAuth();
   const { toast } = useToast();
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
@@ -222,8 +224,9 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
         success++;
 
         if (row.cost !== undefined && row.cost !== product.current_cost) {
-          await supabase.from('cost_history').insert({
+          const { error: histErr } = await supabase.from('cost_history').insert({
             product_id: product.id,
+            changed_by: profile?.id,
             old_cost: product.current_cost,
             new_cost: row.cost,
             old_tier1_price: product.tier1_price,
@@ -234,6 +237,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
             new_tier3_price: row.tier3_price ?? product.tier3_price,
             change_note: 'Bulk pricing update',
           });
+          if (histErr) console.error('Cost history audit failed:', histErr);
         }
       } catch {
         failed++;

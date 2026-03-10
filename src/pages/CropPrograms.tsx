@@ -134,11 +134,12 @@ export default function CropPrograms() {
         .select();
       checkMutationResult(updateResult, 'Update crop programs setting');
     } else {
-      await supabase.from('app_settings').insert({
+      const insertResult = await supabase.from('app_settings').insert({
         setting_key: 'crop_programs',
         setting_value: value,
         updated_by: profile?.id,
-      });
+      }).select();
+      checkMutationResult(insertResult, 'Create crop programs setting');
     }
     setPrograms(updated);
   };

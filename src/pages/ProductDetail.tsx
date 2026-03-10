@@ -254,6 +254,15 @@ export default function ProductDetail() {
     return <div className="animate-pulse space-y-4"><div className="h-8 bg-gray-200 rounded w-1/3" /><div className="h-64 bg-gray-200 rounded" /></div>;
   }
 
+  if (!isNew && !product.id) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 space-y-4">
+        <p className="text-secondary text-lg">Product not found</p>
+        <Button variant="secondary" onClick={() => navigate('/products')}>Back to Products</Button>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">

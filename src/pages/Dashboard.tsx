@@ -522,7 +522,7 @@ export default function Dashboard() {
               <span className="text-sm font-medium text-nav-dark">New PO</span>
             </button>
             <button
-              onClick={() => navigate('/deliveries/schedule')}
+              onClick={() => navigate('/deliveries/new')}
               className="flex flex-col items-center gap-2 p-4 rounded-xl border border-gray-100 bg-white hover:bg-crx-green-tint hover:border-crx-green/20 transition-all cursor-pointer group"
             >
               <div className="w-10 h-10 rounded-lg bg-green-50 group-hover:bg-green-100 flex items-center justify-center transition-colors">

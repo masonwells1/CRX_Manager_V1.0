@@ -38,15 +38,19 @@ export default function Notifications() {
 
   const markAsRead = async (notification: NotificationType) => {
     if (!notification.is_read) {
-      const readResult = await supabase
-        .from('notifications')
-        .update({ is_read: true })
-        .eq('id', notification.id)
-        .select();
-      checkMutationResult(readResult, 'Mark notification as read');
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
-      );
+      try {
+        const readResult = await supabase
+          .from('notifications')
+          .update({ is_read: true })
+          .eq('id', notification.id)
+          .select();
+        checkMutationResult(readResult, 'Mark notification as read');
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
+        );
+      } catch (err: unknown) {
+        toast('error', err instanceof Error ? err.message : 'Failed to mark as read');
+      }
     }
     if (notification.related_entity_type && notification.related_entity_id) {
       const routes: Record<string, string> = {
@@ -64,14 +68,18 @@ export default function Notifications() {
     // Guard: Ensure profile is loaded
     if (!profile) return;
 
-    const markAllResult = await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('user_id', profile.id)
-      .eq('is_read', false)
-      .select();
-    checkMutationResult(markAllResult, 'Mark all notifications as read');
-    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+    try {
+      const markAllResult = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('user_id', profile.id)
+        .eq('is_read', false)
+        .select();
+      checkMutationResult(markAllResult, 'Mark all notifications as read');
+      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to mark all as read');
+    }
   };
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
