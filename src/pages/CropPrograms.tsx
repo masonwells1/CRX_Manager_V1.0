@@ -413,11 +413,11 @@ export default function CropPrograms() {
       {/* Create/Edit Modal */}
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editingProgram ? 'Edit Program' : 'New Crop Program'} maxWidth="lg">
         <div className="space-y-4 max-h-[70vh] overflow-y-auto">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input label="Program Name" value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="e.g. 2026 Corn Program" />
             <Input label="Description" value={formDesc} onChange={(e) => setFormDesc(e.target.value)} placeholder="Optional description" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-secondary mb-1">Crop Type</label>
               <select
@@ -454,8 +454,8 @@ export default function CropPrograms() {
             <div className="space-y-3">
               {formItems.map((item, idx) => (
                 <div key={idx} className="bg-gray-50 rounded-lg p-3 space-y-2">
-                  <div className="grid grid-cols-12 gap-2 items-end">
-                    <div className="col-span-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-12 gap-2 items-end">
+                    <div className="col-span-2 sm:col-span-3">
                       <label className="block text-xs font-medium text-secondary mb-1">Section</label>
                       <select
                         value={item.section_name}
@@ -465,7 +465,7 @@ export default function CropPrograms() {
                         {SECTION_PRESETS.map((s) => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </div>
-                    <div className="col-span-4">
+                    <div className="col-span-2 sm:col-span-4">
                       <label className="block text-xs font-medium text-secondary mb-1">Product</label>
                       <select
                         value={item.product_id}
@@ -478,7 +478,7 @@ export default function CropPrograms() {
                         ))}
                       </select>
                     </div>
-                    <div className="col-span-2">
+                    <div className="col-span-1 sm:col-span-2">
                       <label className="block text-xs font-medium text-secondary mb-1">Rate</label>
                       <input
                         type="number"
@@ -488,7 +488,7 @@ export default function CropPrograms() {
                         placeholder="0"
                       />
                     </div>
-                    <div className="col-span-2">
+                    <div className="col-span-1 sm:col-span-2">
                       <label className="block text-xs font-medium text-secondary mb-1">Unit</label>
                       <select
                         value={item.rate_unit}
@@ -503,7 +503,7 @@ export default function CropPrograms() {
                         <option value="units/acre">units/acre</option>
                       </select>
                     </div>
-                    <div className="col-span-1 flex justify-center">
+                    <div className="col-span-2 sm:col-span-1 flex justify-center sm:justify-center">
                       <button
                         onClick={() => removeItem(idx)}
                         className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"

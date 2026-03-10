@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#28A26A"/>
+  <text x="256" y="230" text-anchor="middle" font-family="Arial Black, sans-serif" font-weight="900" font-size="160" fill="white">CRX</text>
+  <text x="256" y="340" text-anchor="middle" font-family="Arial, sans-serif" font-weight="600" font-size="60" fill="rgba(255,255,255,0.9)" letter-spacing="12">SOLUTIONS</text>
+  <path d="M400 100 Q440 140 420 190 Q400 230 360 230 Q380 190 370 150 Q360 120 400 100Z" fill="rgba(255,255,255,0.3)"/>
+</svg>

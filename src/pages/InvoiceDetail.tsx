@@ -608,8 +608,8 @@ export default function InvoiceDetail() {
         ...(parentOrder ? [{ label: parentOrder.order_number, href: `/orders/${parentOrder.id}` }] : []),
         { label: isNew ? 'New Invoice' : invoice.invoice_number || 'Invoice' },
       ]} />
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-3 min-w-0">
           <div>
             <h1 className="text-xl font-semibold font-heading text-nav-dark">
               {isNew ? 'New Invoice' : invoice.invoice_number}
@@ -626,7 +626,7 @@ export default function InvoiceDetail() {
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {editable && (
             <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving}>
               Save
@@ -687,10 +687,10 @@ export default function InvoiceDetail() {
       </div>
 
       {/* Invoice Info */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-2">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <Card className="md:col-span-2">
           <h2 className="text-sm font-semibold text-nav-dark mb-4">Invoice Details</h2>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Customer */}
             <div className="col-span-2 relative">
               <label className="text-sm font-medium text-nav-dark">Customer *</label>

@@ -400,7 +400,7 @@ export default function CycleCounts() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <h2 className="text-xl font-semibold font-heading text-nav-dark">Cycle Counts</h2>
         {isAdmin && (
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => setShowNew(true)}>

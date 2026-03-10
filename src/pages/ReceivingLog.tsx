@@ -302,14 +302,14 @@ export default function ReceivingLog() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-semibold font-heading text-nav-dark">Receiving Log</h2>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex items-center gap-3 min-w-0">
+          <h2 className="text-xl font-semibold font-heading text-nav-dark whitespace-nowrap">Receiving Log</h2>
           {canBulkAction && <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />}
         </div>
         <button
           onClick={() => navigate('/receiving/quick')}
-          className="flex items-center gap-2 px-4 py-2 bg-crx-green text-white rounded-xl text-sm font-medium hover:bg-crx-green/90 transition-colors shadow-sm"
+          className="flex items-center gap-2 px-4 py-2 bg-crx-green text-white rounded-xl text-sm font-medium hover:bg-crx-green/90 transition-colors shadow-sm self-start sm:self-auto"
         >
           <PackageCheck className="w-4 h-4" />
           Quick Receive

@@ -808,7 +808,7 @@ export default function Dashboard() {
         </Card>
 
         {/* Delivery stats mini-cards */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4">
           <Card>
             <div className="flex items-center gap-2 mb-2">
               <Calendar className="w-4 h-4 text-crx-green" />

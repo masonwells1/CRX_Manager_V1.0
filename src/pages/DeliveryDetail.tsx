@@ -840,7 +840,7 @@ export default function DeliveryDetail() {
         <div className="space-y-4">
           {/* Header card */}
           <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
               <h2 className="text-xl font-semibold text-white font-heading flex items-center gap-2">
                 {delivery.delivery_number}
                 {delivery.is_quick_delivery && (
@@ -849,7 +849,7 @@ export default function DeliveryDetail() {
                   </Badge>
                 )}
               </h2>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 {delivery.priority && delivery.priority !== 'normal' && (
                   <Badge variant={PRIORITY_BADGE[delivery.priority] || 'default'} size="sm">
                     {PRIORITY_LABELS[delivery.priority]}
@@ -989,13 +989,13 @@ export default function DeliveryDetail() {
                 <span className="text-sm text-gray-400">{photos.length}/10</span>
               </div>
               {photos.length > 0 && (
-                <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-4">
                   {photos.map((photo) => (
                     <img
                       key={photo.id}
                       src={photo.image_url}
                       alt={photo.caption || 'Delivery photo'}
-                      className="w-full h-48 object-contain rounded-lg border border-gray-600 bg-gray-800"
+                      className="w-full h-36 sm:h-48 object-contain rounded-lg border border-gray-600 bg-gray-800"
                     />
                   ))}
                 </div>

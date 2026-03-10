@@ -415,9 +415,9 @@ export default function OrderDetail() {
         { label: 'Orders', href: '/orders' },
         { label: order?.order_number || 'Order' },
       ]} />
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <h2 className="text-xl font-semibold font-heading text-nav-dark">{order?.order_number || 'Order'}</h2>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {editing ? (
             <>
               <Button variant="ghost" icon={<X className="w-4 h-4" />} showChevron={false} onClick={() => { setEditing(false); setEditItems(items.map((i) => ({ ...i }))); }}>

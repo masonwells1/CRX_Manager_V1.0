@@ -926,7 +926,7 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end gap-2">
+      <div className="flex justify-end gap-2 flex-wrap">
         <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} onClick={handleExportCSV}>
           Export CSV
         </Button>
@@ -955,7 +955,7 @@ export default function InventoryPage() {
       </div>
 
 
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4">
         {summaryCards.map((c) => (
           <Card key={c.label}>
             <div className={`w-10 h-10 rounded-lg ${c.color} flex items-center justify-center mb-3`}>
