@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff,
   Minus, Plus, Pencil, Ban, Camera, UserPlus, AlertTriangle, RefreshCw,
-  PlayCircle, Lock, Zap, FileText,
+  PlayCircle, Lock, Zap, FileText, Mail,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -88,6 +88,7 @@ export default function DeliveryDetail() {
   const [signedBy, setSignedBy] = useState('');
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
   const [deliveryQtys, setDeliveryQtys] = useState<Record<string, number>>({});
   const [driverIssueType, setDriverIssueType] = useState<DeliveryIssueType>('none');
   const [driverIssueNotes, setDriverIssueNotes] = useState('');
@@ -143,7 +144,7 @@ export default function DeliveryDetail() {
   const isDriver = role === 'driver';
   const isAdminOrRep = role === 'admin' || role === 'sales_rep';
   const canEdit = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
-  const canCancel = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
+  const canCancel = isAdminOrRep && delivery?.status !== 'cancelled';
   const isAssignedDriver = isDriver && profile?.id === delivery?.assigned_driver;
   const canConfirm = (isAdminOrRep || isAssignedDriver) && delivery?.status === 'scheduled';
 
@@ -638,8 +639,11 @@ export default function DeliveryDetail() {
           }).join('');
 
           const photoCount = photos.length;
+          const photoImages = photos.slice(0, 6).map((p) =>
+            `<img src="${p.image_url}" alt="${p.caption || 'Delivery photo'}" style="width:140px;height:105px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;" />`
+          ).join('');
           const photoNote = photoCount > 0
-            ? `<p style="color:#475569;font-size:13px;margin-top:12px;">📷 ${photoCount} delivery photo(s) on file.</p>`
+            ? `<div style="margin-top:16px;"><p style="color:#1e293b;font-size:14px;font-weight:600;margin-bottom:8px;">📷 Delivery Photos (${photoCount})</p><div style="display:flex;flex-wrap:wrap;gap:8px;">${photoImages}</div>${photoCount > 6 ? `<p style="color:#64748b;font-size:12px;margin-top:6px;">+ ${photoCount - 6} more photo(s) on file</p>` : ''}</div>`
             : '';
           const signatureNote = signedBy
             ? `<p style="color:#475569;font-size:13px;">✍️ Signed by: <strong>${signedBy}</strong></p>`
@@ -702,6 +706,79 @@ export default function DeliveryDetail() {
       toast('error', sanitizeError(error));
     }
     setCompleting(false);
+  };
+
+  // ── Resend Delivery Confirmation Email ──────────────────────────────────
+  const handleResendEmail = async () => {
+    if (!delivery || !customer?.email) {
+      toast('error', customer?.email ? 'Delivery not loaded' : 'No customer email on file');
+      return;
+    }
+    setSendingEmail(true);
+    try {
+      const deliveredItems = items.map((item) =>
+        `<tr>
+          <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${item.product?.product_name || 'Product'}</td>
+          <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${item.quantity_delivered || item.quantity}</td>
+        </tr>`
+      ).join('');
+
+      const photoImages = photos.slice(0, 6).map((p) =>
+        `<img src="${p.image_url}" alt="${p.caption || 'Delivery photo'}" style="width:140px;height:105px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;" />`
+      ).join('');
+      const photoNote = photos.length > 0
+        ? `<div style="margin-top:16px;"><p style="color:#1e293b;font-size:14px;font-weight:600;margin-bottom:8px;">📷 Delivery Photos (${photos.length})</p><div style="display:flex;flex-wrap:wrap;gap:8px;">${photoImages}</div>${photos.length > 6 ? `<p style="color:#64748b;font-size:12px;margin-top:6px;">+ ${photos.length - 6} more photo(s) on file</p>` : ''}</div>`
+        : '';
+      const signatureNote = delivery.signed_by
+        ? `<p style="color:#475569;font-size:13px;">✍️ Signed by: <strong>${delivery.signed_by}</strong></p>`
+        : '';
+
+      const html = buildEmailHtml(`
+        <h2 style="color:#1e293b;margin:0 0 12px;">Delivery Confirmation</h2>
+        <p style="color:#475569;font-size:14px;line-height:1.6;">
+          Hi${customer.contact_name ? ` ${customer.contact_name}` : ''},
+        </p>
+        <p style="color:#475569;font-size:14px;line-height:1.6;">
+          Here is your delivery confirmation for <strong>${delivery.delivery_number}</strong>.
+        </p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+          <tr>
+            <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;color:#166534;">Delivery #</td>
+            <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;font-weight:600;color:#166534;">${delivery.delivery_number}</td>
+          </tr>
+          <tr>
+            <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Completed</td>
+            <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${delivery.completed_at ? new Date(delivery.completed_at).toLocaleDateString() : new Date().toLocaleDateString()}</td>
+          </tr>
+        </table>
+        <h3 style="color:#1e293b;font-size:14px;margin:16px 0 8px;">Delivered Items</h3>
+        <table style="width:100%;border-collapse:collapse;">
+          <tr style="background:#f8fafc;">
+            <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:left;color:#64748b;">Product</th>
+            <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Qty Delivered</th>
+          </tr>
+          ${deliveredItems}
+        </table>
+        ${signatureNote}
+        ${photoNote}
+        <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
+          Thank you for your business!
+        </p>
+      `);
+
+      await sendEmail({
+        to: customer.email,
+        subject: `Delivery ${delivery.delivery_number} Confirmation — Crop RX Solutions`,
+        html,
+        email_type: 'delivery_completed',
+        customer_id: delivery.customer_id,
+        idempotency_key: `delivery-resend-${delivery.id}-${Date.now()}`,
+      });
+      toast('success', `Confirmation email sent to ${customer.email}`);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setSendingEmail(false);
   };
 
   // ── Loading / Not Found ────────────────────────────────────────────────
@@ -918,7 +995,7 @@ export default function DeliveryDetail() {
                       key={photo.id}
                       src={photo.image_url}
                       alt={photo.caption || 'Delivery photo'}
-                      className="w-full h-24 object-cover rounded-lg border border-gray-600"
+                      className="w-full h-48 object-contain rounded-lg border border-gray-600 bg-gray-800"
                     />
                   ))}
                 </div>
@@ -1153,6 +1230,18 @@ export default function DeliveryDetail() {
             >
               Receipt PDF
             </Button>
+            {delivery.status === 'completed' && customer?.email && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Mail className="w-4 h-4" />}
+                showChevron={false}
+                onClick={handleResendEmail}
+                loading={sendingEmail}
+              >
+                Email Confirmation
+              </Button>
+            )}
             {canCancel && (
               <Button
                 variant="danger"
@@ -1644,7 +1733,8 @@ export default function DeliveryDetail() {
                 <img
                   src={photo.image_url}
                   alt={photo.caption || 'Delivery photo'}
-                  className="w-full h-32 object-cover rounded-lg border border-gray-200"
+                  className="w-full h-48 object-contain rounded-lg border border-gray-200 bg-gray-50 cursor-pointer"
+                  onClick={(e) => { e.stopPropagation(); window.open(photo.image_url, '_blank'); }}
                 />
                 {photo.caption && (
                   <p className="text-xs text-secondary mt-1 truncate">{photo.caption}</p>
@@ -1725,6 +1815,11 @@ export default function DeliveryDetail() {
             <p className="text-sm text-red-800">
               You are about to cancel delivery <strong>{delivery.delivery_number}</strong>.
               The assigned driver will be notified.
+              {delivery.status === 'completed' && (
+                <span className="block mt-1 font-semibold">
+                  This delivery was already completed. Cancelling will reverse all inventory changes and restore stock to the warehouse.
+                </span>
+              )}
             </p>
           </div>
           <div>

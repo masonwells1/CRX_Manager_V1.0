@@ -62,6 +62,7 @@ export default function NewOrder() {
   const [customerId, setCustomerId] = useState('');
   const [orderName, setOrderName] = useState('');
   const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
+  const [customerPoNumber, setCustomerPoNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);
 
@@ -240,6 +241,12 @@ export default function NewOrder() {
         setSaving(false);
         return;
       }
+
+      // Save customer PO# if provided
+      if (customerPoNumber.trim() && orderId) {
+        await supabase.from('orders').update({ customer_po_number: customerPoNumber.trim() }).eq('id', orderId);
+      }
+
       toast('success', 'Order created successfully');
 
       // Show inventory warnings (non-blocking)
@@ -358,6 +365,18 @@ export default function NewOrder() {
                 value={orderDate}
                 onChange={(e) => setOrderDate(e.target.value)}
               />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-nav-dark mb-1">
+                Customer PO#
+              </label>
+              <Input
+                value={customerPoNumber}
+                onChange={(e) => setCustomerPoNumber(e.target.value)}
+                placeholder="e.g., PO-12345"
+              />
+              <p className="text-xs text-secondary mt-1">Optional — customer&apos;s purchase order reference</p>
             </div>
           </div>
 

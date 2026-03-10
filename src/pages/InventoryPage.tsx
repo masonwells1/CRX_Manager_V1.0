@@ -226,7 +226,7 @@ export default function InventoryPage() {
       item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string; inventory_unit?: string | null; container_size?: number | null; container_type?: string | null; vendor?: string | null; current_cost?: number | null; reorder_point: number; min_stock_level: number },
     ): InventoryRow => {
       const onOrderQty = onOrderByProduct[item.product_id] || 0;
-      const totalOnFloor = item.quantity_available;
+      const totalOnFloor = item.quantity_available + item.quantity_prebooked;
       const plannedQty = (holdsByProduct[item.product_id] || 0) + (plannedByProduct[item.product_id] || 0);
       // Net Position = (supply) - (demand)
       // Supply  = on_order (coming in) + quantity_available (physical stock on floor)

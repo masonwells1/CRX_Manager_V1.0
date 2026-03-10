@@ -236,6 +236,11 @@ export default function Orders() {
       render: (row) => <span className="font-mono text-sm">{fmt(row.total_price)}</span>,
     },
     {
+      key: 'customer_po_number',
+      header: 'Customer PO#',
+      render: (row) => (row as Order & { customer_po_number?: string }).customer_po_number || '-',
+    },
+    {
       key: 'order_date',
       header: 'Order Date',
       sortable: true,

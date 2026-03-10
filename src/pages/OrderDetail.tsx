@@ -5,7 +5,7 @@
  */
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Truck, Pencil, Save, X, Trash2, FileText } from 'lucide-react';
+import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -18,7 +18,7 @@ import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
-import type { Order, OrderItem, Customer, Invoice, Delivery } from '../types';
+import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery } from '../types';
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -35,6 +35,14 @@ export default function OrderDetail() {
 
   // Related blend tickets
   const [relatedTickets, setRelatedTickets] = useState<{ id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }[]>([]);
+
+  // Shares state
+  const [shares, setShares] = useState<OrderShare[]>([]);
+  const [showShareEditor, setShowShareEditor] = useState(false);
+  const [shareCustomers, setShareCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  const [newShareCustomerId, setNewShareCustomerId] = useState('');
+  const [newSharePct, setNewSharePct] = useState('');
+  const [savingShares, setSavingShares] = useState(false);
 
   // Edit mode state
   const [editing, setEditing] = useState(false);
@@ -111,6 +119,14 @@ export default function OrderDetail() {
         .not('status', 'in', '("voided","cancelled")')
         .order('invoice_number');
       setInvoices(invoiceData || []);
+
+      // Load order shares
+      const { data: shareData } = await supabase
+        .from('order_shares')
+        .select('*')
+        .eq('order_id', id!)
+        .order('sort_order');
+      setShares((shareData || []) as OrderShare[]);
     }
     setLoading(false);
   }, [id]);
@@ -264,6 +280,72 @@ export default function OrderDetail() {
     }
   };
 
+  // ── Share management ──────────────────────────────────────────────────
+  const openShareEditor = async () => {
+    // Load customers for dropdown
+    const { data } = await supabase
+      .from('customers')
+      .select('id, farm_name')
+      .is('deleted_at', null)
+      .order('farm_name')
+      .limit(500);
+    setShareCustomers((data || []) as { id: string; farm_name: string }[]);
+    setNewShareCustomerId('');
+    setNewSharePct('');
+    setShowShareEditor(true);
+  };
+
+  const handleAddShare = async () => {
+    if (!order || !newShareCustomerId || !newSharePct) return;
+    const pct = parseFloat(newSharePct);
+    if (isNaN(pct) || pct <= 0 || pct > 100) {
+      toast('error', 'Percentage must be between 0 and 100');
+      return;
+    }
+    const totalExisting = shares.reduce((s, sh) => s + sh.split_percentage, 0);
+    if (totalExisting + pct > 100) {
+      toast('error', `Total split would exceed 100% (currently ${totalExisting}%)`);
+      return;
+    }
+    const selectedCust = shareCustomers.find((c) => c.id === newShareCustomerId);
+    if (!selectedCust) return;
+
+    setSavingShares(true);
+    try {
+      const amountCents = Math.round((order.total_price * 100 * pct) / 100);
+      const result = await supabase.from('order_shares').insert({
+        order_id: order.id,
+        customer_id: newShareCustomerId,
+        customer_name: selectedCust.farm_name,
+        split_percentage: pct,
+        amount_cents: amountCents,
+        is_primary: shares.length === 0,
+        sort_order: shares.length + 1,
+      }).select();
+      checkMutationResult(result, 'Add order share');
+      toast('success', `Added ${selectedCust.farm_name} at ${pct}%`);
+      setNewShareCustomerId('');
+      setNewSharePct('');
+      fetchOrder();
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setSavingShares(false);
+  };
+
+  const handleRemoveShare = async (shareId: string) => {
+    setSavingShares(true);
+    try {
+      const result = await supabase.from('order_shares').delete().eq('id', shareId).select();
+      checkMutationResult(result, 'Remove order share');
+      toast('success', 'Share removed');
+      fetchOrder();
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setSavingShares(false);
+  };
+
   const handleDeleteItem = async (itemId: string) => {
     setEditItems((prev) => prev.filter((i) => i.id !== itemId));
   };
@@ -410,6 +492,14 @@ export default function OrderDetail() {
               {new Date(order.order_date).toLocaleDateString()}
             </p>
           </div>
+          {order.customer_po_number && (
+            <div>
+              <p className="text-xs text-secondary">Customer PO#</p>
+              <p className="text-sm font-medium text-nav-dark">
+                {order.customer_po_number}
+              </p>
+            </div>
+          )}
           <div>
             <p className="text-xs text-secondary">Total Price</p>
             <p className="text-sm font-medium text-nav-dark">{fmt(order.total_price)}</p>
@@ -655,6 +745,106 @@ export default function OrderDetail() {
           </div>
         </Card>
       ))}
+
+      {/* Order Shares (Bill Splitting) */}
+      {(shares.length > 0 || canEdit) && (
+        <Card>
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-blue-500" />
+              <h3 className="font-semibold text-nav-dark">Bill Split</h3>
+              {shares.length > 0 && (
+                <span className="text-xs text-secondary">({shares.length} customer{shares.length !== 1 ? 's' : ''})</span>
+              )}
+            </div>
+            {canEdit && !showShareEditor && (
+              <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} showChevron={false} onClick={openShareEditor}>
+                Add Split
+              </Button>
+            )}
+          </div>
+
+          {shares.length === 0 && !showShareEditor && (
+            <p className="text-sm text-secondary text-center py-4">No bill splits — 100% billed to primary customer</p>
+          )}
+
+          {shares.length > 0 && (
+            <div className="space-y-2 mb-3">
+              {shares.map((share) => (
+                <div key={share.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
+                      <Users className="w-4 h-4 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-nav-dark">{share.customer_name}</p>
+                      <p className="text-xs text-secondary">{fmt(share.amount_cents / 100)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold text-blue-600">{share.split_percentage}%</span>
+                    {canEdit && (
+                      <button onClick={() => handleRemoveShare(share.id)} className="text-red-400 hover:text-red-600 transition-colors">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-center justify-between px-3 py-2 bg-blue-50 rounded-lg">
+                <span className="text-xs font-medium text-blue-700">Total Allocated</span>
+                <span className="text-xs font-semibold text-blue-700">
+                  {shares.reduce((s, sh) => s + sh.split_percentage, 0)}%
+                  {shares.reduce((s, sh) => s + sh.split_percentage, 0) < 100 && (
+                    <span className="text-amber-600 ml-2">
+                      ({100 - shares.reduce((s, sh) => s + sh.split_percentage, 0)}% unallocated)
+                    </span>
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {showShareEditor && (
+            <div className="border border-blue-200 rounded-lg p-4 bg-blue-50/50 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="text-xs font-medium text-secondary mb-1 block">Customer</label>
+                  <select
+                    value={newShareCustomerId}
+                    onChange={(e) => setNewShareCustomerId(e.target.value)}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  >
+                    <option value="">Select customer...</option>
+                    {shareCustomers.map((c) => (
+                      <option key={c.id} value={c.id}>{c.farm_name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-secondary mb-1 block">Split %</label>
+                  <input
+                    type="number"
+                    value={newSharePct}
+                    onChange={(e) => setNewSharePct(e.target.value)}
+                    placeholder="e.g. 35"
+                    min="0.01"
+                    max="100"
+                    step="0.01"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2 justify-end">
+                <Button variant="ghost" size="sm" onClick={() => setShowShareEditor(false)}>Cancel</Button>
+                <Button size="sm" onClick={handleAddShare} loading={savingShares} disabled={!newShareCustomerId || !newSharePct}>
+                  Add Share
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Related Blend Tickets */}
       {relatedTickets.length > 0 && (

@@ -204,11 +204,25 @@ export interface Order {
   season: number | null;
   salesman_id: string | null;
   deleted_at: string | null;
+  customer_po_number: string | null;
   notes: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;
+}
+
+// ── Order Shares (bill-split between multiple customers) ─────────────────
+export interface OrderShare {
+  id: string;
+  order_id: string;
+  customer_id: string;
+  customer_name: string;
+  split_percentage: number;
+  amount_cents: number;
+  is_primary: boolean;
+  sort_order: number;
+  created_at: string;
 }
 
 export interface OrderItem {
