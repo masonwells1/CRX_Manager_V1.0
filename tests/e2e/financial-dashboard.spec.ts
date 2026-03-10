@@ -12,9 +12,9 @@ test.describe('Financial Dashboard', { tag: '@smoke' }, () => {
     await expect(page.locator('#main-content')).toBeVisible({ timeout: 10000 });
 
     // Financial KPI cards should be visible
-    await expect(page.getByText('Total Revenue')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('Total Profit')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('Quote Pipeline')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Total Revenue').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Total Profit').first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('Quote Pipeline').first()).toBeVisible({ timeout: 5000 });
   });
 
   test('should show AR aging summary', async ({ page }) => {

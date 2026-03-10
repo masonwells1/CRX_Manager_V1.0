@@ -31,9 +31,9 @@ test.describe('Operational Dashboard', { tag: '@smoke' }, () => {
 
   test('should show inventory position section', async ({ page }) => {
     await expect(page.getByText('Inventory Position')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('Floor Stock')).toBeVisible();
-    await expect(page.getByText('On Order')).toBeVisible();
-    await expect(page.getByText('Committed')).toBeVisible();
+    await expect(page.getByText('Floor Stock').first()).toBeVisible();
+    await expect(page.getByText('On Order').first()).toBeVisible();
+    await expect(page.getByText('Committed').first()).toBeVisible();
   });
 
   test('should show delivery command center', async ({ page }) => {
@@ -41,8 +41,8 @@ test.describe('Operational Dashboard', { tag: '@smoke' }, () => {
     await expect(main.getByText('Delivery').first()).toBeVisible({ timeout: 5000 });
     await expect(main.getByText('Command Center')).toBeVisible();
     // Stat mini-cards
-    await expect(main.getByText('Today')).toBeVisible();
-    await expect(main.getByText('This Week')).toBeVisible();
+    await expect(main.getByText('Today').first()).toBeVisible();
+    await expect(main.getByText('This Week').first()).toBeVisible();
   });
 
   test('should show sales pipeline section', async ({ page }) => {
