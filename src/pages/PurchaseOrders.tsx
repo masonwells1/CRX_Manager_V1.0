@@ -18,7 +18,7 @@ import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase } from '../lib/db';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
@@ -29,7 +29,7 @@ import type { PurchaseOrder } from '../types';
 const CANCELLABLE = ['draft', 'submitted'];
 
 export default function PurchaseOrders() {
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
   const [pos, setPos] = useState<PurchaseOrder[]>([]);
@@ -177,20 +177,25 @@ export default function PurchaseOrders() {
 
   const handleCancel = async () => {
     setCancelling(true);
-    try {
-      const ids = selectedRows.map((p) => p.id);
-      const result = await supabase
-        .from('purchase_orders')
-        .update({ status: 'cancelled' })
-        .in('id', ids)
-        .select();
-      checkMutationResult(result, 'Cancel purchase orders');
-      toast('success', `Cancelled ${ids.length} purchase order(s)`);
-      clearSelection();
-      fetchPOs();
-    } catch (err) {
-      toast('error', sanitizeError(err));
+    let cancelledCount = 0;
+    for (const po of selectedRows) {
+      if (po.status !== 'cancelled') {
+        const { error } = await supabase.rpc('cancel_purchase_order', {
+          p_po_id: po.id,
+          p_performed_by: profile?.id,
+        });
+        if (error) {
+          toast('error', `Failed to cancel PO ${po.po_number}: ${error.message}`);
+        } else {
+          cancelledCount++;
+        }
+      }
     }
+    if (cancelledCount > 0) {
+      toast('success', `Cancelled ${cancelledCount} purchase order(s)`);
+    }
+    clearSelection();
+    fetchPOs();
     setCancelling(false);
     setCancelModalOpen(false);
   };

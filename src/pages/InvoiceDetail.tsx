@@ -678,10 +678,12 @@ export default function InvoiceDetail() {
               >
                 Write Off
               </Button>
+            </>
+          )}
+          {!isNew && ['posted', 'overdue', 'paid'].includes(invoice.status ?? '') && isAdmin && (
               <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => setShowVoidModal(true)}>
                 Void
               </Button>
-            </>
           )}
         </div>
       </div>

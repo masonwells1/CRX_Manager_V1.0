@@ -706,12 +706,12 @@ export default function InventoryPage() {
           continue;
         }
 
-        const { error } = await supabase
+        const result = await supabase
           .from('inventory')
           .update({ ...fields, updated_at: new Date().toISOString() })
-          .eq('id', inventoryId);
-
-        if (error) throw error;
+          .eq('id', inventoryId)
+          .select();
+        checkMutationResult(result, 'Update inventory item');
       }
 
       const realChanges = [...changes.keys()].filter((k) => !k.startsWith('virtual-')).length;

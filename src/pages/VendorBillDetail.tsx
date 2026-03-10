@@ -23,6 +23,8 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useAuth } from '../contexts/AuthContext';
 import type { VendorBill, VendorPayment } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -36,6 +38,9 @@ export default function VendorBillDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { profile } = useAuth();
+  const paymentIdem = useIdempotencyKey('record_vendor_payment', profile?.id || '');
+  const voidIdem = useIdempotencyKey('void_vendor_bill', profile?.id || '');
 
   const [bill, setBill] = useState<(VendorBill & { vendor_name: string; po_number: string | null }) | null>(null);
   const [payments, setPayments] = useState<(VendorPayment & { creator_name: string })[]>([]);
@@ -110,6 +115,7 @@ export default function VendorBillDetail() {
 
     setPaying(true);
     try {
+      const payKey = paymentIdem.getKey();
       const { error } = await supabase.rpc('record_vendor_payment', {
         p_vendor_bill_id: id,
         p_payment_date: payDate,
@@ -117,8 +123,10 @@ export default function VendorBillDetail() {
         p_payment_method: payMethod || null,
         p_reference_number: payRef || null,
         p_notes: payNotes || null,
+        p_idempotency_key: payKey,
       });
       if (error) throw error;
+      paymentIdem.resetKey();
 
       toast('success', `Payment of ${fmt(amountCents)} recorded`);
       setPayModalOpen(false);
@@ -136,11 +144,14 @@ export default function VendorBillDetail() {
     if (!id) return;
     setVoiding(true);
     try {
+      const voidKey = voidIdem.getKey();
       const { error } = await supabase.rpc('void_vendor_bill', {
         p_vendor_bill_id: id,
         p_reason: voidReason || null,
+        p_idempotency_key: voidKey,
       });
       if (error) throw error;
+      voidIdem.resetKey();
 
       toast('success', 'Bill voided');
       setVoidModalOpen(false);

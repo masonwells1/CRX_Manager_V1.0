@@ -9,6 +9,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -29,6 +30,7 @@ export default function NewDelivery() {
   const [searchParams] = useSearchParams();
   const { profile } = useAuth();
   const { toast } = useToast();
+  const createDeliveryIdem = useIdempotencyKey('create_delivery', profile?.id || '');
 
   const preselectedOrderId = searchParams.get('order') || '';
 
@@ -243,6 +245,7 @@ export default function NewDelivery() {
     }
 
     setSaving(true);
+    const _idemKey = createDeliveryIdem.getKey();
 
     const order = orders.find((o) => o.id === selectedOrderId);
     if (!order) {
@@ -302,6 +305,7 @@ export default function NewDelivery() {
       return;
     }
 
+    createDeliveryIdem.resetKey();
     setIsDirty(false);
     toast('success', `Delivery ${deliveryNumber} scheduled`);
     logActivity('delivery_created', `Delivery ${deliveryNumber} created for order ${order.order_number}`, profile.id, 'delivery', delData.id, order.customer_id);

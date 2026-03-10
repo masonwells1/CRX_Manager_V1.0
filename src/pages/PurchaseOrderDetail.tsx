@@ -9,7 +9,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
@@ -332,11 +332,12 @@ export default function PurchaseOrderDetail() {
     if (!po || !profile) return;
     setSaving(true);
     try {
-      const { error } = await supabase
+      const result = await supabase
         .from('purchase_orders')
         .update({ status: 'submitted', submitted_date: new Date().toISOString().split('T')[0] })
-        .eq('id', id);
-      if (error) throw error;
+        .eq('id', id)
+        .select();
+      checkMutationResult(result, 'Submit purchase order');
       toast('success', `Purchase order ${po.po_number} submitted`);
       fetchPO();
     } catch (err: unknown) {

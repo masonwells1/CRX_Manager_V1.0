@@ -410,17 +410,16 @@ export default function Returns() {
     try {
       const ids = selectedRows.map((r) => r.id);
       // Soft delete via deleted_at timestamp
-      const { error } = await supabase
+      const result = await supabase
         .from('returns')
         .update({ deleted_at: new Date().toISOString() })
-        .in('id', ids);
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
-        toast('success', `Deleted ${ids.length} return(s)`);
-        clearSelection();
-        fetchReturns();
-      }
+        .in('id', ids)
+        .select();
+      checkMutationResult(result, 'Delete returns');
+
+      toast('success', `Deleted ${ids.length} return(s)`);
+      clearSelection();
+      fetchReturns();
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }

@@ -15,6 +15,7 @@ import Badge from '../ui/Badge';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/db';
+import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import type { FinanceChargePreview } from '../../types';
 
 interface FinanceChargePreviewModalProps {
@@ -35,6 +36,7 @@ export default function FinanceChargePreviewModal({
 }: FinanceChargePreviewModalProps) {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const financeChargeIdem = useIdempotencyKey('generate_finance_charges', profile?.id || '');
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [previews, setPreviews] = useState<FinanceChargePreview[]>([]);
@@ -93,15 +95,18 @@ export default function FinanceChargePreviewModal({
   const handleGenerate = async (customerIds?: string[]) => {
     setGenerating(true);
     try {
+      const idemKey = financeChargeIdem.getKey();
       const params: Record<string, unknown> = {
         p_as_of_date: asOfDate,
         p_performed_by: profile?.id,
+        p_idempotency_key: idemKey,
       };
       if (customerIds) {
         params.p_customer_ids = customerIds;
       }
       const { data, error } = await supabase.rpc('generate_finance_charges', params);
       if (error) throw error;
+      financeChargeIdem.resetKey();
       const result = data as { charges_generated: number; details: unknown[] };
       if (result.charges_generated === 0) {
         toast('info', 'No finance charges were generated');

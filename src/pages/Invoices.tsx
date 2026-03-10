@@ -128,7 +128,7 @@ export default function Invoices() {
   // Determine what's selected for action buttons
   const selectedInvoices = invoices.filter((i) => selected.has(i.id));
   const selectedPostable = selectedInvoices.filter((i) => ['draft', 'unposted'].includes(i.status));
-  const selectedVoidable = selectedInvoices.filter((i) => i.status === 'posted');
+  const selectedVoidable = selectedInvoices.filter((i) => ['posted', 'overdue', 'paid'].includes(i.status));
   const selectedDeletable = selectedInvoices.filter((i) => ['draft', 'voided'].includes(i.status));
   const selectableStatuses = ['draft', 'unposted', 'posted', 'voided'];
 

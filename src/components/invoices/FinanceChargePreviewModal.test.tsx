@@ -171,6 +171,7 @@ describe('FinanceChargePreviewModal', () => {
         p_as_of_date: '2026-01-15',
         p_performed_by: 'user-1',
         p_customer_ids: expect.arrayContaining(['c1', 'c2']),
+        p_idempotency_key: expect.stringContaining('generate_finance_charges'),
       });
     });
   });
@@ -193,6 +194,7 @@ describe('FinanceChargePreviewModal', () => {
       expect(mockRpc).toHaveBeenCalledWith('generate_finance_charges', {
         p_as_of_date: '2026-01-15',
         p_performed_by: 'user-1',
+        p_idempotency_key: expect.stringContaining('generate_finance_charges'),
       });
     });
   });

@@ -14,11 +14,15 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useAuth } from '../contexts/AuthContext';
 import type { Vendor, PurchaseOrder } from '../types';
 
 export default function NewVendorBill() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { profile } = useAuth();
+  const createBillIdem = useIdempotencyKey('create_vendor_bill', profile?.id || '');
   const [saving, setSaving] = useState(false);
 
   // Lookups
@@ -102,6 +106,7 @@ export default function NewVendorBill() {
       const subtotalCents = Math.round(Number(subtotalDollars) * 100);
       const adjustmentCents = Math.round(Number(adjustmentDollars || 0) * 100);
 
+      const idemKey = createBillIdem.getKey();
       const { data, error } = await supabase.rpc('create_vendor_bill', {
         p_vendor_id: vendorId,
         p_purchase_order_id: purchaseOrderId || null,
@@ -111,9 +116,11 @@ export default function NewVendorBill() {
         p_subtotal_cents: subtotalCents,
         p_adjustment_cents: adjustmentCents,
         p_notes: notes || null,
+        p_idempotency_key: idemKey,
       });
 
       if (error) throw error;
+      createBillIdem.resetKey();
 
       toast('success', 'Vendor bill created');
       navigate(`/accounts-payable/bills/${data}`);
