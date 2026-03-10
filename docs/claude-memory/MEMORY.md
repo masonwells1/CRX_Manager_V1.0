@@ -1,6 +1,6 @@
 # CRX Manager V1.0 — Agent Memory
 
-> **Last updated:** 2026-03-02
+> **Last updated:** 2026-03-10
 
 ## Project
 
@@ -23,8 +23,8 @@ See `.env.example` in repo root for required variable names. Never commit actual
 ## Current State
 
 - **Branch:** `main`
-- **Pages:** 50 | **Migrations:** 116 | **Edge Functions:** 5
-- **Unit tests:** 1,443 passing (93 files) | **E2E specs:** 102 files (626 tests, all passing)
+- **Pages:** 56 | **Migrations:** 134 | **Edge Functions:** 5
+- **Unit tests:** 1,444 passing (93 files) | **E2E specs:** 102 files (626 tests, all passing)
 - **Build:** clean | **CI:** green | **Pre-commit:** lint + build + vitest
 - **Season:** October 1 to September 30
 

@@ -13,12 +13,12 @@ At the start of each session, silently check if `docs/claude-memory/MEMORY.md` h
 
 To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
 
-## Current State (2026-03-07)
-- 55 pages, 76+ tables, ~123 RPCs, 123 migrations
-- 1,443 unit tests (93 files) + 626 E2E tests (102 spec files), all passing
+## Current State (2026-03-10)
+- 56 pages, 83 tables, ~160 RPCs, 134 migrations
+- 1,444 unit tests (93 files) + 626 E2E tests (102 spec files), all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
-- Latest: Accounts Payable module + RUP Sales Reporting (vendors, bills, payments, compliance register)
+- Latest: 60+ bug audit fixes (state machines, financial RPCs, RLS policies, search_path security)
 
 ---
 
@@ -235,10 +235,10 @@ Run `/update-docs` for a full audit anytime (not required — the commit hook ha
 
 | Doc | Contents |
 |-----|----------|
-| `docs/reference/database-schema.md` | 76+ tables + RLS policy matrix |
-| `docs/reference/rpc-functions.md` | ~123 RPCs + helpers + triggers |
-| `docs/reference/migration-history.md` | 123 migration entries |
-| `docs/reference/pages-routes.md` | 55 pages with routes |
+| `docs/reference/database-schema.md` | 83 tables + RLS policy matrix |
+| `docs/reference/rpc-functions.md` | ~160 RPCs + helpers + triggers |
+| `docs/reference/migration-history.md` | 134 migration entries |
+| `docs/reference/pages-routes.md` | 56 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
 | `docs/CHANGELOG.md` | Sprint-by-sprint history |
