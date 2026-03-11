@@ -172,6 +172,7 @@ export default function CropPrograms() {
       is_active: true,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      items: prog.items.map((item) => ({ ...item })),
     };
     savePrograms([...programs, dup]);
     toast('success', `Program duplicated as "${dup.name}"`);

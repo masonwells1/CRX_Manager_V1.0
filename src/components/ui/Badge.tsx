@@ -53,6 +53,10 @@ export const statusToBadgeVariant: Record<string, BadgeVariant> = {
   fully_received: 'success',
   pending: 'warning',
   paid: 'success',
+  overdue: 'error',
+  posted: 'success',
+  unposted: 'warning',
+  voided: 'error',
 };
 
 export default function Badge({ variant = 'default', children, size = 'sm', className = '' }: BadgeProps) {

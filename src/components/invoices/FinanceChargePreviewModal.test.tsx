@@ -176,7 +176,7 @@ describe('FinanceChargePreviewModal', () => {
     });
   });
 
-  it('calls generate_finance_charges without customer_ids for Generate All', async () => {
+  it('calls generate_finance_charges with all previewed customer_ids for Generate All', async () => {
     const previews = makePreviews();
     mockRpc
       .mockResolvedValueOnce({ data: previews, error: null }) // preview
@@ -194,6 +194,7 @@ describe('FinanceChargePreviewModal', () => {
       expect(mockRpc).toHaveBeenCalledWith('generate_finance_charges', {
         p_as_of_date: '2026-01-15',
         p_performed_by: 'user-1',
+        p_customer_ids: expect.arrayContaining(['c1', 'c2']),
         p_idempotency_key: expect.stringContaining('generate_finance_charges'),
       });
     });

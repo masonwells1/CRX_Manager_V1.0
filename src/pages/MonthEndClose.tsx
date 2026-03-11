@@ -116,8 +116,10 @@ export default function MonthEndClose() {
         },
         {
           label: 'Payments reconciled',
-          done: true,
-          detail: `${summary.payments.count} payments totaling ${fmt(summary.payments.total_cents)}`,
+          done: summary.payments.count === 0 || summary.payments.total_cents > 0,
+          detail: summary.payments.count === 0
+            ? 'No payments this period'
+            : `${summary.payments.count} payments totaling ${fmt(summary.payments.total_cents)} — review before closing`,
         },
         {
           label: 'Deliveries completed',
@@ -126,13 +128,15 @@ export default function MonthEndClose() {
         },
         {
           label: 'Commissions reviewed',
-          done: true,
-          detail: `${fmt(summary.commissions.earned_cents)} earned, ${summary.commissions.paid_count} paid`,
+          done: summary.commissions.earned_cents === 0 || summary.commissions.paid_count > 0,
+          detail: summary.commissions.earned_cents === 0
+            ? 'No commissions this period'
+            : `${fmt(summary.commissions.earned_cents)} earned, ${summary.commissions.paid_count} paid — review before closing`,
         },
         {
-          label: 'Finance charges generated',
+          label: 'Finance charges generated (optional)',
           done: true,
-          detail: 'Generate from AR Aging page if needed',
+          detail: 'Generate from AR Aging page if needed — this step is optional',
         },
       ]
     : [];

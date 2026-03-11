@@ -131,7 +131,9 @@ export default function FinanceChargePreviewModal({
   };
 
   const handleGenerateAll = () => {
-    handleGenerate(undefined);
+    // Generate for all PREVIEWED customers, not all customers in the system
+    const allIds = previews.map((p) => p.customer_id);
+    handleGenerate(allIds);
   };
 
   return (

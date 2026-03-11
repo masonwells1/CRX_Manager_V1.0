@@ -34,6 +34,11 @@ const pageMeta: Record<string, { title: string; accent: string }> = {
   '/team-board': { title: 'Team', accent: 'Board' },
   '/notifications': { title: 'Notifications', accent: '' },
   '/settings': { title: 'App', accent: 'Settings' },
+  '/accounts-payable': { title: 'Accounts', accent: 'Payable' },
+  '/payment-history': { title: 'Payment', accent: 'History' },
+  '/sales-reports': { title: 'Sales', accent: 'Reports' },
+  '/financial-dashboard': { title: 'Financial', accent: 'Dashboard' },
+  '/activity-feed': { title: 'Activity', accent: 'Feed' },
 };
 
 export function usePageMeta() {

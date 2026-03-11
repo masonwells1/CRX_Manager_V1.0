@@ -107,11 +107,17 @@ export default function NewVendorBill() {
       const adjustmentCents = Math.round(Number(adjustmentDollars || 0) * 100);
 
       const idemKey = createBillIdem.getKey();
+      // Compute due_date from bill_date + paymentTermsDays
+      const dueDateObj = new Date(billDate);
+      dueDateObj.setDate(dueDateObj.getDate() + paymentTermsDays);
+      const computedDueDate = dueDateObj.toISOString().split('T')[0];
+
       const { data, error } = await supabase.rpc('create_vendor_bill', {
         p_vendor_id: vendorId,
         p_purchase_order_id: purchaseOrderId || null,
         p_bill_number: billNumber.trim(),
         p_bill_date: billDate,
+        p_due_date: computedDueDate,
         p_payment_terms: paymentTerms || null,
         p_subtotal_cents: subtotalCents,
         p_adjustment_cents: adjustmentCents,

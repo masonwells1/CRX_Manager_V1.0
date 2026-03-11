@@ -1071,11 +1071,13 @@ export default function QuoteBuilder() {
         || (errObj && typeof errObj.hint === 'string' ? errObj.hint : null)
         || 'Failed to create order';
       toast('error', errMsg);
-      // Bug #29 fix: Revert quote status to 'sent' since conversion failed
+      // Bug #29 fix: Revert quote status since conversion failed
+      // Use the status BEFORE conversion (was 'accepted' from saveQuote, revert to previous)
+      const revertTo = status === 'accepted' ? 'sent' : (status || 'sent');
       try {
-        const revertResult = await supabase.from('quotes').update({ status: 'sent' }).eq('id', savedId).select();
+        const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select();
         checkMutationResult(revertResult, 'Revert quote status');
-        setStatus('sent');
+        setStatus(revertTo);
       } catch {
         // Best effort — status revert failed
       }

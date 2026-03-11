@@ -703,7 +703,7 @@ export interface OCRProcessingQueue {
 // Phase 2: Billing / Invoices
 
 export type InvoiceType = 'chemical_sale' | 'field_application' | 'misc_charge';
-export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'voided' | 'cancelled';
+export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'paid' | 'overdue' | 'voided' | 'cancelled';
 
 export interface Invoice {
   id: string;
@@ -1792,10 +1792,13 @@ export interface APAgingRow {
 export interface APDashboardSummary {
   total_owed_cents: number;
   due_this_week_cents: number;
+  due_this_week_count: number;
   due_this_month_cents: number;
   overdue_cents: number;
   overdue_count: number;
   unpaid_count: number;
+  total_bills: number;
+  paid_this_month_cents: number;
 }
 
 export interface RUPSalesRecord {

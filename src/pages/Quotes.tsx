@@ -272,7 +272,7 @@ export default function Quotes() {
             columns={columns}
             searchable
             searchPlaceholder="Search by quote # or customer..."
-            searchKeys={['quote_number']}
+            searchKeys={['quote_number', 'customer_name']}
             onRowClick={(row) => navigate(`/quotes/${row.id}`)}
             emptyTitle="No quotes yet"
             emptyDescription="Create your first quote to get started"

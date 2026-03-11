@@ -658,7 +658,7 @@ export default function InvoiceDetail() {
               Email
             </Button>
           )}
-          {!isNew && invoice.status === 'posted' && isAdmin && (
+          {!isNew && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdmin && (
             <>
               <Button
                 variant="secondary"

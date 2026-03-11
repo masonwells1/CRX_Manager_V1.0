@@ -24,6 +24,8 @@ const STATUS_OPTIONS: { value: InvoiceStatus | ''; label: string }[] = [
   { value: 'draft', label: 'Draft' },
   { value: 'unposted', label: 'Unposted' },
   { value: 'posted', label: 'Posted' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'overdue', label: 'Overdue' },
   { value: 'voided', label: 'Voided' },
   { value: 'cancelled', label: 'Cancelled' },
 ];
@@ -40,6 +42,8 @@ const statusBadge = (status: InvoiceStatus) => {
     draft: { variant: 'default', label: 'Draft' },
     unposted: { variant: 'warning', label: 'Unposted' },
     posted: { variant: 'success', label: 'Posted' },
+    paid: { variant: 'success', label: 'Paid' },
+    overdue: { variant: 'error', label: 'Overdue' },
     voided: { variant: 'error', label: 'Voided' },
     cancelled: { variant: 'default', label: 'Cancelled' },
   };
@@ -128,7 +132,7 @@ export default function Invoices() {
   // Determine what's selected for action buttons
   const selectedInvoices = invoices.filter((i) => selected.has(i.id));
   const selectedPostable = selectedInvoices.filter((i) => ['draft', 'unposted'].includes(i.status));
-  const selectedVoidable = selectedInvoices.filter((i) => ['posted', 'overdue', 'paid'].includes(i.status));
+  const selectedVoidable = selectedInvoices.filter((i) => ['posted', 'overdue'].includes(i.status));
   const selectedDeletable = selectedInvoices.filter((i) => ['draft', 'voided'].includes(i.status));
   const selectableStatuses = ['draft', 'unposted', 'posted', 'voided'];
 

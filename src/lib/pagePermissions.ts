@@ -52,6 +52,8 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'customer-transactions', label: 'Transactions', category: 'Finance', roles: ['admin'] },
   { key: 'month-end', label: 'Month-End', category: 'Finance', roles: ['admin'] },
   { key: 'rebates', label: 'Rebates', category: 'Finance', roles: ['admin'] },
+  { key: 'payment-history', label: 'Payment History', category: 'Finance', roles: ['admin'] },
+  { key: 'financial-dashboard', label: 'Financial Dashboard', category: 'Finance', roles: ['admin'] },
 
   // Reports
   { key: 'reports', label: 'Reports', category: 'Reports', roles: ['admin', 'sales_rep'] },

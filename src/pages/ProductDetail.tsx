@@ -222,9 +222,12 @@ export default function ProductDetail() {
         old_cost: product.current_cost,
         new_cost: cost,
         old_tier1_price: product.tier1_price,
+        new_tier1_price: product.tier1_price,
         old_tier2_price: product.tier2_price,
+        new_tier2_price: product.tier2_price,
         old_tier3_price: product.tier3_price,
-        change_note: costNote,
+        new_tier3_price: product.tier3_price,
+        change_note: costNote || 'Manual cost update',
       },
     ]);
     if (!error) {

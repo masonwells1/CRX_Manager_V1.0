@@ -129,7 +129,7 @@ export default function Returns() {
 
   const loadCreateData = async () => {
     const [custRes, prodRes] = await Promise.all([
-      supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name'),
+      supabase.from('customers').select('id, farm_name, tier').eq('is_active', true).order('farm_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
     ]);
     setCustomers((custRes.data || []) as Customer[]);
@@ -295,6 +295,10 @@ export default function Returns() {
 
   const handleReject = async () => {
     if (!activeReturn || !profile) return;
+    if (activeReturn.status !== 'requested') {
+      toast('error', `Cannot reject a return in '${activeReturn.status}' status`);
+      return;
+    }
     if (!confirm('Reject this return?')) return;
     try {
       const result = await supabase
@@ -408,6 +412,14 @@ export default function Returns() {
   const handleBulkDelete = async () => {
     setDeleting(true);
     try {
+      // Only allow deleting returns in 'requested' or 'rejected' status
+      const nonDeletable = selectedRows.filter((r) => !['requested', 'rejected', 'cancelled'].includes(r.status));
+      if (nonDeletable.length > 0) {
+        toast('error', `Cannot delete returns in active statuses (approved/received/credited)`);
+        setDeleting(false);
+        setDeleteModalOpen(false);
+        return;
+      }
       const ids = selectedRows.map((r) => r.id);
       // Soft delete via deleted_at timestamp
       const result = await supabase
@@ -629,7 +641,11 @@ export default function Returns() {
                       updateItem(idx, 'product_id', e.target.value);
                       if (p) {
                         updateItem(idx, 'product_name', p.product_name);
-                        updateItem(idx, 'unit_price_cents', Math.round((p.tier1_price || 0) * 100));
+                        // Use correct tier price based on customer's tier
+                        const selectedCust = customers.find((c) => c.id === newForm.customer_id);
+                        const tier = selectedCust?.tier || 1;
+                        const tierPrice = tier === 3 ? p.tier3_price : tier === 2 ? p.tier2_price : p.tier1_price;
+                        updateItem(idx, 'unit_price_cents', Math.round((tierPrice || p.tier1_price || 0) * 100));
                       }
                     }}
                     className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"

@@ -60,6 +60,14 @@ export default function Notifications() {
         order: '/orders',
         delivery: '/deliveries',
         purchase_order: '/purchase-orders',
+        invoice: '/invoices',
+        payment: '/payments',
+        return: '/returns',
+        job: '/jobs',
+        product: '/products',
+        customer: '/customers',
+        commission: '/commission-payments',
+        blend_ticket: '/blend-tickets',
       };
       const base = routes[notification.related_entity_type];
       if (base) navigate(`${base}/${notification.related_entity_id}`);

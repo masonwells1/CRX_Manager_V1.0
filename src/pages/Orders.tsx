@@ -310,7 +310,7 @@ export default function Orders() {
             columns={columns}
             searchable
             searchPlaceholder="Search orders..."
-            searchKeys={['order_number', 'farm_group_name']}
+            searchKeys={['order_number', 'farm_group_name', 'customer_name']}
             onRowClick={(row) => navigate(`/orders/${row.id}`)}
             emptyTitle="No orders yet"
             emptyDescription="Orders are created from accepted quotes"

@@ -57,7 +57,7 @@ export default function OrderDetail() {
   const [newStatus, setNewStatus] = useState('');
 
   const isAdmin = role === 'admin';
-  const canEdit = role === 'admin' || role === 'sales_rep';
+  const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled';
 
   const fetchOrder = useCallback(async () => {
     const { data: orderData } = await supabase
@@ -190,7 +190,17 @@ export default function OrderDetail() {
           toast('success', parts.join(' '));
         }
       } else {
-        // Simple status change (no inventory impact)
+        // Simple status change (no inventory impact) — validate allowed transitions
+        const validTransitions: Record<string, string[]> = {
+          confirmed: ['partially_fulfilled', 'fulfilled', 'cancelled'],
+          partially_fulfilled: ['fulfilled', 'cancelled'],
+        };
+        const allowed = validTransitions[order.status] || [];
+        if (!allowed.includes(newStatus)) {
+          toast('error', `Cannot change status from '${order.status}' to '${newStatus}'`);
+          setStatusModalOpen(false);
+          return;
+        }
         const statusResult = await supabase
           .from('orders')
           .update({ status: newStatus, updated_at: new Date().toISOString() })
@@ -450,12 +460,14 @@ export default function OrderDetail() {
                   Create Invoice
                 </Button>
               )}
-              <Button
-                icon={<Truck className="w-4 h-4" />}
-                onClick={() => navigate(`/deliveries/new?order=${order.id}`)}
-              >
-                Schedule Delivery
-              </Button>
+              {order.status !== 'cancelled' && order.status !== 'fulfilled' && (
+                <Button
+                  icon={<Truck className="w-4 h-4" />}
+                  onClick={() => navigate(`/deliveries/new?order=${order.id}`)}
+                >
+                  Schedule Delivery
+                </Button>
+              )}
             </>
           )}
         </div>

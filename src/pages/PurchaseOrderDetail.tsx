@@ -330,6 +330,10 @@ export default function PurchaseOrderDetail() {
 
   const handleSubmitPO = async () => {
     if (!po || !profile) return;
+    if (po.status !== 'draft') {
+      toast('error', `Cannot submit a PO in '${po.status}' status — must be draft`);
+      return;
+    }
     setSaving(true);
     try {
       const result = await supabase
