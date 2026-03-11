@@ -72,6 +72,7 @@ function makeCustomer(farmName: string, contactName?: string): Customer {
     default_commission_split: null,
     finance_charge_enabled: false,
     finance_charge_grace_days: 0,
+    prepay_balance_cents: 0,
     credit_limit_cents: null,
     finance_charge_rate: null,
     notes: null,
