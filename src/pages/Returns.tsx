@@ -129,10 +129,10 @@ export default function Returns() {
 
   const loadCreateData = async () => {
     const [custRes, prodRes] = await Promise.all([
-      supabase.from('customers').select('id, farm_name, tier').eq('is_active', true).order('farm_name'),
+      supabase.from('customers').select('id, farm_name, assigned_tier').eq('is_active', true).order('farm_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
     ]);
-    setCustomers((custRes.data || []) as Customer[]);
+    setCustomers((custRes.data || []) as unknown as Customer[]);
     setProducts((prodRes.data || []) as Product[]);
   };
 
@@ -641,9 +641,9 @@ export default function Returns() {
                       updateItem(idx, 'product_id', e.target.value);
                       if (p) {
                         updateItem(idx, 'product_name', p.product_name);
-                        // Use correct tier price based on customer's tier
+                        // Use correct tier price based on customer's assigned tier
                         const selectedCust = customers.find((c) => c.id === newForm.customer_id);
-                        const tier = selectedCust?.tier || 1;
+                        const tier = selectedCust?.assigned_tier || 1;
                         const tierPrice = tier === 3 ? p.tier3_price : tier === 2 ? p.tier2_price : p.tier1_price;
                         updateItem(idx, 'unit_price_cents', Math.round((tierPrice || p.tier1_price || 0) * 100));
                       }
