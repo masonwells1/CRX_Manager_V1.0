@@ -420,7 +420,7 @@ export default function PurchaseOrderDetail() {
               Submit PO
             </Button>
           )}
-          {canReceive && po.status !== 'cancelled' && (
+          {canReceive && po.status !== 'cancelled' && po.status !== 'fully_received' && (
             <>
               <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
                 Edit
@@ -777,20 +777,7 @@ export default function PurchaseOrderDetail() {
               placeholder="Vendor name"
             />
           </div>
-          <div>
-            <label className="block text-sm font-medium text-nav-dark mb-1">Status</label>
-            <Select
-              value={editForm.status}
-              onChange={(e) => setEditForm(prev => ({ ...prev, status: e.target.value as POStatus }))}
-              options={[
-                { value: 'draft', label: 'Draft' },
-                { value: 'submitted', label: 'Submitted' },
-                { value: 'partially_received', label: 'Partially Received' },
-                { value: 'fully_received', label: 'Fully Received' },
-                { value: 'cancelled', label: 'Cancelled' },
-              ]}
-            />
-          </div>
+          {/* Status is changed through workflow actions (Submit, Receive, Cancel), not manual dropdown */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-nav-dark mb-1">Submitted Date</label>

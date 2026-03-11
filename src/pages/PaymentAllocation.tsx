@@ -524,9 +524,9 @@ export default function PaymentAllocation() {
                           return (
                             <tr key={inv.invoice_id} className="border-b border-gray-50 hover:bg-gray-25">
                               <td className="py-2.5 px-3 font-medium text-nav-dark">{inv.invoice_number}</td>
-                              <td className="py-2.5 px-3 text-secondary">{new Date(inv.invoice_date).toLocaleDateString()}</td>
+                              <td className="py-2.5 px-3 text-secondary">{new Date(inv.invoice_date + 'T00:00:00').toLocaleDateString()}</td>
                               <td className="py-2.5 px-3 text-secondary">
-                                {inv.due_date ? new Date(inv.due_date).toLocaleDateString() : '—'}
+                                {inv.due_date ? new Date(inv.due_date + 'T00:00:00').toLocaleDateString() : '—'}
                               </td>
                               <td className="py-2.5 px-3">
                                 <Badge variant={inv.days_aged > 90 ? 'danger' : inv.days_aged > 30 ? 'warning' : 'default'}>

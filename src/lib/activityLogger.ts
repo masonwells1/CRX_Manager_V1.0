@@ -20,7 +20,7 @@ export async function logActivity(
   customerId?: string
 ) {
   try {
-    await supabase.from('activity_feed').insert({
+    const { error: logErr } = await supabase.from('activity_feed').insert({
       event_type: eventType,
       description,
       performed_by: performedBy,
@@ -28,6 +28,7 @@ export async function logActivity(
       related_entity_id: relatedEntityId || null,
       customer_id: customerId || null,
     });
+    if (logErr) console.error('Activity log insert failed:', logErr);
   } catch (err) {
     // Activity logging should never break the main flow
     console.error('Failed to log activity:', err);
@@ -53,7 +54,7 @@ export async function createNotification(
   relatedEntityId?: string
 ) {
   try {
-    await supabase.from('notifications').insert({
+    const { error: logErr } = await supabase.from('notifications').insert({
       user_id: userId,
       title,
       message,
@@ -61,6 +62,7 @@ export async function createNotification(
       related_entity_type: relatedEntityType || null,
       related_entity_id: relatedEntityId || null,
     });
+    if (logErr) console.error('Activity log insert failed:', logErr);
   } catch (err) {
     console.error('Failed to create notification:', err);
   }
@@ -92,7 +94,8 @@ export async function notifyAdmins(
         related_entity_type: relatedEntityType || null,
         related_entity_id: relatedEntityId || null,
       }));
-      await supabase.from('notifications').insert(notifications);
+      const { error: logErr } = await supabase.from('notifications').insert(notifications);
+      if (logErr) console.error('Activity log insert failed:', logErr);
     }
   } catch (err) {
     console.error('Failed to notify admins:', err);

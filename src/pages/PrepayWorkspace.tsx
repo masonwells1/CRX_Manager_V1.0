@@ -344,7 +344,7 @@ export default function PrepayWorkspace() {
                           ) : null}
                         </div>
                         <p className="text-xs text-secondary mt-1">
-                          Due: {inv.due_date ? new Date(inv.due_date).toLocaleDateString() : 'N/A'}
+                          Due: {inv.due_date ? new Date(inv.due_date + 'T00:00:00').toLocaleDateString() : 'N/A'}
                           {' | '}Total: {fmt(inv.total_cents)}
                         </p>
                       </div>

@@ -111,7 +111,7 @@ export default function VendorBills() {
       sortable: true,
       render: (r) => (
         <span className={isOverdue(r) ? 'text-red-600 font-semibold' : ''}>
-          {new Date(r.due_date).toLocaleDateString()}
+          {new Date(r.due_date + 'T00:00:00').toLocaleDateString()}
           {isOverdue(r) && ' ⚠'}
         </span>
       ),

@@ -194,7 +194,7 @@ Hook: `useRealtimeSubscription({ table, event, filter, onInsert, onUpdate, onDel
 - `return_items`: references `order_item_id` only (not `delivery_item_id`)
 - `invoice_items.extended_cents` (not `line_total_cents`)
 - `create_direct_order` RPC returns `{ order_id }` not `{ id }`, requires `p_order_date` (no default)
-- `complete_delivery` RPC requires `p_signed_by uuid`
+- `complete_delivery` RPC requires `p_signed_by text`
 
 ---
 

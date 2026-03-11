@@ -538,12 +538,13 @@ export default function ARaging() {
 
           if (emailResult.success) {
             // Track in ar_reminder_tracking for dedup
-            await supabase.from('ar_reminder_tracking').insert({
+            const { error: trackErr } = await supabase.from('ar_reminder_tracking').insert({
               customer_id: cust.customer_id,
               reminder_level: reminderLevel,
               sent_date: new Date().toISOString().slice(0, 10),
               email_log_id: emailResult.email_log_id || null,
             });
+            if (trackErr) console.error('Reminder tracking insert failed:', trackErr);
             sent++;
           }
         } catch {

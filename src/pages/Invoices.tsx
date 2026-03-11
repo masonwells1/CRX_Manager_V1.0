@@ -176,21 +176,26 @@ export default function Invoices() {
     }
 
     setVoiding(true);
-    const voidKey = batchVoidIdem.getKey();
-    const { data, error } = await supabase.rpc('batch_void_invoices', {
-      p_invoice_ids: ids,
-      p_void_reason: reason,
-      p_performed_by: profile?.id,
-      p_idempotency_key: voidKey,
-    });
-    if (error) {
-      console.error('Batch void failed:', error.message);
-      toast('error', sanitizeError(error));
-    } else {
-      batchVoidIdem.resetKey();
-      toast('success', `Voided ${data} invoice(s)`);
-      setSelected(new Set());
-      fetchInvoices();
+    try {
+      const voidKey = batchVoidIdem.getKey();
+      const { data, error } = await supabase.rpc('batch_void_invoices', {
+        p_invoice_ids: ids,
+        p_void_reason: reason,
+        p_performed_by: profile?.id,
+        p_idempotency_key: voidKey,
+      });
+      if (error) {
+        console.error('Batch void failed:', error.message);
+        toast('error', sanitizeError(error));
+      } else {
+        batchVoidIdem.resetKey();
+        toast('success', `Voided ${data} invoice(s)`);
+        setSelected(new Set());
+        fetchInvoices();
+      }
+    } catch (err: unknown) {
+      console.error('Batch void error:', err);
+      toast('error', sanitizeError(err));
     }
     setShowVoidModal(false);
     setVoiding(false);
@@ -429,7 +434,7 @@ export default function Invoices() {
       key: 'invoice_date',
       header: 'Date',
       sortable: true,
-      render: (row) => new Date(row.invoice_date).toLocaleDateString(),
+      render: (row) => new Date(row.invoice_date + 'T00:00:00').toLocaleDateString(),
     },
     {
       key: 'total_amount_cents',

@@ -297,7 +297,7 @@ export default function Products() {
           ('tier3_price' in fields && Number(fields.tier3_price) !== Number(original.tier3_price));
 
         if (pricingChanged) {
-          await supabase.from('cost_history').insert({
+          const { error: costErr } = await supabase.from('cost_history').insert({
             product_id: productId,
             changed_by: profile.id,
             old_cost: original.current_cost,
@@ -310,6 +310,7 @@ export default function Products() {
             new_tier3_price: 'tier3_price' in fields ? fields.tier3_price : original.tier3_price,
             change_note: 'Updated via inline bulk edit',
           });
+          if (costErr) console.error('Cost history insert failed:', costErr);
         }
 
         // Update product

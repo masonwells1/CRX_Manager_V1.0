@@ -1778,7 +1778,7 @@ export default function DeliveryDetail() {
                       </button>
                     </td>
                     <td className="px-4 py-2 text-secondary">
-                      {new Date(inv.invoice_date).toLocaleDateString()}
+                      {new Date(inv.invoice_date + 'T00:00:00').toLocaleDateString()}
                     </td>
                     <td className="px-4 py-2">
                       <Badge variant={statusToBadgeVariant[inv.status] || 'default'} size="sm">

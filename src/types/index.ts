@@ -99,6 +99,7 @@ export interface Customer {
   finance_charge_rate: number | null;
   finance_charge_enabled: boolean;
   finance_charge_grace_days: number;
+  prepay_balance_cents: number;
   notes: string | null;
   is_active: boolean;
   created_at: string;
@@ -398,6 +399,7 @@ export interface PurchaseOrderItem {
   id: string;
   purchase_order_id: string;
   product_id: string;
+  product_name?: string;
   quantity_ordered: number;
   unit_cost: number;
   quantity_received: number;
@@ -463,9 +465,13 @@ export interface Commission {
   commission_amount: number;
   order_profit: number;
   order_date: string;
+  order_number: string;
+  customer_name: string;
+  season: number;
   status: 'pending' | 'paid' | 'cancelled';
   paid_date: string | null;
   paid_note: string | null;
+  deleted_at: string | null;
   created_at: string;
 }
 
@@ -749,6 +755,7 @@ export interface Invoice {
   total_cost_cents: number;
 
   is_quick_delivery?: boolean;
+  write_off_cents: number;
 
   deleted_at: string | null;
   created_at: string;

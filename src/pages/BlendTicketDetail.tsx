@@ -334,7 +334,11 @@ export function BlendTicketDetail() {
       .select()
       .single();
 
-    if (!error && data) {
+    if (error) {
+      toast('error', 'Failed to add product: ' + error.message);
+      return;
+    }
+    if (data) {
       setProducts([...products, data]);
     }
   }
@@ -343,14 +347,19 @@ export function BlendTicketDetail() {
     if (!confirm('Remove this product from the ticket?')) return;
     const product = products[index];
 
-    const deleteResult = await supabase
-      .from('blend_ticket_products')
-      .delete()
-      .eq('id', product.id)
-      .select();
-    checkMutationResult(deleteResult, 'Delete blend ticket product');
+    try {
+      const deleteResult = await supabase
+        .from('blend_ticket_products')
+        .delete()
+        .eq('id', product.id)
+        .select();
+      checkMutationResult(deleteResult, 'Delete blend ticket product');
 
-    setProducts(products.filter((_, i) => i !== index));
+      setProducts(products.filter((_, i) => i !== index));
+    } catch (err: unknown) {
+      console.error('removeProduct failed:', err);
+      toast('error', 'Failed to remove product: ' + (err instanceof Error ? err.message : String(err)));
+    }
   }
 
   // Phase 3: Order linkage handlers
@@ -1025,7 +1034,7 @@ export function BlendTicketDetail() {
                   <div className="flex-1">
                     <p className="font-medium text-nav-dark">{order.order_number}</p>
                     <p className="text-xs text-gray-500">
-                      {new Date(order.order_date).toLocaleDateString()} · {order.status} · ${order.total_price.toFixed(2)}
+                      {new Date(order.order_date + 'T00:00:00').toLocaleDateString()} · {order.status} · ${order.total_price.toFixed(2)}
                       {order.items && ` · ${order.items.length} items`}
                     </p>
                   </div>

@@ -57,7 +57,7 @@ export default function OrderDetail() {
   const [newStatus, setNewStatus] = useState('');
 
   const isAdmin = role === 'admin';
-  const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled';
+  const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled';
 
   const fetchOrder = useCallback(async () => {
     const { data: orderData } = await supabase
@@ -170,6 +170,7 @@ export default function OrderDetail() {
 
   const handleStatusChange = async () => {
     if (!newStatus || !order || !profile) return;
+    if (!window.confirm(`Change order status to ${newStatus.replace('_', ' ')}?`)) return;
 
     try {
       if (newStatus === 'cancelled' && order.status !== 'cancelled') {
@@ -241,7 +242,7 @@ export default function OrderDetail() {
               </tr>
               <tr>
                 <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Order Date</td>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${new Date(order.order_date).toLocaleDateString()}</td>
+                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${new Date(order.order_date + 'T00:00:00').toLocaleDateString()}</td>
               </tr>
               <tr>
                 <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Total</td>
@@ -501,7 +502,7 @@ export default function OrderDetail() {
           <div>
             <p className="text-xs text-secondary">Order Date</p>
             <p className="text-sm font-medium text-nav-dark">
-              {new Date(order.order_date).toLocaleDateString()}
+              {new Date(order.order_date + 'T00:00:00').toLocaleDateString()}
             </p>
           </div>
           {order.customer_po_number && (
@@ -896,10 +897,10 @@ export default function OrderDetail() {
             onChange={(e) => setNewStatus(e.target.value)}
             className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
           >
-            <option value="confirmed">Confirmed</option>
-            <option value="partially_fulfilled">Partially Fulfilled</option>
-            <option value="fulfilled">Fulfilled</option>
-            <option value="cancelled">Cancelled</option>
+            <option value={order?.status}>{(order?.status || '').replace('_', ' ')}</option>
+            {(({ confirmed: ['partially_fulfilled', 'fulfilled', 'cancelled'], partially_fulfilled: ['fulfilled', 'cancelled'] } as Record<string, string[]>)[order?.status || ''] || []).map(s => (
+              <option key={s} value={s}>{s.replace('_', ' ')}</option>
+            ))}
           </select>
           <div className="flex justify-end gap-3">
             <Button variant="ghost" onClick={() => setStatusModalOpen(false)}>Cancel</Button>

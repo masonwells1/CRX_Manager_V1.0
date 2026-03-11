@@ -202,7 +202,7 @@ export default function NewOrder() {
         .limit(1);
       if (recentOrders && recentOrders.length > 0) {
         const recent = recentOrders[0];
-        const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date).getTime()) / 86400000);
+        const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date + 'T00:00:00').getTime()) / 86400000);
         const ok = confirm(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Create another?`);
         if (!ok) return;
       }

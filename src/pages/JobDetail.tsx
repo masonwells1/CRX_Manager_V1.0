@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,7 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe } from '../types';
@@ -142,6 +142,7 @@ export default function JobDetail() {
   // Applied info (completion)
   const [showCompleteModal, setShowCompleteModal] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [appliedInfo, setAppliedInfo] = useState({
     wind_speed: '',
     wind_direction: '',
@@ -355,6 +356,7 @@ export default function JobDetail() {
   };
 
   const handleComplete = async () => {
+    if (!window.confirm('Complete this job? This will deduct inventory and create application records.')) return;
     setCompleting(true);
     try {
       const idemKey = completeJobIdem.getKey();
@@ -376,6 +378,26 @@ export default function JobDetail() {
       toast('error', err instanceof Error ? err.message : 'Failed to complete job');
     }
     setCompleting(false);
+  };
+
+  const handleCancelJob = async () => {
+    if (!window.confirm('Cancel this job? This action cannot be undone.')) return;
+    setCancelling(true);
+    try {
+      const result = await supabase
+        .from('jobs')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', id!)
+        .select();
+      checkMutationResult(result, 'Cancel job');
+      if (profile) logActivity('job_cancelled', `Job ${jobNumber} cancelled`, profile.id);
+      toast('success', 'Job cancelled');
+      setIsDirty(false);
+      await fetchJob();
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to cancel job');
+    }
+    setCancelling(false);
   };
 
   const handleTransferToInvoice = async () => {
@@ -470,7 +492,7 @@ export default function JobDetail() {
   }
 
   const canEdit = isEditable && (isNew || status === 'scheduled' || status === 'in_progress');
-  const canComplete = !isNew && (status === 'scheduled' || status === 'in_progress');
+  const canComplete = !isNew && status === 'in_progress';
   const canTransfer = !isNew && status === 'completed';
 
   return (
@@ -499,6 +521,12 @@ export default function JobDetail() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {!isNew && (status === 'scheduled' || status === 'in_progress') && (
+            <Button variant="danger" onClick={handleCancelJob} loading={cancelling}>
+              <Ban className="w-4 h-4" />
+              Cancel Job
+            </Button>
+          )}
           {canComplete && (
             <Button variant="secondary" onClick={() => setShowCompleteModal(true)}>
               <Check className="w-4 h-4" />

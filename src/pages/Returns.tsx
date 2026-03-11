@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
-import { Plus, CheckCircle, XCircle, ArrowDownToLine, DollarSign, Download, FileText, Trash2 } from 'lucide-react';
+import { Plus, CheckCircle, XCircle, ArrowDownToLine, DollarSign, Download, FileText, Trash2, Ban } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -273,6 +273,7 @@ export default function Returns() {
 
   // Workflow actions
   const handleApprove = async () => {
+    if (!window.confirm('Approve this return?')) return;
     if (!activeReturn || !profile) return;
     try {
       const approveKey = approveIdem.getKey();
@@ -310,6 +311,25 @@ export default function Returns() {
 
       await logActivity('return_rejected', `Return ${activeReturn.return_number} rejected`, profile.id, 'return', activeReturn.id);
       toast('success', 'Return rejected');
+      setShowDetail(false);
+      fetchReturns();
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!activeReturn || !profile) return;
+    if (!window.confirm('Cancel this return?')) return;
+    try {
+      const result = await supabase
+        .from('returns')
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', activeReturn.id)
+        .select();
+      checkMutationResult(result, 'Cancel return');
+      await logActivity('return_cancelled', `Return ${activeReturn.return_number} cancelled`, profile.id, 'return', activeReturn.id);
+      toast('success', 'Return cancelled');
       setShowDetail(false);
       fetchReturns();
     } catch (err: unknown) {
@@ -594,7 +614,7 @@ export default function Returns() {
               >
                 <option value="">No linked order</option>
                 {customerOrders.map((o) => (
-                  <option key={o.id} value={o.id}>{o.order_number} ({new Date(o.order_date).toLocaleDateString()})</option>
+                  <option key={o.id} value={o.id}>{o.order_number} ({new Date(o.order_date + 'T00:00:00').toLocaleDateString()})</option>
                 ))}
               </select>
             </div>
@@ -815,6 +835,11 @@ export default function Returns() {
                   {activeReturn.status === 'requested' && (
                     <Button variant="secondary" onClick={handleReject} icon={<XCircle className="w-4 h-4" />}>
                       Reject
+                    </Button>
+                  )}
+                  {(activeReturn.status === 'requested' || activeReturn.status === 'approved') && (
+                    <Button variant="danger" onClick={handleCancel} icon={<Ban className="w-4 h-4" />}>
+                      Cancel
                     </Button>
                   )}
                 </div>

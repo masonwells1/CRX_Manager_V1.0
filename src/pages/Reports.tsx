@@ -378,12 +378,17 @@ export default function Reports() {
         }
 
         toast('info', `Generating ${uniqueIds.length} summary PDF(s)...`);
-        const summaries: YearEndSummaryData[] = [];
-        for (const cid of uniqueIds) {
-          const { data, error } = await supabase.rpc('get_customer_year_end_summary', { p_customer_id: cid, p_season: season });
-          if (error) { console.error(`Failed for ${cid}:`, error); continue; }
-          summaries.push(data as unknown as YearEndSummaryData);
+        // Batch RPC: single call replaces N individual calls
+        const { data: batchResult, error: batchError } = await supabase.rpc('get_batch_year_end_summaries', {
+          p_customer_ids: uniqueIds,
+          p_season: season,
+        });
+        if (batchError) {
+          toast('error', 'Failed to generate summaries: ' + batchError.message);
+          setYeLoading(false);
+          return;
         }
+        const summaries = (batchResult as unknown as YearEndSummaryData[]) || [];
         await downloadBatchYearEndSummaries(summaries, options);
         toast('success', `Generated ${summaries.length} season summary PDF(s)`);
       } else {
@@ -585,7 +590,7 @@ export default function Reports() {
         <input type="checkbox" checked={selectedCommissions.has(r.id)} onChange={() => toggleCommissionSelect(r.id)} aria-label={`Select commission for ${r.recipient}`} className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green" />
       ) : null,
     } as Column<CommissionRow>] : []),
-    { key: 'order_date', header: 'Date', sortable: true, render: (r) => new Date(r.order_date).toLocaleDateString() },
+    { key: 'order_date', header: 'Date', sortable: true, render: (r) => new Date(r.order_date + 'T00:00:00').toLocaleDateString() },
     { key: 'recipient', header: 'Recipient', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.recipient}</span> },
     { key: 'commission_amount', header: 'Commission', sortable: true, render: (r) => <span className="font-mono font-medium">{fmt(r.commission_amount)}</span> },
     { key: 'split_percentage', header: 'Split %', sortable: true, render: (r) => `${r.split_percentage}%` },

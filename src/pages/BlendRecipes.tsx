@@ -260,7 +260,8 @@ export default function BlendRecipes() {
             sort_order: item.sort_order,
             notes: item.notes,
           }));
-          await supabase.from('blend_recipe_items').insert(copies);
+          const { error: copyErr } = await supabase.from('blend_recipe_items').insert(copies);
+          if (copyErr) throw copyErr;
         }
       },
       toast,

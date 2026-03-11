@@ -857,7 +857,7 @@ export default function CustomerDetail() {
                       <td className="px-4 py-3 font-mono">{fmt(o.total_price)}</td>
                       <td className="px-4 py-3 font-mono text-emerald-600">{fmt(o.total_profit)}</td>
                       <td className="px-4 py-3 text-secondary">
-                        {new Date(o.order_date).toLocaleDateString()}
+                        {new Date(o.order_date + 'T00:00:00').toLocaleDateString()}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">

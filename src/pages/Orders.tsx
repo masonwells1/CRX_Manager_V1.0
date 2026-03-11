@@ -244,7 +244,7 @@ export default function Orders() {
       key: 'order_date',
       header: 'Order Date',
       sortable: true,
-      render: (row) => new Date(row.order_date).toLocaleDateString(),
+      render: (row) => new Date(row.order_date + 'T00:00:00').toLocaleDateString(),
     },
     {
       key: 'fulfillment_pct',

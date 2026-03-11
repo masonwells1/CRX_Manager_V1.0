@@ -170,7 +170,7 @@ export default function VendorBillDetail() {
     {
       key: 'payment_date',
       header: 'Date',
-      render: (r) => new Date(r.payment_date).toLocaleDateString(),
+      render: (r) => new Date(r.payment_date + 'T00:00:00').toLocaleDateString(),
     },
     {
       key: 'amount_cents',
@@ -281,7 +281,7 @@ export default function VendorBillDetail() {
             <span className="text-xs text-secondary">Due Date</span>
           </div>
           <p className={`text-xl font-semibold font-heading ${isOverdue ? 'text-red-600' : 'text-nav-dark'}`}>
-            {new Date(bill.due_date).toLocaleDateString()}
+            {new Date(bill.due_date + 'T00:00:00').toLocaleDateString()}
           </p>
         </Card>
       </div>

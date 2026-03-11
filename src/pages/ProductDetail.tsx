@@ -176,7 +176,7 @@ export default function ProductDetail() {
       );
 
       if (pricingChanged && profile) {
-        await supabase.from('cost_history').insert({
+        const { error: costErr } = await supabase.from('cost_history').insert({
           product_id: id,
           changed_by: profile.id,
           old_cost: current.current_cost,
@@ -189,6 +189,7 @@ export default function ProductDetail() {
           new_tier3_price: product.tier3_price,
           change_note: 'Updated via product detail save',
         });
+        if (costErr) console.error('Cost history insert failed:', costErr);
       }
 
       try {

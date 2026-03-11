@@ -171,7 +171,7 @@ export default function QuoteBuilder() {
   const currentStatus = status || 'draft';
   const canEdit = ['draft', 'revised'].includes(currentStatus);
   const canSend = ['draft', 'revised'].includes(currentStatus);
-  const canConvert = ['sent', 'revised'].includes(currentStatus);
+  const canConvert = currentStatus === 'sent';
 
   // Mark dirty whenever user changes form data (after initial load)
   useEffect(() => {
@@ -999,7 +999,7 @@ export default function QuoteBuilder() {
           .limit(1);
         if (recentOrders && recentOrders.length > 0) {
           const recent = recentOrders[0];
-          const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date).getTime()) / 86400000);
+          const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date + 'T00:00:00').getTime()) / 86400000);
           const ok = confirm(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Convert this quote to another order?`);
           if (!ok) return;
         }

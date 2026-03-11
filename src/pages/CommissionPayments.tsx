@@ -195,6 +195,7 @@ export default function CommissionPayments() {
   };
 
   const handlePost = async (paymentId: string) => {
+    if (!window.confirm('Post these commission payments? This action cannot be undone.')) return;
     setPosting(paymentId);
     try {
       const postKey = postPaymentIdem.getKey();

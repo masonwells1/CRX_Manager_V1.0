@@ -371,6 +371,7 @@ export default function InvoiceDetail() {
 
   // Post invoice
   const handlePost = async () => {
+    if (!window.confirm('Post this invoice? This will lock amounts and start AR aging.')) return;
     setPosting(true);
     try {
       const idemKey = postIdem.getKey();
@@ -682,7 +683,7 @@ export default function InvoiceDetail() {
               </Button>
             </>
           )}
-          {!isNew && ['posted', 'overdue', 'paid'].includes(invoice.status ?? '') && isAdmin && (
+          {!isNew && ['posted', 'overdue'].includes(invoice.status ?? '') && isAdmin && (
               <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => setShowVoidModal(true)}>
                 Void
               </Button>
@@ -766,7 +767,7 @@ export default function InvoiceDetail() {
                   className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 />
               ) : (
-                <p className="mt-1 text-sm">{invoice.invoice_date ? new Date(invoice.invoice_date).toLocaleDateString() : '-'}</p>
+                <p className="mt-1 text-sm">{invoice.invoice_date ? new Date(invoice.invoice_date + 'T00:00:00').toLocaleDateString() : '-'}</p>
               )}
             </div>
 

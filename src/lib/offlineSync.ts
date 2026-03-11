@@ -86,9 +86,17 @@ async function executeAction(action: PendingAction): Promise<void> {
       .from(action.entityTable)
       .select('updated_at')
       .eq('id', action.entityId)
-      .single();
+      .maybeSingle();
 
-    if (data && new Date(data.updated_at) > new Date(action.snapshotAt)) {
+    if (!data) {
+      // Entity was deleted while offline — skip this action
+      throw new Error(
+        `Entity ${action.entityTable} ${action.entityId} no longer exists. ` +
+        `Action '${action.operation}' skipped.`
+      );
+    }
+
+    if (new Date(data.updated_at) > new Date(action.snapshotAt)) {
       throw new Error(
         `Conflict: ${action.entityTable} ${action.entityId} was modified ` +
         `while offline (server: ${data.updated_at}, queued: ${action.snapshotAt}). ` +
