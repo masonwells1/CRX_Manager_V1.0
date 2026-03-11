@@ -496,7 +496,6 @@ export default function DeliveryDetail() {
       const idemKey = confirmIdem.getKey();
       const { error } = await supabase.rpc('confirm_delivery', {
         p_delivery_id: id!,
-        p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
