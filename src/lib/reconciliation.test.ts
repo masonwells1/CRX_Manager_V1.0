@@ -282,7 +282,7 @@ describe('checkInvoicePayments', () => {
 describe('checkInvoiceBalances', () => {
   it('returns empty when balance = total - paid - prepay', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, balance_cents: 5000 },
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, balance_cents: 5000 },
     ];
 
     expect(checkInvoiceBalances(invoices)).toEqual([]);
@@ -290,7 +290,7 @@ describe('checkInvoiceBalances', () => {
 
   it('detects corrupted balance column', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, balance_cents: 9999 },
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 3000, prepay_applied_cents: 2000, balance_cents: 9999 },
     ];
 
     const result = checkInvoiceBalances(invoices);
@@ -301,7 +301,7 @@ describe('checkInvoiceBalances', () => {
 
   it('handles fully paid invoices', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', total_amount_cents: 5000, paid_amount_cents: 5000, prepay_applied_cents: 0, balance_cents: 0 },
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 5000, paid_amount_cents: 5000, prepay_applied_cents: 0, balance_cents: 0 },
     ];
 
     expect(checkInvoiceBalances(invoices)).toEqual([]);
@@ -309,7 +309,7 @@ describe('checkInvoiceBalances', () => {
 
   it('handles invoices with only prepay', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', total_amount_cents: 10000, paid_amount_cents: 0, prepay_applied_cents: 10000, balance_cents: 0 },
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 0, prepay_applied_cents: 10000, balance_cents: 0 },
     ];
 
     expect(checkInvoiceBalances(invoices)).toEqual([]);
@@ -317,8 +317,8 @@ describe('checkInvoiceBalances', () => {
 
   it('checks multiple invoices independently', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', total_amount_cents: 10000, paid_amount_cents: 5000, prepay_applied_cents: 0, balance_cents: 5000 }, // OK
-      { id: 'i2', invoice_number: 'INV-002', total_amount_cents: 20000, paid_amount_cents: 10000, prepay_applied_cents: 5000, balance_cents: 999 }, // BAD: should be 5000
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'o1', total_amount_cents: 10000, paid_amount_cents: 5000, prepay_applied_cents: 0, balance_cents: 5000 }, // OK
+      { id: 'i2', invoice_number: 'INV-002', order_id: 'o2', total_amount_cents: 20000, paid_amount_cents: 10000, prepay_applied_cents: 5000, balance_cents: 999 }, // BAD: should be 5000
     ];
 
     const result = checkInvoiceBalances(invoices);
