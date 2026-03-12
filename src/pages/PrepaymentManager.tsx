@@ -250,15 +250,13 @@ export default function PrepaymentManager() {
       .maybeSingle()
       .then(({ data }) => {
         if (data?.setting_value) setBucketLabels(JSON.parse(data.setting_value as string));
-      })
-      .catch(() => {});
+      });
     supabase
       .from('customers')
       .select('id, farm_name')
       .eq('is_active', true)
       .order('farm_name')
-      .then(({ data }) => setAllCustomers(data || []))
-      .catch(() => {});
+      .then(({ data }) => setAllCustomers(data || []));
   }, []);
 
   const openNewCheck = () => {

@@ -330,7 +330,7 @@ export default function Dashboard() {
       supabase.rpc('log_failed_notification', {
         p_notification_type: 'remainder_reminders',
         p_error_message: err instanceof Error ? err.message : String(err),
-      }).catch(console.error);
+      }).then(({ error: logErr }) => { if (logErr) console.error(logErr); });
     }
 
     try {
@@ -341,7 +341,7 @@ export default function Dashboard() {
       supabase.rpc('log_failed_notification', {
         p_notification_type: 'release_expired_holds',
         p_error_message: err instanceof Error ? err.message : String(err),
-      }).catch(console.error);
+      }).then(({ error: logErr }) => { if (logErr) console.error(logErr); });
     }
   }, [toast]);
 

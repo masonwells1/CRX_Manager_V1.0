@@ -100,11 +100,13 @@ export default function ProductDetail() {
   }, [id, isNew, fetchProduct, fetchCostHistory]);
 
   useEffect(() => {
-    supabase.from('unit_conversions').select('*').order('unit').then(({ data }) => {
+    supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
+      if (error) { console.error('Failed to load unit conversions:', error); return; }
       setUnitConversions((data || []) as UnitConversion[]);
-    }).catch((err) => console.error('Failed to load unit conversions:', err));
+    });
     // Fetch distinct values for combobox dropdowns
-    supabase.from('products').select('category, vendor, manufacturer').then(({ data }) => {
+    supabase.from('products').select('category, vendor, manufacturer').then(({ data, error }) => {
+      if (error) { console.error('Failed to load product options:', error); return; }
       if (!data) return;
       const cats = [...new Set(data.map((p) => p.category).filter(Boolean) as string[])].sort();
       const vends = [...new Set(data.map((p) => p.vendor).filter(Boolean) as string[])].sort();
@@ -112,7 +114,7 @@ export default function ProductDetail() {
       setCategoryOptions(cats);
       setVendorOptions(vends);
       setManufacturerOptions(mfrs);
-    }).catch((err) => console.error('Failed to load product options:', err));
+    });
   }, []);
 
   const handleSave = async () => {

@@ -78,8 +78,7 @@ export default function PrepayWorkspace() {
       .gt('prepay_balance_cents', 0)
       .eq('is_active', true)
       .order('farm_name')
-      .then(({ data }) => setCustomers(data || []))
-      .catch(() => {});
+      .then(({ data }) => setCustomers(data || []));
   }, []);
 
   const fetchData = useCallback(async () => {

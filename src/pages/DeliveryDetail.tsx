@@ -1244,7 +1244,7 @@ export default function DeliveryDetail() {
             >
               Receipt PDF
             </Button>
-            {delivery.status === 'completed' && customer?.email && (role === 'admin' || role === 'sales_rep' || role === 'driver') && (
+            {delivery.status === 'completed' && customer?.email && role && role !== 'applicator' && (
               <Button
                 variant="secondary"
                 size="sm"

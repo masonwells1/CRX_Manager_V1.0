@@ -40,8 +40,6 @@ const statusBadge = (status: InvoiceStatus) => {
     draft: { variant: 'default', label: 'Draft' },
     unposted: { variant: 'warning', label: 'Unposted' },
     posted: { variant: 'success', label: 'Posted' },
-    paid: { variant: 'success', label: 'Paid' },
-    overdue: { variant: 'error', label: 'Overdue' },
     voided: { variant: 'error', label: 'Voided' },
     cancelled: { variant: 'default', label: 'Cancelled' },
   };

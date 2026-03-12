@@ -105,20 +105,16 @@ export default function SalesReports() {
   // ── Load filter options on mount ──
   useEffect(() => {
     supabase.from('products').select('id, product_name').eq('is_active', true).order('product_name').limit(500)
-      .then(({ data }) => setProductOptions((data || []).map(r => ({ id: r.id, name: r.product_name }))))
-      .catch(() => {});
+      .then(({ data }) => setProductOptions((data || []).map(r => ({ id: r.id, name: r.product_name }))));
     supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(1000)
-      .then(({ data }) => setCustomerOptions((data || []).map(r => ({ id: r.id, name: r.farm_name }))))
-      .catch(() => {});
+      .then(({ data }) => setCustomerOptions((data || []).map(r => ({ id: r.id, name: r.farm_name }))));
     supabase.from('profiles').select('id, full_name').in('role', ['admin', 'sales_rep']).order('full_name')
-      .then(({ data }) => setSalesRepOptions((data || []).map(r => ({ id: r.id, name: r.full_name }))))
-      .catch(() => {});
+      .then(({ data }) => setSalesRepOptions((data || []).map(r => ({ id: r.id, name: r.full_name }))));
     supabase.from('products').select('category').eq('is_active', true).not('category', 'is', null)
       .then(({ data }) => {
         const unique = [...new Set((data || []).map(r => r.category as string))].filter(Boolean).sort();
         setCategoryOptions(unique);
-      })
-      .catch(() => {});
+      });
   }, []);
 
   // ── Farm group lookup when customer selection changes ──

@@ -46,8 +46,6 @@ const statusBadge = (status: InvoiceStatus) => {
     draft: { variant: 'default', label: 'Draft' },
     unposted: { variant: 'warning', label: 'Unposted' },
     posted: { variant: 'success', label: 'Posted' },
-    paid: { variant: 'success', label: 'Paid' },
-    overdue: { variant: 'error', label: 'Overdue' },
     voided: { variant: 'error', label: 'Voided' },
     cancelled: { variant: 'default', label: 'Cancelled' },
   };
@@ -661,7 +659,7 @@ export default function InvoiceDetail() {
               Email
             </Button>
           )}
-          {!isNew && (invoice.status === 'posted' || invoice.status === 'overdue') && isAdmin && (
+          {!isNew && invoice.status === 'posted' && isAdmin && (
             <>
               <Button
                 variant="secondary"
