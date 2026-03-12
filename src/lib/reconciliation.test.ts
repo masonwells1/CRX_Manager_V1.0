@@ -214,13 +214,16 @@ describe('checkInventoryLedger', () => {
 // ── Check 3: Invoice Payments ───────────────────────────────────
 
 describe('checkInvoicePayments', () => {
+  // NOTE: payments table is order-level (no invoice_id).
+  // InvoiceRow now requires order_id; PaymentAllocationRow uses { order_id, amount } in dollars.
+
   it('returns empty when paid amounts match allocations', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', paid_amount_cents: 5000, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 5000 },
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 5000, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 5000 },
     ];
     const allocations: PaymentAllocationRow[] = [
-      { invoice_id: 'i1', amount_cents: 3000 },
-      { invoice_id: 'i1', amount_cents: 2000 },
+      { order_id: 'ord1', amount: 30 }, // $30 = 3000 cents
+      { order_id: 'ord1', amount: 20 }, // $20 = 2000 cents
     ];
 
     expect(checkInvoicePayments(invoices, allocations)).toEqual([]);
@@ -228,31 +231,31 @@ describe('checkInvoicePayments', () => {
 
   it('detects over-counted paid amount', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', paid_amount_cents: 8000, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 2000 },
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 8000, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 2000 },
     ];
     const allocations: PaymentAllocationRow[] = [
-      { invoice_id: 'i1', amount_cents: 5000 },
+      { order_id: 'ord1', amount: 50 }, // $50 = 5000 cents
     ];
 
     const result = checkInvoicePayments(invoices, allocations);
     expect(result).toHaveLength(1);
-    expect(result[0].expected).toBe(5000); // allocations sum
-    expect(result[0].actual).toBe(8000);   // paid_amount_cents
+    expect(result[0].expected).toBe(5000); // payment total in cents
+    expect(result[0].actual).toBe(8000);   // invoice paid_amount_cents
   });
 
   it('handles invoices with no allocations', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', paid_amount_cents: 0, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 10000 },
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 0, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 10000 },
     ];
     const allocations: PaymentAllocationRow[] = [];
 
-    // paid = 0, allocations = 0 → match
+    // paid = 0, payments = 0 → match
     expect(checkInvoicePayments(invoices, allocations)).toEqual([]);
   });
 
-  it('handles invoice with paid amount but no allocations', () => {
+  it('handles invoice with paid amount but no payments on that order', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', paid_amount_cents: 3000, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 7000 },
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 3000, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 7000 },
     ];
     const allocations: PaymentAllocationRow[] = [];
 
@@ -263,10 +266,10 @@ describe('checkInvoicePayments', () => {
 
   it('tolerates ±1 cent rounding', () => {
     const invoices: InvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', paid_amount_cents: 5001, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 4999 },
+      { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 5001, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 4999 },
     ];
     const allocations: PaymentAllocationRow[] = [
-      { invoice_id: 'i1', amount_cents: 5000 },
+      { order_id: 'ord1', amount: 50 }, // $50 = 5000 cents, delta = 1 cent → within tolerance
     ];
 
     // Delta = 1 cent → within tolerance

@@ -203,41 +203,54 @@ export function checkInventoryLedger(
 export interface InvoiceRow {
   id: string;
   invoice_number: string;
+  order_id: string;
   paid_amount_cents: number;
   prepay_applied_cents: number;
   total_amount_cents: number;
   balance_cents: number;
 }
 
+// Payments are order-level (no invoice_id); amount is stored as numeric dollars
 export interface PaymentAllocationRow {
-  invoice_id: string;
-  amount_cents: number;
+  order_id: string;
+  amount: number;
 }
 
 export function checkInvoicePayments(
   invoices: InvoiceRow[],
-  allocations: PaymentAllocationRow[],
+  payments: PaymentAllocationRow[],
 ): Discrepancy[] {
-  // Sum allocations per invoice
-  const allocByInvoice = new Map<string, number>();
-  for (const alloc of allocations) {
-    const current = allocByInvoice.get(alloc.invoice_id) ?? 0;
-    allocByInvoice.set(alloc.invoice_id, current + alloc.amount_cents);
+  // Sum payment dollars → cents per order_id
+  const payByOrder = new Map<string, number>();
+  for (const p of payments) {
+    const current = payByOrder.get(p.order_id) ?? 0;
+    payByOrder.set(p.order_id, current + Math.round(p.amount * 100));
+  }
+
+  // Sum invoice paid_amount_cents per order_id
+  const paidByOrder = new Map<string, number>();
+  const invoiceNumberByOrder = new Map<string, string>();
+  for (const inv of invoices) {
+    const current = paidByOrder.get(inv.order_id) ?? 0;
+    paidByOrder.set(inv.order_id, current + inv.paid_amount_cents);
+    if (!invoiceNumberByOrder.has(inv.order_id)) {
+      invoiceNumberByOrder.set(inv.order_id, inv.invoice_number);
+    }
   }
 
   const issues: Discrepancy[] = [];
 
-  for (const inv of invoices) {
-    const allocTotal = allocByInvoice.get(inv.id) ?? 0;
-    // paid_amount_cents should equal sum of allocations
-    if (Math.abs(inv.paid_amount_cents - allocTotal) > TOLERANCE_CENTS) {
+  // For each order that has posted invoices, verify payment totals match
+  for (const [orderId, invoicePaidTotal] of paidByOrder) {
+    const paymentTotal = payByOrder.get(orderId) ?? 0;
+    if (Math.abs(invoicePaidTotal - paymentTotal) > TOLERANCE_CENTS) {
       issues.push({
         check: 'invoice_payments',
-        entity: inv.invoice_number,
-        entityId: inv.id,
-        expected: allocTotal,
-        actual: inv.paid_amount_cents,
-        delta: Math.abs(inv.paid_amount_cents - allocTotal),
+        entity: invoiceNumberByOrder.get(orderId) ?? orderId,
+        entityId: orderId,
+        expected: paymentTotal,
+        actual: invoicePaidTotal,
+        delta: Math.abs(invoicePaidTotal - paymentTotal),
       });
     }
   }
@@ -653,23 +666,23 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [invoiceRes, allocRes] = await Promise.all([
       supabase
         .from('invoices')
-        .select('id, invoice_number, paid_amount_cents, prepay_applied_cents, total_amount_cents, balance_cents')
+        .select('id, invoice_number, order_id, paid_amount_cents, prepay_applied_cents, total_amount_cents, balance_cents')
         .eq('status', 'posted')
         .is('deleted_at', null),
       supabase
-        .from('payment_allocations')
-        .select('invoice_id, amount_cents'),
+        .from('payments')
+        .select('order_id, amount'),
     ]);
 
     if (invoiceRes.error) throw new Error(`Invoices query failed: ${invoiceRes.error.message}`);
-    if (allocRes.error) throw new Error(`Payment allocations query failed: ${allocRes.error.message}`);
+    if (allocRes.error) throw new Error(`Payments query failed: ${allocRes.error.message}`);
     const invoices = (invoiceRes.data ?? []) as InvoiceRow[];
-    const allocations = (allocRes.data ?? []) as PaymentAllocationRow[];
+    const payments = (allocRes.data ?? []) as PaymentAllocationRow[];
 
-    const payDisc = checkInvoicePayments(invoices, allocations);
+    const payDisc = checkInvoicePayments(invoices, payments);
     checks.push({
       name: 'Invoice Payments',
-      description: 'Invoice paid_amount_cents matches SUM of payment allocations',
+      description: 'Invoice paid_amount_cents matches SUM of payments per order',
       passed: payDisc.length === 0,
       discrepancies: payDisc,
       entitiesChecked: invoices.length,
@@ -687,7 +700,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const errMsg = err instanceof Error ? err.message : String(err);
     checks.push({
       name: 'Invoice Payments',
-      description: `Invoice paid_amount_cents matches SUM of payment allocations [ERROR: ${errMsg}]`,
+      description: `Invoice paid_amount_cents matches SUM of payments per order [ERROR: ${errMsg}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,

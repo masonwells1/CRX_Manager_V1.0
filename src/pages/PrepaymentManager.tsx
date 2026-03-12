@@ -14,7 +14,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
 import { runCriticalAction } from '../lib/criticalAction';
@@ -276,49 +276,30 @@ export default function PrepaymentManager() {
     const validSplits = bucketSplits.filter((s) => s.label && parseFloat(s.amount) > 0);
     if (validSplits.length === 0) { toast('error', 'Add at least one bucket split'); return; }
 
-    const splitTotal = validSplits.reduce((s, b) => s + Math.round(parseFloat(b.amount) * 100), 0);
-    if (splitTotal !== totalCents) {
+    // M3: use per-split rounded cents to avoid float rounding mismatch
+    const splitAmountsCents = validSplits.map((s) => Math.round(parseFloat(s.amount) * 100));
+    const splitTotal = splitAmountsCents.reduce((sum, c) => sum + c, 0);
+    // Allow 1-cent tolerance for floating-point rounding edge cases
+    if (Math.abs(splitTotal - totalCents) > 1) {
       toast('error', `Splits total ($${(splitTotal / 100).toFixed(2)}) must equal check total ($${checkForm.total})`);
       return;
     }
 
     await runCriticalAction({
       action: async () => {
-        const rows = validSplits.map((s) => ({
-          customer_id: checkForm.customer_id,
-          reference_number: checkForm.reference_number,
-          bucket_label: s.label,
-          original_amount_cents: Math.round(parseFloat(s.amount) * 100),
-          balance_cents: Math.round(parseFloat(s.amount) * 100),
-          payment_method: 'check',
-          notes: `Check #${checkForm.reference_number} — ${s.label}`,
+        // M6: Use atomic RPC — inserts all credits + updates customer balance in one transaction
+        const splits = validSplits.map((s, i) => ({
+          label: s.label,
+          amount_cents: splitAmountsCents[i],
         }));
-        const result = await supabase.from('prepay_credits').insert(rows).select();
-        checkMutationResult(result, 'Create prepay credits');
-
-        // Update customer aggregate balance
-        await supabase.rpc('increment_customer_prepay', {
+        const { error } = await supabase.rpc('create_prepay_check_splits', {
           p_customer_id: checkForm.customer_id,
-          p_amount_cents: totalCents,
+          p_reference_number: checkForm.reference_number,
+          p_splits: splits,
+          p_performed_by: (await supabase.auth.getUser()).data.user?.id,
           p_idempotency_key: crypto.randomUUID(),
-        }).then(async ({ error }) => {
-          // Fallback: direct update if RPC doesn't exist
-          if (error) {
-            const { data: custRow, error: fetchErr } = await supabase
-              .from('customers')
-              .select('prepay_balance_cents')
-              .eq('id', checkForm.customer_id)
-              .single();
-            if (fetchErr || !custRow) throw new Error('Failed to fetch current prepay balance');
-            const currentBalance = (custRow as { prepay_balance_cents: number }).prepay_balance_cents || 0;
-            const updateResult = await supabase
-              .from('customers')
-              .update({ prepay_balance_cents: currentBalance + totalCents })
-              .eq('id', checkForm.customer_id)
-              .select();
-            checkMutationResult(updateResult, 'Update prepay balance');
-          }
         });
+        if (error) throw new Error(error.message);
       },
       toast,
       setLoading: setSavingCheck,

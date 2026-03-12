@@ -331,7 +331,7 @@ export default function OrderDetail() {
 
     setSavingShares(true);
     try {
-      const amountCents = Math.round((order.total_price * 100 * pct) / 100);
+      const amountCents = Math.round(order.total_price * 100 * (pct / 100));
       const result = await supabase.from('order_shares').insert({
         order_id: order.id,
         customer_id: newShareCustomerId,

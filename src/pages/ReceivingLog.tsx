@@ -19,7 +19,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { supabase, sanitizeError } from '../lib/db';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { ReceivingRecord, ReceivingSummary, Profile } from '../types';
@@ -175,8 +175,15 @@ export default function ReceivingLog() {
     setDeleting(true);
     try {
       const ids = selectedRows.map((r) => r.id);
-      const result = await supabase.from('receiving_records').delete().in('id', ids).select();
-      checkMutationResult(result, 'Delete receiving records');
+      // C5 fix: must call reverse_receiving_record() per item to undo inventory changes.
+      // Direct .delete() bypasses the inventory rollback and leaves phantom stock.
+      for (const id of ids) {
+        const { error } = await supabase.rpc('reverse_receiving_record', {
+          p_record_id: id,
+          p_reason: 'Bulk deleted from receiving log',
+        });
+        if (error) throw new Error(`Failed to reverse record ${id}: ${error.message}`);
+      }
       toast('success', `Deleted ${ids.length} record(s)`);
       clearSelection();
       fetchData();

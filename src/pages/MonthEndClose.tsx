@@ -68,6 +68,9 @@ export default function MonthEndClose() {
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [showStatementDialog, setShowStatementDialog] = useState(false);
   const [showYeDialog, setShowYeDialog] = useState(false);
+  // M1/M2: explicit review confirmation for payments and commissions
+  const [reviewedPayments, setReviewedPayments] = useState(false);
+  const [reviewedCommissions, setReviewedCommissions] = useState(false);
   const [yeLoading, setYeLoading] = useState(false);
 
   const current = getCurrentPeriod();
@@ -119,10 +122,12 @@ export default function MonthEndClose() {
         },
         {
           label: 'Payments reconciled',
-          done: summary.payments.count === 0 || summary.payments.total_cents > 0,
+          // M1: require explicit confirmation when payments exist (not trivially satisfied)
+          done: summary.payments.count === 0 || reviewedPayments,
           detail: summary.payments.count === 0
             ? 'No payments this period'
-            : `${summary.payments.count} payments totaling ${fmt(summary.payments.total_cents)} — review before closing`,
+            : `${summary.payments.count} payments totaling ${fmt(summary.payments.total_cents)} — verify and check box to confirm`,
+          reviewKey: summary.payments.count > 0 ? 'payments' : undefined,
         },
         {
           label: 'Deliveries completed',
@@ -131,10 +136,12 @@ export default function MonthEndClose() {
         },
         {
           label: 'Commissions reviewed',
-          done: summary.commissions.earned_cents === 0 || summary.commissions.paid_count > 0,
+          // M2: require explicit confirmation when commissions are earned (not trivially satisfied)
+          done: summary.commissions.earned_cents === 0 || reviewedCommissions,
           detail: summary.commissions.earned_cents === 0
             ? 'No commissions this period'
-            : `${fmt(summary.commissions.earned_cents)} earned, ${summary.commissions.paid_count} paid — review before closing`,
+            : `${fmt(summary.commissions.earned_cents)} earned, ${summary.commissions.paid_count} paid — verify and check box to confirm`,
+          reviewKey: summary.commissions.earned_cents > 0 ? 'commissions' : undefined,
         },
         {
           label: 'Finance charges generated (optional)',
@@ -369,11 +376,25 @@ export default function MonthEndClose() {
                 ) : (
                   <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
                 )}
-                <div>
+                <div className="flex-1">
                   <p className={`text-sm font-medium ${item.done ? 'text-nav-dark' : 'text-amber-700'}`}>
                     {item.label}
                   </p>
                   <p className="text-xs text-secondary">{item.detail}</p>
+                  {'reviewKey' in item && item.reviewKey && !item.done && (
+                    <label className="mt-1.5 flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="accent-crx-green"
+                        checked={item.reviewKey === 'payments' ? reviewedPayments : reviewedCommissions}
+                        onChange={(e) => {
+                          if (item.reviewKey === 'payments') setReviewedPayments(e.target.checked);
+                          else setReviewedCommissions(e.target.checked);
+                        }}
+                      />
+                      <span className="text-xs text-nav-dark">I have verified these {item.reviewKey} and they are correct</span>
+                    </label>
+                  )}
                 </div>
               </div>
             ))}

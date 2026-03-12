@@ -36,7 +36,7 @@ interface PrepayBucket {
 interface UnpaidInvoice {
   id: string;
   invoice_number: string;
-  total_cents: number;
+  total_amount_cents: number;
   balance_cents: number;
   due_date: string | null;
   created_at: string;
@@ -100,7 +100,7 @@ export default function PrepayWorkspace() {
         .order('created_at', { ascending: true }),
       supabase
         .from('invoices')
-        .select('id, invoice_number, total_cents, balance_cents, due_date, created_at')
+        .select('id, invoice_number, total_amount_cents, balance_cents, due_date, created_at')
         .eq('customer_id', selectedCustomerId)
         .eq('status', 'posted')
         .gt('balance_cents', 0)
@@ -348,7 +348,7 @@ export default function PrepayWorkspace() {
                         </div>
                         <p className="text-xs text-secondary mt-1">
                           Due: {inv.due_date ? new Date(inv.due_date + 'T00:00:00').toLocaleDateString() : 'N/A'}
-                          {' | '}Total: {fmt(inv.total_cents)}
+                          {' | '}Total: {fmt(inv.total_amount_cents)}
                         </p>
                       </div>
                       <div className="text-right">

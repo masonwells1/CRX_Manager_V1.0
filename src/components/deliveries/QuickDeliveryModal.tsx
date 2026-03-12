@@ -204,6 +204,11 @@ export default function QuickDeliveryModal({
       toast('error', 'Please add at least one product');
       return;
     }
+    // M16: Prevent $0 total quick deliveries
+    if (totalCents === 0) {
+      toast('error', 'Order total cannot be $0 — update product prices before submitting');
+      return;
+    }
 
     setSubmitting(true);
     try {

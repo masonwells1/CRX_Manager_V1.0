@@ -144,7 +144,7 @@ export default function InventoryPage() {
   const fetchInventory = useCallback(async () => {
     const { data, error } = await supabase
       .from('inventory')
-      .select('*, product:products(product_name, inventory_unit, container_size, container_type, vendor, current_cost)')
+      .select('*, product:products!inner(product_name, inventory_unit, container_size, container_type, vendor, current_cost, is_active)')
       .order('product_id');
 
     if (error) {
@@ -154,7 +154,10 @@ export default function InventoryPage() {
       return;
     }
 
-    const rawRows = (data || []) as Array<Inventory & { product: { product_name: string; inventory_unit: string | null; container_size: number | null; container_type: string | null; vendor: string | null; current_cost: number | null } | null; reorder_point: number; min_stock_level: number }>;
+    // H9: !inner join already excludes inventory rows with no matching product;
+    // also filter out soft-deactivated products (is_active = false).
+    const allRows = (data || []) as Array<Inventory & { product: { product_name: string; inventory_unit: string | null; container_size: number | null; container_type: string | null; vendor: string | null; current_cost: number | null; is_active: boolean } | null; reorder_point: number; min_stock_level: number }>;
+    const rawRows = allRows.filter((r) => r.product?.is_active !== false);
 
     const holdsFetch = supabase
       .from('inventory_holds')

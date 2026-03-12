@@ -496,11 +496,11 @@ export default function InvoiceDetail() {
         is_application_fee: it.is_application_fee || false,
         product_form: it.product_form || it.product?.product_form || null,
       })) as InvoicePdfItem[],
-      total_amount_cents: invoice.total_amount_cents || items.reduce((s, i) => s + i.extended_cents, 0),
-      total_cost_cents: invoice.total_cost_cents || items.reduce((s, i) => s + Math.round(i.cost_cents * i.quantity), 0),
-      paid_amount_cents: invoice.paid_amount_cents || 0,
-      prepay_applied_cents: invoice.prepay_applied_cents || 0,
-      balance_cents: invoice.balance_cents || 0,
+      total_amount_cents: invoice.total_amount_cents ?? items.reduce((s, i) => s + i.extended_cents, 0),
+      total_cost_cents: invoice.total_cost_cents ?? items.reduce((s, i) => s + Math.round(i.cost_cents * i.quantity), 0),
+      paid_amount_cents: invoice.paid_amount_cents ?? 0,
+      prepay_applied_cents: invoice.prepay_applied_cents ?? 0,
+      balance_cents: invoice.balance_cents ?? 0,
       options,
     };
   };
@@ -682,7 +682,7 @@ export default function InvoiceDetail() {
               </Button>
             </>
           )}
-          {!isNew && ['posted', 'overdue'].includes(invoice.status ?? '') && isAdmin && (
+          {!isNew && invoice.status === 'posted' && isAdmin && (
               <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => setShowVoidModal(true)}>
                 Void
               </Button>

@@ -168,6 +168,21 @@ export default function Products() {
     setDeactivating(true);
     try {
       const ids = selectedRows.map((p) => p.id);
+
+      // H22: Block deactivation if any selected product has open PO lines
+      const { data: openPoLines } = await supabase
+        .from('purchase_order_items')
+        .select('id, product_id, purchase_order:purchase_orders!inner(status)')
+        .in('product_id', ids)
+        .in('purchase_order.status', ['draft', 'submitted', 'partially_received'])
+        .limit(1);
+      if (openPoLines && openPoLines.length > 0) {
+        toast('error', 'Cannot deactivate: one or more selected products have open purchase order lines. Receive or cancel those POs first.');
+        setDeactivating(false);
+        setDeactivateModalOpen(false);
+        return;
+      }
+
       const result = await supabase
         .from('products')
         .update({ is_active: false, updated_at: new Date().toISOString() })

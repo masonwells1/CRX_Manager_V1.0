@@ -407,13 +407,16 @@ export default function Deliveries() {
           priority: del.priority || 'normal',
           issue_type: del.issue_type || undefined,
           issue_notes: del.issue_notes || undefined,
-          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>).map((it) => ({
-            product_name: it.product?.product_name || (it.product_name as string),
-            quantity: it.quantity as number,
-            unit_size: (it.unit_size as string) || '-',
-            quantity_delivered: it.quantity_delivered as number,
-            tote_number: (it.tote_number as string) || undefined,
-          })),
+          // M14: sort items by product name for consistent manifest ordering
+          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>)
+            .map((it) => ({
+              product_name: it.product?.product_name || (it.product_name as string),
+              quantity: it.quantity as number,
+              unit_size: (it.unit_size as string) || '-',
+              quantity_delivered: it.quantity_delivered as number,
+              tote_number: (it.tote_number as string) || undefined,
+            }))
+            .sort((a, b) => (a.product_name || '').localeCompare(b.product_name || '')),
         });
       }
 
@@ -463,12 +466,15 @@ export default function Deliveries() {
           driver_name: del.driver_name,
           scheduled_date: del.scheduled_date,
           priority: del.priority || 'normal',
-          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>).map((it) => ({
-            product_name: it.product?.product_name || (it.product_name as string) || 'Unknown',
-            quantity: it.quantity as number,
-            unit_size: (it.unit_size as string) || '-',
-            tote_number: (it.tote_number as string) || undefined,
-          })),
+          // M14: sort items by product name for consistent load sheet ordering
+          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>)
+            .map((it) => ({
+              product_name: it.product?.product_name || (it.product_name as string) || 'Unknown',
+              quantity: it.quantity as number,
+              unit_size: (it.unit_size as string) || '-',
+              tote_number: (it.tote_number as string) || undefined,
+            }))
+            .sort((a, b) => a.product_name.localeCompare(b.product_name)),
         });
       }
 
