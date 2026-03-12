@@ -30,13 +30,18 @@ export default function NotificationsPanel() {
   const fetchNotifications = useCallback(async () => {
     if (!profile) return;
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('notifications')
       .select('*')
       .eq('user_id', profile.id)
       .order('created_at', { ascending: false })
       .limit(20);
 
+    if (error) {
+      toast('error', 'Failed to load notifications');
+      setLoading(false);
+      return;
+    }
     setNotifications((data || []) as Notification[]);
     setLoading(false);
   }, [profile]);

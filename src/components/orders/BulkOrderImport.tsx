@@ -5,6 +5,7 @@ import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
+import { localToday } from '../../lib/dateUtils';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -134,7 +135,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     const parsedOrder: ParsedOrder = {
       order_number: data.order_number || 'OCR-IMPORT',
       customer_name: data.customer_name || 'Unknown Customer',
-      order_date: data.order_date || new Date().toISOString().split('T')[0],
+      order_date: data.order_date || localToday(),
       status: data.status || 'confirmed',
       notes: data.notes || '',
       items: data.items.map((item) => ({
@@ -212,7 +213,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
             customer_name: customerName,
             order_date: orderFieldMap.order_date !== undefined
               ? row[orderFieldMap.order_date]
-              : new Date().toISOString().split('T')[0],
+              : localToday(),
             status: orderFieldMap.status !== undefined ? row[orderFieldMap.status] : 'confirmed',
             notes: orderFieldMap.notes !== undefined ? row[orderFieldMap.notes] : undefined,
             items: [],
@@ -298,11 +299,17 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
 
     for (const order of validation.valid) {
       try {
-        const { data: customer } = await supabase
+        const { data: customer, error: custError } = await supabase
           .from('customers')
           .select('id')
           .ilike('farm_name', order.customer_name)
           .maybeSingle();
+
+        if (custError) {
+          console.error('Failed to look up customer:', custError.message);
+          failedCount++;
+          continue;
+        }
 
         if (!customer) {
           failedCount++;
@@ -340,11 +347,14 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
 
         const orderItems = await Promise.all(
           order.items.map(async (item, idx) => {
-            const { data: product } = await supabase
+            const { data: product, error: prodError } = await supabase
               .from('products')
               .select('id')
               .ilike('product_name', item.product_name)
               .maybeSingle();
+            if (prodError) {
+              console.error('Failed to look up product:', prodError.message);
+            }
 
             return {
               order_id: orderData.id,

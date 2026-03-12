@@ -16,6 +16,7 @@ import { supabase } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
+import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import type { Vendor, PurchaseOrder } from '../types';
 
 export default function NewVendorBill() {
@@ -33,7 +34,7 @@ export default function NewVendorBill() {
   const [vendorId, setVendorId] = useState('');
   const [purchaseOrderId, setPurchaseOrderId] = useState('');
   const [billNumber, setBillNumber] = useState('');
-  const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
+  const [billDate, setBillDate] = useState(localToday());
   const [paymentTerms, setPaymentTerms] = useState('');
   const [paymentTermsDays, setPaymentTermsDays] = useState(30);
   const [subtotalDollars, setSubtotalDollars] = useState('');
@@ -108,9 +109,9 @@ export default function NewVendorBill() {
 
       const idemKey = createBillIdem.getKey();
       // Compute due_date from bill_date + paymentTermsDays
-      const dueDateObj = new Date(billDate);
+      const dueDateObj = parseLocalDate(billDate);
       dueDateObj.setDate(dueDateObj.getDate() + paymentTermsDays);
-      const computedDueDate = dueDateObj.toISOString().split('T')[0];
+      const computedDueDate = formatLocalDate(dueDateObj);
 
       const { data, error } = await supabase.rpc('create_vendor_bill', {
         p_vendor_id: vendorId,
@@ -143,7 +144,7 @@ export default function NewVendorBill() {
   // Calculate due date preview
   const dueDate = (() => {
     try {
-      const d = new Date(billDate);
+      const d = parseLocalDate(billDate);
       d.setDate(d.getDate() + paymentTermsDays);
       return d.toLocaleDateString();
     } catch {

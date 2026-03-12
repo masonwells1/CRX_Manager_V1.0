@@ -35,7 +35,12 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
       query = query.eq('note_id', noteId);
     }
 
-    const { data } = await query;
+    const { data, error } = await query;
+    if (error) {
+      console.error('Failed to load activity feed:', error.message);
+      setLoading(false);
+      return;
+    }
     setActivities((data || []) as ActivityEntry[]);
     setLoading(false);
   }, [noteId, limit]);

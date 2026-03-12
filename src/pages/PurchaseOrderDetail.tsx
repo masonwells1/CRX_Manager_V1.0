@@ -14,6 +14,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
 import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
+import { localToday, parseLocalDate } from '../lib/dateUtils';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition } from '../types';
 
 /* ─── Condition badge helpers ─── */
@@ -339,7 +340,7 @@ export default function PurchaseOrderDetail() {
     try {
       const result = await supabase
         .from('purchase_orders')
-        .update({ status: 'submitted', submitted_date: new Date().toISOString().split('T')[0] })
+        .update({ status: 'submitted', submitted_date: localToday() })
         .eq('id', id)
         .select();
       checkMutationResult(result, 'Submit purchase order');
@@ -452,14 +453,14 @@ export default function PurchaseOrderDetail() {
           <div>
             <p className="text-xs text-secondary">Submitted</p>
             <p className="text-sm font-medium text-nav-dark">
-              {po.submitted_date ? new Date(po.submitted_date).toLocaleDateString() : '-'}
+              {po.submitted_date ? parseLocalDate(po.submitted_date).toLocaleDateString() : '-'}
             </p>
           </div>
           <div>
             <p className="text-xs text-secondary">Expected Delivery</p>
             <p className="text-sm font-medium text-nav-dark">
               {po.expected_delivery_date
-                ? new Date(po.expected_delivery_date).toLocaleDateString()
+                ? parseLocalDate(po.expected_delivery_date).toLocaleDateString()
                 : '-'}
             </p>
           </div>

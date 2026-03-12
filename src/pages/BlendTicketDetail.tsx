@@ -18,6 +18,7 @@ import { useToast } from '../components/ui/Toast';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { validateBlendMath } from '../lib/blendMathValidator';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
+import { localToday } from '../lib/dateUtils';
 import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field } from '../types';
 
 export function BlendTicketDetail() {
@@ -54,7 +55,7 @@ export function BlendTicketDetail() {
   const [selectedOrderId, setSelectedOrderId] = useState('');
   const [linking, setLinking] = useState(false);
   const [newOrderNumber, setNewOrderNumber] = useState('');
-  const [newOrderDate, setNewOrderDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newOrderDate, setNewOrderDate] = useState(localToday());
   const [newOrderNotes, setNewOrderNotes] = useState('');
 
   const [formData, setFormData] = useState({
@@ -991,7 +992,7 @@ export function BlendTicketDetail() {
                   return;
                 }
                 setNewOrderNumber('');
-                setNewOrderDate(new Date().toISOString().split('T')[0]);
+                setNewOrderDate(localToday());
                 setNewOrderNotes('');
                 setShowCreateOrderModal(true);
               }}>

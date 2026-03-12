@@ -15,6 +15,7 @@ import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
 import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
+import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, InventoryCostRow,
@@ -80,15 +81,15 @@ function getPresetDates(preset: string): { start: string; end: string } {
     }
     case 'ytd': {
       const s = computeSeason(now);
-      return { start: seasonStartDate(s), end: now.toISOString().split('T')[0] };
+      return { start: seasonStartDate(s), end: formatLocalDate(now) };
     }
     case 'last30': {
       const d = new Date(now.getTime() - 30 * 86400000);
-      return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+      return { start: formatLocalDate(d), end: formatLocalDate(now) };
     }
     case 'last90': {
       const d = new Date(now.getTime() - 90 * 86400000);
-      return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+      return { start: formatLocalDate(d), end: formatLocalDate(now) };
     }
     default:
       return { start: '', end: '' };
@@ -260,14 +261,14 @@ export default function Reports() {
   }, [startDate, endDate, grossSalesGroupBy, toast]);
 
   const fetchCustomerBalance = useCallback(async () => {
-    const asOf = endDate || new Date().toISOString().split('T')[0];
+    const asOf = endDate || localToday();
     const { data, error } = await supabase.rpc('get_customer_balance_listing', { p_as_of_date: asOf });
     if (error) { toast('error', `Customer balance failed: ${error.message}`); return; }
     setCustBalanceData((data || []) as CustomerBalanceRow[]);
   }, [endDate, toast]);
 
   const fetchCommissionBalance = useCallback(async () => {
-    const asOf = endDate || new Date().toISOString().split('T')[0];
+    const asOf = endDate || localToday();
     const { data, error } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
     if (error) { toast('error', `Commission balance failed: ${error.message}`); return; }
     setCommBalanceData((data || []) as CommissionBalanceRow[]);
@@ -412,8 +413,14 @@ export default function Reports() {
   // ─── Commission mark-paid (original) ────────────────────────
   const handleMarkPaid = async () => {
     if (selectedCommissions.size === 0) { toast('error', 'Select at least one commission'); return; }
+    // Only pending commissions can be marked paid
+    const nonPending = commissionData.filter((c) => selectedCommissions.has(c.id) && c.status !== 'pending');
+    if (nonPending.length > 0) {
+      toast('error', `${nonPending.length} selected commission(s) are not in 'pending' status — only pending commissions can be marked paid`);
+      return;
+    }
     setMarkingPaid(true);
-    const today = new Date().toISOString().split('T')[0];
+    const today = localToday();
     try {
       // TODO: Replace with create_commission_payment RPC for proper audit trail
       const result = await supabase.from('commissions').update({ status: 'paid', paid_date: today }).in('id', Array.from(selectedCommissions)).select();
@@ -591,13 +598,13 @@ export default function Reports() {
         <input type="checkbox" checked={selectedCommissions.has(r.id)} onChange={() => toggleCommissionSelect(r.id)} aria-label={`Select commission for ${r.recipient}`} className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green" />
       ) : null,
     } as Column<CommissionRow>] : []),
-    { key: 'order_date', header: 'Date', sortable: true, render: (r) => new Date(r.order_date + 'T00:00:00').toLocaleDateString() },
+    { key: 'order_date', header: 'Date', sortable: true, render: (r) => parseLocalDate(r.order_date).toLocaleDateString() },
     { key: 'recipient', header: 'Recipient', sortable: true, render: (r) => <span className="font-medium text-nav-dark">{r.recipient}</span> },
     { key: 'commission_amount', header: 'Commission', sortable: true, render: (r) => <span className="font-mono font-medium">{fmt(r.commission_amount)}</span> },
     { key: 'split_percentage', header: 'Split %', sortable: true, render: (r) => `${r.split_percentage}%` },
     { key: 'order_profit', header: 'Order Profit', sortable: true, render: (r) => <span className="font-mono">{fmt(r.order_profit)}</span> },
     { key: 'status', header: 'Status', render: (r) => <Badge variant={statusToBadgeVariant[r.status] || 'default'}>{r.status}</Badge> },
-    { key: 'paid_date', header: 'Paid', sortable: true, render: (r) => r.paid_date ? new Date(r.paid_date).toLocaleDateString() : '-' },
+    { key: 'paid_date', header: 'Paid', sortable: true, render: (r) => r.paid_date ? parseLocalDate(r.paid_date).toLocaleDateString() : '-' },
   ];
 
   const revenueCols: Column<RevenueSummary>[] = [

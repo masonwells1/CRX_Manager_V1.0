@@ -19,6 +19,7 @@ import { supabase, checkMutationResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
+import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils';
 import type { ApplicatorLicense, RUPSalesRecord } from '../types';
 
 type TabKey = 'licenses' | 'rup_products' | 'rup_sales';
@@ -61,7 +62,7 @@ export default function Compliance() {
     const seasonYear = now.getMonth() >= 9 ? now.getFullYear() : now.getFullYear() - 1;
     return `${seasonYear}-10-01`;
   });
-  const [rupEndDate, setRUPEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [rupEndDate, setRUPEndDate] = useState(localToday());
   const [rupComplianceFilter, setRUPComplianceFilter] = useState('');
 
   // Customers for dropdowns
@@ -154,8 +155,8 @@ export default function Compliance() {
     fetchData();
   }, [tab, fetchData]);
 
-  const today = new Date().toISOString().split('T')[0];
-  const thirtyDaysOut = new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0];
+  const today = localToday();
+  const thirtyDaysOut = localDatePlusDays(30);
 
   const getExpiryStatus = (date: string) => {
     if (date < today) return 'expired';
@@ -293,7 +294,7 @@ export default function Compliance() {
                   : 'text-crx-green'
             }`}
           >
-            {new Date(r.expiry_date).toLocaleDateString()}
+            {parseLocalDate(r.expiry_date).toLocaleDateString()}
             {status === 'expired' && ' ⚠ EXPIRED'}
             {status === 'expiring' && ' ⚠ Expiring Soon'}
           </span>
@@ -357,7 +358,7 @@ export default function Compliance() {
       key: 'sale_date',
       header: 'Date',
       sortable: true,
-      render: (r) => new Date(r.sale_date).toLocaleDateString(),
+      render: (r) => parseLocalDate(r.sale_date).toLocaleDateString(),
     },
     {
       key: 'buyer_name',
@@ -396,7 +397,7 @@ export default function Compliance() {
       header: 'Cert Expiry',
       render: (r) =>
         r.buyer_certification_expiry
-          ? new Date(r.buyer_certification_expiry).toLocaleDateString()
+          ? parseLocalDate(r.buyer_certification_expiry).toLocaleDateString()
           : '-',
     },
     {

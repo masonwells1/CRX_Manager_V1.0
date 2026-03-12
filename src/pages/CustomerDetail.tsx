@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
+import { parseLocalDate } from '../lib/dateUtils';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field } from '../types';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
@@ -951,7 +952,7 @@ export default function CustomerDetail() {
                           </td>
                           <td className="px-4 py-3">{d.driver_name}</td>
                           <td className="px-4 py-3 text-secondary">
-                            {new Date(d.scheduled_date).toLocaleDateString()}
+                            {parseLocalDate(d.scheduled_date).toLocaleDateString()}
                           </td>
                           <td className="px-4 py-3 text-secondary">
                             {d.completed_at ? new Date(d.completed_at).toLocaleDateString() : '-'}
@@ -1138,7 +1139,7 @@ export default function CustomerDetail() {
                       <tbody>
                         {transactions.slice(0, 50).map((txn, idx) => (
                           <tr key={idx} className="border-b border-gray-50">
-                            <td className="px-5 py-3">{new Date(txn.transaction_date).toLocaleDateString()}</td>
+                            <td className="px-5 py-3">{parseLocalDate(txn.transaction_date).toLocaleDateString()}</td>
                             <td className="px-4 py-3 capitalize">{txn.transaction_type}</td>
                             <td className="px-4 py-3 font-mono text-xs">{txn.reference_number}</td>
                             <td className={`px-4 py-3 text-right ${txn.amount_cents < 0 ? 'text-red-600' : 'text-nav-dark'}`}>

@@ -320,6 +320,12 @@ export default function Returns() {
 
   const handleCancel = async () => {
     if (!activeReturn || !profile) return;
+    // Only approved or received returns can be cancelled (not requested, credited, or rejected)
+    const cancellableStatuses = ['approved', 'received'];
+    if (!cancellableStatuses.includes(activeReturn.status)) {
+      toast('error', `Cannot cancel a return in '${activeReturn.status}' status`);
+      return;
+    }
     if (!window.confirm('Cancel this return?')) return;
     try {
       const result = await supabase

@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { parseLocalDate } from '../lib/dateUtils';
 import {
   Plus,
   Upload,
@@ -123,7 +124,7 @@ export default function PurchaseOrders() {
       header: 'Submitted',
       sortable: true,
       render: (row) =>
-        row.submitted_date ? new Date(row.submitted_date).toLocaleDateString() : '-',
+        row.submitted_date ? parseLocalDate(row.submitted_date).toLocaleDateString() : '-',
     },
     {
       key: 'expected_delivery_date',
@@ -131,7 +132,7 @@ export default function PurchaseOrders() {
       sortable: true,
       render: (row) =>
         row.expected_delivery_date
-          ? new Date(row.expected_delivery_date).toLocaleDateString()
+          ? parseLocalDate(row.expected_delivery_date).toLocaleDateString()
           : '-',
     },
   ];

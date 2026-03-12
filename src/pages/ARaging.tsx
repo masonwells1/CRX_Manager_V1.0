@@ -20,6 +20,7 @@ import StatementPrintDialog from '../components/statements/StatementPrintDialog'
 import FinanceChargePreviewModal from '../components/invoices/FinanceChargePreviewModal';
 import { useAuth } from '../contexts/AuthContext';
 import { computeSeason } from '../utils/season';
+import { localToday, parseLocalDate, localDatePlusDays } from '../lib/dateUtils';
 import type { ARAgingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
 
 type TabKey = 'aging' | 'statement' | 'season';
@@ -47,17 +48,13 @@ export default function ARaging() {
 
   // Aging
   const [agingData, setAgingData] = useState<ARAgingRow[]>([]);
-  const [asOfDate, setAsOfDate] = useState(new Date().toISOString().split('T')[0]);
+  const [asOfDate, setAsOfDate] = useState(localToday());
 
   // Statement
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState('');
-  const [stmtStart, setStmtStart] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 90);
-    return d.toISOString().split('T')[0];
-  });
-  const [stmtEnd, setStmtEnd] = useState(new Date().toISOString().split('T')[0]);
+  const [stmtStart, setStmtStart] = useState(() => localDatePlusDays(-90));
+  const [stmtEnd, setStmtEnd] = useState(localToday());
   const [statementData, setStatementData] = useState<CustomerStatementRow[]>([]);
   const [stmtCustomerName, setStmtCustomerName] = useState('');
 
@@ -68,10 +65,14 @@ export default function ARaging() {
   const [seasonData, setSeasonData] = useState<SeasonComparisonRow[]>([]);
 
   const fetchCustomers = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('customers')
       .select('id, farm_name')
       .order('farm_name');
+    if (error) {
+      toast('error', 'Failed to load customers: ' + error.message);
+      return;
+    }
     setCustomers(data || []);
   };
 
@@ -261,7 +262,7 @@ export default function ARaging() {
     {
       key: 'transaction_date',
       header: 'Date',
-      render: (r) => new Date(r.transaction_date).toLocaleDateString(),
+      render: (r) => parseLocalDate(r.transaction_date).toLocaleDateString(),
     },
     {
       key: 'transaction_type',
@@ -917,8 +918,8 @@ export default function ARaging() {
                   <div>
                     <h2 className="text-lg font-semibold text-nav-dark">{stmtCustomerName}</h2>
                     <p className="text-sm text-secondary">
-                      Statement period: {new Date(stmtStart).toLocaleDateString()} –{' '}
-                      {new Date(stmtEnd).toLocaleDateString()}
+                      Statement period: {parseLocalDate(stmtStart).toLocaleDateString()} –{' '}
+                      {parseLocalDate(stmtEnd).toLocaleDateString()}
                     </p>
                   </div>
                   <div className="text-right">

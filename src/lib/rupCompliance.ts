@@ -1,4 +1,5 @@
 import { supabase } from './db';
+import { localToday } from './dateUtils';
 
 export interface RUPComplianceResult {
   hasRUPProducts: boolean;
@@ -47,7 +48,7 @@ export async function checkRUPCompliance(
   result.rupProductNames = rupProducts.map((p) => p.product_name);
 
   // 2. Check customer's applicator license
-  const today = new Date().toISOString().split('T')[0];
+  const today = localToday();
   const { data: licenses, error: licenseError } = await supabase
     .from('applicator_licenses')
     .select('id, expiry_date')

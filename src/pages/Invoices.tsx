@@ -16,6 +16,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
 import { generateBatchInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { getSeasonDates } from '../utils/season';
 
 type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null };
 
@@ -82,18 +83,26 @@ export default function Invoices() {
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
+    const { start: seasonStart, end: seasonEnd } = getSeasonDates();
+    const QUERY_LIMIT = 500;
     const { data, error } = await supabase
       .from('invoices')
       .select('*, customer:customers!invoices_customer_id_fkey(farm_name), salesman:profiles!invoices_salesman_id_fkey(full_name)')
       .is('deleted_at', null)
+      .gte('created_at', seasonStart)
+      .lte('created_at', seasonEnd + 'T23:59:59')
       .order('created_at', { ascending: false })
-      .limit(500);
+      .limit(QUERY_LIMIT);
 
     if (error) {
       console.error('Failed to load invoices:', error.message);
       toast('error', 'Failed to load invoices');
       setLoading(false);
       return;
+    }
+
+    if (data && data.length === QUERY_LIMIT) {
+      toast('error', `Showing first ${QUERY_LIMIT} invoices — some invoices may be hidden. Contact admin if you need the full list.`);
     }
 
     const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman?: { full_name: string } }>).map((inv) => ({

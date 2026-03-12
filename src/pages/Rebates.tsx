@@ -16,6 +16,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
+import { localToday, parseLocalDate } from '../lib/dateUtils';
 import type { RebateProgram, RebateClaim } from '../types';
 
 type TabKey = 'programs' | 'claims';
@@ -298,9 +299,9 @@ export default function Rebates() {
 
   const updateClaimStatus = async (claimId: string, newStatus: string) => {
     const updatePayload: Record<string, unknown> = { status: newStatus };
-    if (newStatus === 'submitted') updatePayload.submitted_date = new Date().toISOString().split('T')[0];
-    if (newStatus === 'approved') updatePayload.approved_date = new Date().toISOString().split('T')[0];
-    if (newStatus === 'paid') updatePayload.paid_date = new Date().toISOString().split('T')[0];
+    if (newStatus === 'submitted') updatePayload.submitted_date = localToday();
+    if (newStatus === 'approved') updatePayload.approved_date = localToday();
+    if (newStatus === 'paid') updatePayload.paid_date = localToday();
 
     try {
       const result = await supabase.from('rebate_claims').update(updatePayload).eq('id', claimId).select();
@@ -354,7 +355,7 @@ export default function Rebates() {
       key: 'start_date',
       header: 'Period',
       render: (r) =>
-        `${new Date(r.start_date).toLocaleDateString()} – ${new Date(r.end_date).toLocaleDateString()}`,
+        `${parseLocalDate(r.start_date).toLocaleDateString()} – ${parseLocalDate(r.end_date).toLocaleDateString()}`,
     },
     {
       key: 'status',

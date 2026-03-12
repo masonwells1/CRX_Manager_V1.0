@@ -787,7 +787,19 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Invalid token" }, 401);
   }
 
+  // Role check — only admin, sales_rep, and applicator can process blend tickets
   const adminClient = createClient(supabaseUrl, serviceRoleKey);
+  const { data: callerProfile } = await adminClient
+    .from("profiles")
+    .select("role")
+    .eq("id", caller.id)
+    .single();
+  if (
+    !callerProfile ||
+    !["admin", "sales_rep", "applicator"].includes(callerProfile.role)
+  ) {
+    return jsonResponse({ error: "Forbidden" }, 403);
+  }
 
   let blendTicketId: string;
   try {

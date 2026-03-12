@@ -1,7 +1,9 @@
+import { localToday } from './dateUtils';
+
 /**
  * Export data to a CSV file and trigger a download.
  * Works entirely in the browser - no server needed.
- * 
+ *
  * @param data - Array of objects to export
  * @param columns - Which columns to include and what to call them
  * @param filename - Name for the downloaded file (without .csv extension)
@@ -37,7 +39,7 @@ export function exportToCSV<T extends Record<string, unknown>>(
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = `${filename}_${new Date().toISOString().split('T')[0]}.csv`;
+  link.download = `${filename}_${localToday()}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

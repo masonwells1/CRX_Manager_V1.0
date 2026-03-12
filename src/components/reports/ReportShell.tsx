@@ -9,6 +9,7 @@ import { Download, FileText } from 'lucide-react';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import { computeSeason, seasonStartDate, seasonEndDate } from '../../utils/season';
+import { formatLocalDate } from '../../lib/dateUtils';
 
 // Crop season = October 1 to September 30
 function getPresetDates(preset: string): { start: string; end: string } {
@@ -26,15 +27,15 @@ function getPresetDates(preset: string): { start: string; end: string } {
     case 'ytd': {
       // Season runs Oct 1 to Sep 30 — YTD starts from current season's Oct 1
       const s = computeSeason(now);
-      return { start: seasonStartDate(s), end: now.toISOString().split('T')[0] };
+      return { start: seasonStartDate(s), end: formatLocalDate(now) };
     }
     case 'last30': {
       const d = new Date(now.getTime() - 30 * 86400000);
-      return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+      return { start: formatLocalDate(d), end: formatLocalDate(now) };
     }
     case 'last90': {
       const d = new Date(now.getTime() - 90 * 86400000);
-      return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+      return { start: formatLocalDate(d), end: formatLocalDate(now) };
     }
     default:
       return { start: '', end: '' };

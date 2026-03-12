@@ -21,6 +21,7 @@ import { supabase } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
+import { localToday } from '../lib/dateUtils';
 
 interface PrepayBucket {
   id: string;
@@ -216,7 +217,7 @@ export default function PrepayWorkspace() {
     toast('info', 'All pending allocations cleared');
   };
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localToday();
   const totalPending = pendingAllocations.reduce((s, a) => s + a.amount_cents, 0);
 
   return (

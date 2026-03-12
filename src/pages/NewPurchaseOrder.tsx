@@ -11,6 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
+import { localToday } from '../lib/dateUtils';
 import type { Product } from '../types';
 
 interface POItemDraft {
@@ -159,7 +160,7 @@ export default function NewPurchaseOrder() {
         po_number: poNumber,
         vendor: vendor.trim(),
         status: submitStatus,
-        submitted_date: submitStatus === 'submitted' ? new Date().toISOString().split('T')[0] : null,
+        submitted_date: submitStatus === 'submitted' ? localToday() : null,
         expected_delivery_date: expectedDate || null,
         notes: notes || null,
       };

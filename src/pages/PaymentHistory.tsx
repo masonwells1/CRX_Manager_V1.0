@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { exportToCSV } from '../lib/csvExport';
+import { parseLocalDate } from '../lib/dateUtils';
 
 interface AllocationSet {
   [k: string]: unknown;
@@ -183,7 +184,7 @@ export default function PaymentHistory() {
         >
           {expandedId === r.id ? <ChevronUp className="w-4 h-4 text-secondary" /> : <ChevronDown className="w-4 h-4 text-secondary" />}
           <span className="font-medium">
-            {r.payment_date ? new Date(r.payment_date + 'T00:00:00').toLocaleDateString() : new Date(r.created_at).toLocaleDateString()}
+            {r.payment_date ? parseLocalDate(r.payment_date).toLocaleDateString() : new Date(r.created_at).toLocaleDateString()}
           </span>
         </button>
       ),

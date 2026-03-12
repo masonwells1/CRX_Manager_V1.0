@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { parseLocalDate } from '../lib/dateUtils';
 import { Plus, Upload, Copy, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -213,7 +214,7 @@ export default function Quotes() {
       key: 'expires_at',
       header: 'Expires',
       sortable: true,
-      render: (row) => (row.expires_at ? new Date(row.expires_at).toLocaleDateString() : '-'),
+      render: (row) => (row.expires_at ? parseLocalDate(row.expires_at).toLocaleDateString() : '-'),
     },
     {
       key: 'id',

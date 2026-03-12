@@ -144,10 +144,16 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
       }
 
       const skus = parsed.map((p) => p.sku);
-      const { data: products } = await supabase
+      const { data: products, error: prodError } = await supabase
         .from('products')
         .select('id, sku, product_name')
         .or(`sku.in.(${skus.map(s => `"${s}"`).join(',')}),product_name.in.(${skus.map(s => `"${s}"`).join(',')})`);
+
+      if (prodError) {
+        toast('error', 'Failed to look up products');
+        setParsing(false);
+        return;
+      }
 
       const foundSkus = new Set((products || []).flatMap((p) => [p.sku, p.product_name].filter(Boolean)));
       const valid: ParsedRow[] = [];
@@ -197,11 +203,17 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
     let failed = 0;
 
     for (const row of validation.valid) {
-      const { data: product } = await supabase
+      const { data: product, error: lookupError } = await supabase
         .from('products')
         .select('id, sku, current_cost, tier1_price, tier2_price, tier3_price')
         .eq('sku', row.sku)
         .maybeSingle();
+
+      if (lookupError) {
+        console.error('Failed to look up product:', lookupError.message);
+        failed++;
+        continue;
+      }
 
       if (!product) {
         failed++;

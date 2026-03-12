@@ -6,6 +6,7 @@ import Input from '../ui/Input';
 import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { compressImage } from '../../lib/imageCompression';
+import { localToday } from '../../lib/dateUtils';
 import type { Customer } from '../../types';
 
 interface ImageFile {
@@ -25,7 +26,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
-  const [ticketDate, setTicketDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [ticketDate, setTicketDate] = useState<string>(localToday());
   const [driverName, setDriverName] = useState('');
   const [tankNumber, setTankNumber] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -166,9 +167,13 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
 
         if (uploadError) throw uploadError;
 
-        const { data: urlData } = await supabase.storage
+        const { data: urlData, error: urlError } = await supabase.storage
           .from('blend-ticket-images')
           .createSignedUrl(filePath, 60 * 60 * 24 * 365);
+
+        if (urlError) {
+          console.error('Failed to create signed URL:', urlError.message);
+        }
 
         const { error: imgError } = await supabase.from('blend_ticket_images').insert({
           blend_ticket_id: ticket.id,
@@ -203,7 +208,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
       images.forEach(img => URL.revokeObjectURL(img.preview));
       setImages([]);
       setSelectedCustomerId('');
-      setTicketDate(new Date().toISOString().split('T')[0]);
+      setTicketDate(localToday());
       setDriverName('');
       setTankNumber('');
       setUploadProgress(0);

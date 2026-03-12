@@ -21,6 +21,7 @@ import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useToast } from '../components/ui/Toast';
+import { parseLocalDate } from '../lib/dateUtils';
 import type { BlendTicket, Customer } from '../types';
 
 export function BlendTickets() {
@@ -244,7 +245,7 @@ export function BlendTickets() {
       render: (ticket: BlendTicket) => (
         <span>
           {ticket.ticket_date
-            ? new Date(ticket.ticket_date).toLocaleDateString()
+            ? parseLocalDate(ticket.ticket_date).toLocaleDateString()
             : '-'}
         </span>
       ),

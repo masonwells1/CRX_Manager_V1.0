@@ -42,19 +42,27 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
   const [loading, setLoading] = useState(false);
 
   const fetchAllTags = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('note_tags')
       .select('*')
       .order('name');
+    if (error) {
+      toast('error', 'Failed to load tags');
+      return;
+    }
     setAllTags((data || []) as NoteTag[]);
   };
 
   const fetchNoteTags = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('team_note_tags')
       .select('tag_id, note_tags(*)')
       .eq('note_id', noteId);
 
+    if (error) {
+      toast('error', 'Failed to load note tags');
+      return;
+    }
     if (data) {
       const tags = data.map((d: Record<string, unknown>) => d.note_tags).filter(Boolean);
       setNoteTags(tags as NoteTag[]);

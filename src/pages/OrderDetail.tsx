@@ -18,6 +18,7 @@ import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
+import { parseLocalDate } from '../lib/dateUtils';
 import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery } from '../types';
 
 export default function OrderDetail() {
@@ -196,9 +197,10 @@ export default function OrderDetail() {
         }
       } else {
         // Simple status change (no inventory impact) — validate allowed transitions
+        // Manual status changes — partially_fulfilled/fulfilled happen via delivery RPCs, not manual update
         const validTransitions: Record<string, string[]> = {
-          confirmed: ['partially_fulfilled', 'fulfilled', 'cancelled'],
-          partially_fulfilled: ['fulfilled', 'cancelled'],
+          confirmed: ['cancelled'],
+          partially_fulfilled: ['cancelled'],
         };
         const allowed = validTransitions[order.status] || [];
         if (!allowed.includes(newStatus)) {
@@ -601,7 +603,7 @@ export default function OrderDetail() {
                       {del.driver_name || 'Unassigned'}
                     </td>
                     <td className="px-4 py-2 text-secondary">
-                      {new Date(del.scheduled_date).toLocaleDateString()}
+                      {parseLocalDate(del.scheduled_date).toLocaleDateString()}
                     </td>
                   </tr>
                 ))}
@@ -884,7 +886,7 @@ export default function OrderDetail() {
                 </button>
                 <div className="flex items-center gap-2">
                   {bt.ticket_date && (
-                    <span className="text-xs text-gray-500">{new Date(bt.ticket_date).toLocaleDateString()}</span>
+                    <span className="text-xs text-gray-500">{parseLocalDate(bt.ticket_date).toLocaleDateString()}</span>
                   )}
                   <Badge variant={bt.payment_status === 'billed' ? 'success' : bt.payment_status === 'prepaid' ? 'info' : 'default'}>
                     {(bt.payment_status || 'unbilled').replace('_', ' ')}

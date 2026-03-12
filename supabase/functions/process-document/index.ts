@@ -803,6 +803,21 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Invalid token" }, 401);
   }
 
+  // Role check — only admin, sales_rep, and applicator can process documents
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const adminClient = createClient(supabaseUrl, serviceRoleKey);
+  const { data: callerProfile } = await adminClient
+    .from("profiles")
+    .select("role")
+    .eq("id", caller.id)
+    .single();
+  if (
+    !callerProfile ||
+    !["admin", "sales_rep", "applicator"].includes(callerProfile.role)
+  ) {
+    return jsonResponse({ error: "Forbidden" }, 403);
+  }
+
   // Parse request body
   let documentType: DocumentType;
   let pages: PageInput[];

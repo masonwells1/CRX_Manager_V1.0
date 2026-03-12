@@ -18,6 +18,7 @@ import { downloadInvoicePdf, generateInvoicePdf, type InvoicePdfData, type Invoi
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
+import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 
@@ -68,7 +69,7 @@ export default function InvoiceDetail() {
   const [invoice, setInvoice] = useState<Partial<Invoice>>({
     invoice_type: 'chemical_sale',
     status: 'draft',
-    invoice_date: new Date().toISOString().split('T')[0],
+    invoice_date: localToday(),
     customer_id: '',
     salesman_id: profile?.id || '',
     header_notes: '',
@@ -449,7 +450,7 @@ export default function InvoiceDetail() {
 
     return {
       invoice_number: invoice.invoice_number || 'DRAFT',
-      invoice_date: invoice.invoice_date || new Date().toISOString().split('T')[0],
+      invoice_date: invoice.invoice_date || localToday(),
       due_date: invoice.due_date || undefined,
       invoice_type: invoice.invoice_type || 'chemical_sale',
       status: invoice.status || 'draft',
@@ -496,7 +497,7 @@ export default function InvoiceDetail() {
         product_form: it.product_form || it.product?.product_form || null,
       })) as InvoicePdfItem[],
       total_amount_cents: invoice.total_amount_cents || items.reduce((s, i) => s + i.extended_cents, 0),
-      total_cost_cents: invoice.total_cost_cents || items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0),
+      total_cost_cents: invoice.total_cost_cents || items.reduce((s, i) => s + Math.round(i.cost_cents * i.quantity), 0),
       paid_amount_cents: invoice.paid_amount_cents || 0,
       prepay_applied_cents: invoice.prepay_applied_cents || 0,
       balance_cents: invoice.balance_cents || 0,
@@ -1008,7 +1009,7 @@ export default function InvoiceDetail() {
                       </button>
                     </td>
                     <td className="px-4 py-2 text-secondary">
-                      {new Date(del.scheduled_date).toLocaleDateString()}
+                      {parseLocalDate(del.scheduled_date).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-2">
                       <Badge variant={statusToBadgeVariant[del.status] || 'default'} size="sm">

@@ -7,6 +7,7 @@ import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { logActivity } from '../../lib/activityLogger';
 import { validateBlendMath } from '../../lib/blendMathValidator';
+import { localToday } from '../../lib/dateUtils';
 import type { Customer, Product, BlendRecipe, BlendRecipeItem } from '../../types';
 
 interface ManualTicketCreateProps {
@@ -30,7 +31,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
   const [formData, setFormData] = useState({
     customer_id: '',
-    ticket_date: new Date().toISOString().split('T')[0],
+    ticket_date: localToday(),
     ticket_time: '',
     job_number: '',
     invoice_number: '',

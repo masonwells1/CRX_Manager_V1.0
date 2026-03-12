@@ -16,6 +16,7 @@ import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { getSeasonDates } from '../utils/season';
+import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
 import type { Job, JobStatus } from '../types';
 
 type JobRow = Job & {
@@ -39,14 +40,14 @@ function getPresetDates(preset: string): { start: string; end: string } {
 
   switch (preset) {
     case 'today':
-      return { start: now.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+      return { start: localToday(), end: localToday() };
     case 'this_week': {
       const dayOfWeek = now.getDay();
       const startOfWeek = new Date(now);
       startOfWeek.setDate(now.getDate() - dayOfWeek);
       const endOfWeek = new Date(startOfWeek);
       endOfWeek.setDate(startOfWeek.getDate() + 6);
-      return { start: startOfWeek.toISOString().split('T')[0], end: endOfWeek.toISOString().split('T')[0] };
+      return { start: formatLocalDate(startOfWeek), end: formatLocalDate(endOfWeek) };
     }
     case 'this_season':
       return getSeasonDates(now);
@@ -240,7 +241,7 @@ export default function Jobs() {
       key: 'job_date',
       header: 'Date',
       sortable: true,
-      render: (r) => new Date(r.job_date).toLocaleDateString(),
+      render: (r) => parseLocalDate(r.job_date).toLocaleDateString(),
     },
     {
       key: 'status',

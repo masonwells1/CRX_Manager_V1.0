@@ -8,6 +8,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
+import { localToday } from '../../lib/dateUtils';
 import type { Product } from '../../types';
 
 // ---------- interfaces ----------
@@ -89,7 +90,7 @@ async function parseWithVisionOCR(file: File, filename: string, products: Produc
       source_file: filename,
       vendor_name: '',
       invoice_number: '',
-      invoice_date: new Date().toISOString().split('T')[0],
+      invoice_date: localToday(),
       items: [],
       raw_text: result.raw_text || '',
       parse_errors: [result.error || 'OCR processing failed'],
@@ -133,7 +134,7 @@ async function parseWithVisionOCR(file: File, filename: string, products: Produc
     source_file: filename,
     vendor_name: data.vendor_name || '',
     invoice_number: data.invoice_number || '',
-    invoice_date: data.invoice_date || new Date().toISOString().split('T')[0],
+    invoice_date: data.invoice_date || localToday(),
     items,
     raw_text: result.raw_text,
     parse_errors,
@@ -165,11 +166,15 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
   }, [open]);
 
   const fetchProducts = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('products')
       .select('*')
       .eq('is_active', true)
       .order('product_name');
+    if (error) {
+      toast('error', 'Failed to load products');
+      return;
+    }
     const prods = (data || []) as Product[];
     setProducts(prods);
     setVendors([...new Set(prods.map((p) => p.vendor).filter(Boolean))] as string[]);
@@ -212,7 +217,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
             source_file: file.name,
             vendor_name: '',
             invoice_number: '',
-            invoice_date: new Date().toISOString().split('T')[0],
+            invoice_date: localToday(),
             items: [],
             raw_text: '',
             parse_errors: [`Failed to process: ${err instanceof Error ? err.message : 'Unknown error'}`],
@@ -332,10 +337,15 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
         // Generate PO number
         const year = new Date().getFullYear();
-        const { count } = await supabase
+        const { count, error: countError } = await supabase
           .from('purchase_orders')
           .select('*', { count: 'exact', head: true })
           .like('po_number', `PO-${year}-%`);
+        if (countError) {
+          console.error('Failed to get PO count:', countError.message);
+          failedCount++;
+          continue;
+        }
         const poNumber = `PO-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
 
         const totalCost = validItems.reduce((sum, i) => sum + i.quantity_ordered * i.unit_cost, 0);

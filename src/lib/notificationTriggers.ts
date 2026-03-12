@@ -14,6 +14,7 @@
  */
 import { supabase } from './db';
 import { createNotification, notifyAdmins } from './activityLogger';
+import { localToday, formatLocalDate } from './dateUtils';
 
 /**
  * Log a notification failure to the failed_notifications table.
@@ -66,12 +67,12 @@ export async function checkLowStockNotifications() {
     if (alerts.length === 0) return;
 
     // Check which products already had a notification today (dedup)
-    const today = new Date().toISOString().split('T')[0];
+    const todayStr = localToday();
     const { data: existingToday } = await supabase
       .from('notifications')
       .select('related_entity_id')
       .eq('notification_type', 'low_stock')
-      .gte('created_at', `${today}T00:00:00Z`);
+      .gte('created_at', `${todayStr}T00:00:00Z`);
 
     const alreadyNotified = new Set((existingToday || []).map((n) => n.related_entity_id));
 
@@ -109,13 +110,13 @@ export async function checkExpiringQuoteNotifications() {
       .from('quotes')
       .select('id, quote_number, created_by, expires_at, customer:customers(farm_name)')
       .in('status', ['sent', 'draft'])
-      .lte('expires_at', threeDaysFromNow.toISOString().split('T')[0])
-      .gte('expires_at', now.toISOString().split('T')[0]);
+      .lte('expires_at', formatLocalDate(threeDaysFromNow))
+      .gte('expires_at', formatLocalDate(now));
 
     if (!expiringQuotes || expiringQuotes.length === 0) return;
 
     // Dedup: check existing notifications for today
-    const today = now.toISOString().split('T')[0];
+    const today = formatLocalDate(now);
     const { data: existingToday } = await supabase
       .from('notifications')
       .select('related_entity_id')

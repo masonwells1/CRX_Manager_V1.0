@@ -82,11 +82,19 @@ async function executeAction(action: PendingAction): Promise<void> {
 
   // Conflict detection: if we captured a snapshot, check for server-side changes
   if (action.snapshotAt && action.entityTable && action.entityId) {
-    const { data } = await supabase
+    const { data, error: lookupError } = await supabase
       .from(action.entityTable)
       .select('updated_at')
       .eq('id', action.entityId)
       .maybeSingle();
+
+    if (lookupError) {
+      // Query itself failed (network error, RLS denial, etc.) — don't misreport as "deleted"
+      throw new Error(
+        `Failed to check ${action.entityTable} ${action.entityId} for conflicts: ${lookupError.message}. ` +
+        `Action '${action.operation}' deferred.`
+      );
+    }
 
     if (!data) {
       // Entity was deleted while offline — skip this action

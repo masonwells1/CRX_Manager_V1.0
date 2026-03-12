@@ -14,6 +14,7 @@ import { logActivity } from '../lib/activityLogger';
 import { supabase, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
+import { localToday, parseLocalDate } from '../lib/dateUtils';
 import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe } from '../types';
 
 interface JobDbRow {
@@ -127,7 +128,7 @@ export default function JobDetail() {
   const [jobNumber, setJobNumber] = useState('');
   const [status, setStatus] = useState<JobStatus>('scheduled');
   const [customerId, setCustomerId] = useState('');
-  const [jobDate, setJobDate] = useState(new Date().toISOString().split('T')[0]);
+  const [jobDate, setJobDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [applicatorId, setApplicatorId] = useState('');
   const [vehicleId, setVehicleId] = useState('');
@@ -271,8 +272,8 @@ export default function JobDetail() {
   // Computed
   const customerFields = allFields.filter(f => !customerId || f.customer_id === customerId);
   const totalAcres = fieldRows.reduce((sum, f) => sum + (parseFloat(f.acres_to_treat) || 0), 0);
-  const totalCostCents = chemRows.reduce((sum, c) => sum + ((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0)), 0);
-  const totalPriceCents = chemRows.reduce((sum, c) => sum + ((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0)), 0);
+  const totalCostCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0)), 0);
+  const totalPriceCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0)), 0);
 
   // Loader worksheet
   const selectedVehicle = vehicles.find(v => v.id === vehicleId);
@@ -382,6 +383,11 @@ export default function JobDetail() {
 
   const handleCancelJob = async () => {
     if (!window.confirm('Cancel this job? This action cannot be undone.')) return;
+    // Only scheduled or in_progress jobs can be cancelled
+    if (status !== 'scheduled' && status !== 'in_progress') {
+      toast('error', `Cannot cancel a job in '${status}' status — only scheduled or in-progress jobs can be cancelled`);
+      return;
+    }
     setCancelling(true);
     try {
       const result = await supabase
@@ -476,7 +482,7 @@ export default function JobDetail() {
       updated[i].product_name = p?.product_name || '';
       if (p) {
         updated[i].unit = p.unit_size || '';
-        updated[i].cost_per_unit_cents = ((p.current_cost || 0) * 100).toFixed(0);
+        updated[i].cost_per_unit_cents = Math.round((p.current_cost || 0) * 100).toString();
       }
     }
     setChemRows(updated);
@@ -516,7 +522,7 @@ export default function JobDetail() {
           {!isNew && (
             <div className="flex items-center gap-2 mt-0.5">
               <Badge variant={statusVariant[status]}>{status.replace('_', ' ')}</Badge>
-              <span className="text-sm text-secondary">{new Date(jobDate).toLocaleDateString()}</span>
+              <span className="text-sm text-secondary">{parseLocalDate(jobDate).toLocaleDateString()}</span>
             </div>
           )}
         </div>

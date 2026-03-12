@@ -44,21 +44,30 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
   const [sending, setSending] = useState(false);
 
   const fetchProfiles = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('id, full_name')
       .eq('is_active', true);
+    if (error) {
+      console.error('Failed to load profiles:', error.message);
+      return;
+    }
     setProfiles((data || []) as Profile[]);
   };
 
   const fetchComments = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('team_note_comments')
       .select('*, creator:profiles!team_note_comments_created_by_fkey(full_name)')
       .eq('note_id', noteId)
       .is('deleted_at', null)
       .order('created_at', { ascending: true });
 
+    if (error) {
+      toast('error', 'Failed to load comments');
+      setLoading(false);
+      return;
+    }
     setComments((data || []) as Comment[]);
     setLoading(false);
   }, [noteId]);

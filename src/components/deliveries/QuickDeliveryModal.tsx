@@ -12,6 +12,7 @@ import { supabase } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { localToday } from '../../lib/dateUtils';
 import type { Product, Profile } from '../../types';
 
 interface QuickItem {
@@ -63,7 +64,7 @@ export default function QuickDeliveryModal({
   const [selectedDriver, setSelectedDriver] = useState<string>('');
 
   // Other
-  const [scheduledDate, setScheduledDate] = useState(new Date().toISOString().split('T')[0]);
+  const [scheduledDate, setScheduledDate] = useState(localToday());
   const [deliveryNotes, setDeliveryNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -191,7 +192,7 @@ export default function QuickDeliveryModal({
       )
     : products;
 
-  const totalCents = items.reduce((sum, i) => sum + i.price_cents * i.quantity, 0);
+  const totalCents = items.reduce((sum, i) => sum + Math.round(i.price_cents * i.quantity), 0);
   const showPricing = role === 'admin' || role === 'sales_rep';
 
   const handleSubmit = async () => {
@@ -234,7 +235,7 @@ export default function QuickDeliveryModal({
       setItems([]);
       setDeliveryNotes('');
       setSelectedDriver(profile?.role === 'driver' ? profile.id : '');
-      setScheduledDate(new Date().toISOString().split('T')[0]);
+      setScheduledDate(localToday());
 
       onClose();
       onCreated?.();
@@ -376,7 +377,7 @@ export default function QuickDeliveryModal({
                         )}
                         {showPricing && (
                           <td className="px-3 py-2 text-right font-mono font-medium">
-                            {fmtCurrency(item.price_cents * item.quantity)}
+                            {fmtCurrency(Math.round(item.price_cents * item.quantity))}
                           </td>
                         )}
                         <td className="px-3 py-2">

@@ -13,6 +13,7 @@ import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
+import { localToday, parseLocalDate } from '../lib/dateUtils';
 import type { VendorBill } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -29,7 +30,7 @@ export default function VendorBills() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localToday();
 
   const fetchBills = useCallback(async () => {
     setLoading(true);
@@ -103,7 +104,7 @@ export default function VendorBills() {
       key: 'bill_date',
       header: 'Bill Date',
       sortable: true,
-      render: (r) => new Date(r.bill_date).toLocaleDateString(),
+      render: (r) => parseLocalDate(r.bill_date).toLocaleDateString(),
     },
     {
       key: 'due_date',

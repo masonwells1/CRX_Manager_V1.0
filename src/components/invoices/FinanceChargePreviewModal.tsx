@@ -8,6 +8,7 @@
  * selected customers or all at once.
  */
 import { useState, useEffect, useCallback } from 'react';
+import { parseLocalDate } from '../../lib/dateUtils';
 import { Zap, CheckSquare, Square } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
@@ -146,7 +147,7 @@ export default function FinanceChargePreviewModal({
     >
       <div className="space-y-4">
         <p className="text-sm text-secondary">
-          Preview of finance charges as of <strong>{new Date(asOfDate).toLocaleDateString()}</strong>.
+          Preview of finance charges as of <strong>{parseLocalDate(asOfDate).toLocaleDateString()}</strong>.
           Only customers with finance charges enabled, overdue balance above the minimum threshold,
           and past their grace period are shown.
         </p>

@@ -32,7 +32,8 @@ export interface SendEmailResult {
 // ── sendEmail ──────────────────────────────────────────────────────────
 
 export async function sendEmail(params: SendEmailParams): Promise<SendEmailResult> {
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) throw new Error(`Auth session error: ${sessionError.message}`);
   if (!session) throw new Error('Not authenticated');
 
   const resp = await fetch(
@@ -48,9 +49,14 @@ export async function sendEmail(params: SendEmailParams): Promise<SendEmailResul
     },
   );
 
-  const result = await resp.json();
-  if (!resp.ok) throw new Error(result.error || 'Email send failed');
-  return result as SendEmailResult;
+  let result: Record<string, unknown>;
+  try {
+    result = await resp.json();
+  } catch {
+    throw new Error(`Email service returned invalid response (HTTP ${resp.status})`);
+  }
+  if (!resp.ok) throw new Error((result.error as string) || 'Email send failed');
+  return result as unknown as SendEmailResult;
 }
 
 // ── pdfToBase64 ────────────────────────────────────────────────────────

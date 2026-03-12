@@ -13,6 +13,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
+import { localToday } from '../lib/dateUtils';
 import type { Order, OrderItem, Customer, CustomerAddress, Profile } from '../types';
 
 interface DeliveryItemDraft {
@@ -44,7 +45,7 @@ export default function NewDelivery() {
 
   const [selectedAddressId, setSelectedAddressId] = useState('');
   const [selectedDriverId, setSelectedDriverId] = useState('');
-  const [scheduledDate, setScheduledDate] = useState(new Date().toISOString().split('T')[0]);
+  const [scheduledDate, setScheduledDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [deliveryNotes, setDeliveryNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -58,11 +59,17 @@ export default function NewDelivery() {
   const blocker = useUnsavedChanges(isDirty);
 
   const fetchOrders = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('orders')
       .select('*, customer:customers(farm_name)')
       .in('status', ['confirmed', 'partially_fulfilled'])
       .order('order_date', { ascending: false });
+
+    if (error) {
+      toast('error', 'Failed to load orders: ' + error.message);
+      setLoadingOrders(false);
+      return;
+    }
 
     const rows = ((data || []) as Array<Order & { customer: { farm_name: string } | null }>).map((o) => ({
       ...o,
@@ -70,25 +77,35 @@ export default function NewDelivery() {
     }));
     setOrders(rows);
     setLoadingOrders(false);
-  }, []);
+  }, [toast]);
 
   const fetchDrivers = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .in('role', ['driver', 'admin'])
       .eq('is_active', true)
       .order('full_name');
+    if (error) {
+      toast('error', 'Failed to load drivers: ' + error.message);
+      return;
+    }
     setDrivers((data || []) as Profile[]);
-  }, []);
+  }, [toast]);
 
   const fetchOrderDetails = useCallback(async (orderId: string) => {
     setLoadingDetails(true);
-    const { data: orderData } = await supabase
+    const { data: orderData, error: orderErr } = await supabase
       .from('orders')
       .select('*')
       .eq('id', orderId)
       .maybeSingle();
+
+    if (orderErr) {
+      toast('error', 'Failed to load order: ' + orderErr.message);
+      setLoadingDetails(false);
+      return;
+    }
 
     if (!orderData) {
       setLoadingDetails(false);
@@ -115,11 +132,14 @@ export default function NewDelivery() {
     setOrderItems(items);
 
     if (cust) {
-      const { data: addrData } = await supabase
+      const { data: addrData, error: addrErr } = await supabase
         .from('customer_addresses')
         .select('*')
         .eq('customer_id', cust.id)
         .order('is_default', { ascending: false });
+      if (addrErr) {
+        console.error('Failed to load addresses:', addrErr.message);
+      }
       const addrs = (addrData || []) as CustomerAddress[];
       setAddresses(addrs);
       const defaultAddr = addrs.find((a) => a.is_default);
@@ -218,7 +238,7 @@ export default function NewDelivery() {
     }
 
     // Warn if scheduled date is in the past
-    const today = new Date().toISOString().split('T')[0];
+    const today = localToday();
     if (scheduledDate < today) {
       toast('warning', 'Scheduled date is in the past — delivery will be created anyway');
     }

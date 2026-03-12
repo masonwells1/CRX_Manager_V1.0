@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { FileText } from 'lucide-react';
+import { localToday } from '../../lib/dateUtils';
 import type { StatementOptions } from '../../types';
 
 interface StatementPrintDialogProps {
@@ -19,7 +20,7 @@ export default function StatementPrintDialog({
   loading = false,
   defaultDate,
 }: StatementPrintDialogProps) {
-  const today = defaultDate || new Date().toISOString().split('T')[0];
+  const today = defaultDate || localToday();
 
   const [mode, setMode] = useState<'summary' | 'detailed'>('summary');
   const [showShares, setShowShares] = useState(true);

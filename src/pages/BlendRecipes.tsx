@@ -96,13 +96,17 @@ export default function BlendRecipes() {
   }, [toast]);
 
   const fetchProducts = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('products')
       .select('*')
       .eq('is_active', true)
       .order('product_name');
+    if (error) {
+      toast('error', 'Failed to load products: ' + error.message);
+      return;
+    }
     setProducts(data || []);
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     fetchRecipes();
@@ -127,11 +131,15 @@ export default function BlendRecipes() {
         timing: recipe.timing || '',
       });
       // Load items
-      const { data } = await supabase
+      const { data, error: itemsErr } = await supabase
         .from('blend_recipe_items')
         .select('*, product:products(product_name)')
         .eq('recipe_id', recipe.id)
         .order('sort_order');
+      if (itemsErr) {
+        toast('error', 'Failed to load recipe items: ' + itemsErr.message);
+        return;
+      }
       setEditItems(
         ((data || []) as RecipeItemDbRow[]).map((item) => ({
           id: item.id,
@@ -243,11 +251,14 @@ export default function BlendRecipes() {
           .single();
         if (error) throw error;
 
-        const { data: items } = await supabase
+        const { data: items, error: itemsErr } = await supabase
           .from('blend_recipe_items')
           .select('*')
           .eq('recipe_id', recipe.id)
           .order('sort_order');
+        if (itemsErr) {
+          console.error('Failed to load recipe items for duplicate:', itemsErr.message);
+        }
 
         if (items && items.length > 0) {
           const copies = (items as RecipeItemDbRow[]).map((item) => ({

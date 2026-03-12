@@ -37,19 +37,27 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
   }, []);
 
   const fetchTags = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('note_tags')
       .select('*')
       .order('name');
+    if (error) {
+      console.error('Failed to load tags:', error.message);
+      return;
+    }
     setTags((data || []) as NoteTag[]);
   };
 
   const fetchProfiles = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('id, full_name')
       .eq('is_active', true)
       .order('full_name');
+    if (error) {
+      console.error('Failed to load profiles:', error.message);
+      return;
+    }
     setProfiles((data || []) as Profile[]);
   };
 

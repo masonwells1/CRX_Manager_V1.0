@@ -17,6 +17,7 @@ import { supabase, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
+import { localToday } from '../lib/dateUtils';
 import type { Product, Customer } from '../types';
 
 interface LocalItem {
@@ -61,7 +62,7 @@ export default function NewOrder() {
 
   const [customerId, setCustomerId] = useState('');
   const [orderName, setOrderName] = useState('');
-  const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
+  const [orderDate, setOrderDate] = useState(localToday());
   const [customerPoNumber, setCustomerPoNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);

@@ -15,6 +15,7 @@ import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { Order } from '../types';
+import { getSeasonDates } from '../utils/season';
 
 interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
@@ -37,11 +38,15 @@ export default function Orders() {
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
   const fetchOrders = useCallback(async () => {
+    const { start: seasonStart, end: seasonEnd } = getSeasonDates();
+    const QUERY_LIMIT = 500;
     const { data: ordersData, error: ordersError } = await supabase
       .from('orders')
       .select('*, customer:customers(farm_name, parent_customer_id)')
+      .gte('order_date', seasonStart)
+      .lte('order_date', seasonEnd)
       .order('order_date', { ascending: false })
-      .limit(500);
+      .limit(QUERY_LIMIT);
 
     if (ordersError) {
       console.error('Failed to load orders:', ordersError.message);
@@ -50,10 +55,15 @@ export default function Orders() {
       return;
     }
 
+    if (ordersData && ordersData.length === QUERY_LIMIT) {
+      toast('error', `Showing first ${QUERY_LIMIT} orders — some orders may be hidden. Contact admin if you need the full list.`);
+    }
+
+    const orderIds = (ordersData || []).map((o: Record<string, unknown>) => (o as { id: string }).id);
     const { data: itemsData, error: itemsError } = await supabase
       .from('order_items')
       .select('order_id, total_units_needed, quantity_delivered')
-      .limit(2000);
+      .in('order_id', orderIds.length > 0 ? orderIds : ['__none__']);
 
     if (itemsError) {
       console.error('Failed to load order items:', itemsError.message);

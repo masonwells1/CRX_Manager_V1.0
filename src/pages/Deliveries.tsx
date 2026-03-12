@@ -29,6 +29,7 @@ import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { generateLoadSheetPdf } from '../lib/loadSheetPdf';
+import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import type { Delivery, Profile } from '../types';
 
 /* ─── Row type ─── */
@@ -40,20 +41,20 @@ interface DeliveryRow extends Delivery {
 }
 
 /* ─── Helpers ─── */
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => localToday();
 const addDays = (d: string, n: number) => {
-  const dt = new Date(d);
+  const dt = parseLocalDate(d);
   dt.setDate(dt.getDate() + n);
-  return dt.toISOString().slice(0, 10);
+  return formatLocalDate(dt);
 };
 const weekStart = () => {
   const d = new Date();
   const day = d.getDay();
   d.setDate(d.getDate() - day);
-  return d.toISOString().slice(0, 10);
+  return formatLocalDate(d);
 };
 const dayLabel = (d: string) => {
-  const dt = new Date(d + 'T12:00:00');
+  const dt = parseLocalDate(d);
   return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 };
 
@@ -123,30 +124,42 @@ export default function Deliveries() {
   const isDriver = role === 'driver';
 
   const fetchDrivers = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('role', 'driver')
       .eq('is_active', true)
       .order('full_name');
+    if (error) {
+      toast('error', 'Failed to load drivers: ' + error.message);
+      return;
+    }
     setDrivers((data || []) as Profile[]);
-  }, []);
+  }, [toast]);
 
   const fetchCustomers = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('customers')
       .select('id, farm_name')
       .eq('is_active', true)
       .order('farm_name')
       .limit(500);
+    if (error) {
+      toast('error', 'Failed to load customers: ' + error.message);
+      return;
+    }
     setCustomers((data || []) as { id: string; farm_name: string }[]);
-  }, []);
+  }, [toast]);
 
   const fetchRemainderCount = useCallback(async () => {
-    const { count } = await supabase
+    const { count, error } = await supabase
       .from('delivery_remainders')
       .select('*', { count: 'exact', head: true })
       .eq('status', 'pending');
+    if (error) {
+      console.error('Failed to load remainder count:', error.message);
+      return;
+    }
     setRemainderCount(count || 0);
   }, []);
 
@@ -174,10 +187,13 @@ export default function Deliveries() {
     const deliveryIds = (delData || []).map((d) => d.id);
     const countMap: Record<string, number> = {};
     if (deliveryIds.length > 0) {
-      const { data: itemCounts } = await supabase
+      const { data: itemCounts, error: itemCountErr } = await supabase
         .from('delivery_items')
         .select('delivery_id')
         .in('delivery_id', deliveryIds.slice(0, 500));
+      if (itemCountErr) {
+        console.error('Failed to load delivery item counts:', itemCountErr.message);
+      }
       (itemCounts || []).forEach((item) => {
         countMap[item.delivery_id] = (countMap[item.delivery_id] || 0) + 1;
       });
@@ -191,10 +207,13 @@ export default function Deliveries() {
     )];
     const parentNameMap: Record<string, string> = {};
     if (parentIds.length > 0) {
-      const { data: parents } = await supabase
+      const { data: parents, error: parentErr } = await supabase
         .from('customers')
         .select('id, farm_name')
         .in('id', parentIds);
+      if (parentErr) {
+        console.error('Failed to load parent customers:', parentErr.message);
+      }
       (parents || []).forEach((p) => { parentNameMap[p.id] = p.farm_name; });
     }
 
@@ -224,19 +243,24 @@ export default function Deliveries() {
   useEffect(() => {
     if (!isDriver) return;
     (async () => {
-      const { data } = await supabase
+      const { data, error: unassignedErr } = await supabase
         .from('deliveries')
         .select('*, customer:customers(farm_name, parent_customer_id)')
         .is('assigned_driver', null)
         .in('status', ['scheduled'])
         .order('scheduled_date')
         .limit(20);
+      if (unassignedErr) {
+        console.error('Failed to load unassigned deliveries:', unassignedErr.message);
+        return;
+      }
       const pIds = [...new Set(
         (data || []).map((d: Record<string, unknown>) => (d.customer as { parent_customer_id?: string })?.parent_customer_id).filter(Boolean) as string[]
       )];
       const pMap: Record<string, string> = {};
       if (pIds.length > 0) {
-        const { data: parents } = await supabase.from('customers').select('id, farm_name').in('id', pIds);
+        const { data: parents, error: pErr } = await supabase.from('customers').select('id, farm_name').in('id', pIds);
+        if (pErr) console.error('Failed to load parent customers:', pErr.message);
         (parents || []).forEach((p) => { pMap[p.id] = p.farm_name; });
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -476,7 +500,7 @@ export default function Deliveries() {
         toast('error', sanitizeError(error));
       } else {
         batchRescheduleIdem.resetKey();
-        toast('success', `Rescheduled ${ids.length} delivery(ies) to ${new Date(rescheduleDate).toLocaleDateString()}`);
+        toast('success', `Rescheduled ${ids.length} delivery(ies) to ${parseLocalDate(rescheduleDate).toLocaleDateString()}`);
         setSelected(new Set());
         setShowReschedule(false);
         setRescheduleDate('');
@@ -587,7 +611,7 @@ export default function Deliveries() {
         <div className="flex items-center justify-between text-xs text-gray-400">
           <div className="flex items-center gap-1">
             <Calendar className="w-3 h-3" />
-            <span>{new Date(d.scheduled_date).toLocaleDateString()}</span>
+            <span>{parseLocalDate(d.scheduled_date).toLocaleDateString()}</span>
           </div>
           {d.delivery_window_start && (
             <div className="flex items-center gap-1">
@@ -686,7 +710,7 @@ export default function Deliveries() {
                   )}
                   <div className="flex items-center gap-2 text-gray-400 text-xs">
                     <Calendar className="w-3 h-3" />
-                    <span>{new Date(d.scheduled_date).toLocaleDateString()}</span>
+                    <span>{parseLocalDate(d.scheduled_date).toLocaleDateString()}</span>
                   </div>
                   <Button
                     size="sm"
@@ -769,7 +793,7 @@ export default function Deliveries() {
       header: 'Scheduled',
       sortable: true,
       render: (row) => {
-        const d = new Date(row.scheduled_date);
+        const d = parseLocalDate(row.scheduled_date);
         const window = row.delivery_window_start
           ? ` ${row.delivery_window_start}${row.delivery_window_end ? '-' + row.delivery_window_end : ''}`
           : '';

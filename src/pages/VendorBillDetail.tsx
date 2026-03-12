@@ -25,6 +25,7 @@ import { supabase } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
+import { localToday, parseLocalDate } from '../lib/dateUtils';
 import type { VendorBill, VendorPayment } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -51,7 +52,7 @@ export default function VendorBillDetail() {
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState('check');
   const [payRef, setPayRef] = useState('');
-  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
+  const [payDate, setPayDate] = useState(localToday());
   const [payNotes, setPayNotes] = useState('');
   const [paying, setPaying] = useState(false);
 
@@ -60,7 +61,7 @@ export default function VendorBillDetail() {
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localToday();
 
   const fmt = (cents: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
@@ -292,7 +293,7 @@ export default function VendorBillDetail() {
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
           <div>
             <span className="text-xs text-secondary">Bill Date</span>
-            <p className="font-medium">{new Date(bill.bill_date).toLocaleDateString()}</p>
+            <p className="font-medium">{parseLocalDate(bill.bill_date).toLocaleDateString()}</p>
           </div>
           <div>
             <span className="text-xs text-secondary">Payment Terms</span>

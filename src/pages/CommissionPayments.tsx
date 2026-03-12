@@ -16,6 +16,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
+import { localToday } from '../lib/dateUtils';
 
 interface CommissionPaymentRow {
   [k: string]: unknown;
@@ -65,7 +66,7 @@ export default function CommissionPayments() {
   const [selectedCommissions, setSelectedCommissions] = useState<Set<string>>(new Set());
   const [payMethod, setPayMethod] = useState('check');
   const [payRef, setPayRef] = useState('');
-  const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
+  const [payDate, setPayDate] = useState(localToday());
   const [payNotes, setPayNotes] = useState('');
   const [creating, setCreating] = useState(false);
 
@@ -107,7 +108,7 @@ export default function CommissionPayments() {
   }, [fetchPayments]);
 
   const fetchUnpaid = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('commissions')
       .select(`
         id, order_number, customer_name, order_date, commission_amount,
@@ -117,6 +118,11 @@ export default function CommissionPayments() {
       .neq('status', 'paid')
       .order('order_date', { ascending: false })
       .limit(500);
+
+    if (error) {
+      toast('error', 'Failed to load unpaid commissions: ' + error.message);
+      return;
+    }
 
     setUnpaidCommissions(
       ((data || []) as Array<Record<string, unknown> & { recipient?: { full_name?: string } }>).map((c) => ({
@@ -132,7 +138,7 @@ export default function CommissionPayments() {
     setSelectedCommissions(new Set());
     setPayMethod('check');
     setPayRef('');
-    setPayDate(new Date().toISOString().split('T')[0]);
+    setPayDate(localToday());
     setPayNotes('');
     setShowCreate(true);
   };

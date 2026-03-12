@@ -56,13 +56,16 @@ export default function LogbookReport() {
 
     async function loadEntities() {
       if (tab === 'customer') {
-        const { data: rows } = await supabase.from('customers').select('id, farm_name').order('farm_name').limit(500);
+        const { data: rows, error } = await supabase.from('customers').select('id, farm_name').order('farm_name').limit(500);
+        if (error) { toast('error', 'Failed to load customers'); return; }
         setEntities((rows || []).map((r) => ({ id: r.id, label: r.farm_name })));
       } else if (tab === 'applicator') {
-        const { data: rows } = await supabase.from('profiles').select('id, full_name, role').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name').limit(200);
+        const { data: rows, error } = await supabase.from('profiles').select('id, full_name, role').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name').limit(200);
+        if (error) { toast('error', 'Failed to load applicators'); return; }
         setEntities((rows || []).map((r) => ({ id: r.id, label: r.full_name })));
       } else if (tab === 'field') {
-        const { data: rows } = await supabase.from('fields').select('id, field_name, customer:customers(farm_name)').eq('is_active', true).order('field_name').limit(500);
+        const { data: rows, error } = await supabase.from('fields').select('id, field_name, customer:customers(farm_name)').eq('is_active', true).order('field_name').limit(500);
+        if (error) { toast('error', 'Failed to load fields'); return; }
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         setEntities(((rows || []) as any[]).map((r) => ({ id: r.id, label: `${r.field_name} — ${r.customer?.farm_name || 'Unknown'}` })));
       }

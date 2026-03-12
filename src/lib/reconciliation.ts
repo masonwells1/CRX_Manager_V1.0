@@ -585,6 +585,8 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .select('order_id, quantity, price_per_unit'),
     ]);
 
+    if (ordersRes.error) throw new Error(`Orders query failed: ${ordersRes.error.message}`);
+    if (itemsRes.error) throw new Error(`Order items query failed: ${itemsRes.error.message}`);
     const orders = (ordersRes.data ?? []) as OrderRow[];
     const items = (itemsRes.data ?? []) as OrderItemRow[];
     const disc = checkOrderTotals(orders, items);
@@ -618,6 +620,8 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .select('product_id, transaction_type, quantity'),
     ]);
 
+    if (invRes.error) throw new Error(`Inventory query failed: ${invRes.error.message}`);
+    if (txRes.error) throw new Error(`Inventory transactions query failed: ${txRes.error.message}`);
     const inventory = (invRes.data ?? []).map((r: Record<string, unknown>) => ({
       id: r.id as string,
       product_id: r.product_id as string,
@@ -657,6 +661,8 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .select('invoice_id, amount_cents'),
     ]);
 
+    if (invoiceRes.error) throw new Error(`Invoices query failed: ${invoiceRes.error.message}`);
+    if (allocRes.error) throw new Error(`Payment allocations query failed: ${allocRes.error.message}`);
     const invoices = (invoiceRes.data ?? []) as InvoiceRow[];
     const allocations = (allocRes.data ?? []) as PaymentAllocationRow[];
 
@@ -697,9 +703,10 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
   // ── Check 5: Commission splits ─────────────────────────────────
   try {
-    const { data } = await supabase
+    const { data, error: commErr } = await supabase
       .from('commissions')
       .select('order_id, order_number, split_percentage');
+    if (commErr) throw new Error(`Commissions query failed: ${commErr.message}`);
 
     const commissions = (data ?? []) as CommissionRow[];
     const disc = checkCommissionSplits(commissions);
@@ -733,6 +740,8 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .select('source_id, is_active'),
     ]);
 
+    if (quotesRes.error) throw new Error(`Quotes query failed: ${quotesRes.error.message}`);
+    if (holdsRes.error) throw new Error(`Holds query failed: ${holdsRes.error.message}`);
     const quotes = (quotesRes.data ?? []) as QuoteHoldRow[];
     const holds = (holdsRes.data ?? []) as HoldRow[];
     const disc = checkQuoteHoldParity(quotes, holds);
@@ -765,6 +774,8 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .select('product_id, quantity, invoices(order_id)'),
     ]);
 
+    if (deliveryItemsRes.error) throw new Error(`Delivery items query failed: ${deliveryItemsRes.error.message}`);
+    if (invoiceItemsRes.error) throw new Error(`Invoice items query failed: ${invoiceItemsRes.error.message}`);
     const deliveryItems = (deliveryItemsRes.data ?? []).map((r: Record<string, unknown>) => ({
       order_id: (r.deliveries as Record<string, unknown>)?.order_id as string,
       product_id: r.product_id as string,
@@ -809,6 +820,8 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .gt('quantity_remaining', 0),
     ]);
 
+    if (invPrebookRes.error) throw new Error(`Inventory prebook query failed: ${invPrebookRes.error.message}`);
+    if (orderItemsRes.error) throw new Error(`Order items remaining query failed: ${orderItemsRes.error.message}`);
     const inventoryPrebook = (invPrebookRes.data ?? []) as InventoryPrebookRow[];
     const orderItemsRemaining = (orderItemsRes.data ?? []) as OrderItemRemainingRow[];
     const disc = checkPrebookedInventory(inventoryPrebook, orderItemsRemaining);
@@ -832,10 +845,11 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
   // ── Check 9: Return-Credit Linkage ──────────────────────────────
   try {
-    const { data: returnsData } = await supabase
+    const { data: returnsData, error: retErr } = await supabase
       .from('returns')
       .select('id, return_number, status, credit_invoice_id')
       .is('deleted_at', null);
+    if (retErr) throw new Error(`Returns query failed: ${retErr.message}`);
 
     const returns = (returnsData ?? []) as ReturnCheckRow[];
     const disc = checkReturnCreditLinkage(returns);
@@ -859,10 +873,11 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
   // ── Check 10: Customer AR Consistency ───────────────────────────
   try {
-    const { data: arInvoiceData } = await supabase
+    const { data: arInvoiceData, error: arErr } = await supabase
       .from('invoices')
       .select('id, invoice_number, customer_id, balance_cents, status')
       .is('deleted_at', null);
+    if (arErr) throw new Error(`AR invoices query failed: ${arErr.message}`);
 
     const arInvoices = (arInvoiceData ?? []) as CustomerARInvoiceRow[];
     const disc = checkCustomerARConsistency(arInvoices);

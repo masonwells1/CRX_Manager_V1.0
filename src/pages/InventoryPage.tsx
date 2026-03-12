@@ -17,6 +17,7 @@ import { computeSeason } from '../utils/season';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import { localToday, parseLocalDate } from '../lib/dateUtils';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
 interface InventoryRow extends Inventory {
@@ -159,7 +160,7 @@ export default function InventoryPage() {
       .from('inventory_holds')
       .select('product_id, quantity')
       .eq('is_active', true)
-      .or(`expires_at.is.null,expires_at.gte.${new Date().toISOString().split('T')[0]}`);
+      .or(`expires_at.is.null,expires_at.gte.${localToday()}`);
 
     const poFetch = supabase
       .from('purchase_order_items')
@@ -319,7 +320,7 @@ export default function InventoryPage() {
         creator:profiles!inventory_holds_created_by_fkey(full_name)
       `)
       .eq('is_active', true)
-      .or(`expires_at.is.null,expires_at.gte.${new Date().toISOString().split('T')[0]}`)
+      .or(`expires_at.is.null,expires_at.gte.${localToday()}`)
       .order('created_at', { ascending: false });
 
     if (error) {
@@ -1160,7 +1161,7 @@ export default function InventoryPage() {
                       </td>
                       <td className="py-3 px-3 text-secondary text-xs max-w-xs truncate">{hold.notes || '—'}</td>
                       <td className="py-3 px-3 text-secondary text-xs">
-                        {hold.expires_at ? new Date(hold.expires_at).toLocaleDateString() : 'No expiration'}
+                        {hold.expires_at ? parseLocalDate(hold.expires_at).toLocaleDateString() : 'No expiration'}
                       </td>
                       <td className="py-3 px-3 text-secondary text-xs">{hold.creator_name}</td>
                       {isAdmin && (

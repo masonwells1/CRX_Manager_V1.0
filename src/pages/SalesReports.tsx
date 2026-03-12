@@ -10,6 +10,7 @@ import { supabase } from '../lib/db';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, fmtCurrency } from '../lib/reportPdf';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
+import { formatLocalDate } from '../lib/dateUtils';
 import type { SalesDetailRow, SalesSummaryRow, FarmGroupMember } from '../types';
 
 // ─── Types ──────────────────────────────────────────────────
@@ -28,15 +29,15 @@ function getPresetDates(preset: string): { start: string; end: string } {
     }
     case 'ytd': {
       const s = computeSeason(now);
-      return { start: seasonStartDate(s), end: now.toISOString().split('T')[0] };
+      return { start: seasonStartDate(s), end: formatLocalDate(now) };
     }
     case 'last30': {
       const d = new Date(now.getTime() - 30 * 86400000);
-      return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+      return { start: formatLocalDate(d), end: formatLocalDate(now) };
     }
     case 'last90': {
       const d = new Date(now.getTime() - 90 * 86400000);
-      return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+      return { start: formatLocalDate(d), end: formatLocalDate(now) };
     }
     default: return { start: '', end: '' };
   }

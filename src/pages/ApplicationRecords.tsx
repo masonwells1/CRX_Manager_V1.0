@@ -11,6 +11,7 @@ import { supabase } from '../lib/db';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { Download } from 'lucide-react';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
+import { formatLocalDate, parseLocalDate } from '../lib/dateUtils';
 import type { ApplicationRecord } from '../types';
 
 type AppRecordRow = ApplicationRecord & {
@@ -34,7 +35,7 @@ function getPresetDates(preset: string): { start: string; end: string } {
     }
     case 'last30': {
       const d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      return { start: d.toISOString().split('T')[0], end: now.toISOString().split('T')[0] };
+      return { start: formatLocalDate(d), end: formatLocalDate(now) };
     }
     default:
       return { start: '', end: '' };
@@ -147,7 +148,7 @@ export default function ApplicationRecords() {
       key: 'application_date',
       header: 'Date',
       sortable: true,
-      render: (r) => new Date(r.application_date).toLocaleDateString(),
+      render: (r) => parseLocalDate(r.application_date).toLocaleDateString(),
     },
     {
       key: 'customer_name',

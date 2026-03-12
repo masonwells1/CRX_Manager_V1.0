@@ -282,6 +282,14 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
         supabase.from('products').select('id, product_name, sku'),
         supabase.from('unit_conversions').select('*'),
       ]);
+
+      if (custRes.error || prodRes.error || convRes.error) {
+        const errMsg = custRes.error?.message || prodRes.error?.message || convRes.error?.message;
+        toast('error', `Failed to load reference data: ${errMsg}`);
+        setUploading(false);
+        return;
+      }
+
       const customers = custRes.data;
       const products = prodRes.data;
       const unitConversions = convRes.data || [];
@@ -376,11 +384,15 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 continue;
               }
 
-              const { data: product } = await supabase
+              const { data: product, error: prodDetailError } = await supabase
                 .from('products')
                 .select('current_cost, inventory_unit')
                 .eq('id', productId)
                 .single();
+
+              if (prodDetailError) {
+                console.error('Failed to load product details:', prodDetailError.message);
+              }
 
               const current_cost = product?.current_cost || 0;
               const price_per_unit = item.price_per_unit || 0;

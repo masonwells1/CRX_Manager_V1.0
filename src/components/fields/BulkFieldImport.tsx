@@ -92,12 +92,16 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   }, [open]);
 
   const fetchCustomers = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('customers')
       .select('id, farm_name')
       .eq('is_active', true)
       .order('farm_name')
       .limit(500);
+    if (error) {
+      toast('error', 'Failed to load customers');
+      return;
+    }
     setCustomers((data || []) as Customer[]);
   };
 

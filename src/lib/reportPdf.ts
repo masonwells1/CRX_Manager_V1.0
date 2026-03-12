@@ -6,6 +6,7 @@
  */
 
 import type jsPDF from 'jspdf';
+import { localToday } from './dateUtils';
 
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
   lastAutoTable: { finalY: number };
@@ -150,7 +151,7 @@ export async function generateReportPdf(options: ReportPdfOptions) {
 export async function downloadReportPdf(options: ReportPdfOptions) {
   const doc = await generateReportPdf(options);
   const filename = options.title.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase();
-  doc.save(`${filename}_${new Date().toISOString().split('T')[0]}.pdf`);
+  doc.save(`${filename}_${localToday()}.pdf`);
 }
 
 export { fmtCurrency };

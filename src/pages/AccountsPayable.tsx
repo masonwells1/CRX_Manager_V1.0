@@ -13,6 +13,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
+import { localToday } from '../lib/dateUtils';
 import type { APAgingRow, APDashboardSummary } from '../types';
 
 export default function AccountsPayable() {
@@ -21,7 +22,7 @@ export default function AccountsPayable() {
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<APDashboardSummary | null>(null);
   const [agingData, setAgingData] = useState<APAgingRow[]>([]);
-  const [asOfDate, setAsOfDate] = useState(new Date().toISOString().split('T')[0]);
+  const [asOfDate, setAsOfDate] = useState(localToday());
 
   const fmt = (cents: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);

@@ -25,6 +25,7 @@ import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
+import { parseLocalDate } from '../lib/dateUtils';
 import type {
   Delivery, DeliveryItem, DeliveryPhoto, DeliveryRemainder,
   Customer, CustomerAddress, Profile, OrderItem, DeliveryIssueType,
@@ -873,7 +874,7 @@ export default function DeliveryDetail() {
             </div>
             <p className="text-lg text-white font-medium">{customer?.farm_name}</p>
             <p className="text-sm text-gray-400 mt-1">
-              {new Date(delivery.scheduled_date).toLocaleDateString()}
+              {parseLocalDate(delivery.scheduled_date).toLocaleDateString()}
               {delivery.scheduled_time && ` at ${delivery.scheduled_time}`}
               {delivery.delivery_window_start && delivery.delivery_window_end &&
                 ` (${delivery.delivery_window_start} - ${delivery.delivery_window_end})`}
@@ -1284,7 +1285,7 @@ export default function DeliveryDetail() {
             <div>
               <p className="text-xs text-secondary">Scheduled</p>
               <p className="text-sm font-medium text-nav-dark">
-                {new Date(delivery.scheduled_date).toLocaleDateString()}
+                {parseLocalDate(delivery.scheduled_date).toLocaleDateString()}
                 {delivery.scheduled_time && ` at ${delivery.scheduled_time}`}
               </p>
               {delivery.delivery_window_start && delivery.delivery_window_end && (
