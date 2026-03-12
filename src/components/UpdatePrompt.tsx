@@ -19,7 +19,7 @@ export default function UpdatePrompt() {
     needRefresh: [needRefresh],
     updateServiceWorker,
   } = useRegisterSW({
-    onRegistered(r) {
+    onRegistered(r: ServiceWorkerRegistration | undefined) {
       // Periodically check for updates (every 60 minutes)
       if (r) {
         setInterval(() => r.update(), 60 * 60 * 1000);

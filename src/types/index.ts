@@ -185,7 +185,7 @@ export interface QuoteItem {
   product?: Product;
 }
 
-export type OrderStatus = 'confirmed' | 'partially_fulfilled' | 'fulfilled' | 'cancelled';
+export type OrderStatus = 'confirmed' | 'partially_fulfilled' | 'fulfilled' | 'cancelled' | 'voided';
 
 export interface Order {
   id: string;
