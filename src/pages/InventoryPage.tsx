@@ -168,7 +168,7 @@ export default function InventoryPage() {
     const poFetch = supabase
       .from('purchase_order_items')
       .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
-      .in('purchase_orders.status', ['draft', 'submitted', 'partially_received']);
+      .in('purchase_orders.status', ['submitted', 'partially_received']);
 
     const quoteFetch = supabase
       .from('quote_items')
@@ -510,7 +510,7 @@ export default function InventoryPage() {
       .from('purchase_order_items')
       .select('id, quantity_ordered, quantity_received, unit_cost, unit_size, product_id, purchase_order_id, purchase_orders!inner(po_number, status)')
       .eq('product_id', target.product_id)
-      .in('purchase_orders.status', ['draft', 'submitted', 'partially_received']);
+      .in('purchase_orders.status', ['submitted', 'partially_received']);
 
     if (!error && data) {
       const pos = (data as unknown as Array<{ id: string; quantity_ordered: number; quantity_received: number; unit_cost: number; unit_size: string | null; product_id: string; purchase_order_id: string; purchase_orders: { po_number: string; status: string } }>).map((item) => ({

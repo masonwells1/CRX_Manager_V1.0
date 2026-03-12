@@ -705,10 +705,10 @@ export default function Dashboard() {
                 <span className="text-sm text-secondary">Floor Stock</span>
               </div>
               <p className="text-2xl font-semibold font-heading text-nav-dark">
-                {(data.inventoryAvailable + data.inventoryPrebooked).toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
+                {data.inventoryAvailable.toLocaleString()} <span className="text-sm font-normal text-secondary">units</span>
               </p>
               <div className="flex gap-3 mt-1">
-                <span className="text-xs text-crx-green">{data.inventoryAvailable.toLocaleString()} available</span>
+                <span className="text-xs text-crx-green">{(data.inventoryAvailable - data.inventoryPrebooked).toLocaleString()} free</span>
                 <span className="text-xs text-amber-600">{data.inventoryPrebooked.toLocaleString()} pre-booked</span>
               </div>
             </Card>

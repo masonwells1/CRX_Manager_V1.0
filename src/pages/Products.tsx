@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload, FileUp, Download, FileText, Trash2, Eye, EyeOff } from 'lucide-react';
+import { Plus, Upload, FileUp, Download, FileText, Trash2, Eye, EyeOff, ChevronDown } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EditableDataTable, { type EditableColumn } from '../components/ui/EditableDataTable';
@@ -34,6 +34,7 @@ export default function Products() {
   const [deactivating, setDeactivating] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showSensitive, setShowSensitive] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
@@ -158,6 +159,86 @@ export default function Products() {
         orientation: showCostMarginPdf ? 'landscape' : 'portrait',
       });
       toast('success', `Downloaded PDF with ${selectedRows.length} product(s)`);
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setExporting(false);
+  };
+
+  // --- Download All (filtered) ---
+  const handleDownloadAllCSV = (includeCost: boolean) => {
+    const fmtMargin = (v: unknown) => v != null ? `${(Number(v) * 100).toFixed(1)}%` : '';
+    const baseCols = [
+      { key: 'product_name', header: 'Product Name' },
+      { key: 'sku', header: 'SKU' },
+      { key: 'category', header: 'Category' },
+      { key: 'vendor', header: 'Vendor' },
+      { key: 'container_size', header: 'Container Size' },
+      { key: 'unit_size', header: 'Unit' },
+    ];
+    const priceCols = includeCost
+      ? [
+          { key: 'current_cost', header: 'Cost', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier1_price', header: 'T1 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier1_margin', header: 'T1 Margin %', format: fmtMargin },
+          { key: 'tier2_price', header: 'T2 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier2_margin', header: 'T2 Margin %', format: fmtMargin },
+          { key: 'tier3_price', header: 'T3 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier3_margin', header: 'T3 Margin %', format: fmtMargin },
+        ]
+      : [
+          { key: 'tier1_price', header: 'Tier 1 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier2_price', header: 'Tier 2 Price', format: (v: unknown) => fmtCSV(v as number) },
+          { key: 'tier3_price', header: 'Tier 3 Price', format: (v: unknown) => fmtCSV(v as number) },
+        ];
+    const filename = includeCost ? 'product-price-sheet-internal' : 'product-sales-sheet';
+    exportToCSV(filtered as unknown as Record<string, unknown>[], [...baseCols, ...priceCols], filename);
+    toast('success', `Exported ${filtered.length} product(s) to CSV`);
+    setExportMenuOpen(false);
+  };
+
+  const handleDownloadAllPDF = async (includeCost: boolean) => {
+    setExporting(true);
+    setExportMenuOpen(false);
+    try {
+      const fmtMarginPdf = (v: unknown) => v != null ? String(v) : '';
+      const pdfData = filtered.map((p) => ({
+        ...p,
+        _t1_margin_str: p.tier1_margin != null ? `${(p.tier1_margin * 100).toFixed(1)}%` : '',
+        _t2_margin_str: p.tier2_margin != null ? `${(p.tier2_margin * 100).toFixed(1)}%` : '',
+        _t3_margin_str: p.tier3_margin != null ? `${(p.tier3_margin * 100).toFixed(1)}%` : '',
+      }));
+      const basePdfCols: ReportPdfColumn[] = [
+        { header: 'Product', key: 'product_name' },
+        { header: 'SKU', key: 'sku', format: (v) => String(v || '-') },
+        { header: 'Category', key: 'category', format: (v) => String(v || '-') },
+        { header: 'Size', key: 'container_size', format: (v) => v != null ? String(v) : '-' },
+        { header: 'Unit', key: 'unit_size', format: (v) => String(v || '-') },
+      ];
+      const pricePdfCols: ReportPdfColumn[] = includeCost
+        ? [
+            { header: 'Cost', key: 'current_cost', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T1 Price', key: 'tier1_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T1 Margin', key: '_t1_margin_str', align: 'right', format: fmtMarginPdf },
+            { header: 'T2 Price', key: 'tier2_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T2 Margin', key: '_t2_margin_str', align: 'right', format: fmtMarginPdf },
+            { header: 'T3 Price', key: 'tier3_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'T3 Margin', key: '_t3_margin_str', align: 'right', format: fmtMarginPdf },
+          ]
+        : [
+            { header: 'Tier 1 Price', key: 'tier1_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'Tier 2 Price', key: 'tier2_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+            { header: 'Tier 3 Price', key: 'tier3_price', align: 'right', format: (v) => v != null ? fmt(Number(v)) : '-' },
+          ];
+      const title = includeCost ? 'Product & Pricing — Internal' : 'Product Sales Sheet';
+      await downloadReportPdf({
+        title,
+        subtitle: `${filtered.length} active product(s) — ${new Date().toLocaleDateString()}`,
+        columns: [...basePdfCols, ...pricePdfCols],
+        data: pdfData as unknown as Record<string, unknown>[],
+        orientation: 'landscape',
+      });
+      toast('success', `Downloaded ${includeCost ? 'internal' : 'sales'} price sheet PDF`);
     } catch (err) {
       toast('error', sanitizeError(err));
     }
@@ -477,27 +558,66 @@ export default function Products() {
             />
           )}
         </div>
-        {isAdmin && (
-          <div className="flex gap-2">
+        <div className="flex gap-2">
+          {/* Download All dropdown */}
+          <div className="relative">
             <Button
               variant="secondary"
-              icon={<FileUp className="w-4 h-4" />}
-              onClick={() => setBulkProductImportOpen(true)}
+              icon={<Download className="w-4 h-4" />}
+              onClick={() => setExportMenuOpen((v) => !v)}
+              disabled={exporting || filtered.length === 0}
             >
-              Import Products
+              {exporting ? 'Exporting...' : 'Download'} <ChevronDown className="w-3 h-3 ml-1 inline" />
             </Button>
-            <Button
-              variant="secondary"
-              icon={<Upload className="w-4 h-4" />}
-              onClick={() => setBulkImportOpen(true)}
-            >
-              Update Pricing
-            </Button>
-            <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/products/new')}>
-              Add Product
-            </Button>
+            {exportMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setExportMenuOpen(false)} />
+                <div className="absolute right-0 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1">
+                  <p className="px-3 py-1.5 text-xs font-semibold text-secondary uppercase tracking-wide">PDF</p>
+                  <button onClick={() => handleDownloadAllPDF(false)} className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-gray-400" /> Sales Sheet (prices only)
+                  </button>
+                  {isAdmin && (
+                    <button onClick={() => handleDownloadAllPDF(true)} className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-gray-400" /> Internal (cost + margin)
+                    </button>
+                  )}
+                  <div className="border-t border-gray-100 my-1" />
+                  <p className="px-3 py-1.5 text-xs font-semibold text-secondary uppercase tracking-wide">CSV</p>
+                  <button onClick={() => handleDownloadAllCSV(false)} className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2">
+                    <Download className="w-4 h-4 text-gray-400" /> Sales Sheet (prices only)
+                  </button>
+                  {isAdmin && (
+                    <button onClick={() => handleDownloadAllCSV(true)} className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2">
+                      <Download className="w-4 h-4 text-gray-400" /> Internal (cost + margin)
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </div>
-        )}
+          {isAdmin && (
+            <>
+              <Button
+                variant="secondary"
+                icon={<FileUp className="w-4 h-4" />}
+                onClick={() => setBulkProductImportOpen(true)}
+              >
+                Import Products
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<Upload className="w-4 h-4" />}
+                onClick={() => setBulkImportOpen(true)}
+              >
+                Update Pricing
+              </Button>
+              <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/products/new')}>
+                Add Product
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       <Card padding={false}>

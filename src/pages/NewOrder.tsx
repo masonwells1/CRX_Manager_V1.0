@@ -105,7 +105,7 @@ export default function NewOrder() {
       supabase
         .from('purchase_order_items')
         .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
-        .in('purchase_orders.status', ['draft', 'submitted', 'partially_received']),
+        .in('purchase_orders.status', ['submitted', 'partially_received']),
     ]);
 
     if (customersRes.error) {
