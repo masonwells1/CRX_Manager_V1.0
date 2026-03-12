@@ -5,7 +5,7 @@
  */
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus } from 'lucide-react';
+import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -57,6 +57,11 @@ export default function OrderDetail() {
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [newStatus, setNewStatus] = useState('');
   const [changingStatus, setChangingStatus] = useState(false);
+
+  // Void order (fulfilled → voided, admin-only)
+  const [voidModalOpen, setVoidModalOpen] = useState(false);
+  const [voidReason, setVoidReason] = useState('');
+  const [voiding, setVoiding] = useState(false);
 
   const isAdmin = role === 'admin';
   const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled';
@@ -299,6 +304,41 @@ export default function OrderDetail() {
     }
   };
 
+  // ── Void Order (fulfilled → voided, admin-only) ───────────────────────
+  const handleVoidOrder = async () => {
+    if (!order || !profile) return;
+    setVoiding(true);
+    try {
+      const { data: voidResult, error } = await supabase.rpc('void_order', {
+        p_order_id: order.id,
+        p_performed_by: profile.id,
+        p_reason: voidReason.trim() || 'Voided by admin',
+      });
+      if (error) throw error;
+
+      const parts: string[] = ['Order voided.'];
+      if (voidResult?.inventory_products_restored > 0)
+        parts.push(`Inventory restored for ${voidResult.inventory_products_restored} product(s).`);
+      if (voidResult?.commissions_cancelled > 0)
+        parts.push(`${voidResult.commissions_cancelled} commission(s) cancelled.`);
+      if (voidResult?.draft_invoices_voided > 0)
+        parts.push(`${voidResult.draft_invoices_voided} draft invoice(s) voided.`);
+      if (voidResult?.posted_invoices_flagged > 0)
+        parts.push(`Admin notified about ${voidResult.posted_invoices_flagged} posted invoice(s).`);
+      if (voidResult?.paid_commissions_flagged > 0)
+        parts.push(`Admin notified about ${voidResult.paid_commissions_flagged} paid commission(s).`);
+
+      toast('success', parts.join(' '));
+      setVoidModalOpen(false);
+      setVoidReason('');
+      fetchOrder();
+    } catch (error: unknown) {
+      toast('error', sanitizeError(error));
+    } finally {
+      setVoiding(false);
+    }
+  };
+
   // ── Share management ──────────────────────────────────────────────────
   const openShareEditor = async () => {
     // Load customers for dropdown
@@ -489,17 +529,28 @@ export default function OrderDetail() {
             <h2 className="text-xl font-semibold font-heading text-nav-dark">
               {order.order_number}
             </h2>
+            {order.order_name && (
+              <p className="text-base font-medium text-nav-dark mt-0.5">{order.order_name}</p>
+            )}
             <p className="text-sm text-secondary mt-1">
               {customer?.farm_name || 'Unknown Customer'}
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {isAdmin && (
+            {isAdmin && order.status !== 'voided' && order.status !== 'cancelled' && (
               <button
                 onClick={() => { setNewStatus(order.status); setStatusModalOpen(true); }}
                 className="text-xs text-secondary hover:text-crx-green underline"
               >
                 Change Status
+              </button>
+            )}
+            {isAdmin && order.status === 'fulfilled' && (
+              <button
+                onClick={() => setVoidModalOpen(true)}
+                className="text-xs text-red-500 hover:text-red-700 underline font-medium"
+              >
+                Void Order
               </button>
             )}
             <Badge variant={statusToBadgeVariant[order.status] || 'default'} size="md">
@@ -565,6 +616,18 @@ export default function OrderDetail() {
           </div>
         </div>
       </Card>
+
+      {order.notes && (
+        <Card>
+          <div className="flex items-start gap-3">
+            <FileText className="w-4 h-4 text-secondary mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-xs text-secondary font-medium mb-1">Order Notes</p>
+              <p className="text-sm text-nav-dark whitespace-pre-wrap">{order.notes}</p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Linked Deliveries */}
       {deliveries.length > 0 && (
@@ -916,6 +979,49 @@ export default function OrderDetail() {
           <div className="flex justify-end gap-3">
             <Button variant="ghost" onClick={() => setStatusModalOpen(false)}>Cancel</Button>
             <Button onClick={handleStatusChange} loading={changingStatus} disabled={changingStatus}>Update Status</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Void Order Modal */}
+      <Modal open={voidModalOpen} onClose={() => { setVoidModalOpen(false); setVoidReason(''); }} title="Void Order">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3 bg-red-50 rounded-lg border border-red-200">
+            <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-red-700 space-y-1">
+              <p className="font-semibold">This action cannot be undone.</p>
+              <ul className="list-disc list-inside space-y-0.5 text-red-600">
+                <li>Inventory will be restored for all delivered items</li>
+                <li>Draft invoices will be voided</li>
+                <li>Pending commissions will be cancelled</li>
+                <li>Posted invoices and paid commissions require manual review</li>
+              </ul>
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">
+              Reason <span className="text-secondary font-normal">(optional)</span>
+            </label>
+            <textarea
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+              placeholder="e.g. Customer cancelled, duplicate order, data entry error..."
+              rows={3}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-400 resize-none"
+            />
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => { setVoidModalOpen(false); setVoidReason(''); }} disabled={voiding}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleVoidOrder}
+              loading={voiding}
+              disabled={voiding}
+              className="bg-red-600 hover:bg-red-700 text-white border-red-600 hover:border-red-700"
+            >
+              Void Order
+            </Button>
           </div>
         </div>
       </Modal>

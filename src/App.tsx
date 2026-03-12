@@ -8,6 +8,7 @@ import ProtectedRoute from './components/auth/ProtectedRoute';
 import AppLayout from './components/layout/AppLayout';
 import { checkEnvVars, EnvErrorScreen } from './components/EnvCheck';
 import { trackNavigation } from './lib/metrics';
+import UpdatePrompt from './components/UpdatePrompt';
 
 // Lazy-loaded pages — each page is only downloaded when the user navigates to it
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -102,6 +103,7 @@ function RootLayout() {
   return (
     <AuthProvider>
       <ToastProvider>
+        <UpdatePrompt />
         <ErrorBoundary>
           <NavigationTracker />
           <Suspense fallback={<PageLoader />}>

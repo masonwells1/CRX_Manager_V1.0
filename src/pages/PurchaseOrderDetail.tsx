@@ -11,7 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { notifyDamagedReceiving } from '../lib/notificationTriggers';
+import { notifyDamagedReceiving, notifyOverReceive } from '../lib/notificationTriggers';
 import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
@@ -182,6 +182,7 @@ export default function PurchaseOrderDetail() {
         p_items: itemsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
+        p_allow_over_receive: true,
       });
       if (error) throw error;
       receiveIdem.resetKey();
@@ -202,6 +203,26 @@ export default function PurchaseOrderDetail() {
           });
         if (damagedItems.length > 0) {
           notifyDamagedReceiving(po.po_number, damagedItems, po.id);
+        }
+
+        // AUDIT: Notify admins about over-received items
+        const overItems = itemsPayload
+          .filter((ip) => {
+            const poItem = items.find((i) => i.id === ip.po_item_id);
+            if (!poItem) return false;
+            const remaining = poItem.quantity_ordered - poItem.quantity_received;
+            return ip.quantity > remaining;
+          })
+          .map((ip) => {
+            const poItem = items.find((i) => i.id === ip.po_item_id);
+            return {
+              productName: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
+              quantityOrdered: poItem?.quantity_ordered || 0,
+              quantityReceived: ip.quantity,
+            };
+          });
+        if (overItems.length > 0) {
+          notifyOverReceive(po.po_number, overItems, po.id);
         }
       }
 
@@ -631,28 +652,36 @@ export default function PurchaseOrderDetail() {
               <div className="space-y-4">
                 {items.map((item) => {
                   const remaining = item.quantity_ordered - item.quantity_received;
-                  if (remaining <= 0) return null;
                   const ri = receiveItems[item.id];
                   if (!ri) return null;
+                  const enteredQty = parseFloat(ri.qty || '0');
+                  const isOverReceive = enteredQty > 0 && enteredQty > remaining;
 
                   return (
-                    <div key={item.id} className="border border-gray-100 rounded-xl p-4 space-y-3">
+                    <div
+                      key={item.id}
+                      className={`border rounded-xl p-4 space-y-3 ${isOverReceive ? 'border-orange-200 bg-orange-50/30' : 'border-gray-100'}`}
+                    >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-sm font-medium text-nav-dark">
                             {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
                           </p>
                           <p className="text-xs text-secondary">
-                            {remaining} remaining of {item.quantity_ordered}
+                            {remaining > 0 ? `${remaining} remaining` : 'Fully received'} of {item.quantity_ordered}
                             {item.unit_size && <span> ({item.unit_size})</span>}
                           </p>
+                          {isOverReceive && (
+                            <p className="text-xs text-orange-600 font-medium mt-0.5">
+                              ⚠ Over-receive: {enteredQty - remaining} extra — admin will be notified
+                            </p>
+                          )}
                         </div>
                         <div className="w-24">
                           <Input
                             type="number"
                             min="0"
                             step="any"
-                            max={String(remaining)}
                             value={ri.qty}
                             onChange={(e) => updateReceiveItem(item.id, 'qty', e.target.value)}
                             placeholder="0"
@@ -660,7 +689,7 @@ export default function PurchaseOrderDetail() {
                         </div>
                       </div>
 
-                      {parseFloat(ri.qty || '0') > 0 && (
+                      {enteredQty > 0 && (
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pl-4 border-l-2 border-crx-green/30">
                           <div>
                             <label className="block text-xs text-secondary mb-1">Condition</label>
@@ -734,12 +763,20 @@ export default function PurchaseOrderDetail() {
                 <tbody>
                   {reviewItems.map((item) => {
                     const ri = receiveItems[item.id];
+                    const enteredQty = parseFloat(ri.qty || '0');
+                    const remaining = item.quantity_ordered - item.quantity_received;
+                    const isOver = enteredQty > remaining;
                     return (
                       <tr key={item.id} className="border-b border-gray-50">
                         <td className="px-3 py-2 font-medium text-nav-dark">
                           {(item.product as unknown as { product_name: string })?.product_name || 'Unknown'}
                         </td>
-                        <td className="px-3 py-2 font-mono">{ri.qty}</td>
+                        <td className="px-3 py-2 font-mono">
+                          {ri.qty}
+                          {isOver && (
+                            <span className="text-xs text-orange-600 font-medium ml-1">⚠ over</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2">
                           <Badge variant={conditionVariant(ri.condition)}>
                             {conditionLabel(ri.condition)}

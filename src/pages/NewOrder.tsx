@@ -15,6 +15,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { useFormDraft } from '../hooks/useFormDraft';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
 import { localToday } from '../lib/dateUtils';
@@ -66,6 +67,30 @@ export default function NewOrder() {
   const [customerPoNumber, setCustomerPoNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);
+
+  // Draft persistence: auto-saves form to sessionStorage so data survives
+  // a PWA reload when the user switches away on mobile (e.g. to the calculator).
+  const draftState = { customerId, orderName, orderDate, customerPoNumber, notes, items };
+  const { draft, clearDraft } = useFormDraft<typeof draftState>('new-order', draftState);
+
+  // Restore draft on mount (runs once after loading completes)
+  const [draftRestored, setDraftRestored] = useState(false);
+  useEffect(() => {
+    if (!loading && !draftRestored && draft) {
+      setCustomerId(draft.customerId || '');
+      setOrderName(draft.orderName || '');
+      setOrderDate(draft.orderDate || localToday());
+      setCustomerPoNumber(draft.customerPoNumber || '');
+      setNotes(draft.notes || '');
+      if (draft.items && draft.items.length > 0) {
+        // Re-key items to avoid stale React keys
+        setItems(draft.items.map((item) => ({ ...item, _key: nextKey() })));
+      }
+      setDraftRestored(true);
+      toast('info', 'Draft restored — your previous entries have been recovered.');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   const [showProductModal, setShowProductModal] = useState(false);
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
@@ -249,6 +274,7 @@ export default function NewOrder() {
         checkMutationResult(poResult, 'Update customer PO number');
       }
 
+      clearDraft();
       toast('success', 'Order created successfully');
 
       // Show inventory warnings (non-blocking)

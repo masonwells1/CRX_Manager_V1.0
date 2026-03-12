@@ -211,7 +211,14 @@ export default function Orders() {
       key: 'order_number',
       header: 'Order #',
       sortable: true,
-      render: (row) => <span className="font-medium text-nav-dark">{row.order_number}</span>,
+      render: (row) => (
+        <div>
+          <span className="font-medium text-nav-dark">{row.order_number}</span>
+          {row.order_name && (
+            <p className="text-xs text-secondary mt-0.5">{row.order_name}</p>
+          )}
+        </div>
+      ),
     },
     {
       key: 'customer',

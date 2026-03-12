@@ -7,7 +7,10 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt' mode: when a new service worker is ready, fire a needRefresh
+      // event and let the user decide when to update.  This prevents the
+      // auto-reload that was wiping form data when switching away on mobile.
+      registerType: 'prompt',
       includeAssets: ['pwa-icon.svg', 'apple-touch-icon.png'],
       manifest: {
         name: 'Crop RX Solutions',
@@ -39,8 +42,9 @@ export default defineConfig({
         navigateFallback: 'index.html',
         // Aggressively clean up old caches — critical for Safari iOS
         cleanupOutdatedCaches: true,
-        clientsClaim: true,
-        skipWaiting: true,
+        // clientsClaim and skipWaiting removed: with registerType 'prompt' these
+        // would still cause immediate SW activation and page reloads on mobile.
+        // The UpdatePrompt component handles activation when the user consents.
         // Don't precache sw-doctor.js so it always loads from network
         globIgnores: ['**/sw-doctor.js'],
         runtimeCaching: [
