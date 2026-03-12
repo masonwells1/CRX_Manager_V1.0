@@ -13,6 +13,7 @@ export default function OfflineBanner() {
   const isOnline = useOnlineStatus();
   const [pendingCount, setPendingCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState(false);
   const [syncResult, setSyncResult] = useState<{ synced: number; failed: number } | null>(null);
 
   // Check pending count periodically
@@ -34,6 +35,7 @@ export default function OfflineBanner() {
   const handleSync = useCallback(async () => {
     setSyncing(true);
     setSyncResult(null);
+    setSyncError(false);
     try {
       const result = await syncPendingActions();
       setSyncResult(result);
@@ -45,6 +47,7 @@ export default function OfflineBanner() {
       }
     } catch (error) {
       console.error('Sync failed:', error);
+      setSyncError(true);
     }
     setSyncing(false);
   }, []);
@@ -90,6 +93,9 @@ export default function OfflineBanner() {
           <span className="text-red-600">
             {syncResult.failed} action{syncResult.failed !== 1 ? 's' : ''} failed to sync
           </span>
+        )}
+        {syncError && (
+          <span className="text-red-600">Sync failed — please try again</span>
         )}
       </div>
 

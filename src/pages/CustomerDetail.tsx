@@ -102,27 +102,34 @@ export default function CustomerDetail() {
   const blocker = useUnsavedChanges(isDirty);
 
   const fetchCustomer = useCallback(async () => {
-    const { data } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
+    if (error) {
+      toast('error', 'Failed to load customer');
+      setLoading(false);
+      return;
+    }
     if (data) {
       setCustomer(data);
       // Fetch parent customer name if set
       if (data.parent_customer_id) {
-        const { data: parent } = await supabase
+        const { data: parent, error: parentError } = await supabase
           .from('customers')
           .select('farm_name')
           .eq('id', data.parent_customer_id)
           .maybeSingle();
+        if (parentError) toast('error', 'Failed to load parent customer');
         if (parent) setParentName(parent.farm_name);
       }
     }
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [id]);
+  }, [id, toast]);
 
   const fetchAddresses = useCallback(async () => {
-    const { data } = await supabase.from('customer_addresses').select('*').eq('customer_id', id).order('created_at');
+    const { data, error } = await supabase.from('customer_addresses').select('*').eq('customer_id', id).order('created_at');
+    if (error) toast('error', 'Failed to load addresses');
     setAddresses(data || []);
-  }, [id]);
+  }, [id, toast]);
 
   useEffect(() => {
     if (!initialLoadDone.current) return;
@@ -132,7 +139,8 @@ export default function CustomerDetail() {
   useEffect(() => {
     // Fetch all customers for parent selector
     void supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500)
-      .then(({ data }) => setAllCustomers((data || []) as { id: string; farm_name: string }[]));
+      .then(({ data }) => setAllCustomers((data || []) as { id: string; farm_name: string }[]))
+      .catch(() => toast('error', 'Failed to load customer list'));
 
     if (!isNew && id) {
       fetchCustomer();
@@ -147,7 +155,10 @@ export default function CustomerDetail() {
     setTabLoading(true);
     if (selectedTab === 'fields') {
       const { data, error: fieldError } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
-      if (fieldError) console.error('Failed to load fields:', fieldError);
+      if (fieldError) {
+        console.error('Failed to load fields:', fieldError);
+        toast('error', 'Failed to load fields');
+      }
       const rows = ((data || []) as FieldGeoRow[]).map((f) => ({
         ...f,
         customer_name: f.customer_name || '',
@@ -230,6 +241,9 @@ export default function CustomerDetail() {
         supabase.rpc('get_customer_statement', { p_customer_id: id, p_start_date: ninetyDaysAgo, p_end_date: today }),
         supabase.from('prepay_credits').select('*').eq('customer_id', id!).gt('balance_cents', 0),
       ]);
+      if (agingRes.error) toast('error', 'Failed to load AR aging');
+      if (txnRes.error) toast('error', 'Failed to load transactions');
+      if (prepayRes.error) toast('error', 'Failed to load prepay credits');
       const allAging = (agingRes.data || []) as AgingRow[];
       const myAging = allAging.find((a) => a.customer_id === id) || null;
       setAging(myAging);
@@ -239,15 +253,17 @@ export default function CustomerDetail() {
       setFinancialsLoading(false);
     } else if (selectedTab === 'history') {
       // GAP FIX #15: Fetch purchase history — all products this customer has ordered
-      const { data: orderIds } = await supabase
+      const { data: orderIds, error: orderIdsError } = await supabase
         .from('orders')
         .select('id')
         .eq('customer_id', id);
+      if (orderIdsError) toast('error', 'Failed to load order history');
       if (orderIds && orderIds.length > 0) {
-        const { data: allItems } = await supabase
+        const { data: allItems, error: allItemsError } = await supabase
           .from('order_items')
           .select('product_name, price_per_unit, total_units_needed, total_price, quantity_delivered, section_name, order_id')
           .in('order_id', orderIds.map((o: { id: string }) => o.id));
+        if (allItemsError) toast('error', 'Failed to load purchase history');
         // Aggregate by product
         const productMap: Record<string, PurchaseHistoryItem> = {};
         (allItems || []).forEach((item: { product_name: string; total_units_needed: number | null; total_price: number | null; quantity_delivered: number | null }) => {
@@ -275,6 +291,7 @@ export default function CustomerDetail() {
   }, [tab, id, isNew, fetchTabData]);
 
   const handleSave = async () => {
+    if (saving) return;
     if (!customer.farm_name) {
       toast('error', 'Farm name is required');
       return;

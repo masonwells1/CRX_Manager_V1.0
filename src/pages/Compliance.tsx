@@ -103,9 +103,10 @@ export default function Compliance() {
   }, [toast]);
 
   const fetchCustomers = useCallback(async () => {
-    const { data } = await supabase.from('customers').select('id, farm_name').order('farm_name');
+    const { data, error } = await supabase.from('customers').select('id, farm_name').order('farm_name');
+    if (error) toast('error', 'Failed to load customers');
     setCustomers(data || []);
-  }, []);
+  }, [toast]);
 
   const fetchRUPProducts = useCallback(async () => {
     const { data, error } = await supabase

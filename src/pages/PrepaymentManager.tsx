@@ -187,6 +187,7 @@ export default function PrepaymentManager() {
           p_bucket_label: editForm.bucket_label || null,
           p_notes: editForm.notes || null,
           p_performed_by: profile?.id,
+          p_idempotency_key: crypto.randomUUID(),
         });
         if (error) throw error;
         const result = data as { success: boolean };
@@ -222,6 +223,7 @@ export default function PrepaymentManager() {
           p_credit_id: deleteCredit.id,
           p_reason: deleteReason.trim(),
           p_performed_by: profile?.id,
+          p_idempotency_key: crypto.randomUUID(),
         });
         if (error) throw error;
         const result = data as { success: boolean };
@@ -248,13 +250,15 @@ export default function PrepaymentManager() {
       .maybeSingle()
       .then(({ data }) => {
         if (data?.setting_value) setBucketLabels(JSON.parse(data.setting_value as string));
-      });
+      })
+      .catch(() => {});
     supabase
       .from('customers')
       .select('id, farm_name')
       .eq('is_active', true)
       .order('farm_name')
-      .then(({ data }) => setAllCustomers(data || []));
+      .then(({ data }) => setAllCustomers(data || []))
+      .catch(() => {});
   }, []);
 
   const openNewCheck = () => {
@@ -298,6 +302,7 @@ export default function PrepaymentManager() {
         await supabase.rpc('increment_customer_prepay', {
           p_customer_id: checkForm.customer_id,
           p_amount_cents: totalCents,
+          p_idempotency_key: crypto.randomUUID(),
         }).then(async ({ error }) => {
           // Fallback: direct update if RPC doesn't exist
           if (error) {

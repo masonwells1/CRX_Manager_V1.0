@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
+import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition } from '../types';
 
@@ -343,6 +344,7 @@ export default function PurchaseOrderDetail() {
         .select();
       checkMutationResult(result, 'Submit purchase order');
       toast('success', `Purchase order ${po.po_number} submitted`);
+      await logActivity('po_submitted', `PO ${po.po_number} submitted`, profile.id, 'purchase_order', po.id);
       fetchPO();
     } catch (err: unknown) {
       toast('error', sanitizeError(err));

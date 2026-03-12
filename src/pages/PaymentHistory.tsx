@@ -150,6 +150,7 @@ export default function PaymentHistory() {
           p_allocation_set_id: voidPayment.id,
           p_reason: voidReason.trim(),
           p_performed_by: profile?.id,
+          p_idempotency_key: crypto.randomUUID(),
         });
         if (error) throw error;
         const result = data as { success: boolean; reversed_cents: number; invoices_affected: number };

@@ -183,6 +183,7 @@ export default function PurchaseOrders() {
         const { error } = await supabase.rpc('cancel_purchase_order', {
           p_po_id: po.id,
           p_performed_by: profile?.id,
+          p_idempotency_key: crypto.randomUUID(),
         });
         if (error) {
           toast('error', `Failed to cancel PO ${po.po_number}: ${error.message}`);

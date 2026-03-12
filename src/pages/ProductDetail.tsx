@@ -69,11 +69,16 @@ export default function ProductDetail() {
   }, [product]);
 
   const fetchProduct = useCallback(async () => {
-    const { data } = await supabase.from('products').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await supabase.from('products').select('*').eq('id', id).maybeSingle();
+    if (error) {
+      toast('error', 'Failed to load product');
+      setLoading(false);
+      return;
+    }
     if (data) setProduct(data);
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [id]);
+  }, [id, toast]);
 
   const fetchCostHistory = useCallback(async () => {
     const { data } = await supabase
@@ -97,7 +102,7 @@ export default function ProductDetail() {
   useEffect(() => {
     supabase.from('unit_conversions').select('*').order('unit').then(({ data }) => {
       setUnitConversions((data || []) as UnitConversion[]);
-    });
+    }).catch((err) => console.error('Failed to load unit conversions:', err));
     // Fetch distinct values for combobox dropdowns
     supabase.from('products').select('category, vendor, manufacturer').then(({ data }) => {
       if (!data) return;
@@ -107,7 +112,7 @@ export default function ProductDetail() {
       setCategoryOptions(cats);
       setVendorOptions(vends);
       setManufacturerOptions(mfrs);
-    });
+    }).catch((err) => console.error('Failed to load product options:', err));
   }, []);
 
   const handleSave = async () => {

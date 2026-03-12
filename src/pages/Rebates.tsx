@@ -103,6 +103,9 @@ export default function Rebates() {
       supabase.from('customers').select('id, farm_name').order('farm_name'),
       supabase.from('orders').select('id, order_number, customer_id').order('order_date', { ascending: false }).limit(200),
     ]);
+    if (prodRes.error) toast('error', 'Failed to load products');
+    if (custRes.error) toast('error', 'Failed to load customers');
+    if (ordRes.error) toast('error', 'Failed to load orders');
     setProducts(prodRes.data || []);
     setCustomers(custRes.data || []);
     setOrders(ordRes.data || []);
@@ -261,7 +264,12 @@ export default function Rebates() {
     setSaving(true);
 
     // Generate claim number
-    const { count } = await supabase.from('rebate_claims').select('id', { count: 'exact', head: true });
+    const { count, error: countError } = await supabase.from('rebate_claims').select('id', { count: 'exact', head: true });
+    if (countError) {
+      toast('error', 'Failed to generate claim number');
+      setSaving(false);
+      return;
+    }
     const claimNum = `RC-${new Date().getFullYear()}-${String((count || 0) + 1).padStart(4, '0')}`;
 
     const payload = {

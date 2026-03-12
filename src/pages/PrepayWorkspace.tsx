@@ -78,7 +78,8 @@ export default function PrepayWorkspace() {
       .gt('prepay_balance_cents', 0)
       .eq('is_active', true)
       .order('farm_name')
-      .then(({ data }) => setCustomers(data || []));
+      .then(({ data }) => setCustomers(data || []))
+      .catch(() => {});
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -107,6 +108,8 @@ export default function PrepayWorkspace() {
         .order('due_date', { ascending: true }),
     ]);
 
+    if (bucketsRes.error) toast('error', 'Failed to load prepay credits');
+    if (invoicesRes.error) toast('error', 'Failed to load invoices');
     setBuckets((bucketsRes.data || []) as PrepayBucket[]);
     setInvoices((invoicesRes.data || []) as UnpaidInvoice[]);
     setLoading(false);

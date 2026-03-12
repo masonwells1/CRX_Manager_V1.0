@@ -119,6 +119,9 @@ export default function DeliveryDetail() {
   const [cancelReason, setCancelReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
 
+  // Reassign loading state
+  const [reassigning, setReassigning] = useState(false);
+
   // Photo upload state
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
@@ -388,17 +391,22 @@ export default function DeliveryDetail() {
     if (!profile || !delivery) return;
     if (!confirm(`Take delivery ${delivery.delivery_number}? The current driver will be notified.`)) return;
 
-    const { error } = await supabase.rpc('reassign_delivery', {
-      p_delivery_id: id!,
-      p_new_driver: profile.id,
-      p_performed_by: profile.id,
-    });
+    setReassigning(true);
+    try {
+      const { error } = await supabase.rpc('reassign_delivery', {
+        p_delivery_id: id!,
+        p_new_driver: profile.id,
+        p_performed_by: profile.id,
+      });
 
-    if (error) {
-      toast('error', sanitizeError(error));
-    } else {
-      toast('success', 'Delivery assigned to you');
-      fetchDelivery();
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        toast('success', 'Delivery assigned to you');
+        fetchDelivery();
+      }
+    } finally {
+      setReassigning(false);
     }
   };
 
@@ -876,13 +884,14 @@ export default function DeliveryDetail() {
           {canTakeDelivery && (
             <button
               onClick={handleReassign}
-              className="flex items-center gap-4 w-full bg-gray-800 rounded-xl p-5 border border-crx-green active:bg-gray-700 transition-colors"
+              disabled={reassigning}
+              className="flex items-center gap-4 w-full bg-gray-800 rounded-xl p-5 border border-crx-green active:bg-gray-700 transition-colors disabled:opacity-50"
             >
               <div className="w-12 h-12 rounded-full bg-crx-green flex items-center justify-center shrink-0">
                 <UserPlus className="w-6 h-6 text-white" />
               </div>
               <div className="text-left">
-                <p className="text-white font-medium">Take This Delivery</p>
+                <p className="text-white font-medium">{reassigning ? 'Reassigning...' : 'Take This Delivery'}</p>
                 <p className="text-sm text-gray-400">Assign to yourself</p>
               </div>
             </button>
@@ -1198,6 +1207,8 @@ export default function DeliveryDetail() {
                 icon={<UserPlus className="w-4 h-4" />}
                 showChevron={false}
                 onClick={handleReassign}
+                disabled={reassigning}
+                loading={reassigning}
               >
                 Take Delivery
               </Button>
@@ -1233,7 +1244,7 @@ export default function DeliveryDetail() {
             >
               Receipt PDF
             </Button>
-            {delivery.status === 'completed' && customer?.email && (
+            {delivery.status === 'completed' && customer?.email && (role === 'admin' || role === 'sales_rep' || role === 'driver') && (
               <Button
                 variant="secondary"
                 size="sm"

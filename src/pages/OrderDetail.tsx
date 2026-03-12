@@ -55,6 +55,7 @@ export default function OrderDetail() {
   // Status change
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [newStatus, setNewStatus] = useState('');
+  const [changingStatus, setChangingStatus] = useState(false);
 
   const isAdmin = role === 'admin';
   const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled';
@@ -172,12 +173,15 @@ export default function OrderDetail() {
     if (!newStatus || !order || !profile) return;
     if (!window.confirm(`Change order status to ${newStatus.replace('_', ' ')}?`)) return;
 
+    setChangingStatus(true);
     try {
       if (newStatus === 'cancelled' && order.status !== 'cancelled') {
         // Atomic RPC: cancellation + inventory release + cascade (void drafts, zero commissions, release holds)
+        const idempotencyKey = crypto.randomUUID();
         const { data: cancelResult, error } = await supabase.rpc('cancel_order', {
           p_order_id: id!,
           p_performed_by: profile.id,
+          p_idempotency_key: idempotencyKey,
         });
         if (error) throw error;
         // Show summary toast with cascade details
@@ -288,6 +292,8 @@ export default function OrderDetail() {
     } catch (error: unknown) {
       console.error('Error changing status:', error);
       toast('error', sanitizeError(error));
+    } finally {
+      setChangingStatus(false);
     }
   };
 
@@ -374,6 +380,7 @@ export default function OrderDetail() {
       const { data, error } = await supabase.rpc('create_invoice_from_order', {
         p_order_id: id,
         p_salesman_id: profile.id,
+        p_idempotency_key: crypto.randomUUID(),
       });
       if (error) throw error;
       const invoiceId = data as string;
@@ -638,7 +645,7 @@ export default function OrderDetail() {
                       {inv.invoice_type.replace('_', ' ')}
                     </td>
                     <td className="px-4 py-2">
-                      <Badge variant={inv.status === 'posted' ? 'success' : inv.status === 'draft' ? 'default' : 'warning'} size="sm">
+                      <Badge variant={inv.status === 'posted' ? 'success' : inv.status === 'draft' || inv.status === 'unposted' ? 'default' : inv.status === 'voided' || inv.status === 'cancelled' ? 'error' : 'warning'} size="sm">
                         {inv.status}
                       </Badge>
                     </td>
@@ -898,13 +905,15 @@ export default function OrderDetail() {
             className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
           >
             <option value={order?.status}>{(order?.status || '').replace('_', ' ')}</option>
-            {(({ confirmed: ['partially_fulfilled', 'fulfilled', 'cancelled'], partially_fulfilled: ['fulfilled', 'cancelled'] } as Record<string, string[]>)[order?.status || ''] || []).map(s => (
+            {(({ confirmed: ['partially_fulfilled', 'fulfilled', 'cancelled'], partially_fulfilled: ['fulfilled', 'cancelled'] } as Record<string, string[]>)[order?.status || ''] || [])
+              .filter(s => s !== 'cancelled' || isAdmin)
+              .map(s => (
               <option key={s} value={s}>{s.replace('_', ' ')}</option>
             ))}
           </select>
           <div className="flex justify-end gap-3">
             <Button variant="ghost" onClick={() => setStatusModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleStatusChange}>Update Status</Button>
+            <Button onClick={handleStatusChange} loading={changingStatus} disabled={changingStatus}>Update Status</Button>
           </div>
         </div>
       </Modal>

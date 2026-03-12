@@ -76,11 +76,14 @@ export default function MonthEndClose() {
     setLoading(true);
 
     // Fetch existing periods
-    const { data: periodData } = await supabase
+    const { data: periodData, error: periodError } = await supabase
       .from('accounting_periods')
       .select('*')
       .order('period_end', { ascending: false })
       .limit(12);
+    if (periodError) {
+      toast('error', 'Failed to load accounting periods');
+    }
     setPeriods((periodData || []) as PeriodInfo[]);
 
     // Fetch monthly summary for current period

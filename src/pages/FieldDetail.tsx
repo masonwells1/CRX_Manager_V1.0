@@ -91,12 +91,17 @@ export default function FieldDetail() {
   }, []);
 
   const fetchField = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('fields')
       .select('*, customer:customers!fields_customer_id_fkey(farm_name)')
       .eq('id', id)
       .maybeSingle();
 
+    if (error) {
+      toast('error', 'Failed to load field');
+      setLoading(false);
+      return;
+    }
     if (data) {
       setField(data);
       const cust = data.customer as { farm_name: string } | null;
@@ -106,6 +111,7 @@ export default function FieldDetail() {
       const { data: geoData, error: geoError } = await supabase.rpc('get_field_geojson', { p_field_id: id });
       if (geoError) {
         console.error('Failed to load field geometry:', geoError);
+        toast('warning', 'Could not load field boundary');
       }
       if (geoData && geoData.length > 0) {
         const geo = geoData[0];
@@ -156,7 +162,7 @@ export default function FieldDetail() {
     }
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
-  }, [id]);
+  }, [id, toast]);
 
   useEffect(() => {
     fetchCustomers();

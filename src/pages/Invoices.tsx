@@ -24,8 +24,6 @@ const STATUS_OPTIONS: { value: InvoiceStatus | ''; label: string }[] = [
   { value: 'draft', label: 'Draft' },
   { value: 'unposted', label: 'Unposted' },
   { value: 'posted', label: 'Posted' },
-  { value: 'paid', label: 'Paid' },
-  { value: 'overdue', label: 'Overdue' },
   { value: 'voided', label: 'Voided' },
   { value: 'cancelled', label: 'Cancelled' },
 ];

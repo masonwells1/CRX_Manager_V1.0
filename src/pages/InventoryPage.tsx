@@ -394,6 +394,7 @@ export default function InventoryPage() {
   };
 
   const [creatingHold, setCreatingHold] = useState(false);
+  const [releasingHoldId, setReleasingHoldId] = useState<string | null>(null);
 
   const handleCreateHold = async () => {
     if (creatingHold) return;
@@ -440,10 +441,12 @@ export default function InventoryPage() {
   };
 
   const handleReleaseHold = async (holdId: string) => {
+    setReleasingHoldId(holdId);
     try {
       const { error } = await supabase.rpc('release_inventory_hold', {
         p_hold_id: holdId,
         p_performed_by: profile?.id,
+        p_idempotency_key: crypto.randomUUID(),
       });
       if (error) throw error;
 
@@ -452,6 +455,8 @@ export default function InventoryPage() {
       fetchHolds();
     } catch (error: unknown) {
       toast('error', sanitizeError(error));
+    } finally {
+      setReleasingHoldId(null);
     }
   };
 
@@ -476,6 +481,7 @@ export default function InventoryPage() {
       p_performed_by: profile?.id || null,
       p_notes: qty > 0 ? `Initial inventory record created with ${qty} units` : null,
       p_unit_cost: unitCost && unitCost > 0 ? unitCost : null,
+      p_idempotency_key: crypto.randomUUID(),
     });
 
     if (error) {
@@ -1161,9 +1167,10 @@ export default function InventoryPage() {
                         <td className="py-3 px-3">
                           <button
                             onClick={() => handleReleaseHold(hold.id)}
-                            className="text-xs text-red-600 hover:text-red-700 font-medium"
+                            disabled={releasingHoldId === hold.id}
+                            className="text-xs text-red-600 hover:text-red-700 font-medium disabled:opacity-50"
                           >
-                            Release
+                            {releasingHoldId === hold.id ? 'Releasing...' : 'Release'}
                           </button>
                         </td>
                       )}

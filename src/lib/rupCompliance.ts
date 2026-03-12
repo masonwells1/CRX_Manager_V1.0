@@ -31,11 +31,15 @@ export async function checkRUPCompliance(
   if (!productIds.length) return result;
 
   // 1. Check which products are RUP
-  const { data: rupProducts } = await supabase
+  const { data: rupProducts, error: rupError } = await supabase
     .from('products')
     .select('id, product_name')
     .in('id', productIds)
     .eq('is_rup', true);
+
+  if (rupError) {
+    return { ...result, warnings: ['Unable to verify RUP compliance - database error'] };
+  }
 
   if (!rupProducts?.length) return result;
 
@@ -44,11 +48,15 @@ export async function checkRUPCompliance(
 
   // 2. Check customer's applicator license
   const today = new Date().toISOString().split('T')[0];
-  const { data: licenses } = await supabase
+  const { data: licenses, error: licenseError } = await supabase
     .from('applicator_licenses')
     .select('id, expiry_date')
     .eq('customer_id', customerId)
     .is('deleted_at', null);
+
+  if (licenseError) {
+    return { ...result, warnings: ['Unable to verify applicator license - database error'] };
+  }
 
   if (!licenses?.length) {
     result.missingLicense = true;

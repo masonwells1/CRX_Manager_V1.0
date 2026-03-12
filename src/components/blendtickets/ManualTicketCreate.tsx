@@ -56,25 +56,26 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   const [warnings, setWarnings] = useState<string[]>([]);
 
   useEffect(() => {
-    supabase
-      .from('products')
-      .select('*')
-      .eq('is_active', true)
-      .order('product_name')
-      .then(({ data }) => {
-        if (data) setAllProducts(data);
-      });
+    const loadData = async () => {
+      const { data: prodData, error: prodError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('is_active', true)
+        .order('product_name');
+      if (prodError) console.error('Failed to load products:', prodError.message);
+      if (prodData) setAllProducts(prodData);
 
-    // Fetch active blend recipes with their items
-    supabase
-      .from('blend_recipes')
-      .select('*, items:blend_recipe_items(*)')
-      .eq('is_active', true)
-      .is('deleted_at', null)
-      .order('name')
-      .then(({ data }) => {
-        if (data) setRecipes(data as unknown as (BlendRecipe & { items: BlendRecipeItem[] })[]);
-      });
+      // Fetch active blend recipes with their items
+      const { data: recipeData, error: recipeError } = await supabase
+        .from('blend_recipes')
+        .select('*, items:blend_recipe_items(*)')
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .order('name');
+      if (recipeError) console.error('Failed to load recipes:', recipeError.message);
+      if (recipeData) setRecipes(recipeData as unknown as (BlendRecipe & { items: BlendRecipeItem[] })[]);
+    };
+    loadData();
   }, []);
 
   function applyRecipe(recipeId: string) {

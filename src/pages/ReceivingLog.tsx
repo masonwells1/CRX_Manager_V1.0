@@ -75,8 +75,8 @@ export default function ReceivingLog() {
       if (!sumError && sumData) {
         setSummary(sumData as ReceivingSummary);
       }
-    } catch {
-      // non-critical
+    } catch (err) {
+      console.error('Failed to load receiving summary:', err);
     }
 
     // Fetch receiving log via RPC

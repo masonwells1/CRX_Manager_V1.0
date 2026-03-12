@@ -11,6 +11,8 @@ export interface Profile {
   phone: string | null;
   is_active: boolean;
   denied_pages: string[];
+  applicator_license_number: string | null;
+  faa_certificate_number: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -122,7 +124,7 @@ export interface CustomerAddress {
   created_at: string;
 }
 
-export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined' | 'expired';
+export type QuoteStatus = 'draft' | 'sent' | 'revised' | 'accepted' | 'declined' | 'expired' | 'cancelled';
 
 export interface Quote {
   id: string;
@@ -245,6 +247,7 @@ export interface OrderItem {
   net_margin: number;
   quantity_delivered: number;
   quantity_remaining: number;
+  sort_order: number;
 }
 
 export interface Inventory {
@@ -333,7 +336,6 @@ export interface DeliveryItem {
   unit_size: string | null;
   notes: string | null;
   tote_number: string | null;
-  is_non_returnable: boolean;
   product?: Product;
 }
 
@@ -506,7 +508,10 @@ export interface TeamNoteComment {
   created_by: string;
   deleted_at: string | null;
   deleted_by: string | null;
+  parent_id: string | null;
+  mentions: string[];
   created_at: string;
+  updated_at: string;
   creator?: Profile;
 }
 
@@ -709,7 +714,7 @@ export interface OCRProcessingQueue {
 // Phase 2: Billing / Invoices
 
 export type InvoiceType = 'chemical_sale' | 'field_application' | 'misc_charge';
-export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'paid' | 'overdue' | 'voided' | 'cancelled';
+export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'voided' | 'cancelled';
 
 export interface Invoice {
   id: string;
@@ -791,6 +796,7 @@ export interface InvoiceItem {
   epa_registration: string | null;
   product_form: string | null;
   is_application_fee: boolean;
+  tote_number: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -906,7 +912,16 @@ export interface AllocationSet {
   created_by: string | null;
   is_active: boolean;
   notes: string | null;
+  customer_id: string | null;
+  total_payment_cents: number;
+  total_allocated_cents: number;
+  payment_method: string | null;
+  reference_number: string | null;
+  check_number: string | null;
+  payment_date: string | null;
+  season: number | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface OrderLineAllocation {
@@ -941,6 +956,9 @@ export interface PrepayCredit {
   payment_method: string | null;
   reference_number: string | null;
   notes: string | null;
+  source_type: string | null;
+  source_reference: string | null;
+  bucket_label: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -1582,6 +1600,8 @@ export interface WriteOff {
   reason: string;
   approved_by: string | null;
   created_by: string | null;
+  reversed_at: string | null;
+  reversed_reason: string | null;
   created_at: string;
 }
 

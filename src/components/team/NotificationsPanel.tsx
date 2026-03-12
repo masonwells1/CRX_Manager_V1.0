@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Bell, Check, Trash2, X } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
+import { useToast } from '../ui/Toast';
 import { useRealtimeNotifications } from '../../hooks/useRealtimeSubscription';
 import { useNavigate } from 'react-router-dom';
 
@@ -19,6 +20,7 @@ interface Notification {
 
 export default function NotificationsPanel() {
   const { profile } = useAuth();
+  const { toast } = useToast();
   const navigate = useNavigate();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isOpen, setIsOpen] = useState(false);
@@ -73,6 +75,7 @@ export default function NotificationsPanel() {
       checkMutationResult(result, 'Mark notification as read');
     } catch (err) {
       console.error('Failed to mark notification as read:', err);
+      toast('error', 'Failed to update notification');
     }
     fetchNotifications();
   };
@@ -90,6 +93,7 @@ export default function NotificationsPanel() {
       checkMutationResult(result, 'Mark all notifications as read');
     } catch (err) {
       console.error('Failed to mark all notifications as read:', err);
+      toast('error', 'Failed to update notification');
     }
     fetchNotifications();
   };
@@ -104,6 +108,7 @@ export default function NotificationsPanel() {
       checkMutationResult(result, 'Delete notification');
     } catch (err) {
       console.error('Failed to delete notification:', err);
+      toast('error', 'Failed to update notification');
     }
     fetchNotifications();
   };

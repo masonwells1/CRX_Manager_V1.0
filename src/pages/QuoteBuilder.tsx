@@ -226,10 +226,14 @@ export default function QuoteBuilder() {
     if (error || !data) {
       // Fallback for backward compatibility
       const year = new Date().getFullYear();
-      const { count } = await supabase
+      const { count, error: countError } = await supabase
         .from('quotes')
         .select('*', { count: 'exact', head: true })
         .like('quote_number', `Q-${year}-%`);
+      if (countError) {
+        toast('error', 'Failed to generate quote number. Please try again.');
+        return;
+      }
       const next = (count || 0) + 1;
       setQuoteNumber(`Q-${year}-${String(next).padStart(4, '0')}`);
     } else {

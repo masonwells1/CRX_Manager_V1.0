@@ -56,8 +56,8 @@ Deno.serve(async (req: Request) => {
       .eq("id", caller.id)
       .maybeSingle();
 
-    if (!callerProfile || callerProfile.role !== "admin") {
-      return jsonResponse({ error: "Admin access required" }, 403);
+    if (!callerProfile || !["admin", "sales_rep", "driver"].includes(callerProfile.role)) {
+      return jsonResponse({ error: "Insufficient role — admin, sales_rep, or driver required" }, 403);
     }
 
     // 3. Parse request body

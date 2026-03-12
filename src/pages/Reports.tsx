@@ -415,6 +415,7 @@ export default function Reports() {
     setMarkingPaid(true);
     const today = new Date().toISOString().split('T')[0];
     try {
+      // TODO: Replace with create_commission_payment RPC for proper audit trail
       const result = await supabase.from('commissions').update({ status: 'paid', paid_date: today }).in('id', Array.from(selectedCommissions)).select();
       checkMutationResult(result, 'Mark commissions as paid');
       toast('success', `${result.data!.length} commission(s) marked as paid`);

@@ -156,7 +156,11 @@ export default function SettingsPage() {
   }, [role, navigate]);
 
   const fetchSettings = async () => {
-    const { data } = await supabase.from('app_settings').select('*');
+    const { data, error } = await supabase.from('app_settings').select('*');
+    if (error) {
+      toast('error', 'Failed to load settings');
+      return;
+    }
     const settings = (data || []) as AppSetting[];
     const map: Record<string, string> = {};
     settings.forEach((s) => { map[s.setting_key] = s.setting_value; });
