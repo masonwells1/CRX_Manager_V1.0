@@ -770,7 +770,7 @@ BEGIN
   END LOOP;
 
   -- FIXED: Create commission records for direct orders (was only in convert_quote_to_order)
-  IF v_customer.commission_split IS NOT NULL AND v_customer.commission_split ? 'splits' THEN
+  IF v_customer.default_commission_split IS NOT NULL AND v_customer.default_commission_split ? 'splits' THEN
     INSERT INTO commissions (
       order_id, customer_id, recipient, split_percentage,
       commission_amount, order_profit, order_date, status
@@ -783,7 +783,7 @@ BEGIN
       v_total_profit,
       p_order_date,
       'pending'
-    FROM jsonb_array_elements(v_customer.commission_split->'splits') s
+    FROM jsonb_array_elements(v_customer.default_commission_split->'splits') s
     WHERE (s->>'recipient') IS NOT NULL AND (s->>'percentage')::numeric > 0;
   END IF;
 
