@@ -500,7 +500,7 @@ BEGIN
           product_id, transaction_type, quantity, to_location,
           order_id, delivery_id, performed_by, notes
         ) VALUES (
-          v_item.product_id, 'prebook_released', v_item.quantity, 'Main Warehouse',
+          v_item.product_id, 'released', v_item.quantity, 'Main Warehouse',
           v_delivery.order_id, p_delivery_id, v_actor,
           'Delivery ' || v_delivery.delivery_number || ' cancelled — released prebooked ' || v_item.quantity || ' units of ' || v_item.product_name
         );
@@ -572,9 +572,9 @@ BEGIN
     LOOP
       IF v_invoice.status IN ('draft', 'unposted') THEN
         UPDATE invoices SET
-          status = 'voided',
+          status = 'cancelled',
           voided_by = v_actor,
-          void_reason = 'Auto-voided: delivery ' || v_delivery.delivery_number || ' cancelled',
+          void_reason = 'Auto-cancelled: delivery ' || v_delivery.delivery_number || ' cancelled',
           updated_at = now()
         WHERE id = v_invoice.id;
         v_draft_voided := v_draft_voided + 1;
