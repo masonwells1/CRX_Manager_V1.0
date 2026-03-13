@@ -64,22 +64,22 @@ export default function Orders() {
     const orderIds = (ordersData || []).map((o: Record<string, unknown>) => (o as { id: string }).id);
     const { data: itemsData, error: itemsError } = await supabase
       .from('order_items')
-      .select('order_id, total_units_needed, quantity_delivered, unit_price_cents')
+      .select('order_id, total_units_needed, quantity_delivered, price_per_unit')
       .in('order_id', orderIds.length > 0 ? orderIds : ['__none__']);
 
     if (itemsError) {
       console.error('Failed to load order items:', itemsError.message);
     }
 
-    // H16: Use value-based fulfillment (cents) instead of item-count-based
-    const itemsByOrder: Record<string, { neededCents: number; deliveredCents: number }> = {};
+    // H16: Use value-based fulfillment (weighted by price_per_unit) instead of item-count-based
+    const itemsByOrder: Record<string, { neededValue: number; deliveredValue: number }> = {};
     (itemsData || []).forEach((item) => {
       if (!itemsByOrder[item.order_id]) {
-        itemsByOrder[item.order_id] = { neededCents: 0, deliveredCents: 0 };
+        itemsByOrder[item.order_id] = { neededValue: 0, deliveredValue: 0 };
       }
-      const price = item.unit_price_cents || 0;
-      itemsByOrder[item.order_id].neededCents += (item.total_units_needed || 0) * price;
-      itemsByOrder[item.order_id].deliveredCents += (item.quantity_delivered || 0) * price;
+      const price = Number(item.price_per_unit) || 0;
+      itemsByOrder[item.order_id].neededValue += (Number(item.total_units_needed) || 0) * price;
+      itemsByOrder[item.order_id].deliveredValue += (Number(item.quantity_delivered) || 0) * price;
     });
 
     // Fetch invoice totals per order for invoiced %
@@ -110,8 +110,8 @@ export default function Orders() {
     }
 
     const enriched = ((ordersData || []) as Order[]).map((o) => {
-      const counts = itemsByOrder[o.id] || { neededCents: 0, deliveredCents: 0 };
-      const pct = counts.neededCents > 0 ? Math.round((counts.deliveredCents / counts.neededCents) * 100) : 0;
+      const counts = itemsByOrder[o.id] || { neededValue: 0, deliveredValue: 0 };
+      const pct = counts.neededValue > 0 ? Math.round((counts.deliveredValue / counts.neededValue) * 100) : 0;
       const orderCents = Math.round((o.total_price || 0) * 100);
       const invCents = invoicedByOrder[o.id] || 0;
       const invPct = orderCents > 0 ? Math.round((invCents / orderCents) * 100) : 0;
