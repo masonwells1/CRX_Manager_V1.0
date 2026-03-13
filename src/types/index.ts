@@ -285,7 +285,7 @@ export interface InventoryHold {
   creator?: Profile;
 }
 
-export type DeliveryStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
+export type DeliveryStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'voided';
 export type DeliveryPriority = 'low' | 'normal' | 'high' | 'urgent';
 export type DeliveryIssueType = 'none' | 'customer_not_home' | 'gate_locked' | 'road_blocked' | 'wrong_address' | 'refused' | 'weather' | 'other';
 

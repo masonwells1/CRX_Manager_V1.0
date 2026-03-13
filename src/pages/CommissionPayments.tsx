@@ -5,7 +5,7 @@
  * Sprint 10: Commission Payment Lifecycle
  */
 import { useEffect, useState , useCallback } from 'react';
-import { DollarSign, Send, Plus, Check, Clock } from 'lucide-react';
+import { DollarSign, Send, Plus, Check, Clock, RotateCcw } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -53,11 +53,18 @@ export default function CommissionPayments() {
   const { toast } = useToast();
   const createPaymentIdem = useIdempotencyKey('create_commission_payment', profile?.id || '');
   const postPaymentIdem = useIdempotencyKey('post_commission_payment', profile?.id || '');
+  const voidPaymentIdem = useIdempotencyKey('void_commission_payment', profile?.id || '');
 
   const [tab, setTab] = useState<'unposted' | 'posted'>('unposted');
   const [payments, setPayments] = useState<CommissionPaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState<string | null>(null);
+
+  // Void payment modal (admin only, posted payments)
+  const [showVoid, setShowVoid] = useState(false);
+  const [voidTarget, setVoidTarget] = useState<CommissionPaymentRow | null>(null);
+  const [voidReason, setVoidReason] = useState('');
+  const [voiding, setVoiding] = useState(false);
 
   // Create payment modal
   const [showCreate, setShowCreate] = useState(false);
@@ -220,6 +227,30 @@ export default function CommissionPayments() {
     setPosting(null);
   };
 
+  const handleVoidPayment = async () => {
+    if (!voidTarget || !profile) return;
+    setVoiding(true);
+    try {
+      const voidKey = voidPaymentIdem.getKey();
+      const { data: voidResult, error } = await supabase.rpc('void_commission_payment', {
+        p_payment_id: voidTarget.id,
+        p_reason: voidReason.trim(),
+        p_performed_by: profile.id,
+        p_idempotency_key: voidKey,
+      });
+      if (error) throw error;
+      voidPaymentIdem.resetKey();
+      toast('success', `Payment ${voidTarget.payment_number} voided. ${voidResult?.commissions_reset || 0} commission(s) reset to pending.`);
+      setShowVoid(false);
+      setVoidReason('');
+      setVoidTarget(null);
+      fetchPayments();
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to void payment');
+    }
+    setVoiding(false);
+  };
+
   const filtered = payments.filter((p) => p.status === tab);
 
   const unpostedTotal = payments
@@ -287,7 +318,30 @@ export default function CommissionPayments() {
             ),
           },
         ] as Column<CommissionPaymentRow>[]
-      : ([] as Column<CommissionPaymentRow>[])),
+      : tab === 'posted'
+        ? [
+            {
+              key: 'id',
+              header: '',
+              render: (r: CommissionPaymentRow) => (
+                <Button
+                  size="sm"
+                  variant="danger"
+                  icon={<RotateCcw className="w-3 h-3" />}
+                  onClick={(e: React.MouseEvent) => {
+                    e.stopPropagation();
+                    setVoidTarget(r);
+                    setVoidReason('');
+                    setShowVoid(true);
+                  }}
+                  showChevron={false}
+                >
+                  Void
+                </Button>
+              ),
+            },
+          ] as Column<CommissionPaymentRow>[]
+        : ([] as Column<CommissionPaymentRow>[])),
   ];
 
   return (
@@ -381,6 +435,41 @@ export default function CommissionPayments() {
           />
         </div>
       </Card>
+
+      {/* Void Payment Modal */}
+      <Modal open={showVoid} onClose={() => setShowVoid(false)} title="Void Commission Payment">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
+            <RotateCcw className="w-5 h-5 text-red-600 flex-shrink-0" />
+            <p className="text-sm text-red-800">
+              You are about to void payment <strong>{voidTarget?.payment_number}</strong> ({fmt(voidTarget?.total_amount || 0)}).
+              All {voidTarget?.item_count} linked commission(s) will be reset to <strong>pending</strong> and can be re-paid later.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Void Reason <span className="text-red-500">*</span></label>
+            <textarea
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+              placeholder="Enter reason for voiding this payment..."
+              rows={3}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setShowVoid(false)}>Go Back</Button>
+            <Button
+              variant="danger"
+              icon={<RotateCcw className="w-4 h-4" />}
+              onClick={handleVoidPayment}
+              loading={voiding}
+              disabled={!voidReason.trim()}
+            >
+              Void Payment
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Create Payment Modal */}
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create Commission Payment" size="large">

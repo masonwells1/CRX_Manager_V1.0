@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff,
   Minus, Plus, Pencil, Ban, Camera, UserPlus, AlertTriangle, RefreshCw,
-  PlayCircle, Lock, Zap, FileText, Mail,
+  PlayCircle, Lock, Zap, FileText, Mail, RotateCcw,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -70,6 +70,7 @@ export default function DeliveryDetail() {
   const followupIdem = useIdempotencyKey('create_followup_delivery', profile?.id || '');
   const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
+  const voidIdem = useIdempotencyKey('void_delivery', profile?.id || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [delivery, setDelivery] = useState<Delivery | null>(null);
@@ -120,6 +121,11 @@ export default function DeliveryDetail() {
   const [cancelReason, setCancelReason] = useState('');
   const [cancelling, setCancelling] = useState(false);
 
+  // Void modal state (admin only, completed deliveries)
+  const [voidOpen, setVoidOpen] = useState(false);
+  const [voidReason, setVoidReason] = useState('');
+  const [voiding, setVoiding] = useState(false);
+
   // Reassign loading state
   const [reassigning, setReassigning] = useState(false);
 
@@ -146,9 +152,11 @@ export default function DeliveryDetail() {
   }>>([]);
 
   const isDriver = role === 'driver';
+  const isAdmin = role === 'admin';
   const isAdminOrRep = role === 'admin' || role === 'sales_rep';
   const canEdit = isAdminOrRep && delivery?.status !== 'completed' && delivery?.status !== 'cancelled';
   const canCancel = isAdminOrRep && delivery?.status !== 'cancelled' && delivery?.status !== 'completed';
+  const canVoid = isAdmin && delivery?.status === 'completed';
   const isAssignedDriver = isDriver && profile?.id === delivery?.assigned_driver;
   const canConfirm = (isAdminOrRep || isAssignedDriver) && delivery?.status === 'scheduled';
 
@@ -384,6 +392,35 @@ export default function DeliveryDetail() {
       fetchDelivery();
     }
     setCancelling(false);
+  };
+
+  // ── Void Delivery (admin only, completed) ─────────────────────────────
+
+  const handleVoidDelivery = async () => {
+    if (!profile || !delivery) return;
+    setVoiding(true);
+    const idemKey = voidIdem.getKey();
+    const { data: voidResult, error } = await supabase.rpc('void_delivery', {
+      p_delivery_id: id!,
+      p_reason: voidReason.trim(),
+      p_performed_by: profile.id,
+      p_idempotency_key: idemKey,
+    });
+    if (error) {
+      toast('error', sanitizeError(error));
+    } else {
+      voidIdem.resetKey();
+      const parts: string[] = [`Delivery ${delivery.delivery_number} voided.`];
+      if (voidResult?.posted_invoices_exist) {
+        parts.push('Warning: posted invoices linked to this order require manual review.');
+      }
+      toast('success', parts.join(' '));
+      await logActivity('delivery_voided', `Delivery ${delivery.delivery_number} voided`, 'delivery', id!, delivery.customer_id);
+      setVoidOpen(false);
+      setVoidReason('');
+      fetchDelivery();
+    }
+    setVoiding(false);
   };
 
   // ── Reassign (Take This Delivery) ─────────────────────────────────────
@@ -1269,6 +1306,17 @@ export default function DeliveryDetail() {
                 Cancel
               </Button>
             )}
+            {canVoid && (
+              <Button
+                variant="danger"
+                size="sm"
+                icon={<RotateCcw className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setVoidOpen(true)}
+              >
+                Void Delivery
+              </Button>
+            )}
             {delivery.priority && delivery.priority !== 'normal' && (
               <Badge variant={PRIORITY_BADGE[delivery.priority] || 'default'} size="md">
                 {PRIORITY_LABELS[delivery.priority]}
@@ -1822,6 +1870,47 @@ export default function DeliveryDetail() {
         }))}
         loading={confirming}
       />
+
+      {/* Void Delivery Modal */}
+      <Modal open={voidOpen} onClose={() => setVoidOpen(false)} title="Void Completed Delivery">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3 p-3 bg-red-50 rounded-lg">
+            <RotateCcw className="w-5 h-5 text-red-600 flex-shrink-0" />
+            <p className="text-sm text-red-800">
+              You are about to void delivery <strong>{delivery?.delivery_number}</strong>. This will:
+              <ul className="mt-1 list-disc list-inside space-y-0.5">
+                <li>Restore all inventory to the warehouse</li>
+                <li>Reverse order item delivery quantities</li>
+                <li>Delete delivery remainders from this delivery</li>
+                <li>Auto-void any linked draft invoices</li>
+              </ul>
+              <span className="block mt-2 font-semibold text-red-900">This action cannot be undone. Posted invoices must be manually reviewed.</span>
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Void Reason <span className="text-red-500">*</span></label>
+            <textarea
+              value={voidReason}
+              onChange={(e) => setVoidReason(e.target.value)}
+              placeholder="Enter reason for voiding this delivery..."
+              rows={3}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setVoidOpen(false)}>Go Back</Button>
+            <Button
+              variant="danger"
+              icon={<RotateCcw className="w-4 h-4" />}
+              onClick={handleVoidDelivery}
+              loading={voiding}
+              disabled={!voidReason.trim()}
+            >
+              Void Delivery
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Cancel Modal */}
       <Modal open={cancelOpen} onClose={() => setCancelOpen(false)} title="Cancel Delivery">

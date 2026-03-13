@@ -1,6 +1,6 @@
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { PackageCheck, Pencil, Ban, Download, Send } from 'lucide-react';
+import { PackageCheck, Pencil, Ban, Download, Send, RotateCcw } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -43,6 +43,7 @@ export default function PurchaseOrderDetail() {
   const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
   const savePOIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
   const cancelPOIdem = useIdempotencyKey('cancel_purchase_order', profile?.id || '');
+  const reverseIdem = useIdempotencyKey('reverse_receiving_record', profile?.id || '');
   const [po, setPo] = useState<PurchaseOrder | null>(null);
   const [items, setItems] = useState<PurchaseOrderItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,6 +78,12 @@ export default function PurchaseOrderDetail() {
   /* Receiving history */
   const [receivingHistory, setReceivingHistory] = useState<ReceivingRecord[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+
+  /* Reverse receiving modal */
+  const [reverseOpen, setReverseOpen] = useState(false);
+  const [reverseRecord, setReverseRecord] = useState<ReceivingRecord | null>(null);
+  const [reverseReason, setReverseReason] = useState('');
+  const [reversing, setReversing] = useState(false);
 
   const isAdmin = role === 'admin';
   const canReceive = role === 'admin' || role === 'sales_rep';
@@ -288,6 +295,40 @@ export default function PurchaseOrderDetail() {
     } catch {
       toast('error', 'Failed to download receipt');
     }
+  };
+
+  const openReverseModal = (rec: ReceivingRecord) => {
+    setReverseRecord(rec);
+    setReverseReason('');
+    reverseIdem.resetKey();
+    setReverseOpen(true);
+  };
+
+  const handleReverseReceiving = async () => {
+    if (!reverseRecord || !profile) return;
+    if (!reverseReason.trim()) {
+      toast('error', 'Please provide a reason for the reversal');
+      return;
+    }
+    setReversing(true);
+    try {
+      const { error } = await supabase.rpc('reverse_receiving_record', {
+        p_record_id: reverseRecord.id,
+        p_reason: reverseReason.trim(),
+        p_performed_by: profile.id,
+      });
+      if (error) throw error;
+      reverseIdem.resetKey();
+      await logActivity('receiving_reversed', `Receiving record reversed for PO ${po?.po_number}: ${reverseReason.trim()}`, profile.id, 'purchase_order', po?.id);
+      toast('success', 'Receiving record reversed and inventory adjusted');
+      setReverseOpen(false);
+      setReverseRecord(null);
+      fetchPO();
+      fetchReceivingHistory();
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setReversing(false);
   };
 
   const openEditModal = () => {
@@ -577,6 +618,7 @@ export default function PurchaseOrderDetail() {
                     <th className="px-4 py-3 text-left font-medium text-secondary">By</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary">Notes</th>
                     <th className="px-4 py-3 w-10"></th>
+                    {isAdmin && <th className="px-4 py-3 w-20"></th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -613,6 +655,17 @@ export default function PurchaseOrderDetail() {
                           <Download className="w-4 h-4" />
                         </button>
                       </td>
+                      {isAdmin && (
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => openReverseModal(rec)}
+                            className="text-red-400 hover:text-red-600 transition-colors"
+                            title="Reverse this receiving entry"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -893,6 +946,40 @@ export default function PurchaseOrderDetail() {
             </Button>
             <Button onClick={handleSaveEdit} loading={saving}>
               Save Changes
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Reverse Receiving Modal (Admin only) */}
+      <Modal open={reverseOpen} onClose={() => setReverseOpen(false)} title="Reverse Receiving" accent="Record">
+        <div className="space-y-4">
+          {reverseRecord && (
+            <div className="bg-gray-50 rounded-xl p-4 text-sm space-y-1">
+              <p><span className="text-secondary">Product:</span> <span className="font-medium text-nav-dark">{reverseRecord.product_name}</span></p>
+              <p><span className="text-secondary">Qty received:</span> <span className="font-mono font-medium">{reverseRecord.quantity_received}</span></p>
+              <p><span className="text-secondary">Received on:</span> {new Date(reverseRecord.received_at).toLocaleString()}</p>
+            </div>
+          )}
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+            <p className="text-sm text-amber-800">
+              This will delete the receiving record and subtract the quantity from inventory. This cannot be undone.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Reason <span className="text-red-500">*</span></label>
+            <Input
+              value={reverseReason}
+              onChange={(e) => setReverseReason(e.target.value)}
+              placeholder="e.g. Wrong product, data entry error, etc."
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setReverseOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={handleReverseReceiving} loading={reversing}>
+              Reverse Record
             </Button>
           </div>
         </div>

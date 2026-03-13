@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck, Mail,
+  Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck, Mail, RotateCcw,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -59,10 +59,12 @@ export default function InvoiceDetail() {
   const navigate = useNavigate();
   const { profile } = useAuth();
   const { toast } = useToast();
+  const isAdmin = profile?.role === 'admin';
   const saveIdem = useIdempotencyKey('save_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_invoice', profile?.id || '');
   const payIdem = useIdempotencyKey('record_invoice_payment', profile?.id || '');
+  const reverseWoIdem = useIdempotencyKey('reverse_write_off', profile?.id || '');
   const isNew = id === 'new';
 
   // Invoice header
@@ -101,8 +103,13 @@ export default function InvoiceDetail() {
   // Email invoice
   const [emailing, setEmailing] = useState(false);
 
-  // Write-off modal
+  // Write-off modal + write-off list
   const [showWriteOff, setShowWriteOff] = useState(false);
+  const [writeOffs, setWriteOffs] = useState<Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>>([]);
+  const [showReverseWoModal, setShowReverseWoModal] = useState(false);
+  const [reverseWoTarget, setReverseWoTarget] = useState<{ id: string; amount_cents: number } | null>(null);
+  const [reverseWoReason, setReverseWoReason] = useState('');
+  const [reversingWo, setReversingWo] = useState(false);
 
   // Print dialog
   const [showPrintDialog, setShowPrintDialog] = useState(false);
@@ -227,6 +234,14 @@ export default function InvoiceDetail() {
       .eq('invoice_id', invoiceId)
       .order('sort_order');
     setShares((shareData || []) as InvoiceShare[]);
+
+    // Fetch write-offs
+    const { data: woData } = await supabase
+      .from('write_offs')
+      .select('id, amount_cents, reason, created_at, reversed_at')
+      .eq('invoice_id', invoiceId)
+      .order('created_at');
+    setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
     setLoading(false);
   }, [toast, navigate]);
@@ -438,6 +453,31 @@ export default function InvoiceDetail() {
     setPayingInvoice(false);
   };
 
+  const handleReverseWriteOff = async () => {
+    if (!reverseWoTarget) return;
+    setReversingWo(true);
+    try {
+      const key = reverseWoIdem.getKey();
+      const { error } = await supabase.rpc('reverse_write_off', {
+        p_write_off_id: reverseWoTarget.id,
+        p_reason: reverseWoReason,
+        p_performed_by: profile?.id,
+        p_idempotency_key: key,
+      });
+      if (error) throw error;
+      reverseWoIdem.resetKey();
+      await logActivity('write_off_reversed', `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, 'invoice', id);
+      toast('success', 'Write-off reversed and balance restored');
+      setShowReverseWoModal(false);
+      setReverseWoReason('');
+      setReverseWoTarget(null);
+      if (id) fetchInvoice(id);
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setReversingWo(false);
+  };
+
   // Build PDF data object (shared by print + email)
   const buildInvoicePdfData = async (options?: InvoicePrintOptions): Promise<InvoicePdfData> => {
     const { data: enrichedItems } = await supabase
@@ -585,7 +625,6 @@ export default function InvoiceDetail() {
   const totalCents = items.reduce((s, i) => s + i.extended_cents, 0);
   const totalCostCents = items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0);
   const editable = isNew || ['draft', 'unposted'].includes(invoice.status || '');
-  const isAdmin = profile?.role === 'admin';
 
   // Customer filtered list
   const filteredCustomers = customerSearch.length >= 1
@@ -969,6 +1008,37 @@ export default function InvoiceDetail() {
         )}
       </Card>
 
+      {/* Write-Offs */}
+      {writeOffs.length > 0 && (
+        <Card>
+          <h3 className="text-sm font-semibold text-nav-dark mb-3">Write-Offs</h3>
+          <div className="divide-y divide-gray-50">
+            {writeOffs.map((wo) => (
+              <div key={wo.id} className="py-2 flex items-center justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-medium text-nav-dark">{fmt(wo.amount_cents)}</span>
+                  <span className="text-xs text-secondary ml-2">{wo.reason}</span>
+                  <span className="text-xs text-secondary ml-2">{new Date(wo.created_at).toLocaleDateString()}</span>
+                </div>
+                {wo.reversed_at ? (
+                  <span className="text-xs text-amber-600 font-medium">Reversed {new Date(wo.reversed_at).toLocaleDateString()}</span>
+                ) : (
+                  isAdmin && (
+                    <button
+                      onClick={() => { setReverseWoTarget(wo); setShowReverseWoModal(true); }}
+                      className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium flex-shrink-0"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Reverse
+                    </button>
+                  )
+                )}
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {/* Void reason */}
       {invoice.void_reason && (
         <Card>
@@ -1120,6 +1190,36 @@ export default function InvoiceDetail() {
           <div className="flex justify-end gap-3">
             <Button variant="ghost" onClick={() => setShowPayModal(false)}>Cancel</Button>
             <Button onClick={handlePayment} loading={payingInvoice}>Record Payment</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Reverse Write-Off Modal (admin only) */}
+      <Modal open={showReverseWoModal} onClose={() => { setShowReverseWoModal(false); setReverseWoReason(''); }} title="Reverse Write-Off">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            This will reverse the write-off of <strong>{reverseWoTarget ? fmt(reverseWoTarget.amount_cents) : ''}</strong> and restore that amount to the invoice balance.
+          </p>
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-sm text-amber-800">
+              The customer will owe this amount again after reversal. This action is logged to the financial audit trail.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Reason <span className="text-red-500">*</span></label>
+            <textarea
+              value={reverseWoReason}
+              onChange={(e) => setReverseWoReason(e.target.value)}
+              placeholder="Explain why this write-off is being reversed..."
+              rows={3}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crx-green"
+            />
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => { setShowReverseWoModal(false); setReverseWoReason(''); }}>Cancel</Button>
+            <Button variant="danger" onClick={handleReverseWriteOff} loading={reversingWo} disabled={!reverseWoReason.trim()}>
+              Reverse Write-Off
+            </Button>
           </div>
         </div>
       </Modal>

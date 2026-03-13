@@ -5,7 +5,7 @@
  * Sprint 10: Month-End Close
  */
 import { useEffect, useState, useCallback } from 'react';
-import { Calendar, CheckCircle, AlertCircle, FileText, Download, Lock } from 'lucide-react';
+import { Calendar, CheckCircle, AlertCircle, FileText, Download, Lock, RotateCcw } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -56,9 +56,11 @@ function getCurrentPeriod(): { start: string; end: string; label: string } {
 
 export default function MonthEndClose() {
   const { profile } = useAuth();
+  const isAdmin = profile?.role === 'admin';
   const { toast } = useToast();
   const closePeriodIdem = useIdempotencyKey('close_accounting_period', profile?.id || '');
   const generateStatementsIdem = useIdempotencyKey('generate_batch_statements', profile?.id || '');
+  const reopenPeriodIdem = useIdempotencyKey('reopen_accounting_period', profile?.id || '');
 
   const [periods, setPeriods] = useState<PeriodInfo[]>([]);
   const [summary, setSummary] = useState<MonthlySummary | null>(null);
@@ -66,6 +68,10 @@ export default function MonthEndClose() {
   const [closing, setClosing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [showReopenModal, setShowReopenModal] = useState(false);
+  const [reopenTarget, setReopenTarget] = useState<PeriodInfo | null>(null);
+  const [reopenReason, setReopenReason] = useState('');
+  const [reopening, setReopening] = useState(false);
   const [showStatementDialog, setShowStatementDialog] = useState(false);
   const [showYeDialog, setShowYeDialog] = useState(false);
   // M1/M2: explicit review confirmation for payments and commissions
@@ -171,6 +177,30 @@ export default function MonthEndClose() {
       toast('error', sanitizeError(err));
     }
     setClosing(false);
+  };
+
+  const handleReopen = async () => {
+    if (!reopenTarget?.id) return;
+    setReopening(true);
+    try {
+      const key = reopenPeriodIdem.getKey();
+      const { error } = await supabase.rpc('reopen_accounting_period', {
+        p_period_id: reopenTarget.id,
+        p_reason: reopenReason,
+        p_performed_by: profile?.id,
+        p_idempotency_key: key,
+      });
+      if (error) throw error;
+      reopenPeriodIdem.resetKey();
+      toast('success', 'Accounting period reopened');
+      setShowReopenModal(false);
+      setReopenReason('');
+      setReopenTarget(null);
+      fetchData();
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setReopening(false);
   };
 
   const handleGenerateStatements = async (options: StatementOptions) => {
@@ -429,6 +459,7 @@ export default function MonthEndClose() {
                   <th className="pb-2 pr-4">Period</th>
                   <th className="pb-2 pr-4">Status</th>
                   <th className="pb-2 pr-4">Closed At</th>
+                  {isAdmin && <th className="pb-2 w-24"></th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
@@ -445,6 +476,19 @@ export default function MonthEndClose() {
                     <td className="py-2 text-secondary">
                       {p.closed_at ? new Date(p.closed_at).toLocaleString() : '-'}
                     </td>
+                    {isAdmin && (
+                      <td className="py-2 text-right">
+                        {p.status === 'closed' && p.id && (
+                          <button
+                            onClick={() => { setReopenTarget(p); setShowReopenModal(true); }}
+                            className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            Reopen
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -470,6 +514,44 @@ export default function MonthEndClose() {
         loading={yeLoading}
         batchMode
       />
+
+      {/* Reopen Period Modal (admin only) */}
+      <Modal open={showReopenModal} onClose={() => { setShowReopenModal(false); setReopenReason(''); }} title="Reopen Accounting Period">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            You are about to reopen the accounting period for{' '}
+            <strong>
+              {reopenTarget && new Date(reopenTarget.period_start + 'T00:00:00').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+            </strong>.
+          </p>
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <p className="text-sm text-amber-800">
+              Reopening allows new postings to dates within this period. This action is logged to the financial audit trail.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-nav-dark mb-1">Reason <span className="text-red-500">*</span></label>
+            <textarea
+              value={reopenReason}
+              onChange={(e) => setReopenReason(e.target.value)}
+              placeholder="Explain why this period needs to be reopened..."
+              rows={3}
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-crx-green"
+            />
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => { setShowReopenModal(false); setReopenReason(''); }}>Cancel</Button>
+            <Button
+              variant="danger"
+              onClick={handleReopen}
+              loading={reopening}
+              disabled={!reopenReason.trim()}
+            >
+              Reopen Period
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Close Confirmation Modal */}
       <Modal open={showCloseModal} onClose={() => setShowCloseModal(false)} title="Close Accounting Period">
