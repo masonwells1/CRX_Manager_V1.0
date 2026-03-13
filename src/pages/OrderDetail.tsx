@@ -10,6 +10,7 @@ import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
+import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -19,7 +20,22 @@ import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate } from '../lib/dateUtils';
-import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery } from '../types';
+import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery, Product } from '../types';
+
+/** Temporary new item (not yet saved to DB — has no real id) */
+interface NewOrderItem {
+  _tempKey: string;
+  product_id: string;
+  product_name: string;
+  price_per_unit: number;
+  cost_per_unit: number;
+  total_units_needed: number;
+  unit_size: string | null;
+  section_name: string | null;
+}
+
+let _editKeyCounter = 0;
+function nextEditKey() { return `_new_${++_editKeyCounter}`; }
 
 export default function OrderDetail() {
   const { id } = useParams<{ id: string }>();
@@ -48,7 +64,14 @@ export default function OrderDetail() {
   // Edit mode state
   const [editing, setEditing] = useState(false);
   const [editItems, setEditItems] = useState<OrderItem[]>([]);
+  const [newItems, setNewItems] = useState<NewOrderItem[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // Add-product modal state
+  const [products, setProducts] = useState<Product[]>([]);
+  const [showProductModal, setShowProductModal] = useState(false);
+  const [productSearch, setProductSearch] = useState('');
+  const [inventoryByProduct, setInventoryByProduct] = useState<Record<string, { available: number; prebooked: number; onOrder: number }>>({});
 
   // Create invoice
   const [creatingInvoice, setCreatingInvoice] = useState(false);
@@ -142,17 +165,107 @@ export default function OrderDetail() {
     if (id) fetchOrder();
   }, [id, fetchOrder]);
 
+  // Fetch products + inventory when entering edit mode (lazy load — only when needed)
+  const fetchProducts = useCallback(async () => {
+    const [productsRes, inventoryRes, poRes] = await Promise.all([
+      supabase.from('products').select('*').order('product_name'),
+      supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked'),
+      supabase
+        .from('purchase_order_items')
+        .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
+        .in('purchase_orders.status', ['submitted', 'partially_received']),
+    ]);
+
+    setProducts(productsRes.data || []);
+
+    const invMap: Record<string, { available: number; prebooked: number; onOrder: number }> = {};
+    for (const row of inventoryRes.data || []) {
+      const pid = row.product_id;
+      if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0, onOrder: 0 };
+      invMap[pid].available += Number(row.quantity_available);
+      invMap[pid].prebooked += Number(row.quantity_prebooked);
+    }
+    for (const poi of (poRes.data || []) as Array<{ product_id: string; quantity_ordered: number; quantity_received: number }>) {
+      const pid = poi.product_id;
+      if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0, onOrder: 0 };
+      invMap[pid].onOrder += Number(poi.quantity_ordered) - Number(poi.quantity_received);
+    }
+    setInventoryByProduct(invMap);
+  }, []);
+
+  // Load products when edit mode is activated
+  useEffect(() => {
+    if (editing && products.length === 0) {
+      fetchProducts();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
+
+  const handleAddProduct = (product: Product) => {
+    const tierNum = customer?.assigned_tier || 1;
+    const tierPrice =
+      tierNum === 1 ? product.tier1_price || 0
+        : tierNum === 2 ? product.tier2_price || 0
+          : product.tier3_price || 0;
+
+    const item: NewOrderItem = {
+      _tempKey: nextEditKey(),
+      product_id: product.id,
+      product_name: product.product_name,
+      price_per_unit: tierPrice,
+      cost_per_unit: product.current_cost || 0,
+      total_units_needed: 0,
+      unit_size: product.unit_size || null,
+      section_name: null,
+    };
+    setNewItems((prev) => [...prev, item]);
+    setShowProductModal(false);
+    setProductSearch('');
+  };
+
+  const updateNewItem = (key: string, field: keyof NewOrderItem, value: number | string | null) => {
+    setNewItems((prev) =>
+      prev.map((i) => (i._tempKey === key ? { ...i, [field]: value } : i))
+    );
+  };
+
+  const removeNewItem = (key: string) => {
+    setNewItems((prev) => prev.filter((i) => i._tempKey !== key));
+  };
+
+  const filteredProducts = productSearch
+    ? products.filter(
+        (p) =>
+          p.product_name.toLowerCase().includes(productSearch.toLowerCase()) ||
+          p.manufacturer?.toLowerCase().includes(productSearch.toLowerCase())
+      )
+    : products;
+
   const handleSaveEdits = async () => {
     if (!profile) return;
     setSaving(true);
 
     try {
-      // Atomic RPC with idempotency: item updates + inventory adjustments + order total recalculation
-      const itemsPayload = editItems.map((item) => ({
+      // Build payload: existing items (with id) + new items (without id)
+      const existingPayload = editItems.map((item) => ({
         id: item.id,
         price_per_unit: item.price_per_unit,
         total_units_needed: item.total_units_needed,
       }));
+
+      const newPayload = newItems
+        .filter((item) => item.product_id && item.total_units_needed > 0)
+        .map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          price_per_unit: item.price_per_unit,
+          cost_per_unit: item.cost_per_unit,
+          total_units_needed: item.total_units_needed,
+          unit_size: item.unit_size,
+          section_name: item.section_name,
+        }));
+
+      const itemsPayload = [...existingPayload, ...newPayload];
 
       const idemKey = updateOrderIdem.getKey();
       const { error } = await supabase.rpc('update_order_items', {
@@ -165,8 +278,10 @@ export default function OrderDetail() {
       if (error) throw error;
 
       updateOrderIdem.resetKey();
-      toast('success', 'Order updated');
+      const addedCount = newPayload.length;
+      toast('success', addedCount > 0 ? `Order updated — ${addedCount} product(s) added` : 'Order updated');
       setEditing(false);
+      setNewItems([]);
       fetchOrder();
     } catch (error: unknown) {
       console.error('Error saving edits:', error);
@@ -480,7 +595,7 @@ export default function OrderDetail() {
         <div className="flex gap-2 flex-wrap">
           {editing ? (
             <>
-              <Button variant="ghost" icon={<X className="w-4 h-4" />} showChevron={false} onClick={() => { setEditing(false); setEditItems(items.map((i) => ({ ...i }))); }}>
+              <Button variant="ghost" icon={<X className="w-4 h-4" />} showChevron={false} onClick={() => { setEditing(false); setEditItems(items.map((i) => ({ ...i }))); setNewItems([]); }}>
                 Cancel
               </Button>
               <Button icon={<Save className="w-4 h-4" />} onClick={handleSaveEdits} loading={saving}>
@@ -815,12 +930,72 @@ export default function OrderDetail() {
                 </tbody>
                 {editing && (
                   <tfoot>
+                    {/* New items being added */}
+                    {newItems.map((ni) => (
+                      <tr key={ni._tempKey} className="border-b border-green-100 bg-green-50/40">
+                        <td className="px-4 py-3 font-medium text-nav-dark">
+                          <div className="flex items-center gap-1">
+                            <Plus className="w-3 h-3 text-crx-green" />
+                            {ni.product_name}
+                            <span className="text-xs text-crx-green font-normal">(new)</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 font-mono">
+                          <input
+                            type="number"
+                            value={ni.price_per_unit}
+                            onChange={(e) => updateNewItem(ni._tempKey, 'price_per_unit', Number(e.target.value))}
+                            className="w-24 px-2 py-1 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                            step="0.01"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="number"
+                            value={ni.total_units_needed || ''}
+                            onChange={(e) => updateNewItem(ni._tempKey, 'total_units_needed', Number(e.target.value))}
+                            className="w-20 px-2 py-1 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                            placeholder="Qty"
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-secondary">0</td>
+                        <td className="px-4 py-3 text-secondary">{ni.total_units_needed || 0}</td>
+                        <td className="px-4 py-3">
+                          <span className="text-xs text-secondary">—</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => removeNewItem(ni._tempKey)}
+                            className="text-red-400 hover:text-red-600"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {/* Add Product button */}
+                    <tr className="border-t border-dashed border-gray-300">
+                      <td colSpan={7} className="px-4 py-2">
+                        <button
+                          type="button"
+                          onClick={() => { setShowProductModal(true); setProductSearch(''); }}
+                          className="flex items-center gap-2 text-sm text-crx-green hover:text-crx-green/80 font-medium transition-colors"
+                        >
+                          <Plus className="w-4 h-4" />
+                          Add Product
+                        </button>
+                      </td>
+                    </tr>
+                    {/* New total */}
                     <tr className="border-t border-gray-200">
                       <td colSpan={2} className="px-4 py-3 font-medium text-nav-dark">
                         New Total:
                       </td>
                       <td colSpan={5} className="px-4 py-3 font-semibold text-nav-dark">
-                        {fmt(editItems.reduce((s, i) => s + i.price_per_unit * i.total_units_needed, 0))}
+                        {fmt(
+                          editItems.reduce((s, i) => s + i.price_per_unit * i.total_units_needed, 0) +
+                          newItems.reduce((s, i) => s + i.price_per_unit * i.total_units_needed, 0)
+                        )}
                       </td>
                     </tr>
                   </tfoot>
@@ -1023,6 +1198,86 @@ export default function OrderDetail() {
               Void Order
             </Button>
           </div>
+        </div>
+      </Modal>
+
+      {/* Add Product to Order Modal */}
+      <Modal
+        open={showProductModal}
+        onClose={() => setShowProductModal(false)}
+        title="Add Product to Order"
+        size="large"
+      >
+        <div className="space-y-4">
+          <Input
+            value={productSearch}
+            onChange={(e) => setProductSearch(e.target.value)}
+            placeholder="Search products..."
+          />
+
+          <div className="max-h-96 overflow-y-auto space-y-2">
+            {filteredProducts.map((product) => {
+              const tierNum = customer?.assigned_tier || 1;
+              const tierPrice =
+                tierNum === 1
+                  ? product.tier1_price || 0
+                  : tierNum === 2
+                    ? product.tier2_price || 0
+                    : product.tier3_price || 0;
+              const inv = inventoryByProduct[product.id];
+              const onFloor = inv ? inv.available : 0;
+              const netPos = inv ? inv.onOrder + inv.available - inv.prebooked : 0;
+
+              // Check if product is already in order (existing or newly added)
+              const alreadyInOrder = editItems.some((ei) => ei.product_id === product.id) ||
+                newItems.some((ni) => ni.product_id === product.id);
+
+              return (
+                <button
+                  key={product.id}
+                  onClick={() => handleAddProduct(product)}
+                  disabled={alreadyInOrder}
+                  className={`w-full text-left p-3 border rounded-lg transition-colors ${
+                    alreadyInOrder
+                      ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
+                      : 'border-gray-200 hover:border-crx-green hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="font-medium text-nav-dark">
+                    {product.product_name}
+                    {alreadyInOrder && (
+                      <span className="text-xs text-secondary ml-2">(already in order)</span>
+                    )}
+                  </div>
+                  {product.manufacturer && (
+                    <div className="text-xs text-secondary mt-1">{product.manufacturer}</div>
+                  )}
+                  <div className="flex items-center gap-4 mt-2 text-xs text-secondary">
+                    {product.unit_size && <span>Size: {product.unit_size}</span>}
+                    {tierPrice > 0 && (
+                      <span className="text-crx-green font-medium">
+                        Price:{' '}
+                        {new Intl.NumberFormat('en-US', {
+                          style: 'currency',
+                          currency: 'USD',
+                        }).format(tierPrice)}
+                      </span>
+                    )}
+                    <span className={onFloor > 0 ? 'text-blue-600' : 'text-gray-400'}>
+                      On Floor: {onFloor.toLocaleString()}
+                    </span>
+                    <span className={netPos > 0 ? 'text-emerald-600' : netPos < 0 ? 'text-red-600' : 'text-gray-400'}>
+                      Net: {netPos.toLocaleString()}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {filteredProducts.length === 0 && (
+            <div className="text-center py-8 text-secondary">No products found</div>
+          )}
         </div>
       </Modal>
     </div>
