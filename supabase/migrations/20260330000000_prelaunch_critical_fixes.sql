@@ -655,7 +655,7 @@ BEGIN
   SELECT * INTO v_customer FROM customers WHERE id = p_customer_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Customer not found: %', p_customer_id; END IF;
 
-  v_order_number := next_order_number();
+  v_order_number := generate_order_number();
 
   -- Check inventory (warn, don't block)
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
