@@ -208,6 +208,7 @@ export interface Order {
   salesman_id: string | null;
   deleted_at: string | null;
   customer_po_number: string | null;
+  is_planned: boolean;
   notes: string | null;
   created_by: string | null;
   created_at: string;

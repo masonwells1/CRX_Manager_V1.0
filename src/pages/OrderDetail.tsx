@@ -86,6 +86,9 @@ export default function OrderDetail() {
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
 
+  // Planned/Committed toggle
+  const [togglingPlanned, setTogglingPlanned] = useState(false);
+
   const isAdmin = role === 'admin';
   const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled';
 
@@ -292,6 +295,33 @@ export default function OrderDetail() {
       toast('error', sanitizeError(error));
     }
     setSaving(false);
+  };
+
+  const handleTogglePlanned = async () => {
+    if (!order || !profile) return;
+    setTogglingPlanned(true);
+    try {
+      const newValue = !order.is_planned;
+      const result = await supabase
+        .from('orders')
+        .update({ is_planned: newValue, updated_at: new Date().toISOString() })
+        .eq('id', order.id)
+        .select();
+      checkMutationResult(result, 'Toggle planned status');
+      setOrder({ ...order, is_planned: newValue });
+      toast('success', newValue ? 'Order marked as Planned' : 'Order marked as Committed');
+      logActivity(
+        'order_updated',
+        `Order ${order.order_number} marked as ${newValue ? 'planned' : 'committed'}`,
+        profile.id,
+        'order',
+        order.id,
+        order.customer_id,
+      );
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setTogglingPlanned(false);
   };
 
   const handleStatusChange = async () => {
@@ -672,6 +702,16 @@ export default function OrderDetail() {
                 Void Order
               </button>
             )}
+            <button
+              onClick={handleTogglePlanned}
+              disabled={togglingPlanned}
+              title={order.is_planned ? 'Click to mark as Committed' : 'Click to mark as Planned'}
+              className="cursor-pointer disabled:opacity-50"
+            >
+              <Badge variant={order.is_planned ? 'warning' : 'success'} size="md">
+                {togglingPlanned ? '...' : order.is_planned ? 'Planned' : 'Committed'}
+              </Badge>
+            </button>
             <Badge variant={statusToBadgeVariant[order.status] || 'default'} size="md">
               {order.status.replace('_', ' ')}
             </Badge>

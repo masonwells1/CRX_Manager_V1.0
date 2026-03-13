@@ -21,6 +21,7 @@ interface OrderWithFulfillment extends Order {
   fulfillment_pct: number;
   invoiced_pct: number;
   farm_group_name: string | null;
+  customer_name: string;
 }
 
 export default function Orders() {
@@ -30,6 +31,7 @@ export default function Orders() {
   const [orders, setOrders] = useState<OrderWithFulfillment[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
+  const [planFilter, setPlanFilter] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -115,7 +117,8 @@ export default function Orders() {
       const invPct = orderCents > 0 ? Math.round((invCents / orderCents) * 100) : 0;
       const cust = o.customer as unknown as { farm_name: string; parent_customer_id: string | null } | null;
       const farmGroupName = cust?.parent_customer_id ? parentNameMap[cust.parent_customer_id] || null : null;
-      return { ...o, fulfillment_pct: pct, invoiced_pct: Math.min(invPct, 100), farm_group_name: farmGroupName };
+      const customerName = cust?.farm_name || '';
+      return { ...o, fulfillment_pct: pct, invoiced_pct: Math.min(invPct, 100), farm_group_name: farmGroupName, customer_name: customerName };
     });
 
     setOrders(enriched);
@@ -128,6 +131,8 @@ export default function Orders() {
 
   const filtered = orders.filter((o) => {
     if (statusFilter && o.status !== statusFilter) return false;
+    if (planFilter === 'planned' && !o.is_planned) return false;
+    if (planFilter === 'committed' && o.is_planned) return false;
     return true;
   });
 
@@ -243,9 +248,14 @@ export default function Orders() {
       header: 'Status',
       sortable: true,
       render: (row) => (
-        <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
-          {row.status.replace('_', ' ')}
-        </Badge>
+        <div className="flex items-center gap-1.5">
+          <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
+            {row.status.replace('_', ' ')}
+          </Badge>
+          {row.is_planned && (
+            <Badge variant="warning">Planned</Badge>
+          )}
+        </div>
       ),
     },
     {
@@ -347,6 +357,16 @@ export default function Orders() {
                   <option value="partially_fulfilled">Partially Fulfilled</option>
                   <option value="fulfilled">Fulfilled</option>
                   <option value="cancelled">Cancelled</option>
+                </select>
+                <select
+                  value={planFilter}
+                  onChange={(e) => setPlanFilter(e.target.value)}
+                  aria-label="Filter by planned or committed"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">All Orders</option>
+                  <option value="planned">Planned Only</option>
+                  <option value="committed">Committed Only</option>
                 </select>
                 {canBulkAction && filtered.length > 0 && (
                   <button
