@@ -779,7 +779,7 @@ BEGIN
       v_order_id, p_customer_id,
       s->>'recipient',
       (s->>'percentage')::numeric,
-      v_total_profit * ((s->>'percentage')::numeric / 100),
+      GREATEST(v_total_profit * ((s->>'percentage')::numeric / 100), 0),
       v_total_profit,
       p_order_date,
       'pending'

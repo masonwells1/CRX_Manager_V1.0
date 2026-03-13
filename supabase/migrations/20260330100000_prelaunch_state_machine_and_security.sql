@@ -175,7 +175,7 @@ BEGIN
       v_order_id, v_quote.customer_id,
       s->>'recipient',
       (s->>'percentage')::numeric,
-      v_quote.total_profit * ((s->>'percentage')::numeric / 100),
+      GREATEST(v_quote.total_profit * ((s->>'percentage')::numeric / 100), 0),
       v_quote.total_profit,
       current_date,
       'pending'
