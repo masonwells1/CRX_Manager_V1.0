@@ -81,8 +81,8 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
         *,
         performer:profiles!inventory_transactions_performed_by_fkey(full_name),
         order:orders!inventory_transactions_order_id_fkey(order_number, customer:customers(farm_name)),
-        purchase_order:purchase_orders(po_number),
-        delivery:deliveries(delivery_number)
+        purchase_order:purchase_orders!inventory_transactions_purchase_order_id_fkey(po_number),
+        delivery:deliveries!inventory_transactions_delivery_id_fkey(delivery_number)
       `)
       .eq('product_id', productId)
       .order('created_at', { ascending: true })
