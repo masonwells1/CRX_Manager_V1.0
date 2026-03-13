@@ -12,7 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
-import { parseLocalDate } from '../lib/dateUtils';
+import { parseLocalDate, localToday } from '../lib/dateUtils';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field } from '../types';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
@@ -237,7 +237,7 @@ export default function CustomerDetail() {
     } else if (selectedTab === 'financials') {
       if (financialsFetched.current) { setTabLoading(false); return; }
       setFinancialsLoading(true);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localToday();
       const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
       const [agingRes, txnRes, prepayRes] = await Promise.all([
         supabase.rpc('get_ar_aging', { p_as_of_date: today }),

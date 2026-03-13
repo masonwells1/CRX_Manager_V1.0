@@ -235,12 +235,17 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
         checkMutationResult(result, 'Update product pricing');
         success++;
 
-        if (row.cost !== undefined && row.cost !== product.current_cost) {
+        // Log cost_history when ANY pricing field changes (cost OR tier prices)
+        const costChanged = row.cost !== undefined && row.cost !== product.current_cost;
+        const tier1Changed = row.tier1_price !== undefined && row.tier1_price !== product.tier1_price;
+        const tier2Changed = row.tier2_price !== undefined && row.tier2_price !== product.tier2_price;
+        const tier3Changed = row.tier3_price !== undefined && row.tier3_price !== product.tier3_price;
+        if (costChanged || tier1Changed || tier2Changed || tier3Changed) {
           const { error: histErr } = await supabase.from('cost_history').insert({
             product_id: product.id,
             changed_by: profile?.id,
             old_cost: product.current_cost,
-            new_cost: row.cost,
+            new_cost: row.cost ?? product.current_cost,
             old_tier1_price: product.tier1_price,
             new_tier1_price: row.tier1_price ?? product.tier1_price,
             old_tier2_price: product.tier2_price,

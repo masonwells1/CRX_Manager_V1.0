@@ -27,11 +27,13 @@ export interface CalcItem {
   calc_mode?: CalcMode;
 }
 
-/** Get tier price from product — pure function */
+/** Get tier price from product — pure function.
+ * Falls back to tier1_price when tier2/3 is missing (matches QuoteBuilder behavior). */
 export function getTierPrice(product: Product, tierNum: number): number {
-  if (tierNum === 1) return product.tier1_price || 0;
-  if (tierNum === 2) return product.tier2_price || 0;
-  return product.tier3_price || 0;
+  const t1 = product.tier1_price || 0;
+  if (tierNum === 1) return t1;
+  if (tierNum === 2) return product.tier2_price || t1;
+  return product.tier3_price || t1;
 }
 
 /** Look up unit→oz conversion factor — pure function */

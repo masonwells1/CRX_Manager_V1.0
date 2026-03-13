@@ -476,7 +476,7 @@ export default function ARaging() {
           .select('id')
           .eq('customer_id', cust.customer_id)
           .eq('reminder_level', reminderLevel)
-          .eq('sent_date', new Date().toISOString().slice(0, 10))
+          .eq('sent_date', localToday())
           .maybeSingle();
 
         if (existing) {
@@ -534,7 +534,7 @@ export default function ARaging() {
             html,
             email_type: 'ar_reminder',
             customer_id: cust.customer_id,
-            idempotency_key: `ar-reminder-${cust.customer_id}-${reminderLevel}-${new Date().toISOString().slice(0, 10)}`,
+            idempotency_key: `ar-reminder-${cust.customer_id}-${reminderLevel}-${localToday()}`,
           });
 
           if (emailResult.success) {
@@ -542,7 +542,7 @@ export default function ARaging() {
             const { error: trackErr } = await supabase.from('ar_reminder_tracking').insert({
               customer_id: cust.customer_id,
               reminder_level: reminderLevel,
-              sent_date: new Date().toISOString().slice(0, 10),
+              sent_date: localToday(),
               email_log_id: emailResult.email_log_id || null,
             });
             if (trackErr) console.error('Reminder tracking insert failed:', trackErr);
