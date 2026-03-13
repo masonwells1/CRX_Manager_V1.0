@@ -206,10 +206,12 @@ export default function OrderDetail() {
 
   const handleAddProduct = (product: Product) => {
     const tierNum = customer?.assigned_tier || 1;
+    // Cascade: tier3 → tier2 → tier1 fallback (same logic as quoteCalc.getTierPrice)
+    const t1 = product.tier1_price || 0;
     const tierPrice =
-      tierNum === 1 ? product.tier1_price || 0
-        : tierNum === 2 ? product.tier2_price || 0
-          : product.tier3_price || 0;
+      tierNum === 1 ? t1
+        : tierNum === 2 ? product.tier2_price || t1
+          : product.tier3_price || t1;
 
     const item: NewOrderItem = {
       _tempKey: nextEditKey(),
@@ -1262,12 +1264,14 @@ export default function OrderDetail() {
           <div className="max-h-96 overflow-y-auto space-y-2">
             {filteredProducts.map((product) => {
               const tierNum = customer?.assigned_tier || 1;
+              // Cascade: tier3 → tier2 → tier1 fallback
+              const t1 = product.tier1_price || 0;
               const tierPrice =
                 tierNum === 1
-                  ? product.tier1_price || 0
+                  ? t1
                   : tierNum === 2
-                    ? product.tier2_price || 0
-                    : product.tier3_price || 0;
+                    ? product.tier2_price || t1
+                    : product.tier3_price || t1;
               const inv = inventoryByProduct[product.id];
               const onFloor = inv ? inv.available : 0;
               const netPos = inv ? inv.onOrder + inv.available - inv.prebooked : 0;

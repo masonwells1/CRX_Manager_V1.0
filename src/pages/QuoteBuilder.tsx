@@ -378,7 +378,8 @@ export default function QuoteBuilder() {
       if (!product) return item;
 
       const pricePerUnit = getTierPrice(product, tierNum);
-      const inventoryUnitFactorOz = getConversionFactor(product.inventory_unit);
+      // Fall back to unit_size if inventory_unit is not set on the product
+      const inventoryUnitFactorOz = getConversionFactor(product.inventory_unit || product.unit_size);
 
       if (item.calc_mode === 'units_direct') {
         // User entered total_units_needed directly — skip rate×acres computation

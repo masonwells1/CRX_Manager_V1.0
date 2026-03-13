@@ -57,7 +57,11 @@ export function recalcItem(
 ): CalcItem {
   const pricePerUnit = getTierPrice(product, tierNum);
   const mode = item.calc_mode || 'rate_acres';
-  const inventoryUnitFactorOz = getConversionFactor(product.inventory_unit, conversions);
+  // Fall back to unit_size if inventory_unit is not set on the product
+  const inventoryUnitFactorOz = getConversionFactor(
+    product.inventory_unit || product.unit_size,
+    conversions
+  );
 
   if (mode === 'units_direct') {
     // User entered total_units_needed directly — skip rate×acres computation
