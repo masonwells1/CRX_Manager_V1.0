@@ -310,7 +310,7 @@ export default function OrderDetail() {
           const parts: string[] = ['Order cancelled.'];
           if (cancelResult.holds_released > 0) parts.push(`${cancelResult.holds_released} hold(s) released.`);
           if (cancelResult.commissions_cancelled > 0) parts.push(`${cancelResult.commissions_cancelled} commission(s) zeroed.`);
-          if (cancelResult.draft_invoices_voided > 0) parts.push(`${cancelResult.draft_invoices_voided} draft invoice(s) voided.`);
+          if (cancelResult.draft_invoices_cancelled > 0) parts.push(`${cancelResult.draft_invoices_cancelled} draft invoice(s) cancelled.`);
           if (cancelResult.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
           if (cancelResult.paid_commissions_flagged > 0) parts.push(`Admin notified about ${cancelResult.paid_commissions_flagged} paid commission(s).`);
           toast('success', parts.join(' '));

@@ -204,7 +204,7 @@ BEGIN
       product_id, transaction_type, quantity, to_location,
       order_id, performed_by, notes
     ) VALUES (
-      v_item.product_id, 'cancelled_order_release', -v_undelivered, 'Main Warehouse',
+      v_item.product_id, 'released', -v_undelivered, 'Main Warehouse',
       p_order_id, v_actor,
       'Released ' || v_undelivered || ' units — order ' || v_order.order_number || ' cancelled'
     );
@@ -347,6 +347,7 @@ BEGIN
 
   -- ── Build result ──
   v_result := jsonb_build_object(
+    'success', true,
     'status', 'cancelled',
     'order_number', v_order.order_number,
     'deliveries_cancelled', v_deliveries_cancelled,
@@ -354,7 +355,7 @@ BEGIN
     'commissions_cancelled', v_commissions_cancelled,
     'paid_commissions_flagged', v_paid_commissions,
     'draft_invoices_cancelled', v_draft_cancelled,
-    'posted_invoices_notified', v_posted_notified
+    'posted_invoices_flagged', v_posted_notified
   );
 
   -- ── Save idempotency result ──
