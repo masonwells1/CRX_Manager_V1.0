@@ -74,6 +74,9 @@ export default function PurchaseOrderDetail() {
     unit_cost: string;
     quantity_received: number;
   }>>([]);
+  const [editProductSearch, setEditProductSearch] = useState<number | null>(null); // index of item being changed
+  const [editProductQuery, setEditProductQuery] = useState('');
+  const [editProductResults, setEditProductResults] = useState<Array<{ id: string; product_name: string; unit_size: string }>>([]);
 
   /* Receiving history */
   const [receivingHistory, setReceivingHistory] = useState<ReceivingRecord[]>([]);
@@ -348,8 +351,28 @@ export default function PurchaseOrderDetail() {
       unit_cost: String(item.unit_cost),
       quantity_received: item.quantity_received,
     })));
+    setEditProductSearch(null);
+    setEditProductQuery('');
     setEditOpen(true);
   };
+
+  // Search products for swapping unreceived PO line items
+  useEffect(() => {
+    if (editProductSearch === null || editProductQuery.length < 2) {
+      setEditProductResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      const { data } = await supabase
+        .from('products')
+        .select('id, product_name, unit_size')
+        .ilike('product_name', `%${editProductQuery}%`)
+        .eq('is_active', true)
+        .limit(8);
+      setEditProductResults(data || []);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [editProductQuery, editProductSearch]);
 
   const handleSaveEdit = async () => {
     if (!po || !profile) return;
@@ -357,6 +380,7 @@ export default function PurchaseOrderDetail() {
 
     try {
       const itemsPayload = editItems.map((item) => ({
+        id: item.id,  // Send ID so backend can UPDATE in-place (critical for partially received POs)
         product_id: item.product_id,
         product_name: item.product_name,
         unit_size: (item as unknown as { unit_size?: string }).unit_size,
@@ -901,11 +925,65 @@ export default function PurchaseOrderDetail() {
           <div className="border-t pt-4">
             <h4 className="text-sm font-medium text-nav-dark mb-3">Line Items</h4>
             <div className="space-y-3">
-              {editItems.map((item, idx) => (
-                <div key={item.id} className="grid grid-cols-[1fr,100px,100px] gap-2 items-start">
+              {editItems.map((item, idx) => {
+                const isReceived = item.quantity_received > 0;
+                return (
+                <div key={item.id || idx} className="grid grid-cols-[1fr,100px,100px] gap-2 items-start">
                   <div>
-                    <p className="text-sm font-medium text-nav-dark">{item.product_name}</p>
-                    <p className="text-xs text-secondary">Received: {item.quantity_received}</p>
+                    {isReceived ? (
+                      <>
+                        <p className="text-sm font-medium text-nav-dark">{item.product_name}</p>
+                        <p className="text-xs text-amber-600">🔒 Received: {item.quantity_received} (locked)</p>
+                      </>
+                    ) : editProductSearch === idx ? (
+                      <div className="relative">
+                        <Input
+                          value={editProductQuery}
+                          onChange={(e) => setEditProductQuery(e.target.value)}
+                          placeholder="Search products..."
+                          autoFocus
+                        />
+                        {editProductResults.length > 0 && (
+                          <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                            {editProductResults.map((p) => (
+                              <button
+                                key={p.id}
+                                type="button"
+                                className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
+                                onClick={() => {
+                                  const newItems = [...editItems];
+                                  newItems[idx] = { ...newItems[idx], product_id: p.id, product_name: p.product_name };
+                                  setEditItems(newItems);
+                                  setEditProductSearch(null);
+                                  setEditProductQuery('');
+                                }}
+                              >
+                                <span className="font-medium">{p.product_name}</span>
+                                {p.unit_size && <span className="text-secondary ml-1">({p.unit_size})</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          className="text-xs text-secondary hover:text-nav-dark mt-1"
+                          onClick={() => { setEditProductSearch(null); setEditProductQuery(''); }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div>
+                        <button
+                          type="button"
+                          className="text-sm font-medium text-nav-dark hover:text-crx-green text-left"
+                          onClick={() => { setEditProductSearch(idx); setEditProductQuery(''); }}
+                        >
+                          {item.product_name}
+                        </button>
+                        <p className="text-xs text-crx-green">Click to change product</p>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs text-secondary mb-1">Qty</label>
@@ -936,7 +1014,8 @@ export default function PurchaseOrderDetail() {
                     />
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
