@@ -1,4 +1,4 @@
-# Migration History (124 migrations)
+# Migration History (125 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -76,3 +76,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 70 | 20260307200000 | **Sales & Chemical History Reporting** — 3 new RPCs (`get_sales_detail_report` with LATERAL JOIN to invoices, `get_sales_summary_report` with CTE-based GROUP BY dimension, `get_customer_farm_group` recursive CTE for parent/child farm grouping). Powers new `/sales-reports` page |
 | 71 | 20260308100000 | **Email Infrastructure** — `email_type` enum (8 types), `email_log` table (audit trail with idempotency_key, resend_message_id, status tracking), `ar_reminder_tracking` table (dedup: max one reminder per customer per level per day), `get_ar_reminder_candidates()` RPC (customers with 30+ day overdue invoices). RLS: admin SELECT/INSERT on both tables |
 | 72 | 20260308200000 | **Dashboard Margin Alerts** — extends `financial_dashboard_summary()` with 3 new CTEs: bottom 10 products by margin % this season, bottom 10 customers by margin % this season, monthly margin % trend (last 12 months). Uses `compute_season()` for current season filter. Total function now has 16 CTEs |
+| 73 | 20260313004449 | **PO Receive: stop auto-updating product cost** — flips `p_skip_cost_update` default from `false` to `true` in `receive_po_items()`. Product master cost (pricing basis) is now admin-controlled only. Supplier cost still tracked on `purchase_order_items.unit_cost` and `receiving_records.unit_cost` |

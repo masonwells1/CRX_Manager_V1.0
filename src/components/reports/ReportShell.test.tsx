@@ -121,8 +121,9 @@ describe('ReportShell', () => {
     const month = now.getMonth();
     const seasonStart = month >= 9 ? `${year}-10-01` : `${year - 1}-10-01`;
     expect(start).toBe(seasonStart);
-    // End should be today
-    expect(end).toBe(now.toISOString().split('T')[0]);
+    // End should be today (local date, not UTC)
+    const expectedEnd = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    expect(end).toBe(expectedEnd);
   });
 
   it('shows CSV export button when onExportCSV is provided', () => {

@@ -94,7 +94,7 @@ To copy them: read each `.md` file (except README.md) from `docs/claude-memory/`
 
 ### Purchase Order: `draft -> submitted -> partially_received -> fully_received -> cancelled`
 - Receiving creates `receiving_records` with per-item condition/lot/notes
-- Auto-updates product cost if PO unit_cost differs
+- Does NOT auto-update product cost (p_skip_cost_update defaults to true). Supplier cost tracked on receiving_records.unit_cost
 
 ### Return/RMA: `requested -> approved -> received -> credited -> rejected`
 
