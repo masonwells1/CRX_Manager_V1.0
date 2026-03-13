@@ -99,10 +99,10 @@ BEGIN
       FROM order_items oi
      WHERE oi.order_id = p_order_id
        AND (v_passed_ids IS NULL OR oi.id != ALL(v_passed_ids))
-       AND oi.quantity_prebooked > 0
+       AND oi.quantity_remaining > 0
   LOOP
     UPDATE inventory
-       SET quantity_prebooked = GREATEST(quantity_prebooked - v_old_item.quantity_prebooked, 0),
+       SET quantity_prebooked = GREATEST(quantity_prebooked - v_old_item.quantity_remaining, 0),
            updated_at = now()
      WHERE product_id = v_old_item.product_id AND location = 'Main Warehouse';
   END LOOP;
