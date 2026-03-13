@@ -158,10 +158,11 @@ export default function ProductDetail() {
 
     setSaving(true);
     if (isNew) {
-      const { error } = await supabase.from('products').insert([product]);
-      if (error) {
-        toast('error', error.message);
+      const productInsertResult = await supabase.from('products').insert([product]);
+      if (productInsertResult.error) {
+        toast('error', productInsertResult.error.message);
       } else {
+        checkMutationResult(productInsertResult, 'Insert product');
         setIsDirty(false);
         toast('success', 'Product created');
         logActivity('product_created', `Product ${product.product_name} created`, profile!.id, 'product');
@@ -183,7 +184,7 @@ export default function ProductDetail() {
       );
 
       if (pricingChanged && profile) {
-        const { error: costErr } = await supabase.from('cost_history').insert({
+        const costHistoryResult = await supabase.from('cost_history').insert({
           product_id: id,
           changed_by: profile.id,
           old_cost: current.current_cost,
@@ -196,7 +197,8 @@ export default function ProductDetail() {
           new_tier3_price: product.tier3_price,
           change_note: 'Updated via product detail save',
         });
-        if (costErr) console.error('Cost history insert failed:', costErr);
+        if (costHistoryResult.error) console.error('Cost history insert failed:', costHistoryResult.error);
+        checkMutationResult(costHistoryResult, 'Insert cost history (pricing change)');
       }
 
       try {
@@ -223,7 +225,7 @@ export default function ProductDetail() {
       toast('error', 'Enter a valid cost');
       return;
     }
-    const { error } = await supabase.from('cost_history').insert([
+    const manualCostResult = await supabase.from('cost_history').insert([
       {
         product_id: id,
         changed_by: profile?.id,
@@ -238,7 +240,8 @@ export default function ProductDetail() {
         change_note: costNote || 'Manual cost update',
       },
     ]);
-    if (!error) {
+    if (!manualCostResult.error) {
+      checkMutationResult(manualCostResult, 'Insert cost history (manual update)');
       try {
         const result = await supabase
           .from('products')

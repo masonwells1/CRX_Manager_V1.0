@@ -104,7 +104,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
     setSending(true);
     const mentions = extractMentions(content);
 
-    const { error } = await supabase.from('team_note_comments').insert({
+    const commentResult = await supabase.from('team_note_comments').insert({
       note_id: noteId,
       parent_id: parentId,
       created_by: profile.id,
@@ -112,9 +112,10 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       mentions,
     });
 
-    if (error) {
+    if (commentResult.error) {
       toast('error', 'Failed to post comment');
     } else {
+      checkMutationResult(commentResult, 'Insert team note comment');
       setNewComment('');
       setReplyingTo(null);
       fetchComments();

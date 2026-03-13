@@ -357,7 +357,7 @@ export default function TeamBoard() {
         toast('error', err instanceof Error ? err.message : 'Failed to update note');
       }
     } else {
-      const { error } = await supabase.from('team_notes').insert({
+      const noteResult = await supabase.from('team_notes').insert({
         title,
         content: content || null,
         note_type: noteType,
@@ -366,9 +366,10 @@ export default function TeamBoard() {
         due_date: dueDate || null,
         created_by: profile.id,
       });
-      if (error) {
+      if (noteResult.error) {
         toast('error', 'Failed to add note');
       } else {
+        checkMutationResult(noteResult, 'Insert team note');
         toast('success', 'Note added');
         setModalOpen(false);
         resetForm();

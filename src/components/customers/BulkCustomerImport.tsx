@@ -3,7 +3,7 @@ import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-rea
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { supabase } from '../../lib/db';
+import { supabase, checkMutationResult } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 
 interface BulkCustomerImportProps {
@@ -299,15 +299,16 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
     let failed = 0;
 
     for (const customer of validation.valid) {
-      const { error } = await supabase.from('customers').insert({
+      const customerResult = await supabase.from('customers').insert({
         ...customer,
         is_active: true,
       });
 
-      if (error) {
-        console.error('Failed to insert customer:', error);
+      if (customerResult.error) {
+        console.error('Failed to insert customer:', customerResult.error);
         failed++;
       } else {
+        try { checkMutationResult(customerResult, 'Insert customer'); } catch (e) { console.error(e); failed++; continue; }
         success++;
       }
     }

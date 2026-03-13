@@ -11,7 +11,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { supabase, checkMutationResult } from '../lib/db';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { downloadStatementPdf, downloadBatchStatements, generateStatementPdf } from '../lib/statementPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
@@ -539,13 +539,14 @@ export default function ARaging() {
 
           if (emailResult.success) {
             // Track in ar_reminder_tracking for dedup
-            const { error: trackErr } = await supabase.from('ar_reminder_tracking').insert({
+            const trackResult = await supabase.from('ar_reminder_tracking').insert({
               customer_id: cust.customer_id,
               reminder_level: reminderLevel,
               sent_date: localToday(),
               email_log_id: emailResult.email_log_id || null,
             });
-            if (trackErr) console.error('Reminder tracking insert failed:', trackErr);
+            if (trackResult.error) console.error('Reminder tracking insert failed:', trackResult.error);
+            checkMutationResult(trackResult, 'Insert AR reminder tracking');
             sent++;
           }
         } catch {

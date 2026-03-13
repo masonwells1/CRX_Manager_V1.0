@@ -14,7 +14,7 @@ At the start of each session, silently check if `docs/claude-memory/MEMORY.md` h
 To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
 
 ## Current State (2026-03-10)
-- 56 pages, 83 tables, ~160 RPCs, 152 migrations
+- 56 pages, 83 tables, ~160 RPCs, 153 migrations
 - 1,444 unit tests (93 files) + 626 E2E tests (102 spec files), all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
@@ -237,7 +237,7 @@ Run `/update-docs` for a full audit anytime (not required — the commit hook ha
 |-----|----------|
 | `docs/reference/database-schema.md` | 83 tables + RLS policy matrix |
 | `docs/reference/rpc-functions.md` | ~160 RPCs + helpers + triggers |
-| `docs/reference/migration-history.md` | 152 migration entries |
+| `docs/reference/migration-history.md` | 153 migration entries |
 | `docs/reference/pages-routes.md` | 56 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |

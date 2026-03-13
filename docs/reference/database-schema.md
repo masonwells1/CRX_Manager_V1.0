@@ -80,7 +80,7 @@
 - `commission_payment_items` - Individual commissions included in a payment
 - `write_offs` - Invoice write-off records with reason and approval
 - `finance_charges` - Interest charges on overdue invoices
-- `prepayments` - Customer prepayment deposits
+- `prepay_credits` - Customer prepayment credit balances (prepay bucket system)
 
 ## Blend Recipes
 - `blend_recipes` - Saved blend recipe templates (recipe_name, recipe_number, category, total_cost, total_weight, status)

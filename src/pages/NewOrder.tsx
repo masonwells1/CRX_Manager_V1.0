@@ -18,7 +18,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useFormDraft } from '../hooks/useFormDraft';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
-import { localToday } from '../lib/dateUtils';
+import { localToday, localDatePlusDays } from '../lib/dateUtils';
 import type { Product, Customer } from '../types';
 
 interface LocalItem {
@@ -218,7 +218,7 @@ export default function NewOrder() {
 
     // Duplicate order warning: check for recent orders for same customer
     try {
-      const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      const sevenDaysAgo = localDatePlusDays(-7);
       const { data: recentOrders } = await supabase
         .from('orders')
         .select('order_number, order_date')

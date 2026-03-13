@@ -3,7 +3,7 @@ import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-rea
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { supabase } from '../../lib/db';
+import { supabase, checkMutationResult } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 
 interface BulkProductImportProps {
@@ -308,15 +308,16 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
     let failed = 0;
 
     for (const product of validation.valid) {
-      const { error } = await supabase.from('products').insert({
+      const productResult = await supabase.from('products').insert({
         ...product,
         is_active: true,
       });
 
-      if (error) {
-        console.error('Failed to insert product:', error);
+      if (productResult.error) {
+        console.error('Failed to insert product:', productResult.error);
         failed++;
       } else {
+        try { checkMutationResult(productResult, 'Insert product'); } catch (e) { console.error(e); failed++; continue; }
         success++;
       }
     }

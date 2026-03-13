@@ -444,7 +444,7 @@ export default function DeliveryDetail() {
           .from('delivery-photos')
           .getPublicUrl(storagePath);
 
-        const { error: insertErr } = await supabase.from('delivery_photos').insert({
+        const photoResult = await supabase.from('delivery_photos').insert({
           delivery_id: id!,
           storage_path: storagePath,
           image_url: urlData.publicUrl,
@@ -452,10 +452,11 @@ export default function DeliveryDetail() {
           file_size: file.size,
           sort_order: photos.length + uploadCount,
         });
-        if (insertErr) {
-          toast('error', `Photo saved to storage but DB record failed: ${insertErr.message}`);
+        if (photoResult.error) {
+          toast('error', `Photo saved to storage but DB record failed: ${photoResult.error.message}`);
           continue;
         }
+        checkMutationResult(photoResult, 'Insert delivery photo');
 
         uploadCount++;
       } catch (err) {

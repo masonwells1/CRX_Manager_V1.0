@@ -3,7 +3,7 @@ import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-rea
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { supabase } from '../../lib/db';
+import { supabase, checkMutationResult } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
 
@@ -371,9 +371,10 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           })
         );
 
-        const { error: itemsError } = await supabase.from('order_items').insert(orderItems);
+        const itemsResult = await supabase.from('order_items').insert(orderItems);
 
-        if (itemsError) throw itemsError;
+        if (itemsResult.error) throw itemsResult.error;
+        checkMutationResult(itemsResult, 'Insert order_items');
 
         successCount++;
       } catch (error) {

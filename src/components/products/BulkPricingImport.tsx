@@ -241,7 +241,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
         const tier2Changed = row.tier2_price !== undefined && row.tier2_price !== product.tier2_price;
         const tier3Changed = row.tier3_price !== undefined && row.tier3_price !== product.tier3_price;
         if (costChanged || tier1Changed || tier2Changed || tier3Changed) {
-          const { error: histErr } = await supabase.from('cost_history').insert({
+          const costHistResult = await supabase.from('cost_history').insert({
             product_id: product.id,
             changed_by: profile?.id,
             old_cost: product.current_cost,
@@ -254,7 +254,8 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
             new_tier3_price: row.tier3_price ?? product.tier3_price,
             change_note: 'Bulk pricing update',
           });
-          if (histErr) console.error('Cost history audit failed:', histErr);
+          if (costHistResult.error) console.error('Cost history audit failed:', costHistResult.error);
+          checkMutationResult(costHistResult, 'Insert cost history for bulk pricing import');
         }
       } catch {
         failed++;

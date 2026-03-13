@@ -3,7 +3,7 @@ import { Upload, X, Image as ImageIcon, AlertCircle } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Input from '../ui/Input';
-import { supabase } from '../../lib/db';
+import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { compressImage } from '../../lib/imageCompression';
 import { localToday } from '../../lib/dateUtils';
@@ -175,7 +175,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
           console.error('Failed to create signed URL:', urlError.message);
         }
 
-        const { error: imgError } = await supabase.from('blend_ticket_images').insert({
+        const imgResult = await supabase.from('blend_ticket_images').insert({
           blend_ticket_id: ticket.id,
           storage_path: filePath,
           image_url: urlData?.signedUrl || filePath,
@@ -183,19 +183,21 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
           mime_type: compressedFile.type,
           upload_order: i + 1,
         });
-        if (imgError) throw imgError;
+        if (imgResult.error) throw imgResult.error;
+        checkMutationResult(imgResult, 'Insert blend_ticket_images record');
 
         setUploadProgress(Math.round(((i + 1) / images.length) * 100));
       }
 
-      const { error: ocrError } = await supabase.from('ocr_processing_queue').insert({
+      const ocrResult = await supabase.from('ocr_processing_queue').insert({
         blend_ticket_id: ticket.id,
         status: 'pending',
         priority: 0,
         retry_count: 0,
         max_retries: 3,
       });
-      if (ocrError) throw ocrError;
+      if (ocrResult.error) throw ocrResult.error;
+      checkMutationResult(ocrResult, 'Insert ocr_processing_queue record');
 
       // Trigger server-side OCR processing via Edge Function (non-blocking)
       supabase.functions.invoke('process-blend-ticket', {

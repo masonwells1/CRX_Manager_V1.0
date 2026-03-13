@@ -3,7 +3,7 @@ import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-rea
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { supabase } from '../../lib/db';
+import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 
@@ -412,7 +412,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               const profit = total_price - total_cost;
               const net_margin = total_price > 0 ? (profit / total_price) * 100 : 0;
 
-              const { error: itemError } = await supabase.from('quote_items').insert({
+              const quoteItemResult = await supabase.from('quote_items').insert({
                 quote_id: quote.id,
                 section_id: section.id,
                 product_id: productId,
@@ -431,7 +431,8 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 notes: item.notes || '',
               });
 
-              if (!itemError) {
+              if (!quoteItemResult.error) {
+                checkMutationResult(quoteItemResult, 'Insert quote_item');
                 itemsCreated++;
               }
             }

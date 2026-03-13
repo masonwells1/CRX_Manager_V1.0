@@ -423,7 +423,7 @@ export default function InventoryPage() {
     }
 
     setCreatingHold(true);
-    const { error } = await supabase.from('inventory_holds').insert({
+    const holdResult = await supabase.from('inventory_holds').insert({
       product_id: holdProductId,
       customer_id: holdCustomerId || null,
       quantity: qty,
@@ -433,9 +433,10 @@ export default function InventoryPage() {
       expires_at: holdExpires || null,
     });
 
-    if (error) {
-      toast('error', sanitizeError(error));
+    if (holdResult.error) {
+      toast('error', sanitizeError(holdResult.error));
     } else {
+      checkMutationResult(holdResult, 'Insert inventory hold');
       toast('success', 'Hold created successfully');
       setHoldOpen(false);
       fetchInventory();

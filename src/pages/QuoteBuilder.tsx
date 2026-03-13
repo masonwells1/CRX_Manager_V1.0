@@ -28,6 +28,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
+import { localDatePlusDays } from '../lib/dateUtils';
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -845,7 +846,7 @@ export default function QuoteBuilder() {
           })),
         };
 
-        const { error: versionError } = await supabase.from('quote_versions').insert({
+        const versionResult = await supabase.from('quote_versions').insert({
           quote_id: result,
           version_number: versionNum,
           sent_by: profile.id,
@@ -854,10 +855,11 @@ export default function QuoteBuilder() {
           snapshot_data: snapshotData,
           notes: `Version ${versionNum} sent`,
         });
-        if (versionError) {
-          console.error('Failed to create quote version snapshot:', versionError);
+        if (versionResult.error) {
+          console.error('Failed to create quote version snapshot:', versionResult.error);
           toast('error', 'Quote sent but version snapshot failed. Contact admin.');
         }
+        checkMutationResult(versionResult, 'Insert quote version snapshot');
 
         // === GAP FIX #5: Log activity for quote sent ===
         await logActivity(
@@ -993,7 +995,7 @@ export default function QuoteBuilder() {
     // Duplicate order warning: check for recent orders for same customer
     if (customerId) {
       try {
-        const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+        const sevenDaysAgo = localDatePlusDays(-7);
         const { data: recentOrders } = await supabase
           .from('orders')
           .select('order_number, order_date')

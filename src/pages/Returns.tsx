@@ -233,8 +233,9 @@ export default function Returns() {
         notes: item.notes || null,
       }));
 
-      const { error: itemsError } = await supabase.from('return_items').insert(itemsPayload);
-      if (itemsError) throw itemsError;
+      const returnItemsResult = await supabase.from('return_items').insert(itemsPayload);
+      if (returnItemsResult.error) throw returnItemsResult.error;
+      checkMutationResult(returnItemsResult, 'Insert return items');
 
       await logActivity(
         'return_requested',
