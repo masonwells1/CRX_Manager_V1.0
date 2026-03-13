@@ -249,6 +249,10 @@ export default function OrderDetail() {
       // Build payload: existing items (with id) + new items (without id)
       const existingPayload = editItems.map((item) => ({
         id: item.id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        unit_size: item.unit_size,
+        cost_per_unit: item.cost_per_unit,
         price_per_unit: item.price_per_unit,
         total_units_needed: item.total_units_needed,
       }));
