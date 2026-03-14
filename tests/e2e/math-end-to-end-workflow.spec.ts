@@ -555,7 +555,7 @@ test.describe.serial('E2E Math: Full Dollar-Tracking Workflow', () => {
     expect(bodyText.includes('$') || bodyText.includes('Payment')).toBeTruthy();
 
     // Payment Allocation
-    await nav(page, '/payment-allocation');
+    await nav(page, '/payments');
     bodyText = ((await page.locator('body').textContent()) ?? '').trim();
     expect(bodyText.includes('Payment') || bodyText.includes('Allocat')).toBeTruthy();
   });

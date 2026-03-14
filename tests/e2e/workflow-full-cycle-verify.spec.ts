@@ -105,7 +105,7 @@ test.describe('Full Revenue Cycle — Page & Data Verification', () => {
 
   // STAGE 6: Payment Allocation
   test('S6: Payment Allocation page loads with customer selector and allocation UI', async ({ page }) => {
-    await page.goto('/payment-allocation');
+    await page.goto('/payments');
     await page.waitForTimeout(2000);
 
     await expect(page.locator('main h1, main h2').first()).toBeVisible({ timeout: 10000 });

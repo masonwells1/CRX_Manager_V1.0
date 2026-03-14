@@ -480,7 +480,7 @@ test.describe.serial('Financial Ops — Invoice Payment Lifecycle', () => {
   test('F5: Allocate payment via Payment Allocation page', async ({ page }) => {
     test.skip(!state.customerName, 'No customer name from F1');
 
-    await page.goto('/payment-allocation');
+    await page.goto('/payments');
     await waitForPage(page, 3000);
 
     // Verify page loaded — use getByRole to avoid strict mode on multiple h1s
@@ -614,7 +614,7 @@ test.describe.serial('Financial Ops — Invoice Payment Lifecycle', () => {
     }
 
     // Now record an overpayment via Payment Allocation
-    await page.goto('/payment-allocation');
+    await page.goto('/payments');
     await waitForPage(page, 3000);
 
     // Search for customer

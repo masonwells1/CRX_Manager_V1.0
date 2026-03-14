@@ -118,7 +118,7 @@ test.describe('Payment Allocation Math Verification', () => {
 
   // PA2: Payment allocation page loads with customer search
   test('PA2: Payment allocation page loads with correct structure', async ({ page }) => {
-    await nav(page, '/payment-allocation');
+    await nav(page, '/payments');
 
     // Should have a customer search or selector
     const bodyText = ((await page.locator('body').textContent()) ?? '').trim();
@@ -131,7 +131,7 @@ test.describe('Payment Allocation Math Verification', () => {
 
   // PA3: Allocation table — balances are positive numbers
   test('PA3: Payment allocation table shows valid invoice balances', async ({ page }) => {
-    await nav(page, '/payment-allocation');
+    await nav(page, '/payments');
 
     // Try to select a customer if there's a dropdown or search
     const customerInput = page
@@ -172,7 +172,7 @@ test.describe('Payment Allocation Math Verification', () => {
 
   // PA4: Summary bar math — check total = allocated + remaining
   test('PA4: Summary bar — check total = allocated + remaining', async ({ page }) => {
-    await nav(page, '/payment-allocation');
+    await nav(page, '/payments');
 
     // Try to get to a state with invoices loaded
     const customerInput = page

@@ -302,7 +302,7 @@ test.describe.serial('Schema Regression — Page Data Flow Validation', () => {
   });
 
   test('D6: Payment Allocation page loads without errors', async () => {
-    await page.goto('/payment-allocation');
+    await page.goto('/payments');
     await waitForPage(page, 3000);
     const errorToast = page.locator('[class*="toast"]').filter({ hasText: /error|failed/i });
     expect(await errorToast.count()).toBe(0);
