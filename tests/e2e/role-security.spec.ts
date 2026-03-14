@@ -148,35 +148,27 @@ test.describe('Driver Role Restrictions', () => {
     await login(page, DRIVER_EMAIL, DRIVER_PASSWORD);
   });
 
-  test('sidebar only shows allowed nav items for driver', async ({ page }) => {
-    test.skip(true, 'Sidebar restructured with grouped sections — needs updated text expectations');
+  test('sidebar only shows allowed categories for driver', async ({ page }) => {
+    // Desktop sidebar uses collapsible categories — verify which categories render.
+    // Driver should only see Operations category (Deliveries) and Team Board.
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto('/');
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle');
 
-    // Desktop sidebar is the 2nd <aside> (hidden lg:flex), mobile is 1st (lg:hidden)
-    const sidebar = page.locator('aside:visible').first();
+    const sidebar = page.locator('aside').nth(1);
     await expect(sidebar).toBeVisible({ timeout: 10000 });
+    const allText = (await sidebar.textContent()) || '';
+    const lower = allText.toLowerCase();
 
-    // Desktop sidebar is collapsed by default (icon-only). Standalone links have
-    // tooltip text visible to innerText (opacity:0 but not display:none).
-    // Category sub-items like "Deliveries" are only rendered when expanded,
-    // so we verify via route access instead. Here we check:
-    //   1. Dashboard link exists (standalone)
-    //   2. Admin-only standalone links don't appear
-    const allText = await sidebar.innerText();
-    const lowerText = allText.toLowerCase();
+    // Driver should see these
+    expect(lower).toContain('operations');       // Operations category (Deliveries)
+    expect(lower).toContain('team board');       // Team Board standalone
 
-    // Driver should see Dashboard
-    expect(lowerText).toContain('dashboard');
-
-    // Driver should NOT see admin-only links in sidebar text
-    expect(lowerText).not.toContain('settings');
-
-    // Verify driver CAN access /deliveries (route-level check)
-    await page.goto('/deliveries');
-    await page.waitForTimeout(2000);
-    expect(page.url()).toContain('/deliveries');
+    // Should NOT see these categories (no sub-items visible to driver)
+    expect(lower).not.toContain('sales');        // All items require admin/sales_rep
+    expect(lower).not.toContain('customers');    // All items require admin/sales_rep
+    expect(lower).not.toContain('finance');      // All items require admin/sales_rep
+    expect(lower).not.toContain('settings');     // Admin-only
   });
 
   test('driver cannot access /quotes — redirected', async ({ page }) => {

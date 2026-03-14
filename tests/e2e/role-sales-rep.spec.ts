@@ -108,32 +108,30 @@ test.describe('Sales Rep Role — Sidebar Navigation', () => {
     await login(page, SALES_REP_EMAIL, SALES_REP_PASSWORD);
   });
 
-  test('sidebar shows sales_rep-accessible items', async ({ page }) => {
-    test.skip(true, 'Sidebar restructured with grouped sections — needs updated text expectations and dedicated sales_rep account');
+  test('sidebar shows sales_rep-accessible categories', async ({ page }) => {
+    // Desktop sidebar is collapsible — collapsed mode shows category icons + tooltip labels.
+    // Sub-items (Quotes, Orders, etc.) only render when a category is expanded.
+    // We verify category-level visibility; route-level access is tested by Allowed/Blocked Pages above.
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto('/');
-    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle');
 
-    const allLinks = await page.locator('aside a, nav[role="navigation"] a').allInnerTexts();
-    const linkText = allLinks.join(' ').toLowerCase();
+    // Desktop sidebar is the 2nd <aside> (hidden lg:flex)
+    const sidebar = page.locator('aside').nth(1);
+    await expect(sidebar).toBeVisible({ timeout: 10000 });
+    const allText = (await sidebar.textContent()) || '';
+    const lower = allText.toLowerCase();
 
-    // Should see these
-    expect(linkText).toContain('dashboard');
-    expect(linkText).toContain('quote');
-    expect(linkText).toContain('order');
-    expect(linkText).toContain('invoice');
-    expect(linkText).toContain('customer');
-    expect(linkText).toContain('product');
-    expect(linkText).toContain('deliver');
-    expect(linkText).toContain('inventor');
-    expect(linkText).toContain('report');
+    // Sales rep should see these category groups + standalone links
+    expect(lower).toContain('sales');           // Sales category (Quotes, Orders, Invoices, Payments)
+    expect(lower).toContain('customers');        // Customers category (Customers, Fields, Crop Programs)
+    expect(lower).toContain('products');         // Products & Inventory category
+    expect(lower).toContain('operations');       // Operations category (Jobs, Deliveries, etc.)
+    expect(lower).toContain('finance');          // Finance category (Reports, Compliance, etc.)
+    expect(lower).toContain('team board');       // Team Board standalone link
 
-    // Should NOT see admin-only items
-    expect(linkText).not.toContain('setting');
-    expect(linkText).not.toContain('vehicle');
-    expect(linkText).not.toContain('month-end');
-    expect(linkText).not.toContain('rebate');
-    expect(linkText).not.toContain('cycle count');
+    // Should NOT see admin-only standalone links
+    expect(lower).not.toContain('settings');
   });
 
   test('sidebar shows correct role label', async ({ page }) => {

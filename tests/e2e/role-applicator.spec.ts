@@ -121,33 +121,27 @@ test.describe('Applicator Role — Sidebar Navigation', () => {
     await login(page, APPLICATOR_EMAIL, APPLICATOR_PASSWORD);
   });
 
-  test('sidebar only shows allowed nav items', async ({ page }) => {
-    test.skip(true, 'Sidebar restructured with grouped sections — needs updated text expectations');
-    // Use wide viewport so sidebar is always visible
+  test('sidebar only shows allowed categories for applicator', async ({ page }) => {
+    // Desktop sidebar uses collapsible categories — verify which categories render.
+    // Applicator should only see Operations category (Jobs + App Records) and Team Board.
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto('/');
-    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle');
 
-    // Get all nav links (visible or not — on desktop the sidebar may render off-screen)
-    const allLinks = await page.locator('aside a, nav[role="navigation"] a').allInnerTexts();
-    const linkText = allLinks.join(' ').toLowerCase();
+    const sidebar = page.locator('aside').nth(1);
+    await expect(sidebar).toBeVisible({ timeout: 10000 });
+    const allText = (await sidebar.textContent()) || '';
+    const lower = allText.toLowerCase();
 
-    // Should see these
-    expect(linkText).toContain('dashboard');
-    expect(linkText).toMatch(/job/i);
+    // Applicator should see these
+    expect(lower).toContain('operations');       // Operations category (Jobs, App Records)
+    expect(lower).toContain('team board');       // Team Board standalone
 
-    // Should NOT see these
-    expect(linkText).not.toContain('quote');
-    expect(linkText).not.toContain('invoice');
-    expect(linkText).not.toContain('customer');
-    expect(linkText).not.toContain('product');
-    expect(linkText).not.toContain('deliver');
-    expect(linkText).not.toContain('inventor');
-    expect(linkText).not.toContain('payment');
-    expect(linkText).not.toContain('setting');
-    expect(linkText).not.toContain('report');
-    expect(linkText).not.toContain('purchase');
-    expect(linkText).not.toContain('vehicle');
+    // Should NOT see these categories (no sub-items visible to applicator)
+    expect(lower).not.toContain('sales');        // All items require admin/sales_rep
+    expect(lower).not.toContain('customers');    // All items require admin/sales_rep
+    expect(lower).not.toContain('finance');      // All items require admin/sales_rep
+    expect(lower).not.toContain('settings');     // Admin-only
   });
 
   test('sidebar shows correct role label', async ({ page }) => {
