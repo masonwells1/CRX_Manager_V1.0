@@ -177,6 +177,32 @@ If `typecheck` fails, it usually means you forgot to update `src/types/index.ts`
 | Not making migration idempotent | Fails on re-run | Use `IF NOT EXISTS`, `DROP ... IF EXISTS` |
 | Using bare `auth.uid()` in RLS | Performance issue (evaluates per-row) | Use `(select auth.uid())` (evaluates once) |
 | Forgetting indexes on FK columns | Slow queries on large tables | Add index on every `_id` column |
+| **Rewriting CHECK without reading existing** | Removes values other functions rely on — causes runtime crashes | Query existing values first, add yours to the list |
+| **Creating function overloads** | PostgREST calls the wrong version — your fix never runs | Check pg_proc for existing overloads before CREATE OR REPLACE |
+| **SECURITY DEFINER without search_path** | Function fails when called from trigger context | Always add `SET search_path = public, pg_temp` |
+| **DROP FUNCTION without replacement** | Deletes the only working version — RPC calls fail with "function not found" | Verify replacement exists BEFORE dropping |
+
+---
+
+## Step 2b: CHECK Constraint & Function Safety (CRITICAL)
+
+> These rules were added after 40+ bugs were caused by migration drift in March 2026.
+
+### If your migration touches a CHECK constraint:
+1. **BEFORE writing SQL**, query the existing constraint values
+2. Your new CHECK MUST include ALL existing values plus any new ones
+3. Never assume you know all the values — other migrations may have added values you don't know about
+
+### If your migration creates or modifies a function:
+1. Check if overloads exist: query `pg_proc` for the function name — should return exactly 1 row
+2. If overloads exist (>1 row), you must DROP all overloads and recreate a single version
+3. Every `SECURITY DEFINER` function must include `SET search_path = public, pg_temp`
+4. Every mutating RPC should accept `p_idempotency_key text DEFAULT NULL`
+
+### If your migration rewrites a trigger function:
+1. Search ALL migrations for previous versions of the trigger function
+2. Read the LATEST version to understand what logic exists
+3. Your rewrite must preserve all critical logic from previous versions
 
 ---
 

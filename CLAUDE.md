@@ -7,227 +7,172 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Session Start Checklist
-At the start of each session, silently check if `docs/claude-memory/MEMORY.md` has a matching file at the Claude Code memory directory. If memory files appear to be missing (i.e., no MEMORY.md context was loaded), proactively tell the user:
-> "It looks like your memory files aren't set up on this computer yet. Want me to copy them over? (Just say yes)"
-
-To copy them: read each `.md` file (except README.md) from `docs/claude-memory/` and write it to the memory directory.
-
-## Current State (2026-03-10)
-- 56 pages, 83 tables, ~160 RPCs, 153 migrations
-- 1,444 unit tests (93 files) + 626 E2E tests (102 spec files), all passing
+## Current State (2026-03-14)
+- 56 pages, 85+ tables, ~160 RPCs, 169 migrations, 6 Edge Functions
+- 1,429 unit tests (92 files) + 95 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
-- Latest: 60+ bug audit fixes (state machines, financial RPCs, RLS policies, search_path security)
 
 ---
 
 ## Architecture Rules
-1. **Database changes MUST use migrations** — create files in `supabase/migrations/`, never modify tables directly
+1. **Database changes = migrations only** — files in `supabase/migrations/`, never modify tables directly
 2. **All tables MUST have RLS policies** — no exceptions
-3. **Use `checkMutationResult()`** after every `.update()` or `.delete()` call
-4. **Lazy-load all pages** — follow the pattern in `App.tsx` with `lazy()` and `Suspense`
-5. **Use Lucide React icons** — do not install other icon packages
-6. **Tailwind CSS only** — brand color is `crx-green` (#28A26A)
-7. **Keep types in `src/types/index.ts`** — all shared interfaces go there
-8. **Use the Supabase client from `src/lib/db.ts`** — never create additional clients
-9. **Activity logging:** Call `logActivity()` from `src/lib/activityLogger.ts` for important user actions
-10. **Idempotency:** Use `useIdempotencyKey()` hook (from `src/hooks/useIdempotencyKey.ts`) for critical write operations
+3. **Use `checkMutationResult()`** after every `.update()` or `.delete()`
+4. **Lazy-load all pages** — `lazy()` + `Suspense` in `App.tsx`
+5. **Lucide React icons only** — no other icon packages
+6. **Tailwind CSS only** — brand color `crx-green` (#28A26A)
+7. **Types in `src/types/index.ts`** — all shared interfaces
+8. **Single Supabase client** — `src/lib/db.ts` only
+9. **Activity logging** — `logActivity()` from `src/lib/activityLogger.ts`
+10. **Idempotency** — `useIdempotencyKey()` hook for critical writes
 
 ---
 
-## Hard Red Lines — NEVER Break These
+## Hard Red Lines — NEVER Break
 
 ### Data Safety
-- **NEVER delete or modify existing migration files** — only add new ones
-- **NEVER remove RLS policies from any table** — every table must have RLS
-- **NEVER expose `service_role` key in frontend code** — only use `anon` key in the browser
-- **NEVER modify `financial_audit_log` records** — append-only by design
-- **NEVER store money as floating point** — all money uses `bigint` cents. Display divides by 100.
+- NEVER delete/modify existing migration files — only add new ones
+- NEVER remove RLS policies — every table must have RLS
+- NEVER expose `service_role` key in frontend — anon key only
+- NEVER modify `financial_audit_log` records — append-only
+- NEVER store money as floating point — use `bigint` cents, display ÷ 100
 
 ### Business Logic
-- **NEVER skip the delivery confirm->complete flow** — must go `scheduled -> in_progress -> completed`
-- **NEVER allow editing delivery item quantities** — items locked to original order
-- **NEVER create invoices without an order** — invoices always link to an order
-- **NEVER bypass `check_period_open()`** — closed periods prevent backdated transactions
-- **NEVER allow non-admin users to access month-end close, commissions, or settings**
-- **Season runs October 1 to September 30** — all YTD calculations use this
+- NEVER skip delivery confirm→complete flow (scheduled → in_progress → completed)
+- NEVER allow editing delivery item quantities — locked to original order
+- NEVER create invoices without an order — always linked via order_id
+- NEVER bypass `check_period_open()` — closed periods block backdated transactions
+- NEVER allow non-admin access to month-end, commissions, or settings
+- Season = October 1 to September 30
 
 ### Code Quality
-- **NEVER remove the pre-commit hook** — it runs lint + build + test
-- **NEVER commit with `--no-verify`**
-- **NEVER add `@ts-ignore` or `any` types** — only exception: `reportPdf.ts` columnStyles (has eslint-disable)
-- **NEVER install additional CSS frameworks** (Tailwind only) or **icon libraries** (Lucide only)
-- **NEVER create a second Supabase client**
+- NEVER remove pre-commit hook or commit with `--no-verify`
+- NEVER add `@ts-ignore` or `any` (one exception: `reportPdf.ts` columnStyles)
+- NEVER install other CSS/icon frameworks
+- NEVER commit `.env` files
 
-### Deployment
-- **NEVER commit `.env` files**
-- **NEVER deploy without setting `ALLOWED_ORIGIN`** — Edge Functions will fail with CORS errors
+---
+
+## Migration Safety Rules (CRITICAL — Prevents Code Drift)
+
+These rules exist because **migration drift caused 40+ bugs** in March 2026.
+
+### Before Writing ANY Migration
+1. **CHECK constraints** — `SELECT conname, consrc FROM pg_constraint WHERE conrelid = 'table'::regclass AND contype = 'c';` — read existing values BEFORE rewriting
+2. **Function overloads** — `SELECT proname, pg_get_function_identity_arguments(oid) FROM pg_proc WHERE proname = 'func_name';` — ensure only ONE overload exists
+3. **Trigger functions** — Read the LATEST version in migrations before rewriting
+4. **Status columns** — Check existing CHECK constraint values; your new list MUST include ALL old values plus any new ones
+
+### When Writing Migrations
+- NEVER use `pg_get_functiondef()` + regex to clone functions dynamically
+- NEVER rewrite a CHECK constraint without including ALL existing allowed values
+- NEVER `CREATE OR REPLACE FUNCTION` without checking for overloads first
+- NEVER `DROP FUNCTION` without verifying the replacement exists
+- Every `SECURITY DEFINER` function MUST have `SET search_path = public, pg_temp`
+- Every RPC that mutates data MUST accept `p_idempotency_key text DEFAULT NULL`
+
+### After Writing Migrations
+- Verify: `SELECT proname, count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace GROUP BY proname HAVING count(*) > 1;` — should return ZERO rows
+- Run `npm run build` + `npm run test` before committing
 
 ---
 
 ## Business Logic Lifecycles
 
-### Quote: `draft -> sent -> revised -> accepted -> declined -> expired`
-- `is_planned` flag reserves inventory through holds (linked via `source_id`)
-- Accepted quotes convert to orders via `convert_quote_to_order()` — holds released on accept
-- Declined/expired quotes auto-release holds AND restore `quantity_available` via trigger
+### Quote: `draft → sent → revised → accepted → declined → expired`
+- `is_planned` reserves inventory via holds (linked via `source_id`)
+- Accepted quotes convert via `convert_quote_to_order()` — holds released
+- Declined/expired auto-release holds AND restore `quantity_available`
 
-### Order: `confirmed -> partially_fulfilled -> fulfilled -> cancelled`
-- AR derived from linked invoices (orders.total_paid / balance_due are deprecated)
+### Order: `confirmed → partially_fulfilled → fulfilled → cancelled`
+- AR derived from linked invoices (`orders.total_paid`/`balance_due` are DEPRECATED)
 - Commission records created per order per recipient
 
-### Delivery: `scheduled -> in_progress -> completed -> cancelled`
-- **Two-step flow:** `confirm_delivery()` then `complete_delivery()`
+### Delivery: `scheduled → in_progress → completed → cancelled → voided`
+- Two-step: `confirm_delivery()` then `complete_delivery()`
 - Items locked to order quantities — only logistics editable
-- Quick Delivery: `create_quick_delivery()` = atomic order + delivery + draft invoice; includes inventory pre-check with `FOR UPDATE` locks
+- Quick Delivery: `create_quick_delivery()` = atomic order + delivery + draft invoice
 
-### Invoice: `draft -> posted -> void`
-- `post_invoice()` calls `check_period_open()` — rejects if accounting period is closed
-- Posted invoices lock amounts and start AR aging
-- `balance_cents` tracks remaining after payments/credits
+### Invoice: `draft → posted → paid → overdue → voided`
+- `post_invoice()` calls `check_period_open()` — rejects if period closed
+- `balance_cents` = single source of truth for AR (GENERATED ALWAYS column)
 - All changes logged to `financial_audit_log`
 
-### Job: `scheduled -> in_progress -> completed -> cancelled -> invoiced`
-- Completion creates application_record + deducts inventory
-- Transfer to invoice via `transfer_job_to_invoice()`
-
-### Purchase Order: `draft -> submitted -> partially_received -> fully_received -> cancelled`
-- Receiving creates `receiving_records` with per-item condition/lot/notes
-- Does NOT auto-update product cost (p_skip_cost_update defaults to true). Supplier cost tracked on receiving_records.unit_cost
-
-### Return/RMA: `requested -> approved -> received -> credited -> rejected`
-
-### Month-End Close
-- `check_period_open()` prevents backdated transactions
-- Closing runs checklist + batch statement generation
+### Job: `scheduled → in_progress → completed → cancelled → invoiced`
+### PO: `draft → submitted → partially_received → fully_received → cancelled`
+### Return: `requested → approved → received → credited → rejected → cancelled`
 
 ### Tier Pricing
-- Customers assigned tier 1, 2, or 3
-- Products have tier1_price, tier2_price, tier3_price
-- Quotes inherit customer tier but can be overridden
+- Customers: tier 1, 2, or 3. Products: tier1/2/3_price. Quotes inherit tier.
 
-### Inventory Calculations
-- **Net Free** = quantity_available - planned holds - quantity_prebooked
-- **On Order** = sum of (ordered - received) from open POs
-- **Low Stock** = quantity_available <= reorder_point
+### Inventory
+- **Net Free** = available − planned holds − prebooked
+- **On Order** = sum(ordered − received) from open POs
+- **Transaction types:** received, booked, delivered, returned, adjusted, transferred, job_applied, cancelled_delivery_reversal, void_delivery_reversal, prebooked, released
 
-### Commission Logic
-- `commission_split` stored as JSONB: `{ splits: [{ recipient, percentage }] }`
-- `save_customer()` validates splits sum to exactly 100% (server-side enforcement)
-- Status: `pending -> paid` (with paid_date)
+### Commissions
+- `commission_split` JSONB: `{ splits: [{ recipient, percentage }] }`
+- `save_customer()` validates splits sum to 100%
+- Status: `pending → paid → cancelled`
 
 ---
 
 ## Common Patterns
 
-### Adding a new page
-1. Create component in `src/pages/`
-2. Add lazy import in `src/App.tsx`
-3. Add Route inside the protected route block
-4. Add nav link in `src/components/layout/AppLayout.tsx`
+### Adding a page
+1. Component in `src/pages/` → lazy import in `App.tsx` → Route → nav link in `AppLayout.tsx`
 
-### Adding a database column
-1. Create migration in `supabase/migrations/` with timestamp prefix
-2. Update TypeScript interface in `src/types/index.ts`
-3. Update affected components
+### Database column change
+1. Migration in `supabase/migrations/` → update `src/types/index.ts` → update components → `npm run typecheck && npm run build`
 
 ### Supabase queries
 ```typescript
 import { supabase, checkMutationResult } from '../lib/db';
-
-// Read
-const { data, error } = await supabase.from('customers').select('*');
-
-// Write (always check result)
-const result = await supabase.from('customers').update({ farm_name: 'New' }).eq('id', id).select();
-checkMutationResult(result, 'Update customer');
+const result = await supabase.from('table').update({ col: val }).eq('id', id).select();
+checkMutationResult(result, 'Update context');
 ```
-
-### Migration best practices
-- Name with timestamp prefix: `YYYYMMDDHHMMSS_description.sql`
-- `DROP POLICY IF EXISTS` before `CREATE POLICY` for idempotency
-- Check for existing triggers with `IF NOT EXISTS`
 
 ---
 
-## Edge Functions (5 in `supabase/functions/`)
-- **create-user** — Admin-only: creates auth user with role metadata
-- **process-blend-ticket** — OCR via Google Vision AI (requires GOOGLE_VISION_API_KEY)
+## Edge Functions (6 in `supabase/functions/`)
+- **create-user** — Admin-only user creation
+- **process-blend-ticket** — OCR via Google Vision AI
 - **process-document** — Document processing
-- **seed-admin** — One-time initial admin user creation
-- **setup-blend-tickets-storage** — Returns storage bucket config
+- **seed-admin** — One-time admin setup
+- **send-email** — Resend API, JWT auth, idempotency, PDF attachments
+- **setup-blend-tickets-storage** — Storage bucket config
 
-All require `ALLOWED_ORIGIN` env var for production CORS.
-
-## Realtime Subscriptions
-Hook: `useRealtimeSubscription({ table, event, filter, onInsert, onUpdate, onDelete, disabled })`
-- `disabled?: boolean` — when true, skips channel creation (no-op). Convenience hooks pass `disabled: !noteId` to prevent null-filter subscriptions.
-- Used for: `team_notes`, `team_note_comments`, `notifications`, `note_activity_log`
-
-## Storage Buckets
-- **blend-ticket-images** — Private, RLS-protected
-- **delivery-photos** — Private, RLS-protected
-- **receiving-photos** — Private, RLS-protected
+All require `ALLOWED_ORIGIN` env var for CORS.
 
 ---
 
 ## Key Entry Points
-- `src/App.tsx` — Routes (lazy-loaded), auth provider, navigation tracking
-- `src/contexts/AuthContext.tsx` — Auth state (login, logout, role), Sentry user context
-- `src/lib/db.ts` — Supabase client + `checkMutationResult()` + multi-tab session recovery
+- `src/App.tsx` — Routes, auth provider, navigation tracking
+- `src/contexts/AuthContext.tsx` — Auth state, Sentry user context
+- `src/lib/db.ts` — Supabase client + `checkMutationResult()`
 - `src/types/index.ts` — All TypeScript interfaces
-- `src/lib/activityLogger.ts` — Activity feed + notifications
-- `src/lib/metrics.ts` — Operational metrics: Sentry user context, navigation tracking, business events
-- `src/lib/reconciliation.ts` — Cross-entity data integrity checks (5 pure functions + DB wrapper)
-- `src/lib/rupCompliance.ts` — RUP compliance checker (license expiry, cert type, registration)
-- `src/hooks/useRowSelection.tsx` — Bulk row selection (used on 15 pages)
-- `src/hooks/useIdempotentAction.ts` — Retry-safe action hook with `crypto.randomUUID` keys
+- `src/lib/emailService.ts` — Email service (Resend via Edge Function)
 - `supabase/migrations/` — Database migrations
 - `supabase/functions/` — Edge Functions
 
 ---
 
-## Schema Gotchas (Non-Obvious Column Names)
-- `commissions.commission_amount` is `numeric` (dollars) — NOT `amount_cents bigint` (legacy, predates cents convention)
-- `returns` table: `requested_by` (not `created_by`), status `'requested'` (not `'pending'`), no `delivery_id` column
+## Schema Gotchas
+- `commissions.commission_amount` is `numeric` dollars (NOT `_cents bigint`)
+- `returns`: `requested_by` (not `created_by`), status `'requested'` (not `'pending'`)
 - `return_items`: references `order_item_id` only (not `delivery_item_id`)
 - `invoice_items.extended_cents` (not `line_total_cents`)
-- `create_direct_order` RPC returns `{ order_id }` not `{ id }`, requires `p_order_date` (no default)
-- `complete_delivery` RPC requires `p_signed_by text`
+- `create_direct_order` returns `{ order_id }` not `{ id }`
+- `complete_delivery` requires `p_signed_by text`
+- `orders.total_paid` / `orders.balance_due` — DEPRECATED, use `invoices.balance_cents`
 
 ---
 
-## E2E Testing Notes
-- Mega-workflow spec: `tests/e2e/mega-workflow.spec.ts` (95 serial steps, ~10.5 min, report in `MEGA-TEST-REPORT.md`)
-- In `test.describe.serial()` suites, use `page.once('dialog')` — `page.on` accumulates handlers across steps
-- After 90+ serial steps, avoid `waitForTimeout()` — browser resources are strained; use `waitForLoadState('networkidle')` instead
-
----
-
-## Known Limitations
-- OCR requires GOOGLE_VISION_API_KEY secret in Edge Function
-- PDF generation is client-side only
-- No email sending (notifications are in-app only)
-- Bulk imports process sequentially
-- Offline support: built for driver delivery completion only, not full offline-first
-
----
-
-## Documentation Maintenance (Fully Automatic)
-
-### How It Works
-A `PreToolUse` hook in `.claude/settings.json` fires automatically before every `git commit`.
-If the commit includes structural changes (new pages, migrations, RPCs, etc.), Claude is **blocked from committing** until it:
-1. Counts actual pages, migrations, and Edge Functions
-2. Compares to what CLAUDE.md and reference docs say
-3. Fixes any stale counts or missing entries
-4. Includes the doc updates in the commit
-
-**The user does not need to do anything.** This is fully hands-off.
-
-### Optional: Manual Audit
-Run `/update-docs` for a full audit anytime (not required — the commit hook handles it).
+## E2E Testing
+- Mega-workflow: `tests/e2e/mega-workflow.spec.ts` (95 serial steps)
+- Use `page.once('dialog')` in serial suites (not `page.on`)
+- Use `waitForLoadState('networkidle')` over `waitForTimeout()`
 
 ---
 
@@ -235,34 +180,18 @@ Run `/update-docs` for a full audit anytime (not required — the commit hook ha
 
 | Doc | Contents |
 |-----|----------|
-| `docs/reference/database-schema.md` | 83 tables + RLS policy matrix |
-| `docs/reference/rpc-functions.md` | ~160 RPCs + helpers + triggers |
-| `docs/reference/migration-history.md` | 153 migration entries |
+| `docs/reference/database-schema.md` | 85+ tables + RLS matrix |
+| `docs/reference/rpc-functions.md` | ~160 RPCs + triggers |
+| `docs/reference/migration-history.md` | 169 migration entries |
 | `docs/reference/pages-routes.md` | 56 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
 | `docs/CHANGELOG.md` | Sprint-by-sprint history |
-| `docs/plans/2026-02-23-price-list-versioning-design.md` | Future: price list versioning (NOT built) |
-| `docs/plans/2026-02-27-top-10-improvements-roadmap.md` | Future: UX improvements roadmap (deferred) |
 
-## Other Repo Docs
-- `README.md` — Project overview, quick start
-- `TESTING.md` — Testing guide (beginner-friendly)
-- `DEPLOYMENT.md` — Vercel setup, env vars, Edge Function secrets
-
----
-
-## Workflow Documentation
-
-Detailed workflow guides and safety checklists are in `docs/workflows/`:
-
+## Workflow Docs
+- `SAFE_DEVELOPMENT_RULES.md` — **READ EVERY SESSION** — mandatory safety rules
+- `DATABASE_CHANGE_CHECKLIST.md` — Step-by-step for schema changes
 - `QUOTE_TO_DELIVERY.md` — Full business pipeline reference
 - `INVENTORY_RULES.md` — Inventory calculations and transaction rules
-- `DATABASE_CHANGE_CHECKLIST.md` — Step-by-step for any schema changes
-- `RLS_SECURITY_GUIDE.md` — Row Level Security patterns and debugging
-- `SAFE_DEVELOPMENT_RULES.md` — READ THIS EVERY SESSION — mandatory safety rules
+- `RLS_SECURITY_GUIDE.md` — Row Level Security patterns
 - `UI_PATTERNS.md` — Frontend patterns and conventions
-
-Copy-paste prompt templates for common tasks: `docs/PROMPT_TEMPLATES.md`
-
-**At the start of every session, read `docs/workflows/SAFE_DEVELOPMENT_RULES.md` before making any changes.**

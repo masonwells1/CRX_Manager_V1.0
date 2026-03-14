@@ -1,4 +1,4 @@
-# Database Schema Reference (76+ Tables)
+# Database Schema Reference (85+ Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -18,11 +18,11 @@
 - `orders` - Confirmed orders (order_number, status, totals, order_date). Note: total_paid/balance_due columns are DEPRECATED — AR is tracked via invoices.
 - `order_items` - Order line items (quantity_delivered, quantity_remaining)
 - `payments` - Legacy payment records (DEPRECATED — use allocation_sets + invoice_line_allocations instead)
-- `commissions` - Per-order per-recipient (split_percentage, commission_amount, status, paid_date)
+- `commissions` - Per-order per-recipient (split_percentage, commission_amount numeric dollars, status CHECK: pending/paid/cancelled, paid_date)
 
 ## Inventory
 - `inventory` - Stock per product per location (quantity_available, quantity_prebooked, quantity_on_order, reorder_point, min_stock_level)
-- `inventory_transactions` - Audit trail (transaction_type: received/booked/delivered/returned/adjusted/transferred)
+- `inventory_transactions` - Audit trail (transaction_type CHECK: received/booked/delivered/returned/adjusted/transferred/job_applied/cancelled_delivery_reversal/void_delivery_reversal/prebooked/released)
 - `inventory_holds` - Reserved inventory (quantity, hold_type: manual/crop_program, expires_at, is_active, source_id — links to quote for auto-release on accept/decline/expire)
 - `purchase_orders` - Supplier POs (po_number, vendor, status, total_cost)
 - `purchase_order_items` - PO line items (quantity_ordered, quantity_received, unit_cost)

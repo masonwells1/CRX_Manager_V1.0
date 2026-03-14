@@ -15,7 +15,7 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 
 ### 2. Research before coding
 - Search the codebase for existing patterns before writing new code
-- Check if similar functionality already exists (there are 49 pages — don't recreate one)
+- Check if similar functionality already exists (there are 56 pages — don't recreate one)
 - Look at how the existing code handles the same type of operation
 
 ### 3. Plan before building
@@ -81,6 +81,37 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 
 ---
 
+
+## Migration Safety (CRITICAL - Prevents Code Drift)
+
+> **Context:** In March 2026, a single migration used pg_get_functiondef() + regex to dynamically clone 37 functions with an extra parameter. This created shadow overloads that froze old logic while newer migrations fixed the originals. Result: **40+ bugs** where bug fixes never reached production because PostgreSQL was calling the frozen copies. These rules prevent that from ever happening again.
+
+### Before Writing ANY Migration
+
+| Check | How | Why |
+|-------|-----|-----|
+| **Existing CHECK constraints** | Query pg_constraint for the table | If you rewrite a CHECK, you MUST include ALL existing values plus new ones |
+| **Function overloads** | Query pg_proc for the function name | Must return exactly 1 row. If >1, consolidate before adding more |
+| **Trigger function versions** | Search supabase/migrations/ for all versions | Read the LATEST version before rewriting - do not lose logic from earlier fixes |
+| **Status column values** | Check CHECK constraint AND grep migrations for status strings | A function may write status values that are not in the CHECK yet |
+
+### Migration Anti-Patterns (NEVER Do These)
+
+| Anti-Pattern | What Goes Wrong | Do This Instead |
+|-------------|-----------------|-----------------|
+| pg_get_functiondef() + regex injection | Creates frozen shadow overloads | Write each function explicitly |
+| Rewrite CHECK with only YOUR values | Removes values other functions rely on | Query existing values first, add yours to the list |
+| CREATE OR REPLACE without checking overloads | Updates wrong overload; callers still hit old one | Check for overloads first, DROP all if >1, then CREATE |
+| DROP FUNCTION without replacement | Deletes the only working version | Verify replacement exists BEFORE dropping |
+| SECURITY DEFINER without SET search_path | Triggers fail when called from other SECURITY DEFINER functions | Always add SET search_path = public, pg_temp |
+| Dynamic DO block modifying function source | Regex misses edge cases, creates untested code | Write functions explicitly |
+
+### After Writing ANY Migration
+
+Verify no overloads exist. Then: npm run build + npm run test
+
+---
+
 ## Pipeline Change Safety
 
 If you're changing anything in the quote -> order -> delivery -> invoice -> payment pipeline:
@@ -110,9 +141,10 @@ Before any schema change, follow `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`:
 1. Create a new migration file (never modify existing ones)
 2. Include RLS policies for new tables
 3. Make migrations idempotent (`IF NOT EXISTS`, `DROP ... IF EXISTS`)
-4. Update TypeScript types in `src/types/index.ts`
-5. Update affected components
-6. Run `npm run typecheck` and `npm run build`
+4. **Read existing CHECK constraints and function overloads** (see Migration Safety above)
+5. Update TypeScript types in `src/types/index.ts`
+6. Update affected components
+7. Run `npm run typecheck` and `npm run build`
 
 ---
 
@@ -158,4 +190,5 @@ Before finishing a session:
 - [ ] Types are in sync with database changes
 - [ ] Activity logging added for new user actions
 - [ ] No `@ts-ignore`, `any`, or `console.log` left in code
+- [ ] Migration safety verified (no function overloads, CHECK constraints complete)
 - [ ] Remind Mason to commit to Git
