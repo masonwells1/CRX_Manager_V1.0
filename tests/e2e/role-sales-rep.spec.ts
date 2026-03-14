@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
 
-const SALES_REP_EMAIL = process.env.E2E_SALESREP_EMAIL || 'admin@croprx.com';
+const SALES_REP_EMAIL = process.env.E2E_SALESREP_EMAIL || 'testsalesrep@croprxsolutions.com';
 const SALES_REP_PASSWORD = process.env.E2E_SALESREP_PASSWORD || 'TestSalesRep123!';
 
 /**
