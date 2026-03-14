@@ -100,3 +100,103 @@ Cross-entity data integrity tests via `src/lib/reconciliation.ts`:
 - `src/components/inventory/TransactionLedgerModal.test.ts` — 3 tests: running balance computation (positive, negative, mixed quantities)
 - `src/components/inventory/BatchAdjustModal.test.ts` — 3 tests: RPC call creation per item, zero-delta filtering, reason inclusion
 - jsPDF mock pattern: must use `function JsPDFMock() { return mockDoc; }` (not arrow functions — arrow functions can't be `new`'d)
+
+---
+
+## E2E Testing Guidelines (added Mar 2026 audit)
+
+### Current State
+- **74 E2E spec files** (down from 95 after March 2026 audit removed 21 redundant files)
+- Framework: Playwright with serial test suites for workflow specs
+- Auth: shared admin account by default; role tests need dedicated accounts (see below)
+
+### Rules to Prevent Test Redundancy
+
+1. **One spec per feature depth** — When you write a detailed interaction spec (e.g., `invoice-detail-interactions.spec.ts`), DELETE the basic "page loads" spec (e.g., `invoices.spec.ts`). Basic specs become dead weight once detailed specs exist.
+2. **Never write "page loads and shows heading" tests** — These add zero value. If a page doesn't load, the detailed spec will catch it.
+3. **Check for existing specs before creating new ones** — Run `ls tests/e2e/*feature*` first. If a spec already covers the feature, extend it instead of creating a new file.
+4. **Mega-workflow covers the happy path** — `mega-workflow.spec.ts` covers the full quote→order→deliver→invoice→pay→return cycle. Don't duplicate these steps in other specs.
+
+### DataTable Conditional Rendering (common failure cause)
+
+`src/components/ui/DataTable.tsx` renders `<table>` ONLY when data rows exist. When empty, it renders `<EmptyState>` instead. This means:
+
+- `page.locator('table')` will timeout on pages with no data
+- **Always use the skip guard pattern** for tests that depend on table data:
+
+```typescript
+const table = page.locator('table').first();
+const hasTable = await table.isVisible({ timeout: 10000 }).catch(() => false);
+if (!hasTable) {
+  test.skip(true, 'No data rows available — skipping');
+  return;
+}
+```
+
+- For helper functions that navigate to a specific row, return `null` when no table exists and have callers skip:
+
+```typescript
+async function goToFirstRow(page: Page): Promise<boolean> {
+  const table = page.locator('table').first();
+  const hasTable = await table.isVisible({ timeout: 10000 }).catch(() => false);
+  if (!hasTable) return false;
+  await table.locator('tbody tr').first().click();
+  return true;
+}
+
+// In test:
+const found = await goToFirstRow(page);
+if (!found) { test.skip(true, 'No rows available'); return; }
+```
+
+### Route Rename Checklist
+
+When ANY route changes (e.g., `/payment-allocation` → `/payments`):
+
+1. **Grep all E2E files:** search `tests/e2e/` for the old route string
+2. **Check role test arrays:** `allowedRoutes` and `blockedRoutes` in `role-*.spec.ts`
+3. **Check workflow specs:** any `page.goto()` or `page.waitForURL()` calls
+4. **Check navigation specs:** sidebar/nav link text expectations
+
+Route renames silently break tests because Supabase auth redirects unknown routes to Dashboard — tests appear to "pass" but are testing the wrong page.
+
+### Role-Based Test Accounts
+
+Role tests (`role-sales-rep.spec.ts`, `role-applicator.spec.ts`, `role-security.spec.ts`) require **dedicated Supabase accounts** with the correct role assignment:
+
+| Env Variable | Required Role | Notes |
+|---|---|---|
+| `SALES_REP_EMAIL` / `SALES_REP_PASSWORD` | `sales_rep` | Must NOT be admin |
+| `APPLICATOR_EMAIL` / `APPLICATOR_PASSWORD` | `applicator` | Must NOT be admin |
+| `DRIVER_EMAIL` / `DRIVER_PASSWORD` | `driver` | Must NOT be admin |
+
+Without these, tests fall back to the admin account and skip role-specific assertions (blocked pages, sidebar visibility). To create accounts:
+
+1. Use the `create-user` Edge Function or Supabase dashboard
+2. Assign the correct role in `user_profiles.role`
+3. Add credentials to `.env` and CI secrets
+
+### Sidebar Navigation Test Expectations
+
+The sidebar uses grouped sections (not a flat list). Role tests checking sidebar text must match the current structure:
+- Admin sees all groups: Operations, Financial, Compliance, Settings, etc.
+- Sales rep sees: Dashboard, Customers, Quotes, Orders, Deliveries, Invoices, Payments
+- Driver sees: Dashboard, Deliveries
+- Applicator sees: Dashboard, Jobs
+
+When the sidebar structure changes, grep `tests/e2e/role-*.spec.ts` for sidebar text assertions.
+
+### Serial vs Parallel Test Suites
+
+- **Serial** (`test.describe.serial`): Use for workflow tests where steps depend on prior state (e.g., create order → then deliver it)
+- **Parallel** (default): Use for independent feature tests
+- Serial tests are fragile — if step N fails, steps N+1..end all fail. Use `test.skip()` guards for steps that depend on optional data.
+
+### Dialog Handling in Serial Suites
+
+Use `page.once('dialog')` (not `page.on`) in serial suites to prevent listener leaks between steps:
+
+```typescript
+page.once('dialog', dialog => dialog.accept());
+await page.click('button:has-text("Delete")');
+```
