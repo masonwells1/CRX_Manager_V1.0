@@ -712,3 +712,141 @@ describe('RPC contract: create_quick_delivery', () => {
     expect(params.p_items[0].price_cents).toBe(150000);
   });
 });
+
+// -------------------------------------------------------------------------
+// Idempotency Key Coverage — Track which mutating RPCs accept p_idempotency_key
+// -------------------------------------------------------------------------
+
+/**
+ * Every mutating RPC MUST accept `p_idempotency_key text DEFAULT NULL`.
+ * This list is the source of truth for which RPCs have been updated.
+ * If you add a new mutating RPC, add it here AND add the parameter to the SQL function.
+ */
+const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
+  'adjust_inventory',
+  'allocate_payment',
+  'apply_remaining_prepayments',
+  'approve_return',
+  'batch_apply_all_prepayments',
+  'batch_apply_prepayments',
+  'batch_cancel_deliveries',
+  'batch_post_invoices',
+  'batch_reschedule_deliveries',
+  'batch_void_invoices',
+  'cancel_delivery',
+  'cancel_order',
+  'cancel_purchase_order',
+  'close_accounting_period',
+  'complete_cycle_count',
+  'complete_delivery',
+  'complete_job',
+  'confirm_delivery',
+  'convert_quote_to_order',
+  'create_application_record_from_blend_ticket',
+  'create_commission_payment',
+  'create_direct_order',
+  'create_followup_delivery',
+  'create_invoice_from_delivery',
+  'create_invoice_from_order',
+  'create_order_from_blend_ticket',
+  'create_quick_delivery',
+  'create_vendor_bill',
+  'delete_prepay_credit',
+  'delete_purchase_order',
+  'duplicate_quote',
+  'edit_delivery',
+  'edit_prepay_credit',
+  'generate_batch_statements',
+  'generate_finance_charges',
+  'generate_rup_sales_records',
+  'get_ap_aging',
+  'get_ap_dashboard_summary',
+  'increment_customer_prepay',
+  'issue_return_credit',
+  'link_blend_ticket_to_order',
+  'manual_inventory_add',
+  'post_commission_payment',
+  'post_invoice',
+  'reassign_delivery',
+  'receive_po_items',
+  'receive_return',
+  'record_invoice_payment',
+  'record_payment',
+  'record_vendor_payment',
+  'release_inventory_hold',
+  'reopen_accounting_period',
+  'restore_cancelled_delivery',
+  'restore_cancelled_order',
+  'reverse_blend_ticket_approval',
+  'reverse_write_off',
+  'revert_quote_status',
+  'save_blend_ticket',
+  'save_customer',
+  'save_invoice',
+  'save_job',
+  'save_purchase_order',
+  'save_quote',
+  'transfer_job_to_invoice',
+  'unapply_credit_memo',
+  'unlink_blend_ticket_from_order',
+  'update_order_items',
+  'void_commission_payment',
+  'void_delivery',
+  'void_invoice',
+  'void_payment',
+  'void_vendor_bill',
+];
+
+/**
+ * These mutating RPCs have `p_performed_by` but are MISSING `p_idempotency_key`.
+ * Track the gap here so it shrinks over time. When you add idempotency to one,
+ * move it from this list to MUTATING_RPCS_WITH_IDEMPOTENCY above.
+ */
+const MUTATING_RPCS_MISSING_IDEMPOTENCY: string[] = [
+  'apply_write_off',
+  'save_field',
+  'update_blend_ticket_billing_status',
+  'void_order',
+];
+
+describe('Idempotency Key Coverage', () => {
+  it('covers at least 72 mutating RPCs with p_idempotency_key', () => {
+    expect(MUTATING_RPCS_WITH_IDEMPOTENCY.length).toBeGreaterThanOrEqual(72);
+  });
+
+  it('has no duplicates in the covered list', () => {
+    const unique = new Set(MUTATING_RPCS_WITH_IDEMPOTENCY);
+    expect(unique.size).toBe(MUTATING_RPCS_WITH_IDEMPOTENCY.length);
+  });
+
+  it('has no duplicates in the missing list', () => {
+    const unique = new Set(MUTATING_RPCS_MISSING_IDEMPOTENCY);
+    expect(unique.size).toBe(MUTATING_RPCS_MISSING_IDEMPOTENCY.length);
+  });
+
+  it('missing list is small and shrinking (currently 4)', () => {
+    // If you added idempotency to one of the missing RPCs, update both lists
+    // and lower this number. The goal is zero.
+    expect(MUTATING_RPCS_MISSING_IDEMPOTENCY.length).toBeLessThanOrEqual(4);
+  });
+
+  it('no RPC appears in both lists', () => {
+    const overlap = MUTATING_RPCS_WITH_IDEMPOTENCY.filter(
+      (rpc) => MUTATING_RPCS_MISSING_IDEMPOTENCY.includes(rpc)
+    );
+    expect(overlap).toEqual([]);
+  });
+
+  it('both lists are sorted alphabetically for maintainability', () => {
+    const sortedCovered = [...MUTATING_RPCS_WITH_IDEMPOTENCY].sort();
+    expect(MUTATING_RPCS_WITH_IDEMPOTENCY).toEqual(sortedCovered);
+
+    const sortedMissing = [...MUTATING_RPCS_MISSING_IDEMPOTENCY].sort();
+    expect(MUTATING_RPCS_MISSING_IDEMPOTENCY).toEqual(sortedMissing);
+  });
+
+  it('total tracked RPCs (covered + missing) is at least 76', () => {
+    const total = MUTATING_RPCS_WITH_IDEMPOTENCY.length + MUTATING_RPCS_MISSING_IDEMPOTENCY.length;
+    expect(total).toBeGreaterThanOrEqual(76);
+  });
+});

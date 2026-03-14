@@ -114,8 +114,6 @@ const CRITICAL_COLUMNS: Array<{
       { name: 'order_number', type: 'string', nullable: true },
       { name: 'customer_id', type: 'uuid', nullable: true },
       { name: 'status', type: 'string', nullable: true },
-      { name: 'total_paid', type: 'number', nullable: true },
-      { name: 'balance_due', type: 'number', nullable: true },
     ],
     reason: 'Order queries used by invoices, deliveries, and payment allocation',
   },
@@ -399,8 +397,6 @@ describe('Schema Integrity: Data Type Contracts', () => {
       { table: 'invoices', column: 'total_amount_cents' },
       { table: 'invoices', column: 'paid_amount_cents' },
       { table: 'invoices', column: 'balance_cents' },
-      { table: 'orders', column: 'total_paid' },
-      { table: 'orders', column: 'balance_due' },
       { table: 'customers', column: 'credit_limit' },
       { table: 'customers', column: 'prepay_balance' },
       { table: 'commissions', column: 'commission_amount' },
@@ -470,5 +466,76 @@ describe('Schema Integrity: Cross-Reference Validation', () => {
   });
 });
 
+// ─── CHECK Constraint Contracts ─────────────────────────────────────────
+// These define the expected CHECK constraint values for critical status columns.
+// If a migration adds/removes a status value, these tests catch it.
+
+const CHECK_CONSTRAINT_CONTRACTS: Array<{
+  table: string;
+  column: string;
+  expectedValues: string[];
+}> = [
+  {
+    table: 'inventory_transactions',
+    column: 'transaction_type',
+    expectedValues: [
+      'received', 'booked', 'delivered', 'returned', 'adjusted',
+      'transferred', 'job_applied', 'cancelled_delivery_reversal',
+      'void_delivery_reversal', 'prebooked', 'released',
+    ],
+  },
+  {
+    table: 'commissions',
+    column: 'status',
+    expectedValues: ['pending', 'paid', 'cancelled'],
+  },
+  {
+    table: 'invoices',
+    column: 'status',
+    expectedValues: ['draft', 'posted', 'paid', 'overdue', 'voided', 'cancelled', 'unposted'],
+  },
+  {
+    table: 'deliveries',
+    column: 'status',
+    expectedValues: ['scheduled', 'in_progress', 'completed', 'cancelled', 'voided'],
+  },
+  {
+    table: 'orders',
+    column: 'status',
+    expectedValues: ['confirmed', 'partially_fulfilled', 'fulfilled', 'cancelled'],
+  },
+];
+
+describe('Schema Integrity: CHECK Constraint Contracts', () => {
+  for (const contract of CHECK_CONSTRAINT_CONTRACTS) {
+    describe(`${contract.table}.${contract.column}`, () => {
+      it('has at least 3 expected values', () => {
+        expect(contract.expectedValues.length).toBeGreaterThanOrEqual(3);
+      });
+
+      it('has no duplicate values', () => {
+        const unique = new Set(contract.expectedValues);
+        expect(unique.size).toBe(contract.expectedValues.length);
+      });
+
+      it('all values are non-empty strings', () => {
+        for (const val of contract.expectedValues) {
+          expect(val).toBeTruthy();
+          expect(typeof val).toBe('string');
+        }
+      });
+    });
+  }
+
+  it('covers all critical status columns', () => {
+    const covered = CHECK_CONSTRAINT_CONTRACTS.map(c => `${c.table}.${c.column}`);
+    expect(covered).toContain('inventory_transactions.transaction_type');
+    expect(covered).toContain('commissions.status');
+    expect(covered).toContain('invoices.status');
+    expect(covered).toContain('deliveries.status');
+    expect(covered).toContain('orders.status');
+  });
+});
+
 // ─── Exported for use in E2E tests ──────────────────────────────────────
-export { CRITICAL_COLUMNS, CRITICAL_FK_TARGETS, POSTGREST_EMBEDDING_QUERIES, COLUMN_NAMING_CONTRACTS };
+export { CRITICAL_COLUMNS, CRITICAL_FK_TARGETS, POSTGREST_EMBEDDING_QUERIES, COLUMN_NAMING_CONTRACTS, CHECK_CONSTRAINT_CONTRACTS };

@@ -126,9 +126,11 @@ const COLUMN_CONTRACTS: ColumnContract[] = [
   { table: 'invoices', column: 'paid_amount_cents', expectedTypes: PG_TYPE_MAP.number, nullable: true },
   { table: 'invoices', column: 'balance_cents', expectedTypes: PG_TYPE_MAP.number, nullable: true },
 
-  // orders
-  { table: 'orders', column: 'total_paid', expectedTypes: PG_TYPE_MAP.number, nullable: true },
-  { table: 'orders', column: 'balance_due', expectedTypes: PG_TYPE_MAP.number, nullable: true },
+  // orders — core order columns (balance_due/total_paid deprecated and dropped)
+  { table: 'orders', column: 'id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
+  { table: 'orders', column: 'order_number', expectedTypes: PG_TYPE_MAP.string, nullable: true },
+  { table: 'orders', column: 'customer_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
+  { table: 'orders', column: 'status', expectedTypes: PG_TYPE_MAP.string, nullable: true },
 
   // quote_items — NUMERIC precision for financial fields (Sprint 1b)
   { table: 'quote_items', column: 'price_per_unit', expectedTypes: ['numeric'], nullable: true },
@@ -343,6 +345,99 @@ describe.skipIf(!isLiveDB)('Live DB: Helper Functions Exist', () => {
   });
 });
 
+// ─── Live DB: CHECK Constraint Validation ─────────────────────────────
+// Verifies actual CHECK constraints in the database match expected values.
+
+import { CHECK_CONSTRAINT_CONTRACTS } from './schemaIntegrity.test';
+
+describe.skipIf(!isLiveDB)('Live DB: CHECK Constraint Values', () => {
+  for (const contract of CHECK_CONSTRAINT_CONTRACTS) {
+    it(`${contract.table}.${contract.column} CHECK constraint contains all expected values`, async () => {
+      const result = await queryInformationSchema(`
+        SELECT pg_get_constraintdef(oid) AS def
+        FROM pg_constraint
+        WHERE conrelid = '${contract.table}'::regclass
+          AND contype = 'c'
+          AND conname LIKE '%${contract.column}%check%'
+      `);
+
+      expect(
+        result.length,
+        `No CHECK constraint found for ${contract.table}.${contract.column} (looked for conname LIKE '%${contract.column}%check%')`
+      ).toBeGreaterThan(0);
+
+      const constraintDef = result[0].def;
+      for (const value of contract.expectedValues) {
+        expect(
+          constraintDef,
+          `CHECK constraint on ${contract.table}.${contract.column} is missing value '${value}'. Actual: ${constraintDef}`
+        ).toContain(value);
+      }
+    });
+  }
+});
+
+// ─── Known Function Overloads (intentional) ──────────────────────────
+// Functions that legitimately have multiple overloads in pg_proc.
+// next_invoice_number: no-args version (column default) + type-aware version
+
+const KNOWN_OVERLOADED_FUNCTIONS = ['next_invoice_number'];
+
+// ─── Live DB: Function Overload Detection ─────────────────────────────
+
+describe.skipIf(!isLiveDB)('Live DB: No Unintended Function Overloads', () => {
+  it('no public function has more than 1 overload (except known exceptions)', async () => {
+    const result = await queryInformationSchema(`
+      SELECT proname, count(*) as overload_count
+      FROM pg_proc
+      WHERE pronamespace = 'public'::regnamespace
+      GROUP BY proname
+      HAVING count(*) > 1
+    `);
+
+    const unexpected = (result as Array<{ proname: string; overload_count: number }>).filter(
+      (r) => !KNOWN_OVERLOADED_FUNCTIONS.includes(r.proname)
+    );
+
+    if (unexpected.length > 0) {
+      const details = unexpected
+        .map((r) => `  ${r.proname} (${r.overload_count} overloads)`)
+        .join('\n');
+      expect(
+        unexpected.length,
+        `OVERLOAD BUG: ${unexpected.length} function(s) have unintended overloads.\n` +
+          `This bug class caused 40+ issues in March 2026.\n` +
+          `Overloaded functions:\n${details}\n` +
+          `If intentional, add to KNOWN_OVERLOADED_FUNCTIONS.`
+      ).toBe(0);
+    }
+  });
+
+  it('known overloaded functions actually have overloads', async () => {
+    for (const funcName of KNOWN_OVERLOADED_FUNCTIONS) {
+      const result = await queryInformationSchema(`
+        SELECT proname, count(*) as overload_count
+        FROM pg_proc
+        WHERE pronamespace = 'public'::regnamespace
+          AND proname = '${funcName}'
+        GROUP BY proname
+      `);
+
+      expect(
+        result.length,
+        `Known overloaded function ${funcName}() does not exist in database`
+      ).toBeGreaterThan(0);
+
+      if (result.length > 0) {
+        expect(
+          Number(result[0].overload_count),
+          `${funcName}() is in KNOWN_OVERLOADED_FUNCTIONS but has only 1 version — remove from exceptions list`
+        ).toBeGreaterThan(1);
+      }
+    }
+  });
+});
+
 // ─── Static Tests (always run) ────────────────────────────────────────
 // These validate the contracts themselves are well-formed.
 
@@ -379,6 +474,14 @@ describe('Schema Live DB: Contract Completeness', () => {
     }
   });
 
+  it('known overloaded functions list is small (<=2 entries)', () => {
+    expect(
+      KNOWN_OVERLOADED_FUNCTIONS.length,
+      `KNOWN_OVERLOADED_FUNCTIONS has ${KNOWN_OVERLOADED_FUNCTIONS.length} entries — overloads should be rare. ` +
+        `If a function truly needs overloads, add it to the list. Otherwise fix the duplicate.`
+    ).toBeLessThanOrEqual(2);
+  });
+
   it(`isLiveDB flag matches environment (currently: ${isLiveDB ? 'LIVE' : 'MOCK'})`, () => {
     if (supabaseUrl.includes('test.supabase.co')) {
       expect(isLiveDB).toBe(false);
@@ -392,6 +495,7 @@ describe('Schema Live DB: Contract Completeness', () => {
 export {
   COLUMN_CONTRACTS,
   FK_CONTRACTS,
+  KNOWN_OVERLOADED_FUNCTIONS,
   TABLES_REQUIRING_RLS,
   isLiveDB,
 };

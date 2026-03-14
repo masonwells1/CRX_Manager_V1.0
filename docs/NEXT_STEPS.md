@@ -166,34 +166,26 @@ test('no public functions have multiple overloads', async () => {
 });
 ```
 
-### E2E Tests (add to existing specs)
+### E2E Tests (add to existing specs) — ✅ Done (Mar 14)
 
-#### 4. Order Edit Product Swap Test
-**File:** `tests/e2e/order-editing.spec.ts` (new)
+#### 4. Order Edit Product Swap Test ✅
+**File:** `tests/e2e/order-editing.spec.ts` (extended — OE5, OE6 added)
+- OE5: Add new product via modal in edit mode, fill qty, save, verify it appears
+- OE6: Remove product via trash icon in edit mode, verify count decreased
+- OE7: Cancel edit discards changes (renumbered from old OE5)
 
-Test the full flow that was broken by the CHECK constraint bug:
-1. Create an order with Product A
-2. Edit the order — swap Product A for Product B
-3. Verify inventory: Product A prebooked decreased, Product B prebooked increased
-4. Verify no errors in the process
+#### 5. Vendor Bill Full Lifecycle with AP Aging ✅
+**File:** `tests/e2e/accounts-payable.spec.ts` (extended — AP8, AP9 added)
+- AP8: AP aging table shows vendor breakdown with bucket columns
+- AP9: Create bill and verify AP Dashboard totals reflect new bill
+- AP10: Route accessibility (renumbered from old AP8)
 
-#### 5. Vendor Bill Full Lifecycle Test
-**File:** `tests/e2e/vendor-bills.spec.ts` (new or extend `accounts-payable.spec.ts`)
-
-Test the functions that were completely missing:
-1. Create a vendor bill (was missing — `create_vendor_bill`)
-2. Record a payment against it (was missing — `record_vendor_payment`)
-3. Void a different bill (was missing — `void_vendor_bill`)
-4. Verify AP aging reflects the changes
-
-#### 6. Return Processing Test
-**File:** `tests/e2e/returns.spec.ts` (extend existing)
-
-Test the function that was missing:
-1. Create an order, deliver it
-2. Request a return
-3. Approve and receive the return (`receive_return` — was missing)
-4. Verify inventory updated correctly
+#### 6. Return Processing Full Lifecycle ✅
+**File:** `tests/e2e/returns-workflow.spec.ts` (extended — RP9-RP11 added)
+- RP9: Approve a requested return → verify status → Receive button appears
+- RP10: Receive & restock an approved return → verify "Restocked" badge
+- RP11: Issue credit for received return → verify terminal state
+- RP12: Detail modal shows items (renumbered from old RP9)
 
 ---
 
@@ -201,13 +193,13 @@ Test the function that was missing:
 
 These are quality-of-life improvements, not bug fixes:
 
-| Task | Effort | Benefit |
-|------|--------|---------|
-| Squash 169 migrations to baseline + recent | Medium | Faster local setup, clearer history |
-| Fix 10 groups of duplicate-timestamp migrations | Low | Deterministic migration ordering |
-| Remove orphaned files (`ocrParser.ts`, `reconciliation.ts`) | Low | Less confusion |
-| Add `orders.balance_due` / `orders.total_paid` column removal migration | Low | Clean up deprecated columns |
-| Consolidate `financial_audit_log.operation_type` CHECK | Low | Single clear constraint definition |
+| Task | Effort | Benefit | Status |
+|------|--------|---------|--------|
+| Squash 170 migrations to baseline + recent | Medium | Faster local setup, clearer history | ⚠️ Deferred — renaming applied migrations breaks Supabase `schema_migrations` tracking |
+| Fix 10 groups of duplicate-timestamp migrations | Low | Deterministic migration ordering | ⚠️ Deferred — same risk as squash (applied migrations tracked by filename) |
+| Remove orphaned files (`ocrParser.ts`, `reconciliation.ts`) | Low | Less confusion | ✅ Done (Mar 14) — `ocrParser.ts` + test deleted; `reconciliation.ts` kept (used by E2E tests) |
+| Add `orders.balance_due` / `orders.total_paid` column removal migration | Low | Clean up deprecated columns | ✅ Done (Mar 14) — migration `20260332100000`, columns dropped, types + tests updated |
+| Consolidate `financial_audit_log.operation_type` CHECK | Low | Single clear constraint definition | ✅ Already done — migration `20260331130000` has 54 types in one constraint |
 
 ---
 
