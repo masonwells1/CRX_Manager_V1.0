@@ -14,7 +14,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 export default function NotePhotoUpload({ noteId, onUploadComplete }: NotePhotoUploadProps) {
   const { profile } = useAuth();
-  const toast = useToast();
+  const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
 

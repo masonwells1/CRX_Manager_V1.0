@@ -10,7 +10,7 @@ interface NoteAttachmentsProps {
 }
 
 export default function NoteAttachments({ noteId, canDelete }: NoteAttachmentsProps) {
-  const toast = useToast();
+  const { toast } = useToast();
   const [attachments, setAttachments] = useState<TeamNoteAttachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
