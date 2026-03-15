@@ -62,11 +62,33 @@ export default function Orders() {
     }
 
     const orderIds = (ordersData || []).map((o: Record<string, unknown>) => (o as { id: string }).id);
-    const { data: itemsData, error: itemsError } = await supabase
-      .from('order_items')
-      .select('order_id, total_units_needed, quantity_delivered, price_per_unit')
-      .in('order_id', orderIds.length > 0 ? orderIds : ['__none__']);
 
+    // Fetch parent customer names for farm group labels
+    const parentIds = [...new Set(
+      (ordersData || [])
+        .map((o: Record<string, unknown>) => (o.customer as { parent_customer_id?: string })?.parent_customer_id)
+        .filter(Boolean) as string[]
+    )];
+
+    // Run all three queries in parallel — they depend on ordersData but not on each other
+    const [itemsResult, invoiceResult, parentsResult] = await Promise.all([
+      supabase
+        .from('order_items')
+        .select('order_id, total_units_needed, quantity_delivered, price_per_unit')
+        .in('order_id', orderIds.length > 0 ? orderIds : ['__none__']),
+      supabase
+        .from('invoices')
+        .select('order_id, total_amount_cents')
+        .not('status', 'in', '("voided","cancelled")'),
+      parentIds.length > 0
+        ? supabase
+            .from('customers')
+            .select('id, farm_name')
+            .in('id', parentIds)
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    const { data: itemsData, error: itemsError } = itemsResult;
     if (itemsError) {
       console.error('Failed to load order items:', itemsError.message);
     }
@@ -83,10 +105,7 @@ export default function Orders() {
     });
 
     // Fetch invoice totals per order for invoiced %
-    const { data: invoiceData } = await supabase
-      .from('invoices')
-      .select('order_id, total_amount_cents')
-      .not('status', 'in', '("voided","cancelled")');
+    const { data: invoiceData } = invoiceResult;
     const invoicedByOrder: Record<string, number> = {};
     (invoiceData || []).forEach((inv: { order_id: string | null; total_amount_cents: number }) => {
       if (inv.order_id) {
@@ -94,20 +113,9 @@ export default function Orders() {
       }
     });
 
-    // Fetch parent customer names for farm group labels
-    const parentIds = [...new Set(
-      (ordersData || [])
-        .map((o: Record<string, unknown>) => (o.customer as { parent_customer_id?: string })?.parent_customer_id)
-        .filter(Boolean) as string[]
-    )];
     const parentNameMap: Record<string, string> = {};
-    if (parentIds.length > 0) {
-      const { data: parents } = await supabase
-        .from('customers')
-        .select('id, farm_name')
-        .in('id', parentIds);
-      (parents || []).forEach((p) => { parentNameMap[p.id] = p.farm_name; });
-    }
+    const { data: parents } = parentsResult;
+    (parents || []).forEach((p: { id: string; farm_name: string }) => { parentNameMap[p.id] = p.farm_name; });
 
     const enriched = ((ordersData || []) as Order[]).map((o) => {
       const counts = itemsByOrder[o.id] || { neededValue: 0, deliveredValue: 0 };
