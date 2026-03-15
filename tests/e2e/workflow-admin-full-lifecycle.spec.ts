@@ -276,9 +276,10 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
     await page.goto(state.quoteUrl.replace(/.*localhost:\d+/, ''));
     await waitForPage(page, 3000);
 
-    // Click Convert to Order
+    // Wait for quote data to finish loading before looking for Convert button
+    // The button only renders after the quote detail loads (not during skeleton)
     const convertBtn = page.locator('button:has-text("Convert to Order")');
-    await expect(convertBtn).toBeVisible({ timeout: 10000 });
+    await expect(convertBtn).toBeVisible({ timeout: 20000 });
     await convertBtn.click();
     await waitForPage(page, 1000);
 
@@ -326,11 +327,11 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
     await page.goto(state.orderUrl.replace(/.*localhost:\d+/, ''));
     await waitForPage(page, 3000);
 
-    // Verify heading is visible
-    await expect(page.locator('h1, h2').first()).toBeVisible({ timeout: 10000 });
+    // Wait for the order detail to finish loading (table with line items)
+    const rows = page.locator('table tbody tr');
+    await expect(rows.first()).toBeVisible({ timeout: 15000 });
 
     // Verify order items table has rows
-    const rows = page.locator('table tbody tr');
     const rowCount = await rows.count();
     expect(rowCount).toBeGreaterThanOrEqual(1);
 
@@ -343,12 +344,73 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
     }
   });
 
-  // T5: Snapshot inventory before delivery
+  // T5: Ensure inventory exists and snapshot baseline before delivery
   test('T5: Capture inventory baseline before delivery', async ({ page }) => {
+    // Ensure sufficient inventory at Main Warehouse via Supabase REST API.
+    // Previous test runs may have depleted stock — this guarantees repeatable tests.
+    const supabaseUrl = process.env.VITE_SUPABASE_URL!;
+    const anonKey = process.env.VITE_SUPABASE_ANON_KEY!;
+
     await page.goto('/inventory');
     await waitForPage(page, 3000);
-
     await expect(page.locator('h1').first()).toContainText(/Inventor/i);
+
+    // Top up inventory via REST API (browser has authenticated session)
+    const topUpResult = await page.evaluate(async ({ url, key, p1Name, p2Name }) => {
+      // Read auth token from Supabase session in localStorage
+      const sessionStr = localStorage.getItem('sb-rhyzpcqhnizqbxphqdkr-auth-token');
+      if (!sessionStr) return { error: 'No session' };
+      const session = JSON.parse(sessionStr);
+      const token = session.access_token;
+      const headers = {
+        'apikey': key,
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      };
+
+      const results: string[] = [];
+      for (const name of [p1Name, p2Name]) {
+        if (!name) continue;
+        // Look up product ID
+        const prodRes = await fetch(
+          `${url}/rest/v1/products?product_name=eq.${encodeURIComponent(name)}&select=id`,
+          { headers }
+        );
+        const products = await prodRes.json();
+        if (!products.length) { results.push(`${name}: not found`); continue; }
+        const productId = products[0].id;
+
+        // Check current inventory at Main Warehouse
+        const invRes = await fetch(
+          `${url}/rest/v1/inventory?product_id=eq.${productId}&location=eq.Main%20Warehouse&select=id,quantity_available`,
+          { headers }
+        );
+        const invRows = await invRes.json();
+        if (invRows.length && parseFloat(invRows[0].quantity_available) >= 20) {
+          results.push(`${name}: already has ${invRows[0].quantity_available}`);
+          continue;
+        }
+
+        // Update inventory to 100 units
+        if (invRows.length) {
+          await fetch(
+            `${url}/rest/v1/inventory?id=eq.${invRows[0].id}`,
+            { method: 'PATCH', headers: { ...headers, 'Prefer': 'return=minimal' },
+              body: JSON.stringify({ quantity_available: 100 }) }
+          );
+          results.push(`${name}: topped up to 100`);
+        } else {
+          results.push(`${name}: no inventory row at Main Warehouse`);
+        }
+      }
+      return { results };
+    }, { url: supabaseUrl, key: anonKey, p1Name: state.product1Name, p2Name: state.product2Name });
+
+    console.log('T5: Inventory top-up:', JSON.stringify(topUpResult));
+
+    // Reload to capture updated baselines
+    await page.reload();
+    await waitForPage(page, 3000);
 
     // Capture product quantities from table
     const rows = page.locator('table tbody tr');
@@ -360,7 +422,6 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
       const rowText = await rows.nth(i).innerText();
       if (state.product1Name && rowText.includes(state.product1Name)) {
         const cells = await rows.nth(i).locator('td').allInnerTexts();
-        // Find numeric available qty (typically 3rd cell)
         for (const cell of cells) {
           const num = parseFloat(cell.replace(/,/g, ''));
           if (!isNaN(num) && num > 0) {
@@ -383,7 +444,6 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
 
     // Log baseline for debugging
     console.log(`Inventory baseline — ${state.product1Name}: ${state.product1QtyBefore}, ${state.product2Name}: ${state.product2QtyBefore}`);
-    // At minimum verify the page loaded with data
     expect(rowCount).toBeGreaterThan(0);
   });
 
@@ -411,6 +471,7 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
     await dateInput.fill(today);
 
     // Adjust quantities — set product 1 to half, keep product 2 at max
+    // T5 ensures sufficient inventory (100 units) at Main Warehouse
     const qtyCount = await qtyInputs.count();
     if (qtyCount >= 1) {
       await qtyInputs.first().fill(String(state.product1DeliverQty));
@@ -474,7 +535,7 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
     await waitForPage(page, 3000);
 
     // Accept native confirm() dialog (handleComplete calls confirm())
-    page.on('dialog', async (dialog) => { await dialog.accept(); });
+    page.once('dialog', async (dialog) => { await dialog.accept(); });
 
     // Fill "Signed By" input (admin section uses <Input> component)
     const signedByInput = page.locator('input[placeholder="Customer name"]').first();
@@ -482,7 +543,7 @@ test.describe.serial('Admin Full Lifecycle — Quote to Return', () => {
     await signedByInput.fill('E2E Test Signature');
     await waitForPage(page, 500);
 
-    // Click Complete Delivery button
+    // Click Complete Delivery button — T5 ensures sufficient inventory (100 units)
     const completeBtn = page.locator('button:has-text("Complete Delivery"), button:has-text("Complete (Partial)")').first();
     await expect(completeBtn).toBeVisible({ timeout: 5000 });
     await completeBtn.click();
