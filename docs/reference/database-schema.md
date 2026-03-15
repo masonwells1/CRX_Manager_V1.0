@@ -1,4 +1,4 @@
-# Database Schema Reference (85+ Tables)
+# Database Schema Reference (86+ Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -53,8 +53,9 @@
 - `ocr_processing_queue` - Background queue (status, priority, retry_count)
 
 ## Collaboration
-- `team_notes` - Notes/todos/announcements (note_type, priority, assigned_to, is_completed, is_pinned, deleted_at)
+- `team_notes` - Notes/todos/announcements (note_type, priority, assigned_to, is_completed, is_pinned, deleted_at, linked_entity_type, linked_entity_id)
 - `team_note_comments` - Comments (note_id, content, deleted_at)
+- `team_note_attachments` - Photo attachments for notes (note_id, file_url, file_name, file_type, file_size_bytes, uploaded_by). Storage bucket: `team-note-attachments`
 - `activity_feed` - Auto-generated event log (event_type, description, related_entity_type/id)
 - `notifications` - Per-user notifications (user_id, title, message, notification_type, is_read)
 
@@ -139,6 +140,7 @@
 | commissions | Admin / Sales Rep (own recipient) | Admin | Admin | - |
 | payments | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |
 | team_notes | All authenticated | Own created_by | Own created_by / Admin | Admin |
+| team_note_attachments | All authenticated | Own uploaded_by | Own uploaded_by / Admin | - |
 | team_note_comments | All authenticated | Own created_by | - | - |
 | activity_feed | All authenticated | Own performed_by | - | - |
 | notifications | Own user_id | All authenticated | Own user_id | - |

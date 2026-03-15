@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle } from 'lucide-react';
+import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -13,7 +13,9 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate, localToday } from '../lib/dateUtils';
-import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field } from '../types';
+import QuickTaskModal from '../components/team/QuickTaskModal';
+import RelatedNotes from '../components/team/RelatedNotes';
+import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType } from '../types';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
@@ -80,6 +82,7 @@ export default function CustomerDetail() {
   const [phoneError, setPhoneError] = useState('');
   const [showSummaryDialog, setShowSummaryDialog] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
 
   // Financials tab state
   interface AgingRow { customer_id: string; farm_name: string; current_amount: number; days_30: number; days_60: number; days_90: number; over_90: number; total_outstanding: number }
@@ -454,16 +457,29 @@ export default function CustomerDetail() {
         <h2 className="text-lg font-semibold font-heading text-nav-dark">
           {isNew ? 'New Customer' : customer.farm_name}
         </h2>
-        {!isNew && (profile?.role === 'admin' || profile?.role === 'sales_rep') && (
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<FileText className="w-4 h-4" />}
-            onClick={() => setShowSummaryDialog(true)}
-          >
-            Season Summary
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {!isNew && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<MessageSquarePlus className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setQuickTaskOpen(true)}
+            >
+              Create Task
+            </Button>
+          )}
+          {!isNew && (profile?.role === 'admin' || profile?.role === 'sales_rep') && (
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<FileText className="w-4 h-4" />}
+              onClick={() => setShowSummaryDialog(true)}
+            >
+              Season Summary
+            </Button>
+          )}
+        </div>
       </div>
 
       {!isNew && (
@@ -692,6 +708,15 @@ export default function CustomerDetail() {
               {isNew ? 'Create Customer' : 'Save Changes'}
             </Button>
           </div>
+
+          {/* Related Notes */}
+          {!isNew && id && (
+            <RelatedNotes
+              entityType={'customer' as LinkedEntityType}
+              entityId={id}
+              onCreateTask={() => setQuickTaskOpen(true)}
+            />
+          )}
         </div>
       )}
 
@@ -1273,6 +1298,17 @@ export default function CustomerDetail() {
         onStay={() => blocker.reset?.()}
         onLeave={() => blocker.proceed?.()}
       />
+
+      {!isNew && id && (
+        <QuickTaskModal
+          open={quickTaskOpen}
+          onClose={() => setQuickTaskOpen(false)}
+          entityType={'customer' as LinkedEntityType}
+          entityId={id}
+          prefillTitle={`Note: ${customer.farm_name || ''}`}
+          prefillContent={`Customer: ${customer.farm_name || ''}`}
+        />
+      )}
     </div>
   );
 }

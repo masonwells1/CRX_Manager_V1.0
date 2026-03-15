@@ -91,3 +91,8 @@ is_applicator() -- SECURITY DEFINER STABLE
 
 ## Dashboard (updated)
 Note: `financial_dashboard_summary()` now includes 3 additional margin alert fields: `bottom_products_by_margin` (bottom 10 products by margin % this season), `bottom_customers_by_margin` (bottom 10 customers by margin % this season), `monthly_margin_trend` (last 12 months of margin % trend). Total CTEs: 16.
+
+## Team Board V2 (added 20260315200000)
+- `get_team_board_deliveries()` — SECURITY DEFINER, role-aware. Returns `{ today: [...], tomorrow: [...], unassigned_count, today_total }`. Drivers see only their assigned deliveries; admin/sales_rep see all. Sorted by scheduled_time, then priority (urgent→low).
+- `get_yesterday_delivery_recap()` — SECURITY DEFINER, role-aware. Returns `{ completed: [...], issues: [...], summary: { total_completed, total_with_issues, total_cancelled } }`. Same role filtering as above.
+- `get_notes_for_entity(p_entity_type text, p_entity_id uuid)` — SECURITY DEFINER. Returns all non-deleted team_notes linked to a specific entity, ordered by is_pinned DESC, created_at DESC.

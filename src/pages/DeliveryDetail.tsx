@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Phone, MapPin, CheckCircle2, Package, Download, WifiOff,
   Minus, Plus, Pencil, Ban, Camera, UserPlus, AlertTriangle, RefreshCw,
-  PlayCircle, Lock, Zap, FileText, Mail, RotateCcw,
+  PlayCircle, Lock, Zap, FileText, Mail, RotateCcw, MessageSquarePlus,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -26,9 +26,12 @@ import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
+import QuickTaskModal from '../components/team/QuickTaskModal';
+import RelatedNotes from '../components/team/RelatedNotes';
 import type {
   Delivery, DeliveryItem, DeliveryPhoto, DeliveryRemainder,
   Customer, CustomerAddress, Profile, OrderItem, DeliveryIssueType,
+  LinkedEntityType,
 } from '../types';
 
 const ISSUE_TYPE_LABELS: Record<string, string> = {
@@ -91,6 +94,7 @@ export default function DeliveryDetail() {
   const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
   const [completing, setCompleting] = useState(false);
   const [sendingEmail, setSendingEmail] = useState(false);
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   const [deliveryQtys, setDeliveryQtys] = useState<Record<string, number>>({});
   const [driverIssueType, setDriverIssueType] = useState<DeliveryIssueType>('none');
   const [driverIssueNotes, setDriverIssueNotes] = useState('');
@@ -1295,6 +1299,15 @@ export default function DeliveryDetail() {
                 Email Confirmation
               </Button>
             )}
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<MessageSquarePlus className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setQuickTaskOpen(true)}
+            >
+              Create Task
+            </Button>
             {canCancel && (
               <Button
                 variant="danger"
@@ -1759,6 +1772,13 @@ export default function DeliveryDetail() {
         </Card>
       )}
 
+      {/* Related Notes */}
+      <RelatedNotes
+        entityType={'delivery' as LinkedEntityType}
+        entityId={id!}
+        onCreateTask={() => setQuickTaskOpen(true)}
+      />
+
       {/* Photos section */}
       <Card>
         <div className="flex items-center justify-between mb-4">
@@ -1950,6 +1970,16 @@ export default function DeliveryDetail() {
           </div>
         </div>
       </Modal>
+
+      <QuickTaskModal
+        open={quickTaskOpen}
+        onClose={() => setQuickTaskOpen(false)}
+        entityType={'delivery' as LinkedEntityType}
+        entityId={id!}
+        prefillTitle={`Follow up: ${delivery.delivery_number}`}
+        prefillContent={`Customer: ${customer?.farm_name || 'Unknown'}\nDriver: ${driver?.full_name || 'Unassigned'}\nDate: ${delivery.scheduled_date}`}
+        prefillAssignee={delivery.assigned_driver || ''}
+      />
     </div>
   );
 }

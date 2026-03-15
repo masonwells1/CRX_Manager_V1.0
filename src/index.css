@@ -42,3 +42,12 @@
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-gray-400;
 }
+
+/* Utility: hide scrollbar while keeping scroll functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}

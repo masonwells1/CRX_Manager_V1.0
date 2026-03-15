@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef , useCallback } from 'react';
 import {
-  Plus, CheckSquare, Square, Pin, PinOff, Clock, Pencil, Trash2,
+  Plus, CheckSquare, Square, Pin, Clock, Pencil, Trash2,
   MessageCircle, Activity, LayoutGrid, User, History, ListChecks,
   AlertTriangle, Timer,
 } from 'lucide-react';
@@ -20,7 +20,13 @@ import TeamBoardFilters, { FilterState } from '../components/team/TeamBoardFilte
 import CommentsSection from '../components/team/CommentsSection';
 import TagsManager from '../components/team/TagsManager';
 import ActivityFeed from '../components/team/ActivityFeed';
-import type { TeamNote, Profile, NoteType, NotePriority } from '../types';
+import NoteCard from '../components/team/NoteCard';
+import EntityBadge from '../components/team/EntityBadge';
+import NoteAttachments from '../components/team/NoteAttachments';
+import NotePhotoUpload from '../components/team/NotePhotoUpload';
+import TodaysDeliveries from '../components/team/TodaysDeliveries';
+import YesterdayRecap from '../components/team/YesterdayRecap';
+import type { TeamNote, Profile, NoteType, NotePriority, ExtendedTeamNote, LinkedEntityType } from '../types';
 import { useSearchParams } from 'react-router-dom';
 
 const priorityVariant: Record<NotePriority, 'default' | 'info' | 'warning' | 'error'> = {
@@ -32,11 +38,6 @@ const priorityVariant: Record<NotePriority, 'default' | 'info' | 'warning' | 'er
 
 type ViewTab = 'board' | 'my_tasks' | 'completed' | 'activity';
 
-interface ExtendedTeamNote extends TeamNote {
-  tags?: Array<{ id: string; name: string; color: string }>;
-  comment_count?: number;
-  completer?: { full_name: string } | null;
-}
 
 interface GlobalActivity {
   id: string;
@@ -67,6 +68,8 @@ export default function TeamBoard() {
   const [priority, setPriority] = useState<NotePriority>('medium');
   const [assignedTo, setAssignedTo] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [linkedEntityType, setLinkedEntityType] = useState<string>('');
+  const [linkedEntityId, setLinkedEntityId] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'comments' | 'activity'>('comments');
   const [viewTab, setViewTab] = useState<ViewTab>('board');
@@ -300,6 +303,8 @@ export default function TeamBoard() {
     setPriority('medium');
     setAssignedTo('');
     setDueDate('');
+    setLinkedEntityType('');
+    setLinkedEntityId('');
     setEditingNote(null);
     setIsNoteDirty(false);
     modalInitialized.current = false;
@@ -319,6 +324,8 @@ export default function TeamBoard() {
     setPriority(note.priority);
     setAssignedTo(note.assigned_to || '');
     setDueDate(note.due_date || '');
+    setLinkedEntityType(note.linked_entity_type || '');
+    setLinkedEntityId(note.linked_entity_id || '');
     setModalOpen(true);
     requestAnimationFrame(() => { modalInitialized.current = true; });
   };
@@ -345,6 +352,8 @@ export default function TeamBoard() {
             priority,
             assigned_to: assignedTo || null,
             due_date: dueDate || null,
+            linked_entity_type: linkedEntityType || null,
+            linked_entity_id: linkedEntityId || null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', editingNote.id)
@@ -365,6 +374,8 @@ export default function TeamBoard() {
         priority,
         assigned_to: assignedTo || null,
         due_date: dueDate || null,
+        linked_entity_type: linkedEntityType || null,
+        linked_entity_id: linkedEntityId || null,
         created_by: profile.id,
       });
       if (noteResult.error) {
@@ -505,11 +516,6 @@ export default function TeamBoard() {
   const isOverdue = (note: TeamNote) =>
     !note.is_completed && note.due_date && parseLocalDate(note.due_date) < new Date();
 
-  const getDaysUntilDue = (dueDate: string) => {
-    const diff = parseLocalDate(dueDate).getTime() - new Date().getTime();
-    return Math.ceil(diff / (1000 * 60 * 60 * 24));
-  };
-
   const getTimeToComplete = (created: string, completed: string) => {
     const diffMs = new Date(completed).getTime() - new Date(created).getTime();
     const hours = Math.floor(diffMs / (1000 * 60 * 60));
@@ -526,135 +532,14 @@ export default function TeamBoard() {
   const formatDate = (d: string) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const formatDateTime = (d: string) => new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
-  // ── Render a note card ──
-  const renderCard = (note: ExtendedTeamNote, showCheckbox: boolean, showCompletionDetails: boolean = false) => (
-    <div
-      key={note.id}
-      role="button"
-      tabIndex={0}
-      className={`p-4 rounded-lg border transition-colors group cursor-pointer ${
-        note.is_completed
-          ? 'border-gray-100 bg-gray-50/50 opacity-75'
-          : isOverdue(note)
-            ? 'border-red-200 bg-red-50/30 hover:border-red-300'
-            : 'border-gray-100 hover:border-gray-200'
-      }`}
-      onClick={() => {
-        setSelectedNote(note);
-        setDetailModalOpen(true);
-      }}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedNote(note); setDetailModalOpen(true); } }}
-    >
-      <div className="flex items-start gap-3">
-        {showCheckbox && (
-          <button
-            onClick={(e) => { e.stopPropagation(); toggleComplete(note); }}
-            className="mt-0.5 text-secondary hover:text-crx-green"
-          >
-            {note.is_completed ? <CheckSquare className="w-5 h-5 text-crx-green" /> : <Square className="w-5 h-5" />}
-          </button>
-        )}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            {note.is_pinned && <Pin className="w-3.5 h-3.5 text-amber-500" />}
-            <h4 className={`text-sm font-medium text-nav-dark ${note.is_completed ? 'line-through' : ''}`}>
-              {note.title}
-            </h4>
-            <Badge variant={priorityVariant[note.priority]}>{note.priority}</Badge>
-            {isOverdue(note) && (
-              <Badge variant="error">
-                <AlertTriangle className="w-3 h-3 mr-1" />
-                Overdue {Math.abs(getDaysUntilDue(note.due_date!))}d
-              </Badge>
-            )}
-            {!note.is_completed && note.due_date && !isOverdue(note) && getDaysUntilDue(note.due_date) <= 2 && (
-              <Badge variant="warning">Due soon</Badge>
-            )}
-          </div>
-          {note.content && (
-            <p className="text-xs text-secondary mt-1 line-clamp-2">{note.content}</p>
-          )}
-          {note.tags && note.tags.length > 0 && (
-            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-              {note.tags.map(tag => (
-                <span
-                  key={tag.id}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium"
-                  style={{
-                    backgroundColor: `${tag.color}15`,
-                    color: tag.color,
-                    border: `1px solid ${tag.color}30`,
-                  }}
-                >
-                  {tag.name}
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="flex items-center gap-3 mt-2 text-xs text-gray-400 flex-wrap">
-            {getName(note.creator) && <span>By {getName(note.creator)}</span>}
-            {getName(note.assignee) && (
-              <span className="text-crx-green font-medium">→ {getName(note.assignee)}</span>
-            )}
-            {note.due_date && (
-              <span className={`flex items-center gap-1 ${isOverdue(note) ? 'text-red-500 font-medium' : ''}`}>
-                <Clock className="w-3 h-3" />
-                {formatDate(note.due_date)}
-              </span>
-            )}
-            {note.comment_count !== undefined && note.comment_count > 0 && (
-              <span className="flex items-center gap-1 text-crx-green">
-                <MessageCircle className="w-3 h-3" />
-                {note.comment_count}
-              </span>
-            )}
-          </div>
+  const handleNoteClick = useCallback((note: ExtendedTeamNote) => {
+    setSelectedNote(note);
+    setDetailModalOpen(true);
+  }, []);
 
-          {/* Completion details — shows who completed it and how long it took */}
-          {showCompletionDetails && note.is_completed && note.completed_at && (
-            <div className="mt-2 pt-2 border-t border-gray-100 flex items-center gap-3 text-xs">
-              <span className="flex items-center gap-1 text-crx-green font-medium">
-                <CheckSquare className="w-3 h-3" />
-                Completed by {getName(note.completer) || 'Unknown'}
-              </span>
-              <span className="text-gray-400">
-                {formatDateTime(note.completed_at)}
-              </span>
-              <span className="flex items-center gap-1 text-gray-400" title="Time from creation to completion">
-                <Timer className="w-3 h-3" />
-                {getTimeToComplete(note.created_at, note.completed_at)}
-              </span>
-            </div>
-          )}
-        </div>
-        {canEdit(note) && (
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-            <button
-              onClick={(e) => { e.stopPropagation(); togglePin(note); }}
-              className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-amber-500"
-              title={note.is_pinned ? 'Unpin' : 'Pin'}
-            >
-              {note.is_pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); openEditModal(note); }}
-              className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-blue-500"
-              title="Edit"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(note.id); }}
-              className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-red-500"
-              title="Delete"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+  const handleDeleteNote = useCallback((noteId: string) => {
+    setDeleteConfirmId(noteId);
+  }, []);
 
   // ── Global Activity action formatting ──
   const getActivityIcon = (action: string) => {
@@ -711,6 +596,20 @@ export default function TeamBoard() {
       if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
       return 0;
     });
+
+  // For the Board tab's personalized sections
+  const myTasksForBoard = notes
+    .filter(n => !n.is_completed && n.assigned_to === profile?.id)
+    .sort((a, b) => {
+      const aOverdue = isOverdue(a) ? 0 : 1;
+      const bOverdue = isOverdue(b) ? 0 : 1;
+      if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+      const priOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+      return (priOrder[a.priority] || 4) - (priOrder[b.priority] || 4);
+    });
+
+  const pinnedAndAnnouncements = notes
+    .filter(n => !n.is_completed && (n.is_pinned || n.note_type === 'announcement'));
 
   const completedNotes = notes
     .filter(n => n.is_completed)
@@ -808,25 +707,26 @@ export default function TeamBoard() {
         </div>
       </div>
 
-      {/* ── Tab Navigation ── */}
-      <div className="flex border-b border-gray-200">
+      {/* ── Tab Navigation (horizontally scrollable on mobile) ── */}
+      <div className="flex border-b border-gray-200 overflow-x-auto -mx-1 px-1 scrollbar-hide">
         {([
           { id: 'board' as const, label: 'Board', icon: <LayoutGrid className="w-4 h-4" /> },
           { id: 'my_tasks' as const, label: 'My Tasks', icon: <User className="w-4 h-4" />, count: stats.myTasks },
-          { id: 'completed' as const, label: 'Completed History', icon: <History className="w-4 h-4" />, count: stats.completed },
-          { id: 'activity' as const, label: 'All Activity', icon: <Activity className="w-4 h-4" /> },
+          { id: 'completed' as const, label: 'Completed', icon: <History className="w-4 h-4" />, count: stats.completed },
+          { id: 'activity' as const, label: 'Activity', icon: <Activity className="w-4 h-4" /> },
         ]).map(tab => (
           <button
             key={tab.id}
             onClick={() => setViewTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap min-h-[44px] ${
               viewTab === tab.id
                 ? 'text-crx-green border-crx-green'
                 : 'text-gray-500 border-transparent hover:text-gray-700 hover:border-gray-300'
             }`}
           >
             {tab.icon}
-            {tab.label}
+            <span className="hidden sm:inline">{tab.label}</span>
+            <span className="sm:hidden">{tab.label}</span>
             {tab.count !== undefined && tab.count > 0 && (
               <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold ${
                 viewTab === tab.id ? 'bg-crx-green/10 text-crx-green' : 'bg-gray-100 text-gray-600'
@@ -843,11 +743,83 @@ export default function TeamBoard() {
       {/* ══════════════════════════════════════════════════ */}
       {viewTab === 'board' && (
         <>
+          {/* Today's Deliveries */}
+          <TodaysDeliveries />
+
+          {/* Your Tasks & Mentions — personalized section */}
+          {myTasksForBoard.length > 0 && (
+            <Card padding={false}>
+              <div className="p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <User className="w-4 h-4 text-crx-green" />
+                    <h3 className="text-sm font-semibold text-nav-dark">Your Tasks</h3>
+                    <span className="px-1.5 py-0.5 bg-crx-green/10 text-crx-green rounded-full text-xs font-semibold">
+                      {myTasksForBoard.length}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setViewTab('my_tasks')}
+                    className="text-xs text-crx-green hover:underline"
+                  >
+                    View All
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {myTasksForBoard.slice(0, 5).map(n => (
+                    <NoteCard
+                      key={n.id}
+                      note={n}
+                      showCheckbox={true}
+                      canEdit={canEdit(n)}
+                      onToggleComplete={toggleComplete}
+                      onTogglePin={togglePin}
+                      onEdit={openEditModal}
+                      onDelete={handleDeleteNote}
+                      onClick={handleNoteClick}
+                    />
+                  ))}
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Pinned & Announcements */}
+          {pinnedAndAnnouncements.length > 0 && (
+            <Card padding={false}>
+              <div className="p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <Pin className="w-4 h-4 text-amber-500" />
+                  <h3 className="text-sm font-semibold text-nav-dark">Pinned & Announcements</h3>
+                </div>
+                <div className="space-y-2">
+                  {pinnedAndAnnouncements.map(n => (
+                    <NoteCard
+                      key={n.id}
+                      note={n}
+                      showCheckbox={false}
+                      canEdit={canEdit(n)}
+                      onToggleComplete={toggleComplete}
+                      onTogglePin={togglePin}
+                      onEdit={openEditModal}
+                      onDelete={handleDeleteNote}
+                      onClick={handleNoteClick}
+                    />
+                  ))}
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Yesterday's Recap */}
+          <YesterdayRecap />
+
+          {/* Existing filters + grid below */}
           <div className="flex justify-between items-start gap-4">
             <div className="flex-1">
               <TeamBoardFilters filters={filters} onChange={setFilters} />
             </div>
-            <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
+            <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal} className="hidden sm:flex">
               Add Note
             </Button>
           </div>
@@ -860,7 +832,7 @@ export default function TeamBoard() {
                   {notesByType('note').length === 0 && (
                     <p className="text-sm text-secondary py-4 text-center">No notes</p>
                   )}
-                  {notesByType('note').map((n) => renderCard(n, false, true))}
+                  {notesByType('note').map((n) => <NoteCard key={n.id} note={n} showCheckbox={false} showCompletionDetails canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
                 </div>
               </div>
             </Card>
@@ -872,7 +844,7 @@ export default function TeamBoard() {
                   {notesByType('todo').length === 0 && (
                     <p className="text-sm text-secondary py-4 text-center">No to-dos</p>
                   )}
-                  {notesByType('todo').map((n) => renderCard(n, true, true))}
+                  {notesByType('todo').map((n) => <NoteCard key={n.id} note={n} showCheckbox showCompletionDetails canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
                 </div>
               </div>
             </Card>
@@ -884,7 +856,7 @@ export default function TeamBoard() {
                   {notesByType('announcement').length === 0 && (
                     <p className="text-sm text-secondary py-4 text-center">No announcements</p>
                   )}
-                  {notesByType('announcement').map((n) => renderCard(n, false, true))}
+                  {notesByType('announcement').map((n) => <NoteCard key={n.id} note={n} showCheckbox={false} showCompletionDetails canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
                 </div>
               </div>
             </Card>
@@ -911,7 +883,7 @@ export default function TeamBoard() {
           {myTasks.length > 0 && (
             <Card padding={false}>
               <div className="p-5 space-y-3">
-                {myTasks.map(n => renderCard(n, true, false))}
+                {myTasks.map(n => <NoteCard key={n.id} note={n} showCheckbox showCompletionDetails={false} canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
               </div>
             </Card>
           )}
@@ -930,7 +902,7 @@ export default function TeamBoard() {
                 <div className="p-5">
                   <CardHeader title="My Recently" accent="Completed" />
                   <div className="space-y-3 mt-3">
-                    {myCompleted.map(n => renderCard(n, true, true))}
+                    {myCompleted.map(n => <NoteCard key={n.id} note={n} showCheckbox showCompletionDetails canEdit={canEdit(n)} onToggleComplete={toggleComplete} onTogglePin={togglePin} onEdit={openEditModal} onDelete={handleDeleteNote} onClick={handleNoteClick} />)}
                   </div>
                 </div>
               </Card>
@@ -1244,6 +1216,36 @@ export default function TeamBoard() {
             </div>
             <Input label="Due Date" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
           </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-secondary mb-1">Link to Entity</label>
+              <select
+                value={linkedEntityType}
+                onChange={(e) => { setLinkedEntityType(e.target.value); setLinkedEntityId(''); }}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              >
+                <option value="">None</option>
+                <option value="delivery">Delivery</option>
+                <option value="order">Order</option>
+                <option value="customer">Customer</option>
+                <option value="job">Job</option>
+                <option value="purchase_order">Purchase Order</option>
+                <option value="quote">Quote</option>
+              </select>
+            </div>
+            {linkedEntityType && (
+              <div>
+                <label className="block text-sm font-medium text-secondary mb-1">Entity ID</label>
+                <input
+                  type="text"
+                  value={linkedEntityId}
+                  onChange={(e) => setLinkedEntityId(e.target.value)}
+                  placeholder="Paste entity UUID"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+            )}
+          </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => { setModalOpen(false); resetForm(); }}>Cancel</Button>
             <Button onClick={handleSave} loading={saving}>
@@ -1272,6 +1274,12 @@ export default function TeamBoard() {
                     <AlertTriangle className="w-3 h-3 mr-1" />
                     Overdue
                   </Badge>
+                )}
+                {selectedNote.linked_entity_type && selectedNote.linked_entity_id && (
+                  <EntityBadge
+                    entityType={selectedNote.linked_entity_type as LinkedEntityType}
+                    entityId={selectedNote.linked_entity_id}
+                  />
                 )}
               </div>
               {selectedNote.content && (
@@ -1312,6 +1320,11 @@ export default function TeamBoard() {
             </div>
 
             <TagsManager noteId={selectedNote.id} onTagsChange={fetchNotes} />
+
+            <NoteAttachments noteId={selectedNote.id} canDelete={canEdit(selectedNote)} />
+            {!selectedNote.is_completed && (
+              <NotePhotoUpload noteId={selectedNote.id} onUploadComplete={() => {}} />
+            )}
 
             <div className="border-t border-gray-200">
               <div className="flex border-b border-gray-200">
@@ -1388,6 +1401,15 @@ export default function TeamBoard() {
         onStay={() => blocker.reset?.()}
         onLeave={() => blocker.proceed?.()}
       />
+
+      {/* Mobile FAB — floating "Add Note" button visible only on small screens */}
+      <button
+        onClick={openAddModal}
+        className="fixed bottom-6 right-6 z-40 sm:hidden w-14 h-14 bg-crx-green text-white rounded-full shadow-lg hover:bg-crx-green/90 active:scale-95 transition-all flex items-center justify-center"
+        aria-label="Add Note"
+      >
+        <Plus className="w-6 h-6" />
+      </button>
     </div>
   );
 }

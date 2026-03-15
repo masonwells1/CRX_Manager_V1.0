@@ -1,4 +1,4 @@
-# Migration History (171 migrations)
+# Migration History (172 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -87,3 +87,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 165 | 20260331800000 | **Restore commissions status CHECK** — Re-adds CHECK constraint with 'pending', 'paid', 'cancelled'. Was dropped in 20260302200000 to add 'cancelled' but never recreated |
 | 166 | 20260315004110 | **Fix idempotency_key column refs in save_quote** — Corrects `save_quote` RPC to use `idempotency_key` column (not `key`) and `(idempotency_key, operation)` INSERT (not `key, entity_type, entity_id`). Fixes "column 'key' does not exist" error when idempotency keys are provided. 9 other admin RPCs with same bug deferred to future migration |
 | 167 | 20260315100000 | **Fix ALL idempotency column refs in 11 RPCs** — Uses pg_get_functiondef() + replace() to patch save_quote, receive_po_items, reopen_accounting_period, reverse_write_off, void_commission_payment, revert_quote_status, restore_cancelled_order, restore_cancelled_delivery, unapply_credit_memo, reverse_blend_ticket_approval, void_delivery. Fixes `key` → `idempotency_key`, `entity_type`/`entity_id` → `operation`/`result`, `result_id` → `result`. Includes verification block |
+| 168 | 20260315200000 | **Team Board V2: Entity Linking, Attachments, Delivery RPCs** — (1) Adds `linked_entity_type text` + `linked_entity_id uuid` to `team_notes` with partial index. (2) Creates `team_note_attachments` table with RLS (authenticated read, own insert/delete, admin delete). (3) Creates `team-note-attachments` storage bucket with upload/view/delete policies. (4) New RPC `get_team_board_deliveries()` — role-aware today/tomorrow deliveries with priority sorting. (5) New RPC `get_yesterday_delivery_recap()` — completed/issues/cancelled summary. (6) New RPC `get_notes_for_entity()` — notes linked to a specific entity |

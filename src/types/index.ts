@@ -477,6 +477,8 @@ export interface Commission {
 export type NotePriority = 'low' | 'medium' | 'high' | 'urgent';
 export type NoteType = 'note' | 'todo' | 'announcement';
 
+export type LinkedEntityType = 'delivery' | 'order' | 'customer' | 'job' | 'purchase_order' | 'quote';
+
 export interface TeamNote {
   id: string;
   title: string;
@@ -492,10 +494,76 @@ export interface TeamNote {
   is_pinned: boolean;
   deleted_at: string | null;
   deleted_by: string | null;
+  linked_entity_type: string | null;
+  linked_entity_id: string | null;
   created_at: string;
   updated_at: string;
   creator?: Profile;
   assignee?: Profile;
+}
+
+export interface ExtendedTeamNote extends TeamNote {
+  tags?: Array<{ id: string; name: string; color: string }>;
+  comment_count?: number;
+  completer?: { full_name: string } | null;
+}
+
+export interface TeamNoteAttachment {
+  id: string;
+  note_id: string;
+  file_url: string;
+  file_name: string;
+  file_type: string;
+  file_size_bytes: number;
+  uploaded_by: string;
+  created_at: string;
+}
+
+export interface TeamBoardDelivery {
+  id: string;
+  delivery_number: string;
+  status: string;
+  priority: string;
+  scheduled_date: string;
+  scheduled_time: string | null;
+  delivery_address: string | null;
+  delivery_notes: string | null;
+  customer_name: string;
+  driver_name: string | null;
+  assigned_driver: string | null;
+  item_count: number;
+}
+
+export interface TeamBoardDeliveryData {
+  today: TeamBoardDelivery[];
+  tomorrow: TeamBoardDelivery[];
+  unassigned_count: number;
+  today_total: number;
+}
+
+export interface YesterdayRecapData {
+  completed: Array<{
+    id: string;
+    delivery_number: string;
+    customer_name: string;
+    driver_name: string | null;
+    completed_at: string;
+    item_count: number;
+    has_issues: boolean;
+  }>;
+  issues: Array<{
+    id: string;
+    delivery_number: string;
+    customer_name: string;
+    driver_name: string | null;
+    issue_type: string;
+    issue_description: string | null;
+  }>;
+  summary: {
+    total_completed: number;
+    total_with_issues: number;
+    total_cancelled: number;
+  };
 }
 
 export interface TeamNoteComment {

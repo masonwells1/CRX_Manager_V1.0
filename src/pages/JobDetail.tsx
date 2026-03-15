@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -15,7 +15,9 @@ import { supabase, checkMutationResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe } from '../types';
+import QuickTaskModal from '../components/team/QuickTaskModal';
+import RelatedNotes from '../components/team/RelatedNotes';
+import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, LinkedEntityType } from '../types';
 
 interface JobDbRow {
   id: string;
@@ -152,6 +154,8 @@ export default function JobDetail() {
     actual_gallons_applied: '',
     notes: '',
   });
+
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
 
   // Transfer to invoice
   const [transferring, setTransferring] = useState(false);
@@ -545,6 +549,16 @@ export default function JobDetail() {
               Transfer to Invoice
             </Button>
           )}
+          {!isNew && (
+            <Button
+              variant="secondary"
+              icon={<MessageSquarePlus className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setQuickTaskOpen(true)}
+            >
+              Create Task
+            </Button>
+          )}
           {canEdit && (
             <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving}>
               {isNew ? 'Create Job' : 'Save Changes'}
@@ -806,6 +820,15 @@ export default function JobDetail() {
         </Card>
       )}
 
+      {/* Related Notes */}
+      {!isNew && id && (
+        <RelatedNotes
+          entityType={'job' as LinkedEntityType}
+          entityId={id}
+          onCreateTask={() => setQuickTaskOpen(true)}
+        />
+      )}
+
       {/* Complete Job Modal */}
       <Modal open={showCompleteModal} onClose={() => setShowCompleteModal(false)} title="Complete Job">
         <div className="space-y-4">
@@ -864,6 +887,17 @@ export default function JobDetail() {
           </div>
         </div>
       </Modal>
+
+      {!isNew && id && (
+        <QuickTaskModal
+          open={quickTaskOpen}
+          onClose={() => setQuickTaskOpen(false)}
+          entityType={'job' as LinkedEntityType}
+          entityId={id}
+          prefillTitle={`Issue: Job ${jobNumber || id.slice(0, 8)}`}
+          prefillContent={`Customer: ${customers.find(c => c.id === customerId)?.farm_name || 'Unknown'}`}
+        />
+      )}
     </div>
   );
 }

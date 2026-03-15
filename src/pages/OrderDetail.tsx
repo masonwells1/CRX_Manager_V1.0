@@ -5,7 +5,7 @@
  */
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle } from 'lucide-react';
+import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle, MessageSquarePlus } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -20,7 +20,9 @@ import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate } from '../lib/dateUtils';
-import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery, Product } from '../types';
+import QuickTaskModal from '../components/team/QuickTaskModal';
+import RelatedNotes from '../components/team/RelatedNotes';
+import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery, Product, LinkedEntityType } from '../types';
 
 /** Temporary new item (not yet saved to DB — has no real id) */
 interface NewOrderItem {
@@ -49,6 +51,7 @@ export default function OrderDetail() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name?: string })[]>([]);
   const [loading, setLoading] = useState(true);
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
 
   // Related blend tickets
   const [relatedTickets, setRelatedTickets] = useState<{ id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }[]>([]);
@@ -669,6 +672,14 @@ export default function OrderDetail() {
                   Schedule Delivery
                 </Button>
               )}
+              <Button
+                variant="secondary"
+                icon={<MessageSquarePlus className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setQuickTaskOpen(true)}
+              >
+                Create Task
+              </Button>
             </>
           )}
         </div>
@@ -789,6 +800,13 @@ export default function OrderDetail() {
           </div>
         </Card>
       )}
+
+      {/* Related Notes */}
+      <RelatedNotes
+        entityType={'order' as LinkedEntityType}
+        entityId={id!}
+        onCreateTask={() => setQuickTaskOpen(true)}
+      />
 
       {/* Linked Deliveries */}
       {deliveries.length > 0 && (
@@ -1328,6 +1346,15 @@ export default function OrderDetail() {
           )}
         </div>
       </Modal>
+
+      <QuickTaskModal
+        open={quickTaskOpen}
+        onClose={() => setQuickTaskOpen(false)}
+        entityType={'order' as LinkedEntityType}
+        entityId={id!}
+        prefillTitle={`Follow up: ${order.order_number}`}
+        prefillContent={`Customer: ${customer?.farm_name || 'Unknown'}`}
+      />
     </div>
   );
 }

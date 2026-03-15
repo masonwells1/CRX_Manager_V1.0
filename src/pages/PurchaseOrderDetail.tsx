@@ -1,6 +1,6 @@
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { PackageCheck, Pencil, Ban, Download, Send, RotateCcw } from 'lucide-react';
+import { PackageCheck, Pencil, Ban, Download, Send, RotateCcw, MessageSquarePlus } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -15,7 +15,9 @@ import { notifyDamagedReceiving, notifyOverReceive } from '../lib/notificationTr
 import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition } from '../types';
+import QuickTaskModal from '../components/team/QuickTaskModal';
+import RelatedNotes from '../components/team/RelatedNotes';
+import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition, LinkedEntityType } from '../types';
 
 /* ─── Condition badge helpers ─── */
 const conditionVariant = (c: string): 'success' | 'error' | 'warning' | 'default' => {
@@ -48,6 +50,7 @@ export default function PurchaseOrderDetail() {
   const [items, setItems] = useState<PurchaseOrderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [quickTaskOpen, setQuickTaskOpen] = useState(false);
 
   /* Receive modal state */
   const [receiveOpen, setReceiveOpen] = useState(false);
@@ -509,6 +512,14 @@ export default function PurchaseOrderDetail() {
               Submit PO
             </Button>
           )}
+          <Button
+            variant="secondary"
+            icon={<MessageSquarePlus className="w-4 h-4" />}
+            showChevron={false}
+            onClick={() => setQuickTaskOpen(true)}
+          >
+            Create Task
+          </Button>
           {canReceive && po.status !== 'cancelled' && po.status !== 'fully_received' && (
             <>
               <Button variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={openEditModal}>
@@ -619,6 +630,13 @@ export default function PurchaseOrderDetail() {
           </div>
         </div>
       </Card>
+
+      {/* Related Notes */}
+      <RelatedNotes
+        entityType={'purchase_order' as LinkedEntityType}
+        entityId={id!}
+        onCreateTask={() => setQuickTaskOpen(true)}
+      />
 
       {/* Receiving History */}
       <Card padding={false}>
@@ -1089,6 +1107,15 @@ export default function PurchaseOrderDetail() {
           </div>
         </div>
       </Modal>
+
+      <QuickTaskModal
+        open={quickTaskOpen}
+        onClose={() => setQuickTaskOpen(false)}
+        entityType={'purchase_order' as LinkedEntityType}
+        entityId={id!}
+        prefillTitle={`Follow up: ${po.po_number}`}
+        prefillContent={`PO: ${po.po_number}`}
+      />
     </div>
   );
 }
