@@ -11,6 +11,7 @@ import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
@@ -92,6 +93,7 @@ export default function NewOrder() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading]);
 
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [showProductModal, setShowProductModal] = useState(false);
   const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
   const [productSearch, setProductSearch] = useState('');
@@ -231,11 +233,16 @@ export default function NewOrder() {
       if (recentOrders && recentOrders.length > 0) {
         const recent = recentOrders[0];
         const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date + 'T00:00:00').getTime()) / 86400000);
-        const ok = confirm(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Create another?`);
-        if (!ok) return;
+        setDuplicateWarning(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Create another?`);
+        return;
       }
     } catch { /* ignore — don't block order creation if check fails */ }
 
+    await submitOrder();
+  };
+
+  const submitOrder = async () => {
+    if (!profile) return;
     setSaving(true);
 
     try {
@@ -560,6 +567,19 @@ export default function NewOrder() {
           ))}
         </div>
       </Card>
+
+      <ConfirmModal
+        open={!!duplicateWarning}
+        onClose={() => setDuplicateWarning(null)}
+        onConfirm={() => {
+          setDuplicateWarning(null);
+          submitOrder();
+        }}
+        title="Duplicate Order Warning"
+        message={duplicateWarning || ''}
+        confirmLabel="Create Order"
+        variant="warning"
+      />
 
       <Modal
         open={showProductModal}
