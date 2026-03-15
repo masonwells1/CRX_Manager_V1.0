@@ -185,19 +185,6 @@ export default function Deliveries() {
     }
 
     const deliveryIds = (delData || []).map((d) => d.id);
-    const countMap: Record<string, number> = {};
-    if (deliveryIds.length > 0) {
-      const { data: itemCounts, error: itemCountErr } = await supabase
-        .from('delivery_items')
-        .select('delivery_id')
-        .in('delivery_id', deliveryIds.slice(0, 500));
-      if (itemCountErr) {
-        console.error('Failed to load delivery item counts:', itemCountErr.message);
-      }
-      (itemCounts || []).forEach((item) => {
-        countMap[item.delivery_id] = (countMap[item.delivery_id] || 0) + 1;
-      });
-    }
 
     // Fetch parent customer names for farm group labels
     const parentIds = [...new Set(
@@ -205,17 +192,38 @@ export default function Deliveries() {
         .map((d: Record<string, unknown>) => (d.customer as { parent_customer_id?: string })?.parent_customer_id)
         .filter(Boolean) as string[]
     )];
-    const parentNameMap: Record<string, string> = {};
-    if (parentIds.length > 0) {
-      const { data: parents, error: parentErr } = await supabase
-        .from('customers')
-        .select('id, farm_name')
-        .in('id', parentIds);
-      if (parentErr) {
-        console.error('Failed to load parent customers:', parentErr.message);
-      }
-      (parents || []).forEach((p) => { parentNameMap[p.id] = p.farm_name; });
+
+    // Run both queries in parallel — they depend on delData but not on each other
+    const [itemCountsResult, parentsResult] = await Promise.all([
+      deliveryIds.length > 0
+        ? supabase
+            .from('delivery_items')
+            .select('delivery_id')
+            .in('delivery_id', deliveryIds.slice(0, 500))
+        : Promise.resolve({ data: null, error: null }),
+      parentIds.length > 0
+        ? supabase
+            .from('customers')
+            .select('id, farm_name')
+            .in('id', parentIds)
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    const countMap: Record<string, number> = {};
+    const { data: itemCounts, error: itemCountErr } = itemCountsResult;
+    if (itemCountErr) {
+      console.error('Failed to load delivery item counts:', itemCountErr.message);
     }
+    (itemCounts || []).forEach((item: { delivery_id: string }) => {
+      countMap[item.delivery_id] = (countMap[item.delivery_id] || 0) + 1;
+    });
+
+    const parentNameMap: Record<string, string> = {};
+    const { data: parents, error: parentErr } = parentsResult;
+    if (parentErr) {
+      console.error('Failed to load parent customers:', parentErr.message);
+    }
+    (parents || []).forEach((p: { id: string; farm_name: string }) => { parentNameMap[p.id] = p.farm_name; });
 
     const rows = ((delData || []) as Array<Delivery & {
       customer: { farm_name: string; parent_customer_id: string | null } | null;
