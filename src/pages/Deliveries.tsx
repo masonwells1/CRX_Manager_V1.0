@@ -281,7 +281,7 @@ export default function Deliveries() {
       }));
       setUnassigned(rows);
     })();
-  }, [isDriver, deliveries]);
+  }, [isDriver]);
 
   /* ─── Summary stats ─── */
   const todayStr = today();

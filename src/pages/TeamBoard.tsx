@@ -13,6 +13,7 @@ import { useToast } from '../components/ui/Toast';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { parseLocalDate } from '../lib/dateUtils';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { useRealtimeNotes } from '../hooks/useRealtimeSubscription';
 import TeamBoardFilters, { FilterState } from '../components/team/TeamBoardFilters';
@@ -481,7 +482,7 @@ export default function TeamBoard() {
     const open = notes.filter(n => !n.is_completed);
     const completed = notes.filter(n => n.is_completed);
     const now = new Date();
-    const overdue = open.filter(n => n.due_date && new Date(n.due_date) < now);
+    const overdue = open.filter(n => n.due_date && parseLocalDate(n.due_date) < now);
     const myTasks = open.filter(n => n.assigned_to === profile?.id);
 
     // Completed this week
@@ -502,10 +503,10 @@ export default function TeamBoard() {
 
   // ── Helpers ──
   const isOverdue = (note: TeamNote) =>
-    !note.is_completed && note.due_date && new Date(note.due_date) < new Date();
+    !note.is_completed && note.due_date && parseLocalDate(note.due_date) < new Date();
 
   const getDaysUntilDue = (dueDate: string) => {
-    const diff = new Date(dueDate).getTime() - new Date().getTime();
+    const diff = parseLocalDate(dueDate).getTime() - new Date().getTime();
     return Math.ceil(diff / (1000 * 60 * 60 * 24));
   };
 

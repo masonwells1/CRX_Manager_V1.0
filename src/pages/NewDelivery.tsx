@@ -252,11 +252,16 @@ export default function NewDelivery() {
     }
 
     // Check for duplicate deliveries on same order
-    const { data: existingDels } = await supabase
+    const { data: existingDels, error: dupCheckErr } = await supabase
       .from('deliveries')
       .select('delivery_number, status')
       .eq('order_id', selectedOrderId)
       .in('status', ['scheduled', 'in_progress']);
+
+    if (dupCheckErr) {
+      toast('error', 'Failed to check for existing deliveries');
+      return;
+    }
 
     if (existingDels && existingDels.length > 0) {
       const delList = existingDels.map(d => `${d.delivery_number} (${d.status.replace('_', ' ')})`).join(', ');

@@ -84,6 +84,8 @@ export default function ARaging() {
     if (error) {
       console.error('AR aging error:', error.message);
       toast('error', 'Failed to load AR aging data');
+      setLoading(false);
+      return;
     }
     setAgingData((data || []) as ARAgingRow[]);
     setLoading(false);
@@ -98,6 +100,8 @@ export default function ARaging() {
     if (error) {
       console.error('Season comparison error:', error.message);
       toast('error', 'Failed to load season comparison');
+      setLoading(false);
+      return;
     }
     setSeasonData((data || []) as SeasonComparisonRow[]);
     setLoading(false);
@@ -130,6 +134,8 @@ export default function ARaging() {
     if (error) {
       console.error('Statement error:', error.message);
       toast('error', 'Failed to load customer statement');
+      setLoading(false);
+      return;
     }
     setStatementData((data || []) as CustomerStatementRow[]);
     setTab('statement');
