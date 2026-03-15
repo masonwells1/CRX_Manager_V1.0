@@ -243,6 +243,7 @@ export default function NewOrder() {
 
   const submitOrder = async () => {
     if (!profile) return;
+    const validItems = items.filter((item) => item.product_id && item.quantity > 0);
     setSaving(true);
 
     try {
