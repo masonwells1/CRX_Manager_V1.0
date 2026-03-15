@@ -233,6 +233,36 @@ await expect(page).toHaveURL(/\/quotes\/.+/);
 await expect(page).toHaveURL(/\/quotes\/[0-9a-f]{8}-/);
 ```
 
+### Team Board V2 Test Coverage
+
+**Test file:** `tests/e2e/team-board-v2.spec.ts` (26 tests, serial workflow)
+
+| Test ID | What It Tests |
+|---------|--------------|
+| TBV2-01 | Setup — profile ID retrieval |
+| TBV2-02–05 | Today's Deliveries section rendering, card content, click navigation, tomorrow preview |
+| TBV2-06 | Yesterday's Recap section (visible or hidden based on data) |
+| TBV2-07 | Create note with all fields (title, content, type, priority, due date) |
+| TBV2-08 | Note card priority badge display |
+| TBV2-09 | Detail modal with Comments/Activity tabs |
+| TBV2-10 | Add comment in Comments tab |
+| TBV2-11 | Activity tab shows creation log entry |
+| TBV2-12 | Pin/unpin note |
+| TBV2-13–14 | Complete note → verify on Completed tab → reopen via DB |
+| TBV2-15 | Edit note (change title + priority) |
+| TBV2-16–18 | My Tasks, Completed, and Activity tab views with filters |
+| TBV2-19–20 | Search filtering + priority filter panel |
+| TBV2-21 | Stats bar metric cards |
+| TBV2-22–24 | QuickTaskModal + RelatedNotes on Order and Delivery detail pages |
+| TBV2-25 | Delete note with confirmation modal |
+| TBV2-26 | Cleanup test artifacts from DB |
+
+**Key patterns:**
+- Delivery tests (TBV2-03/04/05) skip gracefully when no deliveries are scheduled today
+- Note lifecycle uses shared state (`S` object) across serial tests
+- Completed tab notes render as plain `div` (not `NoteCard`) — no inline checkboxes
+- Cleanup uses soft-delete (`deleted_at`) since RLS blocks hard DELETE on `team_notes`
+
 ### Inventory-Aware Test Data
 
 Workflow tests that create deliveries must account for available inventory:

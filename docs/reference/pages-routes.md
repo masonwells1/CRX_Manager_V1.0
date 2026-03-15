@@ -56,6 +56,6 @@
 | `/crop-programs` | CropPrograms | Seasonal crop program management |
 | `/compliance` | Compliance | Applicator license tracking, RUP product list, RUP Sales Register (auto-generated from invoices, filterable, CSV export) |
 | `/rebates` | Rebates | Manufacturer rebate programs and claim management |
-| `/team-board` | TeamBoard | Kanban board: notes/todos/announcements, comments, real-time |
+| `/team-board` | TeamBoard | Team communication hub: notes/todos/announcements with entity linking (delivery, order, customer, job, PO, quote), today's deliveries bulletin (role-aware), yesterday's recap, photo attachments, comments, activity log, search/filter, real-time. 8 sub-components in `src/components/team/` |
 | `/notifications` | Notifications | User notification center |
 | `/settings` | SettingsPage | Admin only: company settings, user management |

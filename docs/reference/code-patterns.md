@@ -147,6 +147,52 @@
 - **Idempotency**: All `sendEmail()` calls include an `idempotency_key` (checked in `email_log` by Edge Function before sending)
 - **Prerequisite**: Resend DNS verification (SPF/DKIM for `croprxsolutions.app`) + Edge Function secrets (`RESEND_API_KEY`, `FROM_EMAIL`, `ALLOWED_ORIGIN`)
 
+## Team Board V2 Component Library Pattern
+
+The Team Board was decomposed from a monolith (`TeamBoard.tsx`) into 8 reusable components in `src/components/team/`:
+
+| Component | Purpose | Reused On |
+|-----------|---------|-----------|
+| `NoteCard.tsx` | Extracted card with priority/overdue badges, entity badge, action buttons | TeamBoard (all views) |
+| `EntityBadge.tsx` | Clickable pill linking to entity detail page (6 types) | NoteCard, Detail Modal |
+| `TodaysDeliveries.tsx` | Role-aware delivery bulletin (today + tomorrow preview) | TeamBoard Board tab |
+| `YesterdayRecap.tsx` | Completion summary with issue cards (auto-expands on issues) | TeamBoard Board tab |
+| `QuickTaskModal.tsx` | Modal to create entity-linked task from any detail page | OrderDetail, DeliveryDetail, JobDetail, CustomerDetail, PurchaseOrderDetail |
+| `RelatedNotes.tsx` | Collapsible card showing notes linked to an entity via RPC | Same 5 detail pages |
+| `NotePhotoUpload.tsx` | Camera-capture + multi-file upload to Supabase storage | TeamBoard Detail Modal |
+| `NoteAttachments.tsx` | Thumbnail grid with click-to-view and delete support | TeamBoard Detail Modal |
+
+**Entity Linking Pattern:**
+- `team_notes.linked_entity_type` (text) + `team_notes.linked_entity_id` (uuid)
+- Allowed types: `delivery`, `order`, `customer`, `job`, `purchase_order`, `quote`
+- RPC `get_notes_for_entity(p_entity_type, p_entity_id)` fetches linked notes
+- `EntityBadge` component maps type → route, icon, and color
+
+**Role-Aware RPC Pattern:**
+- `get_team_board_deliveries()` checks `auth.uid()` profile role
+- Drivers see only their assigned deliveries; admins/sales reps see all
+- Returns `{ today: [], tomorrow: [], today_total, unassigned_count }`
+
+**Photo Upload Pattern (Supabase Storage):**
+- Bucket: `team-note-attachments` (public read, authenticated write)
+- Upload path: `{userId}/{timestamp}_{index}.{ext}`
+- 10MB max per file, client-side compression before upload
+- DB record in `team_note_attachments` links `note_id` → `file_url`
+- Delete removes both storage object and DB record
+
+**Adding QuickTaskModal to a new detail page:**
+```tsx
+import QuickTaskModal from '../components/team/QuickTaskModal';
+import RelatedNotes from '../components/team/RelatedNotes';
+
+const [quickTaskOpen, setQuickTaskOpen] = useState(false);
+
+// In JSX:
+<RelatedNotes entityType="order" entityId={id} onCreateTask={() => setQuickTaskOpen(true)} />
+<QuickTaskModal open={quickTaskOpen} onClose={() => setQuickTaskOpen(false)}
+  entityType="order" entityId={id} prefillTitle={`Re: Order ${orderNumber}`} />
+```
+
 ## Build Notes
 - `db.ts` uses fallback placeholder URL/key so `createClient()` doesn't crash in CI
 - Supabase join inference: joined FK tables infer as arrays — use `as unknown as TargetType[]`

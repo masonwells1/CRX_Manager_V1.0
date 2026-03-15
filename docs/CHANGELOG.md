@@ -4,6 +4,40 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-15 — Team Board V2: Delivery Bulletin, Entity Linking, Photo Attachments
+
+### Database (Migration 20260315200000)
+- Added `linked_entity_type` + `linked_entity_id` to `team_notes` for entity linking
+- New `team_note_attachments` table with RLS policies
+- New `team-note-attachments` storage bucket with upload/view/delete policies
+- 3 new RPCs: `get_team_board_deliveries()` (role-aware), `get_yesterday_delivery_recap()`, `get_notes_for_entity()`
+
+### Frontend — 8 New Components in `src/components/team/`
+- `TodaysDeliveries.tsx` — role-aware delivery bulletin (today + tomorrow preview, unassigned alert)
+- `YesterdayRecap.tsx` — completion summary with issue cards (auto-expands when issues exist)
+- `NoteCard.tsx` — extracted from TeamBoard monolith, priority/overdue badges, entity badge
+- `EntityBadge.tsx` — clickable pill badge linking to 6 entity types (delivery, order, customer, job, PO, quote)
+- `QuickTaskModal.tsx` — create entity-linked tasks from any detail page
+- `RelatedNotes.tsx` — collapsible card showing linked notes on detail pages
+- `NotePhotoUpload.tsx` — camera capture + multi-file upload to Supabase storage
+- `NoteAttachments.tsx` — thumbnail grid with view/delete support
+
+### Integration — QuickTaskModal + RelatedNotes on 5 Detail Pages
+- OrderDetail, DeliveryDetail, JobDetail, CustomerDetail, PurchaseOrderDetail
+- "Create Task" button + "Team Notes" collapsible section on each page
+
+### TeamBoard.tsx Updates
+- Board tab now shows: Today's Deliveries → Your Tasks → Pinned & Announcements → Yesterday's Recap → three-column grid
+- Entity linking fields in create/edit modal
+- Photo attachments in detail modal
+- Entity badges on note cards
+
+### E2E Tests
+- `tests/e2e/team-board-v2.spec.ts` — 26 serial tests covering all V2 features
+- 23 passing, 3 skip gracefully when no deliveries scheduled
+
+---
+
 ## 2026-03-09 — Fix: Tab-Switch No Longer Resets Page Data
 
 ### AuthContext (`src/contexts/AuthContext.tsx`)
