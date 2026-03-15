@@ -8,6 +8,7 @@ import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -90,6 +91,7 @@ export default function Returns() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<{ type: 'approve' | 'reject' | 'cancel'; title: string; message: string } | null>(null);
 
   const fetchReturns = useCallback(async () => {
     setLoading(true);
@@ -274,7 +276,6 @@ export default function Returns() {
 
   // Workflow actions
   const handleApprove = async () => {
-    if (!window.confirm('Approve this return?')) return;
     if (!activeReturn || !profile) return;
     try {
       const approveKey = approveIdem.getKey();
@@ -301,7 +302,6 @@ export default function Returns() {
       toast('error', `Cannot reject a return in '${activeReturn.status}' status`);
       return;
     }
-    if (!confirm('Reject this return?')) return;
     try {
       const result = await supabase
         .from('returns')
@@ -327,7 +327,6 @@ export default function Returns() {
       toast('error', `Cannot cancel a return in '${activeReturn.status}' status`);
       return;
     }
-    if (!window.confirm('Cancel this return?')) return;
     try {
       const result = await supabase
         .from('returns')
@@ -744,6 +743,22 @@ export default function Returns() {
         loading={deleting}
       />
 
+      <ConfirmModal
+        open={!!confirmAction}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={async () => {
+          if (!confirmAction) return;
+          setConfirmAction(null);
+          if (confirmAction.type === 'approve') await handleApprove();
+          else if (confirmAction.type === 'reject') await handleReject();
+          else if (confirmAction.type === 'cancel') await handleCancel();
+        }}
+        title={confirmAction?.title || ''}
+        message={confirmAction?.message || ''}
+        confirmLabel={confirmAction?.type === 'approve' ? 'Approve' : confirmAction?.type === 'reject' ? 'Reject' : 'Cancel Return'}
+        variant={confirmAction?.type === 'approve' ? 'info' : 'danger'}
+      />
+
       {/* Return Detail Modal */}
       <Modal
         open={showDetail}
@@ -840,19 +855,19 @@ export default function Returns() {
               <div className="flex justify-between pt-2 border-t">
                 <div className="flex gap-2">
                   {activeReturn.status === 'requested' && (
-                    <Button variant="secondary" onClick={handleReject} icon={<XCircle className="w-4 h-4" />}>
+                    <Button variant="secondary" onClick={() => setConfirmAction({ type: 'reject', title: 'Reject Return', message: 'Are you sure you want to reject this return? This cannot be undone.' })} icon={<XCircle className="w-4 h-4" />}>
                       Reject
                     </Button>
                   )}
                   {(activeReturn.status === 'requested' || activeReturn.status === 'approved') && (
-                    <Button variant="danger" onClick={handleCancel} icon={<Ban className="w-4 h-4" />}>
+                    <Button variant="danger" onClick={() => setConfirmAction({ type: 'cancel', title: 'Cancel Return', message: 'Are you sure you want to cancel this return? This cannot be undone.' })} icon={<Ban className="w-4 h-4" />}>
                       Cancel
                     </Button>
                   )}
                 </div>
                 <div className="flex gap-2">
                   {activeReturn.status === 'requested' && (
-                    <Button onClick={handleApprove} icon={<CheckCircle className="w-4 h-4" />}>
+                    <Button onClick={() => setConfirmAction({ type: 'approve', title: 'Approve Return', message: 'Are you sure you want to approve this return?' })} icon={<CheckCircle className="w-4 h-4" />}>
                       Approve
                     </Button>
                   )}

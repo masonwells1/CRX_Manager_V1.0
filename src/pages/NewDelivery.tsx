@@ -5,6 +5,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -52,6 +53,7 @@ export default function NewDelivery() {
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -258,12 +260,18 @@ export default function NewDelivery() {
 
     if (existingDels && existingDels.length > 0) {
       const delList = existingDels.map(d => `${d.delivery_number} (${d.status.replace('_', ' ')})`).join(', ');
-      const proceed = confirm(
-        `This order already has ${existingDels.length} active delivery(ies): ${delList}.\n\nCreate another delivery for this order?`
+      setDuplicateWarning(
+        `This order already has ${existingDels.length} active delivery(ies): ${delList}. Create another delivery for this order?`
       );
-      if (!proceed) return;
+      return;
     }
 
+    await submitDelivery();
+  };
+
+  const submitDelivery = async () => {
+    if (!profile) return;
+    const activeItems = deliveryItems.filter((item) => item.quantity > 0);
     setSaving(true);
     const _idemKey = createDeliveryIdem.getKey();
 
@@ -537,6 +545,19 @@ export default function NewDelivery() {
           {saving ? 'Scheduling...' : 'Schedule Delivery'}
         </Button>
       </div>
+
+      <ConfirmModal
+        open={!!duplicateWarning}
+        onClose={() => setDuplicateWarning(null)}
+        onConfirm={() => {
+          setDuplicateWarning(null);
+          submitDelivery();
+        }}
+        title="Duplicate Delivery Warning"
+        message={duplicateWarning || ''}
+        confirmLabel="Create Delivery"
+        variant="warning"
+      />
 
       <UnsavedChangesModal
         open={blocker.state === 'blocked'}
