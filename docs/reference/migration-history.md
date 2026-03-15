@@ -1,4 +1,4 @@
-# Migration History (169 migrations)
+# Migration History (170 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -85,3 +85,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 163 | 20260331600000 | **Consolidate All RPC Overloads** — Comprehensive fix for the systemic overload bug. Part 1: Explicit recreation of 4 missing functions (create_vendor_bill, record_vendor_payment, void_vendor_bill, receive_return). Part 2: Dynamic consolidation of 33 functions (find best overload, drop all, inject idempotency, recreate unified). Part 3: Verification that all 42 RPCs have exactly 1 overload |
 | 164 | 20260331700000 | **Fix inventory_transactions transaction_type CHECK** — Restores 'prebooked' and 'released' values that were accidentally removed by 20260331110000 (void delivery). These values are used by update_order_items(), cancel_order(), create_quick_delivery() |
 | 165 | 20260331800000 | **Restore commissions status CHECK** — Re-adds CHECK constraint with 'pending', 'paid', 'cancelled'. Was dropped in 20260302200000 to add 'cancelled' but never recreated |
+| 166 | 20260315004110 | **Fix idempotency_key column refs in save_quote** — Corrects `save_quote` RPC to use `idempotency_key` column (not `key`) and `(idempotency_key, operation)` INSERT (not `key, entity_type, entity_id`). Fixes "column 'key' does not exist" error when idempotency keys are provided. 9 other admin RPCs with same bug deferred to future migration |

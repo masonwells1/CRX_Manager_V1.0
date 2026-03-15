@@ -304,9 +304,9 @@ test.describe('Order Edit — Product Swap Regression', () => {
     }
 
     // Find and click a product that isn't already in the order (not disabled)
+    // Exclude close button via aria-label
     const availableProduct = modal
-      .locator('button:not([disabled])')
-      .filter({ hasText: /.+/ })
+      .locator('button:not([disabled]):not([aria-label="Close"])')
       .first();
 
     if (!(await availableProduct.isVisible({ timeout: 5000 }).catch(() => false))) {
