@@ -29,6 +29,9 @@ playwright-report/
 test-results/
 test-import.csv
 
+# Coverage reports
+coverage/
+
 # Generated files
 INV-*.pdf
 *.generated.pdf
