@@ -1,4 +1,4 @@
-# Migration History (170 migrations)
+# Migration History (171 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -86,3 +86,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 164 | 20260331700000 | **Fix inventory_transactions transaction_type CHECK** — Restores 'prebooked' and 'released' values that were accidentally removed by 20260331110000 (void delivery). These values are used by update_order_items(), cancel_order(), create_quick_delivery() |
 | 165 | 20260331800000 | **Restore commissions status CHECK** — Re-adds CHECK constraint with 'pending', 'paid', 'cancelled'. Was dropped in 20260302200000 to add 'cancelled' but never recreated |
 | 166 | 20260315004110 | **Fix idempotency_key column refs in save_quote** — Corrects `save_quote` RPC to use `idempotency_key` column (not `key`) and `(idempotency_key, operation)` INSERT (not `key, entity_type, entity_id`). Fixes "column 'key' does not exist" error when idempotency keys are provided. 9 other admin RPCs with same bug deferred to future migration |
+| 167 | 20260315100000 | **Fix ALL idempotency column refs in 11 RPCs** — Uses pg_get_functiondef() + replace() to patch save_quote, receive_po_items, reopen_accounting_period, reverse_write_off, void_commission_payment, revert_quote_status, restore_cancelled_order, restore_cancelled_delivery, unapply_credit_memo, reverse_blend_ticket_approval, void_delivery. Fixes `key` → `idempotency_key`, `entity_type`/`entity_id` → `operation`/`result`, `result_id` → `result`. Includes verification block |

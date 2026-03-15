@@ -332,6 +332,18 @@ export default function CustomerDetail() {
       }
     }
 
+    // Commission split validation — splits must sum to 100%
+    if (customer.default_commission_split?.splits?.length) {
+      const splitTotal = customer.default_commission_split.splits.reduce(
+        (sum: number, s: { percentage: number }) => sum + (s.percentage || 0),
+        0
+      );
+      if (Math.abs(splitTotal - 100) >= 0.01) {
+        toast('error', `Commission splits must total 100% (currently ${splitTotal.toFixed(1)}%)`);
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       const customerPayload = {
