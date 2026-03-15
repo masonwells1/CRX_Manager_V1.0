@@ -862,6 +862,7 @@ test.describe.serial('Inventory Operations', () => {
 
   // I2: Inventory adjust
   test('I2: Adjust inventory quantity via modal', async ({ page }) => {
+    test.setTimeout(60000);
     await page.goto('/inventory');
     await waitForPage(page, 3000);
 

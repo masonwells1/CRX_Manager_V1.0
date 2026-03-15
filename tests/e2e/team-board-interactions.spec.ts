@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { login } from './utils/auth';
+import { supabaseRest } from './golive/utils/supabase-helpers';
 
 const RUN_ID = Date.now().toString(36);
 const waitForPage = (page: import('@playwright/test').Page, ms: number) => page.waitForTimeout(ms);
@@ -157,18 +158,39 @@ test.describe('Team Board Interactions', () => {
 
   test('TB4: Click existing note opens detail modal', async ({ page }) => {
     // Look for note cards on the board
-    const noteCard = page.locator(
-      '[class*="card" i], [class*="note" i], [class*="Card"], [class*="Note"], [data-testid*="note"], [data-testid*="card"], .cursor-pointer'
+    let noteCard = page.locator(
+      '.space-y-3 > div[role="button"]'
     ).first();
 
-    const cardVisible = await noteCard.isVisible({ timeout: 10000 }).catch(() => false);
+    let cardVisible = await noteCard.isVisible({ timeout: 10000 }).catch(() => false);
     if (!cardVisible) {
-      // If no cards exist, the board may be empty - that is acceptable
-      const emptyState = page.locator('text=/no notes|no items|empty|nothing here/i').first();
-      const emptyVisible = await emptyState.isVisible().catch(() => false);
-      expect(emptyVisible || true).toBeTruthy();
-      test.skip(true, 'No existing notes on board to click');
-      return;
+      // No notes exist — create one via direct DB insert so TB4-TB7 can run
+      // First get the current user's profile ID
+      const profiles = (await supabaseRest(
+        page, 'GET',
+        'profiles?select=id&limit=1'
+      )) as Array<{ id: string }>;
+      const profileArr = Array.isArray(profiles) ? profiles : [];
+      expect(profileArr.length).toBeGreaterThan(0);
+
+      await supabaseRest(page, 'POST', 'team_notes', {
+        title: `TB4 Auto-Created Note ${RUN_ID}`,
+        content: `Auto-created by TB4 test run ${RUN_ID}`,
+        note_type: 'note',
+        priority: 'medium',
+        created_by: profileArr[0].id,
+      });
+
+      // Reload page to pick up the new note
+      await page.reload();
+      await waitForPage(page, 2000);
+
+      // Re-check for cards after creating
+      noteCard = page.locator(
+        '.space-y-3 > div[role="button"]'
+      ).first();
+      cardVisible = await noteCard.isVisible({ timeout: 10000 }).catch(() => false);
+      expect(cardVisible).toBeTruthy();
     }
 
     await noteCard.click();
@@ -199,72 +221,56 @@ test.describe('Team Board Interactions', () => {
     await waitForPage(page, 500);
   });
 
-  test('TB5: Detail modal has action buttons', async ({ page }) => {
+  test('TB5: Detail modal has interactive tabs and metadata', async ({ page }) => {
     // Click first card to open detail
     const noteCard = page.locator(
-      '[class*="card" i], [class*="note" i], [class*="Card"], [class*="Note"], [data-testid*="note"], [data-testid*="card"], .cursor-pointer'
+      '.space-y-3 > div[role="button"]'
     ).first();
 
     const cardVisible = await noteCard.isVisible({ timeout: 10000 }).catch(() => false);
-    if (!cardVisible) {
-      test.skip(true, 'No existing notes on board');
-      return;
-    }
+    expect(cardVisible).toBeTruthy();
 
     await noteCard.click();
     await waitForPage(page, 1500);
 
     const detailModal = page.locator('[role="dialog"], .modal, [class*="modal"], [class*="Modal"]').first();
-    const modalVisible = await detailModal.isVisible({ timeout: 5000 }).catch(() => false);
-    if (!modalVisible) {
-      test.skip(true, 'Detail modal did not open');
-      return;
-    }
+    await expect(detailModal).toBeVisible({ timeout: 5000 });
 
-    // Look for action buttons: Edit, Delete, Complete
-    const editBtn = detailModal.locator('button:has-text("Edit"), button[aria-label*="edit" i]').first();
-    const deleteBtn = detailModal.locator('button:has-text("Delete"), button[aria-label*="delete" i]').first();
-    const completeBtn = detailModal.locator('button:has-text("Complete"), button:has-text("Done"), button:has-text("Mark Complete")').first();
+    // Detail modal has Comments and Activity Log tabs (always present)
+    const commentsTab = detailModal.locator('button:has-text("Comments")').first();
+    const activityTab = detailModal.locator('button:has-text("Activity")').first();
 
-    const editVisible = await editBtn.isVisible().catch(() => false);
-    const deleteVisible = await deleteBtn.isVisible().catch(() => false);
-    const completeVisible = await completeBtn.isVisible().catch(() => false);
+    const commentsTabVisible = await commentsTab.isVisible().catch(() => false);
+    const activityTabVisible = await activityTab.isVisible().catch(() => false);
 
-    // At least one action button should exist
-    expect(editVisible || deleteVisible || completeVisible).toBeTruthy();
+    expect(commentsTabVisible || activityTabVisible).toBeTruthy();
 
-    // Close modal
-    const closeBtn = detailModal.locator('button:has-text("Close"), button[aria-label="Close"], button:has-text("×"), button:has-text("Cancel")').first();
-    const closeBtnVisible = await closeBtn.isVisible().catch(() => false);
-    if (closeBtnVisible) {
-      await closeBtn.click();
-    } else {
-      await page.keyboard.press('Escape');
-    }
+    // Also verify card-level action buttons exist on the board (Edit/Delete on hover)
+    await page.keyboard.press('Escape');
     await waitForPage(page, 500);
+
+    const cardEditBtn = noteCard.locator('button:has-text("Edit"), button:has(svg.lucide-pencil)').first();
+    const cardDeleteBtn = noteCard.locator('button:has-text("Delete"), button:has(svg.lucide-trash-2)').first();
+    const editOnCard = await cardEditBtn.isVisible({ timeout: 3000 }).catch(() => false);
+    const deleteOnCard = await cardDeleteBtn.isVisible({ timeout: 3000 }).catch(() => false);
+
+    expect(editOnCard || deleteOnCard).toBeTruthy();
   });
 
   test('TB6: Comments section exists in detail modal', async ({ page }) => {
     // Click first card to open detail
     const noteCard = page.locator(
-      '[class*="card" i], [class*="note" i], [class*="Card"], [class*="Note"], [data-testid*="note"], [data-testid*="card"], .cursor-pointer'
+      '.space-y-3 > div[role="button"]'
     ).first();
 
     const cardVisible = await noteCard.isVisible({ timeout: 10000 }).catch(() => false);
-    if (!cardVisible) {
-      test.skip(true, 'No existing notes on board');
-      return;
-    }
+    expect(cardVisible).toBeTruthy();
 
     await noteCard.click();
     await waitForPage(page, 1500);
 
     const detailModal = page.locator('[role="dialog"], .modal, [class*="modal"], [class*="Modal"]').first();
-    const modalVisible = await detailModal.isVisible({ timeout: 5000 }).catch(() => false);
-    if (!modalVisible) {
-      test.skip(true, 'Detail modal did not open');
-      return;
-    }
+    await expect(detailModal).toBeVisible({ timeout: 5000 });
 
     // Look for comments section
     const commentsHeading = detailModal.locator('text=/comment/i').first();
@@ -290,49 +296,30 @@ test.describe('Team Board Interactions', () => {
     await waitForPage(page, 500);
   });
 
-  test('TB7: Complete button is present on note detail', async ({ page }) => {
+  test('TB7: Note detail shows priority and type badges', async ({ page }) => {
     // Click first card to open detail
     const noteCard = page.locator(
-      '[class*="card" i], [class*="note" i], [class*="Card"], [class*="Note"], [data-testid*="note"], [data-testid*="card"], .cursor-pointer'
+      '.space-y-3 > div[role="button"]'
     ).first();
 
     const cardVisible = await noteCard.isVisible({ timeout: 10000 }).catch(() => false);
-    if (!cardVisible) {
-      test.skip(true, 'No existing notes on board');
-      return;
-    }
+    expect(cardVisible).toBeTruthy();
 
     await noteCard.click();
     await waitForPage(page, 1500);
 
     const detailModal = page.locator('[role="dialog"], .modal, [class*="modal"], [class*="Modal"]').first();
-    const modalVisible = await detailModal.isVisible({ timeout: 5000 }).catch(() => false);
-    if (!modalVisible) {
-      test.skip(true, 'Detail modal did not open');
-      return;
-    }
+    await expect(detailModal).toBeVisible({ timeout: 5000 });
 
-    // Look for complete/done action
-    const completeBtn = detailModal.locator(
-      'button:has-text("Complete"), button:has-text("Done"), button:has-text("Mark Complete"), button:has-text("Mark as Done"), input[type="checkbox"]'
-    ).first();
-    const completeVisible = await completeBtn.isVisible().catch(() => false);
+    // Detail modal always shows priority badge + note_type badge
+    const modalText = (await detailModal.textContent()) || '';
+    const hasPriority = /low|medium|high|urgent/i.test(modalText);
+    const hasType = /note|todo|announcement|reminder/i.test(modalText);
 
-    // Also check for status indicators
-    const statusIndicator = detailModal.locator('text=/status|pending|in progress|open/i').first();
-    const statusVisible = await statusIndicator.isVisible().catch(() => false);
+    expect(hasPriority || hasType).toBeTruthy();
 
-    // Either a complete button or status indicator should exist
-    expect(completeVisible || statusVisible).toBeTruthy();
-
-    // Close modal without completing
-    const closeBtn = detailModal.locator('button:has-text("Close"), button[aria-label="Close"], button:has-text("×"), button:has-text("Cancel")').first();
-    const closeBtnVisible = await closeBtn.isVisible().catch(() => false);
-    if (closeBtnVisible) {
-      await closeBtn.click();
-    } else {
-      await page.keyboard.press('Escape');
-    }
+    // Close modal
+    await page.keyboard.press('Escape');
     await waitForPage(page, 500);
   });
 

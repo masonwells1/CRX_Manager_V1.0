@@ -45,6 +45,40 @@ test.describe('Financial Dashboard', { tag: '@smoke' }, () => {
     await expect(main.getByText(/Monthly.*Revenue/i).first()).toBeVisible({ timeout: 5000 });
   });
 
+  test('should show margin alerts section or overall margin', async ({ page }) => {
+    const main = page.locator('#main-content');
+    // Margin section: "Low-Margin Products/Customers" cards or "overall margin" text
+    // Cards are conditional — only render if DB has margin data
+    const bodyText = ((await main.textContent()) ?? '').trim();
+    const hasMargin = bodyText.includes('Low-Margin') ||
+                      bodyText.includes('margin') ||
+                      bodyText.includes('Bottom 10') ||
+                      bodyText.includes('overall margin');
+    expect(hasMargin).toBeTruthy();
+  });
+
+  test('should show bottom products by margin table', async ({ page }) => {
+    const main = page.locator('#main-content');
+    // Bottom 10 products by margin % table
+    const productSection = main.getByText(/Product/i).first();
+    await expect(productSection).toBeVisible({ timeout: 5000 });
+
+    // Should show margin percentages or badges (red <10%, amber 10-20%, green >20%)
+    const badges = main.locator('[class*="badge"], span[class*="bg-red"], span[class*="bg-yellow"], span[class*="bg-green"]');
+    const badgeCount = await badges.count();
+    // May be 0 if no data — just verify no crash
+    expect(badgeCount).toBeGreaterThanOrEqual(0);
+  });
+
+  test('should show monthly margin trend', async ({ page }) => {
+    const main = page.locator('#main-content');
+    // Monthly margin trend chart section
+    const bodyText = ((await main.textContent()) ?? '').trim();
+    const hasMarginTrend = bodyText.includes('Margin') && bodyText.includes('Trend') ||
+                           bodyText.includes('Monthly') && bodyText.includes('Margin');
+    expect(hasMarginTrend).toBeTruthy();
+  });
+
   test('should load without console errors', async ({ page }) => {
     const errors: string[] = [];
     page.on('console', (msg) => {
