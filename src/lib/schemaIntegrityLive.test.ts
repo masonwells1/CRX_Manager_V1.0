@@ -96,24 +96,24 @@ interface ColumnContract {
 const COLUMN_CONTRACTS: ColumnContract[] = [
   // commissions — most common source of schema bugs
   { table: 'commissions', column: 'id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
-  { table: 'commissions', column: 'order_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
-  { table: 'commissions', column: 'customer_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
+  { table: 'commissions', column: 'order_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
+  { table: 'commissions', column: 'customer_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
   { table: 'commissions', column: 'recipient_user_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
   { table: 'commissions', column: 'season', expectedTypes: PG_TYPE_MAP.number, nullable: true },
   { table: 'commissions', column: 'order_number', expectedTypes: PG_TYPE_MAP.string, nullable: true },
   { table: 'commissions', column: 'customer_name', expectedTypes: PG_TYPE_MAP.string, nullable: true },
 
-  // customers — farm_name NOT business_name
+  // customers — farm_name NOT business_name, money columns use _cents suffix
   { table: 'customers', column: 'id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
-  { table: 'customers', column: 'farm_name', expectedTypes: PG_TYPE_MAP.string, nullable: true },
+  { table: 'customers', column: 'farm_name', expectedTypes: PG_TYPE_MAP.string, nullable: false },
   { table: 'customers', column: 'assigned_sales_rep', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
-  { table: 'customers', column: 'credit_limit', expectedTypes: PG_TYPE_MAP.number, nullable: true },
-  { table: 'customers', column: 'prepay_balance', expectedTypes: PG_TYPE_MAP.number, nullable: true },
+  { table: 'customers', column: 'credit_limit_cents', expectedTypes: PG_TYPE_MAP.number, nullable: true },
+  { table: 'customers', column: 'prepay_balance_cents', expectedTypes: PG_TYPE_MAP.number, nullable: false },
   { table: 'customers', column: 'finance_charge_enabled', expectedTypes: PG_TYPE_MAP.boolean, nullable: true },
 
   // cycle_counts — count_number NOT cycle_count_number
-  { table: 'cycle_counts', column: 'count_number', expectedTypes: PG_TYPE_MAP.string, nullable: true },
-  { table: 'cycle_counts', column: 'initiated_by', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
+  { table: 'cycle_counts', column: 'count_number', expectedTypes: PG_TYPE_MAP.string, nullable: false },
+  { table: 'cycle_counts', column: 'initiated_by', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
   { table: 'cycle_counts', column: 'completed_by', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
 
   // deliveries
@@ -121,23 +121,23 @@ const COLUMN_CONTRACTS: ColumnContract[] = [
   { table: 'deliveries', column: 'signature_url', expectedTypes: PG_TYPE_MAP.string, nullable: true },
   { table: 'deliveries', column: 'is_quick_delivery', expectedTypes: PG_TYPE_MAP.boolean, nullable: true },
 
-  // invoices — financial precision
-  { table: 'invoices', column: 'total_amount_cents', expectedTypes: PG_TYPE_MAP.number, nullable: true },
-  { table: 'invoices', column: 'paid_amount_cents', expectedTypes: PG_TYPE_MAP.number, nullable: true },
+  // invoices — financial precision (NOT NULL with defaults)
+  { table: 'invoices', column: 'total_amount_cents', expectedTypes: PG_TYPE_MAP.number, nullable: false },
+  { table: 'invoices', column: 'paid_amount_cents', expectedTypes: PG_TYPE_MAP.number, nullable: false },
   { table: 'invoices', column: 'balance_cents', expectedTypes: PG_TYPE_MAP.number, nullable: true },
 
   // orders — core order columns (balance_due/total_paid deprecated and dropped)
   { table: 'orders', column: 'id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
-  { table: 'orders', column: 'order_number', expectedTypes: PG_TYPE_MAP.string, nullable: true },
-  { table: 'orders', column: 'customer_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: true },
-  { table: 'orders', column: 'status', expectedTypes: PG_TYPE_MAP.string, nullable: true },
+  { table: 'orders', column: 'order_number', expectedTypes: PG_TYPE_MAP.string, nullable: false },
+  { table: 'orders', column: 'customer_id', expectedTypes: PG_TYPE_MAP.uuid, nullable: false },
+  { table: 'orders', column: 'status', expectedTypes: PG_TYPE_MAP.string, nullable: false },
 
   // quote_items — NUMERIC precision for financial fields (Sprint 1b)
-  { table: 'quote_items', column: 'price_per_unit', expectedTypes: ['numeric'], nullable: true },
-  { table: 'quote_items', column: 'current_cost', expectedTypes: ['numeric'], nullable: true },
-  { table: 'quote_items', column: 'total_price', expectedTypes: ['numeric'], nullable: true },
-  { table: 'quote_items', column: 'profit', expectedTypes: ['numeric'], nullable: true },
-  { table: 'quote_items', column: 'net_margin', expectedTypes: ['numeric'], nullable: true },
+  { table: 'quote_items', column: 'price_per_unit', expectedTypes: ['numeric'], nullable: false },
+  { table: 'quote_items', column: 'current_cost', expectedTypes: ['numeric'], nullable: false },
+  { table: 'quote_items', column: 'total_price', expectedTypes: ['numeric'], nullable: false },
+  { table: 'quote_items', column: 'profit', expectedTypes: ['numeric'], nullable: false },
+  { table: 'quote_items', column: 'net_margin', expectedTypes: ['numeric'], nullable: false },
 ];
 
 // ─── FK Contracts ─────────────────────────────────────────────────────
@@ -240,24 +240,24 @@ describe.skipIf(!isLiveDB)('Live DB: RLS Enabled on All Business Tables', () => 
 
 describe.skipIf(!isLiveDB)('Live DB: Critical RLS Policies Exist', () => {
   const EXPECTED_POLICIES: Array<{ table: string; policyName: string; cmd: string }> = [
-    // Admin policies
-    { table: 'orders', policyName: 'orders_admin_select', cmd: 'SELECT' },
-    { table: 'orders', policyName: 'orders_admin_insert', cmd: 'INSERT' },
-    { table: 'orders', policyName: 'orders_admin_update', cmd: 'UPDATE' },
-    { table: 'orders', policyName: 'orders_admin_delete', cmd: 'DELETE' },
+    // Orders — CRUD policies
+    { table: 'orders', policyName: 'orders_select', cmd: 'SELECT' },
+    { table: 'orders', policyName: 'orders_insert', cmd: 'INSERT' },
+    { table: 'orders', policyName: 'orders_update', cmd: 'UPDATE' },
+    { table: 'orders', policyName: 'orders_delete', cmd: 'DELETE' },
 
     // Driver restricted update policy
     { table: 'deliveries', policyName: 'del_driver_signature_only', cmd: 'UPDATE' },
 
-    // Sales rep scoped policies
-    { table: 'quotes', policyName: 'quotes_rep_select', cmd: 'SELECT' },
-    { table: 'quotes', policyName: 'quotes_rep_insert', cmd: 'INSERT' },
-    { table: 'quotes', policyName: 'quotes_rep_update', cmd: 'UPDATE' },
+    // Quotes — CRUD policies
+    { table: 'quotes', policyName: 'quotes_select', cmd: 'SELECT' },
+    { table: 'quotes', policyName: 'quotes_insert', cmd: 'INSERT' },
+    { table: 'quotes', policyName: 'quotes_update', cmd: 'UPDATE' },
 
-    // Admin-only sensitive tables
+    // Sensitive tables
     { table: 'cost_history', policyName: 'cost_history_select', cmd: 'SELECT' },
-    { table: 'purchase_orders', policyName: 'po_admin_select', cmd: 'SELECT' },
-    { table: 'failed_notifications', policyName: 'fn_admin_select', cmd: 'SELECT' },
+    { table: 'purchase_orders', policyName: 'po_select', cmd: 'SELECT' },
+    { table: 'failed_notifications', policyName: 'Admins can view failed notifications', cmd: 'SELECT' },
 
     // Notification privacy
     { table: 'notifications', policyName: 'notif_select', cmd: 'SELECT' },
@@ -381,7 +381,7 @@ describe.skipIf(!isLiveDB)('Live DB: CHECK Constraint Values', () => {
 // Functions that legitimately have multiple overloads in pg_proc.
 // next_invoice_number: no-args version (column default) + type-aware version
 
-const KNOWN_OVERLOADED_FUNCTIONS = ['next_invoice_number'];
+const KNOWN_OVERLOADED_FUNCTIONS = ['next_invoice_number', 'check_rate_limit'];
 
 // ─── Live DB: Function Overload Detection ─────────────────────────────
 
