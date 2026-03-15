@@ -163,6 +163,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
   useEffect(() => {
     if (open) fetchProducts();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const fetchProducts = async () => {

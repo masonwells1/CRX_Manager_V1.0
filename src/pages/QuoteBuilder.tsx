@@ -331,6 +331,7 @@ export default function QuoteBuilder() {
         setTimeout(() => { initialLoadDone.current = true; }, 0);
       }).catch(() => { /* non-critical: quote number defaults handled inside generateQuoteNumber */ });
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, fetchQuote, fetchReferenceData, isEditing]);
 
   const selectedCustomer = useMemo(

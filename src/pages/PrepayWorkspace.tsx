@@ -113,6 +113,7 @@ export default function PrepayWorkspace() {
     setBuckets((bucketsRes.data || []) as PrepayBucket[]);
     setInvoices((invoicesRes.data || []) as UnpaidInvoice[]);
     setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCustomerId]);
 
   useEffect(() => {

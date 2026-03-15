@@ -71,6 +71,7 @@ export default function LogbookReport() {
       }
     }
     loadEntities();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
   const fetchLogbook = useCallback(async () => {

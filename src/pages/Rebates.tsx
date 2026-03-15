@@ -96,6 +96,7 @@ export default function Rebates() {
 
   useEffect(() => {
     fetchLookups();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchLookups = async () => {

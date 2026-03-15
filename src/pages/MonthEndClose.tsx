@@ -105,6 +105,7 @@ export default function MonthEndClose() {
     }
 
     setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current.start, current.end]);
 
   useEffect(() => {

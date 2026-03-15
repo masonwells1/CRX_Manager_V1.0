@@ -34,6 +34,7 @@ const variantClasses: Record<BadgeVariant, string> = {
   danger: 'bg-red-50 text-red-700',
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const statusToBadgeVariant: Record<string, BadgeVariant> = {
   draft: 'draft',
   sent: 'sent',

@@ -40,6 +40,7 @@ const daysBetween = (from: string, to: Date): number => {
 };
 
 /** Auto-allocate: distribute check amount across invoices, oldest first */
+// eslint-disable-next-line react-refresh/only-export-components
 export function autoAllocate(
   checkCents: number,
   invoices: { id: string; balance_cents: number }[],

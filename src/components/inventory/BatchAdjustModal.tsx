@@ -23,6 +23,7 @@ interface RpcCall {
 }
 
 /** Exported for testing */
+// eslint-disable-next-line react-refresh/only-export-components
 export function buildAdjustmentCalls(
   items: AdjustmentItem[],
   reason: string,

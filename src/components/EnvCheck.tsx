@@ -1,5 +1,6 @@
 import { AlertCircle } from 'lucide-react';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function checkEnvVars() {
   const requiredVars = {
     VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,

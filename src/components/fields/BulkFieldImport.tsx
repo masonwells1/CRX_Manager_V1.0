@@ -89,6 +89,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     if (open) {
       fetchCustomers();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const fetchCustomers = async () => {

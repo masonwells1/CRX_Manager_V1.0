@@ -67,11 +67,13 @@ export default function TagsManager({ noteId, onTagsChange }: TagsManagerProps) 
       const tags = data.map((d: Record<string, unknown>) => d.note_tags).filter(Boolean);
       setNoteTags(tags as NoteTag[]);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId]);
 
   useEffect(() => {
     fetchAllTags();
     fetchNoteTags();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId, fetchNoteTags]);
 
   const createTag = async () => {

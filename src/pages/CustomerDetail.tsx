@@ -152,6 +152,7 @@ export default function CustomerDetail() {
       // New customer — mark ready immediately
       setTimeout(() => { initialLoadDone.current = true; }, 0);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, isNew, fetchCustomer, fetchAddresses]);
 
   const fetchTabData = useCallback(async (selectedTab: string) => {
@@ -285,6 +286,7 @@ export default function CustomerDetail() {
       }
     }
     setTabLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {

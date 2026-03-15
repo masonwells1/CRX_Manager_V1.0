@@ -46,6 +46,7 @@ const TYPE_CONFIG: Record<string, { label: string; color: string; icon: React.El
 };
 
 /** Exported for testing */
+// eslint-disable-next-line react-refresh/only-export-components
 export function computeRunningBalance(txns: Array<{ quantity: number }>): number[] {
   const balances: number[] = [];
   let running = 0;

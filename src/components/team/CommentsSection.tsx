@@ -70,6 +70,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
     }
     setComments((data || []) as Comment[]);
     setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId]);
 
   useEffect(() => {

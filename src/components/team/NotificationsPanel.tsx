@@ -44,6 +44,7 @@ export default function NotificationsPanel() {
     }
     setNotifications((data || []) as Notification[]);
     setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile]);
 
   useEffect(() => {

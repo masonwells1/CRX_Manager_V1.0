@@ -153,6 +153,7 @@ export default function SettingsPage() {
       return;
     }
     Promise.all([fetchSettings(), fetchUsers()]).finally(() => setPageLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [role, navigate]);
 
   const fetchSettings = async () => {
