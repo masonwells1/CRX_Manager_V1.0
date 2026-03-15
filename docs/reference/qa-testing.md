@@ -200,3 +200,42 @@ Use `page.once('dialog')` (not `page.on`) in serial suites to prevent listener l
 page.once('dialog', dialog => dialog.accept());
 await page.click('button:has-text("Delete")');
 ```
+
+**Common dialog triggers in the app** (all use `window.confirm()`):
+- **Convert Quote to Order** — duplicate order warning if customer has recent orders (`QuoteBuilder.tsx` line ~1010)
+- **Post Invoice** — confirmation before posting (`InvoiceDetail.tsx`)
+- **Complete Delivery** — confirmation with item summary (`DeliveryDetail.tsx` line ~574)
+- **Delete/Void actions** — most destructive actions confirm first
+
+Without `page.once('dialog', d => d.accept())`, Playwright auto-dismisses these as "cancel", silently aborting the operation.
+
+### Modal Close Button Exclusion
+
+When clicking product selection buttons inside modals, exclude the modal's close button:
+
+```typescript
+// BAD — matches the modal's X close button too
+await page.locator('button').first().click();
+
+// GOOD — excludes close button by aria-label
+await page.locator('button:not([aria-label="Close"]):not([disabled])').click();
+```
+
+### URL Assertion Patterns
+
+Avoid overly broad URL patterns that match intermediate routes:
+
+```typescript
+// BAD — /quotes/.+/ matches /quotes/new (false positive)
+await expect(page).toHaveURL(/\/quotes\/.+/);
+
+// GOOD — UUID pattern ensures we're on an actual record
+await expect(page).toHaveURL(/\/quotes\/[0-9a-f]{8}-/);
+```
+
+### Inventory-Aware Test Data
+
+Workflow tests that create deliveries must account for available inventory:
+- Check inventory baselines before scheduling quantities
+- Use smaller delivery quantities (e.g., 1-2 units) to avoid exceeding available stock
+- The `complete_delivery` RPC enforces positive inventory — it will fail if physical stock goes negative
