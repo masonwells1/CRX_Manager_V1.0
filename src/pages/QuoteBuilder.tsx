@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   Save,
   Send,
@@ -14,6 +14,10 @@ import {
   Pencil,
   History,
   RotateCcw,
+  Eye,
+  EyeOff,
+  CheckCircle,
+  Copy,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -39,6 +43,9 @@ import type {
   Quote,
   QuoteSection,
   QuoteItem,
+  QuoteVersion,
+  QuotePdfTemplate,
+  QuoteTemplate,
   Product,
   Customer,
   UnitConversion,
@@ -52,6 +59,8 @@ interface LocalSection {
   section_name: string;
   sort_order: number;
   section_notes: string | null;
+  section_header_notes: string | null;
+  needed_by_date: string | null;
   items: LocalItem[];
 }
 
@@ -118,6 +127,8 @@ function makeEmptySection(order: number): LocalSection {
     section_name: `Section ${order}`,
     sort_order: order,
     section_notes: null,
+    section_header_notes: null,
+    needed_by_date: null,
     items: [],
   };
 }
@@ -125,6 +136,7 @@ function makeEmptySection(order: number): LocalSection {
 export default function QuoteBuilder() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { toast } = useToast();
   const { profile } = useAuth();
   const saveQuoteIdem = useIdempotencyKey('save_quote', profile?.id || '');
@@ -133,9 +145,8 @@ export default function QuoteBuilder() {
 
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [_sending, __setSending] = useState(false);
   const [converting, setConverting] = useState(false);
-  const [confirmSendOpen, setConfirmSendOpen] = useState(false);
   const [confirmConvertOpen, setConfirmConvertOpen] = useState(false);
 
   const [customerId, setCustomerId] = useState('');
@@ -149,6 +160,8 @@ export default function QuoteBuilder() {
   const [quoteNumber, setQuoteNumber] = useState('');
   const [status, setStatus] = useState<QuoteStatus>('draft');
   const [quoteId, setQuoteId] = useState<string | null>(id || null);
+  const [isPlanned, setIsPlanned] = useState(false);
+  const [wasPlanned, setWasPlanned] = useState(false);
 
   const [sections, setSections] = useState<LocalSection[]>([makeEmptySection(1)]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -162,9 +175,27 @@ export default function QuoteBuilder() {
   const [productQuery, setProductQuery] = useState('');
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
-  const [quoteVersions, setQuoteVersions] = useState<{ id: string; version_number: number; sent_at: string; sent_by: string; snapshot_data: { totals?: { totalPrice?: number }; sections?: { items?: unknown[] }[] } }[]>([]);
+  const [quoteVersions, setQuoteVersions] = useState<QuoteVersion[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<QuoteVersion | null>(null);
+  const [compareMode, setCompareMode] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const [revising, setRevising] = useState(false);
+  const [customerView, setCustomerView] = useState(false);
+  const [showPreviewModal, setShowPreviewModal] = useState(false);
+  const [previewPdfUrl, setPreviewPdfUrl] = useState<string | null>(null);
+  const [pdfTemplates, setPdfTemplates] = useState<QuotePdfTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [customColumns, setCustomColumns] = useState<string[] | null>(null);
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+
+  // Quote template state
+  const [quoteTemplates, setQuoteTemplates] = useState<QuoteTemplate[]>([]);
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  const [templateDescription, setTemplateDescription] = useState('');
+  const [showRolloverModal, setShowRolloverModal] = useState(false);
+  const [rolloverSeason, setRolloverSeason] = useState(new Date().getFullYear() + 1);
 
   // Track dirty state for unsaved changes warning
   const [isDirty, setIsDirty] = useState(false);
@@ -271,6 +302,8 @@ export default function QuoteBuilder() {
     setHeaderNotes(q.header_notes || '');
     setFooterNotes(q.footer_notes || '');
     setStatus(q.status);
+    setIsPlanned(q.is_planned || false);
+    setWasPlanned(q.is_planned || false);
     if (q.commission_split) setCommissionSplit(q.commission_split);
 
     const dbSections = (sectionsRes.data || []) as QuoteSection[];
@@ -282,6 +315,8 @@ export default function QuoteBuilder() {
       section_name: s.section_name,
       sort_order: s.sort_order,
       section_notes: s.section_notes,
+      section_header_notes: s.section_header_notes,
+      needed_by_date: s.needed_by_date || null,
       items: dbItems
         .filter((item) => item.section_id === s.id)
         .map((item) => {
@@ -327,10 +362,10 @@ export default function QuoteBuilder() {
     // Fetch version history for this quote
     const { data: versionsData } = await supabase
       .from('quote_versions')
-      .select('id, version_number, sent_at, sent_by, snapshot_data')
+      .select('*')
       .eq('quote_id', quoteId)
       .order('version_number', { ascending: false });
-    setQuoteVersions(versionsData || []);
+    setQuoteVersions((versionsData || []) as QuoteVersion[]);
 
     setLoading(false);
     // Allow a tick for state to settle before tracking changes
@@ -339,6 +374,20 @@ export default function QuoteBuilder() {
 
   useEffect(() => {
     fetchReferenceData();
+    // Fetch PDF templates (non-critical, inline to avoid TDZ issue with useCallback ordering)
+    supabase.from('quote_pdf_templates').select('*').order('is_default', { ascending: false })
+      .then(({ data }) => {
+        if (data) {
+          setPdfTemplates(data as QuotePdfTemplate[]);
+          const defaultTemplate = (data as QuotePdfTemplate[]).find((t) => t.is_default);
+          if (defaultTemplate) setSelectedTemplateId(defaultTemplate.id);
+        }
+      });
+    // Fetch quote templates for new quotes
+    if (!id) {
+      supabase.from('quote_templates').select('*').eq('is_active', true).order('template_name')
+        .then(({ data }) => { if (data) setQuoteTemplates(data as QuoteTemplate[]); });
+    }
     if (isEditing && id) {
       fetchQuote(id);
     } else {
@@ -349,6 +398,25 @@ export default function QuoteBuilder() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, fetchQuote, fetchReferenceData, isEditing]);
+
+  // Auto-set customer from URL query param (e.g., /quotes/new?customer_id=xxx)
+  useEffect(() => {
+    if (!id && customers.length > 0) {
+      const params = new URLSearchParams(location.search);
+      const presetCustomerId = params.get('customer_id');
+      if (presetCustomerId && !customerId) {
+        const cust = customers.find((c) => c.id === presetCustomerId);
+        if (cust) {
+          setCustomerId(presetCustomerId);
+          setTier(cust.assigned_tier);
+          if (cust.default_commission_split) {
+            setCommissionSplit(cust.default_commission_split);
+          }
+        }
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, customers.length, location.search]);
 
   const selectedCustomer = useMemo(
     () => customers.find((c) => c.id === customerId),
@@ -506,6 +574,7 @@ export default function QuoteBuilder() {
               ...item,
               product_id: product.id,
               product,
+              notes: product.notes || '',
               price_per_unit: pricePerUnit,
               price_override: null,
               current_cost: product.current_cost || 0,
@@ -538,6 +607,12 @@ export default function QuoteBuilder() {
   const updateSectionName = (key: string, name: string) => {
     setSections((prev) =>
       prev.map((s) => (s._key === key ? { ...s, section_name: name } : s))
+    );
+  };
+
+  const updateSectionField = (key: string, field: keyof LocalSection, value: string | null) => {
+    setSections((prev) =>
+      prev.map((s) => (s._key === key ? { ...s, [field]: value } : s))
     );
   };
 
@@ -689,6 +764,7 @@ export default function QuoteBuilder() {
       ).toISOString(),
       header_notes: headerNotes || null,
       footer_notes: footerNotes || null,
+      is_planned: isPlanned,
       ...(newStatus === 'sent' ? { sent_at: new Date().toISOString() } : {}),
     };
 
@@ -697,6 +773,8 @@ export default function QuoteBuilder() {
       section_name: sec.section_name,
       sort_order: sec.sort_order,
       section_notes: sec.section_notes || null,
+      section_header_notes: sec.section_header_notes || null,
+      needed_by_date: sec.needed_by_date || null,
       items: sec.items
         .filter((item) => item.product_id)
         .map((item) => ({
@@ -769,9 +847,70 @@ export default function QuoteBuilder() {
           customerId
         );
       }
+      // Planned program hold management
+      if (isPlanned && profile) {
+        const { error: holdError } = await supabase.rpc('create_planned_holds', {
+          p_quote_id: result,
+          p_performed_by: profile.id,
+        });
+        if (holdError) toast('error', 'Failed to create inventory holds');
+        else toast('success', 'Inventory holds created for planned program');
+      } else if (!isPlanned && wasPlanned) {
+        // Release holds when toggled off
+        await supabase.from('inventory_holds')
+          .update({ is_active: false, updated_at: new Date().toISOString() })
+          .eq('source_id', result)
+          .eq('is_active', true);
+        setWasPlanned(false);
+      }
+
       if (!isEditing) navigate(`/quotes/${result}`, { replace: true });
     }
     setSaving(false);
+  };
+
+  // Save as template handler
+  const handleSaveTemplate = async () => {
+    if (!quoteId || !profile) return;
+    const { error } = await supabase.rpc('save_quote_template', {
+      p_quote_id: quoteId,
+      p_template_name: templateName.trim(),
+      p_description: templateDescription.trim() || null,
+      p_performed_by: profile.id,
+    });
+    if (error) { toast('error', 'Failed to save template'); return; }
+    toast('success', `Template "${templateName}" saved`);
+    setShowSaveTemplateModal(false);
+    setTemplateName('');
+    setTemplateDescription('');
+  };
+
+  // Create from template handler
+  const handleSelectTemplate = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const templateId = e.target.value;
+    if (!templateId || !customerId || !profile) return;
+    const { data, error } = await supabase.rpc('create_quote_from_template', {
+      p_template_id: templateId,
+      p_customer_id: customerId,
+      p_performed_by: profile.id,
+    });
+    if (error) { toast('error', 'Failed to create from template'); return; }
+    const result = data as { quote_id: string; quote_number: string };
+    navigate(`/quotes/${result.quote_id}`);
+  };
+
+  // Seasonal rollover handler
+  const handleRollover = async () => {
+    if (!quoteId || !profile) return;
+    const { data, error } = await supabase.rpc('rollover_quote_to_season', {
+      p_quote_id: quoteId,
+      p_new_season: rolloverSeason,
+      p_performed_by: profile.id,
+    });
+    if (error) { toast('error', 'Failed to roll over quote'); return; }
+    const result = data as { quote_id: string; quote_number: string; season: number };
+    toast('success', `Rolled over to season ${result.season} — ${result.quote_number}`);
+    navigate(`/quotes/${result.quote_id}`);
   };
 
   // === GAP FIX #1: Download Quote as PDF ===
@@ -793,16 +932,23 @@ export default function QuoteBuilder() {
       sections: sections.map((sec) => ({
         section_name: sec.section_name,
         section_notes: sec.section_notes || undefined,
+        section_header_notes: sec.section_header_notes || undefined,
         items: sec.items
           .filter((i) => i.product_id)
           .map((i) => ({
             product_name: i.product?.product_name || '',
+            category: i.product?.category || '',
+            notes: i.notes || undefined,
+            suggested_rate: i.product?.suggested_rate || undefined,
             actual_rate: i.actual_rate || 0,
             rate_unit: i.rate_unit || '',
             acres: i.acres || 0,
             total_units_needed: i.total_units_needed || 0,
+            inventory_unit: i.product?.inventory_unit || undefined,
+            unit_size: i.product?.unit_size || undefined,
             price_per_unit: i.price_per_unit,
             price_unit: i.price_unit || undefined,
+            price_per_acre: i.price_per_acre || undefined,
             total_price: i.total_price,
           })),
       })),
@@ -812,7 +958,7 @@ export default function QuoteBuilder() {
         totalProfit: totals.totalProfit,
         avgMargin: totals.totalMarginPct,
       },
-    });
+    }, customColumns || getTemplateColumns(selectedTemplateId));
     toast('success', 'PDF downloaded');
     } catch (err: unknown) {
       console.error('PDF generation error:', err);
@@ -820,77 +966,31 @@ export default function QuoteBuilder() {
     }
   };
 
-  const handleSendQuote = async () => {
-    setSending(true);
-    setConfirmSendOpen(false);
+  // Kept for future email integration
+  const _handleSendQuote = async () => {
+    _setSending(true);
     const result = await saveQuote('sent');
     if (result) {
-      // === GAP FIX #6: Create a quote version snapshot ===
+      // Create version snapshot via RPC
       if (profile) {
-        const { count } = await supabase
-          .from('quote_versions')
-          .select('*', { count: 'exact', head: true })
-          .eq('quote_id', result);
-        const versionNum = (count || 0) + 1;
-
-        const snapshotData = {
-          quote_number: quoteNumber,
-          customer_id: customerId,
-          customer_name: selectedCustomer?.farm_name || '',
-          tier,
-          valid_days: validDays,
-          header_notes: headerNotes,
-          footer_notes: footerNotes,
-          commission_split: commissionSplit,
-          totals,
-          sections: sections.map((sec) => ({
-            section_name: sec.section_name,
-            sort_order: sec.sort_order,
-            section_notes: sec.section_notes,
-            items: sec.items
-              .filter((i) => i.product_id)
-              .map((i) => ({
-                product_id: i.product_id,
-                product_name: i.product?.product_name || '',
-                price_per_unit: i.price_per_unit,
-                current_cost: i.current_cost,
-                actual_rate: i.actual_rate,
-                rate_unit: i.rate_unit,
-                acres: i.acres,
-                total_units_needed: i.total_units_needed,
-                total_price: i.total_price,
-                profit: i.profit,
-                net_margin: i.net_margin,
-                calc_mode: i.calc_mode,
-                price_unit: i.price_unit,
-              })),
-          })),
-        };
-
-        const versionResult = await supabase.from('quote_versions').insert({
-          quote_id: result,
-          version_number: versionNum,
-          sent_by: profile.id,
-          sent_at: new Date().toISOString(),
-          sent_method: 'manual',
-          snapshot_data: snapshotData,
-          notes: `Version ${versionNum} sent`,
+        const { data: versionData, error: versionError } = await supabase.rpc('create_quote_version', {
+          p_quote_id: result,
+          p_performed_by: profile.id,
+          p_method: 'manual',
         });
-        if (versionResult.error) {
-          console.error('Failed to create quote version snapshot:', versionResult.error);
-          toast('error', 'Quote sent but version snapshot failed. Contact admin.');
+        if (versionError) {
+          console.error('Failed to create quote version:', versionError);
+          toast('error', 'Quote sent but version snapshot failed.');
+        } else {
+          await logActivity(
+            'quote_sent',
+            `Quote ${quoteNumber} v${versionData?.version_number || '?'} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
+            profile.id,
+            'quote',
+            result,
+            customerId
+          );
         }
-        checkMutationResult(versionResult, 'Insert quote version snapshot');
-
-        // === GAP FIX #5: Log activity for quote sent ===
-        await logActivity(
-          'quote_sent',
-          `Quote ${quoteNumber} v${versionNum} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
-          profile.id,
-          'quote',
-          result,
-          customerId
-        );
       }
 
       setStatus('sent');
@@ -935,7 +1035,7 @@ export default function QuoteBuilder() {
               avgMargin: totals.totalMarginPct,
             },
           };
-          const doc = await generateQuotePdf(pdfData);
+          const doc = await generateQuotePdf(pdfData, customColumns || getTemplateColumns(selectedTemplateId));
           const base64 = pdfToBase64(doc);
           const html = buildEmailHtml(`
             <h2 style="color:#1e293b;margin:0 0 12px;">Quote ${quoteNumber}</h2>
@@ -988,16 +1088,9 @@ export default function QuoteBuilder() {
       }
 
       // Refresh version history
-      if (quoteId) {
-        const { data: versionsData } = await supabase
-          .from('quote_versions')
-          .select('id, version_number, sent_at, sent_by, snapshot_data')
-          .eq('quote_id', quoteId)
-          .order('version_number', { ascending: false });
-        setQuoteVersions(versionsData || []);
-      }
+      await fetchVersions();
     }
-    setSending(false);
+    _setSending(false);
   };
 
   const handleReviseQuote = async () => {
@@ -1010,6 +1103,130 @@ export default function QuoteBuilder() {
       toast('success', 'Quote is now in revised mode — you can edit and re-send.');
     }
     setRevising(false);
+  };
+
+  const handlePreviewQuote = async () => {
+    try {
+      const pdfData = {
+        quote_number: quoteNumber,
+        customer_name: selectedCustomer?.farm_name || 'Customer',
+        customer_email: selectedCustomer?.email || undefined,
+        customer_phone: selectedCustomer?.phone || undefined,
+        customer_address: selectedCustomer?.billing_address || undefined,
+        sales_rep_name: profile?.full_name || 'Sales Rep',
+        created_at: new Date().toISOString(),
+        expires_at: undefined,
+        valid_days: validDays,
+        tier,
+        header_notes: headerNotes || undefined,
+        footer_notes: footerNotes || undefined,
+        sections: sections.map((sec) => ({
+          section_name: sec.section_name,
+          section_notes: sec.section_notes || undefined,
+          items: sec.items
+            .filter((i) => i.product_id)
+            .map((i) => ({
+              product_name: i.product?.product_name || '',
+              actual_rate: i.actual_rate || 0,
+              rate_unit: i.rate_unit || '',
+              acres: i.acres || 0,
+              total_units_needed: i.total_units_needed || 0,
+              price_per_unit: i.price_per_unit,
+              price_unit: i.price_unit || undefined,
+              total_price: i.total_price,
+            })),
+        })),
+        totals: {
+          totalPrice: totals.totalPrice,
+          totalCost: totals.totalCost,
+          totalProfit: totals.totalProfit,
+          avgMargin: totals.totalMarginPct,
+        },
+      };
+      const doc = await generateQuotePdf(pdfData);
+      const blob = doc.output('blob');
+      const url = URL.createObjectURL(blob);
+      if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
+      setPreviewPdfUrl(url);
+      setShowPreviewModal(true);
+    } catch (err: unknown) {
+      console.error('Preview error:', err);
+      toast('error', err instanceof Error ? err.message : 'Failed to generate preview');
+    }
+  };
+
+  const handleMarkPresented = async () => {
+    if (!quoteId || !profile) return;
+    // Save current state first
+    const savedId = await saveQuote(status === 'draft' ? 'draft' : status);
+    if (!savedId) return;
+    // Create version snapshot via RPC
+    const { data: versionData, error } = await supabase.rpc('create_quote_version', {
+      p_quote_id: savedId,
+      p_performed_by: profile.id,
+      p_method: 'presented',
+    });
+    if (error) { toast('error', 'Failed to mark as presented'); return; }
+    await logActivity(
+      'quote_presented',
+      `Quote ${quoteNumber} V${versionData?.version_number || '?'} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`,
+      profile.id,
+      'quote',
+      savedId,
+      customerId
+    );
+    toast('success', `Quote marked as presented (V${versionData?.version_number || '?'})`);
+    setShowPreviewModal(false);
+    if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
+    setPreviewPdfUrl(null);
+    setStatus('sent');
+    setIsDirty(false);
+    fetchVersions();
+  };
+
+  const AVAILABLE_PDF_COLUMNS = [
+    { key: 'product', label: 'Product' },
+    { key: 'category', label: 'Category' },
+    { key: 'notes', label: 'Notes' },
+    { key: 'sug_rate', label: 'Sug. Rate' },
+    { key: 'actual_rate', label: 'Actual Rate' },
+    { key: 'rate_unit', label: 'Unit' },
+    { key: 'acres', label: 'Acres' },
+    { key: 'qty', label: 'Qty' },
+    { key: 'unit_size', label: 'Container' },
+    { key: 'price_unit', label: 'Price/Unit' },
+    { key: 'price_per_acre', label: '$/Acre' },
+    { key: 'total_price', label: 'Total' },
+  ] as const;
+
+  const getTemplateColumns = (templateId: string | null): string[] => {
+    const t = pdfTemplates.find((p) => p.id === templateId);
+    return t ? (t.columns as string[]) : ['product', 'actual_rate', 'acres', 'qty', 'price_unit', 'total_price'];
+  };
+
+  const fetchVersions = useCallback(async () => {
+    if (!quoteId) return;
+    const { data } = await supabase
+      .from('quote_versions')
+      .select('*')
+      .eq('quote_id', quoteId)
+      .order('version_number', { ascending: false });
+    setQuoteVersions((data || []) as QuoteVersion[]);
+  }, [quoteId]);
+
+  const handleRestoreVersion = async (versionId: string) => {
+    if (!quoteId || !profile) return;
+    const { error } = await supabase.rpc('restore_quote_version', {
+      p_quote_id: quoteId,
+      p_version_id: versionId,
+      p_performed_by: profile.id,
+    });
+    if (error) { toast('error', 'Failed to restore version'); return; }
+    toast('success', `Restored from V${selectedVersion?.version_number || '?'}`);
+    setConfirmRestore(null);
+    setSelectedVersion(null);
+    // Reload quote data
+    window.location.reload();
   };
 
   const handleConvertToOrder = async () => {
@@ -1162,6 +1379,21 @@ export default function QuoteBuilder() {
               {status}
             </Badge>
           )}
+          <label className="flex items-center gap-2 text-sm ml-4">
+            <input
+              type="checkbox"
+              checked={isPlanned}
+              onChange={(e) => setIsPlanned(e.target.checked)}
+              className="rounded border-gray-300 text-crx-green focus:ring-crx-green"
+              disabled={!canEdit && isEditing}
+            />
+            <span className="font-medium">Planned Program</span>
+          </label>
+          {isPlanned && (
+            <span className="px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 rounded-full">
+              Planned
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -1174,6 +1406,17 @@ export default function QuoteBuilder() {
           >
             Save Draft
           </Button>
+          <button
+            onClick={() => setCustomerView(!customerView)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
+              customerView
+                ? 'bg-crx-green text-white border-crx-green'
+                : 'border-gray-200 text-secondary hover:border-crx-green hover:text-crx-green'
+            }`}
+          >
+            {customerView ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            Customer View
+          </button>
           <Button
             variant="secondary"
             icon={<Download className="w-4 h-4" />}
@@ -1182,14 +1425,31 @@ export default function QuoteBuilder() {
           >
             Download PDF
           </Button>
+          {quoteId && (
+            <>
+              <button
+                onClick={() => setShowSaveTemplateModal(true)}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
+              >
+                <Copy className="w-4 h-4" />
+                Save as Template
+              </button>
+              <button
+                onClick={() => setShowRolloverModal(true)}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Roll Over to New Season
+              </button>
+            </>
+          )}
           {canSend && (
             <Button
               variant="primary"
-              icon={<Send className="w-4 h-4" />}
-              onClick={() => setConfirmSendOpen(true)}
-              loading={sending}
+              icon={<Eye className="w-4 h-4" />}
+              onClick={handlePreviewQuote}
             >
-              Send Quote
+              Preview Quote
             </Button>
           )}
           {isEditing && canConvert && (
@@ -1238,17 +1498,34 @@ export default function QuoteBuilder() {
         </div>
       )}
 
+      {customerView && (
+        <div className="flex items-center gap-2 px-4 py-2 bg-green-50 border border-crx-green/20 rounded-lg text-sm text-crx-green font-medium">
+          <EyeOff className="w-4 h-4" />
+          Customer View — cost, profit, and margin columns hidden
+        </div>
+      )}
+
       {showVersionHistory && quoteVersions.length > 0 && (
         <Card>
           <CardHeader title="Version" accent="History" />
+          {/* Version list */}
           <div className="divide-y divide-gray-100">
             {quoteVersions.map((v) => {
               const itemCount = v.snapshot_data?.sections?.reduce(
-                (sum: number, s: { items?: unknown[] }) => sum + (s.items?.length || 0), 0
+                (sum, s) => sum + (s.items?.length || 0), 0
               ) || 0;
-              const totalPrice = v.snapshot_data?.totals?.totalPrice || 0;
+              const totalPrice = v.snapshot_data?.quote?.total_price || 0;
+              const isSelected = selectedVersion?.id === v.id;
               return (
-                <div key={v.id} className="py-3 px-1 flex items-center justify-between">
+                <div
+                  key={v.id}
+                  className={`py-3 px-3 flex items-center justify-between cursor-pointer transition-colors ${isSelected ? 'bg-crx-green/10 border-l-4 border-crx-green' : 'hover:bg-gray-50'}`}
+                  onClick={() => {
+                    setSelectedVersion(isSelected ? null : v);
+                    setCompareMode(false);
+                    setConfirmRestore(null);
+                  }}
+                >
                   <div>
                     <span className="font-medium text-nav-dark">v{v.version_number}</span>
                     <span className="text-secondary text-sm ml-3">
@@ -1257,13 +1534,245 @@ export default function QuoteBuilder() {
                   </div>
                   <div className="text-sm text-secondary">
                     {itemCount} item{itemCount !== 1 ? 's' : ''} &middot;{' '}
-                    {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totalPrice)}
+                    {fmt(totalPrice)}
                   </div>
                 </div>
               );
             })}
           </div>
+
+          {/* Selected version details */}
+          {selectedVersion && !compareMode && (
+            <div className="border-t border-gray-200 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-nav-dark">V{selectedVersion.version_number} Snapshot</h4>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<Eye className="w-3.5 h-3.5" />}
+                    showChevron={false}
+                    onClick={() => setCompareMode(true)}
+                  >
+                    Compare
+                  </Button>
+                  {canEdit && (
+                    <>
+                      {confirmRestore === selectedVersion.id ? (
+                        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1">
+                          <span className="text-sm text-amber-800">Restore V{selectedVersion.version_number}?</span>
+                          <Button
+                            size="sm"
+                            icon={<CheckCircle className="w-3.5 h-3.5" />}
+                            showChevron={false}
+                            onClick={() => handleRestoreVersion(selectedVersion.id)}
+                          >
+                            Yes
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            showChevron={false}
+                            onClick={() => setConfirmRestore(null)}
+                          >
+                            No
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          icon={<RotateCcw className="w-3.5 h-3.5" />}
+                          showChevron={false}
+                          onClick={() => setConfirmRestore(selectedVersion.id)}
+                        >
+                          Restore
+                        </Button>
+                      )}
+                    </>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    showChevron={false}
+                    onClick={() => { setSelectedVersion(null); setConfirmRestore(null); }}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+              <div className="text-sm text-secondary mb-3">
+                Total: {fmt(selectedVersion.snapshot_data?.quote?.total_price || 0)}
+                {' '}&middot;{' '}
+                Margin: {(selectedVersion.snapshot_data?.quote?.total_margin_pct || 0).toFixed(1)}%
+              </div>
+              {selectedVersion.snapshot_data?.sections?.map((sec, si) => (
+                <div key={si} className="mb-3">
+                  <div className="flex items-center gap-2">
+                    <h5 className="text-sm font-medium text-nav-dark mb-1">{sec.section_name}</h5>
+                    {sec.needed_by_date && <span className="text-xs text-amber-600 mb-1">Needed by: {sec.needed_by_date}</span>}
+                  </div>
+                  {sec.section_header_notes && <p className="text-xs text-secondary italic mb-1">{sec.section_header_notes}</p>}
+                  {sec.section_notes && <p className="text-xs text-secondary mb-1">{sec.section_notes}</p>}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-secondary">
+                          <th className="text-left py-1 pr-2">Product</th>
+                          <th className="text-right py-1 px-2">Rate</th>
+                          <th className="text-right py-1 px-2">Acres</th>
+                          <th className="text-right py-1 px-2">Units</th>
+                          <th className="text-right py-1 px-2">Price/Unit</th>
+                          <th className="text-right py-1 pl-2">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sec.items?.map((item, ii) => (
+                          <tr key={ii} className="border-b border-gray-100">
+                            <td className="py-1 pr-2 text-nav-dark">{item.product_name}</td>
+                            <td className="py-1 px-2 text-right text-secondary">
+                              {item.actual_rate ? `${item.actual_rate} ${item.rate_unit || ''}` : '-'}
+                            </td>
+                            <td className="py-1 px-2 text-right text-secondary">{item.acres ?? '-'}</td>
+                            <td className="py-1 px-2 text-right text-secondary">{item.total_units_needed ?? '-'}</td>
+                            <td className="py-1 px-2 text-right text-secondary">{fmt(item.price_per_unit)}</td>
+                            <td className="py-1 pl-2 text-right font-medium text-nav-dark">{fmt(item.total_price)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Compare mode: show differences between selected version and current quote */}
+          {selectedVersion && compareMode && (
+            <div className="border-t border-gray-200 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-nav-dark">
+                  Comparing V{selectedVersion.version_number} vs Current
+                </h4>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={<EyeOff className="w-3.5 h-3.5" />}
+                    showChevron={false}
+                    onClick={() => setCompareMode(false)}
+                  >
+                    Exit Compare
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    showChevron={false}
+                    onClick={() => { setSelectedVersion(null); setCompareMode(false); setConfirmRestore(null); }}
+                  >
+                    Close
+                  </Button>
+                </div>
+              </div>
+              {/* Price comparison summary */}
+              {(() => {
+                const vTotal = selectedVersion.snapshot_data?.quote?.total_price || 0;
+                const cTotal = totals.totalPrice;
+                const diff = cTotal - vTotal;
+                return (
+                  <div className={`rounded-lg p-3 mb-3 text-sm ${diff > 0 ? 'bg-green-50 text-green-800' : diff < 0 ? 'bg-red-50 text-red-800' : 'bg-gray-50 text-secondary'}`}>
+                    V{selectedVersion.version_number} Total: {fmt(vTotal)} &rarr; Current: {fmt(cTotal)}
+                    {diff !== 0 && (
+                      <span className="ml-2 font-medium">
+                        ({diff > 0 ? '+' : ''}{fmt(diff)})
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+              {/* Item-level comparison */}
+              {(() => {
+                const versionItems = (selectedVersion.snapshot_data?.sections || []).flatMap(
+                  s => (s.items || []).map(i => ({ ...i, section: s.section_name }))
+                );
+                const currentItems = sections.flatMap(
+                  s => s.items.filter(i => i.product_id).map(i => ({
+                    product_id: i.product_id,
+                    product_name: i.product?.product_name || '',
+                    price_per_unit: i.price_per_unit,
+                    total_price: i.total_price,
+                    total_units_needed: i.total_units_needed,
+                    section: s.section_name,
+                  }))
+                );
+                const vMap = new Map(versionItems.map(i => [i.product_id, i]));
+                const cMap = new Map(currentItems.map(i => [i.product_id, i]));
+                const allProductIds = new Set([...vMap.keys(), ...cMap.keys()]);
+
+                return (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-gray-200 text-secondary">
+                          <th className="text-left py-1 pr-2">Product</th>
+                          <th className="text-right py-1 px-2">V{selectedVersion.version_number} Price</th>
+                          <th className="text-right py-1 px-2">Current Price</th>
+                          <th className="text-right py-1 px-2">V{selectedVersion.version_number} Total</th>
+                          <th className="text-right py-1 pl-2">Current Total</th>
+                          <th className="text-right py-1 pl-2">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {Array.from(allProductIds).map((pid) => {
+                          const vItem = vMap.get(pid);
+                          const cItem = cMap.get(pid);
+                          const isAdded = !vItem && cItem;
+                          const isRemoved = vItem && !cItem;
+                          const priceChanged = vItem && cItem && Math.abs(vItem.price_per_unit - cItem.price_per_unit) > 0.001;
+                          const bgClass = isAdded ? 'bg-green-50' : isRemoved ? 'bg-red-50' : priceChanged ? 'bg-amber-50' : '';
+                          return (
+                            <tr key={pid} className={`border-b border-gray-100 ${bgClass}`}>
+                              <td className="py-1 pr-2 text-nav-dark">{vItem?.product_name || cItem?.product_name || ''}</td>
+                              <td className="py-1 px-2 text-right text-secondary">{vItem ? fmt(vItem.price_per_unit) : '-'}</td>
+                              <td className="py-1 px-2 text-right text-secondary">{cItem ? fmt(cItem.price_per_unit) : '-'}</td>
+                              <td className="py-1 px-2 text-right text-secondary">{vItem ? fmt(vItem.total_price) : '-'}</td>
+                              <td className="py-1 pl-2 text-right text-secondary">{cItem ? fmt(cItem.total_price) : '-'}</td>
+                              <td className="py-1 pl-2 text-right">
+                                {isAdded && <Badge variant="success">Added</Badge>}
+                                {isRemoved && <Badge variant="error">Removed</Badge>}
+                                {priceChanged && <Badge variant="warning">Changed</Badge>}
+                                {!isAdded && !isRemoved && !priceChanged && <span className="text-secondary">-</span>}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
         </Card>
+      )}
+
+      {!id && quoteTemplates.length > 0 && (
+        <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-lg">
+          <label className="text-sm font-medium">Start from Template:</label>
+          <select
+            onChange={handleSelectTemplate}
+            defaultValue=""
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5"
+          >
+            <option value="">Blank Quote</option>
+            {quoteTemplates.map((t) => (
+              <option key={t.id} value={t.id}>{t.template_name}</option>
+            ))}
+          </select>
+          {!customerId && (
+            <span className="text-xs text-secondary">Select a customer first to use a template</span>
+          )}
+        </div>
       )}
 
       <Card>
@@ -1374,6 +1883,17 @@ export default function QuoteBuilder() {
                   <span className="text-sm font-mono text-secondary">
                     {fmt(sectionTotal)}
                   </span>
+                  {isPlanned && (
+                    <div className="flex items-center gap-2 ml-2">
+                      <label className="text-xs text-secondary whitespace-nowrap">Needed By:</label>
+                      <input
+                        type="date"
+                        value={sec.needed_by_date || ''}
+                        onChange={(e) => updateSectionField(sec._key, 'needed_by_date', e.target.value || null)}
+                        className="text-sm border border-gray-200 rounded px-2 py-1"
+                      />
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
@@ -1398,6 +1918,17 @@ export default function QuoteBuilder() {
             </div>
 
             {!isCollapsed && (
+              <>
+              {/* Section Header Notes — above items table */}
+              <div className="px-5 pb-2">
+                <textarea
+                  value={sec.section_header_notes || ''}
+                  onChange={(e) => updateSectionField(sec._key, 'section_header_notes', e.target.value || null)}
+                  rows={2}
+                  placeholder="Section notes for grower (shown above products on PDF)..."
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none"
+                />
+              </div>
               <div className="overflow-x-auto">
                 {sec.items.length === 0 ? (
                   <div className="px-5 pb-5">
@@ -1418,7 +1949,7 @@ export default function QuoteBuilder() {
                         <th className="px-5 py-3 font-medium w-8">#</th>
                         <th className="px-3 py-3 font-medium min-w-[200px]">Product</th>
                         <th className="px-3 py-3 font-medium">Price/Unit</th>
-                        <th className="px-3 py-3 font-medium">Cost</th>
+                        {!customerView && <th className="px-3 py-3 font-medium">Cost</th>}
                         <th className="px-3 py-3 font-medium">Sug. Rate</th>
                         <th className="px-3 py-3 font-medium">Actual Rate</th>
                         <th className="px-3 py-3 font-medium">Unit</th>
@@ -1427,8 +1958,9 @@ export default function QuoteBuilder() {
                         <th className="px-3 py-3 font-medium">$/Acre</th>
                         <th className="px-3 py-3 font-medium">Units Needed</th>
                         <th className="px-3 py-3 font-medium">Total</th>
-                        <th className="px-3 py-3 font-medium">Profit</th>
-                        <th className="px-3 py-3 font-medium">Margin</th>
+                        <th className="px-3 py-3 font-medium min-w-[140px]">Notes</th>
+                        {!customerView && <th className="px-3 py-3 font-medium">Profit</th>}
+                        {!customerView && <th className="px-3 py-3 font-medium">Margin</th>}
                         <th className="px-3 py-3 font-medium w-10" />
                       </tr>
                     </thead>
@@ -1543,9 +2075,11 @@ export default function QuoteBuilder() {
                                   ))}
                               </select>
                             </td>
-                            <td className="px-3 py-2 font-mono text-secondary">
-                              {fmt(item.current_cost)}
-                            </td>
+                            {!customerView && (
+                              <td className="px-3 py-2 font-mono text-secondary">
+                                {fmt(item.current_cost)}
+                              </td>
+                            )}
                             <td className="px-3 py-2 text-secondary">
                               {item.suggested_rate || '-'}
                             </td>
@@ -1647,12 +2181,36 @@ export default function QuoteBuilder() {
                             <td className="px-3 py-2 font-mono font-medium text-nav-dark">
                               {fmt(item.total_price)}
                             </td>
-                            <td className="px-3 py-2 font-mono text-emerald-600">
-                              {fmt(item.profit)}
+                            <td className="px-3 py-2">
+                              <div className="flex items-center gap-1">
+                                <textarea
+                                  value={item.notes || ''}
+                                  onChange={(e) => updateItem(sec._key, item._key, { notes: e.target.value || null })}
+                                  rows={1}
+                                  placeholder="Product notes..."
+                                  className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-crx-green/20 resize-none"
+                                />
+                                {prod?.notes && item.notes !== prod.notes && (
+                                  <button
+                                    onClick={() => updateItem(sec._key, item._key, { notes: prod?.notes || '' })}
+                                    title="Reset to default"
+                                    className="text-xs text-crx-green hover:underline whitespace-nowrap"
+                                  >
+                                    Reset
+                                  </button>
+                                )}
+                              </div>
                             </td>
-                            <td className="px-3 py-2 font-mono text-secondary">
-                              {pct(item.net_margin)}
-                            </td>
+                            {!customerView && (
+                              <td className="px-3 py-2 font-mono text-emerald-600">
+                                {fmt(item.profit)}
+                              </td>
+                            )}
+                            {!customerView && (
+                              <td className="px-3 py-2 font-mono text-secondary">
+                                {pct(item.net_margin)}
+                              </td>
+                            )}
                             <td className="px-3 py-2">
                               <button
                                 onClick={() => removeItem(sec._key, item._key)}
@@ -1668,6 +2226,7 @@ export default function QuoteBuilder() {
                   </table>
                 )}
               </div>
+              </>
             )}
           </Card>
         );
@@ -1701,7 +2260,7 @@ export default function QuoteBuilder() {
 
       <Card>
         <CardHeader title="Quote" accent="Totals" />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className={`grid grid-cols-2 ${customerView ? 'sm:grid-cols-1' : 'sm:grid-cols-4'} gap-4`}>
           <div>
             <p className="text-xs text-secondary uppercase tracking-wide mb-1">
               Total Price
@@ -1710,30 +2269,36 @@ export default function QuoteBuilder() {
               {fmt(totals.totalPrice)}
             </p>
           </div>
-          <div>
-            <p className="text-xs text-secondary uppercase tracking-wide mb-1">
-              Total Cost
-            </p>
-            <p className="text-xl font-semibold font-heading text-secondary font-mono">
-              {fmt(totals.totalCost)}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-secondary uppercase tracking-wide mb-1">
-              Total Profit
-            </p>
-            <p className="text-xl font-semibold font-heading text-emerald-600 font-mono">
-              {fmt(totals.totalProfit)}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-secondary uppercase tracking-wide mb-1">
-              Overall Margin
-            </p>
-            <p className="text-xl font-semibold font-heading text-crx-green font-mono">
-              {totals.totalMarginPct.toFixed(1)}%
-            </p>
-          </div>
+          {!customerView && (
+            <div>
+              <p className="text-xs text-secondary uppercase tracking-wide mb-1">
+                Total Cost
+              </p>
+              <p className="text-xl font-semibold font-heading text-secondary font-mono">
+                {fmt(totals.totalCost)}
+              </p>
+            </div>
+          )}
+          {!customerView && (
+            <div>
+              <p className="text-xs text-secondary uppercase tracking-wide mb-1">
+                Total Profit
+              </p>
+              <p className="text-xl font-semibold font-heading text-emerald-600 font-mono">
+                {fmt(totals.totalProfit)}
+              </p>
+            </div>
+          )}
+          {!customerView && (
+            <div>
+              <p className="text-xs text-secondary uppercase tracking-wide mb-1">
+                Overall Margin
+              </p>
+              <p className="text-xl font-semibold font-heading text-crx-green font-mono">
+                {totals.totalMarginPct.toFixed(1)}%
+              </p>
+            </div>
+          )}
         </div>
       </Card>
 
@@ -1802,38 +2367,6 @@ export default function QuoteBuilder() {
       </Modal>
 
       <Modal
-        open={confirmSendOpen}
-        onClose={() => setConfirmSendOpen(false)}
-        title="Send"
-        accent="Quote"
-      >
-        <div className="space-y-4">
-          <p className="text-sm text-secondary">
-            This will mark the quote as sent and record the sent date. The customer
-            ({selectedCustomer?.farm_name || 'selected customer'}) will see the quote
-            with {sections.reduce((s, sec) => s + sec.items.filter((i) => i.product_id).length, 0)} line
-            items totaling {fmt(totals.totalPrice)}.
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="secondary"
-              showChevron={false}
-              onClick={() => setConfirmSendOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              icon={<Send className="w-4 h-4" />}
-              onClick={handleSendQuote}
-              loading={sending}
-            >
-              Confirm Send
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal
         open={confirmConvertOpen}
         onClose={() => setConfirmConvertOpen(false)}
         title="Convert to"
@@ -1864,11 +2397,165 @@ export default function QuoteBuilder() {
         </div>
       </Modal>
 
+      <Modal
+        open={showPreviewModal}
+        onClose={() => { setShowPreviewModal(false); if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl); }}
+        title="Quote"
+        accent="Preview"
+      >
+        {/* PDF Column Template Picker */}
+        <div className="flex items-center gap-3 mb-3">
+          <select
+            value={selectedTemplateId || ''}
+            onChange={(e) => { setSelectedTemplateId(e.target.value); setCustomColumns(null); }}
+            className="text-sm border border-gray-200 rounded-lg px-3 py-1.5"
+          >
+            {pdfTemplates.map((t) => (
+              <option key={t.id} value={t.id}>{t.template_name}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => setShowColumnPicker(!showColumnPicker)}
+            className="text-sm text-crx-green hover:underline"
+          >
+            {showColumnPicker ? 'Hide Columns' : 'Customize Columns'}
+          </button>
+        </div>
+        {showColumnPicker && (
+          <div className="flex flex-wrap gap-2 mb-3 p-3 bg-gray-50 rounded-lg">
+            {AVAILABLE_PDF_COLUMNS.map((col) => {
+              const activeColumns = customColumns || getTemplateColumns(selectedTemplateId);
+              const isActive = activeColumns.includes(col.key);
+              return (
+                <label key={col.key} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isActive}
+                    onChange={() => {
+                      const cols = [...activeColumns];
+                      if (isActive) cols.splice(cols.indexOf(col.key), 1);
+                      else cols.push(col.key);
+                      setCustomColumns(cols);
+                    }}
+                  />
+                  {col.label}
+                </label>
+              );
+            })}
+          </div>
+        )}
+        <div className="h-[60vh]">
+          <iframe src={previewPdfUrl || ''} className="w-full h-full border rounded-lg" title="Quote PDF Preview" />
+        </div>
+        <div className="flex justify-end gap-3 mt-4 pt-4 border-t">
+          <Button
+            variant="secondary"
+            icon={<Download className="w-4 h-4" />}
+            showChevron={false}
+            onClick={handleDownloadPdf}
+          >
+            Download PDF
+          </Button>
+          <Button
+            variant="primary"
+            icon={<CheckCircle className="w-4 h-4" />}
+            onClick={handleMarkPresented}
+            disabled={status !== 'draft' && status !== 'revised'}
+          >
+            Mark as Presented
+          </Button>
+          <button
+            disabled
+            title="Coming Soon"
+            className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 rounded-lg cursor-not-allowed text-sm"
+          >
+            <Send className="w-4 h-4" />
+            Email to Grower
+          </button>
+        </div>
+      </Modal>
+
       <UnsavedChangesModal
         open={blocker.state === 'blocked'}
         onStay={() => blocker.reset?.()}
         onLeave={() => blocker.proceed?.()}
       />
+
+      {showSaveTemplateModal && (
+        <Modal onClose={() => setShowSaveTemplateModal(false)} title="Save as Template">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Template Name</label>
+              <input
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                placeholder="e.g., 2026 Soybean Program"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Description (optional)</label>
+              <textarea
+                value={templateDescription}
+                onChange={(e) => setTemplateDescription(e.target.value)}
+                placeholder="When to use this template..."
+                rows={2}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg"
+              />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowSaveTemplateModal(false)}
+                className="px-4 py-2 text-sm border rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveTemplate}
+                disabled={!templateName.trim()}
+                className="px-4 py-2 text-sm bg-crx-green text-white rounded-lg disabled:opacity-50"
+              >
+                Save Template
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showRolloverModal && (
+        <Modal onClose={() => setShowRolloverModal(false)} title="Roll Over to New Season">
+          <div className="space-y-4">
+            <p className="text-sm text-secondary">
+              Creates a new draft quote with the same products and program structure,
+              but with updated pricing from current product prices.
+              Need dates will be reset.
+            </p>
+            <div>
+              <label className="block text-sm font-medium mb-1">Target Season</label>
+              <input
+                type="number"
+                value={rolloverSeason}
+                onChange={(e) => setRolloverSeason(parseInt(e.target.value))}
+                className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg"
+              />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowRolloverModal(false)}
+                className="px-4 py-2 text-sm border rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRollover}
+                className="px-4 py-2 text-sm bg-crx-green text-white rounded-lg"
+              >
+                Roll Over
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

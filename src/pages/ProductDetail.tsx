@@ -438,12 +438,26 @@ export default function ProductDetail() {
               </div>
             </div>
 
-            {/* Notes */}
+            {/* Grower Description (existing notes field) */}
             <div className="border-t border-gray-100 pt-4 mt-4">
-              <label className="block text-sm font-medium text-secondary mb-1">Notes</label>
+              <label className="block text-sm font-medium text-secondary mb-1">Grower Description</label>
+              <p className="text-xs text-gray-400 mb-1">Shown to growers on quotes and PDFs. Describe what the product does, application tips, etc.</p>
               <textarea
                 value={product.notes || ''}
                 onChange={(e) => update('notes', e.target.value)}
+                disabled={!isAdmin}
+                rows={3}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"
+              />
+            </div>
+
+            {/* Internal Notes */}
+            <div className="border-t border-gray-100 pt-4 mt-4">
+              <label className="block text-sm font-medium text-secondary mb-1">Internal Notes</label>
+              <p className="text-xs text-gray-400 mb-1">Internal only — never shown to growers.</p>
+              <textarea
+                value={product.internal_notes || ''}
+                onChange={(e) => update('internal_notes', e.target.value)}
                 disabled={!isAdmin}
                 rows={3}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:opacity-50 disabled:bg-gray-50"

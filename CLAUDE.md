@@ -8,8 +8,8 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-03-16)
-- 56 pages, 83+ tables, ~139 RPCs, 187 migrations, 6 Edge Functions
-- 1,600 unit tests (103 files) + 90 E2E spec files, all passing
+- 56 pages, 88+ tables, ~143 RPCs, 196 migrations, 6 Edge Functions
+- 1,603 unit tests (104 files) + 90 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 
@@ -203,7 +203,7 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 |-----|----------|
 | `docs/reference/database-schema.md` | 83+ tables + RLS matrix |
 | `docs/reference/rpc-functions.md` | ~138 RPCs + triggers |
-| `docs/reference/migration-history.md` | 187 migration entries |
+| `docs/reference/migration-history.md` | 188 migration entries |
 | `docs/reference/pages-routes.md` | 56 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |

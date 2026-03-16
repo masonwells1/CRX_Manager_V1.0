@@ -257,6 +257,7 @@ export default function Dashboard() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<OperationalData>(defaultData);
+  const [expiringPlannedHoldsCount, setExpiringPlannedHoldsCount] = useState(0);
 
   const fetchDashboard = useCallback(async () => {
     setLoading(true);
@@ -313,6 +314,12 @@ export default function Dashboard() {
         periodDaysRemaining: Number(d.period_days_remaining) || 0,
         recentActivity: d.recent_activity || [],
       });
+      // Fetch expiring planned holds count
+      const { data: holdsData } = await supabase.rpc('get_expiring_planned_holds', { p_days_ahead: 7 });
+      if (holdsData) {
+        const parsed = typeof holdsData === 'string' ? JSON.parse(holdsData) : holdsData;
+        setExpiringPlannedHoldsCount(Array.isArray(parsed) ? parsed.length : 0);
+      }
     } catch (err) {
       console.error('Dashboard load error:', err);
       toast('error', 'Failed to load dashboard data. Please refresh.');
@@ -487,6 +494,17 @@ export default function Dashboard() {
       bg: 'bg-indigo-50', border: 'border-indigo-200',
       iconColor: 'text-indigo-600', textColor: 'text-indigo-800', subColor: 'text-indigo-600',
       path: '/compliance',
+      driverVisible: false,
+    },
+    {
+      key: 'expiring_planned_holds',
+      count: expiringPlannedHoldsCount,
+      label: 'Planned Holds Expiring',
+      sublabel: `${expiringPlannedHoldsCount} planned program hold(s) expiring within 7 days`,
+      icon: <Calendar className="w-5 h-5" />,
+      bg: 'bg-amber-50', border: 'border-amber-200',
+      iconColor: 'text-amber-600', textColor: 'text-amber-800', subColor: 'text-amber-600',
+      path: '/quotes?filter=planned',
       driverVisible: false,
     },
   ];

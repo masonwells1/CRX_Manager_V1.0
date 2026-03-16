@@ -481,6 +481,7 @@ export default function Deliveries() {
               quantity: it.quantity as number,
               unit_size: (it.unit_size as string) || '-',
               tote_number: (it.tote_number as string) || undefined,
+              notes: (it.notes as string) || undefined,
             }))
             .sort((a, b) => a.product_name.localeCompare(b.product_name)),
         });

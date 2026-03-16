@@ -4,6 +4,27 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Quote Builder V2 (Sprints 8-12: Notes Flow, Forecasting, Rollover, Quick Quote)
+
+- **Sprint 8: Notes Pipeline Flow** — Notes now flow through the full quote→order→delivery pipeline. `order_items.notes` column added for per-line product notes copied from quote_items. `orders.program_notes` column added for aggregated section header notes. Load sheet PDF shows notes column when present. Migration: `20260316700000_notes_pipeline_flow.sql`
+- **Sprint 9: Customer Detail Quotes Tab** — Enhanced with planned programs filter and `is_planned` badge for easy identification of crop programs vs one-off quotes
+- **Sprint 10: Inventory Forecasting** — New Inventory Forecasting tab on Inventory page showing planned demand vs supply with gap alerts. New `get_inventory_forecast()` RPC aggregates planned demand by product/month. Migration: `20260316800000_inventory_forecasting.sql`
+- **Sprint 11: Seasonal Program Rollover** — `rollover_quote_to_season()` RPC duplicates a quote with updated pricing for a new season. "Roll Over" button added to QuoteBuilder for quick season transitions. Migration: `20260316900000_seasonal_rollover.sql`
+- **Sprint 12: Quick Quote from Customer** — "New from Last Quote" button on Customer page creates a new quote pre-populated from the customer's most recent quote. `customer_id` URL param on QuoteBuilder auto-sets the customer on load
+
+---
+
+## 2026-03-16 — Quote Builder V2 (Sprint 1: Product Internal Notes)
+
+- **New `internal_notes` column** on `products` table — internal-only notes, never shown to growers
+- **Relabeled "Notes"** to **"Grower Description"** on ProductDetail page with helper text
+- **New "Internal Notes"** textarea on ProductDetail page with helper text ("Internal only — never shown to growers")
+- Existing `notes` data auto-copied to `internal_notes` during migration — zero breaking changes
+- 3 new unit tests for the internal notes field
+- Migration: `20260316100000_product_internal_notes.sql`
+
+---
+
 ## 2026-03-16 — New Order: Per-Line Margin Calculation + Editable Price Override
 
 - **Per-line margin display** on New Order page — each line item shows Total, Profit ($), and Margin (%) with color-coded thresholds (green ≥20%, amber 10-20%, red <10%)

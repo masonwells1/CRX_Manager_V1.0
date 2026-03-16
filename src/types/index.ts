@@ -51,6 +51,7 @@ export interface Product {
   rate_per_acre: number | null;
   rate_unit: string | null;
   notes: string | null;
+  internal_notes: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -158,6 +159,8 @@ export interface QuoteSection {
   section_name: string;
   sort_order: number;
   section_notes: string | null;
+  section_header_notes: string | null;
+  needed_by_date: string | null;
 }
 
 export interface QuoteItem {
@@ -183,6 +186,102 @@ export interface QuoteItem {
   calc_mode: string | null;
   price_unit: string | null;
   product?: Product;
+}
+
+export interface QuoteVersion {
+  id: string;
+  quote_id: string;
+  version_number: number;
+  sent_by: string;
+  sent_at: string;
+  sent_method: string;
+  snapshot_data: {
+    quote: {
+      quote_number: string;
+      customer_id: string;
+      tier: number;
+      status: string;
+      total_price: number;
+      total_cost: number;
+      total_profit: number;
+      total_margin_pct: number;
+      valid_days: number;
+      expires_at: string | null;
+      header_notes: string | null;
+      footer_notes: string | null;
+      is_planned: boolean;
+      commission_split: CommissionSplit | null;
+    };
+    sections: Array<{
+      section_name: string;
+      sort_order: number;
+      section_notes: string | null;
+      section_header_notes: string | null;
+      needed_by_date: string | null;
+      items: Array<{
+        product_id: string;
+        product_name: string;
+        sku: string | null;
+        sort_order: number;
+        notes: string | null;
+        price_per_unit: number;
+        current_cost: number;
+        suggested_rate: string | null;
+        actual_rate: number | null;
+        rate_unit: string | null;
+        oz_per_acre: number | null;
+        price_per_acre: number | null;
+        acres: number | null;
+        total_units_needed: number | null;
+        unit_size: string | null;
+        profit: number;
+        total_price: number;
+        net_margin: number;
+        calc_mode: string | null;
+        price_unit: string | null;
+      }>;
+    }>;
+  };
+  pdf_url: string | null;
+  notes: string | null;
+}
+
+export interface QuoteTemplate {
+  id: string;
+  template_name: string;
+  description: string | null;
+  sections: Array<{
+    section_name: string;
+    sort_order: number;
+    section_notes: string | null;
+    section_header_notes: string | null;
+    items: Array<{
+      product_id: string;
+      product_name: string;
+      sku: string | null;
+      sort_order: number;
+      notes: string | null;
+      suggested_rate: string | null;
+      actual_rate: number | null;
+      rate_unit: string | null;
+      calc_mode: string | null;
+    }>;
+  }>;
+  created_by: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface QuotePdfTemplate {
+  id: string;
+  template_name: string;
+  columns: string[];
+  is_default: boolean;
+  is_system: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export type OrderStatus = 'confirmed' | 'partially_fulfilled' | 'fulfilled' | 'cancelled' | 'voided';
@@ -245,6 +344,7 @@ export interface OrderItem {
   quantity_delivered: number;
   quantity_remaining: number;
   sort_order: number;
+  notes: string | null;
 }
 
 export interface Inventory {

@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { parseLocalDate } from '../lib/dateUtils';
 import { Plus, Upload, Copy, Download, FileText, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -23,9 +23,11 @@ const DELETABLE = ['draft', 'sent', 'revised'];
 
 export default function Quotes() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
+  const [plannedFilter, setPlannedFilter] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const { toast } = useToast();
   const { profile } = useAuth();
@@ -77,9 +79,13 @@ export default function Quotes() {
 
   useEffect(() => {
     fetchQuotes();
-  }, [fetchQuotes]);
+    // Support ?filter=planned from dashboard alert link
+    const params = new URLSearchParams(location.search);
+    if (params.get('filter') === 'planned') setPlannedFilter(true);
+  }, [fetchQuotes, location.search]);
 
   const filtered = quotes.filter((q) => {
+    if (plannedFilter && !q.is_planned) return false;
     if (statusFilter && q.status !== statusFilter) return false;
     return true;
   });
@@ -187,9 +193,16 @@ export default function Quotes() {
       header: 'Status',
       sortable: true,
       render: (row) => (
-        <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
-          {row.status.replace('_', ' ')}
-        </Badge>
+        <>
+          <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
+            {row.status.replace('_', ' ')}
+          </Badge>
+          {row.is_planned && (
+            <span className="ml-1 px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-800 rounded">
+              Planned
+            </span>
+          )}
+        </>
       ),
     },
     {
@@ -299,9 +312,15 @@ export default function Quotes() {
                   <option value="declined">Declined</option>
                   <option value="expired">Expired</option>
                 </select>
-                {statusFilter && (
+                <button
+                  onClick={() => setPlannedFilter(!plannedFilter)}
+                  className={`px-3 py-2 text-sm rounded-lg transition-colors ${plannedFilter ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'border border-gray-200 text-secondary hover:bg-gray-50'}`}
+                >
+                  Planned Programs
+                </button>
+                {(statusFilter || plannedFilter) && (
                   <button
-                    onClick={() => setStatusFilter('')}
+                    onClick={() => { setStatusFilter(''); setPlannedFilter(false); }}
                     className="text-xs text-crx-green hover:underline"
                   >
                     Clear

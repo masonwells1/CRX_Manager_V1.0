@@ -1,10 +1,10 @@
-# Database Schema Reference (83 Tables)
+# Database Schema Reference (88 Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
 - `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-4, credit_limit, finance_charge_rate, prepay_balance)
 - `customer_addresses` - Multiple addresses per customer (label, address, delivery_notes, is_default)
-- `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, product_form)
+- `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, product_form, notes [grower description], internal_notes [internal only])
 - `cost_history` - Cost change audit log (product_id, old/new costs and prices, change_note)
 - `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, Mapbox polygon geometry)
 - `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
@@ -15,8 +15,12 @@
 - `quote_sections` - Sections within a quote (section_name, sort_order)
 - `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals)
 - `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)
-- `orders` - Confirmed orders (order_number, status, totals, order_date, customer_po_number, is_planned, season). Note: total_paid/balance_due columns are DEPRECATED — AR is tracked via invoices.
-- `order_items` - Order line items (quantity_delivered, quantity_remaining)
+- `quote_pdf_templates` - Saved column presets for quote PDF generation (template_name, columns jsonb)
+- `quote_templates` - Reusable quote structures (template_name, description, created_by)
+- `quote_template_sections` - Sections within a quote template (section_name, sort_order)
+- `quote_template_items` - Items within a template section (product_id, pricing defaults)
+- `orders` - Confirmed orders (order_number, status, totals, order_date, customer_po_number, is_planned, season, program_notes). Note: total_paid/balance_due columns are DEPRECATED — AR is tracked via invoices.
+- `order_items` - Order line items (quantity_delivered, quantity_remaining, notes)
 - `payments` - Legacy payment records (DEPRECATED — use allocation_sets + invoice_line_allocations instead)
 - `commissions` - Per-order per-recipient (split_percentage, commission_amount numeric dollars, status CHECK: pending/paid/cancelled, paid_date)
 

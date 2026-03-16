@@ -25,6 +25,7 @@ interface DeliveryItemDraft {
   max_quantity: number;
   unit_size: string;
   tote_number: string;
+  notes: string | null;
 }
 
 export default function NewDelivery() {
@@ -158,6 +159,7 @@ export default function NewDelivery() {
         max_quantity: item.quantity_remaining,
         unit_size: item.unit_size || '',
         tote_number: '',
+        notes: item.notes || null,
       }));
     setDeliveryItems(drafts);
     setLoadingDetails(false);
@@ -325,6 +327,7 @@ export default function NewDelivery() {
       quantity: item.quantity,
       unit_size: item.unit_size || null,
       tote_number: item.tote_number || null,
+      notes: item.notes || null,
     }));
 
     const { error: itemError } = await supabase

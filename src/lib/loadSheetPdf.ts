@@ -13,6 +13,7 @@ export interface LoadSheetItem {
   quantity: number;
   unit_size: string;
   tote_number?: string | null;
+  notes?: string | null;
 }
 
 export interface LoadSheetStop {
@@ -149,14 +150,17 @@ export async function generateLoadSheetPdf(
 
     // Items table for this stop
     const hasTotes = stop.items.some((it) => it.tote_number);
-    const headRow = hasTotes
-      ? ['Product', 'Qty', 'Unit', 'Tote #']
-      : ['Product', 'Qty', 'Unit'];
-    const bodyRows = stop.items.map((it) =>
-      hasTotes
-        ? [it.product_name, String(it.quantity), it.unit_size, it.tote_number || '-']
-        : [it.product_name, String(it.quantity), it.unit_size]
-    );
+    const hasNotes = stop.items.some((it) => it.notes);
+    const headRow = [
+      'Product', 'Qty', 'Unit',
+      ...(hasTotes ? ['Tote #'] : []),
+      ...(hasNotes ? ['Notes'] : []),
+    ];
+    const bodyRows = stop.items.map((it) => [
+      it.product_name, String(it.quantity), it.unit_size,
+      ...(hasTotes ? [it.tote_number || '-'] : []),
+      ...(hasNotes ? [it.notes || '-'] : []),
+    ]);
 
     autoTable(doc, {
       startY: y,

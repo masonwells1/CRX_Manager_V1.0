@@ -1,5 +1,5 @@
 import { useEffect, useState , useCallback } from 'react';
-import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2, Download, FileText } from 'lucide-react';
+import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2, Download, FileText, TrendingUp } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EditableDataTable, { type EditableColumn } from '../components/ui/EditableDataTable';
@@ -52,6 +52,13 @@ export default function InventoryPage() {
   const [loading, setLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState('');
   const [locations, setLocations] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState<'inventory' | 'forecast'>('inventory');
+  const [forecastData, setForecastData] = useState<Array<{
+    product_id: string; product_name: string; sku: string | null;
+    needed_month: string; planned_demand: number; current_available: number;
+    prebooked: number; on_order: number; quote_count: number; customer_count: number;
+  }>>([]);
+  const [forecastLoading, setForecastLoading] = useState(false);
 
   // Existing modals
   const [receiveOpen, setReceiveOpen] = useState(false);
@@ -345,6 +352,22 @@ export default function InventoryPage() {
     fetchInventory();
     fetchHolds();
   }, [fetchInventory, fetchHolds]);
+
+  const fetchForecast = useCallback(async () => {
+    setForecastLoading(true);
+    const { data, error } = await supabase.rpc('get_inventory_forecast', { p_months_ahead: 6 });
+    if (error) {
+      console.error('Failed to load forecast:', error.message);
+      toast('error', 'Failed to load forecast data');
+    } else if (data) {
+      setForecastData(data as typeof forecastData);
+    }
+    setForecastLoading(false);
+  }, [toast]);
+
+  useEffect(() => {
+    if (activeTab === 'forecast' && forecastData.length === 0) fetchForecast();
+  }, [activeTab, forecastData.length, fetchForecast]);
 
   const fetchProducts = async () => {
     const { data, error } = await supabase
@@ -947,6 +970,25 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-4">
+      {/* Tab Selector */}
+      <div className="flex gap-1 border-b border-gray-200">
+        <button
+          onClick={() => setActiveTab('inventory')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'inventory' ? 'border-crx-green text-crx-green' : 'border-transparent text-secondary hover:text-nav-dark'}`}
+        >
+          <Package className="w-4 h-4 inline mr-1.5" />
+          Inventory
+        </button>
+        <button
+          onClick={() => setActiveTab('forecast')}
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'forecast' ? 'border-crx-green text-crx-green' : 'border-transparent text-secondary hover:text-nav-dark'}`}
+        >
+          <TrendingUp className="w-4 h-4 inline mr-1.5" />
+          Forecast
+        </button>
+      </div>
+
+      {activeTab === 'inventory' && (<>
       <div className="flex justify-end gap-2 flex-wrap">
         <Button variant="secondary" size="sm" icon={<Download className="w-4 h-4" />} onClick={handleExportCSV}>
           Export CSV
@@ -1185,6 +1227,80 @@ export default function InventoryPage() {
               </table>
             </div>
           )}
+        </Card>
+      )}
+      </>)}
+
+      {/* Forecast Tab */}
+      {activeTab === 'forecast' && (
+        <Card>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-nav-dark">Planned Demand Forecast</h3>
+              <Button variant="secondary" size="sm" onClick={fetchForecast} loading={forecastLoading}>
+                Refresh
+              </Button>
+            </div>
+            {forecastLoading ? (
+              <div className="space-y-3">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="h-10 bg-gray-100 rounded-lg animate-pulse" />
+                ))}
+              </div>
+            ) : forecastData.length === 0 ? (
+              <p className="text-sm text-secondary py-8 text-center">
+                No planned demand data. Create planned programs (quotes with inventory holds) to see forecasts here.
+              </p>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="px-4 py-3 text-left font-medium text-secondary">Product</th>
+                        <th className="px-4 py-3 text-left font-medium text-secondary">Needed</th>
+                        <th className="px-4 py-3 text-right font-medium text-secondary">Planned Demand</th>
+                        <th className="px-4 py-3 text-right font-medium text-secondary">Available</th>
+                        <th className="px-4 py-3 text-right font-medium text-secondary">On Order</th>
+                        <th className="px-4 py-3 text-right font-medium text-secondary">Gap</th>
+                        <th className="px-4 py-3 text-right font-medium text-secondary">Quotes</th>
+                        <th className="px-4 py-3 text-right font-medium text-secondary">Customers</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {forecastData.map((row, idx) => {
+                        const gap = row.planned_demand - (row.current_available + row.on_order - row.prebooked);
+                        return (
+                          <tr key={idx} className="border-b border-gray-50 hover:bg-gray-50">
+                            <td className="px-4 py-3 font-medium text-nav-dark">{row.product_name}</td>
+                            <td className="px-4 py-3 text-secondary">
+                              {new Date(row.needed_month + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono">{row.planned_demand.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-mono">{row.current_available.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-mono text-teal-600">{row.on_order.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-mono">
+                              <span className={gap > 0 ? 'text-red-600 font-bold' : 'text-crx-green'}>
+                                {gap > 0 ? `-${gap.toLocaleString()}` : 'OK'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right">{row.quote_count}</td>
+                            <td className="px-4 py-3 text-right">{row.customer_count}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {forecastData.some((f) => f.planned_demand > (f.current_available + f.on_order - f.prebooked)) && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                    <AlertTriangle className="w-4 h-4 inline mr-2" />
+                    Some products have demand exceeding available supply. Consider placing purchase orders.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </Card>
       )}
 

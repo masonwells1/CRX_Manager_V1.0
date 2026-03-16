@@ -21,18 +21,24 @@ const LIGHT_BG: [number, number, number] = [245, 250, 247]; // very light green 
 interface PdfQuoteSection {
   section_name: string;
   section_notes?: string;
+  section_header_notes?: string;
   items: PdfQuoteItem[];
 }
 
 interface PdfQuoteItem {
   product_name: string;
+  category?: string;
+  notes?: string;
+  suggested_rate?: string;
   actual_rate: number;
   rate_unit: string;
   acres: number;
   total_units_needed: number;
   inventory_unit?: string;
+  unit_size?: string;
   price_unit?: string;
   price_per_unit: number;
+  price_per_acre?: number;
   total_price: number;
 }
 
@@ -61,7 +67,26 @@ interface PdfQuoteData {
 const fmt = (n: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
-export async function generateQuotePdf(data: PdfQuoteData) {
+// Column definitions for the dynamic PDF column system
+const PDF_COLUMN_DEFS: Record<string, { label: string; getValue: (item: PdfQuoteItem) => string; align?: 'right' }> = {
+  product: { label: 'Product', getValue: (item) => item.product_name },
+  category: { label: 'Category', getValue: (item) => item.category || '' },
+  notes: { label: 'Notes', getValue: (item) => item.notes || '' },
+  sug_rate: { label: 'Sug. Rate', getValue: (item) => item.suggested_rate || '-' },
+  actual_rate: { label: 'Rate', getValue: (item) => `${item.actual_rate} ${item.rate_unit}` },
+  rate_unit: { label: 'Unit', getValue: (item) => item.rate_unit || '' },
+  acres: { label: 'Acres', getValue: (item) => item.acres?.toLocaleString() || '0' },
+  qty: { label: 'Qty', getValue: (item) => `${item.total_units_needed?.toLocaleString() || '0'}${item.inventory_unit ? ' ' + item.inventory_unit : ''}` },
+  unit_size: { label: 'Container', getValue: (item) => item.unit_size || '' },
+  price_unit: { label: 'Price/Unit', getValue: (item) => `${fmt(item.price_per_unit)}${item.price_unit || item.inventory_unit ? '/' + (item.price_unit || item.inventory_unit) : ''}`, align: 'right' },
+  price_per_acre: { label: '$/Acre', getValue: (item) => item.price_per_acre ? fmt(item.price_per_acre) : '-', align: 'right' },
+  total_price: { label: 'Total', getValue: (item) => fmt(item.total_price), align: 'right' },
+};
+
+// Default columns when none specified (matches legacy behavior)
+const DEFAULT_PDF_COLUMNS = ['product', 'actual_rate', 'acres', 'qty', 'price_unit', 'total_price'];
+
+export async function generateQuotePdf(data: PdfQuoteData, columns?: string[]) {
   const { default: jsPDF } = await import('jspdf');
   const { default: autoTable } = await import('jspdf-autotable');
 
@@ -159,19 +184,39 @@ export async function generateQuotePdf(data: PdfQuoteData) {
     doc.text(section.section_name.toUpperCase(), margin + 8, y + 15);
     y += 26;
 
-    const rows = section.items.map((item) => [
-      item.product_name,
-      `${item.actual_rate} ${item.rate_unit}`,
-      item.acres.toLocaleString(),
-      `${item.total_units_needed.toLocaleString()}${item.inventory_unit ? ' ' + item.inventory_unit : ''}`,
-      `${fmt(item.price_per_unit)}${item.price_unit || item.inventory_unit ? '/' + (item.price_unit || item.inventory_unit) : ''}`,
-      fmt(item.total_price),
-    ]);
+    // Section header notes (above items table)
+    if (section.section_header_notes) {
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'italic');
+      doc.setTextColor(...GRAY);
+      const headerNoteLines = doc.splitTextToSize(section.section_header_notes, pageW - margin * 2 - 8);
+      doc.text(headerNoteLines, margin + 4, y + 4);
+      y += headerNoteLines.length * 4 + 8;
+    }
+
+    const activeCols = (columns || DEFAULT_PDF_COLUMNS).filter((c) => PDF_COLUMN_DEFS[c]);
+    const headerRow = activeCols.map((c) => PDF_COLUMN_DEFS[c].label);
+    const rows = section.items.map((item) =>
+      activeCols.map((c) => PDF_COLUMN_DEFS[c].getValue(item))
+    );
+
+    // Build column styles: right-align columns that need it, last col bold
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const colStyles: Record<number, any> = { 0: { cellWidth: 'auto' } };
+    activeCols.forEach((c, i) => {
+      if (PDF_COLUMN_DEFS[c].align === 'right') {
+        colStyles[i] = { ...(colStyles[i] || {}), halign: 'right' };
+      }
+      // Bold the last column (usually total)
+      if (i === activeCols.length - 1 && PDF_COLUMN_DEFS[c].align === 'right') {
+        colStyles[i] = { ...(colStyles[i] || {}), fontStyle: 'bold' };
+      }
+    });
 
     autoTable(doc, {
       startY: y,
       margin: { left: margin, right: margin },
-      head: [['Product', 'Rate', 'Acres', 'Qty', 'Price/Unit', 'Total']],
+      head: [headerRow],
       body: rows,
       theme: 'plain',
       styles: { fontSize: 9, cellPadding: 5, textColor: CHARCOAL },
@@ -181,11 +226,7 @@ export async function generateQuotePdf(data: PdfQuoteData) {
         fontStyle: 'bold',
         fontSize: 8,
       },
-      columnStyles: {
-        0: { cellWidth: 'auto' },
-        4: { halign: 'right' },
-        5: { halign: 'right', fontStyle: 'bold' },
-      },
+      columnStyles: colStyles,
       alternateRowStyles: { fillColor: [252, 252, 252] },
     });
 
@@ -256,8 +297,8 @@ export async function generateQuotePdf(data: PdfQuoteData) {
 }
 
 /** Convenience: generate + immediately download */
-export async function downloadQuotePdf(data: PdfQuoteData) {
-  const doc = await generateQuotePdf(data);
+export async function downloadQuotePdf(data: PdfQuoteData, columns?: string[]) {
+  const doc = await generateQuotePdf(data, columns);
   doc.save(`${data.quote_number}.pdf`);
 }
 

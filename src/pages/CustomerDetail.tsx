@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus } from 'lucide-react';
+import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -83,6 +83,7 @@ export default function CustomerDetail() {
   const [showSummaryDialog, setShowSummaryDialog] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
+  const [quotePlannedFilter, setQuotePlannedFilter] = useState(false);
 
   // Financials tab state
   interface AgingRow { customer_id: string; farm_name: string; current_amount: number; days_30: number; days_60: number; days_90: number; over_90: number; total_outstanding: number }
@@ -808,16 +809,44 @@ export default function CustomerDetail() {
         </>
       )}
 
-      {tab === 'quotes' && !isNew && (
+      {tab === 'quotes' && !isNew && (() => {
+        const filteredQuotes = quotePlannedFilter ? quotes.filter((q) => q.is_planned) : quotes;
+        return (
         <Card padding={false}>
           <div className="p-5">
             <CardHeader
               title="Customer"
               accent="Quotes"
               action={
-                <Button variant="ghost" size="sm" onClick={() => navigate('/quotes/new')}>
-                  New Quote
-                </Button>
+                <div className="flex gap-2 items-center">
+                  <button
+                    onClick={() => setQuotePlannedFilter(!quotePlannedFilter)}
+                    className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${quotePlannedFilter ? 'bg-amber-100 text-amber-800 border border-amber-200' : 'border border-gray-200 text-secondary hover:bg-gray-50'}`}
+                  >
+                    Planned Programs
+                  </button>
+                  {quotes.length > 0 && (
+                    <button
+                      onClick={async () => {
+                        const lastQuote = quotes[0];
+                        const { data, error } = await supabase.rpc('duplicate_quote', {
+                          p_source_quote_id: lastQuote.id,
+                          p_performed_by: profile?.id,
+                        });
+                        if (error) { toast('error', 'Failed to duplicate quote'); return; }
+                        const result = data as { quote_id: string };
+                        navigate(`/quotes/${result.quote_id}`);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-crx-green text-crx-green rounded-lg hover:bg-crx-green-tint"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      New from Last
+                    </button>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => navigate(`/quotes/new?customer_id=${id}`)}>
+                    New Quote
+                  </Button>
+                </div>
               }
             />
           </div>
@@ -827,9 +856,9 @@ export default function CustomerDetail() {
                 <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
               ))}
             </div>
-          ) : quotes.length === 0 ? (
+          ) : filteredQuotes.length === 0 ? (
             <div className="px-5 pb-5">
-              <p className="text-sm text-secondary">No quotes for this customer yet.</p>
+              <p className="text-sm text-secondary">{quotePlannedFilter ? 'No planned programs for this customer.' : 'No quotes for this customer yet.'}</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -845,7 +874,7 @@ export default function CustomerDetail() {
                   </tr>
                 </thead>
                 <tbody>
-                  {quotes.map((q) => (
+                  {filteredQuotes.map((q) => (
                     <tr
                       key={q.id}
                       onClick={() => navigate(`/quotes/${q.id}`)}
@@ -853,9 +882,16 @@ export default function CustomerDetail() {
                     >
                       <td className="px-5 py-3 font-medium text-nav-dark">{q.quote_number}</td>
                       <td className="px-4 py-3">
-                        <Badge variant={statusToBadgeVariant[q.status] || 'default'}>
-                          {q.status}
-                        </Badge>
+                        <>
+                          <Badge variant={statusToBadgeVariant[q.status] || 'default'}>
+                            {q.status}
+                          </Badge>
+                          {q.is_planned && (
+                            <span className="ml-1 px-1.5 py-0.5 text-[10px] font-medium bg-amber-100 text-amber-800 rounded">
+                              Planned
+                            </span>
+                          )}
+                        </>
                       </td>
                       <td className="px-4 py-3">T{q.tier}</td>
                       <td className="px-4 py-3 font-mono">{fmt(q.total_price)}</td>
@@ -870,7 +906,8 @@ export default function CustomerDetail() {
             </div>
           )}
         </Card>
-      )}
+        );
+      })()}
 
       {tab === 'orders' && !isNew && (
         <Card padding={false}>

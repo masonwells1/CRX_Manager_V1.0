@@ -1,4 +1,4 @@
-# RPC Functions Reference (~139 unique functions)
+# RPC Functions Reference (~143 unique functions)
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -14,10 +14,12 @@
 - `save_field()` — upsert field record
 - `delete_purchase_order()` — soft-delete PO (must be draft)
 - `duplicate_quote()` — deep-clone quote + items with new number
+- `create_quote_version(p_quote_id uuid, p_performed_by uuid)` — snapshots full quote state (sections + items) for version history. SECURITY DEFINER, search_path = public, pg_temp
+- `restore_quote_version(p_version_id uuid, p_performed_by uuid)` — restores quote from a version snapshot as revised draft. SECURITY DEFINER, search_path = public, pg_temp
 - `admin_update_profile()` — admin-only profile updates (name, role, email, active flag)
 
 ## Order & Delivery
-- `convert_quote_to_order()` — also releases inventory holds linked to the quote
+- `convert_quote_to_order()` — also releases inventory holds linked to the quote. Copies `qi.notes` to `order_items.notes` and aggregates section_header_notes into `orders.program_notes`
 - `create_direct_order()` — create order without a quote; warns (not blocks) on low inventory using net position
 - `create_order_from_blend_ticket()` — create order from linked blend ticket
 - `cancel_order()` — cancels order, releases prebooked inventory
@@ -153,6 +155,12 @@
 - `get_team_board_deliveries()` — SECURITY DEFINER, role-aware. Returns `{ today: [...], tomorrow: [...], unassigned_count, today_total }`. Drivers see only their assigned deliveries; admin/sales_rep see all. Sorted by scheduled_time, then priority (urgent->low).
 - `get_yesterday_delivery_recap()` — SECURITY DEFINER, role-aware. Returns `{ completed: [...], issues: [...], summary: { total_completed, total_with_issues, total_cancelled } }`. Same role filtering as above.
 - `get_notes_for_entity(p_entity_type text, p_entity_id uuid)` — SECURITY DEFINER. Returns all non-deleted team_notes linked to a specific entity, ordered by is_pinned DESC, created_at DESC.
+
+## Inventory Forecasting
+- `get_inventory_forecast(p_months_ahead integer DEFAULT 6)` → Returns jsonb array of planned demand vs supply by product and month. SECURITY DEFINER, search_path = public, pg_temp
+
+## Seasonal Rollover
+- `rollover_quote_to_season(p_quote_id uuid, p_new_season integer, p_performed_by uuid, p_idempotency_key text DEFAULT NULL)` → Returns jsonb with new quote_id, quote_number, season. Creates duplicate quote with updated pricing for the new season. SECURITY DEFINER, search_path = public, pg_temp
 
 ## Automation
 - `auto_expire_quotes()` — cron-callable: expires quotes past their expiration date, releases inventory holds
