@@ -1,4 +1,4 @@
-# Migration History (180 migrations)
+# Migration History (181 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -184,3 +184,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 178 | 20260332000000 | Fix void_delivery/batch_cancel_deliveries/cancel_order — void_delivery must restore prebooked, batch_cancel_deliveries same class of bugs, cancel_order logs negative quantity fix |
 | 179 | 20260332100000 | Drop deprecated order columns — removes orders.total_paid and orders.balance_due (deprecated since 20260311200000; AR now on invoices.balance_cents) |
 | 180 | 20260332200000 | **Fix idempotency column refs (Round 2)** — 10 RPCs had wrong idempotency_keys column names re-introduced by Mar 31 migrations (which overwrote the 20260315004110 fix). Fixes: `key`→`idempotency_key`, `result_id`→`result`, `entity_type`/`entity_id`→`operation`/`result` in reopen_accounting_period, reverse_write_off, void_delivery, void_commission_payment, revert_quote_status, restore_cancelled_order, restore_cancelled_delivery, unapply_credit_memo, reverse_blend_ticket_approval, save_quote |
+| 181 | 20260316300000 | **Wire confirm_delivery idempotency logic** — The consolidation migration (20260331600000) added p_idempotency_key parameter but never wired up check_idempotency/save_idempotency calls inside the function body. Frontend was already passing the key (DeliveryDetail.tsx:550) but server was ignoring it. Drivers on mobile could create duplicate activity_feed + notification entries. |
