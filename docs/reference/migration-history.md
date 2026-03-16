@@ -1,4 +1,4 @@
-# Migration History (187 migrations)
+# Migration History (196 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 

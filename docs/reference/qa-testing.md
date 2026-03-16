@@ -116,6 +116,7 @@ Cross-entity data integrity tests via `src/lib/reconciliation.ts`:
 2. **Never write "page loads and shows heading" tests** — These add zero value. If a page doesn't load, the detailed spec will catch it.
 3. **Check for existing specs before creating new ones** — Run `ls tests/e2e/*feature*` first. If a spec already covers the feature, extend it instead of creating a new file.
 4. **Mega-workflow covers the happy path** — `mega-workflow.spec.ts` covers the full quote→order→deliver→invoice→pay→return cycle. Don't duplicate these steps in other specs.
+5. **Quote Builder V2 E2E** — `quote-builder-v2.spec.ts` covers all 12 V2 sprints (versioning, templates, notes pipeline, forecasting, rollover, quick quote). Uses `safeRpc()`/`safeRest()` wrappers for migration resilience. 20 serial steps with full cleanup.
 
 ### DataTable Conditional Rendering (common failure cause)
 

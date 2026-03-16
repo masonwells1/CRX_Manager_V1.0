@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Quote Builder V2 E2E Test Suite
+
+- **New E2E spec** `tests/e2e/quote-builder-v2.spec.ts` — 20 serial steps covering all 12 V2 sprints
+- Tests: quote creation, versioning, section header notes, planned programs, PDF templates, quote templates, notes pipeline flow, inventory forecasting, seasonal rollover, "New from Last Quote" quick create
+- Uses `safeRpc()`/`safeRest()` wrappers for resilience against unapplied V2 migrations
+- Full cleanup in Step 20 — deletes all created quotes, orders, and templates
+- All 20/20 tests passing, 2.5 min runtime
+
+---
+
 ## 2026-03-16 — Quote Builder V2 (Sprints 8-12: Notes Flow, Forecasting, Rollover, Quick Quote)
 
 - **Sprint 8: Notes Pipeline Flow** — Notes now flow through the full quote→order→delivery pipeline. `order_items.notes` column added for per-line product notes copied from quote_items. `orders.program_notes` column added for aggregated section header notes. Load sheet PDF shows notes column when present. Migration: `20260316700000_notes_pipeline_flow.sql`
