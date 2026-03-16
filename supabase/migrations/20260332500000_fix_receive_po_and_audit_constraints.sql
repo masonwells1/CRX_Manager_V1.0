@@ -52,6 +52,8 @@ DECLARE
   v_lot_number text;
   v_notes text;
   v_storage_location text;
+  v_total_ordered numeric;
+  v_total_received numeric;
 BEGIN
   -- Auth check
   v_actor := COALESCE(p_performed_by, auth.uid());
@@ -143,10 +145,22 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- Update PO statuses
+  -- FIX: Replace non-existent update_po_status() with inline PO status update
   FOREACH v_unique_po_id IN ARRAY (SELECT ARRAY(SELECT DISTINCT unnest(v_affected_po_ids)))
   LOOP
-    PERFORM update_po_status(v_unique_po_id);
+    SELECT COALESCE(SUM(quantity_ordered), 0),
+           COALESCE(SUM(quantity_received), 0)
+      INTO v_total_ordered, v_total_received
+      FROM purchase_order_items
+     WHERE purchase_order_id = v_unique_po_id;
+
+    IF v_total_received >= v_total_ordered THEN
+      UPDATE purchase_orders SET status = 'fully_received', updated_at = now()
+      WHERE id = v_unique_po_id AND status != 'fully_received';
+    ELSIF v_total_received > 0 THEN
+      UPDATE purchase_orders SET status = 'partially_received', updated_at = now()
+      WHERE id = v_unique_po_id AND status NOT IN ('partially_received', 'fully_received');
+    END IF;
   END LOOP;
 
   v_result := jsonb_build_object(
