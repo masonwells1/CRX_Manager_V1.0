@@ -150,6 +150,8 @@ export interface Quote {
   created_at: string;
   updated_at: string;
   sent_at: string | null;
+  pdf_template_id: string | null;
+  pdf_columns_override: Record<string, unknown> | null;
   customer?: Customer;
 }
 
@@ -305,9 +307,12 @@ export interface Order {
   customer_po_number: string | null;
   is_planned: boolean;
   notes: string | null;
+  program_notes: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  balance_due: number;
+  total_paid: number;
   customer?: Customer;
 }
 
@@ -2081,6 +2086,15 @@ export interface EmailLog {
   error_message: string | null;
   idempotency_key: string | null;
   created_by: string | null;
+  created_at: string;
+}
+
+export interface ArReminderTracking {
+  id: string;
+  customer_id: string;
+  reminder_level: number;
+  sent_date: string;
+  email_log_id: string | null;
   created_at: string;
 }
 

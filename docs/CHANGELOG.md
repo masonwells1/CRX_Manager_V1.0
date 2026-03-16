@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Forensic Audit & Idempotency Fix Round 3
+
+- **Forensic audit** — 6-agent parallel audit of entire codebase: RPC column names, migration ordering, frontend-DB alignment, TypeScript types, table headers, RPC parameters
+- **CRITICAL FIX: Idempotency column references (round 3)** — 58 broken references across 16 migration files. Migrations created after the round 1 fix re-introduced `key` (should be `idempotency_key`), `entity_type`/`entity_id` (should be `operation`/`result`), and `result_id` (should be `result`). New migration `20260332700000` fixes all with safety-net scan + self-testing verification block.
+- **FIX: Quotes.tsx CSV/PDF export** — `customer_name` key changed to `customer` to match Supabase join shape
+- **FIX: SalesReports.tsx PDF header** — "Price" changed to "Unit Price" to match CSV and DataTable headers
+- **FIX: TypeScript type drift** — Added `program_notes`, `balance_due`, `total_paid` to Order interface; `pdf_template_id`, `pdf_columns_override` to Quote interface; new `ArReminderTracking` interface
+- **Prevention: 3-layer defense** — Pre-commit hook validates SQL for wrong idempotency patterns, full audit script (`scripts/validate-sql-migrations.sh`), Claude Code PreToolUse hook blocks bad patterns at write-time
+- Migration: `20260332700000_fix_idempotency_column_refs_round3.sql`
+
+---
+
 ## 2026-03-16 — Quote Builder V2 E2E Test Suite
 
 - **New E2E spec** `tests/e2e/quote-builder-v2.spec.ts` — 20 serial steps covering all 12 V2 sprints

@@ -2,6 +2,8 @@
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
+> **Audit (2026-03-16):** Round 3 idempotency fix applied via migration 20260332700000. All public functions verified to use correct `idempotency_keys` columns (`idempotency_key`, `operation`, `result`). Pre-commit hook now blocks wrong patterns.
+
 ---
 
 ## Atomic Save/Delete
@@ -17,6 +19,8 @@
 - `create_quote_version(p_quote_id uuid, p_performed_by uuid)` — snapshots full quote state (sections + items) for version history. SECURITY DEFINER, search_path = public, pg_temp
 - `restore_quote_version(p_version_id uuid, p_performed_by uuid)` — restores quote from a version snapshot as revised draft. SECURITY DEFINER, search_path = public, pg_temp
 - `admin_update_profile()` — admin-only profile updates (name, role, email, active flag)
+- `save_quote_template()` — Saves quote template with sections and items
+- `create_quote_from_template()` — Creates a new quote from a saved template
 
 ## Order & Delivery
 - `convert_quote_to_order()` — also releases inventory holds linked to the quote. Copies `qi.notes` to `order_items.notes` and aggregates section_header_notes into `orders.program_notes`
@@ -53,6 +57,7 @@
 - `manual_inventory_add()` — add inventory manually (does not override product unit cost)
 - `receive_po_items()` — per-item condition/lot/notes/storage, creates receiving_records
 - `release_inventory_hold()` — release a specific inventory hold
+- `create_planned_holds()` — Creates inventory holds for planned quote sections
 - `complete_cycle_count()` — finalize cycle count, create adjustment transactions
 - `get_receiving_log()` — paginated, filterable receiving history
 - `get_receiving_summary()` — dashboard stats (expected_today, pending_receipt, received_this_week, items_ytd, damaged_this_week)

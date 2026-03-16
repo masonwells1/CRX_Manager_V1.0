@@ -8,7 +8,7 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-03-16)
-- 56 pages, 88+ tables, ~143 RPCs, 196 migrations, 6 Edge Functions
+- 56 pages, 88+ tables, ~143 RPCs, 197 migrations, 6 Edge Functions
 - 1,603 unit tests (104 files) + 82 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
@@ -71,6 +71,7 @@ These rules exist because **migration drift caused 40+ bugs** in March 2026.
 - NEVER `DROP FUNCTION` without verifying the replacement exists
 - Every `SECURITY DEFINER` function MUST have `SET search_path = public, pg_temp`
 - Every RPC that mutates data MUST accept `p_idempotency_key text DEFAULT NULL`
+- NEVER reference `idempotency_keys` columns as `key`, `entity_type`, `entity_id`, or `result_id` — correct columns are `idempotency_key`, `operation`, `result`
 
 ### After Writing Migrations
 - Verify: `SELECT proname, count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace GROUP BY proname HAVING count(*) > 1;` — should return ZERO rows
@@ -265,6 +266,7 @@ These rules exist because code drift caused 40+ bugs. Follow them to keep the co
 - **Column names** — ALWAYS read the actual table schema before referencing columns in RPCs. Never assume column names from memory.
 - **RPC signatures** — ALWAYS check for existing overloads before CREATE OR REPLACE. Run: `SELECT proname, pg_get_function_identity_arguments(oid) FROM pg_proc WHERE proname = 'func_name';`
 - **Type definitions** — When adding new DB columns, ALWAYS update `src/types/index.ts` to match
+- **idempotency_keys columns** — The table uses `idempotency_key` (NOT `key`), `operation` (NOT `entity_type`), `result` (NOT `result_id` or `entity_id`). Pre-commit hook validates this.
 
 ### Pattern Consistency Rules
 - **New pages** MUST follow the existing pattern: lazy import → Route → nav link → page component with standard layout
@@ -275,8 +277,13 @@ These rules exist because code drift caused 40+ bugs. Follow them to keep the co
 - **Activity logging** — call `logActivity()` for user-visible actions
 - **Error handling** — use toast notifications, never `window.alert()` or `window.confirm()` (use `ConfirmModal`)
 
+### SQL Validation Scripts
+- **Pre-commit (automatic):** `scripts/validate-sql.sh` — validates staged .sql files for idempotency column bugs, missing search_path, etc.
+- **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
+
 ### Before Every Commit
 1. `npm run lint` — 0 errors
 2. `npm run build` — clean build
 3. `npm run test` — all tests pass
 4. Doc counts match reality (see Documentation Maintenance above)
+5. SQL migration validation passes (automatic via pre-commit hook — validates idempotency column names)

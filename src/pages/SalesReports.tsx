@@ -283,7 +283,7 @@ export default function SalesReports() {
         { key: 'product_name', header: 'Product' },
         { key: 'quantity', header: 'Qty', align: 'right' as const, format: (v: unknown) => fmtQty(Number(v) || 0) },
         { key: 'unit', header: 'Unit' },
-        { key: 'unit_price', header: 'Price', align: 'right' as const, format: (v: unknown) => fmtCurrency(Number(v) || 0) },
+        { key: 'unit_price', header: 'Unit Price', align: 'right' as const, format: (v: unknown) => fmtCurrency(Number(v) || 0) },
         { key: 'total_price', header: 'Total', align: 'right' as const, format: (v: unknown) => fmtCurrency(Number(v) || 0) },
         ...(!customerView ? [
           { key: 'profit', header: 'Profit', align: 'right' as const, format: (v: unknown) => fmtCurrency(Number(v) || 0) },

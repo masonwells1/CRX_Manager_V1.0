@@ -353,3 +353,24 @@ Workflow tests that create deliveries must account for available inventory:
 - Check inventory baselines before scheduling quantities
 - Use smaller delivery quantities (e.g., 1-2 units) to avoid exceeding available stock
 - The `complete_delivery` RPC enforces positive inventory — it will fail if physical stock goes negative
+
+---
+
+## SQL Migration Validation
+
+### Pre-commit (automatic)
+The pre-commit hook runs `scripts/validate-sql.sh` on all staged SQL files. It blocks commits containing:
+- Wrong `idempotency_keys` column references (`key` instead of `idempotency_key`, etc.)
+- Missing `SET search_path` on `SECURITY DEFINER` functions
+- Known-bad patterns from previous audit findings
+
+### Full Audit (manual)
+Run `bash scripts/validate-sql-migrations.sh` to scan ALL migration files. Use `--idempotency-only` for focused idempotency checks.
+
+### Known Dead RPCs
+These RPCs are defined in migrations but have NO frontend callers (test stubs only in `rpcContracts.test.ts`):
+- `restore_cancelled_delivery`
+- `restore_cancelled_order`
+- `reverse_blend_ticket_approval`
+- `revert_quote_status`
+- `unapply_credit_memo`

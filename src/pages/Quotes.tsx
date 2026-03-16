@@ -109,7 +109,7 @@ export default function Quotes() {
   const handleExportCSV = () => {
     exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
       { key: 'quote_number', header: 'Quote #' },
-      { key: 'customer_name', header: 'Customer', format: (v) => {
+      { key: 'customer', header: 'Customer', format: (v) => {
         const c = v as { farm_name?: string } | undefined;
         return c?.farm_name || '-';
       }},
@@ -127,7 +127,7 @@ export default function Quotes() {
     try {
       const pdfCols: ReportPdfColumn[] = [
         { header: 'Quote #', key: 'quote_number' },
-        { header: 'Customer', key: 'customer_name', format: (v) => {
+        { header: 'Customer', key: 'customer', format: (v) => {
           const c = v as { farm_name?: string } | undefined;
           return c?.farm_name || '-';
         }},
