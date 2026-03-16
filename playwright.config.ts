@@ -23,6 +23,8 @@ if (existsSync(envPath)) {
 
 export default defineConfig({
   testDir: './tests/e2e',
+  globalSetup: './tests/e2e/fixtures/setup-fixtures.ts',
+  globalTeardown: './tests/e2e/fixtures/teardown-fixtures.ts',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

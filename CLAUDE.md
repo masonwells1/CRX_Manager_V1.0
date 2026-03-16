@@ -8,8 +8,8 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-03-15)
-- 56 pages, 85+ tables, ~163 RPCs, 172 migrations, 6 Edge Functions
-- 1,429 unit tests (92 files) + 75 E2E spec files, all passing
+- 56 pages, 83+ tables, ~138 RPCs, 179 migrations, 6 Edge Functions
+- 1,510 unit tests (91 files) + 90 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 
@@ -174,15 +174,26 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 - Use `page.once('dialog')` in serial suites (not `page.on`)
 - Use `waitForLoadState('networkidle')` over `waitForTimeout()`
 
+### E2E Test Data Protocol (MANDATORY)
+- **ALL test-created entities MUST use `[E2E]` prefix** in their name — no exceptions
+- **Reuse shared fixtures** from `tests/e2e/fixtures/e2e-constants.ts`:
+  - Customers: `[E2E] Farm Alpha` (tier 1), `[E2E] Farm Beta` (tier 3)
+  - Products: `[E2E] Herbicide Alpha`, `[E2E] Adjuvant Beta`, `[E2E] Fertilizer Gamma`
+  - Vendor: `[E2E] Test Vendor`
+- **If a test needs unique entities** (e.g., concurrency), use `${E2E_PREFIX} Desc-${runId()}`
+- **NEVER create test entities without the `[E2E]` prefix** — they won't get cleaned up
+- `globalSetup` creates shared fixtures before the suite, `globalTeardown` deletes ALL `[E2E]` data after
+- Import from `tests/e2e/fixtures/e2e-constants.ts` — never hardcode test entity names
+
 ---
 
 ## Reference Docs (read when needed)
 
 | Doc | Contents |
 |-----|----------|
-| `docs/reference/database-schema.md` | 85+ tables + RLS matrix |
-| `docs/reference/rpc-functions.md` | ~160 RPCs + triggers |
-| `docs/reference/migration-history.md` | 169 migration entries |
+| `docs/reference/database-schema.md` | 83+ tables + RLS matrix |
+| `docs/reference/rpc-functions.md` | ~138 RPCs + triggers |
+| `docs/reference/migration-history.md` | 179 migration entries |
 | `docs/reference/pages-routes.md` | 56 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
@@ -195,3 +206,67 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 - `INVENTORY_RULES.md` — Inventory calculations and transaction rules
 - `RLS_SECURITY_GUIDE.md` — Row Level Security patterns
 - `UI_PATTERNS.md` — Frontend patterns and conventions
+
+---
+
+## Documentation Maintenance Rules (MANDATORY)
+
+Docs drift caused confusion and wasted time repeatedly. These rules prevent it.
+
+### After EVERY Code Change Session
+1. **Update `CLAUDE.md` Current State counts** — page count, migration count, RPC count, test counts
+2. **Update `docs/reference/migration-history.md`** — add row for every new migration file created
+3. **Update `docs/reference/pages-routes.md`** — add entry for every new page/route added
+4. **Update `docs/reference/rpc-functions.md`** — add entry for every new RPC created or dropped
+5. **Update `docs/reference/database-schema.md`** — add entry for every new table or significant column change
+6. **Update `docs/CHANGELOG.md`** — add entry summarizing the work done in this session
+7. **Update `docs/reference/qa-testing.md`** — if new E2E tests were added or test patterns changed
+
+### When Writing Migrations
+- Add the new migration to `docs/reference/migration-history.md` immediately
+- If the migration creates a table → update `database-schema.md`
+- If the migration creates/drops a function → update `rpc-functions.md`
+- If the migration changes status enums or lifecycles → update `CLAUDE.md` Business Logic section
+
+### When Adding Pages
+- Add lazy import to `App.tsx` → update `pages-routes.md` → update page count in `CLAUDE.md`
+
+### When Adding/Changing Business Logic
+- Update the relevant lifecycle in `CLAUDE.md` Business Logic Lifecycles section
+- Update `docs/workflows/QUOTE_TO_DELIVERY.md` if the quote→order→delivery→invoice pipeline changes
+- Update `docs/workflows/INVENTORY_RULES.md` if inventory calculations change
+
+### Verification
+Before claiming work is done, verify:
+```bash
+# Quick doc-drift check
+grep -c "lazy(" src/App.tsx                    # should match CLAUDE.md page count
+ls supabase/migrations/*.sql | wc -l          # should match CLAUDE.md migration count
+```
+
+---
+
+## Code Drift Prevention Rules (MANDATORY)
+
+These rules exist because code drift caused 40+ bugs. Follow them to keep the codebase consistent.
+
+### Naming & Convention Rules
+- **Status enums** — ALWAYS check existing CHECK constraints before adding/modifying statuses. Your new list MUST be a superset of the old values.
+- **Column names** — ALWAYS read the actual table schema before referencing columns in RPCs. Never assume column names from memory.
+- **RPC signatures** — ALWAYS check for existing overloads before CREATE OR REPLACE. Run: `SELECT proname, pg_get_function_identity_arguments(oid) FROM pg_proc WHERE proname = 'func_name';`
+- **Type definitions** — When adding new DB columns, ALWAYS update `src/types/index.ts` to match
+
+### Pattern Consistency Rules
+- **New pages** MUST follow the existing pattern: lazy import → Route → nav link → page component with standard layout
+- **New RPCs** MUST accept `p_idempotency_key text DEFAULT NULL` if they mutate data
+- **New tables** MUST have RLS policies — no exceptions
+- **New mutations** MUST use `checkMutationResult()` after `.update()` or `.delete()`
+- **Money values** MUST use `bigint` cents — NEVER floating point
+- **Activity logging** — call `logActivity()` for user-visible actions
+- **Error handling** — use toast notifications, never `window.alert()` or `window.confirm()` (use `ConfirmModal`)
+
+### Before Every Commit
+1. `npm run lint` — 0 errors
+2. `npm run build` — clean build
+3. `npm run test` — all tests pass
+4. Doc counts match reality (see Documentation Maintenance above)

@@ -106,7 +106,7 @@ Cross-entity data integrity tests via `src/lib/reconciliation.ts`:
 ## E2E Testing Guidelines (added Mar 2026 audit)
 
 ### Current State
-- **74 E2E spec files** (down from 95 after March 2026 audit removed 21 redundant files)
+- **81 E2E spec files** (down from 95 after March 2026 audit removed 21 redundant, then added new specs)
 - Framework: Playwright with serial test suites for workflow specs
 - Auth: shared admin account by default; role tests need dedicated accounts (see below)
 
@@ -201,13 +201,21 @@ page.once('dialog', dialog => dialog.accept());
 await page.click('button:has-text("Delete")');
 ```
 
-**Common dialog triggers in the app** (all use `window.confirm()`):
-- **Convert Quote to Order** — duplicate order warning if customer has recent orders (`QuoteBuilder.tsx` line ~1010)
-- **Post Invoice** — confirmation before posting (`InvoiceDetail.tsx`)
-- **Complete Delivery** — confirmation with item summary (`DeliveryDetail.tsx` line ~574)
-- **Delete/Void actions** — most destructive actions confirm first
+**Note:** As of March 2026, most `window.confirm()` calls have been replaced with the shared `ConfirmModal` component. For these, use standard Playwright button clicks instead of dialog handlers:
 
-Without `page.once('dialog', d => d.accept())`, Playwright auto-dismisses these as "cancel", silently aborting the operation.
+```typescript
+// For ConfirmModal-based confirmations (most actions now):
+await page.click('button:has-text("Confirm")');
+
+// For any remaining browser-native dialogs:
+page.once('dialog', dialog => dialog.accept());
+```
+
+Common confirmation triggers in the app:
+- **Convert Quote to Order** — ConfirmModal for duplicate order warning
+- **Post Invoice** — ConfirmModal before posting
+- **Complete Delivery** — ConfirmModal with item summary
+- **Delete/Void actions** — ConfirmModal for destructive actions
 
 ### Modal Close Button Exclusion
 
@@ -262,6 +270,81 @@ await expect(page).toHaveURL(/\/quotes\/[0-9a-f]{8}-/);
 - Note lifecycle uses shared state (`S` object) across serial tests
 - Completed tab notes render as plain `div` (not `NoteCard`) — no inline checkboxes
 - Cleanup uses soft-delete (`deleted_at`) since RLS blocks hard DELETE on `team_notes`
+
+### E2E Test Data Protocol (MANDATORY)
+
+**Problem:** Before this protocol, every E2E run created random entities (`TierCust-1-PE-mmrwld6k`) that were never cleaned up. This polluted the production database with hundreds of fake records that had to be manually deleted.
+
+**Solution:** ALL test-created entities must use the `[E2E]` prefix, and Playwright's `globalTeardown` automatically deletes everything with that prefix after each run.
+
+#### The Rules
+
+1. **ALL test entities MUST use `[E2E]` prefix** — customers, products, vendors, team notes, everything
+2. **Reuse shared fixtures** — don't create new customers/products when the shared ones work
+3. **If you need unique entities** (concurrency tests, etc.), use: `${E2E_PREFIX} DescriptiveName-${runId()}`
+4. **Import from `tests/e2e/fixtures/e2e-constants.ts`** — never hardcode test names
+5. **NEVER create test data without the prefix** — it won't get cleaned up
+
+#### Shared Fixtures (created by `globalSetup`, reused by all tests)
+
+| Entity | Name | Details |
+|--------|------|---------|
+| Customer A | `[E2E] Farm Alpha` | Tier 1, standard workflows |
+| Customer B | `[E2E] Farm Beta` | Tier 3, tier-specific tests |
+| Product 1 | `[E2E] Herbicide Alpha` | $50 cost, 30% margin |
+| Product 2 | `[E2E] Adjuvant Beta` | $80 cost, 25% margin |
+| Product 3 | `[E2E] Fertilizer Gamma` | $30 cost, 40% margin |
+| Vendor | `[E2E] Test Vendor` | Default test vendor |
+
+Each product starts with 500 units of inventory at "Main Warehouse".
+
+#### Usage Example
+
+```typescript
+import { E2E_PREFIX, TEST_CUSTOMER_A, runId } from '../fixtures/e2e-constants';
+
+// ✅ GOOD — reuse shared fixture
+const customers = await supabaseRest(page, 'GET',
+  `customers?farm_name=eq.${encodeURIComponent(TEST_CUSTOMER_A.farm_name)}&select=id`);
+const custId = customers[0].id;
+
+// ✅ GOOD — unique entity with prefix (will be auto-cleaned)
+const RUN = runId();
+await supabaseRest(page, 'POST', 'customers', {
+  farm_name: `${E2E_PREFIX} ConcurrencyCust-${RUN}`,
+  ...
+});
+
+// ❌ BAD — no prefix, won't get cleaned up!
+await supabaseRest(page, 'POST', 'customers', {
+  farm_name: `RaceCust-CO-${RUN}`,
+  ...
+});
+```
+
+#### How Cleanup Works
+
+1. `globalSetup` (`tests/e2e/fixtures/setup-fixtures.ts`):
+   - Runs before the test suite
+   - Creates shared fixtures if they don't exist (idempotent)
+   - Seeds inventory for test products
+
+2. `globalTeardown` (`tests/e2e/fixtures/teardown-fixtures.ts`):
+   - Runs after the test suite completes (even on failure)
+   - Deletes ALL rows where name starts with `[E2E]`
+   - Respects FK constraints — deletes children before parents
+   - Handles team_notes via soft-delete (RLS blocks hard DELETE)
+
+#### File Structure
+
+```
+tests/e2e/fixtures/
+├── e2e-constants.ts      # Prefix, shared entity definitions, runId()
+├── setup-fixtures.ts     # globalSetup — creates shared fixtures
+└── teardown-fixtures.ts  # globalTeardown — deletes ALL [E2E] data
+```
+
+---
 
 ### Inventory-Aware Test Data
 
