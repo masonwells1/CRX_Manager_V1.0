@@ -1,4 +1,4 @@
-# RPC Functions Reference (~138 unique functions)
+# RPC Functions Reference (~139 unique functions)
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -115,6 +115,7 @@
 - `batch_apply_prepayments(allocations jsonb, performed_by, idempotency_key?)` — batch wrapper with idempotency guard, iterates over JSON array, calls `apply_prepay_to_invoice` for each, returns total count and amount
 - `calculate_billing_splits()` — calculate billing splits for an order
 - `check_customer_credit_limit()` — check if customer has exceeded credit limit
+- `mark_overdue_invoices()` — batch scan: sets posted invoices past due_date to 'overdue', logs to financial_audit_log, returns `{ invoices_marked_overdue, run_at }`
 
 ## Pricing
 - `calculate_prices_from_margin()` — trigger: auto-calculate tier prices from margin target

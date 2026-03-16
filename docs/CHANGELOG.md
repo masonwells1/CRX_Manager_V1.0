@@ -20,7 +20,23 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
-## 2026-03-16 — Additional Audit Gap Remediation
+## 2026-03-16 — Audit Remediation, Idempotency Fixes, Overdue Detection
+
+### Audit Triage & Branch Cleanup
+- Verified 24 audit findings across 3 reports — 17 were already fixed or false positives
+- Deleted stale branches: `claude/final-bug-sweep-RnKBF`, `claude/analyze-test-coverage-eb1h9`, plus 20 additional stale remote branches
+- Realtime null-filter finding: FALSE POSITIVE (guarded by `disabled` flag)
+- Commission recipients hardcoding: LOW priority (has "Other..." workaround)
+
+### confirm_delivery Idempotency Fix (migration `20260316300000`)
+- Consolidation migration added `p_idempotency_key` parameter but never wired up `check_idempotency`/`save_idempotency` logic
+- Frontend was already passing the key (DeliveryDetail.tsx:550) but server ignored it
+- Drivers on mobile with spotty connections could create duplicate activity_feed + notification entries
+
+### Invoice Overdue Auto-Detection (migration `20260316115721`)
+- New `mark_overdue_invoices()` batch function: scans posted invoices past due_date → transitions to 'overdue'
+- Logs each transition to `financial_audit_log` with invoice details
+- Naturally idempotent — safe to call from cron/scheduler repeatedly
 
 ### RPC Hardening (migration `20260316200000`)
 - `apply_write_off`: added `p_idempotency_key` parameter with `check_idempotency`/`save_idempotency` guards
