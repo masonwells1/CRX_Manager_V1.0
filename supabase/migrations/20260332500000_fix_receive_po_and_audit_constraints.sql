@@ -129,11 +129,11 @@ BEGIN
     INSERT INTO receiving_records (
       purchase_order_id, po_item_id, product_id,
       quantity_received, received_by, notes, condition,
-      lot_number, storage_location, unit_size, unit_cost
+      lot_number, storage_location, unit_size
     ) VALUES (
       v_po_item.po_parent_id, v_po_item.id, v_po_item.product_id,
       v_qty, v_actor, v_notes, v_condition,
-      v_lot_number, v_storage_location, v_po_item.unit_size, v_po_item.unit_cost
+      v_lot_number, v_storage_location, v_po_item.unit_size
     ) RETURNING id INTO v_recv_id;
 
     v_receiving_record_ids := v_receiving_record_ids || to_jsonb(v_recv_id::text);
