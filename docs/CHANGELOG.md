@@ -4,6 +4,19 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — New Order: Per-Line Margin Calculation + Editable Price Override
+
+- **Per-line margin display** on New Order page — each line item shows Total, Profit ($), and Margin (%) with color-coded thresholds (green ≥20%, amber 10-20%, red <10%)
+- **Editable price per unit** with override detection — amber highlight and "price overridden" indicator when price differs from customer tier
+- **Reset to tier price** button (RotateCcw icon) — appears on overridden items, tooltip shows the tier price it resets to
+- **Order Totals summary card** — aggregate total, profit, and margin for the entire order
+- **Customer swap recalculates all prices** — clears overrides and recalculates to the new customer's tier
+- **Product swap clears override** — fresh start with the new product's tier price
+- No DB migration needed — `order_items.price_per_unit` already stores the effective price
+- Mirrors the exact pattern from the Quote Builder editable price feature
+
+---
+
 ## 2026-03-16 — Quote Builder Editable Price/Unit with Auto Margin Recalc
 
 - **Editable price/unit** in Quote Builder — price input is now a number field instead of static text

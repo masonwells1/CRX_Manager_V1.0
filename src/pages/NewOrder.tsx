@@ -6,6 +6,7 @@ import {
   Plus,
   Trash2,
   Search,
+  RotateCcw,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -28,9 +29,13 @@ interface LocalItem {
   product_name: string;
   quantity: number;
   price_per_unit: number;
+  price_override: number | null;
   unit_cost: number;
   unit_size: string | null;
   notes: string | null;
+  profit: number;
+  net_margin: number;
+  total_price: number;
 }
 
 let keyCounter = 0;
@@ -45,9 +50,13 @@ function makeEmptyItem(): LocalItem {
     product_name: '',
     quantity: 0,
     price_per_unit: 0,
+    price_override: null,
     unit_cost: 0,
     unit_size: null,
     notes: null,
+    profit: 0,
+    net_margin: 0,
+    total_price: 0,
   };
 }
 
@@ -143,6 +152,47 @@ export default function NewOrder() {
     fetchData();
   }, [fetchData]);
 
+  // Tier price lookup — cascades: tier3 → tier2 → tier1 fallback
+  const getTierPrice = useCallback(
+    (product: Product, tierNum: number): number => {
+      const t1 = product.tier1_price || 0;
+      if (tierNum === 1) return t1;
+      if (tierNum === 2) return product.tier2_price || t1;
+      return product.tier3_price || t1;
+    },
+    []
+  );
+
+  // Recalculate margin fields for a single item
+  const recalcItem = useCallback(
+    (item: LocalItem, tierNum: number): LocalItem => {
+      const product = products.find((p) => p.id === item.product_id);
+      if (!product) return item;
+
+      const tierPrice = getTierPrice(product, tierNum);
+      const pricePerUnit = item.price_override != null ? item.price_override : tierPrice;
+      const qty = item.quantity || 0;
+      const cost = product.current_cost || 0;
+
+      const totalPrice = pricePerUnit * qty;
+      const profit = (pricePerUnit - cost) * qty;
+      const netMargin = totalPrice > 0 ? (profit / totalPrice) * 100 : 0;
+
+      return {
+        ...item,
+        price_per_unit: pricePerUnit,
+        unit_cost: cost,
+        total_price: Math.round(totalPrice * 100) / 100,
+        profit: Math.round(profit * 100) / 100,
+        net_margin: Math.round(netMargin * 100) / 100,
+      };
+    },
+    [products, getTierPrice]
+  );
+
+  // Get current customer tier
+  const customerTier = customers.find((c) => c.id === customerId)?.assigned_tier || 1;
+
   const addItem = () => {
     setItems([...items, makeEmptyItem()]);
   };
@@ -155,13 +205,19 @@ export default function NewOrder() {
     setItems(items.filter((item) => item._key !== key));
   };
 
-  const updateItem = (key: string, field: keyof LocalItem, value: string | number | null) => {
+  const updateItemFields = (key: string, updates: Partial<LocalItem>) => {
     setItems(
       items.map((item) => {
         if (item._key !== key) return item;
-        return { ...item, [field]: value };
+        const merged = { ...item, ...updates };
+        return recalcItem(merged, customerTier);
       })
     );
+  };
+
+  // Legacy single-field update (for notes, unit_size, etc.)
+  const updateItem = (key: string, field: keyof LocalItem, value: string | number | null) => {
+    updateItemFields(key, { [field]: value });
   };
 
   const openProductModal = (itemKey: string) => {
@@ -173,29 +229,19 @@ export default function NewOrder() {
   const selectProduct = (product: Product) => {
     if (!selectedItemKey) return;
 
-    // Look up customer tier for price auto-fill
-    const customer = customers.find((c) => c.id === customerId);
-    const tierNum = customer?.assigned_tier || 1;
-    // Cascade: tier3 → tier2 → tier1 fallback (same logic as quoteCalc.getTierPrice)
-    const t1 = product.tier1_price || 0;
-    const tierPrice =
-      tierNum === 1
-        ? t1
-        : tierNum === 2
-          ? product.tier2_price || t1
-          : product.tier3_price || t1;
-
     setItems(
       items.map((item) => {
         if (item._key !== selectedItemKey) return item;
-        return {
+        // Reset override when swapping product — fresh start with tier price
+        const merged: LocalItem = {
           ...item,
           product_id: product.id,
           product_name: product.product_name,
-          price_per_unit: tierPrice,
+          price_override: null,
           unit_cost: product.current_cost || 0,
           unit_size: product.unit_size || null,
         };
+        return recalcItem(merged, customerTier);
       })
     );
 
@@ -334,6 +380,16 @@ export default function NewOrder() {
       )
     : products;
 
+  // Currency formatter
+  const fmtUsd = (n: number) =>
+    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(n);
+
+  // Order totals
+  const validItems = items.filter((i) => i.product_id && i.quantity > 0);
+  const orderTotal = validItems.reduce((sum, i) => sum + i.total_price, 0);
+  const orderProfit = validItems.reduce((sum, i) => sum + i.profit, 0);
+  const orderMargin = orderTotal > 0 ? (orderProfit / orderTotal) * 100 : 0;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -370,7 +426,15 @@ export default function NewOrder() {
               </label>
               <select
                 value={customerId}
-                onChange={(e) => setCustomerId(e.target.value)}
+                onChange={(e) => {
+                  const newId = e.target.value;
+                  setCustomerId(newId);
+                  // Recalc all items with new customer tier, clearing price overrides
+                  const newTier = customers.find((c) => c.id === newId)?.assigned_tier || 1;
+                  setItems((prev) =>
+                    prev.map((item) => recalcItem({ ...item, price_override: null }, newTier))
+                  );
+                }}
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               >
                 <option value="">Select customer...</option>
@@ -485,23 +549,50 @@ export default function NewOrder() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-secondary mb-1">
                         Price per Unit
                       </label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        value={item.price_per_unit || ''}
-                        onChange={(e) =>
-                          updateItem(
-                            item._key,
-                            'price_per_unit',
-                            parseFloat(e.target.value) || 0
-                          )
-                        }
-                      />
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          step="any"
+                          min={0}
+                          value={item.price_per_unit || ''}
+                          onChange={(e) => {
+                            const val = e.target.value ? parseFloat(e.target.value) : 0;
+                            const prod = products.find((p) => p.id === item.product_id);
+                            const tierPrice = prod ? getTierPrice(prod, customerTier) : 0;
+                            const isOverride = Math.abs(val - tierPrice) > 0.001;
+                            updateItemFields(item._key, {
+                              price_override: isOverride ? val : null,
+                              price_per_unit: val,
+                            });
+                          }}
+                          aria-label="Price per unit"
+                          className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green ${
+                            item.price_override != null
+                              ? 'border-amber-400 bg-amber-50'
+                              : 'border-gray-200'
+                          }`}
+                        />
+                        {item.price_override != null && (
+                          <button
+                            onClick={() =>
+                              updateItemFields(item._key, { price_override: null })
+                            }
+                            title={`Reset to tier ${customerTier} price: ${fmtUsd(
+                              products.find((p) => p.id === item.product_id)
+                                ? getTierPrice(products.find((p) => p.id === item.product_id)!, customerTier)
+                                : 0
+                            )}`}
+                            className="p-1.5 rounded text-amber-500 hover:text-amber-700 hover:bg-amber-100 transition-colors flex-shrink-0"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div>
@@ -528,29 +619,45 @@ export default function NewOrder() {
                         placeholder="e.g., 2.5 gal"
                       />
                     </div>
-                  </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-secondary mb-1">
-                      Notes
-                    </label>
-                    <Input
-                      value={item.notes || ''}
-                      onChange={(e) => updateItem(item._key, 'notes', e.target.value)}
-                      placeholder="Item notes..."
-                    />
+                    <div>
+                      <label className="block text-xs font-medium text-secondary mb-1">
+                        Notes
+                      </label>
+                      <Input
+                        value={item.notes || ''}
+                        onChange={(e) => updateItem(item._key, 'notes', e.target.value)}
+                        placeholder="Item notes..."
+                      />
+                    </div>
                   </div>
 
                   {item.product_id && item.quantity > 0 && (
                     <div className="bg-gray-50 rounded-lg p-3 text-sm">
-                      <div className="flex justify-between items-center">
-                        <span className="text-secondary">Total:</span>
-                        <span className="font-medium">
-                          {new Intl.NumberFormat('en-US', {
-                            style: 'currency',
-                            currency: 'USD',
-                          }).format(item.quantity * item.price_per_unit)}
-                        </span>
+                      <div className="flex flex-wrap gap-x-6 gap-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-secondary">Total:</span>
+                          <span className="font-medium font-mono">
+                            {fmtUsd(item.total_price)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-secondary">Profit:</span>
+                          <span className={`font-medium font-mono ${item.profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                            {fmtUsd(item.profit)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-secondary">Margin:</span>
+                          <span className={`font-medium font-mono ${
+                            item.net_margin >= 20 ? 'text-emerald-600' : item.net_margin >= 10 ? 'text-amber-600' : 'text-red-600'
+                          }`}>
+                            {item.net_margin.toFixed(1)}%
+                          </span>
+                        </div>
+                        {item.price_override != null && (
+                          <span className="text-xs text-amber-600 italic">price overridden</span>
+                        )}
                       </div>
                     </div>
                   )}
@@ -568,6 +675,37 @@ export default function NewOrder() {
           ))}
         </div>
       </Card>
+
+      {/* Order Totals Summary */}
+      {validItems.length > 0 && (
+        <Card>
+          <div className="p-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <h3 className="text-sm font-medium text-secondary uppercase tracking-wider">Order Totals</h3>
+              <div className="flex flex-wrap items-center gap-6 text-sm">
+                <div>
+                  <span className="text-secondary mr-2">Total:</span>
+                  <span className="font-semibold font-mono text-nav-dark">{fmtUsd(orderTotal)}</span>
+                </div>
+                <div>
+                  <span className="text-secondary mr-2">Profit:</span>
+                  <span className={`font-semibold font-mono ${orderProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {fmtUsd(orderProfit)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-secondary mr-2">Margin:</span>
+                  <span className={`font-semibold font-mono ${
+                    orderMargin >= 20 ? 'text-emerald-600' : orderMargin >= 10 ? 'text-amber-600' : 'text-red-600'
+                  }`}>
+                    {orderMargin.toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <ConfirmModal
         open={!!duplicateWarning}
@@ -597,16 +735,7 @@ export default function NewOrder() {
 
           <div className="max-h-96 overflow-y-auto space-y-2">
             {filteredProducts.map((product) => {
-              const customer = customers.find((c) => c.id === customerId);
-              const tierNum = customer?.assigned_tier || 1;
-              // Cascade: tier3 → tier2 → tier1 fallback
-              const t1 = product.tier1_price || 0;
-              const tierPrice =
-                tierNum === 1
-                  ? t1
-                  : tierNum === 2
-                    ? product.tier2_price || t1
-                    : product.tier3_price || t1;
+              const tierPrice = getTierPrice(product, customerTier);
               const inv = inventoryByProduct[product.id];
               const onFloor = inv ? inv.available : 0;
               const netPos = inv ? inv.onOrder + inv.available - inv.prebooked : 0;
