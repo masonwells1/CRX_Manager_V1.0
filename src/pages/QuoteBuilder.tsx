@@ -968,7 +968,7 @@ export default function QuoteBuilder() {
 
   // Kept for future email integration
   const _handleSendQuote = async () => {
-    _setSending(true);
+    __setSending(true);
     const result = await saveQuote('sent');
     if (result) {
       // Create version snapshot via RPC
@@ -1090,7 +1090,7 @@ export default function QuoteBuilder() {
       // Refresh version history
       await fetchVersions();
     }
-    _setSending(false);
+    __setSending(false);
   };
 
   const handleReviseQuote = async () => {
@@ -2482,7 +2482,7 @@ export default function QuoteBuilder() {
       />
 
       {showSaveTemplateModal && (
-        <Modal onClose={() => setShowSaveTemplateModal(false)} title="Save as Template">
+        <Modal open={showSaveTemplateModal} onClose={() => setShowSaveTemplateModal(false)} title="Save as Template">
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">Template Name</label>
@@ -2523,7 +2523,7 @@ export default function QuoteBuilder() {
       )}
 
       {showRolloverModal && (
-        <Modal onClose={() => setShowRolloverModal(false)} title="Roll Over to New Season">
+        <Modal open={showRolloverModal} onClose={() => setShowRolloverModal(false)} title="Roll Over to New Season">
           <div className="space-y-4">
             <p className="text-sm text-secondary">
               Creates a new draft quote with the same products and program structure,

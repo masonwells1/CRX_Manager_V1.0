@@ -58,6 +58,7 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
     notes: null,
     is_active: true,
     created_at: '2026-01-01',
+    internal_notes: null,
     updated_at: '2026-01-01',
     ...overrides,
   };
