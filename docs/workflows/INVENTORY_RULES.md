@@ -35,6 +35,12 @@ Example: "Delivered YTD" means total delivered since October 1 of the current se
 Net Free = quantity_available - planned holds - quantity_prebooked
 ```
 
+### Net Position (used for inventory warnings on order creation)
+```
+Net Position = quantity_available - quantity_prebooked + on_order
+```
+`create_direct_order` and `convert_quote_to_order` use net position to warn (not block) when inventory is low.
+
 ### On Order (incoming from suppliers)
 ```
 On Order = SUM(quantity_ordered - quantity_received) from open POs
@@ -61,9 +67,9 @@ Delivered YTD = SUM(quantity) from inventory_transactions
 
 ---
 
-## Six Transaction Types
+## Eleven Transaction Types
 
-Every inventory change creates an `inventory_transactions` record. Here are the 6 types:
+Every inventory change creates an `inventory_transactions` record. Here are all 11 types:
 
 | Type | When used | Effect on quantity_available |
 |------|-----------|------------------------------|
@@ -73,6 +79,11 @@ Every inventory change creates an `inventory_transactions` record. Here are the 
 | `returned` | Customer return is received back | + (increases stock, if restocked) |
 | `adjusted` | Manual inventory adjustment or cycle count variance | +/- (can go either direction) |
 | `transferred` | Stock moved between warehouses | +/- (decrease at source, increase at destination) |
+| `job_applied` | Product applied during a job | - (decreases stock) |
+| `prebooked` | Order created, inventory reserved | No change to quantity_available (tracked via prebooked) |
+| `released` | Order cancelled or fulfilled, prebooked inventory released | No change to quantity_available (tracked via prebooked) |
+| `cancelled_delivery_reversal` | Cancelled delivery restores inventory | + (increases stock) |
+| `void_delivery_reversal` | Voided delivery restores inventory | + (increases stock) |
 
 ### Critical rule: All inventory math happens in the database, NOT in React.
 

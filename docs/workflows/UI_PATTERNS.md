@@ -40,7 +40,7 @@ const MyNewPage = lazy(() => import('./pages/MyNewPage'));
 
 ---
 
-## Existing Pages (49 total)
+## Existing Pages (56 total)
 
 Before creating a new page, check that it doesn't already exist. Here are all current pages grouped by area:
 
@@ -60,7 +60,10 @@ InventoryPage, PurchaseOrders, NewPurchaseOrder, PurchaseOrderDetail, ReceivingL
 Jobs, JobDetail, ApplicationRecords, BlendTickets, BlendTicketDetail, BlendRecipes
 
 ### Financial
-Invoices, InvoiceDetail, Payments, PaymentAllocation, ARaging, MonthEndClose, CommissionPayments, CustomerTransactionReview, PrepaymentManager
+Invoices, InvoiceDetail, Payments, PaymentAllocation, PaymentHistory, ARaging, MonthEndClose, CommissionPayments, CustomerTransactionReview, PrepaymentManager, PrepayWorkspace, FinancialDashboard, SalesReports
+
+### Accounts Payable
+AccountsPayable (AP Dashboard), VendorBills, NewVendorBill, VendorBillDetail
 
 ### Fields & Compliance
 Fields, FieldDetail, Compliance, Rebates

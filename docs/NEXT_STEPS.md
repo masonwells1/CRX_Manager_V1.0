@@ -195,7 +195,7 @@ These are quality-of-life improvements, not bug fixes:
 
 | Task | Effort | Benefit | Status |
 |------|--------|---------|--------|
-| Squash 170 migrations to baseline + recent | Medium | Faster local setup, clearer history | ⚠️ Deferred — renaming applied migrations breaks Supabase `schema_migrations` tracking |
+| Squash 179 migrations to baseline + recent | Medium | Faster local setup, clearer history | ⚠️ Deferred — renaming applied migrations breaks Supabase `schema_migrations` tracking |
 | Fix 10 groups of duplicate-timestamp migrations | Low | Deterministic migration ordering | ⚠️ Deferred — same risk as squash (applied migrations tracked by filename) |
 | Remove orphaned files (`ocrParser.ts`, `reconciliation.ts`) | Low | Less confusion | ✅ Done (Mar 14) — `ocrParser.ts` + test deleted; `reconciliation.ts` kept (used by E2E tests) |
 | Add `orders.balance_due` / `orders.total_paid` column removal migration | Low | Clean up deprecated columns | ✅ Done (Mar 14) — migration `20260332100000`, columns dropped, types + tests updated |

@@ -1,4 +1,4 @@
-# Database Schema Reference (86+ Tables)
+# Database Schema Reference (83 Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -15,7 +15,7 @@
 - `quote_sections` - Sections within a quote (section_name, sort_order)
 - `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals)
 - `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)
-- `orders` - Confirmed orders (order_number, status, totals, order_date). Note: total_paid/balance_due columns are DEPRECATED — AR is tracked via invoices.
+- `orders` - Confirmed orders (order_number, status, totals, order_date, customer_po_number, is_planned, season). Note: total_paid/balance_due columns are DEPRECATED — AR is tracked via invoices.
 - `order_items` - Order line items (quantity_delivered, quantity_remaining)
 - `payments` - Legacy payment records (DEPRECATED — use allocation_sets + invoice_line_allocations instead)
 - `commissions` - Per-order per-recipient (split_percentage, commission_amount numeric dollars, status CHECK: pending/paid/cancelled, paid_date)
@@ -56,16 +56,19 @@
 - `team_notes` - Notes/todos/announcements (note_type, priority, assigned_to, is_completed, is_pinned, deleted_at, linked_entity_type, linked_entity_id)
 - `team_note_comments` - Comments (note_id, content, deleted_at)
 - `team_note_attachments` - Photo attachments for notes (note_id, file_url, file_name, file_type, file_size_bytes, uploaded_by). Storage bucket: `team-note-attachments`
+- `note_tags` - Tag definitions for team notes (name UNIQUE, color, created_by)
+- `team_note_tags` - Junction table linking notes to tags (note_id, tag_id — composite PK)
+- `note_activity_log` - Audit trail for note changes (note_id, user_id, action_type, changes jsonb)
 - `activity_feed` - Auto-generated event log (event_type, description, related_entity_type/id)
 - `notifications` - Per-user notifications (user_id, title, message, notification_type, is_read)
 
 ## Billing / Invoices
 - `invoices` - Invoice headers (invoice_number, order_id, customer_id, status: draft/posted/void, balance_cents bigint, due_date)
 - `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, line_total_cents)
-- `allocation_sets` - Payment-to-invoice allocation groups (payment_id, allocated_at)
+- `allocation_sets` - Payment-to-invoice allocation groups (payment_id, allocated_at, customer_id, total_payment_cents, total_allocated_cents, payment_method, reference_number, check_number, payment_date, season)
 - `order_line_allocations` - Payment portions applied to order items
 - `invoice_line_allocations` - Payment portions applied to invoice items
-- `prepay_credits` - Prepayment credits (customer_id, original_amount_cents, remaining_cents, source_payment_id, reference_number, bucket_label)
+- `prepay_credits` - Prepayment credits (customer_id, original_amount_cents, remaining_cents, source_payment_id, reference_number, bucket_label, source_type, source_reference)
 - `prepay_applications` - Prepay credit applications to invoices (credit_id, invoice_id, applied_cents)
 - `financial_audit_log` - Immutable audit trail (entity_type, entity_id, action, old_data/new_data jsonb, performed_by)
 
@@ -81,12 +84,11 @@
 - `commission_payment_items` - Individual commissions included in a payment
 - `write_offs` - Invoice write-off records with reason and approval
 - `finance_charges` - Interest charges on overdue invoices
-- `prepay_credits` - Customer prepayment credit balances (prepay bucket system)
 
 ## Blend Recipes
 - `blend_recipes` - Saved blend recipe templates (recipe_name, recipe_number, category, total_cost, total_weight, status)
 - `blend_recipe_items` - Recipe ingredients (recipe_id, product_id, quantity, unit, sort_order)
-- `blend_ticket_to_order_item` - Links blend tickets to order items (ticket_id, order_item_id)
+- `blend_ticket_to_order_items` - Links blend tickets to order items (blend_ticket_id, order_id, order_item_id, linked_by)
 
 ## Warehouses & Cycle Counts
 - `warehouses` - Storage locations (warehouse_name, code, address, is_active, is_default)
@@ -103,6 +105,22 @@
 ## Rebates
 - `rebate_programs` - Manufacturer rebate programs (program_name, manufacturer, season, product_id, rebate_type, rebate_amount, start_date, end_date, status)
 - `rebate_claims` - Rebate claims (program_id, claim_number, quantity, claim_amount_cents, status: pending/submitted/approved/paid/rejected)
+
+## Email & Notifications
+- `email_log` - Email audit trail with idempotency (email_type, recipient, subject, status, idempotency_key)
+- `ar_reminder_tracking` - AR reminder deduplication (customer_id, reminder_level, sent_at)
+- `failed_notifications` - Failed notification retry queue (notification_type, entity_type, entity_id, error_message, attempts, max_attempts, resolved_at)
+
+## Billing Shares
+- `invoice_shares` - Split-bill invoice shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order)
+- `order_shares` - Split-bill order shares (order_id, customer_id, customer_name, split_percentage, amount_cents, is_primary, sort_order)
+
+## Document Processing
+- `document_processing_log` - OCR/document processing audit (user_id, document_type CHECK: invoice/purchase_order/price_list/product_list/customer_list/quote_list, file_name, file_size_bytes, page_count, processing_time_ms, confidence, items_extracted, success, error_message)
+
+## System / Infrastructure
+- `idempotency_keys` - Idempotent operation cache (idempotency_key UNIQUE, operation, result jsonb, expires_at — auto-cleanup after 24h)
+- `rate_limit_log` - Rate limiting tracker (user_id, operation, created_at — accessed only by SECURITY DEFINER functions)
 
 ## Config
 - `app_settings` - Key-value settings (setting_key, setting_value)
@@ -158,7 +176,7 @@
 | financial_audit_log | Admin | All authenticated | - | - |
 | blend_recipes | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | blend_recipe_items | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
-| blend_ticket_to_order_item | All authenticated | Admin / Sales Rep | - | Admin |
+| blend_ticket_to_order_items | All authenticated | Admin / Sales Rep | - | Admin |
 | warehouses | All authenticated | Admin | Admin | Admin |
 | cycle_counts | Admin | Admin | Admin | Admin |
 | cycle_count_items | Admin | Admin | Admin | Admin |
@@ -175,3 +193,12 @@
 | rup_sales_records | Admin | Admin | - | - |
 | email_log | Admin | Admin | - | - |
 | ar_reminder_tracking | Admin | - | - | - |
+| failed_notifications | Admin | Admin | Admin | - |
+| invoice_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| order_shares | Admin / Sales Rep | Admin / Sales Rep | - | Admin |
+| document_processing_log | Own user_id | Own user_id | - | - |
+| idempotency_keys | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
+| rate_limit_log | - (SECURITY DEFINER only) | - (SECURITY DEFINER only) | - | - |
+| note_tags | All authenticated | All authenticated | Admin / Own | Admin |
+| team_note_tags | All authenticated | All authenticated | - | All authenticated |
+| note_activity_log | All authenticated | All authenticated | - | - |

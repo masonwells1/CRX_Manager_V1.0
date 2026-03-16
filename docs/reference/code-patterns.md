@@ -21,8 +21,7 @@
 
 ## Bulk Operations Pattern
 - `useRowSelection` hook + `createCheckboxColumn` + `BulkActionBar` (auto-hides when 0 selected) + `BulkDeleteConfirmModal`
-- Used on 6 pages: Products, Customers, Jobs, Quotes, PurchaseOrders, BlendTickets
-- Other pages (Orders, Vehicles, Fields, Returns, ReceivingLog) use same pattern directly
+- Used on 11 pages: Products, Customers, Jobs, Quotes, PurchaseOrders, BlendTickets, Orders, Vehicles, Fields, Returns, ReceivingLog
 - Smart fallback export: `const rows = selected.size > 0 ? selectedRows : filtered;` — exports selected if any, otherwise all filtered
 - Soft delete pattern: `.update({ deleted_at: new Date().toISOString() })` + filter `.is('deleted_at', null)`. Used by Returns, Invoices
 - Hand-rolled checkbox selection: Invoices and Deliveries use custom `Set<string>` state (pre-existing pattern, kept for stability)

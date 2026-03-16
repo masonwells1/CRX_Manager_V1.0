@@ -111,12 +111,13 @@ confirmed -> partially_fulfilled -> fulfilled -> cancelled
 
 ### Status transitions
 ```
-scheduled -> in_progress -> completed -> cancelled
+scheduled -> in_progress -> completed -> cancelled -> voided
 ```
 - **scheduled**: Delivery is planned, driver assigned.
 - **in_progress**: Driver has confirmed/started delivery (`confirm_delivery()` RPC).
 - **completed**: Delivery finished (`complete_delivery()` RPC). Inventory deducted, order updated.
 - **cancelled**: Delivery was cancelled (`cancel_delivery()` or `batch_cancel_deliveries()`).
+- **voided**: Completed delivery reversed by admin (`void_delivery()` RPC). Inventory restored.
 
 ### Two-step delivery flow (CRITICAL)
 1. **`confirm_delivery()`** — transitions scheduled -> in_progress. Shows inventory warning if stock is low.
@@ -168,11 +169,13 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 
 ### Status transitions
 ```
-draft -> posted -> void
+draft -> posted -> paid -> overdue -> voided
 ```
 - **draft**: Created from order or quick delivery. Can be edited.
 - **posted**: Locked. Starts AR aging. Amounts cannot be changed.
-- **void**: Cancelled. Reverses AR impact.
+- **paid**: Fully paid (balance_cents = 0).
+- **overdue**: Past due date and unpaid.
+- **voided**: Cancelled. Reverses AR impact.
 
 ### Rules
 - All money is bigint cents: `balance_cents`, `unit_price_cents`, `line_total_cents`.
