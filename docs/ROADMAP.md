@@ -1,6 +1,6 @@
 # CRX Manager — Roadmap
 
-> **Last updated:** 2026-03-15 | **Owner:** Mason Wells
+> **Last updated:** 2026-03-16 | **Owner:** Mason Wells
 
 ---
 
@@ -60,12 +60,12 @@ Detailed doc: `docs/plans/2026-03-01-gap-remediation-handoff.md`
 
 | # | Feature | Effort |
 |---|---------|--------|
-| A1 | `unhandledrejection` safety net in `main.tsx` | 10 min |
-| A3 | Production sourcemaps → Sentry upload | 30 min |
+| A1 | `unhandledrejection` safety net in `main.tsx` | 10 min | ✅ Done (Mar 16) |
+| A3 | Production sourcemaps → Sentry upload | 30 min | ✅ Done (Mar 16 — needs SENTRY_AUTH_TOKEN in Vercel) |
 | A4 | Migrate 47 pages to `runCriticalAction()` | 2-4 hrs |
-| A5 | Route-level error boundaries | 1-2 hrs |
+| A5 | Route-level error boundaries | 1-2 hrs | ✅ Done (Mar 16 — inline ErrorBoundary + RouteShell) |
 | A6 | Skeleton loading states (10 pages) | 1-2 hrs |
-| A7 | ESLint `no-console` rule | 5 min |
+| A7 | ESLint `no-console` rule | 5 min | ✅ Done (Mar 16) |
 | A8 | Firefox E2E test matrix | 15 min |
 | A9 | Accessibility lint (`jsx-a11y`) | 2-4 hrs |
 | A10 | CSP `unsafe-inline` tightening | 30 min |
@@ -100,6 +100,10 @@ Detailed doc: `docs/plans/2026-03-01-gap-remediation-handoff.md`
 - ~~Replace window.confirm with ConfirmModal~~ (Mar 15)
 - ~~Parallelize Orders/Deliveries DB queries~~ (Mar 15)
 - ~~Vitest coverage reporting~~ (Mar 15)
+- ~~A1: Unhandled rejection safety net~~ (Mar 16)
+- ~~A3: Sentry sourcemap uploads~~ (Mar 16)
+- ~~A5: Route-level error boundaries~~ (Mar 16)
+- ~~A7: ESLint no-console rule~~ (Mar 16)
 - ~~Inventory Valuation cards~~ (Mar 5)
 - ~~Batch Adjustments~~ (Mar 2)
 - ~~Inventory Transaction Ledger~~ (Mar 2)

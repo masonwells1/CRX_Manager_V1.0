@@ -599,6 +599,7 @@ export interface TeamNote {
   is_pinned: boolean;
   deleted_at: string | null;
   deleted_by: string | null;
+  last_escalated_at: string | null;
   linked_entity_type: string | null;
   linked_entity_id: string | null;
   created_at: string;

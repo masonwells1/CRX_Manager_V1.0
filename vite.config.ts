@@ -1,11 +1,25 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
+import { sentryVitePlugin } from '@sentry/vite-plugin';
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
+    // Upload sourcemaps to Sentry during production builds, then delete them
+    // so they never reach end users.  Only activates when SENTRY_AUTH_TOKEN is set
+    // (i.e., in Vercel CI — not local dev).
+    sentryVitePlugin({
+      org: process.env.SENTRY_ORG ?? 'crx-solutions',
+      project: process.env.SENTRY_PROJECT ?? 'crx-manager',
+      authToken: process.env.SENTRY_AUTH_TOKEN,
+      sourcemaps: {
+        filesToDeleteAfterUpload: ['./dist/**/*.map'],
+      },
+      // Silently skip if no auth token (local dev)
+      disable: !process.env.SENTRY_AUTH_TOKEN,
+    }),
     VitePWA({
       // 'prompt' mode: when a new service worker is ready, fire a needRefresh
       // event and let the user decide when to update.  This prevents the
@@ -74,7 +88,7 @@ export default defineConfig({
     exclude: ['lucide-react'],
   },
   build: {
-    sourcemap: false,
+    sourcemap: 'hidden',
     rollupOptions: {
       output: {
         manualChunks: {

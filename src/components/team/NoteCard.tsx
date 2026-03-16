@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import Badge from '../ui/Badge';
 import EntityBadge from './EntityBadge';
+import CustomerContextCard from './CustomerContextCard';
 import { parseLocalDate } from '../../lib/dateUtils';
 import type { TeamNote, NotePriority, ExtendedTeamNote, LinkedEntityType } from '../../types';
 
@@ -112,10 +113,15 @@ export default function NoteCard({
           </div>
 
           {note.linked_entity_type && note.linked_entity_id && (
-            <EntityBadge
-              entityType={note.linked_entity_type as LinkedEntityType}
-              entityId={note.linked_entity_id}
-            />
+            <>
+              <EntityBadge
+                entityType={note.linked_entity_type as LinkedEntityType}
+                entityId={note.linked_entity_id}
+              />
+              {note.linked_entity_type === 'customer' && (
+                <CustomerContextCard customerId={note.linked_entity_id} />
+              )}
+            </>
           )}
 
           {note.content && (

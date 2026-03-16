@@ -98,6 +98,18 @@ function NavigationTracker() {
   return null;
 }
 
+// Wraps each route's lazy-loaded page so a crash on one page doesn't
+// take down the sidebar or prevent navigating to other pages.
+function RouteShell() {
+  return (
+    <ErrorBoundary inline>
+      <Suspense fallback={<PageLoader />}>
+        <Outlet />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
 // Root layout that wraps all routes with providers
 function RootLayout() {
   return (
@@ -126,7 +138,11 @@ const router = createBrowserRouter([
             <AppLayout />
           </ProtectedRoute>
         ),
-        children: [
+        children: [{
+          // RouteShell wraps all authenticated pages with an inline ErrorBoundary
+          // so a crash on one page keeps the sidebar/nav functional.
+          element: <RouteShell />,
+          children: [
           // All authenticated roles
           { index: true, element: <Dashboard /> },
           { path: 'team-board', element: <TeamBoard /> },
@@ -195,7 +211,8 @@ const router = createBrowserRouter([
           { path: 'settings', element: <ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute> },
 
           // payment-allocation route removed — now served at /payments
-        ],
+          ],
+        }],
       },
       { path: '*', element: <Navigate to="/" replace /> },
     ],

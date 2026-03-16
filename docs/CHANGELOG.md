@@ -4,6 +4,29 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Team Board V2 Phase 2 (Escalation, Context, Workload)
+
+- **F5: Escalation Engine** — `StaleTasksAlert` component surfaces overdue tasks with 3 visual tiers: amber (1-3d), red (3-7d), critical (7d+ with pulse animation). Collapsible summary with counts. Sorted most overdue first
+- **F9: Customer Context Cards** — `CustomerContextCard` on customer-linked notes shows tier, AR aging, open orders, and last delivery date. Module-level `Map` cache prevents N+1 queries
+- **F7: Workload Visibility tab** — new "Workload" tab on Team Board calls `get_team_workload()` RPC. Color-coded cards (green/amber/red) with expandable detail grid per team member
+- Migration: `20260316950000_team_board_phase2.sql` — adds `last_escalated_at` to `team_notes`, creates `get_team_workload()` RPC
+- New files: `StaleTasksAlert.tsx`, `CustomerContextCard.tsx`, `WorkloadView.tsx`
+- Updated `TeamBoard.tsx` with new tab + escalation alert on Board view
+- Updated `NoteCard.tsx` to render customer context inline
+- Added `last_escalated_at` to `TeamNote` TypeScript interface
+
+---
+
+## 2026-03-16 — Infrastructure Hardening (Quick Wins)
+
+- **A1: Unhandled rejection safety net** — `window.addEventListener('unhandledrejection', ...)` in `main.tsx` catches async errors that bypass React ErrorBoundary, reports to Sentry
+- **A7: ESLint `no-console` rule** — warns on `console.log`/`info`/`debug`, allows `error`/`warn`. Zero existing violations, purely preventive
+- **A3: Sentry sourcemap uploads** — installed `@sentry/vite-plugin`, `sourcemap: 'hidden'` generates maps without exposing to users. Plugin uploads to Sentry then deletes from `dist/`. Only active when `SENTRY_AUTH_TOKEN` env var is set (Vercel CI)
+- **A5: Per-route error boundaries** — enhanced `ErrorBoundary` with `inline` prop for compact in-page error UI. Added `RouteShell` wrapper in `App.tsx` so page crashes don't take down sidebar navigation. 2 new unit tests
+- Design doc: `docs/plans/2026-03-16-infrastructure-hardening-design.md`
+
+---
+
 ## 2026-03-16 — Forensic Audit & Idempotency Fix Round 3
 
 - **Forensic audit** — 6-agent parallel audit of entire codebase: RPC column names, migration ordering, frontend-DB alignment, TypeScript types, table headers, RPC parameters

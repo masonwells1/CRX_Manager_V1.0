@@ -1,4 +1,4 @@
-# Migration History (196 migrations)
+# Migration History (198 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -200,4 +200,5 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 194 | 20260316700000 | **Notes pipeline flow** — Adds `notes` column to `order_items`, `program_notes` column to `orders`. Rewrites `convert_quote_to_order` to copy `qi.notes` from quote_items to order_items and aggregate section_header_notes into `orders.program_notes` |
 | 195 | 20260316800000 | **Inventory forecasting** — Creates `get_inventory_forecast` RPC for planned demand aggregation by product/month. SECURITY DEFINER, search_path = public, pg_temp |
 | 196 | 20260316900000 | **Seasonal rollover** — Creates `rollover_quote_to_season` RPC to duplicate quotes with updated pricing for a new season. SECURITY DEFINER, search_path = public, pg_temp |
-| 197 | 20260332700000 | Fix idempotency column refs round 3 — surgical fix of 4 RPCs + safety-net scan of all public functions + self-testing verification |
+| 197 | 20260316950000 | **Team Board Phase 2** — Adds `last_escalated_at` column to `team_notes`, creates `get_team_workload()` RPC (aggregates open tasks, overdue tasks, today's/week's deliveries per team member). SECURITY DEFINER, search_path = public, pg_temp |
+| 198 | 20260332700000 | Fix idempotency column refs round 3 — surgical fix of 4 RPCs + safety-net scan of all public functions + self-testing verification |

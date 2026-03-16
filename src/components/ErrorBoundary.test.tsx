@@ -67,4 +67,38 @@ describe('ErrorBoundary', () => {
     expect(screen.getByText('Normal content')).toBeInTheDocument();
     expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
   });
+
+  it('renders inline error UI when inline prop is set', () => {
+    render(
+      <ErrorBoundary inline>
+        <ThrowingComponent shouldThrow={true} />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText('This page crashed')).toBeInTheDocument();
+    expect(screen.getByText('Try Again')).toBeInTheDocument();
+    expect(screen.getByText('Go Back')).toBeInTheDocument();
+  });
+
+  it('resets error state when Try Again is clicked in inline mode', () => {
+    const { rerender } = render(
+      <ErrorBoundary inline>
+        <ThrowingComponent shouldThrow={true} />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText('This page crashed')).toBeInTheDocument();
+
+    // Click Try Again — boundary resets but component will throw again
+    screen.getByText('Try Again').click();
+
+    // Re-render with a non-throwing child to verify boundary recovered
+    rerender(
+      <ErrorBoundary inline>
+        <ThrowingComponent shouldThrow={false} />
+      </ErrorBoundary>
+    );
+
+    expect(screen.getByText('Normal content')).toBeInTheDocument();
+  });
 });

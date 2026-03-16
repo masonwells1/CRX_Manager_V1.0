@@ -26,6 +26,8 @@ import NoteAttachments from '../components/team/NoteAttachments';
 import NotePhotoUpload from '../components/team/NotePhotoUpload';
 import TodaysDeliveries from '../components/team/TodaysDeliveries';
 import YesterdayRecap from '../components/team/YesterdayRecap';
+import StaleTasksAlert from '../components/team/StaleTasksAlert';
+import WorkloadView from '../components/team/WorkloadView';
 import type { TeamNote, Profile, NoteType, NotePriority, ExtendedTeamNote, LinkedEntityType } from '../types';
 import { useSearchParams } from 'react-router-dom';
 
@@ -36,7 +38,7 @@ const priorityVariant: Record<NotePriority, 'default' | 'info' | 'warning' | 'er
   urgent: 'error',
 };
 
-type ViewTab = 'board' | 'my_tasks' | 'completed' | 'activity';
+type ViewTab = 'board' | 'my_tasks' | 'completed' | 'workload' | 'activity';
 
 
 interface GlobalActivity {
@@ -713,6 +715,7 @@ export default function TeamBoard() {
           { id: 'board' as const, label: 'Board', icon: <LayoutGrid className="w-4 h-4" /> },
           { id: 'my_tasks' as const, label: 'My Tasks', icon: <User className="w-4 h-4" />, count: stats.myTasks },
           { id: 'completed' as const, label: 'Completed', icon: <History className="w-4 h-4" />, count: stats.completed },
+          { id: 'workload' as const, label: 'Workload', icon: <Users className="w-4 h-4" /> },
           { id: 'activity' as const, label: 'Activity', icon: <Activity className="w-4 h-4" /> },
         ]).map(tab => (
           <button
@@ -745,6 +748,9 @@ export default function TeamBoard() {
         <>
           {/* Today's Deliveries */}
           <TodaysDeliveries />
+
+          {/* Stale Tasks — overdue tasks escalated by severity */}
+          <StaleTasksAlert notes={notes} onClickNote={setSelectedNote} />
 
           {/* Your Tasks & Mentions — personalized section */}
           {myTasksForBoard.length > 0 && (
@@ -1005,6 +1011,11 @@ export default function TeamBoard() {
           )}
         </div>
       )}
+
+      {/* ══════════════════════════════════════════════════ */}
+      {/* ── VIEW: Workload ── */}
+      {/* ══════════════════════════════════════════════════ */}
+      {viewTab === 'workload' && <WorkloadView />}
 
       {/* ══════════════════════════════════════════════════ */}
       {/* ── VIEW: All Activity (Global Audit Log) ── */}
