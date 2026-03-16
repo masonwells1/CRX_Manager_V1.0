@@ -20,6 +20,21 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — void_delivery Fix & Fake Data Cleanup
+
+### void_delivery RPC — 4 bugs fixed (migration `20260332300000`)
+- **Bug 1**: `quantity` column reference → `total_units_needed` (column was renamed in earlier migration but void_delivery never updated)
+- **Bug 2**: Missing `app.admin_override` for reverse status transitions (fulfilled→confirmed blocked by trigger)
+- **Bug 3**: `financial_audit_log` INSERT missing `actor_user_id` (NOT NULL violation under SECURITY DEFINER)
+- **Bug 4**: `idempotency_keys` wrong column names (`key`→`idempotency_key`, `result_id`→`result`)
+- All 4 bugs masked each other — Bug 1 failed first, hiding bugs 2-4
+
+### Fake Data Cleanup
+- Removed "A9 Test Farm CSV" customer and all child records (2 orders, 2 deliveries, 18 jobs, 6 applicator licenses, 8 rebate claims, 5 application records)
+- Inventory corrected: Start Right 2.0 Tote (+265 available released), Start Right 2.0 2.5G (+10 available released)
+
+---
+
 ## 2026-03-16 — Audit Remediation, Idempotency Fixes, Overdue Detection
 
 ### Audit Triage & Branch Cleanup

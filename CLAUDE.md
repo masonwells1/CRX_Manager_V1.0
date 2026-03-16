@@ -7,9 +7,9 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-03-15)
-- 56 pages, 83+ tables, ~139 RPCs, 183 migrations, 6 Edge Functions
-- 1,510 unit tests (91 files) + 90 E2E spec files, all passing
+## Current State (2026-03-16)
+- 56 pages, 83+ tables, ~139 RPCs, 184 migrations, 6 Edge Functions
+- 1,510 unit tests (103 files) + 90 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 
@@ -193,7 +193,7 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 |-----|----------|
 | `docs/reference/database-schema.md` | 83+ tables + RLS matrix |
 | `docs/reference/rpc-functions.md` | ~138 RPCs + triggers |
-| `docs/reference/migration-history.md` | 180 migration entries |
+| `docs/reference/migration-history.md` | 184 migration entries |
 | `docs/reference/pages-routes.md` | 56 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
