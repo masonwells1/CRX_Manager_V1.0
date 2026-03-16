@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Quote Builder Editable Price/Unit with Auto Margin Recalc
+
+- **Editable price/unit** in Quote Builder — price input is now a number field instead of static text
+- **Price override detection** — typing a price different from the tier price highlights the field amber and shows a reset button
+- **Auto margin recalc** — profit, margin %, $/acre, and quote totals all update instantly when price is overridden
+- **Reset to tier price** button (RotateCcw icon) appears on overridden items, tooltip shows the tier price
+- **Override sticks** through rate/acres changes but resets on product swap or customer tier change
+- **Existing quote detection** — loading a saved quote detects overridden prices by comparing saved price vs tier price
+- No DB migration needed — `quote_items.price_per_unit` already stores the effective price
+
+---
+
 ## 2026-03-15 — Bug Sweep Branch Review & Type Drift Fixes
 
 ### TypeScript Type Drift (verified against DB schema)

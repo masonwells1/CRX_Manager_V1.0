@@ -13,6 +13,7 @@ import {
   AlertTriangle,
   Pencil,
   History,
+  RotateCcw,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -63,6 +64,7 @@ interface LocalItem {
   sort_order: number;
   notes: string | null;
   price_per_unit: number;
+  price_override: number | null;
   current_cost: number;
   suggested_rate: string | null;
   actual_rate: number | null;
@@ -92,6 +94,7 @@ function makeEmptyItem(): LocalItem {
     sort_order: 1,
     notes: null,
     price_per_unit: 0,
+    price_override: null,
     current_cost: 0,
     suggested_rate: null,
     actual_rate: null,
@@ -281,29 +284,42 @@ export default function QuoteBuilder() {
       section_notes: s.section_notes,
       items: dbItems
         .filter((item) => item.section_id === s.id)
-        .map((item) => ({
-          _key: nextKey(),
-          id: item.id,
-          product_id: item.product_id,
-          sort_order: item.sort_order,
-          notes: item.notes,
-          price_per_unit: item.price_per_unit,
-          current_cost: item.current_cost,
-          suggested_rate: item.suggested_rate,
-          actual_rate: item.actual_rate,
-          rate_unit: item.rate_unit,
-          oz_per_acre: item.oz_per_acre,
-          price_per_acre: item.price_per_acre,
-          acres: item.acres,
-          total_units_needed: item.total_units_needed,
-          unit_size: item.unit_size,
-          profit: item.profit,
-          total_price: item.total_price,
-          net_margin: item.net_margin,
-          product: item.product,
-          calc_mode: (item.calc_mode as CalcMode) || 'rate_acres',
-          price_unit: item.price_unit || null,
-        })),
+        .map((item) => {
+          // Detect price override: if saved price differs from tier price, it was overridden
+          const product = item.product as Product | undefined;
+          const t1 = product?.tier1_price || 0;
+          const tierPrice = q.tier === 2
+            ? (product?.tier2_price || t1)
+            : q.tier === 3
+              ? (product?.tier3_price || t1)
+              : t1;
+          const savedPrice = item.price_per_unit;
+          const isOverridden = product && Math.abs(savedPrice - tierPrice) > 0.001;
+          return {
+            _key: nextKey(),
+            id: item.id,
+            product_id: item.product_id,
+            sort_order: item.sort_order,
+            notes: item.notes,
+            price_per_unit: item.price_per_unit,
+            price_override: isOverridden ? savedPrice : null,
+            current_cost: item.current_cost,
+            suggested_rate: item.suggested_rate,
+            actual_rate: item.actual_rate,
+            rate_unit: item.rate_unit,
+            oz_per_acre: item.oz_per_acre,
+            price_per_acre: item.price_per_acre,
+            acres: item.acres,
+            total_units_needed: item.total_units_needed,
+            unit_size: item.unit_size,
+            profit: item.profit,
+            total_price: item.total_price,
+            net_margin: item.net_margin,
+            product: item.product,
+            calc_mode: (item.calc_mode as CalcMode) || 'rate_acres',
+            price_unit: item.price_unit || null,
+          };
+        }),
     }));
 
     setSections(localSections.length > 0 ? localSections : [makeEmptySection(1)]);
@@ -378,7 +394,9 @@ export default function QuoteBuilder() {
       const product = item.product || products.find((p) => p.id === item.product_id);
       if (!product) return item;
 
-      const pricePerUnit = getTierPrice(product, tierNum);
+      const tierPrice = getTierPrice(product, tierNum);
+      // Use override price if set, otherwise fall back to tier price
+      const pricePerUnit = item.price_override != null ? item.price_override : tierPrice;
       // Fall back to unit_size if inventory_unit is not set on the product
       const inventoryUnitFactorOz = getConversionFactor(product.inventory_unit || product.unit_size);
 
@@ -450,7 +468,7 @@ export default function QuoteBuilder() {
     setSections((prev) =>
       prev.map((sec) => ({
         ...sec,
-        items: sec.items.map((item) => recalcItem(item, tierNum)),
+        items: sec.items.map((item) => recalcItem({ ...item, price_override: null }, tierNum)),
       }))
     );
   };
@@ -489,6 +507,7 @@ export default function QuoteBuilder() {
               product_id: product.id,
               product,
               price_per_unit: pricePerUnit,
+              price_override: null,
               current_cost: product.current_cost || 0,
               suggested_rate: product.suggested_rate || null,
               actual_rate: product.rate_per_acre ?? item.actual_rate ?? null,
@@ -1464,7 +1483,42 @@ export default function QuoteBuilder() {
                               )}
                             </td>
                             <td className="px-3 py-2">
-                              <div className="font-mono">{fmt(item.price_per_unit)}</div>
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="number"
+                                  value={item.price_per_unit || ''}
+                                  onChange={(e) => {
+                                    const val = e.target.value ? parseFloat(e.target.value) : 0;
+                                    const tierPrice = prod ? getTierPrice(prod, tier) : 0;
+                                    const isOverride = Math.abs(val - tierPrice) > 0.001;
+                                    updateItem(sec._key, item._key, {
+                                      price_override: isOverride ? val : null,
+                                      price_per_unit: val,
+                                    });
+                                  }}
+                                  aria-label="Price per unit"
+                                  className={`w-20 px-2 py-1 text-sm font-mono border rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30 focus:border-crx-green ${
+                                    item.price_override != null
+                                      ? 'border-amber-400 bg-amber-50'
+                                      : 'border-gray-200'
+                                  }`}
+                                  step="any"
+                                  min={0}
+                                />
+                                {item.price_override != null && (
+                                  <button
+                                    onClick={() =>
+                                      updateItem(sec._key, item._key, {
+                                        price_override: null,
+                                      })
+                                    }
+                                    title={`Reset to tier ${tier} price: ${fmt(prod ? getTierPrice(prod, tier) : 0)}`}
+                                    className="p-0.5 rounded text-amber-500 hover:text-amber-700 hover:bg-amber-100 transition-colors"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
                               <select
                                 value={item.price_unit || ''}
                                 onChange={(e) =>
