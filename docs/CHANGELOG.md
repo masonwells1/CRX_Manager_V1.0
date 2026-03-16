@@ -4,6 +4,64 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-15 — Bug Sweep Branch Review & Type Drift Fixes
+
+### TypeScript Type Drift (verified against DB schema)
+- **InvoiceStatus**: added `paid` | `overdue` to match DB CHECK constraint (from `20260312100000`)
+- **CommissionPayment.status**: added `voided` to match DB CHECK constraint (from `20260331120000`)
+- **Invoice badge maps**: added `paid` (info) and `overdue` (error) entries in `InvoiceDetail.tsx` and `Invoices.tsx`
+
+### Idempotency Column Fix Round 2 (migration `20260332200000`)
+- 10 RPCs had wrong `idempotency_keys` column names re-introduced by March 31 migrations
+- Fix: `key` to `idempotency_key`, `result_id` to `result` (with jsonb cast), `entity_type`/`entity_id` to `operation`/`result`
+
+### Branch Review Findings (claude/final-bug-sweep-RnKBF)
+- **Rejected**: Deleting E2E fixture files, removing CLAUDE.md rules, search_path fixes (not needed), ConfirmModal doc reverts
+
+---
+
+## 2026-03-16 — Additional Audit Gap Remediation
+
+### RPC Hardening (migration `20260316200000`)
+- `apply_write_off`: added `p_idempotency_key` parameter with `check_idempotency`/`save_idempotency` guards
+- `batch_apply_prepayments`: added `p_idempotency_key` parameter with idempotency guards
+- `generate_finance_charges`: added admin role check (`profiles.role = 'admin'`) at RPC entry
+
+### Frontend Fixes
+- **WriteOffModal**: replaced `parseFloat` with `parseDollarsToCents()` for IEEE 754-safe money handling; passes idempotency key to RPC
+- **PrepayWorkspace**: replaced `parseFloat * 100` with `parseDollarsToCents()`; passes idempotency key to `batch_apply_prepayments`
+- **BulkTicketUpload**: added error checks on two fire-and-forget inserts (`blend_ticket_images`, `ocr_processing_queue`)
+- **ReceivingLog**: added `checkMutationResult()` to bulk delete with `.select()` validation
+- **Invoices**: added error/null check on `.single()` customer fetch in batch PDF print
+
+---
+
+## 2026-03-15 — UX Polish, ConfirmModal, Parallelized Queries, Coverage Reporting
+
+### Replace window.confirm() with ConfirmModal (PRs merged)
+- All `window.confirm()` and `confirm()` calls across the app replaced with the shared `ConfirmModal` component
+- Provides consistent styled confirmation dialogs instead of browser-native popups
+- Covers: Convert Quote to Order, Post Invoice, Complete Delivery, Delete/Void actions
+
+### Parallelize Database Queries (PR merged)
+- Orders page and Deliveries page now run independent Supabase queries in parallel instead of sequentially
+- Reduces page load time for data-heavy list views
+
+### Accessibility: Aria-labels on Product Filters (PR merged)
+- Added `aria-label` attributes to category and vendor filter `<select>` elements on Products page
+
+### Vitest V8 Coverage Reporting
+- Added Vitest V8 coverage provider for visibility-only reporting (no enforcement gates)
+
+### 4 Quick-Win Bug Fixes from Branch Audit
+- Various small fixes discovered during orphaned branch audit
+
+### E2E Test Suite Hardening
+- Eliminated all remaining E2E test skips and fixed 12 failing tests
+- Fixed `useToast()` destructuring in team board components
+
+---
+
 ## 2026-03-15 — Team Board V2: Delivery Bulletin, Entity Linking, Photo Attachments
 
 ### Database (Migration 20260315200000)
@@ -88,6 +146,36 @@ All significant development milestones, in reverse chronological order.
 - **Removed `unit_size`** from form — legacy field replaced by `container_size` + `container_unit` (data preserved in DB)
 - **Grouped sections** with dividers and helper text: Product Form → Container (size+unit+type in one row) → Inventory Unit → Application Rates
 - No SQL migration needed (UI-only changes)
+
+---
+
+## 2026-03-08 — Order Editing, Admin Corrections, Transaction Ledger Expansion
+
+### Add Products to Existing Orders in Edit Mode
+- Admin can now add new products to an existing order via the product modal in edit mode
+- Handles inventory prebooked adjustments correctly when swapping products
+
+### Admin Corrections & Reversal Capabilities (Phases 1-3)
+- Admin-only capabilities for correcting and reversing posted transactions
+- Multi-phase rollout for safe, auditable corrections
+
+### Transaction Ledger Expansion
+- Transaction ledger now shows customer name, reference info, and full notes per transaction
+- Added missing FK constraints for transaction ledger joins
+
+### Orders Page Improvements
+- Fixed fulfillment progress bar showing 0% for all orders
+- Added "Planned" / "Committed" label to orders
+- Fixed customer search on Orders page
+
+### Bug Fixes
+- `cancel_order` used invalid transaction_type `cancelled_order_release` — fixed
+- `cancel_delivery` used invalid transaction_type `prebook_released` — fixed
+- `update_order_items` used `quantity_prebooked` instead of `quantity_remaining` — fixed
+- `create_direct_order` calling non-existent `next_order_number()` — fixed
+- `create_direct_order` using wrong column name `commission_split` — fixed
+- Clamped `commission_amount` to 0 when order profit is negative
+- `complete_delivery` pre-check + PO edit on partially received orders — fixed
 
 ---
 
@@ -303,22 +391,6 @@ All 22 math tests pass: 12 invoice verification (IV1–IV12) + 10 quote pricing 
 - `20260302100000` — `quote_items.calc_mode` + `quote_items.price_unit` columns
 - `20260302110000` — `orders.order_name` column + updated `create_direct_order()` RPC
 - `20260302120000` — updated `save_quote()` RPC with bidirectional calc_mode support
-
----
-
-## 2026-03-16 — Additional Audit Gap Remediation
-
-### RPC Hardening (migration `20260316200000`)
-- `apply_write_off`: added `p_idempotency_key` parameter with `check_idempotency`/`save_idempotency` guards
-- `batch_apply_prepayments`: added `p_idempotency_key` parameter with idempotency guards
-- `generate_finance_charges`: added admin role check (`profiles.role = 'admin'`) at RPC entry
-
-### Frontend Fixes
-- **WriteOffModal**: replaced `parseFloat` with `parseDollarsToCents()` for IEEE 754-safe money handling; passes idempotency key to RPC
-- **PrepayWorkspace**: replaced `parseFloat * 100` with `parseDollarsToCents()`; passes idempotency key to `batch_apply_prepayments`
-- **BulkTicketUpload**: added error checks on two fire-and-forget inserts (`blend_ticket_images`, `ocr_processing_queue`)
-- **ReceivingLog**: added `checkMutationResult()` to bulk delete with `.select()` validation
-- **Invoices**: added error/null check on `.single()` customer fetch in batch PDF print
 
 ---
 

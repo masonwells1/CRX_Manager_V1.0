@@ -779,7 +779,7 @@ export interface OCRProcessingQueue {
 // Phase 2: Billing / Invoices
 
 export type InvoiceType = 'chemical_sale' | 'field_application' | 'misc_charge';
-export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'voided' | 'cancelled';
+export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'paid' | 'overdue' | 'voided' | 'cancelled';
 
 export interface Invoice {
   id: string;
@@ -1634,7 +1634,7 @@ export interface CommissionPayment {
   payment_number: string;
   recipient_id: string;
   total_amount: number;
-  status: 'unposted' | 'posted';
+  status: 'unposted' | 'posted' | 'voided';
   payment_method: string | null;
   reference_number: string | null;
   payment_date: string;
