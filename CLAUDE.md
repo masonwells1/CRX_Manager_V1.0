@@ -8,7 +8,7 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-03-16)
-- 56 pages, 83+ tables, ~139 RPCs, 185 migrations, 6 Edge Functions
+- 56 pages, 83+ tables, ~139 RPCs, 187 migrations, 6 Edge Functions
 - 1,510 unit tests (103 files) + 90 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
@@ -167,6 +167,16 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 - `complete_delivery` requires `p_signed_by text`
 - `orders.total_paid` / `orders.balance_due` — DEPRECATED, use `invoices.balance_cents`
 
+### Tables WITHOUT `updated_at` (DO NOT SET updated_at on these!)
+These tables have NO `updated_at` column. Setting it in an UPDATE will crash the RPC:
+`commissions`, `purchase_order_items`, `payments`, `write_offs`, `delivery_items`,
+`order_items`, `quote_items`, `return_items`, `finance_charges`, `prepay_applications`,
+`cycle_counts`, `cycle_count_items`, `activity_feed`, `financial_audit_log`,
+`idempotency_keys`, `receiving_records`, `inventory_transactions`,
+`invoice_line_allocations`, `commission_payment_items`
+
+**Rule:** ALWAYS check `information_schema.columns` before referencing `updated_at` in any UPDATE statement.
+
 ---
 
 ## E2E Testing
@@ -193,7 +203,7 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 |-----|----------|
 | `docs/reference/database-schema.md` | 83+ tables + RLS matrix |
 | `docs/reference/rpc-functions.md` | ~138 RPCs + triggers |
-| `docs/reference/migration-history.md` | 185 migration entries |
+| `docs/reference/migration-history.md` | 187 migration entries |
 | `docs/reference/pages-routes.md` | 56 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |

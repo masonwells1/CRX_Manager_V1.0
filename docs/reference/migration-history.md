@@ -1,4 +1,4 @@
-# Migration History (183 migrations)
+# Migration History (187 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -189,3 +189,5 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 183 | 20260316121800 | **Drop stale confirm_delivery overload + enable pg_cron** — Removes the broken `confirm_delivery(uuid, text)` overload from consolidation. Enables `pg_cron` extension and schedules `mark_overdue_invoices()` to run daily at 6 AM UTC. |
 | 184 | 20260332300000 | **Fix void_delivery — 4 bugs** — (1) `quantity` → `total_units_needed` in order status check, (2) adds `app.admin_override` for reverse status transitions (fulfilled→confirmed), (3) includes `actor_user_id` in financial_audit_log INSERT, (4) fixes idempotency_keys column refs (`key`→`idempotency_key`, `result_id`→`result`) |
 | 185 | 20260332400000 | **Fix audit_log actor + column bugs across 24 RPCs** — (1) cancel_delivery: move admin_override BEFORE order status updates, (2) mark_overdue_invoices: fix wrong column names + NULL actor, (3) link/unlink_blend_ticket: fix wrong column names, (4) BEFORE INSERT trigger on financial_audit_log to fill actor_user_id when NULL (safety net for 20 other functions) |
+| 186 | 20260332500000 | **Fix receive_po_items + expand financial_audit_log CHECK constraints** — (1) remove `updated_at = now()` from purchase_order_items UPDATE (column doesn't exist), (2) add 5 missing operation_type values: `invoice_marked_overdue`, `prepay_reconciliation`, `batch_prepay_apply`, `blend_ticket_linked`, `blend_ticket_unlinked`, (3) add `blend_ticket` to entity_type CHECK |
+| 187 | 20260332600000 | **Fix commission payment RPCs** — `create_commission_payment` and `void_commission_payment` both referenced non-existent `updated_at` column on `commissions` table, causing crashes when paying or voiding commission payments |

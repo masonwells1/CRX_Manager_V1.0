@@ -12,6 +12,15 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You are a SQL migration safety gate for the CRX Manager project. Examine the file being written/edited.\n\nIF the file path does NOT contain 'supabase/migrations/' or does NOT end in '.sql', respond: {\"decision\":\"allow\"}\n\nIF the file IS a SQL migration, scan the content for these BANNED PATTERNS:\n\n1. **pg_get_functiondef** — NEVER use this to clone/modify functions dynamically. It bakes in existing bugs.\n   Pattern: pg_get_functiondef\n\n2. **updated_at on tables that lack it** — These tables do NOT have updated_at columns:\n   commissions, purchase_order_items, payments, write_offs, delivery_items, order_items,\n   quote_items, return_items, finance_charges, prepay_applications, cycle_counts,\n   cycle_count_items, activity_feed, financial_audit_log, idempotency_keys,\n   receiving_records, inventory_transactions, invoice_line_allocations\n   If you see UPDATE <any_of_these_tables> SET ... updated_at, BLOCK.\n\n3. **CHECK constraint rewrites without superset** — If you see ALTER TABLE ... DROP CONSTRAINT followed by ADD CONSTRAINT with a CHECK, verify the new list includes ALL values from the old constraint plus new ones. If you can't verify, WARN.\n\n4. **Missing idempotency** — Any CREATE OR REPLACE FUNCTION that does INSERT/UPDATE/DELETE but doesn't accept p_idempotency_key parameter. WARN (don't block).\n\nIf ANY banned pattern is found, respond:\n{\"decision\":\"block\",\"reason\":\"SQL SAFETY VIOLATION: [describe which pattern was violated and the exact line]. Fix the SQL before writing.\"}\n\nIf only warnings, respond: {\"decision\":\"allow\"} but include the warnings in your response.\n\nIf clean, respond: {\"decision\":\"allow\"}\n\nFile: $TOOL_INPUT"
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {

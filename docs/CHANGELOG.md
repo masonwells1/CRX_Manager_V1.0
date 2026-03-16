@@ -20,6 +20,29 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Fix Commission Payment RPCs (migration `20260332600000`)
+
+- Fixed `create_commission_payment` and `void_commission_payment` RPCs crashing due to non-existent `updated_at` column on `commissions` table (found by deep audit). Added SQL validation pre-commit hook and Claude Code PreToolUse hook to prevent similar bugs.
+
+---
+
+## 2026-03-16 — Fix receive_po_items Crash + Expand Audit Log CHECK Constraints (migration `20260332500000`)
+
+### receive_po_items RPC — crash on UPDATE
+- `receive_po_items` was crashing because it referenced `updated_at` on `purchase_order_items`, which does not have that column
+- Fix: removed `updated_at = now()` from the UPDATE statement
+
+### financial_audit_log — missing operation_type values
+- CHECK constraint was missing 5 values used by existing code: `invoice_marked_overdue`, `prepay_reconciliation`, `batch_prepay_apply`, `blend_ticket_linked`, `blend_ticket_unlinked`
+- Any INSERT using these values would throw a constraint violation
+- Fix: expanded operation_type CHECK constraint to include all 5 missing values
+
+### financial_audit_log — missing entity_type value
+- `blend_ticket` was absent from the entity_type CHECK constraint
+- Fix: added `blend_ticket` to entity_type CHECK constraint
+
+---
+
 ## 2026-03-16 — Comprehensive Audit Log & Admin Override Fix (migration `20260332400000`)
 
 ### cancel_delivery — admin_override ordering bug

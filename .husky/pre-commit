@@ -1,4 +1,16 @@
 #!/usr/bin/env sh
+
+# --- SQL Migration Validation (prevents known anti-patterns) ---
+echo "🛡️ Validating SQL migrations..."
+bash scripts/validate-sql.sh
+SQL_EXIT=$?
+
+if [ $SQL_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ SQL VALIDATION FAILED — commit blocked. Fix SQL anti-patterns first."
+  exit 1
+fi
+
 echo "🔍 Running ESLint..."
 npm run lint 2>&1
 LINT_EXIT=$?
