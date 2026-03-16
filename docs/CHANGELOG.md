@@ -20,6 +20,29 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Comprehensive Audit Log & Admin Override Fix (migration `20260332400000`)
+
+### cancel_delivery — admin_override ordering bug
+- `SET LOCAL app.admin_override = 'true'` was positioned AFTER the order status re-evaluation block
+- Reverse transitions (e.g. `fulfilled → confirmed`) were blocked by `_enforce_order_status_transition` trigger
+- Fix: moved admin_override to BEFORE any status updates
+
+### mark_overdue_invoices — wrong column names + NULL actor
+- Used `event_type`, `performed_by`, `metadata` instead of `operation_type`, `actor_user_id`, `new_values`
+- Passed NULL for actor (cron context), violating NOT NULL constraint on `actor_user_id`
+- Fix: correct column names + explicit system admin UUID for cron context
+
+### link/unlink_blend_ticket — wrong column names
+- Same wrong column pattern as mark_overdue_invoices (`event_type`/`performed_by`/`metadata`)
+- Fix: rewritten with correct `operation_type`/`actor_user_id`/`new_values` columns
+
+### Safety-net trigger for 20 other functions
+- 20 additional RPCs omit `actor_user_id` from financial_audit_log INSERTs
+- They rely on `DEFAULT auth.uid()` which works from frontend but fails from pg_cron/direct SQL
+- Fix: BEFORE INSERT trigger `trg_fill_audit_actor` on financial_audit_log fills NULL actor_user_id with auth.uid() or admin fallback
+
+---
+
 ## 2026-03-16 — void_delivery Fix & Fake Data Cleanup
 
 ### void_delivery RPC — 4 bugs fixed (migration `20260332300000`)
