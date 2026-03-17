@@ -26,6 +26,7 @@ import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
+import * as Sentry from '@sentry/react';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type {

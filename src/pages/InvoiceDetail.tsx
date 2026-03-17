@@ -591,7 +591,7 @@ export default function InvoiceDetail() {
         `);
 
         const result = await sendEmail({
-          to: cust.email,
+          to: cust.email!,
           subject: `Invoice ${invoice.invoice_number || ''} from Crop RX Solutions`,
           html,
           email_type: 'invoice',
