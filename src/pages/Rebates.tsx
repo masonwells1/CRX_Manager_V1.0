@@ -5,7 +5,7 @@
  * and reconcile payments received.
  */
 import { useEffect, useState , useCallback } from 'react';
-import { Plus, DollarSign, TrendingUp, FileText } from 'lucide-react';
+import { Plus, DollarSign, TrendingUp, FileText, Trash2, Pencil } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -323,6 +323,37 @@ export default function Rebates() {
     });
   };
 
+  // ===== Delete Program =====
+  const handleDeleteProgram = async (programId: string, programName: string) => {
+    if (!confirm(`Delete rebate program "${programName}"? This will also delete all claims under this program.`)) return;
+    try {
+      // Delete claims first (FK constraint) — may be zero claims, so only check for error
+      const { error: claimsError } = await supabase.from('rebate_claims').delete().eq('program_id', programId);
+      if (claimsError) throw claimsError;
+      const result = await supabase.from('rebate_programs').delete().eq('id', programId).select();
+      checkMutationResult(result, 'Delete rebate program');
+      toast('success', `Rebate program "${programName}" deleted`);
+      if (profile) logActivity('rebate_program_deleted', `Rebate program "${programName}" deleted`, profile.id);
+      fetchPrograms();
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to delete program');
+    }
+  };
+
+  // ===== Delete Claim =====
+  const handleDeleteClaim = async (claimId: string, claimNumber: string) => {
+    if (!confirm(`Delete rebate claim ${claimNumber}?`)) return;
+    try {
+      const result = await supabase.from('rebate_claims').delete().eq('id', claimId).select();
+      checkMutationResult(result, 'Delete rebate claim');
+      toast('success', `Claim ${claimNumber} deleted`);
+      if (profile) logActivity('rebate_claim_deleted', `Rebate claim ${claimNumber} deleted`, profile.id);
+      fetchClaims();
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to delete claim');
+    }
+  };
+
   // Stats
   const pendingClaims = claims.filter((c) => c.status === 'pending' || c.status === 'submitted');
   const totalPending = pendingClaims.reduce((s, c) => s + c.claim_amount_cents, 0);
@@ -375,6 +406,32 @@ export default function Rebates() {
         </Badge>
       ),
     },
+    ...(isAdmin
+      ? [
+          {
+            key: 'id' as keyof ProgramRow,
+            header: 'Actions',
+            render: (r: ProgramRow) => (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={(e) => { e.stopPropagation(); openEditProgram(r); }}
+                  className="p-1.5 text-gray-400 hover:text-crx-green rounded-lg hover:bg-gray-100 transition-colors"
+                  title="Edit program"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDeleteProgram(r.id, r.program_name); }}
+                  className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                  title="Delete program"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ),
+          },
+        ]
+      : []),
   ];
 
   const claimColumns: Column<ClaimRow>[] = [
@@ -409,25 +466,32 @@ export default function Rebates() {
       header: 'Actions',
       render: (r) => {
         if (!isAdmin) return null;
-        if (r.status === 'pending')
-          return (
-            <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'submitted'); }}>
-              Submit
-            </Button>
-          );
-        if (r.status === 'submitted')
-          return (
-            <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'approved'); }}>
-              Approve
-            </Button>
-          );
-        if (r.status === 'approved')
-          return (
-            <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'paid'); }}>
-              Mark Paid
-            </Button>
-          );
-        return null;
+        return (
+          <div className="flex items-center gap-1">
+            {r.status === 'pending' && (
+              <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'submitted'); }}>
+                Submit
+              </Button>
+            )}
+            {r.status === 'submitted' && (
+              <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'approved'); }}>
+                Approve
+              </Button>
+            )}
+            {r.status === 'approved' && (
+              <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'paid'); }}>
+                Mark Paid
+              </Button>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); handleDeleteClaim(r.id, r.claim_number); }}
+              className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+              title="Delete claim"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        );
       },
     },
   ];

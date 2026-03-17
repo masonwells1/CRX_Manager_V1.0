@@ -51,6 +51,7 @@ export default function CycleCounts() {
   const { profile, role } = useAuth();
   const { toast } = useToast();
   const completeCycleCountIdem = useIdempotencyKey('complete_cycle_count', profile?.id || '');
+  const reverseCycleCountIdem = useIdempotencyKey('reverse_cycle_count', profile?.id || '');
   const [counts, setCounts] = useState<CountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -68,6 +69,7 @@ export default function CycleCounts() {
   const [countItems, setCountItems] = useState<CountItemRow[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [reversing, setReversing] = useState(false);
 
   const isAdmin = role === 'admin';
 
@@ -338,6 +340,41 @@ export default function CycleCounts() {
         fetchCounts();
       },
     });
+  };
+
+  // Reverse a completed cycle count (undo inventory adjustments)
+  const handleReverse = async () => {
+    if (!activeCount || !profile) return;
+    if (!confirm('Reverse this completed cycle count? All inventory adjustments will be undone.')) return;
+
+    setReversing(true);
+    try {
+      const key = reverseCycleCountIdem.getKey();
+      const { error } = await supabase.rpc('reverse_completed_cycle_count', {
+        p_cycle_count_id: activeCount.id,
+        p_reversed_by: profile.id,
+        p_idempotency_key: key,
+      });
+
+      if (error) throw error;
+      reverseCycleCountIdem.resetKey();
+
+      await logActivity(
+        'cycle_count_reversed',
+        `Cycle count ${activeCount.count_number} reversed — inventory adjustments undone`,
+        profile.id,
+        'cycle_count',
+        activeCount.id
+      );
+
+      toast('success', `Cycle count ${activeCount.count_number} reversed. Inventory restored.`);
+      setShowDetail(false);
+      fetchCounts();
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to reverse cycle count');
+    } finally {
+      setReversing(false);
+    }
   };
 
   const statusBadge = (status: string) => {
@@ -620,6 +657,18 @@ export default function CycleCounts() {
                   icon={<CheckCircle className="w-4 h-4" />}
                 >
                   Complete &amp; Apply Adjustments
+                </Button>
+              </div>
+            )}
+            {activeCount.status === 'completed' && isAdmin && (
+              <div className="flex justify-end pt-2 border-t">
+                <Button
+                  variant="secondary"
+                  onClick={handleReverse}
+                  loading={reversing}
+                  icon={<XCircle className="w-4 h-4" />}
+                >
+                  Reverse &amp; Undo Adjustments
                 </Button>
               </div>
             )}
