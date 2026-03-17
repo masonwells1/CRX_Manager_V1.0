@@ -585,7 +585,7 @@ export default function Products() {
             </Button>
             {exportMenuOpen && (
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setExportMenuOpen(false)} />
+                <div className="fixed inset-0 z-40" role="presentation" onClick={() => setExportMenuOpen(false)} onKeyDown={() => setExportMenuOpen(false)} />
                 <div className="absolute right-0 mt-1 w-56 bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1">
                   <p className="px-3 py-1.5 text-xs font-semibold text-secondary uppercase tracking-wide">PDF</p>
                   <button onClick={() => handleDownloadAllPDF(false)} className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center gap-2">

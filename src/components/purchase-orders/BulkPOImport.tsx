@@ -9,6 +9,7 @@ import { supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
+import * as Sentry from '@sentry/react';
 import type { Product } from '../../types';
 
 // ---------- interfaces ----------
@@ -213,7 +214,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           const parsed = await parseWithVisionOCR(file, file.name, products);
           results.push(parsed);
         } catch (err) {
-          console.error(`Error parsing ${file.name}:`, err);
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: `Error parsing ${file.name}` } });
           results.push({
             source_file: file.name,
             vendor_name: '',
@@ -231,7 +232,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
       }
       setParsedPOs(results);
     } catch (err) {
-      console.error('Parse error:', err);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Parse error' } });
       toast('error', 'Error processing files');
     } finally {
       setParsing(false);
@@ -343,7 +344,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           .select('*', { count: 'exact', head: true })
           .like('po_number', `PO-${year}-%`);
         if (countError) {
-          console.error('Failed to get PO count:', countError.message);
+          Sentry.captureException(new Error(`Failed to get PO count: ${countError.message}`));
           failedCount++;
           continue;
         }
@@ -398,7 +399,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
         successCount++;
       } catch (error) {
-        console.error('Error importing PO:', error);
+        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing PO' } });
         failedCount++;
       }
     }
@@ -535,7 +536,10 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
                     {/* PO header */}
                     <div
                       className="p-4 bg-gray-50 flex items-center gap-3 cursor-pointer hover:bg-gray-100 transition-colors"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => toggleExpanded(poIdx)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleExpanded(poIdx); } }}
                     >
                       {po.expanded ? (
                         <ChevronDown className="w-4 h-4 text-gray-500 flex-shrink-0" />

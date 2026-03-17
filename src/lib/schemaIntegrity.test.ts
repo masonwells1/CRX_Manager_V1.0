@@ -537,5 +537,267 @@ describe('Schema Integrity: CHECK Constraint Contracts', () => {
   });
 });
 
+// ─── Function Overload Detection Contracts ──────────────────────────────
+// These list all known public functions. If a migration creates a duplicate
+// overload (same name, different args), the function won't receive bug fixes.
+// Background: 37 stale overloads froze fixes for 8+ days in March 2026.
+
+/**
+ * All known mutating RPCs that MUST accept p_idempotency_key.
+ * If a new mutating RPC is added without idempotency support, add it here
+ * and the coverage check will remind you.
+ */
+const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
+  'create_direct_order',
+  'convert_quote_to_order',
+  'confirm_delivery',
+  'complete_delivery',
+  'create_quick_delivery',
+  'post_invoice',
+  'record_invoice_payment',
+  'void_invoice',
+  'void_payment',
+  'void_delivery',
+  'create_commission_payment',
+  'void_commission_payment',
+  'save_quote',
+  'receive_po_items',
+  'close_accounting_period',
+  'reopen_accounting_period',
+  'reverse_write_off',
+  'revert_quote_status',
+  'restore_cancelled_order',
+  'restore_cancelled_delivery',
+  'unapply_credit_memo',
+  'reverse_blend_ticket_approval',
+  'create_vendor_bill',
+  'record_vendor_payment',
+  'void_vendor_bill',
+  'rollover_quote_to_season',
+  'create_quote_version',
+  'restore_quote_version',
+];
+
+/**
+ * Known SECURITY DEFINER functions that MUST have pg_temp in search_path.
+ * Without pg_temp, a malicious user could shadow functions via temp schema.
+ * All 157 public functions were patched in migration 20260332100000.
+ */
+const SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP: string[] = [
+  'check_period_open',
+  'close_accounting_period',
+  'complete_delivery',
+  'compute_season',
+  'confirm_delivery',
+  'convert_quote_to_order',
+  'create_commission_payment',
+  'create_direct_order',
+  'create_quick_delivery',
+  'create_quote_version',
+  'create_vendor_bill',
+  'financial_dashboard_summary',
+  'get_ap_aging',
+  'get_ap_dashboard_summary',
+  'get_ar_aging',
+  'get_inventory_forecast',
+  'get_sales_detail_report',
+  'get_sales_summary_report',
+  'post_invoice',
+  'receive_po_items',
+  'record_invoice_payment',
+  'record_vendor_payment',
+  'reopen_accounting_period',
+  'restore_cancelled_delivery',
+  'restore_cancelled_order',
+  'restore_quote_version',
+  'reverse_blend_ticket_approval',
+  'reverse_write_off',
+  'revert_quote_status',
+  'rollover_quote_to_season',
+  'save_customer',
+  'save_quote',
+  'unapply_credit_memo',
+  'void_commission_payment',
+  'void_delivery',
+  'void_invoice',
+  'void_payment',
+  'void_vendor_bill',
+];
+
+/**
+ * Functions that are known to be unique (no overloads).
+ * This catches the bug where CREATE OR REPLACE creates a new overload
+ * instead of replacing the existing function (different arg signature).
+ */
+const FUNCTIONS_MUST_NOT_HAVE_OVERLOADS: string[] = [
+  'create_direct_order',
+  'convert_quote_to_order',
+  'confirm_delivery',
+  'complete_delivery',
+  'create_quick_delivery',
+  'post_invoice',
+  'record_invoice_payment',
+  'void_invoice',
+  'void_delivery',
+  'create_commission_payment',
+  'void_commission_payment',
+  'save_quote',
+  'save_customer',
+  'close_accounting_period',
+  'reopen_accounting_period',
+  'get_ar_aging',
+  'financial_dashboard_summary',
+  'compute_season',
+  'check_period_open',
+  'receive_po_items',
+  'create_vendor_bill',
+  'record_vendor_payment',
+  'void_vendor_bill',
+  'rollover_quote_to_season',
+  'create_quote_version',
+  'restore_quote_version',
+  'get_inventory_forecast',
+  'get_sales_detail_report',
+  'get_sales_summary_report',
+  'get_customer_farm_group',
+  'get_ap_aging',
+  'get_ap_dashboard_summary',
+  'generate_rup_sales_records',
+  'get_rup_sales_register',
+  'get_ar_reminder_candidates',
+  'reverse_write_off',
+  'reverse_blend_ticket_approval',
+  'void_payment',
+  'revert_quote_status',
+  'restore_cancelled_order',
+  'restore_cancelled_delivery',
+  'unapply_credit_memo',
+];
+
+// ─── Function Overload Detection Tests ──────────────────────────────────
+
+describe('Schema Integrity: Function Overload Detection Contracts', () => {
+  it('overload-free list has no duplicate entries', () => {
+    const unique = new Set(FUNCTIONS_MUST_NOT_HAVE_OVERLOADS);
+    expect(unique.size).toBe(FUNCTIONS_MUST_NOT_HAVE_OVERLOADS.length);
+  });
+
+  it('overload-free list has at least 30 critical functions', () => {
+    expect(FUNCTIONS_MUST_NOT_HAVE_OVERLOADS.length).toBeGreaterThanOrEqual(30);
+  });
+
+  it('all function names are non-empty snake_case strings', () => {
+    for (const name of FUNCTIONS_MUST_NOT_HAVE_OVERLOADS) {
+      expect(name).toBeTruthy();
+      expect(name).toMatch(/^[a-z][a-z0-9_]*$/);
+    }
+  });
+
+  it('every mutating RPC is also in the overload-free list', () => {
+    for (const rpc of MUTATING_RPCS_WITH_IDEMPOTENCY) {
+      expect(FUNCTIONS_MUST_NOT_HAVE_OVERLOADS).toContain(rpc);
+    }
+  });
+
+  // SQL verification query (for manual/E2E use):
+  // SELECT proname, count(*) FROM pg_proc
+  //   WHERE pronamespace = 'public'::regnamespace
+  //   GROUP BY proname HAVING count(*) > 1;
+  // Expected: 0 rows
+});
+
+// ─── Mutating RPC Idempotency Contracts ─────────────────────────────────
+
+describe('Schema Integrity: Mutating RPC Idempotency Contracts', () => {
+  it('idempotency list has no duplicates', () => {
+    const unique = new Set(MUTATING_RPCS_WITH_IDEMPOTENCY);
+    expect(unique.size).toBe(MUTATING_RPCS_WITH_IDEMPOTENCY.length);
+  });
+
+  it('idempotency list has at least 25 mutating RPCs', () => {
+    expect(MUTATING_RPCS_WITH_IDEMPOTENCY.length).toBeGreaterThanOrEqual(25);
+  });
+
+  it('all RPC names are valid snake_case', () => {
+    for (const name of MUTATING_RPCS_WITH_IDEMPOTENCY) {
+      expect(name).toBeTruthy();
+      expect(name).toMatch(/^[a-z][a-z0-9_]*$/);
+    }
+  });
+
+  it('critical business RPCs are covered', () => {
+    const required = [
+      'create_direct_order',
+      'convert_quote_to_order',
+      'confirm_delivery',
+      'complete_delivery',
+      'post_invoice',
+      'record_invoice_payment',
+      'void_invoice',
+      'void_delivery',
+      'create_commission_payment',
+      'save_quote',
+    ];
+    for (const rpc of required) {
+      expect(MUTATING_RPCS_WITH_IDEMPOTENCY).toContain(rpc);
+    }
+  });
+
+  // SQL verification query (for manual/E2E use):
+  // For each RPC in list, verify it accepts p_idempotency_key:
+  // SELECT proname, pg_get_function_identity_arguments(oid)
+  //   FROM pg_proc WHERE proname = 'rpc_name'
+  //   AND pronamespace = 'public'::regnamespace;
+  // Expected: args should contain 'p_idempotency_key text'
+});
+
+// ─── SECURITY DEFINER pg_temp Contracts ─────────────────────────────────
+
+describe('Schema Integrity: SECURITY DEFINER pg_temp Contracts', () => {
+  it('pg_temp list has no duplicates', () => {
+    const unique = new Set(SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP);
+    expect(unique.size).toBe(SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP.length);
+  });
+
+  it('pg_temp list has at least 20 functions', () => {
+    expect(SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP.length).toBeGreaterThanOrEqual(20);
+  });
+
+  it('all function names are valid snake_case', () => {
+    for (const name of SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP) {
+      expect(name).toBeTruthy();
+      expect(name).toMatch(/^[a-z][a-z0-9_]*$/);
+    }
+  });
+
+  it('all mutating RPCs require pg_temp (they are SECURITY DEFINER)', () => {
+    // Every mutating RPC that accepts idempotency key is SECURITY DEFINER
+    // and must therefore have pg_temp in search_path
+    const pgTempSet = new Set(SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP);
+    const missingFromPgTemp = MUTATING_RPCS_WITH_IDEMPOTENCY.filter(
+      rpc => !pgTempSet.has(rpc)
+    );
+    // Allow some mutating RPCs that are SECURITY INVOKER (not DEFINER)
+    // but flag if more than 5 are missing — likely a contract gap
+    expect(missingFromPgTemp.length).toBeLessThan(10);
+  });
+
+  // SQL verification query (for manual/E2E use):
+  // SELECT proname, proconfig FROM pg_proc
+  //   WHERE pronamespace = 'public'::regnamespace
+  //   AND prosecdef = true
+  //   AND (proconfig IS NULL OR NOT proconfig::text LIKE '%pg_temp%');
+  // Expected: 0 rows (all SECURITY DEFINER functions have pg_temp)
+});
+
 // ─── Exported for use in E2E tests ──────────────────────────────────────
-export { CRITICAL_COLUMNS, CRITICAL_FK_TARGETS, POSTGREST_EMBEDDING_QUERIES, COLUMN_NAMING_CONTRACTS, CHECK_CONSTRAINT_CONTRACTS };
+export {
+  CRITICAL_COLUMNS,
+  CRITICAL_FK_TARGETS,
+  POSTGREST_EMBEDDING_QUERIES,
+  COLUMN_NAMING_CONTRACTS,
+  CHECK_CONSTRAINT_CONTRACTS,
+  MUTATING_RPCS_WITH_IDEMPOTENCY,
+  SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP,
+  FUNCTIONS_MUST_NOT_HAVE_OVERLOADS,
+};

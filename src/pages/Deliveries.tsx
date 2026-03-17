@@ -604,7 +604,10 @@ export default function Deliveries() {
 
     const DriverCard = ({ d }: { d: DeliveryRow }) => (
       <div
+        role="button"
+        tabIndex={0}
         onClick={() => navigate(`/deliveries/${d.id}`)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/deliveries/${d.id}`); } }}
         className="bg-gray-800 rounded-xl p-4 space-y-2 cursor-pointer active:bg-gray-700 transition-colors"
       >
         <div className="flex items-center justify-between">

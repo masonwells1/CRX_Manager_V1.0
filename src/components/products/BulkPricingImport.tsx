@@ -6,6 +6,7 @@ import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
+import { Sentry } from '../../lib/sentry';
 
 interface BulkPricingImportProps {
   open: boolean;
@@ -210,7 +211,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
         .maybeSingle();
 
       if (lookupError) {
-        console.error('Failed to look up product:', lookupError.message);
+        Sentry.captureException(new Error(String(lookupError.message)), { extra: { context: 'Failed to look up product' } });
         failed++;
         continue;
       }
@@ -254,7 +255,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
             new_tier3_price: row.tier3_price ?? product.tier3_price,
             change_note: 'Bulk pricing update',
           });
-          if (costHistResult.error) console.error('Cost history audit failed:', costHistResult.error);
+          if (costHistResult.error) Sentry.captureException(costHistResult.error instanceof Error ? costHistResult.error : new Error(String(costHistResult.error)), { extra: { context: 'Cost history audit failed' } });
           checkMutationResult(costHistResult, 'Insert cost history for bulk pricing import');
         }
       } catch {

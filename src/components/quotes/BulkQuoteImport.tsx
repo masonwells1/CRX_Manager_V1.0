@@ -6,6 +6,7 @@ import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
+import * as Sentry from '@sentry/react';
 
 interface BulkQuoteImportProps {
   open: boolean;
@@ -391,7 +392,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 .single();
 
               if (prodDetailError) {
-                console.error('Failed to load product details:', prodDetailError.message);
+                Sentry.captureException(new Error(`Failed to load product details: ${prodDetailError.message}`));
               }
 
               const current_cost = product?.current_cost || 0;

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { X, Loader2, Image } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
+import * as Sentry from '@sentry/react';
 import { useToast } from '../ui/Toast';
 import type { TeamNoteAttachment } from '../../types';
 
@@ -23,7 +24,7 @@ export default function NoteAttachments({ noteId, canDelete }: NoteAttachmentsPr
       .order('created_at', { ascending: true });
 
     if (error) {
-      console.error('Failed to fetch attachments:', error);
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Failed to fetch attachments' } });
     } else {
       setAttachments(data ?? []);
     }
@@ -53,7 +54,7 @@ export default function NoteAttachments({ noteId, canDelete }: NoteAttachmentsPr
           .remove([storagePath]);
 
         if (storageErr) {
-          console.error('Storage delete error:', storageErr);
+          Sentry.captureException(storageErr instanceof Error ? storageErr : new Error(String(storageErr)), { extra: { context: 'Storage delete error' } });
           // Continue to delete DB record even if storage delete fails
         }
       }
@@ -69,7 +70,7 @@ export default function NoteAttachments({ noteId, canDelete }: NoteAttachmentsPr
       toast('success', 'Photo deleted');
       setAttachments((prev) => prev.filter((a) => a.id !== attachment.id));
     } catch (err) {
-      console.error('Delete attachment error:', err);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Delete attachment error' } });
       toast('error', 'Failed to delete photo');
     } finally {
       setDeletingId(null);

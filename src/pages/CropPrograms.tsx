@@ -311,7 +311,10 @@ export default function CropPrograms() {
               <div className="flex items-start justify-between">
                 <div
                   className="flex-1 cursor-pointer"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setExpandedId(expandedId === prog.id ? null : prog.id)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpandedId(expandedId === prog.id ? null : prog.id); } }}
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg bg-crx-green-light flex items-center justify-center">

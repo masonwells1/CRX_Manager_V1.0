@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import * as Sentry from '@sentry/react';
 import { supabase } from '../lib/db';
 
 const POLL_INTERVAL = 30000;
@@ -61,13 +62,13 @@ export function useOCRProcessor(enabled: boolean = true) {
           });
           setProcessedCount(prev => prev + 1);
         } catch (err) {
-          console.error('Failed to re-trigger OCR for ticket:', item.blend_ticket_id, err);
+          Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Failed to re-trigger OCR for ticket', blend_ticket_id: item.blend_ticket_id } });
         }
       }
 
       setIsProcessing(false);
     } catch (err) {
-      console.error('Queue check error:', err);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Queue check error' } });
       setIsProcessing(false);
     }
   }

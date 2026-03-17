@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Activity, CheckCircle2, XCircle, Edit, MessageCircle, UserPlus, Plus, Trash } from 'lucide-react';
 import { supabase } from '../../lib/db';
+import * as Sentry from '@sentry/react';
 import { useRealtimeActivity } from '../../hooks/useRealtimeSubscription';
 
 interface ActivityEntry {
@@ -37,7 +38,7 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
 
     const { data, error } = await query;
     if (error) {
-      console.error('Failed to load activity feed:', error.message);
+      Sentry.captureException(new Error(`Failed to load activity feed: ${error.message}`));
       setLoading(false);
       return;
     }

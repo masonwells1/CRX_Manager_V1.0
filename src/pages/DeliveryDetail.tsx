@@ -1853,7 +1853,10 @@ export default function DeliveryDetail() {
                   src={photo.image_url}
                   alt={photo.caption || 'Delivery photo'}
                   className="w-full h-48 object-contain rounded-lg border border-gray-200 bg-gray-50 cursor-pointer"
+                  role="button"
+                  tabIndex={0}
                   onClick={(e) => { e.stopPropagation(); window.open(photo.image_url, '_blank'); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.open(photo.image_url, '_blank'); } }}
                 />
                 {photo.caption && (
                   <p className="text-xs text-secondary mt-1 truncate">{photo.caption}</p>

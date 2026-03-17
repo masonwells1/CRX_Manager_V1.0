@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import * as Sentry from '@sentry/react';
 import { supabase } from '../lib/db';
 import { setUserContext, clearUserContext } from '../lib/metrics';
 import type { Profile, UserRole } from '../types';
@@ -46,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (data) setUserContext(data.id, data.role ?? 'unknown');
         return;
       }
-      console.error(`Profile fetch attempt ${attempt + 1} failed:`, error.message);
+      Sentry.captureException(new Error(error.message), { extra: { context: `Profile fetch attempt ${attempt + 1} failed` } });
       if (attempt < retries) {
         // Wait 1s before retry (doubles each attempt)
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));

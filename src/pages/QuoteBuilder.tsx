@@ -1524,11 +1524,14 @@ export default function QuoteBuilder() {
                 <div
                   key={v.id}
                   className={`py-3 px-3 flex items-center justify-between cursor-pointer transition-colors ${isSelected ? 'bg-crx-green/10 border-l-4 border-crx-green' : 'hover:bg-gray-50'}`}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => {
                     setSelectedVersion(isSelected ? null : v);
                     setCompareMode(false);
                     setConfirmRestore(null);
                   }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedVersion(isSelected ? null : v); setCompareMode(false); setConfirmRestore(null); } }}
                 >
                   <div>
                     <span className="font-medium text-nav-dark">v{v.version_number}</span>

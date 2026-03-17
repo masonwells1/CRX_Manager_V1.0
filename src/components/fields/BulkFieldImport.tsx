@@ -492,7 +492,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               onDragOver={handleDragOver}
               onDrop={handleDrop}
               className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-crx-green hover:bg-crx-green-tint transition-colors cursor-pointer"
+              role="button"
+              tabIndex={0}
               onClick={() => document.getElementById('field-import-input')?.click()}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); document.getElementById('field-import-input')?.click(); } }}
             >
               <Upload className="w-10 h-10 text-gray-400 mx-auto mb-3" />
               <p className="text-sm font-medium text-nav-dark">

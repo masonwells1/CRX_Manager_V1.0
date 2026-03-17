@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Camera, Loader2 } from 'lucide-react';
 import { supabase } from '../../lib/db';
+import * as Sentry from '@sentry/react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { compressImage } from '../../lib/imageCompression';
@@ -69,7 +70,7 @@ export default function NotePhotoUpload({ noteId, onUploadComplete }: NotePhotoU
 
         uploadCount++;
       } catch (err) {
-        console.error('Photo upload error:', err);
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Photo upload error' } });
         toast('error', 'Photo upload failed. Please try again.');
       }
     }

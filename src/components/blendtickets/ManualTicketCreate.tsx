@@ -9,6 +9,7 @@ import { logActivity } from '../../lib/activityLogger';
 import { validateBlendMath } from '../../lib/blendMathValidator';
 import { localToday } from '../../lib/dateUtils';
 import type { Customer, Product, BlendRecipe, BlendRecipeItem } from '../../types';
+import { Sentry } from '../../lib/sentry';
 
 interface ManualTicketCreateProps {
   customers: Customer[];
@@ -63,7 +64,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
         .select('*')
         .eq('is_active', true)
         .order('product_name');
-      if (prodError) console.error('Failed to load products:', prodError.message);
+      if (prodError) Sentry.captureException(new Error(String(prodError.message)), { extra: { context: 'Failed to load products' } });
       if (prodData) setAllProducts(prodData);
 
       // Fetch active blend recipes with their items
@@ -73,7 +74,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
         .eq('is_active', true)
         .is('deleted_at', null)
         .order('name');
-      if (recipeError) console.error('Failed to load recipes:', recipeError.message);
+      if (recipeError) Sentry.captureException(new Error(String(recipeError.message)), { extra: { context: 'Failed to load recipes' } });
       if (recipeData) setRecipes(recipeData as unknown as (BlendRecipe & { items: BlendRecipeItem[] })[]);
     };
     loadData();
@@ -222,7 +223,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
 
       onComplete();
     } catch (err: unknown) {
-      console.error('Error creating manual ticket:', err);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Error creating manual ticket' } });
       setError(err instanceof Error ? err.message : 'Failed to create ticket');
     } finally {
       setSaving(false);

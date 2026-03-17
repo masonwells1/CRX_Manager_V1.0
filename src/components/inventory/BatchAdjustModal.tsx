@@ -6,6 +6,7 @@ import { supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { Sentry } from '../../lib/sentry';
 
 export interface AdjustmentItem {
   inventory_id: string;
@@ -83,7 +84,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     for (const call of calls) {
       const { error } = await supabase.rpc('adjust_inventory', call);
       if (error) {
-        console.error('Batch adjust error:', error);
+        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Batch adjust error' } });
         errorCount++;
       } else {
         successCount++;

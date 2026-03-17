@@ -969,7 +969,10 @@ export default function TeamBoard() {
               <div className="divide-y divide-gray-100">
                 {completedNotes.map(n => (
                   <div key={n.id} className="p-4 hover:bg-gray-50/50 transition-colors cursor-pointer"
+                    role="button"
+                    tabIndex={0}
                     onClick={() => { setSelectedNote(n); setDetailModalOpen(true); }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedNote(n); setDetailModalOpen(true); } }}
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="flex-1 min-w-0">
@@ -1114,6 +1117,8 @@ export default function TeamBoard() {
                     <div
                       key={a.id}
                       className="px-5 py-3 flex items-start gap-3 hover:bg-gray-50/50 transition-colors cursor-pointer"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => {
                         const note = notes.find(n => n.id === a.note_id);
                         if (note) {
@@ -1121,6 +1126,7 @@ export default function TeamBoard() {
                           setDetailModalOpen(true);
                         }
                       }}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const note = notes.find(n => n.id === a.note_id); if (note) { setSelectedNote(note); setDetailModalOpen(true); } } }}
                     >
                       <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center shrink-0 mt-0.5">
                         {getActivityIcon(a.action_type)}

@@ -5,6 +5,7 @@
  */
 import { useEffect, useState, useCallback } from 'react';
 import { WifiOff, RefreshCw, CheckCircle2 } from 'lucide-react';
+import * as Sentry from '@sentry/react';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { getPendingCount } from '../../lib/offlineQueue';
 import { syncPendingActions } from '../../lib/offlineSync';
@@ -46,7 +47,7 @@ export default function OfflineBanner() {
         setTimeout(() => setSyncResult(null), 5000);
       }
     } catch (error) {
-      console.error('Sync failed:', error);
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Sync failed' } });
       setSyncError(true);
     }
     setSyncing(false);

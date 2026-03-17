@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { History, ChevronDown, ChevronUp, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 import { supabase } from '../../lib/db';
+import * as Sentry from '@sentry/react';
 import type { YesterdayRecapData } from '../../types';
 import Badge from '../ui/Badge';
 
@@ -15,7 +16,7 @@ export default function YesterdayRecap() {
     async function fetchRecap() {
       const { data: recap, error } = await supabase.rpc('get_yesterday_delivery_recap');
       if (error) {
-        console.error('Failed to load yesterday recap:', error.message);
+        Sentry.captureException(new Error(`Failed to load yesterday recap: ${error.message}`));
         setLoading(false);
         return;
       }
@@ -108,7 +109,10 @@ export default function YesterdayRecap() {
           {issues.map((issue) => (
             <div
               key={issue.id}
+              role="button"
+              tabIndex={0}
               onClick={() => navigate(`/deliveries/${issue.id}`)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/deliveries/${issue.id}`); } }}
               className="border-l-4 border-red-400 bg-red-50/50 rounded-r-lg p-3 cursor-pointer hover:bg-red-50 transition-colors"
             >
               <div className="flex items-start justify-between gap-2">

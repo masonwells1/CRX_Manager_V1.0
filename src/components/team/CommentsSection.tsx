@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { MessageCircle, Send, Reply, Edit2, Trash2, X } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
+import * as Sentry from '@sentry/react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useRealtimeComments } from '../../hooks/useRealtimeSubscription';
@@ -49,7 +50,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       .select('id, full_name')
       .eq('is_active', true);
     if (error) {
-      console.error('Failed to load profiles:', error.message);
+      Sentry.captureException(new Error(`Failed to load profiles: ${error.message}`));
       return;
     }
     setProfiles((data || []) as Profile[]);

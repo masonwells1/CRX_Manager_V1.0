@@ -13,7 +13,6 @@ window.addEventListener('unhandledrejection', (event) => {
   const error = event.reason instanceof Error
     ? event.reason
     : new Error(String(event.reason));
-  console.error('[Unhandled Promise Rejection]', error);
   Sentry.captureException(error, { tags: { mechanism: 'unhandledrejection' } });
 });
 

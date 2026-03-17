@@ -9,7 +9,7 @@ function getAllowedOrigin(): string {
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1"))
     return "http://localhost:5173";
-  console.error("ALLOWED_ORIGIN not set — CORS will block all requests");
+  console.warn("ALLOWED_ORIGIN not set — CORS will block all requests");
   return "";
 }
 
@@ -876,7 +876,7 @@ Deno.serve(async (req: Request) => {
       processing_time_ms: Date.now() - startTime,
     });
   } catch (e) {
-    console.error("Document processing error:", e);
+    console.warn("Document processing error:", e);
     return jsonResponse({
       success: false,
       error: (e as Error).message,

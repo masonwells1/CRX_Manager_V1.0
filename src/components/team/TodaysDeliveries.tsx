@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Truck, ChevronDown, ChevronUp, Clock, Package, AlertTriangle, User } from 'lucide-react';
 import { supabase } from '../../lib/db';
+import * as Sentry from '@sentry/react';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import type { TeamBoardDeliveryData, TeamBoardDelivery } from '../../types';
@@ -97,7 +98,7 @@ export default function TodaysDeliveries() {
     setLoading(true);
     const { data: result, error } = await supabase.rpc('get_team_board_deliveries');
     if (error) {
-      console.error('Failed to load deliveries:', error.message);
+      Sentry.captureException(new Error(`Failed to load deliveries: ${error.message}`));
       setLoading(false);
       return;
     }

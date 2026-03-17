@@ -7,7 +7,7 @@ import Button from '../components/ui/Button';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import LogbookReport from '../components/reports/LogbookReport';
@@ -414,7 +414,8 @@ export default function Reports() {
   const handleMarkPaid = async () => {
     if (selectedCommissions.size === 0) { toast('error', 'Select at least one commission'); return; }
     // Only pending commissions can be marked paid
-    const nonPending = commissionData.filter((c) => selectedCommissions.has(c.id) && c.status !== 'pending');
+    const selected = commissionData.filter((c) => selectedCommissions.has(c.id));
+    const nonPending = selected.filter((c) => c.status !== 'pending');
     if (nonPending.length > 0) {
       toast('error', `${nonPending.length} selected commission(s) are not in 'pending' status — only pending commissions can be marked paid`);
       return;
@@ -422,11 +423,31 @@ export default function Reports() {
     setMarkingPaid(true);
     const today = localToday();
     try {
-      // TODO: Replace with create_commission_payment RPC for proper audit trail
-      const result = await supabase.from('commissions').update({ status: 'paid', paid_date: today }).in('id', Array.from(selectedCommissions)).select();
-      checkMutationResult(result, 'Mark commissions as paid');
-      toast('success', `${result.data!.length} commission(s) marked as paid`);
-      if (profile) logActivity('commissions_paid', `${result.data!.length} commission(s) marked as paid`, profile.id);
+      // Group by recipient — RPC requires all commissions per call belong to same recipient
+      const byRecipient = new Map<string, string[]>();
+      for (const c of selected) {
+        const rid = (c as Record<string, unknown>).recipient_user_id as string;
+        if (!byRecipient.has(rid)) byRecipient.set(rid, []);
+        byRecipient.get(rid)!.push(c.id);
+      }
+
+      let totalPaid = 0;
+      for (const [, ids] of byRecipient) {
+        const { error } = await supabase.rpc('create_commission_payment', {
+          p_commission_ids: ids,
+          p_payment_method: 'other',
+          p_reference: null,
+          p_payment_date: today,
+          p_notes: 'Quick pay from Reports page',
+          p_performed_by: profile!.id,
+          p_idempotency_key: `reports-commission-pay-${ids.join('-')}-${Date.now()}`,
+        });
+        if (error) throw new Error(error.message);
+        totalPaid += ids.length;
+      }
+
+      toast('success', `${totalPaid} commission(s) marked as paid (${byRecipient.size} payment${byRecipient.size > 1 ? 's' : ''} created)`);
+      if (profile) logActivity('commissions_paid', `${totalPaid} commission(s) marked as paid via Reports`, profile.id);
       fetchCommissions();
     } catch (err: unknown) {
       toast('error', err instanceof Error ? err.message : 'Failed to update commissions');

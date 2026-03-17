@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Bell, Check, Trash2, X } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
+import * as Sentry from '@sentry/react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useRealtimeNotifications } from '../../hooks/useRealtimeSubscription';
@@ -80,7 +81,7 @@ export default function NotificationsPanel() {
         .select();
       checkMutationResult(result, 'Mark notification as read');
     } catch (err) {
-      console.error('Failed to mark notification as read:', err);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Failed to mark notification as read' } });
       toast('error', 'Failed to update notification');
     }
     fetchNotifications();
@@ -98,7 +99,7 @@ export default function NotificationsPanel() {
         .select();
       checkMutationResult(result, 'Mark all notifications as read');
     } catch (err) {
-      console.error('Failed to mark all notifications as read:', err);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Failed to mark all notifications as read' } });
       toast('error', 'Failed to update notification');
     }
     fetchNotifications();
@@ -113,7 +114,7 @@ export default function NotificationsPanel() {
         .select();
       checkMutationResult(result, 'Delete notification');
     } catch (err) {
-      console.error('Failed to delete notification:', err);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Failed to delete notification' } });
       toast('error', 'Failed to update notification');
     }
     fetchNotifications();

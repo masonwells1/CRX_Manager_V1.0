@@ -6,6 +6,7 @@ import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
+import { Sentry } from '../../lib/sentry';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -283,7 +284,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
 
       setValidation({ valid: parsedOrders, invalid });
     } catch (error) {
-      console.error('Error parsing file:', error);
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error parsing file' } });
       toast('error', 'Error parsing file');
     } finally {
       setParsing(false);
@@ -306,7 +307,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           .maybeSingle();
 
         if (custError) {
-          console.error('Failed to look up customer:', custError.message);
+          Sentry.captureException(new Error(String(custError.message)), { extra: { context: 'Failed to look up customer' } });
           failedCount++;
           continue;
         }
@@ -353,7 +354,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
               .ilike('product_name', item.product_name)
               .maybeSingle();
             if (prodError) {
-              console.error('Failed to look up product:', prodError.message);
+              Sentry.captureException(new Error(String(prodError.message)), { extra: { context: 'Failed to look up product' } });
             }
 
             return {
@@ -378,7 +379,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
 
         successCount++;
       } catch (error) {
-        console.error('Error importing order:', error);
+        Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Error importing order' } });
         failedCount++;
       }
     }

@@ -7,7 +7,7 @@ function getAllowedOrigin(): string {
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  console.error("ALLOWED_ORIGIN not set — CORS will block all requests");
+  console.warn("ALLOWED_ORIGIN not set — CORS will block all requests");
   return "";
 }
 
@@ -152,7 +152,7 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (logError) {
-      console.error("Failed to insert email_log:", logError);
+      console.warn("Failed to insert email_log:", logError);
     }
 
     if (!success) {

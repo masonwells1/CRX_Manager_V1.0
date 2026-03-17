@@ -7,6 +7,7 @@ import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { compressImage } from '../../lib/imageCompression';
 import { localToday } from '../../lib/dateUtils';
+import { Sentry } from '../../lib/sentry';
 import type { Customer } from '../../types';
 
 interface ImageFile {
@@ -172,7 +173,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
           .createSignedUrl(filePath, 60 * 60 * 24 * 365);
 
         if (urlError) {
-          console.error('Failed to create signed URL:', urlError.message);
+          Sentry.captureException(new Error(String(urlError.message)), { extra: { context: 'Failed to create signed URL' } });
         }
 
         const imgResult = await supabase.from('blend_ticket_images').insert({
@@ -219,7 +220,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
 
       setError(null);
     } catch (err: unknown) {
-      console.error('Upload error:', err);
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Upload error' } });
       setError(err instanceof Error ? err.message : 'Failed to upload images');
     } finally {
       setIsUploading(false);

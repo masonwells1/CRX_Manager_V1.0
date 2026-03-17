@@ -5,6 +5,7 @@ import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
+import { Sentry } from '../../lib/sentry';
 
 interface BulkProductImportProps {
   open: boolean;
@@ -314,10 +315,10 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
       });
 
       if (productResult.error) {
-        console.error('Failed to insert product:', productResult.error);
+        Sentry.captureException(productResult.error instanceof Error ? productResult.error : new Error(String(productResult.error)), { extra: { context: 'Failed to insert product' } });
         failed++;
       } else {
-        try { checkMutationResult(productResult, 'Insert product'); } catch (e) { console.error(e); failed++; continue; }
+        try { checkMutationResult(productResult, 'Insert product'); } catch (e) { Sentry.captureException(e instanceof Error ? e : new Error(String(e))); failed++; continue; }
         success++;
       }
     }

@@ -90,7 +90,9 @@ export default function CustomerContextCard({ customerId }: Props) {
   return (
     <div
       className="mt-1 px-2.5 py-1.5 rounded-md bg-purple-50 border border-purple-100 text-xs flex items-center gap-3 flex-wrap"
+      role="presentation"
       onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
     >
       <span className="flex items-center gap-1 text-purple-700 font-medium">
         <Star className="w-3 h-3" />

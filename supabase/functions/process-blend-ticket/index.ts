@@ -8,7 +8,7 @@ function getAllowedOrigin(): string {
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  console.error("ALLOWED_ORIGIN not set — CORS will block all requests");
+  console.warn("ALLOWED_ORIGIN not set — CORS will block all requests");
   return "";
 }
 
@@ -864,7 +864,7 @@ Deno.serve(async (req: Request) => {
 
       const response = await fetch(imageUrl);
       if (!response.ok) {
-        console.error(
+        console.warn(
           `Failed to fetch image ${image.id}: ${response.status}`,
         );
         continue;
@@ -1012,7 +1012,7 @@ Deno.serve(async (req: Request) => {
       status: ticketUpdate.status,
     });
   } catch (err) {
-    console.error("OCR processing error:", err);
+    console.warn("OCR processing error:", err);
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
 
     // Handle retry logic

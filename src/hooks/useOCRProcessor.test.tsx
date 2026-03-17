@@ -26,6 +26,13 @@ vi.mock('../lib/db', () => ({
   },
 }));
 
+const { mockCaptureException } = vi.hoisted(() => ({
+  mockCaptureException: vi.fn(),
+}));
+vi.mock('@sentry/react', () => ({
+  captureException: mockCaptureException,
+}));
+
 import { useOCRProcessor } from './useOCRProcessor';
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -144,12 +151,11 @@ describe('useOCRProcessor', () => {
     });
     mockInvoke.mockRejectedValueOnce(new Error('Edge Function timeout'));
 
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockCaptureException.mockClear();
     renderHook(() => useOCRProcessor(true));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 
-    expect(consoleSpy).toHaveBeenCalled();
-    consoleSpy.mockRestore();
+    expect(mockCaptureException).toHaveBeenCalled();
   });
 });

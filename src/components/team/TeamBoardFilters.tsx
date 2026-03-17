@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Search, Filter, X, Tag, User, AlertCircle } from 'lucide-react';
 import { supabase } from '../../lib/db';
+import * as Sentry from '@sentry/react';
 
 interface NoteTag {
   id: string;
@@ -42,7 +43,7 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
       .select('*')
       .order('name');
     if (error) {
-      console.error('Failed to load tags:', error.message);
+      Sentry.captureException(new Error(`Failed to load tags: ${error.message}`));
       return;
     }
     setTags((data || []) as NoteTag[]);
@@ -55,7 +56,7 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
       .eq('is_active', true)
       .order('full_name');
     if (error) {
-      console.error('Failed to load profiles:', error.message);
+      Sentry.captureException(new Error(`Failed to load profiles: ${error.message}`));
       return;
     }
     setProfiles((data || []) as Profile[]);
