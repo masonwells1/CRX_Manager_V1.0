@@ -5,7 +5,7 @@ import Input from '../ui/Input';
 import { supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { useToast } from '../ui/Toast';
-import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
+
 import { Sentry } from '../../lib/sentry';
 
 export interface AdjustmentItem {
@@ -52,10 +52,11 @@ interface Props {
 
 export default function BatchAdjustModal({ open, onClose, items, userId, onSuccess }: Props) {
   const { toast } = useToast();
-  const batchAdjustIdem = useIdempotencyKey('batch_adjust', userId || '');
   const [reason, setReason] = useState('');
   const [uniformDelta, setUniformDelta] = useState('');
   const [saving, setSaving] = useState(false);
+  // Per-item idempotency keys: generated once on first submit, reused on retry
+  const [batchKeys, setBatchKeys] = useState<string[]>([]);
 
   const delta = Number(uniformDelta) || 0;
 
@@ -77,7 +78,11 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
       delta,
     }));
 
-    const calls = buildAdjustmentCalls(adjustItems, reason.trim(), userId);
+    // Generate stable per-item keys on first attempt; reuse on retry
+    const keys = batchKeys.length === adjustItems.length ? batchKeys : adjustItems.map(() => crypto.randomUUID());
+    if (batchKeys.length !== adjustItems.length) setBatchKeys(keys);
+    let keyIndex = 0;
+    const calls = buildAdjustmentCalls(adjustItems, reason.trim(), userId, () => keys[keyIndex++]);
     let successCount = 0;
     let errorCount = 0;
 
@@ -92,7 +97,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     }
 
     if (successCount > 0) {
-      batchAdjustIdem.resetKey();
+      setBatchKeys([]);
       await logActivity(
         'inventory_batch_adjusted',
         `Batch adjusted ${successCount} product(s) by ${delta > 0 ? '+' : ''}${delta}: ${reason.trim()}`,

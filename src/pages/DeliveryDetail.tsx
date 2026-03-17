@@ -429,7 +429,7 @@ export default function DeliveryDetail() {
         parts.push('Warning: posted invoices linked to this order require manual review.');
       }
       toast('success', parts.join(' '));
-      await logActivity('delivery_voided', `Delivery ${delivery.delivery_number} voided`, 'delivery', id!, delivery.customer_id);
+      await logActivity('delivery_voided', `Delivery ${delivery.delivery_number} voided`, profile.id, 'delivery', id!, delivery.customer_id);
       setVoidOpen(false);
       setVoidReason('');
       fetchDelivery();

@@ -471,7 +471,7 @@ export default function InvoiceDetail() {
       });
       if (error) throw error;
       reverseWoIdem.resetKey();
-      await logActivity('write_off_reversed', `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, 'invoice', id);
+      await logActivity('write_off_reversed', `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, profile?.id ?? '', 'invoice', id);
       toast('success', 'Write-off reversed and balance restored');
       setShowReverseWoModal(false);
       setReverseWoReason('');

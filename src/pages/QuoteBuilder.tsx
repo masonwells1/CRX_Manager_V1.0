@@ -869,11 +869,14 @@ export default function QuoteBuilder() {
         else { plannedHoldsIdem.resetKey(); toast('success', 'Inventory holds created for planned program'); }
       } else if (!isPlanned && wasPlanned) {
         // Release holds when toggled off — zero rows is valid (no holds may exist)
-        const { error: releaseError } = await supabase.from('inventory_holds')
+        const releaseResult = await supabase.from('inventory_holds')
           .update({ is_active: false, updated_at: new Date().toISOString() })
           .eq('source_id', result)
-          .eq('is_active', true);
-        if (releaseError) toast('error', 'Failed to release inventory holds: ' + releaseError.message);
+          .eq('is_active', true)
+          .select();
+        // Zero rows is valid (no holds may exist), so only check for actual errors
+        if (releaseResult.error) toast('error', 'Failed to release inventory holds: ' + releaseResult.error.message);
+        else if (releaseResult.data && releaseResult.data.length > 0) checkMutationResult(releaseResult, 'Release inventory holds');
         setWasPlanned(false);
       }
 
