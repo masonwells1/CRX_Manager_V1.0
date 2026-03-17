@@ -272,6 +272,7 @@ export default function FieldDetail() {
       if (error) {
         toast('error', error.message);
       } else {
+        saveFieldIdem.resetKey();
         assertRpcResult(data, 'save_field');
         const savedFieldId = isNew ? data : id;
 
@@ -291,6 +292,8 @@ export default function FieldDetail() {
           if (geoError) {
             Sentry.captureException(geoError, { tags: { source: 'critical_action', action: 'save_field_geometry' } });
             toast('error', 'Field saved but boundary could not be saved. Please try re-drawing.');
+          } else {
+            saveFieldGeoIdem.resetKey();
           }
         }
 

@@ -401,6 +401,7 @@ export default function CustomerDetail() {
       if (error) {
         toast('error', error.message);
       } else {
+        saveCustomerIdem.resetKey();
         const result = assertRpcResult<{ customer_id: string }>(data, 'save_customer');
         setIsDirty(false);
         if (isNew) {

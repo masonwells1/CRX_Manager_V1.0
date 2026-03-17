@@ -866,7 +866,7 @@ export default function QuoteBuilder() {
           p_idempotency_key: holdIdemKey,
         });
         if (holdError) toast('error', 'Failed to create inventory holds');
-        else toast('success', 'Inventory holds created for planned program');
+        else { plannedHoldsIdem.resetKey(); toast('success', 'Inventory holds created for planned program'); }
       } else if (!isPlanned && wasPlanned) {
         // Release holds when toggled off — zero rows is valid (no holds may exist)
         const { error: releaseError } = await supabase.from('inventory_holds')
@@ -894,6 +894,7 @@ export default function QuoteBuilder() {
       p_idempotency_key: tmplIdemKey,
     });
     if (error) { toast('error', 'Failed to save template'); return; }
+    saveTemplateIdem.resetKey();
     toast('success', `Template "${templateName}" saved`);
     setShowSaveTemplateModal(false);
     setTemplateName('');
@@ -912,7 +913,8 @@ export default function QuoteBuilder() {
       p_idempotency_key: ftIdemKey,
     });
     if (error) { toast('error', 'Failed to create from template'); return; }
-    const result = data as { quote_id: string; quote_number: string };
+    fromTemplateIdem.resetKey();
+    const result = assertRpcResult<{ quote_id: string; quote_number: string }>(data, 'create_quote_from_template');
     navigate(`/quotes/${result.quote_id}`);
   };
 
@@ -927,7 +929,8 @@ export default function QuoteBuilder() {
       p_idempotency_key: rollIdemKey,
     });
     if (error) { toast('error', 'Failed to roll over quote'); return; }
-    const result = data as { quote_id: string; quote_number: string; season: number };
+    rolloverIdem.resetKey();
+    const result = assertRpcResult<{ quote_id: string; quote_number: string; season: number }>(data, 'rollover_quote_to_season');
     toast('success', `Rolled over to season ${result.season} — ${result.quote_number}`);
     navigate(`/quotes/${result.quote_id}`);
   };
@@ -1004,6 +1007,7 @@ export default function QuoteBuilder() {
           Sentry.captureException(versionError, { tags: { source: 'mutation', action: 'create_quote_version' } });
           toast('error', 'Quote sent but version snapshot failed.');
         } else {
+          createVersionIdem.resetKey();
           await logActivity(
             'quote_sent',
             `Quote ${quoteNumber} v${versionData?.version_number || '?'} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
@@ -1192,6 +1196,7 @@ export default function QuoteBuilder() {
       p_idempotency_key: presVerIdemKey,
     });
     if (error) { toast('error', 'Failed to mark as presented'); return; }
+    createVersionIdem.resetKey();
     await logActivity(
       'quote_presented',
       `Quote ${quoteNumber} V${versionData?.version_number || '?'} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`,
@@ -1249,6 +1254,7 @@ export default function QuoteBuilder() {
       p_idempotency_key: restoreIdemKey,
     });
     if (error) { toast('error', 'Failed to restore version'); return; }
+    restoreVersionIdem.resetKey();
     toast('success', `Restored from V${selectedVersion?.version_number || '?'}`);
     setConfirmRestore(null);
     setSelectedVersion(null);

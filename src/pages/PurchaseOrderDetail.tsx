@@ -318,10 +318,12 @@ export default function PurchaseOrderDetail() {
     }
     setReversing(true);
     try {
+      const reverseKey = reverseIdem.getKey();
       const { error } = await supabase.rpc('reverse_receiving_record', {
         p_record_id: reverseRecord.id,
         p_reason: reverseReason.trim(),
         p_performed_by: profile.id,
+        p_idempotency_key: reverseKey,
       });
       if (error) throw error;
       reverseIdem.resetKey();

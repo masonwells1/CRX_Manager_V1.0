@@ -333,6 +333,7 @@ export default function SettingsPage() {
         if (data?.error) {
           toast('error', data.error);
         } else {
+          adminUpdateIdem.resetKey();
           toast('success', 'User updated successfully');
           if (profile) logActivity('user_updated', `User ${editName} updated (role: ${editRole}, active: ${editIsActive})`, profile.id);
           setEditModalOpen(false);
