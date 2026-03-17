@@ -48,6 +48,8 @@ export default function OrderDetail() {
   const { role, profile } = useAuth();
   const updateOrderIdem = useIdempotencyKey('update_order_items', profile?.id || '');
   const voidOrderIdem = useIdempotencyKey('void_order', profile?.id || '');
+  const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '');
+  const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -348,13 +350,14 @@ export default function OrderDetail() {
       action: async () => {
         if (targetStatus === 'cancelled' && order.status !== 'cancelled') {
           // Atomic RPC: cancellation + inventory release + cascade (void drafts, zero commissions, release holds)
-          const idempotencyKey = crypto.randomUUID();
+          const cancelKey = cancelOrderIdem.getKey();
           const { data: cancelResult, error } = await supabase.rpc('cancel_order', {
             p_order_id: id!,
             p_performed_by: profile.id,
-            p_idempotency_key: idempotencyKey,
+            p_idempotency_key: cancelKey,
           });
           if (error) throw error;
+          cancelOrderIdem.resetKey();
           // Show summary toast with cascade details
           if (cancelResult && cancelResult.success) {
             const parts: string[] = ['Order cancelled.'];
@@ -587,12 +590,14 @@ export default function OrderDetail() {
     if (!profile || !id) return;
     await runCriticalAction({
       action: async () => {
+        const invoiceKey = createInvoiceIdem.getKey();
         const { data, error } = await supabase.rpc('create_invoice_from_order', {
           p_order_id: id,
           p_salesman_id: profile.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: invoiceKey,
         });
         if (error) throw error;
+        createInvoiceIdem.resetKey();
         const invoiceId = assertRpcResult<string>(data, 'create_invoice_from_order');
         navigate(`/invoices/${invoiceId}`);
       },
