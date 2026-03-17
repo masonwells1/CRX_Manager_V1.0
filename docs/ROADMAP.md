@@ -1,6 +1,6 @@
 # CRX Manager — Roadmap
 
-> **Last updated:** 2026-03-16 | **Owner:** Mason Wells
+> **Last updated:** 2026-03-17 | **Owner:** Mason Wells
 
 ---
 
@@ -70,6 +70,12 @@ Detailed doc: `docs/plans/2026-03-01-gap-remediation-handoff.md`
 | A9 | Accessibility lint (`jsx-a11y`) | 2-4 hrs | ✅ Done (Mar 16 — 18 rules at warn) |
 | A10 | CSP `unsafe-inline` tightening | 30 min | ⏭️ Skipped (Mapbox needs unsafe-inline) |
 | A11 | Request correlation IDs | 2-3 hrs | ✅ Done (Mar 16 — overnight session) |
+| A12 | assertRpcResult on all mutation RPCs | 2-3 hrs | ✅ Done (Mar 17 — 30 RPCs across 18 files) |
+| A13 | Replace all bare confirm() with ConfirmModal | 1-2 hrs | ✅ Done (Mar 17 — 9 pages, 16 calls) |
+| A14 | Wire idempotency keys to all frontend RPCs | 1-2 hrs | ✅ Done (Mar 17 — 15 RPCs across 6 files) |
+| A15 | Add logActivity() to ~50 mutation handlers | 3-4 hrs | TODO |
+| A16 | Fix TypeScript/DB type mismatches (6 critical) | 1 hr | TODO |
+| A17 | Add deny-all RLS policy to rate_limit_log | 5 min | TODO |
 
 ---
 
@@ -116,6 +122,13 @@ Detailed doc: `docs/plans/2026-03-01-gap-remediation-handoff.md`
 - ~~A11y: all click-events-have-key-events warnings fixed~~ (Mar 16)
 - ~~Phase 4 safety-net tests: overload detection, idempotency, pg_temp contracts~~ (Mar 16)
 - ~~Commission audit trail: Reports.tsx → create_commission_payment RPC~~ (Mar 16)
+- ~~A12: assertRpcResult on 30 mutation RPCs~~ (Mar 17)
+- ~~A13: Replace all bare confirm() with ConfirmModal (9 pages)~~ (Mar 17)
+- ~~A14: Wire idempotency keys to 15 frontend RPCs~~ (Mar 17)
+- ~~DB migration: p_idempotency_key on 5 RPCs~~ (Mar 17)
+- ~~Fix Returns.tsx wrong updated_at column~~ (Mar 17)
+- ~~Fix teardown-fixtures.ts wrong entity_id column~~ (Mar 17)
+- ~~Fix eslint.config.js stale nested directory~~ (Mar 17)
 - ~~Inventory Valuation cards~~ (Mar 5)
 - ~~Batch Adjustments~~ (Mar 2)
 - ~~Inventory Transaction Ledger~~ (Mar 2)
