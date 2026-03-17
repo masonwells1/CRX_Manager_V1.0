@@ -14,11 +14,11 @@ Detailed brainstorm: `docs/plans/2026-03-01-team-board-brainstorm.md`
 | F2 | "Create Task From Here" buttons on operational pages | Medium | Remove friction between ops and board | ✅ Done (Mar 15 — QuickTaskModal on 5 detail pages) |
 | F3 | Delivery Communication Thread | Medium | Biggest operational blind spot | ✅ Partial (Mar 15 — TodaysDeliveries + YesterdayRecap bulletins) |
 | F4 | Daily Briefing / Morning Digest | Medium | Immediate value for every role | ✅ Partial (Mar 15 — TodaysDeliveries + YesterdayRecap on Board tab) |
-| F5 | Escalation Engine (stale task alerts) | Medium | Prevents things going silent | TODO |
+| F5 | Escalation Engine (stale task alerts) | Medium | Prevents things going silent | ✅ Done (Mar 16 — StaleTasksAlert) |
 | F6 | Quick Status Updates (driver mobile) | Medium | 5-second field communication | TODO |
-| F7 | Workload Visibility | Medium | Better assignment decisions | TODO |
+| F7 | Workload Visibility | Medium | Better assignment decisions | ✅ Done (Mar 16 — WorkloadView tab) |
 | F8 | Recurring Tasks / Checklists | Medium | Automate repeatable ops tasks | TODO |
-| F9 | Customer Context Cards on linked notes | Low | Faster decision-making | TODO |
+| F9 | Customer Context Cards on linked notes | Low | Faster decision-making | ✅ Done (Mar 16 — CustomerContextCard) |
 | F10 | Handoff Notes (end-of-day) | Low | Institutional memory | TODO |
 | F11 | Dispatch Priority Queue | High | Purpose-built coordination | TODO |
 | F12 | Read Receipts / Acknowledgment | Medium | Safety & compliance | TODO |
@@ -48,8 +48,8 @@ Detailed brainstorm: `docs/plans/2026-03-01-superpower-brainstorm-inventory-deli
 
 | # | Feature | Effort | Impact |
 |---|---------|--------|--------|
-| D3 | Delivery status notifications to customers | Medium | HIGH |
-| D4 | Delivery Calendar View | Medium | MEDIUM |
+| D3 | Delivery status notifications to customers | Medium | HIGH | ✅ Done (Mar 16 — email opt-out + in-app notifications) |
+| D4 | Delivery Calendar View | Medium | MEDIUM | ✅ Done (Mar 16 — @fullcalendar/react toggle) |
 | D5 | Delivery Time Window alerts | Low | MEDIUM |
 
 ---
@@ -62,14 +62,14 @@ Detailed doc: `docs/plans/2026-03-01-gap-remediation-handoff.md`
 |---|---------|--------|
 | A1 | `unhandledrejection` safety net in `main.tsx` | 10 min | ✅ Done (Mar 16) |
 | A3 | Production sourcemaps → Sentry upload | 30 min | ✅ Done (Mar 16 — needs SENTRY_AUTH_TOKEN in Vercel) |
-| A4 | Migrate 47 pages to `runCriticalAction()` | 2-4 hrs |
+| A4 | Migrate 47 pages to `runCriticalAction()` | 2-4 hrs | ✅ Done (Mar 16 — overnight session) |
 | A5 | Route-level error boundaries | 1-2 hrs | ✅ Done (Mar 16 — inline ErrorBoundary + RouteShell) |
-| A6 | Skeleton loading states (10 pages) | 1-2 hrs |
+| A6 | Skeleton loading states (10 pages) | 1-2 hrs | ✅ Done (Mar 16 — overnight session) |
 | A7 | ESLint `no-console` rule | 5 min | ✅ Done (Mar 16) |
-| A8 | Firefox E2E test matrix | 15 min |
-| A9 | Accessibility lint (`jsx-a11y`) | 2-4 hrs |
-| A10 | CSP `unsafe-inline` tightening | 30 min |
-| A11 | Request correlation IDs | 2-3 hrs |
+| A8 | Firefox E2E test matrix | 15 min | ✅ Done (Mar 16 — overnight session) |
+| A9 | Accessibility lint (`jsx-a11y`) | 2-4 hrs | ✅ Done (Mar 16 — 18 rules at warn) |
+| A10 | CSP `unsafe-inline` tightening | 30 min | ⏭️ Skipped (Mapbox needs unsafe-inline) |
+| A11 | Request correlation IDs | 2-3 hrs | ✅ Done (Mar 16 — overnight session) |
 
 ---
 
@@ -77,8 +77,8 @@ Detailed doc: `docs/plans/2026-03-01-gap-remediation-handoff.md`
 
 | # | Feature | Effort |
 |---|---------|--------|
-| B1 | Add `pg_temp` to 16 SECURITY DEFINER functions with NO search_path | Medium |
-| B2 | Add `pg_temp` to 141 functions missing it from search_path | Large |
+| B1 | Add `pg_temp` to 16 SECURITY DEFINER functions with NO search_path | Medium | ✅ Done (Mar 16 — overnight session) |
+| B2 | Add `pg_temp` to 141 functions missing it from search_path | Large | ✅ Done (Mar 16 — covered all functions via ALTER FUNCTION) |
 
 ---
 
@@ -102,8 +102,16 @@ Detailed doc: `docs/plans/2026-03-01-gap-remediation-handoff.md`
 - ~~Vitest coverage reporting~~ (Mar 15)
 - ~~A1: Unhandled rejection safety net~~ (Mar 16)
 - ~~A3: Sentry sourcemap uploads~~ (Mar 16)
+- ~~A4: Migrate 47 pages to runCriticalAction~~ (Mar 16 — overnight)
 - ~~A5: Route-level error boundaries~~ (Mar 16)
+- ~~A6: Skeleton loading states (10 pages)~~ (Mar 16 — overnight)
 - ~~A7: ESLint no-console rule~~ (Mar 16)
+- ~~A8: Firefox E2E test matrix~~ (Mar 16 — overnight)
+- ~~A9: Accessibility lint (jsx-a11y)~~ (Mar 16 — overnight)
+- ~~A11: Request correlation IDs~~ (Mar 16 — overnight)
+- ~~B1+B2: pg_temp search_path on all SECURITY DEFINER functions~~ (Mar 16 — overnight)
+- ~~D3: Delivery status notifications~~ (Mar 16 — overnight, email + in-app)
+- ~~D4: Delivery Calendar View~~ (Mar 16 — overnight, @fullcalendar/react)
 - ~~Inventory Valuation cards~~ (Mar 5)
 - ~~Batch Adjustments~~ (Mar 2)
 - ~~Inventory Transaction Ledger~~ (Mar 2)

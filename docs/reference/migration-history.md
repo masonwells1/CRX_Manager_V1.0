@@ -1,4 +1,4 @@
-# Migration History (198 migrations)
+# Migration History (200 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -202,3 +202,5 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 196 | 20260316900000 | **Seasonal rollover** — Creates `rollover_quote_to_season` RPC to duplicate quotes with updated pricing for a new season. SECURITY DEFINER, search_path = public, pg_temp |
 | 197 | 20260316950000 | **Team Board Phase 2** — Adds `last_escalated_at` column to `team_notes`, creates `get_team_workload()` RPC (aggregates open tasks, overdue tasks, today's/week's deliveries per team member). SECURITY DEFINER, search_path = public, pg_temp |
 | 198 | 20260332700000 | Fix idempotency column refs round 3 — surgical fix of 4 RPCs + safety-net scan of all public functions + self-testing verification |
+| 199 | 20260332800000 | **pg_temp search_path fix** — ALTER FUNCTION on ALL SECURITY DEFINER functions to add `pg_temp` to search_path. Verification block raises EXCEPTION if any functions still missing. Prevents temp schema hijacking attacks |
+| 200 | 20260332900000 | **Data validation & cleanup** — Fixes negative inventory quantities, recalculates prebooked from actual pending orders, verifies commission splits sum to 100%, checks invoice paid_amount_cents integrity, fixes invalid commission statuses |

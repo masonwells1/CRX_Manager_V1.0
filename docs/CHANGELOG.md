@@ -4,6 +4,31 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Overnight Session: DB Security, Code Quality, Delivery Features
+
+### Phase A: Database Housekeeping
+- **A1: pg_temp search_path fix** — Migration `20260332800000` uses `ALTER FUNCTION` to add `pg_temp` to search_path on ALL SECURITY DEFINER functions. Verification block confirms zero functions remain unpatched. Prevents temp schema hijacking attacks
+- **A2: Data validation & cleanup** — Migration `20260332900000` fixes negative inventory quantities, recalculates prebooked from actual pending orders, verifies commission splits sum to 100%, checks invoice paid_amount_cents integrity, fixes invalid commission statuses. All checks passed clean on production
+
+### Phase B: Code Quality Sprint
+- **B1: runCriticalAction migration** — Migrated ~47 pages from bare `try/catch + console.error` to centralized `runCriticalAction()` pattern (toast + Sentry.captureException). Also replaced `console.error` with `Sentry.captureException` in 3 lib files (activityLogger, notificationTriggers, imageCompression)
+- **B2: Skeleton loading states** — Added animated skeleton placeholders to 10 high-traffic list pages (Orders, Deliveries, Invoices, Products, Customers, Quotes, PurchaseOrders, Returns, ARaging, InventoryPage)
+- **B3: Firefox E2E** — Added Firefox project to `playwright.config.ts`, updated CI to install both Chromium and Firefox browsers
+- **B4: CSP tightening** — SKIPPED: Mapbox GL JS and Google Fonts both inject inline styles; `unsafe-inline` must stay in `style-src`
+- **Accessibility lint** — Added `eslint-plugin-jsx-a11y` with 18 cherry-picked rules at `warn` level (avoided `recommended` spread due to minimatch compatibility crash with flat ESLint config)
+- **ESLint no-console tightened** — Removed `'error'` from allowed console methods; only `console.warn` now permitted
+
+### Phase C: Delivery Features
+- **C1: Delivery Calendar View** — New `DeliveryCalendar.tsx` component using `@fullcalendar/react` with dayGrid + interaction plugins. Status-based color coding (blue=scheduled, amber=in_progress, green=completed, gray=cancelled). List/Calendar toggle on Deliveries page
+- **C2: Email opt-out** — Added checkbox "Email delivery receipt to customer" (default: checked) to both driver (dark theme) and admin (light theme) completion UIs in DeliveryDetail. Email sending gated by checkbox state
+- **C3: In-app notifications** — New `notifyDeliveryCompleted()` function in `notificationTriggers.ts`. Notifies admins, assigned driver, and sales reps from linked order commissions. Deduplicates notifications
+
+### Phase D: Stretch Goals
+- **D1: Request correlation IDs** — Custom fetch wrapper in `db.ts` adds unique `X-Request-ID` header to every Supabase request. Sentry breadcrumbs recorded with requestId for full request tracing
+- New dependencies: `@fullcalendar/react`, `@fullcalendar/daygrid`, `@fullcalendar/interaction`, `eslint-plugin-jsx-a11y`
+
+---
+
 ## 2026-03-16 — Team Board V2 Phase 2 (Escalation, Context, Workload)
 
 - **F5: Escalation Engine** — `StaleTasksAlert` component surfaces overdue tasks with 3 visual tiers: amber (1-3d), red (3-7d), critical (7d+ with pulse animation). Collapsible summary with counts. Sorted most overdue first

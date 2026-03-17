@@ -86,12 +86,12 @@ BEGIN
   SELECT count(*) INTO _bad
   FROM invoices
   WHERE status NOT IN ('voided')
-    AND paid_cents < 0;
+    AND paid_amount_cents < 0;
 
   IF _bad > 0 THEN
-    RAISE WARNING 'Found % invoices with negative paid_cents — investigate manually', _bad;
+    RAISE WARNING 'Found % invoices with negative paid_amount_cents — investigate manually', _bad;
   ELSE
-    RAISE NOTICE 'Invoice integrity: ALL OK (no negative paid_cents)';
+    RAISE NOTICE 'Invoice integrity: ALL OK (no negative paid_amount_cents)';
   END IF;
 END $$;
 
