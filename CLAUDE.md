@@ -261,6 +261,54 @@ ls supabase/migrations/*.sql | wc -l          # should match CLAUDE.md migration
 
 These rules exist because code drift caused 40+ bugs. Follow them to keep the codebase consistent.
 
+### ⚠️ COPY-PASTE CHECKLIST — Read Before Writing ANY Code ⚠️
+
+**Before writing a SQL function that touches `idempotency_keys`:**
+```sql
+-- CORRECT pattern — copy this exactly:
+IF p_idempotency_key IS NOT NULL THEN
+  SELECT result INTO v_existing
+    FROM idempotency_keys
+    WHERE idempotency_key = p_idempotency_key;   -- NOT "key"
+  IF v_existing IS NOT NULL THEN RETURN v_existing::uuid; END IF;
+END IF;
+
+-- At end of function:
+INSERT INTO idempotency_keys (idempotency_key, operation, result)  -- NOT key/entity_type/entity_id
+VALUES (p_idempotency_key, 'operation_name', v_id::text);
+```
+
+**Before writing a SECURITY DEFINER function:**
+```sql
+SECURITY DEFINER
+SET search_path = public, pg_temp   -- ALWAYS include pg_temp
+```
+
+**Before writing a supabase `.update()` or `.delete()`:**
+```typescript
+const result = await supabase.from('table').update({ col: val }).eq('id', id).select();
+checkMutationResult(result, 'Context description');  // ALWAYS — import from lib/db
+```
+
+**Before writing a confirmation dialog:**
+```typescript
+// NEVER: confirm(), window.confirm(), alert(), window.alert()
+// ALWAYS: ConfirmModal component — see existing usage in any page
+```
+
+**Before writing `logActivity()`:**
+```typescript
+// Signature: logActivity(eventType, description, performedBy, entityType?, entityId?, customerId?)
+// performedBy is ALWAYS profile.id — never a string like 'delivery'
+await logActivity('event_type', 'Description', profile.id, 'entity_type', entityId);
+```
+
+**Before importing Sentry:**
+```typescript
+// NEVER: import * as Sentry from '@sentry/react'
+// ALWAYS: import { Sentry } from '../lib/sentry'
+```
+
 ### Naming & Convention Rules
 - **Status enums** — ALWAYS check existing CHECK constraints before adding/modifying statuses. Your new list MUST be a superset of the old values.
 - **Column names** — ALWAYS read the actual table schema before referencing columns in RPCs. Never assume column names from memory.
@@ -274,16 +322,23 @@ These rules exist because code drift caused 40+ bugs. Follow them to keep the co
 - **New tables** MUST have RLS policies — no exceptions
 - **New mutations** MUST use `checkMutationResult()` after `.update()` or `.delete()`
 - **Money values** MUST use `bigint` cents — NEVER floating point
-- **Activity logging** — call `logActivity()` for user-visible actions
+- **Activity logging** — call `logActivity(performedBy=profile.id)` for user-visible actions
 - **Error handling** — use toast notifications, never `window.alert()` or `window.confirm()` (use `ConfirmModal`)
+- **Sentry** — import `{ Sentry }` from `lib/sentry`, never directly from `@sentry/react`
 
-### SQL Validation Scripts
-- **Pre-commit (automatic):** `scripts/validate-sql.sh` — validates staged .sql files for idempotency column bugs, missing search_path, etc.
-- **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
+### Automated Enforcement (Pre-Commit Hook)
+The pre-commit hook runs these checks automatically — code that violates them CANNOT be committed:
+
+1. **`scripts/validate-sql.sh`** — Blocks SQL with wrong idempotency columns, pg_get_functiondef, updated_at on wrong tables
+2. **`scripts/validate-frontend.sh`** — Blocks frontend code with direct @sentry/react imports, warns on missing checkMutationResult
+3. **ESLint rules** — `no-restricted-globals` blocks `confirm()` and `alert()`, `no-restricted-properties` blocks `window.confirm()` and `window.alert()`, `no-restricted-imports` blocks `@sentry/react`
+4. **Build + test** — TypeScript check, production build, all unit tests
+
+**Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
 
 ### Before Every Commit
-1. `npm run lint` — 0 errors
+1. `npm run lint` — 0 errors (ESLint now blocks confirm/alert/wrong-imports)
 2. `npm run build` — clean build
 3. `npm run test` — all tests pass
 4. Doc counts match reality (see Documentation Maintenance above)
-5. SQL migration validation passes (automatic via pre-commit hook — validates idempotency column names)
+5. SQL + frontend validation passes (automatic via pre-commit hook)

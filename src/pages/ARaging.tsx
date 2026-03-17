@@ -24,6 +24,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { computeSeason } from '../utils/season';
 import { localToday, parseLocalDate, localDatePlusDays } from '../lib/dateUtils';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import type { ARAgingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
 
 type TabKey = 'aging' | 'statement' | 'season';
@@ -48,6 +49,9 @@ export default function ARaging() {
   const [sendingReminders, setSendingReminders] = useState(false);
   // Batch email statements
   const [emailingStatements, setEmailingStatements] = useState(false);
+  // Confirm modals
+  const [arReminderConfirmOpen, setArReminderConfirmOpen] = useState(false);
+  const [emailStatementsConfirmOpen, setEmailStatementsConfirmOpen] = useState(false);
 
   // Aging
   const [agingData, setAgingData] = useState<ARAgingRow[]>([]);
@@ -454,7 +458,12 @@ export default function ARaging() {
   // === A5: Send AR Reminders to all overdue customers ===
   const handleSendARReminders = async () => {
     if (!profile) return;
-    if (!confirm('Send AR reminder emails to all customers with 30+ day overdue invoices?')) return;
+    setArReminderConfirmOpen(true);
+  };
+
+  const executeSendARReminders = async () => {
+    setArReminderConfirmOpen(false);
+    if (!profile) return;
     await runCriticalAction({
       action: async () => {
         const { data, error } = await supabase.rpc('get_ar_reminder_candidates');
@@ -706,11 +715,7 @@ export default function ARaging() {
                 variant="secondary"
                 size="sm"
                 icon={<Mail className="w-4 h-4" />}
-                onClick={() => {
-                  if (confirm(`Email statements to ${selectedCustomers.size} selected customer(s)?`)) {
-                    handleEmailBatchStatements({ mode: 'summary', show_shares: true, as_of_date: asOfDate });
-                  }
-                }}
+                onClick={() => setEmailStatementsConfirmOpen(true)}
                 loading={emailingStatements}
               >
                 Email Statements ({selectedCustomers.size})
@@ -1082,6 +1087,29 @@ export default function ARaging() {
         onClose={() => setShowFinanceChargePreview(false)}
         asOfDate={asOfDate}
         onSuccess={handleFinanceChargeSuccess}
+      />
+
+      <ConfirmModal
+        open={arReminderConfirmOpen}
+        onClose={() => setArReminderConfirmOpen(false)}
+        onConfirm={executeSendARReminders}
+        title="Send AR Reminders"
+        message="Send AR reminder emails to all customers with 30+ day overdue invoices?"
+        confirmLabel="Send Reminders"
+        variant="warning"
+      />
+
+      <ConfirmModal
+        open={emailStatementsConfirmOpen}
+        onClose={() => setEmailStatementsConfirmOpen(false)}
+        onConfirm={() => {
+          setEmailStatementsConfirmOpen(false);
+          handleEmailBatchStatements({ mode: 'summary', show_shares: true, as_of_date: asOfDate });
+        }}
+        title="Email Statements"
+        message={`Email statements to ${selectedCustomers.size} selected customer(s)?`}
+        confirmLabel="Send Emails"
+        variant="info"
       />
     </div>
   );

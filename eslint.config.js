@@ -44,6 +44,29 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true },
       ],
+      // ── CRX Project Rules ── Block patterns that have caused repeat bugs
+      'no-restricted-globals': ['error', {
+        name: 'confirm',
+        message: 'Use ConfirmModal instead of confirm(). See CLAUDE.md.',
+      }, {
+        name: 'alert',
+        message: 'Use toast() instead of alert(). See CLAUDE.md.',
+      }],
+      'no-restricted-properties': ['error', {
+        object: 'window',
+        property: 'confirm',
+        message: 'Use ConfirmModal instead of window.confirm(). See CLAUDE.md.',
+      }, {
+        object: 'window',
+        property: 'alert',
+        message: 'Use toast() instead of window.alert(). See CLAUDE.md.',
+      }],
+      'no-restricted-imports': ['error', {
+        paths: [{
+          name: '@sentry/react',
+          message: 'Import { Sentry } from "../lib/sentry" instead. See CLAUDE.md.',
+        }],
+      }],
       'no-console': ['warn', { allow: ['warn'] }],
       '@typescript-eslint/no-unused-vars': [
         'error',
@@ -59,6 +82,15 @@ export default tseslint.config(
     files: ['tests/**/*.{ts,tsx}'],
     rules: {
       'no-console': 'off',
+      'no-restricted-globals': 'off',
+      'no-restricted-imports': 'off',
+    },
+  },
+  {
+    // Edge Functions run in Deno — no lib/sentry wrapper available
+    files: ['supabase/functions/**/*.ts'],
+    rules: {
+      'no-restricted-imports': 'off',
     },
   }
 );

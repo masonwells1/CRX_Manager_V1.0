@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../lib/sentry';
 import { supabase } from '../lib/db';
 
 const POLL_INTERVAL = 30000;

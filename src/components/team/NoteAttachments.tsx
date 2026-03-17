@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { X, Loader2, Image } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import type { TeamNoteAttachment } from '../../types';
 
 interface NoteAttachmentsProps {
   noteId: string;
   canDelete: boolean;
+  refreshKey?: number;
 }
 
-export default function NoteAttachments({ noteId, canDelete }: NoteAttachmentsProps) {
+export default function NoteAttachments({ noteId, canDelete, refreshKey }: NoteAttachmentsProps) {
   const { toast } = useToast();
   const [attachments, setAttachments] = useState<TeamNoteAttachment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -33,7 +34,7 @@ export default function NoteAttachments({ noteId, canDelete }: NoteAttachmentsPr
 
   useEffect(() => {
     fetchAttachments();
-  }, [fetchAttachments]);
+  }, [fetchAttachments, refreshKey]);
 
   const handleDelete = async (attachment: TeamNoteAttachment) => {
     setDeletingId(attachment.id);

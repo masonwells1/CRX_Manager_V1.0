@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Truck, ChevronDown, ChevronUp, Clock, Package, AlertTriangle, User } from 'lucide-react';
 import { supabase } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
+import { useToast } from '../ui/Toast';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import type { TeamBoardDeliveryData, TeamBoardDelivery } from '../../types';
@@ -86,24 +87,32 @@ function SkeletonCard() {
 }
 
 export default function TodaysDeliveries() {
+  const { toast } = useToast();
   const [data, setData] = useState<TeamBoardDeliveryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [tomorrowOpen, setTomorrowOpen] = useState(false);
 
   useEffect(() => {
     fetchDeliveries();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const fetchDeliveries = async () => {
     setLoading(true);
-    const { data: result, error } = await supabase.rpc('get_team_board_deliveries');
-    if (error) {
-      Sentry.captureException(new Error(`Failed to load deliveries: ${error.message}`));
+    try {
+      const { data: result, error } = await supabase.rpc('get_team_board_deliveries');
+      if (error) {
+        Sentry.captureException(new Error(`Failed to load deliveries: ${error.message}`));
+        toast('error', 'Failed to load deliveries');
+        setLoading(false);
+        return;
+      }
+      setData(result as unknown as TeamBoardDeliveryData);
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to load deliveries');
+    } finally {
       setLoading(false);
-      return;
     }
-    setData(result as unknown as TeamBoardDeliveryData);
-    setLoading(false);
   };
 
   return (

@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, useCallback } from 'react';
 import { WifiOff, RefreshCw, CheckCircle2 } from 'lucide-react';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 import { getPendingCount } from '../../lib/offlineQueue';
 import { syncPendingActions } from '../../lib/offlineSync';

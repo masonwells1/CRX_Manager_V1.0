@@ -2,33 +2,42 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { History, ChevronDown, ChevronUp, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 import { supabase } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
+import { useToast } from '../ui/Toast';
 import type { YesterdayRecapData } from '../../types';
 import Badge from '../ui/Badge';
 
 export default function YesterdayRecap() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [data, setData] = useState<YesterdayRecapData | null>(null);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     async function fetchRecap() {
-      const { data: recap, error } = await supabase.rpc('get_yesterday_delivery_recap');
-      if (error) {
-        Sentry.captureException(new Error(`Failed to load yesterday recap: ${error.message}`));
+      try {
+        const { data: recap, error } = await supabase.rpc('get_yesterday_delivery_recap');
+        if (error) {
+          Sentry.captureException(new Error(`Failed to load yesterday recap: ${error.message}`));
+          toast('error', 'Failed to load yesterday recap');
+          setLoading(false);
+          return;
+        }
+        const result = recap as unknown as YesterdayRecapData;
+        setData(result);
+        // Default expanded if there are issues
+        if (result?.summary?.total_with_issues > 0) {
+          setExpanded(true);
+        }
+      } catch (err: unknown) {
+        toast('error', err instanceof Error ? err.message : 'Failed to load yesterday recap');
+      } finally {
         setLoading(false);
-        return;
       }
-      const result = recap as unknown as YesterdayRecapData;
-      setData(result);
-      // Default expanded if there are issues
-      if (result?.summary?.total_with_issues > 0) {
-        setExpanded(true);
-      }
-      setLoading(false);
     }
     fetchRecap();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Loading state: single skeleton row

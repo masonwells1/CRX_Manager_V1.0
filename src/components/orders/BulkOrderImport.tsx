@@ -333,7 +333,10 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           .insert({
             order_number: order.order_number,
             customer_id: customer.id,
-            status: order.status || 'confirmed',
+            status: (() => {
+              const validStatuses = ['confirmed', 'partially_fulfilled', 'fulfilled', 'cancelled'];
+              return validStatuses.includes(order.status || '') ? order.status : 'confirmed';
+            })(),
             total_price: totalPrice,
             total_cost: totalCost,
             total_profit: totalProfit,

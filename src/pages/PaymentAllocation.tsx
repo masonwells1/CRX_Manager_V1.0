@@ -19,6 +19,7 @@ import {
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
@@ -96,6 +97,9 @@ export default function PaymentAllocation() {
   // Submission
   const [submitting, setSubmitting] = useState(false);
   const [lastResult, setLastResult] = useState<PaymentAllocationResult | null>(null);
+
+  // Prepay confirmation modal
+  const [prepayConfirmOpen, setPrepayConfirmOpen] = useState(false);
 
   /* ── Customer search (typeahead) ─────────────────────────────────────── */
 
@@ -247,9 +251,16 @@ export default function PaymentAllocation() {
     }
     // Confirm if 100% of check goes to prepay (no invoice allocations)
     if (!hasAllocations && remaining > 0) {
-      if (!confirm(`No invoices allocated. ${fmt(checkCents)} will be added as prepay credit. Continue?`)) return;
+      setPrepayConfirmOpen(true);
+      return;
     }
 
+    executeSubmit();
+  };
+
+  const executeSubmit = async () => {
+    if (!selectedCustomer || !profile) return;
+    setPrepayConfirmOpen(false);
     setSubmitting(true);
     try {
       const allocations = invoices
@@ -628,6 +639,16 @@ export default function PaymentAllocation() {
           )}
         </>
       )}
+
+      <ConfirmModal
+        open={prepayConfirmOpen}
+        onClose={() => setPrepayConfirmOpen(false)}
+        onConfirm={executeSubmit}
+        title="Full Prepay Credit"
+        message={`No invoices allocated. ${fmt(checkCents)} will be added as prepay credit. Continue?`}
+        confirmLabel="Continue"
+        variant="warning"
+      />
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import type { CycleCount, CycleCountItem } from '../types';
 
 type CountRow = CycleCount & {
@@ -68,6 +69,9 @@ export default function CycleCounts() {
   const [countItems, setCountItems] = useState<CountItemRow[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+  const [completeConfirmMsg, setCompleteConfirmMsg] = useState('');
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
 
   const isAdmin = role === 'admin';
 
@@ -273,15 +277,22 @@ export default function CycleCounts() {
   };
 
   // Complete the cycle count
-  const handleComplete = async () => {
+  const handleComplete = () => {
     if (!activeCount || !profile) return;
 
     const uncounted = countItems.filter((i) => !i.is_counted);
     if (uncounted.length > 0) {
-      if (!confirm(`${uncounted.length} products have not been counted yet. Complete anyway?`)) {
-        return;
-      }
+      setCompleteConfirmMsg(`${uncounted.length} products have not been counted yet. Complete anyway?`);
+      setCompleteConfirmOpen(true);
+      return;
     }
+
+    executeComplete();
+  };
+
+  const executeComplete = async () => {
+    setCompleteConfirmOpen(false);
+    if (!activeCount || !profile) return;
 
     await runCriticalAction({
       action: async () => {
@@ -317,9 +328,14 @@ export default function CycleCounts() {
   };
 
   // Cancel cycle count
-  const handleCancel = async () => {
+  const handleCancel = () => {
     if (!activeCount || !profile) return;
-    if (!confirm('Cancel this cycle count? No inventory adjustments will be made.')) return;
+    setCancelConfirmOpen(true);
+  };
+
+  const executeCancelCount = async () => {
+    setCancelConfirmOpen(false);
+    if (!activeCount || !profile) return;
 
     await runCriticalAction({
       action: async () => {
@@ -626,6 +642,26 @@ export default function CycleCounts() {
           </div>
         )}
       </Modal>
+
+      <ConfirmModal
+        open={completeConfirmOpen}
+        onClose={() => setCompleteConfirmOpen(false)}
+        onConfirm={executeComplete}
+        title="Complete Cycle Count"
+        message={completeConfirmMsg}
+        confirmLabel="Complete Anyway"
+        variant="warning"
+      />
+
+      <ConfirmModal
+        open={cancelConfirmOpen}
+        onClose={() => setCancelConfirmOpen(false)}
+        onConfirm={executeCancelCount}
+        title="Cancel Cycle Count"
+        message="Cancel this cycle count? No inventory adjustments will be made."
+        confirmLabel="Cancel Count"
+        variant="danger"
+      />
     </div>
   );
 }

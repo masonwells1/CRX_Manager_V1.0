@@ -21,6 +21,7 @@ import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
 import { parseLocalDate } from '../lib/dateUtils';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery, Product, LinkedEntityType } from '../types';
@@ -53,6 +54,7 @@ export default function OrderDetail() {
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name?: string })[]>([]);
   const [loading, setLoading] = useState(true);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
+  const [statusChangeConfirmOpen, setStatusChangeConfirmOpen] = useState(false);
 
   // Related blend tickets
   const [relatedTickets, setRelatedTickets] = useState<{ id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }[]>([]);
@@ -329,9 +331,14 @@ export default function OrderDetail() {
     setTogglingPlanned(false);
   };
 
-  const handleStatusChange = async () => {
+  const handleStatusChange = () => {
     if (!newStatus || !order || !profile) return;
-    if (!window.confirm(`Change order status to ${newStatus.replace('_', ' ')}?`)) return;
+    setStatusChangeConfirmOpen(true);
+  };
+
+  const executeStatusChange = async () => {
+    setStatusChangeConfirmOpen(false);
+    if (!newStatus || !order || !profile) return;
 
     await runCriticalAction({
       action: async () => {
@@ -1353,6 +1360,16 @@ export default function OrderDetail() {
         entityId={id!}
         prefillTitle={`Follow up: ${order.order_number}`}
         prefillContent={`Customer: ${customer?.farm_name || 'Unknown'}`}
+      />
+
+      <ConfirmModal
+        open={statusChangeConfirmOpen}
+        onClose={() => setStatusChangeConfirmOpen(false)}
+        onConfirm={executeStatusChange}
+        title="Change Order Status"
+        message={`Change order status to ${newStatus.replace('_', ' ')}?`}
+        confirmLabel="Change Status"
+        variant="warning"
       />
     </div>
   );

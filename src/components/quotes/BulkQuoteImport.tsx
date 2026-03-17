@@ -6,7 +6,7 @@ import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 
 interface BulkQuoteImportProps {
   open: boolean;
@@ -338,7 +338,10 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               customer_id: customerId,
               created_by: profile!.id,
               tier: firstItem.tier || 1,
-              status: firstItem.status || 'draft',
+              status: (() => {
+                const validStatuses = ['draft', 'sent', 'revised', 'accepted', 'declined', 'expired'];
+                return validStatuses.includes(firstItem.status || '') ? firstItem.status : 'draft';
+              })(),
               valid_days: firstItem.valid_days || 15,
               header_notes: firstItem.header_notes || '',
               footer_notes: firstItem.footer_notes || '',

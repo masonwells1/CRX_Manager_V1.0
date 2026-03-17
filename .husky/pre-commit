@@ -11,6 +11,17 @@ if [ $SQL_EXIT -ne 0 ]; then
   exit 1
 fi
 
+# --- Frontend Code Validation (prevents known anti-patterns) ---
+echo "🛡️ Validating frontend code..."
+bash scripts/validate-frontend.sh
+FE_EXIT=$?
+
+if [ $FE_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ FRONTEND VALIDATION FAILED — commit blocked. Fix anti-patterns first."
+  exit 1
+fi
+
 echo "🔍 Running ESLint..."
 npm run lint 2>&1
 LINT_EXIT=$?

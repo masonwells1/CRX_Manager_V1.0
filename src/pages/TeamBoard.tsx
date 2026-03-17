@@ -75,6 +75,7 @@ export default function TeamBoard() {
   const [linkedEntityId, setLinkedEntityId] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'comments' | 'activity'>('comments');
+  const [attachmentRefresh, setAttachmentRefresh] = useState(0);
   const [viewTab, setViewTab] = useState<ViewTab>('board');
   const [isNoteDirty, setIsNoteDirty] = useState(false);
   const modalInitialized = useRef(false);
@@ -278,15 +279,21 @@ export default function TeamBoard() {
     }
   }, [notes, setSearchParams]);
 
+  // Initial load — fetch notes and profiles once on mount
   useEffect(() => {
     fetchNotes();
     fetchProfiles();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
+  // Deep-link: open a note when ?note=<id> is in the URL
+  useEffect(() => {
     const noteId = searchParams.get('note');
-    if (noteId) {
+    if (noteId && notes.length > 0) {
       openNoteDetail(noteId);
     }
-  }, [searchParams, fetchNotes, fetchProfiles, openNoteDetail]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   useEffect(() => {
     if (viewTab === 'activity') {
@@ -751,7 +758,7 @@ export default function TeamBoard() {
           <TodaysDeliveries />
 
           {/* Stale Tasks — overdue tasks escalated by severity */}
-          <StaleTasksAlert notes={notes} onClickNote={setSelectedNote} />
+          <StaleTasksAlert notes={notes} onClickNote={(note) => { setSelectedNote(note); setDetailModalOpen(true); }} />
 
           {/* Your Tasks & Mentions — personalized section */}
           {myTasksForBoard.length > 0 && (
@@ -1339,9 +1346,9 @@ export default function TeamBoard() {
 
             <TagsManager noteId={selectedNote.id} onTagsChange={fetchNotes} />
 
-            <NoteAttachments noteId={selectedNote.id} canDelete={canEdit(selectedNote)} />
+            <NoteAttachments noteId={selectedNote.id} canDelete={canEdit(selectedNote)} refreshKey={attachmentRefresh} />
             {!selectedNote.is_completed && (
-              <NotePhotoUpload noteId={selectedNote.id} onUploadComplete={() => {}} />
+              <NotePhotoUpload noteId={selectedNote.id} onUploadComplete={() => setAttachmentRefresh(prev => prev + 1)} />
             )}
 
             <div className="border-t border-gray-200">

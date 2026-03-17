@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { MessageCircle, Send, Reply, Edit2, Trash2, X } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useRealtimeComments } from '../../hooks/useRealtimeSubscription';
@@ -38,11 +38,13 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [newComment, setNewComment] = useState('');
+  const [replyText, setReplyText] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const fetchProfiles = async () => {
     const { data, error } = await supabase
@@ -100,7 +102,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
   };
 
   const handleSendComment = async (parentId: string | null = null) => {
-    const content = parentId ? newComment : newComment;
+    const content = parentId ? replyText : newComment;
     if (!content.trim() || !profile) return;
 
     setSending(true);
@@ -118,7 +120,11 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       toast('error', 'Failed to post comment');
     } else {
       checkMutationResult(commentResult, 'Insert team note comment');
-      setNewComment('');
+      if (parentId) {
+        setReplyText('');
+      } else {
+        setNewComment('');
+      }
       setReplyingTo(null);
       fetchComments();
     }
@@ -151,6 +157,11 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
   };
 
   const handleDeleteComment = async (commentId: string) => {
+    if (confirmDeleteId !== commentId) {
+      setConfirmDeleteId(commentId);
+      return;
+    }
+    setConfirmDeleteId(null);
     try {
       const result = await supabase
         .from('team_note_comments')
@@ -229,8 +240,9 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
                     </button>
                     <button
                       onClick={() => handleDeleteComment(comment.id)}
-                      className="p-1 text-gray-400 hover:text-red-500 rounded"
-                      title="Delete"
+                      onBlur={() => { if (confirmDeleteId === comment.id) setConfirmDeleteId(null); }}
+                      className={`p-1 rounded ${confirmDeleteId === comment.id ? 'text-red-600 bg-red-50' : 'text-gray-400 hover:text-red-500'}`}
+                      title={confirmDeleteId === comment.id ? 'Click again to confirm delete' : 'Delete'}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -279,8 +291,8 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
             {replyingTo === comment.id && (
               <div className="mt-2 flex gap-2">
                 <textarea
-                  value={newComment}
-                  onChange={(e) => setNewComment(e.target.value)}
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
                   className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                   rows={2}
                   placeholder="Write a reply..."
@@ -297,7 +309,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
                   <Button
                     size="sm"
                     variant="secondary"
-                    onClick={() => { setReplyingTo(null); setNewComment(''); }}
+                    onClick={() => { setReplyingTo(null); setReplyText(''); }}
                     icon={<X className="w-3.5 h-3.5" />}
                   >
                     Cancel

@@ -259,9 +259,14 @@ export function BlendTicketDetail() {
     });
   }
 
-  async function handleApprove() {
+  function handleApprove() {
     if (!ticket || !profile) return;
-    if (!confirm('Approve this blend ticket?')) return;
+    setApproveConfirmOpen(true);
+  }
+
+  async function executeApprove() {
+    setApproveConfirmOpen(false);
+    if (!ticket || !profile) return;
 
     await runCriticalAction({
       action: async () => {
@@ -283,9 +288,14 @@ export function BlendTicketDetail() {
     });
   }
 
-  async function handleReject() {
+  function handleReject() {
     if (!ticket || !profile) return;
-    if (!confirm('Reject this blend ticket?')) return;
+    setRejectConfirmOpen(true);
+  }
+
+  async function executeReject() {
+    setRejectConfirmOpen(false);
+    if (!ticket || !profile) return;
 
     await runCriticalAction({
       action: async () => {
@@ -345,9 +355,17 @@ export function BlendTicketDetail() {
     }
   }
 
-  async function removeProduct(index: number) {
-    if (!confirm('Remove this product from the ticket?')) return;
-    const product = products[index];
+  function removeProduct(index: number) {
+    setRemoveProductIndex(index);
+    setRemoveProductConfirmOpen(true);
+  }
+
+  async function executeRemoveProduct() {
+    setRemoveProductConfirmOpen(false);
+    if (removeProductIndex === null) return;
+    const product = products[removeProductIndex];
+    const capturedIndex = removeProductIndex;
+    setRemoveProductIndex(null);
 
     await runCriticalAction({
       action: async () => {
@@ -360,7 +378,7 @@ export function BlendTicketDetail() {
       },
       toast,
       sentryTag: 'remove_blend_ticket_product',
-      onSuccess: () => setProducts(products.filter((_, i) => i !== index)),
+      onSuccess: () => setProducts(products.filter((_, i) => i !== capturedIndex)),
     });
   }
 
@@ -413,9 +431,14 @@ export function BlendTicketDetail() {
     }
   }
 
-  async function handleUnlink() {
+  function handleUnlink() {
     if (!ticket || !profile) return;
-    if (!confirm('Unlink this blend ticket from its order? The order itself will not be deleted.')) return;
+    setUnlinkConfirmOpen(true);
+  }
+
+  async function executeUnlink() {
+    setUnlinkConfirmOpen(false);
+    if (!ticket || !profile) return;
     try {
       const unlinkKey = unlinkIdem.getKey();
       const { data, error } = await supabase.rpc('unlink_blend_ticket_from_order', {
@@ -463,6 +486,11 @@ export function BlendTicketDetail() {
 
   const [creatingAppRecord, setCreatingAppRecord] = useState(false);
   const [appRecordConfirmOpen, setAppRecordConfirmOpen] = useState(false);
+  const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
+  const [removeProductConfirmOpen, setRemoveProductConfirmOpen] = useState(false);
+  const [removeProductIndex, setRemoveProductIndex] = useState<number | null>(null);
+  const [unlinkConfirmOpen, setUnlinkConfirmOpen] = useState(false);
 
   function handleCreateApplicationRecord() {
     if (!ticket || !profile) return;
@@ -1154,6 +1182,47 @@ export function BlendTicketDetail() {
         variant="info"
         icon={ClipboardCheck}
         loading={creatingAppRecord}
+      />
+
+      <ConfirmModal
+        open={approveConfirmOpen}
+        onClose={() => setApproveConfirmOpen(false)}
+        onConfirm={executeApprove}
+        title="Approve Blend Ticket"
+        message="Approve this blend ticket?"
+        confirmLabel="Approve"
+        variant="info"
+        icon={Check}
+      />
+
+      <ConfirmModal
+        open={rejectConfirmOpen}
+        onClose={() => setRejectConfirmOpen(false)}
+        onConfirm={executeReject}
+        title="Reject Blend Ticket"
+        message="Reject this blend ticket?"
+        confirmLabel="Reject"
+        variant="danger"
+      />
+
+      <ConfirmModal
+        open={removeProductConfirmOpen}
+        onClose={() => { setRemoveProductConfirmOpen(false); setRemoveProductIndex(null); }}
+        onConfirm={executeRemoveProduct}
+        title="Remove Product"
+        message="Remove this product from the ticket?"
+        confirmLabel="Remove"
+        variant="danger"
+      />
+
+      <ConfirmModal
+        open={unlinkConfirmOpen}
+        onClose={() => setUnlinkConfirmOpen(false)}
+        onConfirm={executeUnlink}
+        title="Unlink Blend Ticket"
+        message="Unlink this blend ticket from its order? The order itself will not be deleted."
+        confirmLabel="Unlink"
+        variant="warning"
       />
     </div>
   );

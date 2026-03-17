@@ -9,7 +9,7 @@ import { supabase } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 import type { Product } from '../../types';
 
 // ---------- interfaces ----------

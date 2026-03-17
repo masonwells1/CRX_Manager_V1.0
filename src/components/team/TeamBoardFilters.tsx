@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Search, Filter, X, Tag, User, AlertCircle } from 'lucide-react';
 import { supabase } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 
 interface NoteTag {
   id: string;
@@ -38,28 +38,36 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
   }, []);
 
   const fetchTags = async () => {
-    const { data, error } = await supabase
-      .from('note_tags')
-      .select('*')
-      .order('name');
-    if (error) {
-      Sentry.captureException(new Error(`Failed to load tags: ${error.message}`));
-      return;
+    try {
+      const { data, error } = await supabase
+        .from('note_tags')
+        .select('*')
+        .order('name');
+      if (error) {
+        Sentry.captureException(new Error(`Failed to load tags: ${error.message}`));
+        return;
+      }
+      setTags((data || []) as NoteTag[]);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
     }
-    setTags((data || []) as NoteTag[]);
   };
 
   const fetchProfiles = async () => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, full_name')
-      .eq('is_active', true)
-      .order('full_name');
-    if (error) {
-      Sentry.captureException(new Error(`Failed to load profiles: ${error.message}`));
-      return;
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name')
+        .eq('is_active', true)
+        .order('full_name');
+      if (error) {
+        Sentry.captureException(new Error(`Failed to load profiles: ${error.message}`));
+        return;
+      }
+      setProfiles((data || []) as Profile[]);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
     }
-    setProfiles((data || []) as Profile[]);
   };
 
   const updateFilter = (key: keyof FilterState, value: string | string[] | boolean) => {

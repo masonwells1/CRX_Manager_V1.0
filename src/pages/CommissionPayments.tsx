@@ -11,6 +11,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
@@ -76,6 +77,10 @@ export default function CommissionPayments() {
   const [payDate, setPayDate] = useState(localToday());
   const [payNotes, setPayNotes] = useState('');
   const [creating, setCreating] = useState(false);
+
+  // Post confirmation modal
+  const [postConfirmOpen, setPostConfirmOpen] = useState(false);
+  const [postTargetId, setPostTargetId] = useState<string | null>(null);
 
   const fetchPayments = useCallback(async () => {
     setLoading(true);
@@ -207,13 +212,19 @@ export default function CommissionPayments() {
     setCreating(false);
   };
 
-  const handlePost = async (paymentId: string) => {
-    if (!window.confirm('Post these commission payments? This action cannot be undone.')) return;
-    setPosting(paymentId);
+  const handlePost = (paymentId: string) => {
+    setPostTargetId(paymentId);
+    setPostConfirmOpen(true);
+  };
+
+  const executePost = async () => {
+    if (!postTargetId) return;
+    setPostConfirmOpen(false);
+    setPosting(postTargetId);
     try {
       const postKey = postPaymentIdem.getKey();
       const { error } = await supabase.rpc('post_commission_payment', {
-        p_payment_id: paymentId,
+        p_payment_id: postTargetId,
         p_performed_by: profile?.id,
         p_idempotency_key: postKey,
       });
@@ -597,6 +608,16 @@ export default function CommissionPayments() {
           </div>
         </div>
       </Modal>
+
+      <ConfirmModal
+        open={postConfirmOpen}
+        onClose={() => setPostConfirmOpen(false)}
+        onConfirm={executePost}
+        title="Post Commission Payment"
+        message="Post these commission payments? This action cannot be undone."
+        confirmLabel="Post"
+        variant="warning"
+      />
     </div>
   );
 }

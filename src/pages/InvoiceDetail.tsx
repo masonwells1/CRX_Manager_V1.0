@@ -21,6 +21,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 
 interface LineItem {
@@ -117,6 +118,9 @@ export default function InvoiceDetail() {
   // Print dialog
   const [showPrintDialog, setShowPrintDialog] = useState(false);
   const [shares, setShares] = useState<InvoiceShare[]>([]);
+
+  // Post confirm
+  const [postConfirmOpen, setPostConfirmOpen] = useState(false);
 
   // Void modal
   const [showVoidModal, setShowVoidModal] = useState(false);
@@ -387,8 +391,12 @@ export default function InvoiceDetail() {
   };
 
   // Post invoice
-  const handlePost = async () => {
-    if (!window.confirm('Post this invoice? This will lock amounts and start AR aging.')) return;
+  const handlePost = () => {
+    setPostConfirmOpen(true);
+  };
+
+  const executePost = async () => {
+    setPostConfirmOpen(false);
     setPosting(true);
     try {
       const idemKey = postIdem.getKey();
@@ -1243,6 +1251,16 @@ export default function InvoiceDetail() {
         hasShares={shares.length > 1}
         onPrint={handlePrint}
         loading={printing}
+      />
+
+      <ConfirmModal
+        open={postConfirmOpen}
+        onClose={() => setPostConfirmOpen(false)}
+        onConfirm={executePost}
+        title="Post Invoice"
+        message="Post this invoice? This will lock amounts and start AR aging."
+        confirmLabel="Post Invoice"
+        variant="warning"
       />
     </div>
   );

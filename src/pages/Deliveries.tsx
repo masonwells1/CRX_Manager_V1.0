@@ -280,14 +280,16 @@ export default function Deliveries() {
         if (pErr) Sentry.captureException(pErr, { tags: { source: 'fetch', page: 'deliveries' } });
         (parents || []).forEach((p) => { pMap[p.id] = p.farm_name; });
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rows = ((data || []) as any[]).map((d) => ({
-        ...d,
-        customer_name: d.customer?.farm_name || 'Unknown',
-        driver_name: 'Unassigned',
-        item_count: 0,
-        farm_group_name: d.customer?.parent_customer_id ? pMap[d.customer.parent_customer_id] || null : null,
-      }));
+      const rows = (data || []).map((d) => {
+        const cust = d.customer as { farm_name?: string; parent_customer_id?: string } | null;
+        return {
+          ...d,
+          customer_name: cust?.farm_name || 'Unknown',
+          driver_name: 'Unassigned',
+          item_count: 0,
+          farm_group_name: cust?.parent_customer_id ? pMap[cust.parent_customer_id] || null : null,
+        };
+      });
       setUnassigned(rows);
     })();
   }, [isDriver]);

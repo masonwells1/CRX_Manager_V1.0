@@ -7,6 +7,7 @@ import Input from '../components/ui/Input';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -159,6 +160,11 @@ export default function JobDetail() {
 
   // Transfer to invoice
   const [transferring, setTransferring] = useState(false);
+
+  // Confirm modals
+  const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
 
   // Recipe load modal
   const [showRecipeModal, setShowRecipeModal] = useState(false);
@@ -360,8 +366,12 @@ export default function JobDetail() {
     setSaving(false);
   };
 
-  const handleComplete = async () => {
-    if (!window.confirm('Complete this job? This will deduct inventory and create application records.')) return;
+  const handleComplete = () => {
+    setCompleteConfirmOpen(true);
+  };
+
+  const executeComplete = async () => {
+    setCompleteConfirmOpen(false);
     setCompleting(true);
     try {
       const idemKey = completeJobIdem.getKey();
@@ -385,13 +395,17 @@ export default function JobDetail() {
     setCompleting(false);
   };
 
-  const handleCancelJob = async () => {
-    if (!window.confirm('Cancel this job? This action cannot be undone.')) return;
+  const handleCancelJob = () => {
     // Only scheduled or in_progress jobs can be cancelled
     if (status !== 'scheduled' && status !== 'in_progress') {
       toast('error', `Cannot cancel a job in '${status}' status — only scheduled or in-progress jobs can be cancelled`);
       return;
     }
+    setCancelConfirmOpen(true);
+  };
+
+  const executeCancelJob = async () => {
+    setCancelConfirmOpen(false);
     setCancelling(true);
     try {
       const result = await supabase
@@ -410,8 +424,12 @@ export default function JobDetail() {
     setCancelling(false);
   };
 
-  const handleTransferToInvoice = async () => {
-    if (!confirm('Transfer this job to an invoice? This will create a new invoice from the job chemicals.')) return;
+  const handleTransferToInvoice = () => {
+    setTransferConfirmOpen(true);
+  };
+
+  const executeTransferToInvoice = async () => {
+    setTransferConfirmOpen(false);
     setTransferring(true);
     try {
       const idemKey = transferJobIdem.getKey();
@@ -898,6 +916,36 @@ export default function JobDetail() {
           prefillContent={`Customer: ${customers.find(c => c.id === customerId)?.farm_name || 'Unknown'}`}
         />
       )}
+
+      <ConfirmModal
+        open={completeConfirmOpen}
+        onClose={() => setCompleteConfirmOpen(false)}
+        onConfirm={executeComplete}
+        title="Complete Job"
+        message="Complete this job? This will deduct inventory and create application records."
+        confirmLabel="Complete"
+        variant="warning"
+      />
+
+      <ConfirmModal
+        open={cancelConfirmOpen}
+        onClose={() => setCancelConfirmOpen(false)}
+        onConfirm={executeCancelJob}
+        title="Cancel Job"
+        message="Cancel this job? This action cannot be undone."
+        confirmLabel="Cancel Job"
+        variant="danger"
+      />
+
+      <ConfirmModal
+        open={transferConfirmOpen}
+        onClose={() => setTransferConfirmOpen(false)}
+        onConfirm={executeTransferToInvoice}
+        title="Transfer to Invoice"
+        message="Transfer this job to an invoice? This will create a new invoice from the job chemicals."
+        confirmLabel="Transfer"
+        variant="warning"
+      />
     </div>
   );
 }

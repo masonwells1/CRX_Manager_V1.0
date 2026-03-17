@@ -26,7 +26,8 @@ import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../lib/sentry';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type {
@@ -102,6 +103,8 @@ export default function DeliveryDetail() {
   const [autoInvoiceId, setAutoInvoiceId] = useState<string | null>(null);
   const [emailOnComplete, setEmailOnComplete] = useState(true);
   const isOnline = useOnlineStatus();
+  const [reassignConfirmOpen, setReassignConfirmOpen] = useState(false);
+  const [completeDeliveryConfirmOpen, setCompleteDeliveryConfirmOpen] = useState(false);
 
   // Edit mode state
   const [editing, setEditing] = useState(false);
@@ -421,7 +424,7 @@ export default function DeliveryDetail() {
         parts.push('Warning: posted invoices linked to this order require manual review.');
       }
       toast('success', parts.join(' '));
-      await logActivity('delivery_voided', `Delivery ${delivery.delivery_number} voided`, 'delivery', id!, delivery.customer_id);
+      await logActivity('delivery_voided', `Delivery ${delivery.delivery_number} voided`, profile!.id, 'delivery', id!, delivery.customer_id);
       setVoidOpen(false);
       setVoidReason('');
       fetchDelivery();
@@ -431,9 +434,14 @@ export default function DeliveryDetail() {
 
   // ── Reassign (Take This Delivery) ─────────────────────────────────────
 
-  const handleReassign = async () => {
+  const handleReassign = () => {
     if (!profile || !delivery) return;
-    if (!confirm(`Take delivery ${delivery.delivery_number}? The current driver will be notified.`)) return;
+    setReassignConfirmOpen(true);
+  };
+
+  const executeReassign = async () => {
+    setReassignConfirmOpen(false);
+    if (!profile || !delivery) return;
 
     setReassigning(true);
     try {
@@ -564,7 +572,7 @@ export default function DeliveryDetail() {
 
   // ── Complete Delivery (Driver) ─────────────────────────────────────────
 
-  const handleComplete = async () => {
+  const handleComplete = () => {
     if (!signedBy.trim()) {
       toast('error', 'Please enter a signature name');
       return;
@@ -574,10 +582,12 @@ export default function DeliveryDetail() {
       toast('error', 'At least one item must have a quantity greater than 0');
       return;
     }
-    const confirmMsg = isPartialDelivery
-      ? 'Complete this delivery with partial quantities? This will update inventory and cannot be undone.'
-      : 'Complete this delivery? This will update inventory and cannot be undone.';
-    if (!confirm(confirmMsg)) return;
+    setCompleteDeliveryConfirmOpen(true);
+  };
+
+  const executeComplete = async () => {
+    setCompleteDeliveryConfirmOpen(false);
+    if (!delivery || !profile) return;
     setCompleting(true);
 
     const quantitiesJson = isPartialDelivery
@@ -2017,6 +2027,28 @@ export default function DeliveryDetail() {
         prefillTitle={`Follow up: ${delivery.delivery_number}`}
         prefillContent={`Customer: ${customer?.farm_name || 'Unknown'}\nDriver: ${driver?.full_name || 'Unassigned'}\nDate: ${delivery.scheduled_date}`}
         prefillAssignee={delivery.assigned_driver || ''}
+      />
+
+      <ConfirmModal
+        open={reassignConfirmOpen}
+        onClose={() => setReassignConfirmOpen(false)}
+        onConfirm={executeReassign}
+        title="Take This Delivery"
+        message={`Take delivery ${delivery.delivery_number}? The current driver will be notified.`}
+        confirmLabel="Take Delivery"
+        variant="warning"
+      />
+
+      <ConfirmModal
+        open={completeDeliveryConfirmOpen}
+        onClose={() => setCompleteDeliveryConfirmOpen(false)}
+        onConfirm={executeComplete}
+        title="Complete Delivery"
+        message={isPartialDelivery
+          ? 'Complete this delivery with partial quantities? This will update inventory and cannot be undone.'
+          : 'Complete this delivery? This will update inventory and cannot be undone.'}
+        confirmLabel="Complete Delivery"
+        variant="warning"
       />
     </div>
   );

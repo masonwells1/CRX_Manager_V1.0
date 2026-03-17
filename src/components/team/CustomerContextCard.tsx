@@ -24,6 +24,10 @@ export default function CustomerContextCard({ customerId }: Props) {
   const fetchedRef = useRef(false);
 
   useEffect(() => {
+    fetchedRef.current = false;
+  }, [customerId]);
+
+  useEffect(() => {
     if (cache.has(customerId)) {
       setCtx(cache.get(customerId)!);
       setLoading(false);

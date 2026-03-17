@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Users, Truck, ClipboardList, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import { supabase } from '../../lib/db';
+import { useToast } from '../ui/Toast';
 import Badge from '../ui/Badge';
 
 interface TeamMemberWorkload {
@@ -34,17 +35,24 @@ const roleLabels: Record<string, string> = {
 };
 
 export default function WorkloadView() {
+  const { toast } = useToast();
   const [members, setMembers] = useState<TeamMemberWorkload[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
-      const { data } = await supabase.rpc('get_team_workload');
-      if (data) setMembers(data as TeamMemberWorkload[]);
-      setLoading(false);
+      try {
+        const { data } = await supabase.rpc('get_team_workload');
+        if (data) setMembers(data as TeamMemberWorkload[]);
+      } catch (err: unknown) {
+        toast('error', err instanceof Error ? err.message : 'Failed to load workload data');
+      } finally {
+        setLoading(false);
+      }
     }
     load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (loading) {

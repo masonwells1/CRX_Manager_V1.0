@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../lib/sentry';
 import { supabase } from '../lib/db';
 import { setUserContext, clearUserContext } from '../lib/metrics';
 import type { Profile, UserRole } from '../types';

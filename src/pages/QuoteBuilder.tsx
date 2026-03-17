@@ -24,6 +24,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
@@ -150,6 +151,8 @@ export default function QuoteBuilder() {
   const [_sending, __setSending] = useState(false);
   const [converting, setConverting] = useState(false);
   const [confirmConvertOpen, setConfirmConvertOpen] = useState(false);
+  const [duplicateOrderConfirmOpen, setDuplicateOrderConfirmOpen] = useState(false);
+  const [duplicateOrderMsg, setDuplicateOrderMsg] = useState('');
 
   const [customerId, setCustomerId] = useState('');
   const [tier, setTier] = useState(1);
@@ -859,10 +862,12 @@ export default function QuoteBuilder() {
         else toast('success', 'Inventory holds created for planned program');
       } else if (!isPlanned && wasPlanned) {
         // Release holds when toggled off
-        await supabase.from('inventory_holds')
+        const holdResult = await supabase.from('inventory_holds')
           .update({ is_active: false, updated_at: new Date().toISOString() })
           .eq('source_id', result)
-          .eq('is_active', true);
+          .eq('is_active', true)
+          .select();
+        checkMutationResult(holdResult, 'Release inventory holds');
         setWasPlanned(false);
       }
 
@@ -1248,12 +1253,18 @@ export default function QuoteBuilder() {
         if (recentOrders && recentOrders.length > 0) {
           const recent = recentOrders[0];
           const daysAgo = Math.ceil((Date.now() - new Date(recent.order_date + 'T00:00:00').getTime()) / 86400000);
-          const ok = confirm(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Convert this quote to another order?`);
-          if (!ok) return;
+          setDuplicateOrderMsg(`This customer already has order ${recent.order_number} from ${daysAgo} day(s) ago. Convert this quote to another order?`);
+          setDuplicateOrderConfirmOpen(true);
+          return;
         }
       } catch { /* ignore — don't block conversion if check fails */ }
     }
 
+    executeConvertToOrder();
+  };
+
+  const executeConvertToOrder = async () => {
+    setDuplicateOrderConfirmOpen(false);
     setConverting(true);
     setConfirmConvertOpen(false);
 
@@ -2563,6 +2574,16 @@ export default function QuoteBuilder() {
           </div>
         </Modal>
       )}
+
+      <ConfirmModal
+        open={duplicateOrderConfirmOpen}
+        onClose={() => setDuplicateOrderConfirmOpen(false)}
+        onConfirm={executeConvertToOrder}
+        title="Duplicate Order Warning"
+        message={duplicateOrderMsg}
+        confirmLabel="Convert Anyway"
+        variant="warning"
+      />
     </div>
   );
 }
