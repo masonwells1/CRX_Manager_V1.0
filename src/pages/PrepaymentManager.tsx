@@ -190,7 +190,7 @@ export default function PrepaymentManager() {
           p_idempotency_key: crypto.randomUUID(),
         });
         if (error) throw error;
-        const result = data as { success: boolean };
+        const result = assertRpcResult<{ success: boolean }>(data, 'edit_prepay_credit');
         if (!result?.success) throw new Error('Edit failed');
       },
       toast,
@@ -226,7 +226,7 @@ export default function PrepaymentManager() {
           p_idempotency_key: crypto.randomUUID(),
         });
         if (error) throw error;
-        const result = data as { success: boolean };
+        const result = assertRpcResult<{ success: boolean }>(data, 'delete_prepay_credit');
         if (!result?.success) throw new Error('Delete failed');
       },
       toast,

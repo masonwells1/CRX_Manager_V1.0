@@ -5,6 +5,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -70,6 +71,12 @@ export default function CycleCounts() {
   const [loadingItems, setLoadingItems] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [reversing, setReversing] = useState(false);
+
+  // Confirm modal states
+  const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [reverseConfirmOpen, setReverseConfirmOpen] = useState(false);
+  const [uncountedCount, setUncountedCount] = useState(0);
 
   const isAdmin = role === 'admin';
 
@@ -280,10 +287,17 @@ export default function CycleCounts() {
 
     const uncounted = countItems.filter((i) => !i.is_counted);
     if (uncounted.length > 0) {
-      if (!confirm(`${uncounted.length} products have not been counted yet. Complete anyway?`)) {
-        return;
-      }
+      setUncountedCount(uncounted.length);
+      setCompleteConfirmOpen(true);
+      return;
     }
+
+    await doComplete();
+  };
+
+  const doComplete = async () => {
+    if (!activeCount || !profile) return;
+    setCompleteConfirmOpen(false);
 
     await runCriticalAction({
       action: async () => {
@@ -319,9 +333,14 @@ export default function CycleCounts() {
   };
 
   // Cancel cycle count
-  const handleCancel = async () => {
+  const handleCancel = () => {
     if (!activeCount || !profile) return;
-    if (!confirm('Cancel this cycle count? No inventory adjustments will be made.')) return;
+    setCancelConfirmOpen(true);
+  };
+
+  const doCancel = async () => {
+    if (!activeCount || !profile) return;
+    setCancelConfirmOpen(false);
 
     await runCriticalAction({
       action: async () => {
@@ -343,9 +362,14 @@ export default function CycleCounts() {
   };
 
   // Reverse a completed cycle count (undo inventory adjustments)
-  const handleReverse = async () => {
+  const handleReverse = () => {
     if (!activeCount || !profile) return;
-    if (!confirm('Reverse this completed cycle count? All inventory adjustments will be undone.')) return;
+    setReverseConfirmOpen(true);
+  };
+
+  const doReverse = async () => {
+    if (!activeCount || !profile) return;
+    setReverseConfirmOpen(false);
 
     setReversing(true);
     try {
@@ -522,6 +546,37 @@ export default function CycleCounts() {
           </div>
         </div>
       </Modal>
+
+      {/* Confirm Modals */}
+      <ConfirmModal
+        open={completeConfirmOpen}
+        onClose={() => setCompleteConfirmOpen(false)}
+        onConfirm={doComplete}
+        title="Complete with Uncounted Items"
+        message={`${uncountedCount} products have not been counted yet. Complete anyway?`}
+        confirmLabel="Complete Anyway"
+        variant="warning"
+        loading={completing}
+      />
+      <ConfirmModal
+        open={cancelConfirmOpen}
+        onClose={() => setCancelConfirmOpen(false)}
+        onConfirm={doCancel}
+        title="Cancel Cycle Count"
+        message="Cancel this cycle count? No inventory adjustments will be made."
+        confirmLabel="Cancel Count"
+        variant="warning"
+      />
+      <ConfirmModal
+        open={reverseConfirmOpen}
+        onClose={() => setReverseConfirmOpen(false)}
+        onConfirm={doReverse}
+        title="Reverse Cycle Count"
+        message="Reverse this completed cycle count? All inventory adjustments will be undone."
+        confirmLabel="Reverse Count"
+        variant="danger"
+        loading={reversing}
+      />
 
       {/* Cycle Count Detail Modal */}
       <Modal

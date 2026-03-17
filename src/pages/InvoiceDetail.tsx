@@ -10,7 +10,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
@@ -22,6 +22,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
+import ConfirmModal from '../components/ui/ConfirmModal';
 
 interface LineItem {
   id?: string;
@@ -142,6 +143,7 @@ export default function InvoiceDetail() {
 
   // Post loading
   const [posting, setPosting] = useState(false);
+  const [showPostConfirm, setShowPostConfirm] = useState(false);
 
   // Fetch reference data
   useEffect(() => {
@@ -374,7 +376,8 @@ export default function InvoiceDetail() {
         saveIdem.resetKey();
 
         if (isNew && data) {
-          navigate(`/invoices/${data}`, { replace: true });
+          const savedId = assertRpcResult<string>(data, 'save_invoice');
+          navigate(`/invoices/${savedId}`, { replace: true });
         } else {
           fetchInvoice(id!);
         }
@@ -388,7 +391,6 @@ export default function InvoiceDetail() {
 
   // Post invoice
   const handlePost = async () => {
-    if (!window.confirm('Post this invoice? This will lock amounts and start AR aging.')) return;
     setPosting(true);
     try {
       const idemKey = postIdem.getKey();
@@ -675,7 +677,7 @@ export default function InvoiceDetail() {
             </Button>
           )}
           {!isNew && editable && isAdmin && (
-            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={handlePost} loading={posting}>
+            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={() => setShowPostConfirm(true)} loading={posting}>
               Post
             </Button>
           )}
@@ -1243,6 +1245,18 @@ export default function InvoiceDetail() {
         hasShares={shares.length > 1}
         onPrint={handlePrint}
         loading={printing}
+      />
+
+      {/* Post Invoice Confirm */}
+      <ConfirmModal
+        open={showPostConfirm}
+        onClose={() => setShowPostConfirm(false)}
+        onConfirm={() => { setShowPostConfirm(false); handlePost(); }}
+        title="Post Invoice"
+        message="Post this invoice? This will lock amounts and start AR aging."
+        confirmLabel="Post Invoice"
+        variant="warning"
+        loading={posting}
       />
     </div>
   );

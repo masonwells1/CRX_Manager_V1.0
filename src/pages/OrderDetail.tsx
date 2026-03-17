@@ -10,13 +10,14 @@ import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
-import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
@@ -46,6 +47,7 @@ export default function OrderDetail() {
   const { toast } = useToast();
   const { role, profile } = useAuth();
   const updateOrderIdem = useIdempotencyKey('update_order_items', profile?.id || '');
+  const voidOrderIdem = useIdempotencyKey('void_order', profile?.id || '');
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -84,6 +86,8 @@ export default function OrderDetail() {
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [newStatus, setNewStatus] = useState('');
   const [changingStatus, setChangingStatus] = useState(false);
+  const [statusConfirmOpen, setStatusConfirmOpen] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<string>('');
 
   // Void order (fulfilled → voided, admin-only)
   const [voidModalOpen, setVoidModalOpen] = useState(false);
@@ -329,13 +333,20 @@ export default function OrderDetail() {
     setTogglingPlanned(false);
   };
 
-  const handleStatusChange = async () => {
+  const handleStatusChange = () => {
     if (!newStatus || !order || !profile) return;
-    if (!window.confirm(`Change order status to ${newStatus.replace('_', ' ')}?`)) return;
+    setPendingStatus(newStatus);
+    setStatusConfirmOpen(true);
+  };
+
+  const executeStatusChange = async () => {
+    if (!pendingStatus || !order || !profile) return;
+    setStatusConfirmOpen(false);
+    const targetStatus = pendingStatus;
 
     await runCriticalAction({
       action: async () => {
-        if (newStatus === 'cancelled' && order.status !== 'cancelled') {
+        if (targetStatus === 'cancelled' && order.status !== 'cancelled') {
           // Atomic RPC: cancellation + inventory release + cascade (void drafts, zero commissions, release holds)
           const idempotencyKey = crypto.randomUUID();
           const { data: cancelResult, error } = await supabase.rpc('cancel_order', {
@@ -362,25 +373,25 @@ export default function OrderDetail() {
             partially_fulfilled: ['cancelled'],
           };
           const allowed = validTransitions[order.status] || [];
-          if (!allowed.includes(newStatus)) {
-            toast('error', `Cannot change status from '${order.status}' to '${newStatus}'`);
+          if (!allowed.includes(targetStatus)) {
+            toast('error', `Cannot change status from '${order.status}' to '${targetStatus}'`);
             setStatusModalOpen(false);
             return;
           }
           const statusResult = await supabase
             .from('orders')
-            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .update({ status: targetStatus, updated_at: new Date().toISOString() })
             .eq('id', id!)
             .select();
           checkMutationResult(statusResult, 'Update order status');
-          toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
+          toast('success', `Status changed to ${targetStatus.replace('_', ' ')}`);
         }
 
-        logActivity('order_status_changed', `Order ${order.order_number} status changed to ${newStatus}`, profile.id, 'order', order.id, order.customer_id);
-        notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by ?? undefined);
+        logActivity('order_status_changed', `Order ${order.order_number} status changed to ${targetStatus}`, profile.id, 'order', order.id, order.customer_id);
+        notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', targetStatus, order.created_by ?? undefined);
 
         // === Email customer when order is confirmed ===
-        if (newStatus === 'confirmed' && customer?.email) {
+        if (targetStatus === 'confirmed' && customer?.email) {
           try {
             const itemSummary = items
               .slice(0, 10)
@@ -462,12 +473,15 @@ export default function OrderDetail() {
     if (!order || !profile) return;
     setVoiding(true);
     try {
+      const idemKey = voidOrderIdem.getKey();
       const { data: voidResult, error } = await supabase.rpc('void_order', {
         p_order_id: order.id,
         p_performed_by: profile.id,
         p_reason: voidReason.trim() || 'Voided by admin',
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      assertRpcResult(voidResult, 'void_order');
 
       const parts: string[] = ['Order voided.'];
       if (voidResult?.inventory_products_restored > 0)
@@ -578,7 +592,7 @@ export default function OrderDetail() {
           p_idempotency_key: crypto.randomUUID(),
         });
         if (error) throw error;
-        const invoiceId = data as string;
+        const invoiceId = assertRpcResult<string>(data, 'create_invoice_from_order');
         navigate(`/invoices/${invoiceId}`);
       },
       toast,
@@ -1345,6 +1359,17 @@ export default function OrderDetail() {
           )}
         </div>
       </Modal>
+
+      <ConfirmModal
+        open={statusConfirmOpen}
+        onClose={() => setStatusConfirmOpen(false)}
+        onConfirm={executeStatusChange}
+        title="Change Order Status"
+        message={`Change order status to ${pendingStatus.replace('_', ' ')}?`}
+        variant="warning"
+        confirmLabel="Change Status"
+        loading={changingStatus}
+      />
 
       <QuickTaskModal
         open={quickTaskOpen}

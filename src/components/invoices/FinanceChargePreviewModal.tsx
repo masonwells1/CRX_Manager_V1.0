@@ -15,7 +15,7 @@ import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import type { FinanceChargePreview } from '../../types';
 
@@ -108,7 +108,7 @@ export default function FinanceChargePreviewModal({
       const { data, error } = await supabase.rpc('generate_finance_charges', params);
       if (error) throw error;
       financeChargeIdem.resetKey();
-      const result = data as { charges_generated: number; details: unknown[] };
+      const result = assertRpcResult<{ charges_generated: number; details: unknown[] }>(data, 'generate_finance_charges');
       if (result.charges_generated === 0) {
         toast('info', 'No finance charges were generated');
       } else {

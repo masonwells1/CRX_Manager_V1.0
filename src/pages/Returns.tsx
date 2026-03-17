@@ -311,7 +311,7 @@ export default function Returns() {
       action: async () => {
         const result = await supabase
           .from('returns')
-          .update({ status: 'rejected', updated_at: new Date().toISOString() })
+          .update({ status: 'rejected' })
           .eq('id', activeReturn.id)
           .select();
         checkMutationResult(result, 'Reject return');
@@ -340,7 +340,7 @@ export default function Returns() {
       action: async () => {
         const result = await supabase
           .from('returns')
-          .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+          .update({ status: 'cancelled' })
           .eq('id', activeReturn.id)
           .select();
         checkMutationResult(result, 'Cancel return');

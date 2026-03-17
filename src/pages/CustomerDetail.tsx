@@ -10,7 +10,8 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase } from '../lib/db';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { supabase, assertRpcResult } from '../lib/db';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate, localToday } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -48,6 +49,8 @@ export default function CustomerDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
+  const saveCustomerIdem = useIdempotencyKey('save_customer', profile?.id || '');
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>({
@@ -386,20 +389,23 @@ export default function CustomerDetail() {
         is_default: addr.is_default,
       }));
 
+      const idemKey = saveCustomerIdem.getKey();
       const { data, error } = await supabase.rpc('save_customer', {
         p_customer_id: isNew ? null : id,
         p_customer_payload: customerPayload,
         p_addresses: addressesPayload,
         p_performed_by: profile?.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) {
         toast('error', error.message);
       } else {
+        const result = assertRpcResult<{ customer_id: string }>(data, 'save_customer');
         setIsDirty(false);
         if (isNew) {
           toast('success', 'Customer created');
-          navigate(`/customers/${data?.customer_id ?? data}`, { replace: true });
+          navigate(`/customers/${result.customer_id ?? data}`, { replace: true });
         } else {
           toast('success', 'Customer updated');
           fetchAddresses();
@@ -830,12 +836,15 @@ export default function CustomerDetail() {
                     <button
                       onClick={async () => {
                         const lastQuote = quotes[0];
+                        const idemKey = duplicateQuoteIdem.getKey();
                         const { data, error } = await supabase.rpc('duplicate_quote', {
                           p_source_quote_id: lastQuote.id,
                           p_performed_by: profile?.id,
+                          p_idempotency_key: idemKey,
                         });
                         if (error) { toast('error', 'Failed to duplicate quote'); return; }
-                        const result = data as { quote_id: string };
+                        const result = assertRpcResult<{ quote_id: string }>(data, 'duplicate_quote');
+                        duplicateQuoteIdem.resetKey();
                         navigate(`/quotes/${result.quote_id}`);
                       }}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-crx-green text-crx-green rounded-lg hover:bg-crx-green-tint"

@@ -11,6 +11,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -95,6 +96,12 @@ export default function Rebates() {
   });
 
   const [saving, setSaving] = useState(false);
+
+  // Confirm modal states
+  const [deleteProgramConfirmOpen, setDeleteProgramConfirmOpen] = useState(false);
+  const [deleteProgramTarget, setDeleteProgramTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deleteClaimConfirmOpen, setDeleteClaimConfirmOpen] = useState(false);
+  const [deleteClaimTarget, setDeleteClaimTarget] = useState<{ id: string; number: string } | null>(null);
 
   useEffect(() => {
     fetchLookups();
@@ -324,8 +331,16 @@ export default function Rebates() {
   };
 
   // ===== Delete Program =====
-  const handleDeleteProgram = async (programId: string, programName: string) => {
-    if (!confirm(`Delete rebate program "${programName}"? This will also delete all claims under this program.`)) return;
+  const handleDeleteProgram = (programId: string, programName: string) => {
+    setDeleteProgramTarget({ id: programId, name: programName });
+    setDeleteProgramConfirmOpen(true);
+  };
+
+  const doDeleteProgram = async () => {
+    if (!deleteProgramTarget) return;
+    const { id: programId, name: programName } = deleteProgramTarget;
+    setDeleteProgramConfirmOpen(false);
+    setDeleteProgramTarget(null);
     try {
       // Delete claims first (FK constraint) — may be zero claims, so only check for error
       const { error: claimsError } = await supabase.from('rebate_claims').delete().eq('program_id', programId);
@@ -341,8 +356,16 @@ export default function Rebates() {
   };
 
   // ===== Delete Claim =====
-  const handleDeleteClaim = async (claimId: string, claimNumber: string) => {
-    if (!confirm(`Delete rebate claim ${claimNumber}?`)) return;
+  const handleDeleteClaim = (claimId: string, claimNumber: string) => {
+    setDeleteClaimTarget({ id: claimId, number: claimNumber });
+    setDeleteClaimConfirmOpen(true);
+  };
+
+  const doDeleteClaim = async () => {
+    if (!deleteClaimTarget) return;
+    const { id: claimId, number: claimNumber } = deleteClaimTarget;
+    setDeleteClaimConfirmOpen(false);
+    setDeleteClaimTarget(null);
     try {
       const result = await supabase.from('rebate_claims').delete().eq('id', claimId).select();
       checkMutationResult(result, 'Delete rebate claim');
@@ -744,6 +767,26 @@ export default function Rebates() {
           </div>
         </div>
       </Modal>
+
+      {/* Confirm Modals */}
+      <ConfirmModal
+        open={deleteProgramConfirmOpen}
+        onClose={() => { setDeleteProgramConfirmOpen(false); setDeleteProgramTarget(null); }}
+        onConfirm={doDeleteProgram}
+        title="Delete Rebate Program"
+        message={`Delete rebate program "${deleteProgramTarget?.name}"? This will also delete all claims under this program.`}
+        confirmLabel="Delete Program"
+        variant="danger"
+      />
+      <ConfirmModal
+        open={deleteClaimConfirmOpen}
+        onClose={() => { setDeleteClaimConfirmOpen(false); setDeleteClaimTarget(null); }}
+        onConfirm={doDeleteClaim}
+        title="Delete Rebate Claim"
+        message={`Delete rebate claim ${deleteClaimTarget?.number}?`}
+        confirmLabel="Delete Claim"
+        variant="danger"
+      />
 
       {/* ========== CLAIM MODAL ========== */}
       <Modal open={cModalOpen} onClose={() => setCModalOpen(false)} title="New Rebate Claim">

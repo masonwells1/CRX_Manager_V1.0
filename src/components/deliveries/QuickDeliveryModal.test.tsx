@@ -42,6 +42,7 @@ vi.mock('../../lib/db', () => ({
     from: mockFrom,
     rpc: mockRpc,
   },
+  assertRpcResult: (data: unknown) => data,
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({
