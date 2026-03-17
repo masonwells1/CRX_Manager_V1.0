@@ -329,6 +329,7 @@ export default function SettingsPage() {
       if (error) {
         toast('error', sanitizeError(error));
       } else {
+        adminUpdateIdem.resetKey();
         assertRpcResult(data, 'admin_update_profile');
         if (data?.error) {
           toast('error', data.error);

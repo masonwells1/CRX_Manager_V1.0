@@ -448,6 +448,7 @@ export default function JobDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      loadRecipeIdem.resetKey();
       const recipeResult = assertRpcResult<LoadRecipeResult>(data, 'load_recipe_into_job');
       toast('success', `Loaded ${recipeResult.items_loaded} items from recipe`);
       setShowRecipeModal(false);

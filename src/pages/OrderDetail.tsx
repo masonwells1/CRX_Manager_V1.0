@@ -481,6 +481,7 @@ export default function OrderDetail() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      voidOrderIdem.resetKey();
       assertRpcResult(voidResult, 'void_order');
 
       const parts: string[] = ['Order voided.'];
