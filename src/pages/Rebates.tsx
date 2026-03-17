@@ -432,7 +432,7 @@ export default function Rebates() {
     ...(isAdmin
       ? [
           {
-            key: 'id' as keyof ProgramRow,
+            key: 'id' as string,
             header: 'Actions',
             render: (r: ProgramRow) => (
               <div className="flex items-center gap-1">
