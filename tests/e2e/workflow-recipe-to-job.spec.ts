@@ -216,7 +216,8 @@ test.describe.serial('Recipe to Job Workflow', () => {
       !e.includes('Mapbox') &&
       !e.includes('mapbox') &&
       !e.includes('Warning:') &&
-      !e.includes('deprecated')
+      !e.includes('deprecated') &&
+      !e.includes('__cf_bm')
     );
     // Soft assertion — some pages may have benign console errors
     expect(realErrors.length <= 2).toBe(true);

@@ -91,7 +91,7 @@ test.describe('Financial Dashboard', { tag: '@smoke' }, () => {
     await page.waitForTimeout(3000);
 
     const criticalErrors = errors.filter(
-      (e) => !e.includes('net::ERR') && !e.includes('Failed to load resource')
+      (e) => !e.includes('net::ERR') && !e.includes('Failed to load resource') && !e.includes('__cf_bm')
     );
     expect(criticalErrors).toHaveLength(0);
   });

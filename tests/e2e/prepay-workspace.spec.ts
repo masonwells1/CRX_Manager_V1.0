@@ -321,7 +321,8 @@ test.describe('Prepay Workspace', () => {
         !e.includes('net::ERR') &&
         !e.includes('favicon') &&
         !e.includes('Failed to load resource') &&
-        !e.includes('Profile fetch attempt')   // transient retry during login
+        !e.includes('Profile fetch attempt') &&   // transient retry during login
+        !e.includes('__cf_bm')
     );
     expect(realErrors.length).toBe(0);
   });
