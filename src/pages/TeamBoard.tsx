@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useRef , useCallback } from 'react';
 import {
   Plus, CheckSquare, Square, Pin, Clock, Pencil, Trash2,
-  MessageCircle, Activity, LayoutGrid, User, History, ListChecks,
+  MessageCircle, Activity, LayoutGrid, User, Users, History, ListChecks,
   AlertTriangle, Timer,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
