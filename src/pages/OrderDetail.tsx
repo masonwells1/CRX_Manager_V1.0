@@ -19,6 +19,7 @@ import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
+import { runCriticalAction } from '../lib/criticalAction';
 import { parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -251,55 +252,54 @@ export default function OrderDetail() {
 
   const handleSaveEdits = async () => {
     if (!profile) return;
-    setSaving(true);
-
-    try {
-      // Build payload: existing items (with id) + new items (without id)
-      const existingPayload = editItems.map((item) => ({
-        id: item.id,
-        product_id: item.product_id,
-        product_name: item.product_name,
-        unit_size: item.unit_size,
-        cost_per_unit: item.cost_per_unit,
-        price_per_unit: item.price_per_unit,
-        total_units_needed: item.total_units_needed,
-      }));
-
-      const newPayload = newItems
-        .filter((item) => item.product_id && item.total_units_needed > 0)
-        .map((item) => ({
+    await runCriticalAction({
+      action: async () => {
+        // Build payload: existing items (with id) + new items (without id)
+        const existingPayload = editItems.map((item) => ({
+          id: item.id,
           product_id: item.product_id,
           product_name: item.product_name,
-          price_per_unit: item.price_per_unit,
-          cost_per_unit: item.cost_per_unit,
-          total_units_needed: item.total_units_needed,
           unit_size: item.unit_size,
-          section_name: item.section_name,
+          cost_per_unit: item.cost_per_unit,
+          price_per_unit: item.price_per_unit,
+          total_units_needed: item.total_units_needed,
         }));
 
-      const itemsPayload = [...existingPayload, ...newPayload];
+        const newPayload = newItems
+          .filter((item) => item.product_id && item.total_units_needed > 0)
+          .map((item) => ({
+            product_id: item.product_id,
+            product_name: item.product_name,
+            price_per_unit: item.price_per_unit,
+            cost_per_unit: item.cost_per_unit,
+            total_units_needed: item.total_units_needed,
+            unit_size: item.unit_size,
+            section_name: item.section_name,
+          }));
 
-      const idemKey = updateOrderIdem.getKey();
-      const { error } = await supabase.rpc('update_order_items', {
-        p_order_id: id!,
-        p_items: itemsPayload,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      });
+        const itemsPayload = [...existingPayload, ...newPayload];
 
-      if (error) throw error;
+        const idemKey = updateOrderIdem.getKey();
+        const { error } = await supabase.rpc('update_order_items', {
+          p_order_id: id!,
+          p_items: itemsPayload,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        });
 
-      updateOrderIdem.resetKey();
-      const addedCount = newPayload.length;
-      toast('success', addedCount > 0 ? `Order updated — ${addedCount} product(s) added` : 'Order updated');
-      setEditing(false);
-      setNewItems([]);
-      fetchOrder();
-    } catch (error: unknown) {
-      console.error('Error saving edits:', error);
-      toast('error', sanitizeError(error));
-    }
-    setSaving(false);
+        if (error) throw error;
+
+        updateOrderIdem.resetKey();
+        const addedCount = newPayload.length;
+        toast('success', addedCount > 0 ? `Order updated — ${addedCount} product(s) added` : 'Order updated');
+        setEditing(false);
+        setNewItems([]);
+        fetchOrder();
+      },
+      toast,
+      setLoading: setSaving,
+      sentryTag: 'save_order_edits',
+    });
   };
 
   const handleTogglePlanned = async () => {
@@ -333,129 +333,128 @@ export default function OrderDetail() {
     if (!newStatus || !order || !profile) return;
     if (!window.confirm(`Change order status to ${newStatus.replace('_', ' ')}?`)) return;
 
-    setChangingStatus(true);
-    try {
-      if (newStatus === 'cancelled' && order.status !== 'cancelled') {
-        // Atomic RPC: cancellation + inventory release + cascade (void drafts, zero commissions, release holds)
-        const idempotencyKey = crypto.randomUUID();
-        const { data: cancelResult, error } = await supabase.rpc('cancel_order', {
-          p_order_id: id!,
-          p_performed_by: profile.id,
-          p_idempotency_key: idempotencyKey,
-        });
-        if (error) throw error;
-        // Show summary toast with cascade details
-        if (cancelResult && cancelResult.success) {
-          const parts: string[] = ['Order cancelled.'];
-          if (cancelResult.holds_released > 0) parts.push(`${cancelResult.holds_released} hold(s) released.`);
-          if (cancelResult.commissions_cancelled > 0) parts.push(`${cancelResult.commissions_cancelled} commission(s) zeroed.`);
-          if (cancelResult.draft_invoices_cancelled > 0) parts.push(`${cancelResult.draft_invoices_cancelled} draft invoice(s) cancelled.`);
-          if (cancelResult.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
-          if (cancelResult.paid_commissions_flagged > 0) parts.push(`Admin notified about ${cancelResult.paid_commissions_flagged} paid commission(s).`);
-          toast('success', parts.join(' '));
-        }
-      } else {
-        // Simple status change (no inventory impact) — validate allowed transitions
-        // Manual status changes — partially_fulfilled/fulfilled happen via delivery RPCs, not manual update
-        const validTransitions: Record<string, string[]> = {
-          confirmed: ['cancelled'],
-          partially_fulfilled: ['cancelled'],
-        };
-        const allowed = validTransitions[order.status] || [];
-        if (!allowed.includes(newStatus)) {
-          toast('error', `Cannot change status from '${order.status}' to '${newStatus}'`);
-          setStatusModalOpen(false);
-          return;
-        }
-        const statusResult = await supabase
-          .from('orders')
-          .update({ status: newStatus, updated_at: new Date().toISOString() })
-          .eq('id', id!)
-          .select();
-        checkMutationResult(statusResult, 'Update order status');
-        toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
-      }
-
-      logActivity('order_status_changed', `Order ${order.order_number} status changed to ${newStatus}`, profile.id, 'order', order.id, order.customer_id);
-      notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by ?? undefined);
-
-      // === Email customer when order is confirmed ===
-      if (newStatus === 'confirmed' && customer?.email) {
-        try {
-          const itemSummary = items
-            .slice(0, 10)
-            .map((i) => `<tr>
-              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${i.product_name}</td>
-              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${i.total_units_needed}</td>
-              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${fmt(i.price_per_unit)}</td>
-            </tr>`)
-            .join('');
-          const moreItems = items.length > 10 ? `<p style="color:#64748b;font-size:12px;">...and ${items.length - 10} more item(s)</p>` : '';
-
-          const html = buildEmailHtml(`
-            <h2 style="color:#1e293b;margin:0 0 12px;">Order Confirmed</h2>
-            <p style="color:#475569;font-size:14px;line-height:1.6;">
-              Hi${customer.contact_name ? ` ${customer.contact_name}` : ''},
-            </p>
-            <p style="color:#475569;font-size:14px;line-height:1.6;">
-              Your order <strong>${order.order_number}</strong> has been confirmed and is being processed.
-            </p>
-            <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-              <tr>
-                <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;color:#166534;">Order Number</td>
-                <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;font-weight:600;color:#166534;">${order.order_number}</td>
-              </tr>
-              <tr>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Order Date</td>
-                <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${new Date(order.order_date + 'T00:00:00').toLocaleDateString()}</td>
-              </tr>
-              <tr>
-                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Total</td>
-                <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${fmt(order.total_price)}</td>
-              </tr>
-            </table>
-            <h3 style="color:#1e293b;font-size:14px;margin:16px 0 8px;">Items</h3>
-            <table style="width:100%;border-collapse:collapse;">
-              <tr style="background:#f8fafc;">
-                <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:left;color:#64748b;">Product</th>
-                <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Qty</th>
-                <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Price/Unit</th>
-              </tr>
-              ${itemSummary}
-            </table>
-            ${moreItems}
-            <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
-              We'll notify you when deliveries are scheduled. Thank you for your business!
-            </p>
-          `);
-
-          const emailResult = await sendEmail({
-            to: customer.email,
-            subject: `Order ${order.order_number} Confirmed — Crop RX Solutions`,
-            html,
-            email_type: 'order_confirmed',
-            customer_id: order.customer_id,
-            idempotency_key: `order-confirmed-${order.id}-${Date.now()}`,
+    await runCriticalAction({
+      action: async () => {
+        if (newStatus === 'cancelled' && order.status !== 'cancelled') {
+          // Atomic RPC: cancellation + inventory release + cascade (void drafts, zero commissions, release holds)
+          const idempotencyKey = crypto.randomUUID();
+          const { data: cancelResult, error } = await supabase.rpc('cancel_order', {
+            p_order_id: id!,
+            p_performed_by: profile.id,
+            p_idempotency_key: idempotencyKey,
           });
-
-          if (emailResult.success) {
-            toast('success', `Order confirmed and confirmation emailed to ${customer.email}`);
+          if (error) throw error;
+          // Show summary toast with cascade details
+          if (cancelResult && cancelResult.success) {
+            const parts: string[] = ['Order cancelled.'];
+            if (cancelResult.holds_released > 0) parts.push(`${cancelResult.holds_released} hold(s) released.`);
+            if (cancelResult.commissions_cancelled > 0) parts.push(`${cancelResult.commissions_cancelled} commission(s) zeroed.`);
+            if (cancelResult.draft_invoices_cancelled > 0) parts.push(`${cancelResult.draft_invoices_cancelled} draft invoice(s) cancelled.`);
+            if (cancelResult.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
+            if (cancelResult.paid_commissions_flagged > 0) parts.push(`Admin notified about ${cancelResult.paid_commissions_flagged} paid commission(s).`);
+            toast('success', parts.join(' '));
           }
-          // If email fails, the status toast above already showed success
-        } catch (emailErr) {
-          console.warn('Order confirmation email failed:', emailErr);
-          // Status change already succeeded — don't show error for email
+        } else {
+          // Simple status change (no inventory impact) — validate allowed transitions
+          // Manual status changes — partially_fulfilled/fulfilled happen via delivery RPCs, not manual update
+          const validTransitions: Record<string, string[]> = {
+            confirmed: ['cancelled'],
+            partially_fulfilled: ['cancelled'],
+          };
+          const allowed = validTransitions[order.status] || [];
+          if (!allowed.includes(newStatus)) {
+            toast('error', `Cannot change status from '${order.status}' to '${newStatus}'`);
+            setStatusModalOpen(false);
+            return;
+          }
+          const statusResult = await supabase
+            .from('orders')
+            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .eq('id', id!)
+            .select();
+          checkMutationResult(statusResult, 'Update order status');
+          toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
         }
-      }
 
-      setStatusModalOpen(false);
-      fetchOrder();
-    } catch (error: unknown) {
-      console.error('Error changing status:', error);
-      toast('error', sanitizeError(error));
-    } finally {
-      setChangingStatus(false);
-    }
+        logActivity('order_status_changed', `Order ${order.order_number} status changed to ${newStatus}`, profile.id, 'order', order.id, order.customer_id);
+        notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by ?? undefined);
+
+        // === Email customer when order is confirmed ===
+        if (newStatus === 'confirmed' && customer?.email) {
+          try {
+            const itemSummary = items
+              .slice(0, 10)
+              .map((i) => `<tr>
+                <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${i.product_name}</td>
+                <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${i.total_units_needed}</td>
+                <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${fmt(i.price_per_unit)}</td>
+              </tr>`)
+              .join('');
+            const moreItems = items.length > 10 ? `<p style="color:#64748b;font-size:12px;">...and ${items.length - 10} more item(s)</p>` : '';
+
+            const html = buildEmailHtml(`
+              <h2 style="color:#1e293b;margin:0 0 12px;">Order Confirmed</h2>
+              <p style="color:#475569;font-size:14px;line-height:1.6;">
+                Hi${customer.contact_name ? ` ${customer.contact_name}` : ''},
+              </p>
+              <p style="color:#475569;font-size:14px;line-height:1.6;">
+                Your order <strong>${order.order_number}</strong> has been confirmed and is being processed.
+              </p>
+              <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+                <tr>
+                  <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;color:#166534;">Order Number</td>
+                  <td style="padding:8px 12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:13px;font-weight:600;color:#166534;">${order.order_number}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Order Date</td>
+                  <td style="padding:8px 12px;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${new Date(order.order_date + 'T00:00:00').toLocaleDateString()}</td>
+                </tr>
+                <tr>
+                  <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;color:#64748b;">Total</td>
+                  <td style="padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;font-size:13px;font-weight:600;">${fmt(order.total_price)}</td>
+                </tr>
+              </table>
+              <h3 style="color:#1e293b;font-size:14px;margin:16px 0 8px;">Items</h3>
+              <table style="width:100%;border-collapse:collapse;">
+                <tr style="background:#f8fafc;">
+                  <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:left;color:#64748b;">Product</th>
+                  <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Qty</th>
+                  <th style="padding:6px 12px;border:1px solid #e2e8f0;font-size:12px;text-align:right;color:#64748b;">Price/Unit</th>
+                </tr>
+                ${itemSummary}
+              </table>
+              ${moreItems}
+              <p style="color:#475569;font-size:14px;line-height:1.6;margin-top:16px;">
+                We'll notify you when deliveries are scheduled. Thank you for your business!
+              </p>
+            `);
+
+            const emailResult = await sendEmail({
+              to: customer.email,
+              subject: `Order ${order.order_number} Confirmed — Crop RX Solutions`,
+              html,
+              email_type: 'order_confirmed',
+              customer_id: order.customer_id,
+              idempotency_key: `order-confirmed-${order.id}-${Date.now()}`,
+            });
+
+            if (emailResult.success) {
+              toast('success', `Order confirmed and confirmation emailed to ${customer.email}`);
+            }
+            // If email fails, the status toast above already showed success
+          } catch (emailErr) {
+            console.warn('Order confirmation email failed:', emailErr);
+            // Status change already succeeded — don't show error for email
+          }
+        }
+
+        setStatusModalOpen(false);
+        fetchOrder();
+      },
+      toast,
+      setLoading: setChangingStatus,
+      sentryTag: 'change_order_status',
+    });
   };
 
   // ── Void Order (fulfilled → voided, admin-only) ───────────────────────
@@ -571,22 +570,22 @@ export default function OrderDetail() {
 
   const handleCreateInvoice = async () => {
     if (!profile || !id) return;
-    setCreatingInvoice(true);
-    try {
-      const { data, error } = await supabase.rpc('create_invoice_from_order', {
-        p_order_id: id,
-        p_salesman_id: profile.id,
-        p_idempotency_key: crypto.randomUUID(),
-      });
-      if (error) throw error;
-      const invoiceId = data as string;
-      toast('success', 'Draft invoice created');
-      navigate(`/invoices/${invoiceId}`);
-    } catch (error: unknown) {
-      console.error('Error creating invoice:', error);
-      toast('error', sanitizeError(error));
-    }
-    setCreatingInvoice(false);
+    await runCriticalAction({
+      action: async () => {
+        const { data, error } = await supabase.rpc('create_invoice_from_order', {
+          p_order_id: id,
+          p_salesman_id: profile.id,
+          p_idempotency_key: crypto.randomUUID(),
+        });
+        if (error) throw error;
+        const invoiceId = data as string;
+        navigate(`/invoices/${invoiceId}`);
+      },
+      toast,
+      successMessage: 'Draft invoice created',
+      setLoading: setCreatingInvoice,
+      sentryTag: 'create_invoice_from_order',
+    });
   };
 
   const fmt = (n: number) =>

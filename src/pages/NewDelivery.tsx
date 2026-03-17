@@ -10,6 +10,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
@@ -121,11 +122,11 @@ export default function NewDelivery() {
     ]);
 
     if (custRes.error) {
-      console.error('Failed to load customer:', custRes.error);
+      Sentry.captureException(custRes.error, { tags: { source: 'fetch', action: 'load_customer' } });
       toast('error', 'Failed to load customer details.');
     }
     if (itemsRes.error) {
-      console.error('Failed to load order items:', itemsRes.error);
+      Sentry.captureException(itemsRes.error, { tags: { source: 'fetch', action: 'load_order_items' } });
       toast('error', 'Failed to load order items.');
     }
 
@@ -141,7 +142,7 @@ export default function NewDelivery() {
         .eq('customer_id', cust.id)
         .order('is_default', { ascending: false });
       if (addrErr) {
-        console.error('Failed to load addresses:', addrErr.message);
+        Sentry.captureException(addrErr, { tags: { source: 'fetch', action: 'load_addresses' } });
       }
       const addrs = (addrData || []) as CustomerAddress[];
       setAddresses(addrs);

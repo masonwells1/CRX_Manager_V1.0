@@ -9,6 +9,8 @@ import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -18,6 +20,7 @@ import TransactionLedgerModal from '../components/inventory/TransactionLedgerMod
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
 interface InventoryRow extends Inventory {
@@ -155,7 +158,7 @@ export default function InventoryPage() {
       .order('product_id');
 
     if (error) {
-      console.error('Failed to load inventory:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
       toast('error', 'Failed to load inventory. Please try again.');
       setLoading(false);
       return;
@@ -334,7 +337,7 @@ export default function InventoryPage() {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Failed to load holds:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
       return;
     }
 
@@ -357,7 +360,7 @@ export default function InventoryPage() {
     setForecastLoading(true);
     const { data, error } = await supabase.rpc('get_inventory_forecast', { p_months_ahead: 6 });
     if (error) {
-      console.error('Failed to load forecast:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
       toast('error', 'Failed to load forecast data');
     } else if (data) {
       setForecastData(data as typeof forecastData);
@@ -376,7 +379,7 @@ export default function InventoryPage() {
       .eq('is_active', true)
       .order('product_name');
     if (error) {
-      console.error('Failed to load products:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
       toast('error', 'Failed to load products. Please try again.');
       return;
     }
@@ -390,7 +393,7 @@ export default function InventoryPage() {
       .eq('is_active', true)
       .order('farm_name');
     if (error) {
-      console.error('Failed to load customers:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
       return;
     }
     setCustomers((data || []) as Customer[]);
@@ -581,25 +584,27 @@ export default function InventoryPage() {
       return;
     }
 
-    try {
-      const idemKey = receivePoIdem.getKey();
-      const { error } = await supabase.rpc('receive_po_items', {
-        p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      });
-      if (error) throw error;
-
-      receivePoIdem.resetKey();
-      toast('success', `Received ${qty} units`);
-      setReceiveOpen(false);
-      setReceiveQty('');
-      setReceivePOItemId('');
-      fetchInventory();
-    } catch (error) {
-      console.error('Error receiving inventory:', error);
-      toast('error', 'Failed to receive inventory: ' + (error instanceof Error ? error.message : String(error)));
-    }
+    await runCriticalAction({
+      action: async () => {
+        const idemKey = receivePoIdem.getKey();
+        const { error } = await supabase.rpc('receive_po_items', {
+          p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        });
+        if (error) throw error;
+        receivePoIdem.resetKey();
+      },
+      toast,
+      successMessage: `Received ${qty} units`,
+      sentryTag: 'receive_po_items',
+      onSuccess: () => {
+        setReceiveOpen(false);
+        setReceiveQty('');
+        setReceivePOItemId('');
+        fetchInventory();
+      },
+    });
   };
 
   const handleAdjust = async () => {
@@ -610,27 +615,29 @@ export default function InventoryPage() {
     }
     if (!profile) return;
 
-    try {
-      const idemKey = adjustIdem.getKey();
-      const { error } = await supabase.rpc('adjust_inventory', {
-        p_inventory_id: selectedId,
-        p_delta: qty,
-        p_reason: adjustNote || null,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      });
-      if (error) throw error;
-
-      adjustIdem.resetKey();
-      toast('success', `Adjusted by ${qty} units`);
-      setAdjustOpen(false);
-      setAdjustQty('');
-      setAdjustNote('');
-      fetchInventory();
-    } catch (error) {
-      console.error('Error adjusting inventory:', error);
-      toast('error', 'Failed to adjust inventory: ' + (error instanceof Error ? error.message : String(error)));
-    }
+    await runCriticalAction({
+      action: async () => {
+        const idemKey = adjustIdem.getKey();
+        const { error } = await supabase.rpc('adjust_inventory', {
+          p_inventory_id: selectedId,
+          p_delta: qty,
+          p_reason: adjustNote || null,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        });
+        if (error) throw error;
+        adjustIdem.resetKey();
+      },
+      toast,
+      successMessage: `Adjusted by ${qty} units`,
+      sentryTag: 'adjust_inventory',
+      onSuccess: () => {
+        setAdjustOpen(false);
+        setAdjustQty('');
+        setAdjustNote('');
+        fetchInventory();
+      },
+    });
   };
 
   const handleDelete = async (inventoryId: string) => {
@@ -692,22 +699,25 @@ export default function InventoryPage() {
       }
     }
 
-    try {
-      const deleteResult = await supabase
-        .from('inventory')
-        .delete()
-        .eq('id', deleteConfirmId)
-        .select();
-      checkMutationResult(deleteResult, 'Delete inventory item');
-
-      toast('success', 'Inventory item deleted');
-      fetchInventory();
-    } catch (error: unknown) {
-      console.error('Failed to delete inventory:', error);
-      toast('error', sanitizeError(error));
-    } finally {
-      setDeleteConfirmId(null);
-    }
+    await runCriticalAction({
+      action: async () => {
+        const deleteResult = await supabase
+          .from('inventory')
+          .delete()
+          .eq('id', deleteConfirmId)
+          .select();
+        checkMutationResult(deleteResult, 'Delete inventory item');
+      },
+      toast,
+      successMessage: 'Inventory item deleted',
+      sentryTag: 'delete_inventory',
+      onSuccess: () => {
+        fetchInventory();
+        setDeleteConfirmId(null);
+      },
+    });
+    // Also clear on failure
+    setDeleteConfirmId(null);
   };
 
   const filtered = inventory.filter((i) => {
@@ -967,6 +977,20 @@ export default function InventoryPage() {
   const filteredProducts = products.filter((p) =>
     !productSearch || p.product_name.toLowerCase().includes(productSearch.toLowerCase())
   );
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+        <SkeletonTable rows={8} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

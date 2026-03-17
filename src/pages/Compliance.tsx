@@ -17,6 +17,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils';
@@ -92,7 +93,7 @@ export default function Compliance() {
 
     if (error) {
       toast('error', 'Failed to load licenses');
-      console.error(error.message);
+      Sentry.captureException(error);
       return;
     }
 
@@ -118,7 +119,7 @@ export default function Compliance() {
 
     if (error) {
       toast('error', 'Failed to load RUP products');
-      console.error(error.message);
+      Sentry.captureException(error);
       return;
     }
     setRUPProducts((data || []) as RUPProduct[]);
@@ -133,7 +134,7 @@ export default function Compliance() {
 
     if (error) {
       toast('error', 'Failed to load RUP sales register');
-      console.error(error.message);
+      Sentry.captureException(error);
       return;
     }
     setRUPSales((data || []) as RUPSalesRecord[]);

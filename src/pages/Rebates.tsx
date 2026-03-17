@@ -15,6 +15,8 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import type { RebateProgram, RebateClaim } from '../types';
@@ -122,7 +124,7 @@ export default function Rebates() {
 
     if (error) {
       toast('error', 'Failed to load rebate programs');
-      console.error(error.message);
+      Sentry.captureException(error);
     }
     const mapped = ((data || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>).map((p) => ({
       ...p,
@@ -141,7 +143,7 @@ export default function Rebates() {
 
     if (error) {
       toast('error', 'Failed to load rebate claims');
-      console.error(error.message);
+      Sentry.captureException(error);
     }
     const mapped = ((data || []) as Array<Record<string, unknown> & { program?: { program_name?: string; manufacturer?: string }; customer?: { farm_name?: string }; product?: { product_name?: string }; order?: { order_number?: string } }>).map((c) => ({
       ...c,
@@ -209,7 +211,6 @@ export default function Rebates() {
       toast('error', 'Fill in required fields');
       return;
     }
-    setSaving(true);
     const payload = {
       program_name: pForm.program_name,
       manufacturer: pForm.manufacturer,
@@ -225,23 +226,26 @@ export default function Rebates() {
       notes: pForm.notes || null,
     };
 
-    try {
-      if (pEditId) {
-        const result = await supabase.from('rebate_programs').update(payload).eq('id', pEditId).select();
-        checkMutationResult(result, 'Update rebate program');
-        toast('success', 'Rebate program updated');
-      } else {
-        const result = await supabase.from('rebate_programs').insert(payload).select();
-        checkMutationResult(result, 'Create rebate program');
-        toast('success', 'Rebate program created');
-        if (profile) logActivity('rebate_program_created', `Rebate program "${pForm.program_name}" created`, profile.id);
-      }
-      setPModalOpen(false);
-      fetchPrograms();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to save program');
-    }
-    setSaving(false);
+    await runCriticalAction({
+      action: async () => {
+        if (pEditId) {
+          const result = await supabase.from('rebate_programs').update(payload).eq('id', pEditId).select();
+          checkMutationResult(result, 'Update rebate program');
+        } else {
+          const result = await supabase.from('rebate_programs').insert(payload).select();
+          checkMutationResult(result, 'Create rebate program');
+          if (profile) logActivity('rebate_program_created', `Rebate program "${pForm.program_name}" created`, profile.id);
+        }
+      },
+      toast,
+      setLoading: setSaving,
+      successMessage: pEditId ? 'Rebate program updated' : 'Rebate program created',
+      sentryTag: pEditId ? 'update_rebate_program' : 'create_rebate_program',
+      onSuccess: () => {
+        setPModalOpen(false);
+        fetchPrograms();
+      },
+    });
   };
 
   // ===== Claim CRUD =====
@@ -263,13 +267,11 @@ export default function Rebates() {
       toast('error', 'Fill in required fields');
       return;
     }
-    setSaving(true);
 
-    // Generate claim number
+    // Generate claim number before entering runCriticalAction
     const { count, error: countError } = await supabase.from('rebate_claims').select('id', { count: 'exact', head: true });
     if (countError) {
       toast('error', 'Failed to generate claim number');
-      setSaving(false);
       return;
     }
     const claimNum = `RC-${new Date().getFullYear()}-${String((count || 0) + 1).padStart(4, '0')}`;
@@ -285,17 +287,21 @@ export default function Rebates() {
       notes: cForm.notes || null,
     };
 
-    try {
-      const result = await supabase.from('rebate_claims').insert(payload).select();
-      checkMutationResult(result, 'Create rebate claim');
-      toast('success', `Claim ${claimNum} created`);
-      if (profile) logActivity('rebate_claim_created', `Rebate claim ${claimNum} created`, profile.id);
-      setCModalOpen(false);
-      fetchClaims();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to create claim');
-    }
-    setSaving(false);
+    await runCriticalAction({
+      action: async () => {
+        const result = await supabase.from('rebate_claims').insert(payload).select();
+        checkMutationResult(result, 'Create rebate claim');
+        if (profile) logActivity('rebate_claim_created', `Rebate claim ${claimNum} created`, profile.id);
+      },
+      toast,
+      setLoading: setSaving,
+      successMessage: `Claim ${claimNum} created`,
+      sentryTag: 'create_rebate_claim',
+      onSuccess: () => {
+        setCModalOpen(false);
+        fetchClaims();
+      },
+    });
   };
 
   const updateClaimStatus = async (claimId: string, newStatus: string) => {
@@ -304,15 +310,17 @@ export default function Rebates() {
     if (newStatus === 'approved') updatePayload.approved_date = localToday();
     if (newStatus === 'paid') updatePayload.paid_date = localToday();
 
-    try {
-      const result = await supabase.from('rebate_claims').update(updatePayload).eq('id', claimId).select();
-      checkMutationResult(result, `Update claim to ${newStatus}`);
-      toast('success', `Claim marked as ${newStatus}`);
-      if (profile) logActivity('rebate_claim_updated', `Rebate claim status → ${newStatus}`, profile.id);
-      fetchClaims();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to update claim status');
-    }
+    await runCriticalAction({
+      action: async () => {
+        const result = await supabase.from('rebate_claims').update(updatePayload).eq('id', claimId).select();
+        checkMutationResult(result, `Update claim to ${newStatus}`);
+        if (profile) logActivity('rebate_claim_updated', `Rebate claim status → ${newStatus}`, profile.id);
+      },
+      toast,
+      successMessage: `Claim marked as ${newStatus}`,
+      sentryTag: 'update_rebate_claim_status',
+      onSuccess: () => fetchClaims(),
+    });
   };
 
   // Stats

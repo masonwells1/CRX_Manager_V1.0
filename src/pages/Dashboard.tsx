@@ -30,6 +30,7 @@ import { SkeletonCard } from '../components/ui/Skeleton';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
 
 // --- Types ---
@@ -321,7 +322,7 @@ export default function Dashboard() {
         setExpiringPlannedHoldsCount(Array.isArray(parsed) ? parsed.length : 0);
       }
     } catch (err) {
-      console.error('Dashboard load error:', err);
+      Sentry.captureException(err, { tags: { source: 'fetch', page: 'dashboard' } });
       toast('error', 'Failed to load dashboard data. Please refresh.');
     }
     setLoading(false);
@@ -333,22 +334,22 @@ export default function Dashboard() {
       const { error: reminderErr } = await supabase.rpc('check_remainder_reminders');
       if (reminderErr) throw reminderErr;
     } catch (err) {
-      console.error('Remainder reminders check failed:', err);
+      Sentry.captureException(err, { tags: { source: 'mutation', action: 'check_remainder_reminders' } });
       supabase.rpc('log_failed_notification', {
         p_notification_type: 'remainder_reminders',
         p_error_message: err instanceof Error ? err.message : String(err),
-      }).then(({ error: logErr }) => { if (logErr) console.error(logErr); });
+      }).then(({ error: logErr }) => { if (logErr) Sentry.captureException(logErr, { tags: { source: 'mutation', action: 'log_failed_notification' } }); });
     }
 
     try {
       const { error: holdsErr } = await supabase.rpc('release_expired_quote_holds');
       if (holdsErr) throw holdsErr;
     } catch (err) {
-      console.error('Release expired holds failed:', err);
+      Sentry.captureException(err, { tags: { source: 'mutation', action: 'release_expired_quote_holds' } });
       supabase.rpc('log_failed_notification', {
         p_notification_type: 'release_expired_holds',
         p_error_message: err instanceof Error ? err.message : String(err),
-      }).then(({ error: logErr }) => { if (logErr) console.error(logErr); });
+      }).then(({ error: logErr }) => { if (logErr) Sentry.captureException(logErr, { tags: { source: 'mutation', action: 'log_failed_notification' } }); });
     }
   }, [toast]);
 

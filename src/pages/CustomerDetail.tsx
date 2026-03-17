@@ -16,6 +16,7 @@ import { parseLocalDate, localToday } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType } from '../types';
+import { Sentry } from '../lib/sentry';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
@@ -164,7 +165,7 @@ export default function CustomerDetail() {
     if (selectedTab === 'fields') {
       const { data, error: fieldError } = await supabase.rpc('get_fields_with_geojson', { p_customer_id: id });
       if (fieldError) {
-        console.error('Failed to load fields:', fieldError);
+        Sentry.captureException(fieldError, { tags: { source: 'fetch', action: 'load_customer_fields' } });
         toast('error', 'Failed to load fields');
       }
       const rows = ((data || []) as FieldGeoRow[]).map((f) => ({

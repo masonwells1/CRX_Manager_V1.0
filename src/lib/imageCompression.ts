@@ -3,6 +3,7 @@
  * Compresses images client-side before uploading to Supabase storage.
  * Target: max 1920px on longest side, JPEG quality 0.8, max ~1MB output.
  */
+import { Sentry } from './sentry';
 
 const MAX_DIMENSION = 1920;
 const JPEG_QUALITY = 0.8;
@@ -82,7 +83,7 @@ export async function compressImage(file: File): Promise<File> {
 
     return compressedFile;
   } catch (error) {
-    console.error('Image compression failed, using original:', error);
+    Sentry.captureException(error, { tags: { source: 'image_compression', action: 'compress_image' } });
     return file;
   }
 }

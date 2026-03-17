@@ -11,6 +11,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
 import { localToday } from '../lib/dateUtils';
 import type { Product } from '../types';
 
@@ -141,71 +142,67 @@ export default function NewPurchaseOrder() {
       return;
     }
 
-    setSaving(true);
-
-    try {
-      // Only generate a PO number on first save
-      let poNumber = savedPoNumber;
-      if (!poNumber) {
-        const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_po_number');
-        if (rpcError || !rpcNumber) {
-          toast('error', rpcError?.message || 'Failed to generate PO number');
-          setSaving(false);
-          return;
+    await runCriticalAction({
+      action: async () => {
+        // Only generate a PO number on first save
+        let poNumber = savedPoNumber;
+        if (!poNumber) {
+          const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_po_number');
+          if (rpcError || !rpcNumber) {
+            throw new Error(rpcError?.message || 'Failed to generate PO number');
+          }
+          poNumber = rpcNumber as string;
         }
-        poNumber = rpcNumber as string;
-      }
 
-      const poPayload = {
-        po_number: poNumber,
-        vendor: vendor.trim(),
-        status: submitStatus,
-        submitted_date: submitStatus === 'submitted' ? localToday() : null,
-        expected_delivery_date: expectedDate || null,
-        notes: notes || null,
-      };
+        const poPayload = {
+          po_number: poNumber,
+          vendor: vendor.trim(),
+          status: submitStatus,
+          submitted_date: submitStatus === 'submitted' ? localToday() : null,
+          expected_delivery_date: expectedDate || null,
+          notes: notes || null,
+        };
 
-      const itemsPayload = validItems.map((i) => ({
-        product_id: i.product_id,
-        quantity_ordered: i.quantity_ordered,
-        unit_cost: i.unit_cost,
-        unit_size: i.unit_size || null,
-        quantity_received: 0,
-      }));
+        const itemsPayload = validItems.map((i) => ({
+          product_id: i.product_id,
+          quantity_ordered: i.quantity_ordered,
+          unit_cost: i.unit_cost,
+          unit_size: i.unit_size || null,
+          quantity_received: 0,
+        }));
 
-      const idemKey = saveIdem.getKey();
-      const { data, error } = await supabase.rpc('save_purchase_order', {
-        p_po_id: savedPoId,
-        p_po_payload: poPayload,
-        p_items: itemsPayload,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      });
+        const idemKey = saveIdem.getKey();
+        const { data, error } = await supabase.rpc('save_purchase_order', {
+          p_po_id: savedPoId,
+          p_po_payload: poPayload,
+          p_items: itemsPayload,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        });
 
-      if (error) throw error;
-      saveIdem.resetKey();
+        if (error) throw error;
+        saveIdem.resetKey();
 
-      const isFirstSave = !savedPoId;
-      const returnedId = (data as { po_id: string })?.po_id;
+        const isFirstSave = !savedPoId;
+        const returnedId = (data as { po_id: string })?.po_id;
 
-      if (isFirstSave && returnedId) {
-        setSavedPoId(returnedId);
-        setSavedPoNumber(poNumber);
-      }
+        if (isFirstSave && returnedId) {
+          setSavedPoId(returnedId);
+          setSavedPoNumber(poNumber);
+        }
 
-      setIsDirty(false);
-      toast('success',
-        submitStatus === 'submitted'
-          ? `Purchase order ${poNumber} submitted`
-          : isFirstSave ? `Draft ${poNumber} created` : `Draft ${poNumber} saved`
-      );
-      navigate(`/purchase-orders/${returnedId || savedPoId}`, { replace: true });
-    } catch (err: unknown) {
-      console.error('Save error:', err);
-      const msg = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message || String(err);
-      toast('error', msg as string);
-    }
-    setSaving(false);
+        setIsDirty(false);
+        navigate(`/purchase-orders/${returnedId || savedPoId}`, { replace: true });
+
+        return { poNumber, isFirstSave };
+      },
+      toast,
+      successMessage: submitStatus === 'submitted'
+        ? `Purchase order ${savedPoNumber || '(new)'} submitted`
+        : !savedPoId ? 'Draft created' : 'Draft saved',
+      setLoading: setSaving,
+      sentryTag: 'save_purchase_order',
+    });
   };
 
   const filteredProducts = products.filter((p) => {

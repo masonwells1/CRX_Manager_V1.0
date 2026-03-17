@@ -10,6 +10,7 @@ import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving, notifyOverReceive } from '../lib/notificationTriggers';
 import { logActivity } from '../lib/activityLogger';
@@ -188,93 +189,92 @@ export default function PurchaseOrderDetail() {
       return;
     }
 
-    setSaving(true);
-    try {
-      const idemKey = receiveIdem.getKey();
-      const { data, error } = await supabase.rpc('receive_po_items', {
-        p_items: itemsPayload,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-        p_allow_over_receive: true,
-      });
-      if (error) throw error;
-      receiveIdem.resetKey();
+    await runCriticalAction({
+      action: async () => {
+        const idemKey = receiveIdem.getKey();
+        const { data, error } = await supabase.rpc('receive_po_items', {
+          p_items: itemsPayload,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+          p_allow_over_receive: true,
+        });
+        if (error) throw error;
+        receiveIdem.resetKey();
 
-      toast('success', 'Items received and inventory updated');
-
-      // AUDIT 3.2: Notify admins about damaged/non-good items
-      if (po) {
-        const damagedItems = itemsPayload
-          .filter((ip) => ip.condition && ip.condition !== 'good')
-          .map((ip) => {
-            const poItem = items.find((i) => i.id === ip.po_item_id);
-            return {
-              productName: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
-              quantity: ip.quantity,
-              condition: ip.condition,
-            };
-          });
-        if (damagedItems.length > 0) {
-          notifyDamagedReceiving(po.po_number, damagedItems, po.id);
-        }
-
-        // AUDIT: Notify admins about over-received items
-        const overItems = itemsPayload
-          .filter((ip) => {
-            const poItem = items.find((i) => i.id === ip.po_item_id);
-            if (!poItem) return false;
-            const remaining = poItem.quantity_ordered - poItem.quantity_received;
-            return ip.quantity > remaining;
-          })
-          .map((ip) => {
-            const poItem = items.find((i) => i.id === ip.po_item_id);
-            return {
-              productName: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
-              quantityOrdered: poItem?.quantity_ordered || 0,
-              quantityReceived: ip.quantity,
-            };
-          });
-        if (overItems.length > 0) {
-          notifyOverReceive(po.po_number, overItems, po.id);
-        }
-      }
-
-      // Offer PDF download
-      const receivingRecordIds = (data as { receiving_record_ids?: string[] } | null)?.receiving_record_ids;
-      if (receivingRecordIds && receivingRecordIds.length > 0 && po) {
-        try {
-          const { downloadReceivingPdf } = await import('../lib/receivingPdf');
-          await downloadReceivingPdf({
-            po_number: po.po_number,
-            vendor: po.vendor,
-            received_at: new Date().toISOString(),
-            received_by_name: profile.full_name || 'Unknown',
-            storage_location: storageLocation,
-            items: itemsPayload.map((ip) => {
+        // AUDIT 3.2: Notify admins about damaged/non-good items
+        if (po) {
+          const damagedItems = itemsPayload
+            .filter((ip) => ip.condition && ip.condition !== 'good')
+            .map((ip) => {
               const poItem = items.find((i) => i.id === ip.po_item_id);
               return {
-                product_name: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
-                quantity_received: ip.quantity,
+                productName: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
+                quantity: ip.quantity,
                 condition: ip.condition,
-                lot_number: ip.lot_number || undefined,
-                unit_size: poItem?.unit_size || undefined,
-                notes: ip.notes || undefined,
               };
-            }),
-          });
-        } catch {
-          // PDF download is non-critical
-        }
-      }
+            });
+          if (damagedItems.length > 0) {
+            notifyDamagedReceiving(po.po_number, damagedItems, po.id);
+          }
 
-      setReceiveOpen(false);
-      fetchPO();
-      fetchReceivingHistory();
-    } catch (error: unknown) {
-      console.error('Error receiving items:', error);
-      toast('error', sanitizeError(error));
-    }
-    setSaving(false);
+          // AUDIT: Notify admins about over-received items
+          const overItems = itemsPayload
+            .filter((ip) => {
+              const poItem = items.find((i) => i.id === ip.po_item_id);
+              if (!poItem) return false;
+              const remaining = poItem.quantity_ordered - poItem.quantity_received;
+              return ip.quantity > remaining;
+            })
+            .map((ip) => {
+              const poItem = items.find((i) => i.id === ip.po_item_id);
+              return {
+                productName: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
+                quantityOrdered: poItem?.quantity_ordered || 0,
+                quantityReceived: ip.quantity,
+              };
+            });
+          if (overItems.length > 0) {
+            notifyOverReceive(po.po_number, overItems, po.id);
+          }
+        }
+
+        // Offer PDF download
+        const receivingRecordIds = (data as { receiving_record_ids?: string[] } | null)?.receiving_record_ids;
+        if (receivingRecordIds && receivingRecordIds.length > 0 && po) {
+          try {
+            const { downloadReceivingPdf } = await import('../lib/receivingPdf');
+            await downloadReceivingPdf({
+              po_number: po.po_number,
+              vendor: po.vendor,
+              received_at: new Date().toISOString(),
+              received_by_name: profile.full_name || 'Unknown',
+              storage_location: storageLocation,
+              items: itemsPayload.map((ip) => {
+                const poItem = items.find((i) => i.id === ip.po_item_id);
+                return {
+                  product_name: (poItem?.product as unknown as { product_name: string } | undefined)?.product_name || 'Unknown',
+                  quantity_received: ip.quantity,
+                  condition: ip.condition,
+                  lot_number: ip.lot_number || undefined,
+                  unit_size: poItem?.unit_size || undefined,
+                  notes: ip.notes || undefined,
+                };
+              }),
+            });
+          } catch {
+            // PDF download is non-critical
+          }
+        }
+
+        setReceiveOpen(false);
+        fetchPO();
+        fetchReceivingHistory();
+      },
+      toast,
+      successMessage: 'Items received and inventory updated',
+      setLoading: setSaving,
+      sentryTag: 'receive_po_items',
+    });
   };
 
   /* ─── Download receiving PDF for a history entry ─── */

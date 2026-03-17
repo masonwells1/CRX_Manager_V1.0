@@ -13,6 +13,7 @@
  * for admin visibility and automatic retry.
  */
 import { supabase } from './db';
+import { Sentry } from './sentry';
 import { createNotification, notifyAdmins } from './activityLogger';
 import { localToday, formatLocalDate } from './dateUtils';
 
@@ -29,8 +30,8 @@ async function logNotificationFailure(
 ): Promise<void> {
   const errorMessage = error instanceof Error ? error.message : String(error);
 
-  // Always log to console for dev visibility
-  console.error(`Notification failed [${notificationType}]:`, errorMessage);
+  // Report to Sentry for visibility
+  Sentry.captureException(error, { tags: { source: 'notification_failure', notification_type: notificationType } });
 
   try {
     await supabase.rpc('log_failed_notification', {
@@ -41,8 +42,8 @@ async function logNotificationFailure(
       p_payload: payload || {},
     });
   } catch (logErr) {
-    // Last-resort: if even logging fails, console.error is all we have
-    console.error('Failed to log notification failure:', logErr);
+    // Last-resort: if even logging fails, report to Sentry
+    Sentry.captureException(logErr, { tags: { source: 'notification_failure_log', notification_type: notificationType } });
   }
 }
 
@@ -389,6 +390,78 @@ export async function notifyOverReceive(
     await logNotificationFailure('over_receive', err, 'purchase_order', poId, {
       context: 'notifyOverReceive',
       poNumber,
+    });
+  }
+}
+
+/**
+ * Notify driver, admins, and sales rep when a delivery is completed.
+ * Call this from DeliveryDetail after completing a delivery.
+ */
+export async function notifyDeliveryCompleted(
+  deliveryId: string,
+  deliveryNumber: string,
+  customerName: string,
+  driverUserId: string | null,
+  orderId: string | null,
+  isPartial: boolean
+) {
+  const label = isPartial ? '(partial)' : '';
+  const title = `Delivery Completed ${label}`.trim();
+  const message = `Delivery ${deliveryNumber} for ${customerName} has been completed${isPartial ? ' with partial quantities' : ''}.`;
+
+  try {
+    // Notify admins
+    await notifyAdmins(title, message, 'delivery_completed', 'delivery', deliveryId);
+
+    // Notify the assigned driver (confirmation their delivery is recorded)
+    if (driverUserId) {
+      await createNotification(
+        driverUserId,
+        title,
+        message,
+        'delivery_completed',
+        'delivery',
+        deliveryId
+      );
+    }
+
+    // Notify sales rep from the linked order's commissions
+    if (orderId) {
+      const { data: commissions } = await supabase
+        .from('commissions')
+        .select('recipient')
+        .eq('order_id', orderId)
+        .neq('status', 'cancelled');
+
+      if (commissions && commissions.length > 0) {
+        const uniqueRecipients = [...new Set(commissions.map((c) => c.recipient))];
+        for (const recipientId of uniqueRecipients) {
+          // Skip if recipient is the driver (already notified) or an admin (already notified)
+          if (recipientId === driverUserId) continue;
+          const { data: recipientProfile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('id', recipientId)
+            .maybeSingle();
+          if (recipientProfile?.role === 'admin') continue;
+
+          await createNotification(
+            recipientId,
+            title,
+            `Your customer ${customerName} received delivery ${deliveryNumber}${isPartial ? ' (partial)' : ''}.`,
+            'delivery_completed',
+            'delivery',
+            deliveryId
+          );
+        }
+      }
+    }
+  } catch (err) {
+    await logNotificationFailure('delivery_completed', err, 'delivery', deliveryId, {
+      context: 'notifyDeliveryCompleted',
+      deliveryNumber,
+      customerName,
     });
   }
 }

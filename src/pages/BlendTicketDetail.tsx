@@ -2,6 +2,8 @@ import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck } from 'lucide-react';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { useAuth } from '../contexts/AuthContext';
@@ -168,7 +170,7 @@ export function BlendTicketDetail() {
       // Mark initial load complete so future changes trigger isDirty
       requestAnimationFrame(() => { initialLoadDone.current = true; });
     } catch (error) {
-      console.error('Error loading ticket:', error);
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'blend_ticket_detail' } });
       toast('error', 'Failed to load blend ticket. Please try again.');
     } finally {
       setLoading(false);
@@ -205,105 +207,104 @@ export function BlendTicketDetail() {
   async function handleSave() {
     if (!ticket) return;
 
-    setSaving(true);
-    try {
-      const ticketPayload = {
-        customer_id: formData.customer_id || null,
-        ticket_date: formData.ticket_date || null,
-        ticket_time: formData.ticket_time || null,
-        job_number: formData.job_number || null,
-        invoice_number: formData.invoice_number || null,
-        driver_name: formData.driver_name || null,
-        applicator_name: formData.applicator_name || null,
-        mixer_name: formData.mixer_name || null,
-        tank_number: formData.tank_number || null,
-        vehicle_info: formData.vehicle_info || null,
-        field_names: formData.field_names || null,
-        total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
-        application_rate: formData.application_rate || null,
-        total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
-        total_volume_unit: formData.total_volume_unit || null,
-        notes: formData.notes || null,
-      };
+    await runCriticalAction({
+      action: async () => {
+        const ticketPayload = {
+          customer_id: formData.customer_id || null,
+          ticket_date: formData.ticket_date || null,
+          ticket_time: formData.ticket_time || null,
+          job_number: formData.job_number || null,
+          invoice_number: formData.invoice_number || null,
+          driver_name: formData.driver_name || null,
+          applicator_name: formData.applicator_name || null,
+          mixer_name: formData.mixer_name || null,
+          tank_number: formData.tank_number || null,
+          vehicle_info: formData.vehicle_info || null,
+          field_names: formData.field_names || null,
+          total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
+          application_rate: formData.application_rate || null,
+          total_volume: formData.total_volume ? parseFloat(formData.total_volume) : null,
+          total_volume_unit: formData.total_volume_unit || null,
+          notes: formData.notes || null,
+        };
 
-      const productsPayload = products.map(p => ({
-        id: p.id,
-        product_id: p.product_id,
-        product_name: p.product_name,
-        quantity: p.quantity,
-        unit: p.unit,
-        lot_number: p.lot_number,
-        rate_per_acre: p.rate_per_acre,
-        rate_per_acre_unit: p.rate_per_acre_unit,
-      }));
+        const productsPayload = products.map(p => ({
+          id: p.id,
+          product_id: p.product_id,
+          product_name: p.product_name,
+          quantity: p.quantity,
+          unit: p.unit,
+          lot_number: p.lot_number,
+          rate_per_acre: p.rate_per_acre,
+          rate_per_acre_unit: p.rate_per_acre_unit,
+        }));
 
-      const saveKey = saveIdem.getKey();
-      const { error } = await supabase.rpc('save_blend_ticket', {
-        p_ticket_id: ticket.id,
-        p_ticket_payload: ticketPayload,
-        p_products: productsPayload,
-        p_performed_by: profile!.id,
-        p_idempotency_key: saveKey,
-      });
-      if (error) throw error;
-      saveIdem.resetKey();
+        const saveKey = saveIdem.getKey();
+        const { error } = await supabase.rpc('save_blend_ticket', {
+          p_ticket_id: ticket.id,
+          p_ticket_payload: ticketPayload,
+          p_products: productsPayload,
+          p_performed_by: profile!.id,
+          p_idempotency_key: saveKey,
+        });
+        if (error) throw error;
+        saveIdem.resetKey();
 
-      setIsDirty(false);
-      await loadTicketData();
-    } catch (error: unknown) {
-      console.error('Error saving ticket:', error);
-      toast('error', error instanceof Error ? error.message : 'Operation failed');
-    } finally {
-      setSaving(false);
-    }
+        setIsDirty(false);
+        await loadTicketData();
+      },
+      toast,
+      setLoading: setSaving,
+      sentryTag: 'save_blend_ticket',
+    });
   }
 
   async function handleApprove() {
     if (!ticket || !profile) return;
     if (!confirm('Approve this blend ticket?')) return;
 
-    try {
-      const approveResult = await supabase
-        .from('blend_tickets')
-        .update({
-          review_status: 'approved',
-          reviewed_by: profile.id,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq('id', ticket.id)
-        .select();
-      checkMutationResult(approveResult, 'Approve blend ticket');
-      logActivity('blend_ticket_approved', `Blend ticket ${ticket.ticket_number} approved`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
-
-      navigate('/blend-tickets');
-    } catch (error: unknown) {
-      console.error('Error approving ticket:', error);
-      toast('error', error instanceof Error ? error.message : 'Operation failed');
-    }
+    await runCriticalAction({
+      action: async () => {
+        const approveResult = await supabase
+          .from('blend_tickets')
+          .update({
+            review_status: 'approved',
+            reviewed_by: profile.id,
+            reviewed_at: new Date().toISOString(),
+          })
+          .eq('id', ticket.id)
+          .select();
+        checkMutationResult(approveResult, 'Approve blend ticket');
+        logActivity('blend_ticket_approved', `Blend ticket ${ticket.ticket_number} approved`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
+      },
+      toast,
+      sentryTag: 'approve_blend_ticket',
+      onSuccess: () => navigate('/blend-tickets'),
+    });
   }
 
   async function handleReject() {
     if (!ticket || !profile) return;
     if (!confirm('Reject this blend ticket?')) return;
 
-    try {
-      const rejectResult = await supabase
-        .from('blend_tickets')
-        .update({
-          review_status: 'rejected',
-          reviewed_by: profile.id,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq('id', ticket.id)
-        .select();
-      checkMutationResult(rejectResult, 'Reject blend ticket');
-      logActivity('blend_ticket_rejected', `Blend ticket ${ticket.ticket_number} rejected`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
-
-      navigate('/blend-tickets');
-    } catch (error: unknown) {
-      console.error('Error rejecting ticket:', error);
-      toast('error', error instanceof Error ? error.message : 'Operation failed');
-    }
+    await runCriticalAction({
+      action: async () => {
+        const rejectResult = await supabase
+          .from('blend_tickets')
+          .update({
+            review_status: 'rejected',
+            reviewed_by: profile.id,
+            reviewed_at: new Date().toISOString(),
+          })
+          .eq('id', ticket.id)
+          .select();
+        checkMutationResult(rejectResult, 'Reject blend ticket');
+        logActivity('blend_ticket_rejected', `Blend ticket ${ticket.ticket_number} rejected`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
+      },
+      toast,
+      sentryTag: 'reject_blend_ticket',
+      onSuccess: () => navigate('/blend-tickets'),
+    });
   }
 
   function updateProduct(index: number, field: keyof BlendTicketProduct, value: BlendTicketProduct[keyof BlendTicketProduct]) {
@@ -348,19 +349,19 @@ export function BlendTicketDetail() {
     if (!confirm('Remove this product from the ticket?')) return;
     const product = products[index];
 
-    try {
-      const deleteResult = await supabase
-        .from('blend_ticket_products')
-        .delete()
-        .eq('id', product.id)
-        .select();
-      checkMutationResult(deleteResult, 'Delete blend ticket product');
-
-      setProducts(products.filter((_, i) => i !== index));
-    } catch (err: unknown) {
-      console.error('removeProduct failed:', err);
-      toast('error', 'Failed to remove product: ' + (err instanceof Error ? err.message : String(err)));
-    }
+    await runCriticalAction({
+      action: async () => {
+        const deleteResult = await supabase
+          .from('blend_ticket_products')
+          .delete()
+          .eq('id', product.id)
+          .select();
+        checkMutationResult(deleteResult, 'Delete blend ticket product');
+      },
+      toast,
+      sentryTag: 'remove_blend_ticket_product',
+      onSuccess: () => setProducts(products.filter((_, i) => i !== index)),
+    });
   }
 
   // Phase 3: Order linkage handlers

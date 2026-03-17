@@ -13,6 +13,7 @@ import { useToast } from '../components/ui/Toast';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { parseLocalDate } from '../lib/dateUtils';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { useRealtimeNotes } from '../hooks/useRealtimeSubscription';
@@ -108,7 +109,7 @@ export default function TeamBoard() {
   const fetchProfiles = useCallback(async () => {
     const { data, error } = await supabase.from('profiles').select('*').eq('is_active', true).order('full_name');
     if (error) {
-      console.error('Failed to load profiles:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_profiles' } });
       toast('error', 'Failed to load team members. Please try again.');
       return;
     }
@@ -130,7 +131,7 @@ export default function TeamBoard() {
       .order('created_at', { ascending: false });
 
     if (notesError) {
-      console.error('Failed to load notes:', notesError.message);
+      Sentry.captureException(notesError, { tags: { source: 'fetch', action: 'load_notes' } });
       toast('error', 'Failed to load notes. Please try again.');
       setLoading(false);
       return;
@@ -217,7 +218,7 @@ export default function TeamBoard() {
     const { data, error } = await query;
 
     if (error) {
-      console.error('Failed to load activity log:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_activity_log' } });
       toast('error', 'Failed to load activity log. Please try again.');
       setActivityLoading(false);
       return;

@@ -9,6 +9,7 @@ import Button from '../components/ui/Button';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
+import { Sentry } from '../lib/sentry';
 import { Download } from 'lucide-react';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
 import { formatLocalDate, parseLocalDate } from '../lib/dateUtils';
@@ -81,7 +82,7 @@ export default function ApplicationRecords() {
     const { data, error } = await query;
 
     if (error) {
-      console.error('Failed to load application records:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_application_records' } });
       toast('error', 'Failed to load application records');
       setLoading(false);
       return;

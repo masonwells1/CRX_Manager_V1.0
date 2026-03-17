@@ -19,6 +19,8 @@ import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { computeSeason } from '../utils/season';
 import type { Product } from '../types';
@@ -82,7 +84,7 @@ export default function CropPrograms() {
       .maybeSingle();
 
     if (error) {
-      console.error('Failed to load crop programs:', error.message);
+      Sentry.captureException(error);
       toast('error', 'Failed to load crop programs.');
       setLoading(false);
       return;
@@ -107,7 +109,7 @@ export default function CropPrograms() {
       .order('product_name')
       .limit(500);
     if (error) {
-      console.error('Failed to load products for crop programs:', error.message);
+      Sentry.captureException(error);
     }
     setProducts((data || []) as Product[]);
   }, []);
@@ -214,43 +216,48 @@ export default function CropPrograms() {
       toast('error', 'Add at least one product');
       return;
     }
-    setSaving(true);
 
     const now = new Date().toISOString();
     const cleanItems = formItems.filter((i) => i.product_id);
 
-    if (editingProgram) {
-      const updated = programs.map((p) =>
-        p.id === editingProgram.id
-          ? { ...p, name: formName, description: formDesc, crop_type: formCrop, season: formSeason, items: cleanItems, updated_at: now }
-          : p
-      );
-      await savePrograms(updated);
-      if (profile) {
-        await logActivity('program_updated', `Crop program "${formName}" updated`, profile.id, 'setting', editingProgram.id);
-      }
-      toast('success', 'Program updated');
-    } else {
-      const newProg: CropProgram = {
-        id: crypto.randomUUID(),
-        name: formName,
-        description: formDesc,
-        crop_type: formCrop,
-        season: formSeason,
-        is_active: true,
-        items: cleanItems,
-        created_at: now,
-        updated_at: now,
-      };
-      await savePrograms([...programs, newProg]);
-      if (profile) {
-        await logActivity('program_created', `Crop program "${formName}" created with ${cleanItems.length} products`, profile.id, 'setting', newProg.id);
-      }
-      toast('success', 'Program created');
-    }
-
-    setModalOpen(false);
-    setSaving(false);
+    await runCriticalAction({
+      action: async () => {
+        if (editingProgram) {
+          const updated = programs.map((p) =>
+            p.id === editingProgram.id
+              ? { ...p, name: formName, description: formDesc, crop_type: formCrop, season: formSeason, items: cleanItems, updated_at: now }
+              : p
+          );
+          await savePrograms(updated);
+          if (profile) {
+            await logActivity('program_updated', `Crop program "${formName}" updated`, profile.id, 'setting', editingProgram.id);
+          }
+        } else {
+          const newProg: CropProgram = {
+            id: crypto.randomUUID(),
+            name: formName,
+            description: formDesc,
+            crop_type: formCrop,
+            season: formSeason,
+            is_active: true,
+            items: cleanItems,
+            created_at: now,
+            updated_at: now,
+          };
+          await savePrograms([...programs, newProg]);
+          if (profile) {
+            await logActivity('program_created', `Crop program "${formName}" created with ${cleanItems.length} products`, profile.id, 'setting', newProg.id);
+          }
+        }
+      },
+      toast,
+      setLoading: setSaving,
+      successMessage: editingProgram ? 'Program updated' : 'Program created',
+      sentryTag: editingProgram ? 'update_crop_program' : 'create_crop_program',
+      onSuccess: () => {
+        setModalOpen(false);
+      },
+    });
   };
 
   const toggleActive = async (progId: string) => {

@@ -164,14 +164,11 @@ describe('compressImage', () => {
 
   it('returns original file on createImageBitmap error', async () => {
     vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('Bad image')));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const file = makeFile('corrupt.jpg', 2 * 1024 * 1024, 'image/jpeg');
     const result = await compressImage(file);
 
     expect(result).toBe(file);
-    expect(consoleSpy).toHaveBeenCalled();
-    consoleSpy.mockRestore();
   });
 
   it('closes bitmap after successful compression', async () => {

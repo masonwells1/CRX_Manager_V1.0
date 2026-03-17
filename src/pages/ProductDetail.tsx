@@ -12,6 +12,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { supabase, checkMutationResult } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import type { Product, CostHistory, UnitConversion } from '../types';
 
 export default function ProductDetail() {
@@ -101,12 +102,12 @@ export default function ProductDetail() {
 
   useEffect(() => {
     supabase.from('unit_conversions').select('*').order('unit').then(({ data, error }) => {
-      if (error) { console.error('Failed to load unit conversions:', error); return; }
+      if (error) { Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_unit_conversions' } }); return; }
       setUnitConversions((data || []) as UnitConversion[]);
     });
     // Fetch distinct values for combobox dropdowns
     supabase.from('products').select('category, vendor, manufacturer').then(({ data, error }) => {
-      if (error) { console.error('Failed to load product options:', error); return; }
+      if (error) { Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_product_options' } }); return; }
       if (!data) return;
       const cats = [...new Set(data.map((p) => p.category).filter(Boolean) as string[])].sort();
       const vends = [...new Set(data.map((p) => p.vendor).filter(Boolean) as string[])].sort();
@@ -197,7 +198,7 @@ export default function ProductDetail() {
           new_tier3_price: product.tier3_price,
           change_note: 'Updated via product detail save',
         });
-        if (costHistoryResult.error) console.error('Cost history insert failed:', costHistoryResult.error);
+        if (costHistoryResult.error) Sentry.captureException(costHistoryResult.error, { tags: { source: 'critical_action', action: 'insert_cost_history' } });
         checkMutationResult(costHistoryResult, 'Insert cost history (pricing change)');
       }
 

@@ -19,7 +19,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { downloadDeliveryPdf } from '../lib/deliveryPdf';
 import { logActivity } from '../lib/activityLogger';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
-import { notifyDeliveryRemainder } from '../lib/notificationTriggers';
+import { notifyDeliveryRemainder, notifyDeliveryCompleted } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
@@ -99,6 +99,7 @@ export default function DeliveryDetail() {
   const [driverIssueType, setDriverIssueType] = useState<DeliveryIssueType>('none');
   const [driverIssueNotes, setDriverIssueNotes] = useState('');
   const [autoInvoiceId, setAutoInvoiceId] = useState<string | null>(null);
+  const [emailOnComplete, setEmailOnComplete] = useState(true);
   const isOnline = useOnlineStatus();
 
   // Edit mode state
@@ -501,7 +502,7 @@ export default function DeliveryDetail() {
 
         uploadCount++;
       } catch (err) {
-        console.error('Photo upload error:', err);
+        Sentry.captureException(err, { tags: { source: 'critical_action', action: 'upload_delivery_photo' } });
         toast('error', 'Photo upload failed. Please try again.');
       }
     }
@@ -681,8 +682,18 @@ export default function DeliveryDetail() {
         }
       }
 
-      // === Email customer when delivery is completed ===
-      if (customer?.email) {
+      // === Notify driver, admins, and sales rep ===
+      await notifyDeliveryCompleted(
+        delivery.id,
+        delivery.delivery_number,
+        customer?.farm_name || 'Unknown',
+        delivery.assigned_driver,
+        delivery.order_id,
+        isPartialDelivery
+      );
+
+      // === Email customer when delivery is completed (opt-out via checkbox) ===
+      if (emailOnComplete && customer?.email) {
         try {
           const deliveredItems = items.map((item) => {
             const qty = isPartialDelivery ? (deliveryQtys[item.id] ?? item.quantity) : item.quantity;
@@ -697,13 +708,13 @@ export default function DeliveryDetail() {
             `<img src="${p.image_url}" alt="${p.caption || 'Delivery photo'}" style="width:140px;height:105px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;" />`
           ).join('');
           const photoNote = photoCount > 0
-            ? `<div style="margin-top:16px;"><p style="color:#1e293b;font-size:14px;font-weight:600;margin-bottom:8px;">📷 Delivery Photos (${photoCount})</p><div style="display:flex;flex-wrap:wrap;gap:8px;">${photoImages}</div>${photoCount > 6 ? `<p style="color:#64748b;font-size:12px;margin-top:6px;">+ ${photoCount - 6} more photo(s) on file</p>` : ''}</div>`
+            ? `<div style="margin-top:16px;"><p style="color:#1e293b;font-size:14px;font-weight:600;margin-bottom:8px;">Delivery Photos (${photoCount})</p><div style="display:flex;flex-wrap:wrap;gap:8px;">${photoImages}</div>${photoCount > 6 ? `<p style="color:#64748b;font-size:12px;margin-top:6px;">+ ${photoCount - 6} more photo(s) on file</p>` : ''}</div>`
             : '';
           const signatureNote = signedBy
-            ? `<p style="color:#475569;font-size:13px;">✍️ Signed by: <strong>${signedBy}</strong></p>`
+            ? `<p style="color:#475569;font-size:13px;">Signed by: <strong>${signedBy}</strong></p>`
             : '';
           const partialNote = isPartialDelivery
-            ? '<p style="color:#d97706;font-size:13px;font-weight:600;margin-top:8px;">⚠️ This was a partial delivery. Remaining items will be delivered separately.</p>'
+            ? '<p style="color:#d97706;font-size:13px;font-weight:600;margin-top:8px;">This was a partial delivery. Remaining items will be delivered separately.</p>'
             : '';
 
           const html = buildEmailHtml(`
@@ -756,7 +767,7 @@ export default function DeliveryDetail() {
 
       fetchDelivery();
     } catch (error: unknown) {
-      console.error('Error completing delivery:', error);
+      Sentry.captureException(error, { tags: { source: 'critical_action', action: 'complete_delivery' } });
       toast('error', sanitizeError(error));
     }
     setCompleting(false);
@@ -1146,6 +1157,17 @@ export default function DeliveryDetail() {
                   height={120}
                 />
               </div>
+              {customer?.email && (
+                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={emailOnComplete}
+                    onChange={(e) => setEmailOnComplete(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-600 text-crx-green focus:ring-crx-green bg-gray-700"
+                  />
+                  Email delivery receipt to customer
+                </label>
+              )}
               {!isOnline && (
                 <div className="flex items-center gap-2 p-3 bg-yellow-900/30 border border-yellow-700 rounded-lg text-yellow-300 text-sm">
                   <WifiOff className="h-4 w-4 flex-shrink-0" />
@@ -1708,6 +1730,18 @@ export default function DeliveryDetail() {
                 placeholder="Describe the issue..."
               />
             </div>
+          )}
+
+          {customer?.email && (
+            <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer mb-4">
+              <input
+                type="checkbox"
+                checked={emailOnComplete}
+                onChange={(e) => setEmailOnComplete(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
+              />
+              Email delivery receipt to customer
+            </label>
           )}
 
           <div className="flex justify-end">

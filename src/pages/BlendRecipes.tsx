@@ -11,6 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import type { BlendRecipe, Product, RecipeType } from '../types';
 
 type RecipeRow = BlendRecipe & { item_count: number; creator_name: string };
@@ -80,7 +81,7 @@ export default function BlendRecipes() {
       .order('name');
 
     if (error) {
-      console.error('Failed to load recipes:', error.message);
+      Sentry.captureException(error);
       toast('error', 'Failed to load recipes');
       setLoading(false);
       return;
@@ -258,7 +259,7 @@ export default function BlendRecipes() {
           .eq('recipe_id', recipe.id)
           .order('sort_order');
         if (itemsErr) {
-          console.error('Failed to load recipe items for duplicate:', itemsErr.message);
+          Sentry.captureException(itemsErr);
         }
 
         if (items && items.length > 0) {

@@ -26,6 +26,7 @@ import Button from '../components/ui/Button';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import type { BottomProduct, BottomCustomer, MonthlyMargin } from '../types';
 
 // --- Types ---
@@ -232,7 +233,7 @@ export default function FinancialDashboard() {
         })),
       });
     } catch (err) {
-      console.error('Financial dashboard load error:', err);
+      Sentry.captureException(err, { tags: { source: 'fetch', action: 'load_financial_dashboard' } });
       toast('error', 'Failed to load financial dashboard. Please refresh.');
     }
     setLoading(false);

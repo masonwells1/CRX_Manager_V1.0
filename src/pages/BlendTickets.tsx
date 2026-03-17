@@ -20,6 +20,7 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { Sentry } from '../lib/sentry';
 import { useToast } from '../components/ui/Toast';
 import { parseLocalDate } from '../lib/dateUtils';
 import type { BlendTicket, Customer } from '../types';
@@ -76,7 +77,7 @@ export function BlendTickets() {
       setTickets(ticketsResult.data || []);
       setCustomers(customersResult.data || []);
     } catch (error) {
-      console.error('Error loading data:', error);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_blend_tickets' } });
       toast('error', 'Failed to load blend tickets. Please try again.');
     } finally {
       setLoading(false);

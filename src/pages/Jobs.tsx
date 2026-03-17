@@ -15,8 +15,10 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { Sentry } from '../lib/sentry';
 import { getSeasonDates } from '../utils/season';
 import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
+import { SkeletonTable } from '../components/ui/Skeleton';
 import type { Job, JobStatus } from '../types';
 
 type JobRow = Job & {
@@ -107,7 +109,7 @@ export default function Jobs() {
     const { data, error } = await query;
 
     if (error) {
-      console.error('Failed to load jobs:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_jobs' } });
       toast('error', 'Failed to load jobs');
       setLoading(false);
       return;
@@ -290,6 +292,14 @@ export default function Jobs() {
   ];
 
   const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <SkeletonTable rows={8} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

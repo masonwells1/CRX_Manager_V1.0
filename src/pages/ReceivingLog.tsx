@@ -20,6 +20,8 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { ReceivingRecord, ReceivingSummary, Profile } from '../types';
@@ -76,7 +78,7 @@ export default function ReceivingLog() {
         setSummary(sumData as ReceivingSummary);
       }
     } catch (err) {
-      console.error('Failed to load receiving summary:', err);
+      Sentry.captureException(err);
     }
 
     // Fetch receiving log via RPC
@@ -94,7 +96,7 @@ export default function ReceivingLog() {
       const { data: logData, error: logError } = await supabase.rpc('get_receiving_log', params);
 
       if (logError) {
-        console.error('Failed to load receiving log:', logError.message);
+        Sentry.captureException(logError);
         toast('error', 'Failed to load receiving log');
         setLoading(false);
         return;
@@ -107,7 +109,7 @@ export default function ReceivingLog() {
       const uniqueVendors = [...new Set(rows.map((r) => r.vendor).filter(Boolean))] as string[];
       if (uniqueVendors.length > 0) setVendors(uniqueVendors);
     } catch (err: unknown) {
-      console.error('Failed to load receiving log:', err);
+      Sentry.captureException(err);
       toast('error', 'Failed to load receiving log');
     }
 
@@ -172,26 +174,29 @@ export default function ReceivingLog() {
   };
 
   const handleBulkDelete = async () => {
-    setDeleting(true);
-    try {
-      const ids = selectedRows.map((r) => r.id);
-      // C5 fix: must call reverse_receiving_record() per item to undo inventory changes.
-      // Direct .delete() bypasses the inventory rollback and leaves phantom stock.
-      for (const id of ids) {
-        const { error } = await supabase.rpc('reverse_receiving_record', {
-          p_record_id: id,
-          p_reason: 'Bulk deleted from receiving log',
-        });
-        if (error) throw new Error(`Failed to reverse record ${id}: ${error.message}`);
-      }
-      toast('success', `Deleted ${ids.length} record(s)`);
-      clearSelection();
-      fetchData();
-    } catch (err: unknown) {
-      toast('error', sanitizeError(err));
-    }
-    setDeleting(false);
-    setDeleteModalOpen(false);
+    await runCriticalAction({
+      action: async () => {
+        const ids = selectedRows.map((r) => r.id);
+        // C5 fix: must call reverse_receiving_record() per item to undo inventory changes.
+        // Direct .delete() bypasses the inventory rollback and leaves phantom stock.
+        for (const id of ids) {
+          const { error } = await supabase.rpc('reverse_receiving_record', {
+            p_record_id: id,
+            p_reason: 'Bulk deleted from receiving log',
+          });
+          if (error) throw new Error(`Failed to reverse record ${id}: ${error.message}`);
+        }
+      },
+      toast,
+      setLoading: setDeleting,
+      successMessage: `Deleted ${selectedRows.length} record(s)`,
+      sentryTag: 'bulk_delete_receiving_records',
+      onSuccess: () => {
+        clearSelection();
+        fetchData();
+        setDeleteModalOpen(false);
+      },
+    });
   };
 
   const bulkActions = [

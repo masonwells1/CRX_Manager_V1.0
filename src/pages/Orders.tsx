@@ -12,8 +12,11 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
+import { SkeletonTable } from '../components/ui/Skeleton';
 import type { Order } from '../types';
 import { getSeasonDates } from '../utils/season';
 
@@ -51,7 +54,7 @@ export default function Orders() {
       .limit(QUERY_LIMIT);
 
     if (ordersError) {
-      console.error('Failed to load orders:', ordersError.message);
+      Sentry.captureException(ordersError);
       toast('error', 'Failed to load orders. Please try again.');
       setLoading(false);
       return;
@@ -90,7 +93,7 @@ export default function Orders() {
 
     const { data: itemsData, error: itemsError } = itemsResult;
     if (itemsError) {
-      console.error('Failed to load order items:', itemsError.message);
+      Sentry.captureException(itemsError);
     }
 
     // H16: Use value-based fulfillment (weighted by price_per_unit) instead of item-count-based
@@ -198,19 +201,22 @@ export default function Orders() {
   };
 
   const handleBulkDelete = async () => {
-    setDeleting(true);
-    try {
-      const ids = selectedRows.map((o) => o.id);
-      const result = await supabase.from('orders').delete().in('id', ids).select();
-      checkMutationResult(result, 'Delete orders');
-      toast('success', `Deleted ${ids.length} order(s)`);
-      clearSelection();
-      fetchOrders();
-    } catch (err: unknown) {
-      toast('error', sanitizeError(err));
-    }
-    setDeleting(false);
-    setDeleteModalOpen(false);
+    await runCriticalAction({
+      action: async () => {
+        const ids = selectedRows.map((o) => o.id);
+        const result = await supabase.from('orders').delete().in('id', ids).select();
+        checkMutationResult(result, 'Delete orders');
+      },
+      toast,
+      setLoading: setDeleting,
+      successMessage: `Deleted ${selectedRows.length} order(s)`,
+      sentryTag: 'bulk_delete_orders',
+      onSuccess: () => {
+        clearSelection();
+        fetchOrders();
+        setDeleteModalOpen(false);
+      },
+    });
   };
 
   const bulkActions = [
@@ -318,6 +324,14 @@ export default function Orders() {
   ];
 
   const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <SkeletonTable rows={8} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

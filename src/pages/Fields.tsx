@@ -11,6 +11,7 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { Field } from '../types';
@@ -44,7 +45,7 @@ export default function Fields() {
     const { data, error } = await supabase.rpc('get_fields_with_geojson');
 
     if (error) {
-      console.error('Failed to load fields:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_fields' } });
       toast('error', 'Failed to load fields. Please try again.');
       setLoading(false);
       return;

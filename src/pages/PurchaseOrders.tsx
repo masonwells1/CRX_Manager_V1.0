@@ -24,7 +24,9 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { Sentry } from '../lib/sentry';
 import BulkPOImport from '../components/purchase-orders/BulkPOImport';
+import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import type { PurchaseOrder } from '../types';
 
 const CANCELLABLE = ['draft', 'submitted'];
@@ -51,7 +53,7 @@ export default function PurchaseOrders() {
       .order('created_at', { ascending: false })
       .limit(500);
     if (error) {
-      console.error('Failed to load purchase orders:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_purchase_orders' } });
       toast('error', 'Failed to load purchase orders. Please try again.');
       setLoading(false);
       return;
@@ -207,6 +209,20 @@ export default function PurchaseOrders() {
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
     { key: 'cancel', label: 'Cancel POs', icon: <XCircle className="w-4 h-4" />, onClick: () => setCancelModalOpen(true), variant: 'danger' as const },
   ];
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+        <SkeletonTable rows={8} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

@@ -15,6 +15,8 @@ import {
   Download,
   FileText,
   Users,
+  List,
+  CalendarDays,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -23,6 +25,8 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
@@ -30,6 +34,8 @@ import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { generateLoadSheetPdf } from '../lib/loadSheetPdf';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
+import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
+import DeliveryCalendar from '../components/deliveries/DeliveryCalendar';
 import type { Delivery, Profile } from '../types';
 
 /* ─── Row type ─── */
@@ -113,6 +119,9 @@ export default function Deliveries() {
   /* Quick Delivery modal */
   const [quickDeliveryOpen, setQuickDeliveryOpen] = useState(false);
 
+  /* View mode: list or calendar */
+  const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
+
   /* Remainder count for summary */
   const [remainderCount, setRemainderCount] = useState(0);
 
@@ -157,7 +166,7 @@ export default function Deliveries() {
       .select('*', { count: 'exact', head: true })
       .eq('status', 'pending');
     if (error) {
-      console.error('Failed to load remainder count:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'deliveries' } });
       return;
     }
     setRemainderCount(count || 0);
@@ -178,7 +187,7 @@ export default function Deliveries() {
     const { data: delData, error: delError } = await query;
 
     if (delError) {
-      console.error('Failed to load deliveries:', delError.message);
+      Sentry.captureException(delError, { tags: { source: 'fetch', page: 'deliveries' } });
       toast('error', 'Failed to load deliveries. Please try again.');
       setLoading(false);
       return;
@@ -212,7 +221,7 @@ export default function Deliveries() {
     const countMap: Record<string, number> = {};
     const { data: itemCounts, error: itemCountErr } = itemCountsResult;
     if (itemCountErr) {
-      console.error('Failed to load delivery item counts:', itemCountErr.message);
+      Sentry.captureException(itemCountErr, { tags: { source: 'fetch', page: 'deliveries' } });
     }
     (itemCounts || []).forEach((item: { delivery_id: string }) => {
       countMap[item.delivery_id] = (countMap[item.delivery_id] || 0) + 1;
@@ -221,7 +230,7 @@ export default function Deliveries() {
     const parentNameMap: Record<string, string> = {};
     const { data: parents, error: parentErr } = parentsResult;
     if (parentErr) {
-      console.error('Failed to load parent customers:', parentErr.message);
+      Sentry.captureException(parentErr, { tags: { source: 'fetch', page: 'deliveries' } });
     }
     (parents || []).forEach((p: { id: string; farm_name: string }) => { parentNameMap[p.id] = p.farm_name; });
 
@@ -259,7 +268,7 @@ export default function Deliveries() {
         .order('scheduled_date')
         .limit(20);
       if (unassignedErr) {
-        console.error('Failed to load unassigned deliveries:', unassignedErr.message);
+        Sentry.captureException(unassignedErr, { tags: { source: 'fetch', page: 'deliveries' } });
         return;
       }
       const pIds = [...new Set(
@@ -268,7 +277,7 @@ export default function Deliveries() {
       const pMap: Record<string, string> = {};
       if (pIds.length > 0) {
         const { data: parents, error: pErr } = await supabase.from('customers').select('id, farm_name').in('id', pIds);
-        if (pErr) console.error('Failed to load parent customers:', pErr.message);
+        if (pErr) Sentry.captureException(pErr, { tags: { source: 'fetch', page: 'deliveries' } });
         (parents || []).forEach((p) => { pMap[p.id] = p.farm_name; });
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -361,139 +370,134 @@ export default function Deliveries() {
       toast('error', 'No cancellable deliveries selected');
       return;
     }
-    setCancelling(true);
-    try {
-      const cancelKey = batchCancelIdem.getKey();
-      const { data, error } = await supabase.rpc('batch_cancel_deliveries', {
-        p_delivery_ids: ids,
-        p_cancel_reason: reason,
-        p_performed_by: profile?.id,
-        p_idempotency_key: cancelKey,
-      });
-      if (error) {
-        console.error('Batch cancel failed:', error.message);
-        toast('error', sanitizeError(error));
-      } else {
+    await runCriticalAction({
+      action: async () => {
+        const cancelKey = batchCancelIdem.getKey();
+        const { data, error } = await supabase.rpc('batch_cancel_deliveries', {
+          p_delivery_ids: ids,
+          p_cancel_reason: reason,
+          p_performed_by: profile?.id,
+          p_idempotency_key: cancelKey,
+        });
+        if (error) throw error;
         batchCancelIdem.resetKey();
-        toast('success', `Cancelled ${data} delivery(ies)`);
+        return data;
+      },
+      toast,
+      successMessage: `Cancelled ${ids.length} delivery(ies)`,
+      setLoading: setCancelling,
+      sentryTag: 'batch_cancel_deliveries',
+      onSuccess: () => {
         setSelected(new Set());
         fetchDeliveries();
-      }
-    } catch (err: unknown) {
-      console.error('Batch cancel error:', err);
-      toast('error', sanitizeError(err));
-    }
+      },
+    });
     setShowCancelModal(false);
-    setCancelling(false);
   };
 
   const handleBatchPrint = async () => {
-    setPrinting(true);
-    try {
-      const { generateBatchDeliveryPdf } = await import('../lib/deliveryPdf');
-      const pdfDataList = [];
+    await runCriticalAction({
+      action: async () => {
+        const { generateBatchDeliveryPdf } = await import('../lib/deliveryPdf');
+        const pdfDataList = [];
 
-      for (const del of selectedDeliveries) {
-        const { data: items } = await supabase
-          .from('delivery_items')
-          .select('*, product:products(product_name)')
-          .eq('delivery_id', del.id)
-          .order('sort_order');
+        for (const del of selectedDeliveries) {
+          const { data: items } = await supabase
+            .from('delivery_items')
+            .select('*, product:products(product_name)')
+            .eq('delivery_id', del.id)
+            .order('sort_order');
 
-        const delAny = del as unknown as Record<string, unknown>;
-        pdfDataList.push({
-          delivery_number: del.delivery_number,
-          order_number: (delAny.order_number as string) || '-',
-          customer_name: del.customer_name,
-          customer_address: (delAny.delivery_address as string) || undefined,
-          driver_name: del.driver_name,
-          scheduled_date: del.scheduled_date,
-          completed_at: del.completed_at || undefined,
-          status: del.status,
-          signed_by: del.signed_by || undefined,
-          delivery_notes: del.delivery_notes || undefined,
-          priority: del.priority || 'normal',
-          issue_type: del.issue_type || undefined,
-          issue_notes: del.issue_notes || undefined,
-          // M14: sort items by product name for consistent manifest ordering
-          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>)
-            .map((it) => ({
-              product_name: it.product?.product_name || (it.product_name as string),
-              quantity: it.quantity as number,
-              unit_size: (it.unit_size as string) || '-',
-              quantity_delivered: it.quantity_delivered as number,
-              tote_number: (it.tote_number as string) || undefined,
-            }))
-            .sort((a, b) => (a.product_name || '').localeCompare(b.product_name || '')),
-        });
-      }
+          const delAny = del as unknown as Record<string, unknown>;
+          pdfDataList.push({
+            delivery_number: del.delivery_number,
+            order_number: (delAny.order_number as string) || '-',
+            customer_name: del.customer_name,
+            customer_address: (delAny.delivery_address as string) || undefined,
+            driver_name: del.driver_name,
+            scheduled_date: del.scheduled_date,
+            completed_at: del.completed_at || undefined,
+            status: del.status,
+            signed_by: del.signed_by || undefined,
+            delivery_notes: del.delivery_notes || undefined,
+            priority: del.priority || 'normal',
+            issue_type: del.issue_type || undefined,
+            issue_notes: del.issue_notes || undefined,
+            // M14: sort items by product name for consistent manifest ordering
+            items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>)
+              .map((it) => ({
+                product_name: it.product?.product_name || (it.product_name as string),
+                quantity: it.quantity as number,
+                unit_size: (it.unit_size as string) || '-',
+                quantity_delivered: it.quantity_delivered as number,
+                tote_number: (it.tote_number as string) || undefined,
+              }))
+              .sort((a, b) => (a.product_name || '').localeCompare(b.product_name || '')),
+          });
+        }
 
-      if (pdfDataList.length === 0) {
-        toast('error', 'No deliveries to print');
-        setPrinting(false);
-        return;
-      }
+        if (pdfDataList.length === 0) {
+          throw new Error('No deliveries to print');
+        }
 
-      await generateBatchDeliveryPdf(pdfDataList);
-      toast('success', `Printed ${pdfDataList.length} delivery receipt(s) to PDF`);
-    } catch (err: unknown) {
-      console.error('Batch print failed:', err);
-      toast('error', sanitizeError(err));
-    }
-    setPrinting(false);
+        await generateBatchDeliveryPdf(pdfDataList);
+      },
+      toast,
+      successMessage: 'Printed delivery receipt(s) to PDF',
+      setLoading: setPrinting,
+      sentryTag: 'batch_print_deliveries',
+    });
   };
 
   const handlePrintLoadSheet = async () => {
-    setPrintingLoadSheet(true);
-    try {
-      // Use selected deliveries, or all filtered scheduled/in_progress for today
-      const rows = selected.size > 0
-        ? selectedDeliveries
-        : filtered.filter((d) => d.status === 'scheduled' || d.status === 'in_progress');
+    await runCriticalAction({
+      action: async () => {
+        // Use selected deliveries, or all filtered scheduled/in_progress for today
+        const rows = selected.size > 0
+          ? selectedDeliveries
+          : filtered.filter((d) => d.status === 'scheduled' || d.status === 'in_progress');
 
-      if (rows.length === 0) {
-        toast('error', 'No deliveries to include in load sheet');
-        setPrintingLoadSheet(false);
-        return;
-      }
+        if (rows.length === 0) {
+          throw new Error('No deliveries to include in load sheet');
+        }
 
-      // Fetch items for each delivery
-      const stops = [];
-      for (const del of rows) {
-        const { data: items } = await supabase
-          .from('delivery_items')
-          .select('*, product:products(product_name)')
-          .eq('delivery_id', del.id)
-          .order('sort_order');
+        // Fetch items for each delivery
+        const stops = [];
+        for (const del of rows) {
+          const { data: items } = await supabase
+            .from('delivery_items')
+            .select('*, product:products(product_name)')
+            .eq('delivery_id', del.id)
+            .order('sort_order');
 
-        const delAny = del as unknown as Record<string, unknown>;
-        stops.push({
-          delivery_number: del.delivery_number,
-          customer_name: del.customer_name,
-          customer_address: (delAny.delivery_address as string) || undefined,
-          driver_name: del.driver_name,
-          scheduled_date: del.scheduled_date,
-          priority: del.priority || 'normal',
-          // M14: sort items by product name for consistent load sheet ordering
-          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>)
-            .map((it) => ({
-              product_name: it.product?.product_name || (it.product_name as string) || 'Unknown',
-              quantity: it.quantity as number,
-              unit_size: (it.unit_size as string) || '-',
-              tote_number: (it.tote_number as string) || undefined,
-              notes: (it.notes as string) || undefined,
-            }))
-            .sort((a, b) => a.product_name.localeCompare(b.product_name)),
-        });
-      }
+          const delAny = del as unknown as Record<string, unknown>;
+          stops.push({
+            delivery_number: del.delivery_number,
+            customer_name: del.customer_name,
+            customer_address: (delAny.delivery_address as string) || undefined,
+            driver_name: del.driver_name,
+            scheduled_date: del.scheduled_date,
+            priority: del.priority || 'normal',
+            // M14: sort items by product name for consistent load sheet ordering
+            items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>)
+              .map((it) => ({
+                product_name: it.product?.product_name || (it.product_name as string) || 'Unknown',
+                quantity: it.quantity as number,
+                unit_size: (it.unit_size as string) || '-',
+                tote_number: (it.tote_number as string) || undefined,
+                notes: (it.notes as string) || undefined,
+              }))
+              .sort((a, b) => a.product_name.localeCompare(b.product_name)),
+          });
+        }
 
-      await generateLoadSheetPdf(stops);
-      toast('success', `Load sheet generated for ${stops.length} stop(s)`);
-    } catch (err: unknown) {
-      console.error('Load sheet failed:', err);
-      toast('error', sanitizeError(err));
-    }
-    setPrintingLoadSheet(false);
+        await generateLoadSheetPdf(stops);
+      },
+      toast,
+      successMessage: 'Load sheet generated',
+      setLoading: setPrintingLoadSheet,
+      sentryTag: 'print_load_sheet',
+    });
   };
 
   const handleBatchReschedule = async () => {
@@ -501,31 +505,30 @@ export default function Deliveries() {
       toast('error', 'Please select a new date');
       return;
     }
-    setRescheduling(true);
-    try {
-      const ids = selectedCancellable.map((d) => d.id);
-      const rescheduleKey = batchRescheduleIdem.getKey();
-      const { error } = await supabase.rpc('batch_reschedule_deliveries', {
-        p_delivery_ids: ids,
-        p_new_date: rescheduleDate,
-        p_performed_by: profile?.id,
-        p_idempotency_key: rescheduleKey,
-      });
-      if (error) {
-        toast('error', sanitizeError(error));
-      } else {
+    const ids = selectedCancellable.map((d) => d.id);
+    await runCriticalAction({
+      action: async () => {
+        const rescheduleKey = batchRescheduleIdem.getKey();
+        const { error } = await supabase.rpc('batch_reschedule_deliveries', {
+          p_delivery_ids: ids,
+          p_new_date: rescheduleDate,
+          p_performed_by: profile?.id,
+          p_idempotency_key: rescheduleKey,
+        });
+        if (error) throw error;
         batchRescheduleIdem.resetKey();
-        toast('success', `Rescheduled ${ids.length} delivery(ies) to ${parseLocalDate(rescheduleDate).toLocaleDateString()}`);
+      },
+      toast,
+      successMessage: `Rescheduled ${ids.length} delivery(ies) to ${parseLocalDate(rescheduleDate).toLocaleDateString()}`,
+      setLoading: setRescheduling,
+      sentryTag: 'batch_reschedule_deliveries',
+      onSuccess: () => {
         setSelected(new Set());
         setShowReschedule(false);
         setRescheduleDate('');
         fetchDeliveries();
-      }
-    } catch (err: unknown) {
-      console.error('Batch reschedule error:', err);
-      toast('error', sanitizeError(err));
-    }
-    setRescheduling(false);
+      },
+    });
   };
 
   const handleExportCSV = () => {
@@ -580,25 +583,23 @@ export default function Deliveries() {
     const myCompleted = deliveries.filter((d) => d.status === 'completed').slice(0, 10);
 
     const handleTakeDelivery = async (deliveryId: string) => {
-      try {
-        const reassignKey = reassignIdem.getKey();
-        const { error } = await supabase.rpc('reassign_delivery', {
-          p_delivery_id: deliveryId,
-          p_new_driver: profile?.id,
-          p_performed_by: profile?.id,
-          p_idempotency_key: reassignKey,
-        });
-        if (error) {
-          toast('error', sanitizeError(error));
-        } else {
+      await runCriticalAction({
+        action: async () => {
+          const reassignKey = reassignIdem.getKey();
+          const { error } = await supabase.rpc('reassign_delivery', {
+            p_delivery_id: deliveryId,
+            p_new_driver: profile?.id,
+            p_performed_by: profile?.id,
+            p_idempotency_key: reassignKey,
+          });
+          if (error) throw error;
           reassignIdem.resetKey();
-          toast('success', 'Delivery assigned to you');
-          fetchDeliveries();
-        }
-      } catch (err: unknown) {
-        console.error('Take delivery error:', err);
-        toast('error', sanitizeError(err));
-      }
+        },
+        toast,
+        successMessage: 'Delivery assigned to you',
+        sentryTag: 'take_delivery',
+        onSuccess: () => fetchDeliveries(),
+      });
     };
 
     const DriverCard = ({ d }: { d: DeliveryRow }) => (
@@ -843,11 +844,53 @@ export default function Deliveries() {
     },
   ];
 
+  if (loading) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+        <SkeletonTable rows={8} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Header + Actions */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Deliveries</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl font-semibold font-heading text-nav-dark">Deliveries</h2>
+          <div className="flex rounded-lg border border-gray-200 overflow-hidden">
+            <button
+              onClick={() => setViewMode('list')}
+              className={`px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors ${
+                viewMode === 'list'
+                  ? 'bg-crx-green text-white'
+                  : 'bg-white text-secondary hover:bg-gray-50'
+              }`}
+              aria-label="List view"
+            >
+              <List className="w-4 h-4" />
+              List
+            </button>
+            <button
+              onClick={() => setViewMode('calendar')}
+              className={`px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors ${
+                viewMode === 'calendar'
+                  ? 'bg-crx-green text-white'
+                  : 'bg-white text-secondary hover:bg-gray-50'
+              }`}
+              aria-label="Calendar view"
+            >
+              <CalendarDays className="w-4 h-4" />
+              Calendar
+            </button>
+          </div>
+        </div>
         <div className="flex gap-2 flex-wrap justify-end">
           <Button
             variant="secondary"
@@ -967,6 +1010,19 @@ export default function Deliveries() {
         </Card>
       </div>
 
+      {/* Calendar View */}
+      {viewMode === 'calendar' && (
+        <Card>
+          <DeliveryCalendar
+            deliveries={deliveries}
+            onDeliveryClick={(deliveryId) => navigate(`/deliveries/${deliveryId}`)}
+            onDateClick={(date) => navigate(`/deliveries/new?date=${date}`)}
+          />
+        </Card>
+      )}
+
+      {/* List View */}
+      {viewMode === 'list' && <>
       {/* 7-Day Schedule Strip */}
       <div className="flex gap-2 overflow-x-auto pb-1">
         {scheduleStrip.map((day) => {
@@ -1091,6 +1147,7 @@ export default function Deliveries() {
           />
         </div>
       </Card>
+      </>}
 
       {/* Batch Cancel Modal */}
       <BatchCancelModal

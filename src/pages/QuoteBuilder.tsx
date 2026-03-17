@@ -29,6 +29,8 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
@@ -239,15 +241,15 @@ export default function QuoteBuilder() {
     ]);
 
     if (custRes.error) {
-      console.error('Failed to load customers:', custRes.error);
+      Sentry.captureException(custRes.error, { tags: { source: 'fetch', page: 'quote_builder' } });
       toast('error', 'Failed to load customers.');
     }
     if (prodRes.error) {
-      console.error('Failed to load products:', prodRes.error);
+      Sentry.captureException(prodRes.error, { tags: { source: 'fetch', page: 'quote_builder' } });
       toast('error', 'Failed to load products.');
     }
     if (convRes.error) {
-      console.error('Failed to load unit conversions:', convRes.error);
+      Sentry.captureException(convRes.error, { tags: { source: 'fetch', page: 'quote_builder' } });
     }
 
     setCustomers((custRes.data || []) as Customer[]);
@@ -915,55 +917,56 @@ export default function QuoteBuilder() {
 
   // === GAP FIX #1: Download Quote as PDF ===
   const handleDownloadPdf = async () => {
-    try {
-    await downloadQuotePdf({
-      quote_number: quoteNumber,
-      customer_name: selectedCustomer?.farm_name || 'Customer',
-      customer_email: selectedCustomer?.email || undefined,
-      customer_phone: selectedCustomer?.phone || undefined,
-      customer_address: selectedCustomer?.billing_address || undefined,
-      sales_rep_name: profile?.full_name || 'Sales Rep',
-      created_at: new Date().toISOString(),
-      expires_at: undefined,
-      valid_days: validDays,
-      tier,
-      header_notes: headerNotes || undefined,
-      footer_notes: footerNotes || undefined,
-      sections: sections.map((sec) => ({
-        section_name: sec.section_name,
-        section_notes: sec.section_notes || undefined,
-        section_header_notes: sec.section_header_notes || undefined,
-        items: sec.items
-          .filter((i) => i.product_id)
-          .map((i) => ({
-            product_name: i.product?.product_name || '',
-            category: i.product?.category || '',
-            notes: i.notes || undefined,
-            suggested_rate: i.product?.suggested_rate || undefined,
-            actual_rate: i.actual_rate || 0,
-            rate_unit: i.rate_unit || '',
-            acres: i.acres || 0,
-            total_units_needed: i.total_units_needed || 0,
-            inventory_unit: i.product?.inventory_unit || undefined,
-            unit_size: i.product?.unit_size || undefined,
-            price_per_unit: i.price_per_unit,
-            price_unit: i.price_unit || undefined,
-            price_per_acre: i.price_per_acre || undefined,
-            total_price: i.total_price,
+    await runCriticalAction({
+      action: async () => {
+        await downloadQuotePdf({
+          quote_number: quoteNumber,
+          customer_name: selectedCustomer?.farm_name || 'Customer',
+          customer_email: selectedCustomer?.email || undefined,
+          customer_phone: selectedCustomer?.phone || undefined,
+          customer_address: selectedCustomer?.billing_address || undefined,
+          sales_rep_name: profile?.full_name || 'Sales Rep',
+          created_at: new Date().toISOString(),
+          expires_at: undefined,
+          valid_days: validDays,
+          tier,
+          header_notes: headerNotes || undefined,
+          footer_notes: footerNotes || undefined,
+          sections: sections.map((sec) => ({
+            section_name: sec.section_name,
+            section_notes: sec.section_notes || undefined,
+            section_header_notes: sec.section_header_notes || undefined,
+            items: sec.items
+              .filter((i) => i.product_id)
+              .map((i) => ({
+                product_name: i.product?.product_name || '',
+                category: i.product?.category || '',
+                notes: i.notes || undefined,
+                suggested_rate: i.product?.suggested_rate || undefined,
+                actual_rate: i.actual_rate || 0,
+                rate_unit: i.rate_unit || '',
+                acres: i.acres || 0,
+                total_units_needed: i.total_units_needed || 0,
+                inventory_unit: i.product?.inventory_unit || undefined,
+                unit_size: i.product?.unit_size || undefined,
+                price_per_unit: i.price_per_unit,
+                price_unit: i.price_unit || undefined,
+                price_per_acre: i.price_per_acre || undefined,
+                total_price: i.total_price,
+              })),
           })),
-      })),
-      totals: {
-        totalPrice: totals.totalPrice,
-        totalCost: totals.totalCost,
-        totalProfit: totals.totalProfit,
-        avgMargin: totals.totalMarginPct,
+          totals: {
+            totalPrice: totals.totalPrice,
+            totalCost: totals.totalCost,
+            totalProfit: totals.totalProfit,
+            avgMargin: totals.totalMarginPct,
+          },
+        }, customColumns || getTemplateColumns(selectedTemplateId));
       },
-    }, customColumns || getTemplateColumns(selectedTemplateId));
-    toast('success', 'PDF downloaded');
-    } catch (err: unknown) {
-      console.error('PDF generation error:', err);
-      toast('error', err instanceof Error ? err.message : 'Failed to generate PDF');
-    }
+      toast,
+      successMessage: 'PDF downloaded',
+      sentryTag: 'download_quote_pdf',
+    });
   };
 
   // Kept for future email integration
@@ -979,7 +982,7 @@ export default function QuoteBuilder() {
           p_method: 'manual',
         });
         if (versionError) {
-          console.error('Failed to create quote version:', versionError);
+          Sentry.captureException(versionError, { tags: { source: 'mutation', action: 'create_quote_version' } });
           toast('error', 'Quote sent but version snapshot failed.');
         } else {
           await logActivity(
@@ -1106,53 +1109,54 @@ export default function QuoteBuilder() {
   };
 
   const handlePreviewQuote = async () => {
-    try {
-      const pdfData = {
-        quote_number: quoteNumber,
-        customer_name: selectedCustomer?.farm_name || 'Customer',
-        customer_email: selectedCustomer?.email || undefined,
-        customer_phone: selectedCustomer?.phone || undefined,
-        customer_address: selectedCustomer?.billing_address || undefined,
-        sales_rep_name: profile?.full_name || 'Sales Rep',
-        created_at: new Date().toISOString(),
-        expires_at: undefined,
-        valid_days: validDays,
-        tier,
-        header_notes: headerNotes || undefined,
-        footer_notes: footerNotes || undefined,
-        sections: sections.map((sec) => ({
-          section_name: sec.section_name,
-          section_notes: sec.section_notes || undefined,
-          items: sec.items
-            .filter((i) => i.product_id)
-            .map((i) => ({
-              product_name: i.product?.product_name || '',
-              actual_rate: i.actual_rate || 0,
-              rate_unit: i.rate_unit || '',
-              acres: i.acres || 0,
-              total_units_needed: i.total_units_needed || 0,
-              price_per_unit: i.price_per_unit,
-              price_unit: i.price_unit || undefined,
-              total_price: i.total_price,
-            })),
-        })),
-        totals: {
-          totalPrice: totals.totalPrice,
-          totalCost: totals.totalCost,
-          totalProfit: totals.totalProfit,
-          avgMargin: totals.totalMarginPct,
-        },
-      };
-      const doc = await generateQuotePdf(pdfData);
-      const blob = doc.output('blob');
-      const url = URL.createObjectURL(blob);
-      if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
-      setPreviewPdfUrl(url);
-      setShowPreviewModal(true);
-    } catch (err: unknown) {
-      console.error('Preview error:', err);
-      toast('error', err instanceof Error ? err.message : 'Failed to generate preview');
-    }
+    await runCriticalAction({
+      action: async () => {
+        const pdfData = {
+          quote_number: quoteNumber,
+          customer_name: selectedCustomer?.farm_name || 'Customer',
+          customer_email: selectedCustomer?.email || undefined,
+          customer_phone: selectedCustomer?.phone || undefined,
+          customer_address: selectedCustomer?.billing_address || undefined,
+          sales_rep_name: profile?.full_name || 'Sales Rep',
+          created_at: new Date().toISOString(),
+          expires_at: undefined,
+          valid_days: validDays,
+          tier,
+          header_notes: headerNotes || undefined,
+          footer_notes: footerNotes || undefined,
+          sections: sections.map((sec) => ({
+            section_name: sec.section_name,
+            section_notes: sec.section_notes || undefined,
+            items: sec.items
+              .filter((i) => i.product_id)
+              .map((i) => ({
+                product_name: i.product?.product_name || '',
+                actual_rate: i.actual_rate || 0,
+                rate_unit: i.rate_unit || '',
+                acres: i.acres || 0,
+                total_units_needed: i.total_units_needed || 0,
+                price_per_unit: i.price_per_unit,
+                price_unit: i.price_unit || undefined,
+                total_price: i.total_price,
+              })),
+          })),
+          totals: {
+            totalPrice: totals.totalPrice,
+            totalCost: totals.totalCost,
+            totalProfit: totals.totalProfit,
+            avgMargin: totals.totalMarginPct,
+          },
+        };
+        const doc = await generateQuotePdf(pdfData);
+        const blob = doc.output('blob');
+        const url = URL.createObjectURL(blob);
+        if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
+        setPreviewPdfUrl(url);
+        setShowPreviewModal(true);
+      },
+      toast,
+      sentryTag: 'preview_quote_pdf',
+    });
   };
 
   const handleMarkPresented = async () => {
@@ -1306,7 +1310,7 @@ export default function QuoteBuilder() {
       setIsDirty(false);
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
-      console.error('Error converting to order:', error);
+      Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
       // Bug #30 fix: Extract error message from Supabase RPC error objects
       const errObj = error as Record<string, unknown> | null;
       const errMsg = (error instanceof Error ? error.message : null)

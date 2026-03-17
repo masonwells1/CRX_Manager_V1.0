@@ -1,4 +1,5 @@
 import { supabase } from './db';
+import { Sentry } from './sentry';
 
 /**
  * Log an event to the activity_feed table.
@@ -28,10 +29,10 @@ export async function logActivity(
       related_entity_id: relatedEntityId || null,
       customer_id: customerId || null,
     });
-    if (logErr) console.error('Activity log insert failed:', logErr);
+    if (logErr) Sentry.captureException(logErr, { tags: { source: 'activity_logger', action: 'log_activity' } });
   } catch (err) {
     // Activity logging should never break the main flow
-    console.error('Failed to log activity:', err);
+    Sentry.captureException(err, { tags: { source: 'activity_logger', action: 'log_activity' } });
   }
 }
 
@@ -62,9 +63,9 @@ export async function createNotification(
       related_entity_type: relatedEntityType || null,
       related_entity_id: relatedEntityId || null,
     });
-    if (logErr) console.error('Activity log insert failed:', logErr);
+    if (logErr) Sentry.captureException(logErr, { tags: { source: 'activity_logger', action: 'create_notification' } });
   } catch (err) {
-    console.error('Failed to create notification:', err);
+    Sentry.captureException(err, { tags: { source: 'activity_logger', action: 'create_notification' } });
   }
 }
 
@@ -95,9 +96,9 @@ export async function notifyAdmins(
         related_entity_id: relatedEntityId || null,
       }));
       const { error: logErr } = await supabase.from('notifications').insert(notifications);
-      if (logErr) console.error('Activity log insert failed:', logErr);
+      if (logErr) Sentry.captureException(logErr, { tags: { source: 'activity_logger', action: 'notify_admins' } });
     }
   } catch (err) {
-    console.error('Failed to notify admins:', err);
+    Sentry.captureException(err, { tags: { source: 'activity_logger', action: 'notify_admins' } });
   }
 }

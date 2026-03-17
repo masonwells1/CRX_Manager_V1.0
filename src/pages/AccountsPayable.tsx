@@ -12,6 +12,7 @@ import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
 import type { APAgingRow, APDashboardSummary } from '../types';
@@ -35,14 +36,14 @@ export default function AccountsPayable() {
     ]);
 
     if (summaryRes.error) {
-      console.error('AP summary error:', summaryRes.error.message);
+      Sentry.captureException(summaryRes.error);
       toast('error', 'Failed to load AP summary');
     } else {
       setSummary(summaryRes.data as unknown as APDashboardSummary);
     }
 
     if (agingRes.error) {
-      console.error('AP aging error:', agingRes.error.message);
+      Sentry.captureException(agingRes.error);
       toast('error', 'Failed to load AP aging data');
     } else {
       setAgingData((agingRes.data || []) as APAgingRow[]);

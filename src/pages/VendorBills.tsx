@@ -13,6 +13,7 @@ import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import type { VendorBill } from '../types';
 
@@ -41,7 +42,7 @@ export default function VendorBills() {
       .order('due_date', { ascending: true });
 
     if (error) {
-      console.error('Failed to load vendor bills:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_vendor_bills' } });
       toast('error', 'Failed to load vendor bills');
       setLoading(false);
       return;

@@ -8,6 +8,8 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
@@ -16,6 +18,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
 import { generateBatchInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { getSeasonDates } from '../utils/season';
 
 type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null };
@@ -99,7 +102,7 @@ export default function Invoices() {
       .limit(QUERY_LIMIT);
 
     if (error) {
-      console.error('Failed to load invoices:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', page: 'invoices' } });
       toast('error', 'Failed to load invoices');
       setLoading(false);
       return;
@@ -153,27 +156,26 @@ export default function Invoices() {
       return;
     }
 
-    setPosting(true);
-    try {
-      const postKey = batchPostIdem.getKey();
-      const { data, error } = await supabase.rpc('batch_post_invoices', {
-        p_invoice_ids: ids,
-        p_idempotency_key: postKey,
-      });
-      if (error) {
-        console.error('Batch post failed:', error.message);
-        toast('error', sanitizeError(error));
-      } else {
+    await runCriticalAction({
+      action: async () => {
+        const postKey = batchPostIdem.getKey();
+        const { data, error } = await supabase.rpc('batch_post_invoices', {
+          p_invoice_ids: ids,
+          p_idempotency_key: postKey,
+        });
+        if (error) throw error;
         batchPostIdem.resetKey();
-        toast('success', `Posted ${data} invoice(s)`);
+        return data;
+      },
+      toast,
+      successMessage: `Posted ${ids.length} invoice(s)`,
+      setLoading: setPosting,
+      sentryTag: 'batch_post_invoices',
+      onSuccess: () => {
         setSelected(new Set());
         fetchInvoices();
-      }
-    } catch (err: unknown) {
-      console.error('Batch post error:', err);
-      toast('error', sanitizeError(err));
-    }
-    setPosting(false);
+      },
+    });
   };
 
   // Batch void
@@ -184,156 +186,155 @@ export default function Invoices() {
       return;
     }
 
-    setVoiding(true);
-    try {
-      const voidKey = batchVoidIdem.getKey();
-      const { data, error } = await supabase.rpc('batch_void_invoices', {
-        p_invoice_ids: ids,
-        p_void_reason: reason,
-        p_performed_by: profile?.id,
-        p_idempotency_key: voidKey,
-      });
-      if (error) {
-        console.error('Batch void failed:', error.message);
-        toast('error', sanitizeError(error));
-      } else {
+    await runCriticalAction({
+      action: async () => {
+        const voidKey = batchVoidIdem.getKey();
+        const { data, error } = await supabase.rpc('batch_void_invoices', {
+          p_invoice_ids: ids,
+          p_void_reason: reason,
+          p_performed_by: profile?.id,
+          p_idempotency_key: voidKey,
+        });
+        if (error) throw error;
         batchVoidIdem.resetKey();
-        toast('success', `Voided ${data} invoice(s)`);
+        return data;
+      },
+      toast,
+      successMessage: `Voided ${ids.length} invoice(s)`,
+      setLoading: setVoiding,
+      sentryTag: 'batch_void_invoices',
+      onSuccess: () => {
         setSelected(new Set());
         fetchInvoices();
-      }
-    } catch (err: unknown) {
-      console.error('Batch void error:', err);
-      toast('error', sanitizeError(err));
-    }
+      },
+    });
     setShowVoidModal(false);
-    setVoiding(false);
   };
 
   // Batch print
   const handleBatchPrint = async (options: InvoicePrintOptions) => {
     setShowBatchPrintDialog(false);
-    setPrinting(true);
+    await runCriticalAction({
+      action: async () => {
+        // Fetch full data for each selected invoice
+        const pdfDataList: InvoicePdfData[] = [];
 
-    try {
-      // Fetch full data for each selected invoice
-      const pdfDataList: InvoicePdfData[] = [];
+        for (const inv of selectedInvoices) {
+          // Fetch customer details
+          const { data: cust, error: custError } = await supabase
+            .from('customers')
+            .select('billing_address, city, state, zip, account_number, payment_terms')
+            .eq('id', inv.customer_id)
+            .single();
+          if (custError) {
+            console.warn(`Customer ${inv.customer_id} not found for invoice ${inv.invoice_number}, using defaults`);
+          }
 
-      for (const inv of selectedInvoices) {
-        // Fetch customer details
-        const { data: cust, error: custError } = await supabase
-          .from('customers')
-          .select('billing_address, city, state, zip, account_number, payment_terms')
-          .eq('id', inv.customer_id)
-          .single();
-        if (custError) {
-          console.warn(`Customer ${inv.customer_id} not found for invoice ${inv.invoice_number}, using defaults`);
+          // Fetch items with product details
+          const { data: items } = await supabase
+            .from('invoice_items')
+            .select('*, product:products(product_name, epa_registration, product_form)')
+            .eq('invoice_id', inv.id)
+            .order('sort_order');
+
+          // Fetch shares
+          const { data: shares } = await supabase
+            .from('invoice_shares')
+            .select('*, customer:customers!invoice_shares_customer_id_fkey(farm_name)')
+            .eq('invoice_id', inv.id);
+
+          const pdfData: InvoicePdfData = {
+            invoice_number: inv.invoice_number,
+            invoice_date: inv.invoice_date,
+            due_date: inv.due_date || undefined,
+            invoice_type: inv.invoice_type || 'chemical_sale',
+            status: inv.status || 'draft',
+            customer_name: inv.customer_name,
+            customer_address: cust?.billing_address || undefined,
+            customer_city: cust?.city || undefined,
+            customer_state: cust?.state || undefined,
+            customer_zip: cust?.zip || undefined,
+            account_number: cust?.account_number || undefined,
+            payment_terms: cust?.payment_terms || undefined,
+            salesman_name: inv.salesman_name || undefined,
+            purchase_order_ref: inv.purchase_order_ref || undefined,
+            header_notes: inv.header_notes || undefined,
+            footer_notes: inv.footer_notes || undefined,
+            crop_type: inv.crop_type || undefined,
+            field_names: inv.field_names || undefined,
+            total_acres: inv.total_acres || undefined,
+            applicator_name: inv.applicator_name || undefined,
+            vehicle_name: inv.vehicle_name || undefined,
+            application_date: inv.application_date || undefined,
+            shares: (shares || []).length > 0 ? (shares as Array<{ customer?: { farm_name: string }; split_percentage: number; acres: number; amount_cents: number; price_per_acre_cents: number | null; pricing_note: string | null }>).map(s => ({
+              customer_name: s.customer?.farm_name || 'Unknown',
+              split_percentage: s.split_percentage,
+              acres: s.acres,
+              amount_cents: s.amount_cents,
+              price_per_acre_cents: s.price_per_acre_cents || null,
+              pricing_note: s.pricing_note || null,
+            })) : undefined,
+            items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name: string; epa_registration?: string | null; product_form?: string | null }; description?: string; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null }>).map((it) => ({
+              description: it.description,
+              product_name: it.product?.product_name || it.description,
+              quantity: Number(it.quantity),
+              unit_size: it.unit_size || undefined,
+              unit_price_cents: it.unit_price_cents,
+              extended_cents: it.extended_cents,
+              cost_cents: it.cost_cents,
+              rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
+              rate_unit: it.rate_unit || null,
+              total_applied: it.total_applied ? Number(it.total_applied) : null,
+              total_applied_unit: it.total_applied_unit || null,
+              total_applied_gl_lb: it.total_applied_gl_lb ? Number(it.total_applied_gl_lb) : null,
+              gl_lb_unit: it.gl_lb_unit || null,
+              epa_registration: it.epa_registration || it.product?.epa_registration || null,
+              is_application_fee: it.is_application_fee || false,
+              product_form: it.product_form || it.product?.product_form || null,
+            })) as InvoicePdfItem[],
+            total_amount_cents: inv.total_amount_cents || 0,
+            total_cost_cents: inv.total_cost_cents || 0,
+            paid_amount_cents: inv.paid_amount_cents || 0,
+            prepay_applied_cents: inv.prepay_applied_cents || 0,
+            balance_cents: inv.balance_cents || 0,
+            options,
+          };
+          pdfDataList.push(pdfData);
         }
 
-        // Fetch items with product details
-        const { data: items } = await supabase
-          .from('invoice_items')
-          .select('*, product:products(product_name, epa_registration, product_form)')
-          .eq('invoice_id', inv.id)
-          .order('sort_order');
+        if (pdfDataList.length === 0) {
+          throw new Error('No invoices to print');
+        }
 
-        // Fetch shares
-        const { data: shares } = await supabase
-          .from('invoice_shares')
-          .select('*, customer:customers!invoice_shares_customer_id_fkey(farm_name)')
-          .eq('invoice_id', inv.id);
-
-        const pdfData: InvoicePdfData = {
-          invoice_number: inv.invoice_number,
-          invoice_date: inv.invoice_date,
-          due_date: inv.due_date || undefined,
-          invoice_type: inv.invoice_type || 'chemical_sale',
-          status: inv.status || 'draft',
-          customer_name: inv.customer_name,
-          customer_address: cust?.billing_address || undefined,
-          customer_city: cust?.city || undefined,
-          customer_state: cust?.state || undefined,
-          customer_zip: cust?.zip || undefined,
-          account_number: cust?.account_number || undefined,
-          payment_terms: cust?.payment_terms || undefined,
-          salesman_name: inv.salesman_name || undefined,
-          purchase_order_ref: inv.purchase_order_ref || undefined,
-          header_notes: inv.header_notes || undefined,
-          footer_notes: inv.footer_notes || undefined,
-          crop_type: inv.crop_type || undefined,
-          field_names: inv.field_names || undefined,
-          total_acres: inv.total_acres || undefined,
-          applicator_name: inv.applicator_name || undefined,
-          vehicle_name: inv.vehicle_name || undefined,
-          application_date: inv.application_date || undefined,
-          shares: (shares || []).length > 0 ? (shares as Array<{ customer?: { farm_name: string }; split_percentage: number; acres: number; amount_cents: number; price_per_acre_cents: number | null; pricing_note: string | null }>).map(s => ({
-            customer_name: s.customer?.farm_name || 'Unknown',
-            split_percentage: s.split_percentage,
-            acres: s.acres,
-            amount_cents: s.amount_cents,
-            price_per_acre_cents: s.price_per_acre_cents || null,
-            pricing_note: s.pricing_note || null,
-          })) : undefined,
-          items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name: string; epa_registration?: string | null; product_form?: string | null }; description?: string; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null }>).map((it) => ({
-            description: it.description,
-            product_name: it.product?.product_name || it.description,
-            quantity: Number(it.quantity),
-            unit_size: it.unit_size || undefined,
-            unit_price_cents: it.unit_price_cents,
-            extended_cents: it.extended_cents,
-            cost_cents: it.cost_cents,
-            rate_per_acre: it.rate_per_acre ? Number(it.rate_per_acre) : null,
-            rate_unit: it.rate_unit || null,
-            total_applied: it.total_applied ? Number(it.total_applied) : null,
-            total_applied_unit: it.total_applied_unit || null,
-            total_applied_gl_lb: it.total_applied_gl_lb ? Number(it.total_applied_gl_lb) : null,
-            gl_lb_unit: it.gl_lb_unit || null,
-            epa_registration: it.epa_registration || it.product?.epa_registration || null,
-            is_application_fee: it.is_application_fee || false,
-            product_form: it.product_form || it.product?.product_form || null,
-          })) as InvoicePdfItem[],
-          total_amount_cents: inv.total_amount_cents || 0,
-          total_cost_cents: inv.total_cost_cents || 0,
-          paid_amount_cents: inv.paid_amount_cents || 0,
-          prepay_applied_cents: inv.prepay_applied_cents || 0,
-          balance_cents: inv.balance_cents || 0,
-          options,
-        };
-        pdfDataList.push(pdfData);
-      }
-
-      if (pdfDataList.length === 0) {
-        toast('error', 'No invoices to print');
-        setPrinting(false);
-        return;
-      }
-
-      await generateBatchInvoicePdf(pdfDataList);
-      toast('success', `Printed ${pdfDataList.length} invoice(s) to PDF`);
-    } catch (err: unknown) {
-      console.error('Batch print failed:', err);
-      toast('error', sanitizeError(err));
-    }
-    setPrinting(false);
+        await generateBatchInvoicePdf(pdfDataList);
+      },
+      toast,
+      successMessage: `Printed invoice(s) to PDF`,
+      setLoading: setPrinting,
+      sentryTag: 'batch_print_invoices',
+    });
   };
 
   const handleBatchDelete = async () => {
-    setDeleting(true);
-    try {
-      const ids = selectedDeletable.map((i) => i.id);
-      const result = await supabase
-        .from('invoices')
-        .update({ deleted_at: new Date().toISOString() })
-        .in('id', ids)
-        .select();
-      checkMutationResult(result, 'Delete invoices');
-      toast('success', `Deleted ${ids.length} invoice(s)`);
-      setSelected(new Set());
-      fetchInvoices();
-    } catch (err) {
-      toast('error', sanitizeError(err));
-    }
-    setDeleting(false);
+    await runCriticalAction({
+      action: async () => {
+        const ids = selectedDeletable.map((i) => i.id);
+        const result = await supabase
+          .from('invoices')
+          .update({ deleted_at: new Date().toISOString() })
+          .in('id', ids)
+          .select();
+        checkMutationResult(result, 'Delete invoices');
+      },
+      toast,
+      successMessage: `Deleted ${selectedDeletable.length} invoice(s)`,
+      setLoading: setDeleting,
+      sentryTag: 'batch_delete_invoices',
+      onSuccess: () => {
+        setSelected(new Set());
+        fetchInvoices();
+      },
+    });
     setShowDeleteModal(false);
   };
 
@@ -481,6 +482,19 @@ export default function Invoices() {
   const anySelectedIsFieldApp = selectedInvoices.some(
     (i) => i.invoice_type === 'field_application'
   );
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+        <SkeletonTable rows={8} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

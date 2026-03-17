@@ -12,6 +12,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 
 interface RemainderRow {
@@ -59,7 +60,7 @@ export default function DeliveryRemainders() {
       .limit(500);
 
     if (error) {
-      console.error('Failed to load remainders:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_delivery_remainders' } });
       toast('error', 'Failed to load delivery remainders');
       setLoading(false);
       return;

@@ -9,6 +9,8 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import type { CycleCount, CycleCountItem } from '../types';
@@ -82,7 +84,7 @@ export default function CycleCounts() {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Failed to load cycle counts:', error.message);
+      Sentry.captureException(error);
       toast('error', 'Failed to load cycle counts');
       setLoading(false);
       return;
@@ -125,74 +127,76 @@ export default function CycleCounts() {
   // Create new cycle count
   const handleCreate = async () => {
     if (!profile) return;
-    setCreating(true);
-    try {
-      // Generate sequential count number via advisory-lock RPC
-      const { data: countNumData, error: countNumError } = await supabase.rpc('next_cycle_count_number');
-      if (countNumError) throw countNumError;
-      const countNum = countNumData as string;
 
-      // Fetch inventory items for the selected warehouse
-      const { data: invData, error: invError } = await supabase
-        .from('inventory')
-        .select('id, product_id, quantity_available, product:products(product_name)')
-        .eq('location', newWarehouse)
-        .order('product_id');
+    await runCriticalAction({
+      action: async () => {
+        // Generate sequential count number via advisory-lock RPC
+        const { data: countNumData, error: countNumError } = await supabase.rpc('next_cycle_count_number');
+        if (countNumError) throw countNumError;
+        const countNum = countNumData as string;
 
-      if (invError) throw invError;
-      const invItems = (invData || []) as unknown as InventoryDbRow[];
+        // Fetch inventory items for the selected warehouse
+        const { data: invData, error: invError } = await supabase
+          .from('inventory')
+          .select('id, product_id, quantity_available, product:products(product_name)')
+          .eq('location', newWarehouse)
+          .order('product_id');
 
-      if (invItems.length === 0) {
-        toast('error', 'No inventory found at this location');
-        setCreating(false);
-        return;
-      }
+        if (invError) throw invError;
+        const invItems = (invData || []) as unknown as InventoryDbRow[];
 
-      // Create the cycle count
-      const { data: cc, error: ccError } = await supabase
-        .from('cycle_counts')
-        .insert({
-          count_number: countNum,
-          warehouse: newWarehouse,
-          status: 'in_progress',
-          notes: newNotes || null,
-        })
-        .select()
-        .single();
+        if (invItems.length === 0) {
+          throw new Error('No inventory found at this location');
+        }
 
-      if (ccError) throw ccError;
+        // Create the cycle count
+        const { data: cc, error: ccError } = await supabase
+          .from('cycle_counts')
+          .insert({
+            count_number: countNum,
+            warehouse: newWarehouse,
+            status: 'in_progress',
+            notes: newNotes || null,
+          })
+          .select()
+          .single();
 
-      // Insert items
-      const items = invItems.map((inv) => ({
-        cycle_count_id: cc.id,
-        product_id: inv.product_id,
-        inventory_id: inv.id,
-        expected_qty: inv.quantity_available || 0,
-      }));
+        if (ccError) throw ccError;
 
-      const { error: itemsError } = await supabase
-        .from('cycle_count_items')
-        .insert(items);
+        // Insert items
+        const items = invItems.map((inv) => ({
+          cycle_count_id: cc.id,
+          product_id: inv.product_id,
+          inventory_id: inv.id,
+          expected_qty: inv.quantity_available || 0,
+        }));
 
-      if (itemsError) throw itemsError;
+        const { error: itemsError } = await supabase
+          .from('cycle_count_items')
+          .insert(items);
 
-      await logActivity(
-        'cycle_count_started',
-        `Cycle count ${countNum} started for ${newWarehouse} (${invItems.length} products)`,
-        profile.id,
-        'cycle_count',
-        cc.id
-      );
+        if (itemsError) throw itemsError;
 
-      toast('success', `Cycle count ${countNum} created with ${invItems.length} products`);
-      setShowNew(false);
-      setNewNotes('');
-      fetchCounts();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to create cycle count');
-    } finally {
-      setCreating(false);
-    }
+        await logActivity(
+          'cycle_count_started',
+          `Cycle count ${countNum} started for ${newWarehouse} (${invItems.length} products)`,
+          profile.id,
+          'cycle_count',
+          cc.id
+        );
+
+        return `Cycle count ${countNum} created with ${invItems.length} products`;
+      },
+      toast,
+      setLoading: setCreating,
+      successMessage: 'Cycle count created',
+      sentryTag: 'create_cycle_count',
+      onSuccess: () => {
+        setShowNew(false);
+        setNewNotes('');
+        fetchCounts();
+      },
+    });
   };
 
   // Open detail modal
@@ -208,7 +212,7 @@ export default function CycleCounts() {
       .order('created_at');
 
     if (error) {
-      console.error('Failed to load items:', error.message);
+      Sentry.captureException(error);
       toast('error', 'Failed to load count items');
     }
 
@@ -279,36 +283,37 @@ export default function CycleCounts() {
       }
     }
 
-    setCompleting(true);
-    try {
-      const key = completeCycleCountIdem.getKey();
-      const { error } = await supabase.rpc('complete_cycle_count', {
-        p_cycle_count_id: activeCount.id,
-        p_completed_by: profile.id,
-        p_idempotency_key: key,
-      });
+    await runCriticalAction({
+      action: async () => {
+        const key = completeCycleCountIdem.getKey();
+        const { error } = await supabase.rpc('complete_cycle_count', {
+          p_cycle_count_id: activeCount.id,
+          p_completed_by: profile.id,
+          p_idempotency_key: key,
+        });
 
-      if (error) throw error;
-      completeCycleCountIdem.resetKey();
+        if (error) throw error;
+        completeCycleCountIdem.resetKey();
 
-      const varianceItems = countItems.filter((i) => i.variance && i.variance !== 0);
+        const varianceItems = countItems.filter((i) => i.variance && i.variance !== 0);
 
-      await logActivity(
-        'cycle_count_completed',
-        `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`,
-        profile.id,
-        'cycle_count',
-        activeCount.id
-      );
-
-      toast('success', `Cycle count completed. ${varianceItems.length} adjustments made.`);
-      setShowDetail(false);
-      fetchCounts();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to complete cycle count');
-    } finally {
-      setCompleting(false);
-    }
+        await logActivity(
+          'cycle_count_completed',
+          `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`,
+          profile.id,
+          'cycle_count',
+          activeCount.id
+        );
+      },
+      toast,
+      setLoading: setCompleting,
+      successMessage: 'Cycle count completed',
+      sentryTag: 'complete_cycle_count',
+      onSuccess: () => {
+        setShowDetail(false);
+        fetchCounts();
+      },
+    });
   };
 
   // Cancel cycle count
@@ -316,20 +321,23 @@ export default function CycleCounts() {
     if (!activeCount || !profile) return;
     if (!confirm('Cancel this cycle count? No inventory adjustments will be made.')) return;
 
-    try {
-      const result = await supabase
-        .from('cycle_counts')
-        .update({ status: 'cancelled' })
-        .eq('id', activeCount.id)
-        .select();
-      checkMutationResult(result, 'Cancel cycle count');
-
-      toast('success', 'Cycle count cancelled');
-      setShowDetail(false);
-      fetchCounts();
-    } catch (err: unknown) {
-      toast('error', err instanceof Error ? err.message : 'Failed to cancel');
-    }
+    await runCriticalAction({
+      action: async () => {
+        const result = await supabase
+          .from('cycle_counts')
+          .update({ status: 'cancelled' })
+          .eq('id', activeCount.id)
+          .select();
+        checkMutationResult(result, 'Cancel cycle count');
+      },
+      toast,
+      successMessage: 'Cycle count cancelled',
+      sentryTag: 'cancel_cycle_count',
+      onSuccess: () => {
+        setShowDetail(false);
+        fetchCounts();
+      },
+    });
   };
 
   const statusBadge = (status: string) => {

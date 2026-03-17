@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { Sentry } from './sentry';
 export { sanitizeError } from './errorSanitizer';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -22,6 +23,25 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     // Use localStorage so the session survives tab switches and
     // browser restarts (default, but explicit for clarity)
     storage: window.localStorage,
+  },
+  global: {
+    headers: {
+      // Request correlation ID — links browser requests to Edge Function
+      // and database logs for end-to-end tracing. Logged in Sentry breadcrumbs.
+      'X-Request-ID': crypto.randomUUID(),
+    },
+    fetch: (url, options = {}) => {
+      const requestId = crypto.randomUUID();
+      const headers = new Headers(options.headers);
+      headers.set('X-Request-ID', requestId);
+      Sentry.addBreadcrumb({
+        category: 'supabase',
+        message: `${options.method || 'GET'} ${typeof url === 'string' ? url.replace(supabaseUrl, '') : url}`,
+        data: { requestId },
+        level: 'info',
+      });
+      return fetch(url, { ...options, headers });
+    },
   },
 });
 

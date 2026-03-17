@@ -17,6 +17,7 @@ import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceSha
 import { downloadInvoicePdf, generateInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
+import { runCriticalAction } from '../lib/criticalAction';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -332,57 +333,57 @@ export default function InvoiceDetail() {
       toast('error', 'Please select a customer');
       return;
     }
-    setSaving(true);
-    try {
-      const payload = {
-        id: isNew ? undefined : id,
-        customer_id: invoice.customer_id,
-        invoice_type: invoice.invoice_type || 'chemical_sale',
-        status: invoice.status || 'draft',
-        season: invoice.season,
-        salesman_id: invoice.salesman_id || null,
-        invoice_date: invoice.invoice_date,
-        due_date: invoice.due_date || null,
-        purchase_order_ref: invoice.purchase_order_ref || null,
-        header_notes: invoice.header_notes || null,
-        footer_notes: invoice.footer_notes || null,
-      };
+    await runCriticalAction({
+      action: async () => {
+        const payload = {
+          id: isNew ? undefined : id,
+          customer_id: invoice.customer_id,
+          invoice_type: invoice.invoice_type || 'chemical_sale',
+          status: invoice.status || 'draft',
+          season: invoice.season,
+          salesman_id: invoice.salesman_id || null,
+          invoice_date: invoice.invoice_date,
+          due_date: invoice.due_date || null,
+          purchase_order_ref: invoice.purchase_order_ref || null,
+          header_notes: invoice.header_notes || null,
+          footer_notes: invoice.footer_notes || null,
+        };
 
-      const itemsPayload = items.map((it, idx) => ({
-        product_id: it.product_id,
-        description: it.description || it.product_name,
-        quantity: it.quantity,
-        unit_price_cents: it.unit_price_cents,
-        extended_cents: it.extended_cents,
-        cost_cents: it.cost_cents,
-        sort_order: idx,
-        rate_per_acre: it.rate_per_acre,
-        acres: it.acres,
-        unit_size: it.unit_size,
-        notes: it.notes,
-      }));
+        const itemsPayload = items.map((it, idx) => ({
+          product_id: it.product_id,
+          description: it.description || it.product_name,
+          quantity: it.quantity,
+          unit_price_cents: it.unit_price_cents,
+          extended_cents: it.extended_cents,
+          cost_cents: it.cost_cents,
+          sort_order: idx,
+          rate_per_acre: it.rate_per_acre,
+          acres: it.acres,
+          unit_size: it.unit_size,
+          notes: it.notes,
+        }));
 
-      const idemKey = saveIdem.getKey();
-      const { data, error } = await supabase.rpc('save_invoice', {
-        p_invoice: payload,
-        p_items: itemsPayload,
-        p_idempotency_key: idemKey,
-      });
+        const idemKey = saveIdem.getKey();
+        const { data, error } = await supabase.rpc('save_invoice', {
+          p_invoice: payload,
+          p_items: itemsPayload,
+          p_idempotency_key: idemKey,
+        });
 
-      if (error) throw error;
-      saveIdem.resetKey();
+        if (error) throw error;
+        saveIdem.resetKey();
 
-      toast('success', isNew ? 'Invoice created' : 'Invoice saved');
-      if (isNew && data) {
-        navigate(`/invoices/${data}`, { replace: true });
-      } else {
-        fetchInvoice(id!);
-      }
-    } catch (err: unknown) {
-      console.error('Save error:', err);
-      toast('error', sanitizeError(err));
-    }
-    setSaving(false);
+        if (isNew && data) {
+          navigate(`/invoices/${data}`, { replace: true });
+        } else {
+          fetchInvoice(id!);
+        }
+      },
+      toast,
+      successMessage: isNew ? 'Invoice created' : 'Invoice saved',
+      setLoading: setSaving,
+      sentryTag: 'save_invoice',
+    });
   };
 
   // Post invoice
@@ -552,19 +553,18 @@ export default function InvoiceDetail() {
     // Ref-based guard prevents multiple concurrent executions (triple-fire from click propagation)
     if (printingRef.current) return;
     printingRef.current = true;
-    setPrinting(true);
-    try {
-      const pdfData = await buildInvoicePdfData(options);
-      await downloadInvoicePdf(pdfData);
-      setShowPrintDialog(false);
-      toast('success', 'Invoice PDF downloaded');
-    } catch (err: unknown) {
-      console.error('Failed to generate invoice PDF:', err);
-      toast('error', sanitizeError(err));
-    } finally {
-      setPrinting(false);
-      printingRef.current = false;
-    }
+    await runCriticalAction({
+      action: async () => {
+        const pdfData = await buildInvoicePdfData(options);
+        await downloadInvoicePdf(pdfData);
+        setShowPrintDialog(false);
+      },
+      toast,
+      successMessage: 'Invoice PDF downloaded',
+      setLoading: (v) => { setPrinting(v); if (!v) printingRef.current = false; },
+      sentryTag: 'print_invoice_pdf',
+    });
+    printingRef.current = false;
   };
 
   // Email invoice with PDF attachment
@@ -574,54 +574,53 @@ export default function InvoiceDetail() {
       toast('error', 'Customer does not have an email address on file');
       return;
     }
-    setEmailing(true);
-    try {
-      const pdfData = await buildInvoicePdfData();
-      const doc = await generateInvoicePdf(pdfData);
-      const base64 = pdfToBase64(doc);
+    await runCriticalAction({
+      action: async () => {
+        const pdfData = await buildInvoicePdfData();
+        const doc = await generateInvoicePdf(pdfData);
+        const base64 = pdfToBase64(doc);
 
-      const amountStr = ((invoice.balance_cents || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
-      const html = buildEmailHtml(`
-        <h2 style="margin:0 0 16px;color:#111827;font-size:18px;">Invoice ${invoice.invoice_number || ''}</h2>
-        <p style="margin:0 0 8px;color:#374151;">Amount Due: <strong>${amountStr}</strong></p>
-        <p style="margin:0 0 8px;color:#374151;">Invoice Date: ${invoice.invoice_date || 'N/A'}</p>
-        ${invoice.due_date ? `<p style="margin:0 0 8px;color:#374151;">Due Date: ${invoice.due_date}</p>` : ''}
-        <p style="margin:16px 0 0;color:#374151;">Please find your invoice attached to this email.</p>
-        <p style="margin:8px 0 0;color:#6b7280;font-size:13px;">If you have questions about this invoice, please contact us.</p>
-      `);
+        const amountStr = ((invoice.balance_cents || 0) / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+        const html = buildEmailHtml(`
+          <h2 style="margin:0 0 16px;color:#111827;font-size:18px;">Invoice ${invoice.invoice_number || ''}</h2>
+          <p style="margin:0 0 8px;color:#374151;">Amount Due: <strong>${amountStr}</strong></p>
+          <p style="margin:0 0 8px;color:#374151;">Invoice Date: ${invoice.invoice_date || 'N/A'}</p>
+          ${invoice.due_date ? `<p style="margin:0 0 8px;color:#374151;">Due Date: ${invoice.due_date}</p>` : ''}
+          <p style="margin:16px 0 0;color:#374151;">Please find your invoice attached to this email.</p>
+          <p style="margin:8px 0 0;color:#6b7280;font-size:13px;">If you have questions about this invoice, please contact us.</p>
+        `);
 
-      const result = await sendEmail({
-        to: cust.email,
-        subject: `Invoice ${invoice.invoice_number || ''} from Crop RX Solutions`,
-        html,
-        email_type: 'invoice',
-        customer_id: invoice.customer_id,
-        idempotency_key: `invoice-email-${id}-${Date.now()}`,
-        attachments: [{
-          filename: `Invoice-${invoice.invoice_number || 'DRAFT'}.pdf`,
-          content: base64,
-        }],
-      });
+        const result = await sendEmail({
+          to: cust.email,
+          subject: `Invoice ${invoice.invoice_number || ''} from Crop RX Solutions`,
+          html,
+          email_type: 'invoice',
+          customer_id: invoice.customer_id,
+          idempotency_key: `invoice-email-${id}-${Date.now()}`,
+          attachments: [{
+            filename: `Invoice-${invoice.invoice_number || 'DRAFT'}.pdf`,
+            content: base64,
+          }],
+        });
 
-      if (result.success) {
-        toast('success', `Invoice emailed to ${cust.email}`);
-        logActivity(
-          'invoice_emailed',
-          `Invoice ${invoice.invoice_number} emailed to ${cust.email}`,
-          profile?.id || '',
-          'invoice',
-          id,
-          invoice.customer_id,
-        );
-      } else {
-        toast('error', result.error || 'Failed to send email');
-      }
-    } catch (err: unknown) {
-      console.error('Failed to email invoice:', err);
-      toast('error', sanitizeError(err));
-    } finally {
-      setEmailing(false);
-    }
+        if (result.success) {
+          logActivity(
+            'invoice_emailed',
+            `Invoice ${invoice.invoice_number} emailed to ${cust.email}`,
+            profile?.id || '',
+            'invoice',
+            id,
+            invoice.customer_id,
+          );
+        } else {
+          throw new Error(result.error || 'Failed to send email');
+        }
+      },
+      toast,
+      successMessage: `Invoice emailed to ${cust.email}`,
+      setLoading: setEmailing,
+      sentryTag: 'email_invoice',
+    });
   };
 
   const totalCents = items.reduce((s, i) => s + i.extended_cents, 0);

@@ -12,6 +12,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import area from '@turf/area';
 import turfCentroid from '@turf/centroid';
 import type { Feature, Polygon } from 'geojson';
@@ -110,7 +111,7 @@ export default function FieldDetail() {
       // Fetch GeoJSON for map display
       const { data: geoData, error: geoError } = await supabase.rpc('get_field_geojson', { p_field_id: id });
       if (geoError) {
-        console.error('Failed to load field geometry:', geoError);
+        Sentry.captureException(geoError, { tags: { source: 'fetch', action: 'load_field_geometry' } });
         toast('warning', 'Could not load field boundary');
       }
       if (geoData && geoData.length > 0) {
@@ -280,7 +281,7 @@ export default function FieldDetail() {
             p_boundary_geojson: boundaryGeoJSONStr,
           });
           if (geoError) {
-            console.error('Geometry save error:', geoError);
+            Sentry.captureException(geoError, { tags: { source: 'critical_action', action: 'save_field_geometry' } });
             toast('error', 'Field saved but boundary could not be saved. Please try re-drawing.');
           }
         }

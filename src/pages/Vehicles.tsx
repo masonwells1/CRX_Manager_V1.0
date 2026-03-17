@@ -12,6 +12,7 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { Vehicle, VehicleType, VehicleStatus } from '../types';
@@ -44,7 +45,7 @@ export default function Vehicles() {
       .order('vehicle_name');
 
     if (error) {
-      console.error('Failed to load vehicles:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_vehicles' } });
       toast('error', 'Failed to load vehicles');
       setLoading(false);
       return;

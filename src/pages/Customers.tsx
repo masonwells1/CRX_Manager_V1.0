@@ -15,6 +15,8 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { Sentry } from '../lib/sentry';
+import { SkeletonTable } from '../components/ui/Skeleton';
 import type { Customer } from '../types';
 
 export default function Customers() {
@@ -36,7 +38,7 @@ export default function Customers() {
       .order('farm_name')
       .limit(500);
     if (error) {
-      console.error('Failed to load customers:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_customers' } });
       toast('error', 'Failed to load customers. Please try again.');
       setLoading(false);
       return;
@@ -185,6 +187,14 @@ export default function Customers() {
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
     { key: 'deactivate', label: 'Deactivate', icon: <ToggleLeft className="w-4 h-4" />, onClick: () => setDeactivateModalOpen(true), variant: 'danger' as const },
   ];
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <SkeletonTable rows={8} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

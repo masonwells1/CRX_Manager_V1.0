@@ -13,6 +13,8 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -108,7 +110,7 @@ export default function Returns() {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Failed to load returns:', error.message);
+      Sentry.captureException(error);
       toast('error', 'Failed to load returns');
       setLoading(false);
       return;
@@ -195,67 +197,66 @@ export default function Returns() {
       return;
     }
 
-    setCreating(true);
-    try {
-      // Use sequential RPC instead of timestamp-based number
-      const { data: rpcNum, error: rpcError } = await supabase.rpc('next_return_number');
-      if (rpcError || !rpcNum) {
-        toast('error', rpcError?.message || 'Failed to generate return number');
-        setCreating(false);
-        return;
-      }
-      const returnNum = rpcNum as string;
+    await runCriticalAction({
+      action: async () => {
+        // Use sequential RPC instead of timestamp-based number
+        const { data: rpcNum, error: rpcError } = await supabase.rpc('next_return_number');
+        if (rpcError || !rpcNum) {
+          throw new Error(rpcError?.message || 'Failed to generate return number');
+        }
+        const returnNum = rpcNum as string;
 
-      const { data: ret, error: retError } = await supabase
-        .from('returns')
-        .insert({
-          return_number: returnNum,
-          customer_id: newForm.customer_id,
-          order_id: newForm.order_id || null,
-          reason: newForm.reason,
-          reason_notes: newForm.reason_notes || null,
-          notes: newForm.notes || null,
-        })
-        .select()
-        .single();
+        const { data: ret, error: retError } = await supabase
+          .from('returns')
+          .insert({
+            return_number: returnNum,
+            customer_id: newForm.customer_id,
+            order_id: newForm.order_id || null,
+            reason: newForm.reason,
+            reason_notes: newForm.reason_notes || null,
+            notes: newForm.notes || null,
+          })
+          .select()
+          .single();
 
-      if (retError) throw retError;
+        if (retError) throw retError;
 
-      const itemsPayload = newItems.map((item, idx) => ({
-        return_id: ret.id,
-        product_id: item.product_id,
-        product_name: item.product_name,
-        quantity: item.quantity,
-        unit: item.unit,
-        unit_price_cents: item.unit_price_cents,
-        extended_cents: Math.round(item.quantity * item.unit_price_cents),
-        condition: item.condition,
-        restock: item.restock,
-        sort_order: idx,
-        notes: item.notes || null,
-      }));
+        const itemsPayload = newItems.map((item, idx) => ({
+          return_id: ret.id,
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit: item.unit,
+          unit_price_cents: item.unit_price_cents,
+          extended_cents: Math.round(item.quantity * item.unit_price_cents),
+          condition: item.condition,
+          restock: item.restock,
+          sort_order: idx,
+          notes: item.notes || null,
+        }));
 
-      const returnItemsResult = await supabase.from('return_items').insert(itemsPayload);
-      if (returnItemsResult.error) throw returnItemsResult.error;
-      checkMutationResult(returnItemsResult, 'Insert return items');
+        const returnItemsResult = await supabase.from('return_items').insert(itemsPayload);
+        if (returnItemsResult.error) throw returnItemsResult.error;
+        checkMutationResult(returnItemsResult, 'Insert return items');
 
-      await logActivity(
-        'return_requested',
-        `Return ${returnNum} requested for ${newItems.length} product(s)`,
-        profile.id,
-        'return',
-        ret.id,
-        newForm.customer_id
-      );
-
-      toast('success', `Return ${returnNum} created`);
-      setShowCreate(false);
-      fetchReturns();
-    } catch (err: unknown) {
-      toast('error', sanitizeError(err));
-    } finally {
-      setCreating(false);
-    }
+        await logActivity(
+          'return_requested',
+          `Return ${returnNum} requested for ${newItems.length} product(s)`,
+          profile.id,
+          'return',
+          ret.id,
+          newForm.customer_id
+        );
+      },
+      toast,
+      setLoading: setCreating,
+      successMessage: 'Return created',
+      sentryTag: 'create_return',
+      onSuccess: () => {
+        setShowCreate(false);
+        fetchReturns();
+      },
+    });
   };
 
   const openDetail = async (ret: ReturnRow) => {
@@ -269,7 +270,7 @@ export default function Returns() {
       .eq('return_id', ret.id)
       .order('sort_order');
 
-    if (error) console.error('Failed to load items:', error.message);
+    if (error) Sentry.captureException(error);
     setDetailItems((data || []) as ReturnItem[]);
     setLoadingDetail(false);
   };
@@ -277,23 +278,27 @@ export default function Returns() {
   // Workflow actions
   const handleApprove = async () => {
     if (!activeReturn || !profile) return;
-    try {
-      const approveKey = approveIdem.getKey();
-      const { error } = await supabase.rpc('approve_return', {
-        p_return_id: activeReturn.id,
-        p_approved_by: profile.id,
-        p_idempotency_key: approveKey,
-      });
-      if (error) throw error;
+    await runCriticalAction({
+      action: async () => {
+        const approveKey = approveIdem.getKey();
+        const { error } = await supabase.rpc('approve_return', {
+          p_return_id: activeReturn.id,
+          p_approved_by: profile.id,
+          p_idempotency_key: approveKey,
+        });
+        if (error) throw error;
 
-      approveIdem.resetKey();
-      await logActivity('return_approved', `Return ${activeReturn.return_number} approved`, profile.id, 'return', activeReturn.id);
-      toast('success', 'Return approved');
-      setShowDetail(false);
-      fetchReturns();
-    } catch (err: unknown) {
-      toast('error', sanitizeError(err));
-    }
+        approveIdem.resetKey();
+        await logActivity('return_approved', `Return ${activeReturn.return_number} approved`, profile.id, 'return', activeReturn.id);
+      },
+      toast,
+      successMessage: 'Return approved',
+      sentryTag: 'approve_return',
+      onSuccess: () => {
+        setShowDetail(false);
+        fetchReturns();
+      },
+    });
   };
 
   const handleReject = async () => {
@@ -302,21 +307,25 @@ export default function Returns() {
       toast('error', `Cannot reject a return in '${activeReturn.status}' status`);
       return;
     }
-    try {
-      const result = await supabase
-        .from('returns')
-        .update({ status: 'rejected', updated_at: new Date().toISOString() })
-        .eq('id', activeReturn.id)
-        .select();
-      checkMutationResult(result, 'Reject return');
+    await runCriticalAction({
+      action: async () => {
+        const result = await supabase
+          .from('returns')
+          .update({ status: 'rejected', updated_at: new Date().toISOString() })
+          .eq('id', activeReturn.id)
+          .select();
+        checkMutationResult(result, 'Reject return');
 
-      await logActivity('return_rejected', `Return ${activeReturn.return_number} rejected`, profile.id, 'return', activeReturn.id);
-      toast('success', 'Return rejected');
-      setShowDetail(false);
-      fetchReturns();
-    } catch (err: unknown) {
-      toast('error', sanitizeError(err));
-    }
+        await logActivity('return_rejected', `Return ${activeReturn.return_number} rejected`, profile.id, 'return', activeReturn.id);
+      },
+      toast,
+      successMessage: 'Return rejected',
+      sentryTag: 'reject_return',
+      onSuccess: () => {
+        setShowDetail(false);
+        fetchReturns();
+      },
+    });
   };
 
   const handleCancel = async () => {
@@ -327,62 +336,74 @@ export default function Returns() {
       toast('error', `Cannot cancel a return in '${activeReturn.status}' status`);
       return;
     }
-    try {
-      const result = await supabase
-        .from('returns')
-        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-        .eq('id', activeReturn.id)
-        .select();
-      checkMutationResult(result, 'Cancel return');
-      await logActivity('return_cancelled', `Return ${activeReturn.return_number} cancelled`, profile.id, 'return', activeReturn.id);
-      toast('success', 'Return cancelled');
-      setShowDetail(false);
-      fetchReturns();
-    } catch (err: unknown) {
-      toast('error', sanitizeError(err));
-    }
+    await runCriticalAction({
+      action: async () => {
+        const result = await supabase
+          .from('returns')
+          .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+          .eq('id', activeReturn.id)
+          .select();
+        checkMutationResult(result, 'Cancel return');
+        await logActivity('return_cancelled', `Return ${activeReturn.return_number} cancelled`, profile.id, 'return', activeReturn.id);
+      },
+      toast,
+      successMessage: 'Return cancelled',
+      sentryTag: 'cancel_return',
+      onSuccess: () => {
+        setShowDetail(false);
+        fetchReturns();
+      },
+    });
   };
 
   const handleReceive = async () => {
     if (!activeReturn || !profile) return;
-    try {
-      const receiveKey = receiveIdem.getKey();
-      const { error } = await supabase.rpc('receive_return', {
-        p_return_id: activeReturn.id,
-        p_received_by: profile.id,
-        p_idempotency_key: receiveKey,
-      });
-      if (error) throw error;
+    await runCriticalAction({
+      action: async () => {
+        const receiveKey = receiveIdem.getKey();
+        const { error } = await supabase.rpc('receive_return', {
+          p_return_id: activeReturn.id,
+          p_received_by: profile.id,
+          p_idempotency_key: receiveKey,
+        });
+        if (error) throw error;
 
-      receiveIdem.resetKey();
-      await logActivity('return_received', `Return ${activeReturn.return_number} received, inventory restocked`, profile.id, 'return', activeReturn.id);
-      toast('success', 'Return received and inventory restocked');
-      setShowDetail(false);
-      fetchReturns();
-    } catch (err: unknown) {
-      toast('error', sanitizeError(err));
-    }
+        receiveIdem.resetKey();
+        await logActivity('return_received', `Return ${activeReturn.return_number} received, inventory restocked`, profile.id, 'return', activeReturn.id);
+      },
+      toast,
+      successMessage: 'Return received and inventory restocked',
+      sentryTag: 'receive_return',
+      onSuccess: () => {
+        setShowDetail(false);
+        fetchReturns();
+      },
+    });
   };
 
   const handleIssueCredit = async () => {
     if (!activeReturn || !profile) return;
-    try {
-      const creditKey = creditIdem.getKey();
-      const { error } = await supabase.rpc('issue_return_credit', {
-        p_return_id: activeReturn.id,
-        p_actor_id: profile.id,
-        p_idempotency_key: creditKey,
-      });
-      if (error) throw error;
+    await runCriticalAction({
+      action: async () => {
+        const creditKey = creditIdem.getKey();
+        const { error } = await supabase.rpc('issue_return_credit', {
+          p_return_id: activeReturn.id,
+          p_actor_id: profile.id,
+          p_idempotency_key: creditKey,
+        });
+        if (error) throw error;
 
-      creditIdem.resetKey();
-      await logActivity('return_credited', `Credit issued for return ${activeReturn.return_number}`, profile.id, 'return', activeReturn.id);
-      toast('success', 'Credit issued');
-      setShowDetail(false);
-      fetchReturns();
-    } catch (err: unknown) {
-      toast('error', sanitizeError(err));
-    }
+        creditIdem.resetKey();
+        await logActivity('return_credited', `Credit issued for return ${activeReturn.return_number}`, profile.id, 'return', activeReturn.id);
+      },
+      toast,
+      successMessage: 'Credit issued',
+      sentryTag: 'issue_return_credit',
+      onSuccess: () => {
+        setShowDetail(false);
+        fetchReturns();
+      },
+    });
   };
 
   const filtered = returns.filter((r) => {
@@ -436,33 +457,35 @@ export default function Returns() {
   };
 
   const handleBulkDelete = async () => {
-    setDeleting(true);
-    try {
-      // Only allow deleting returns in 'requested' or 'rejected' status
-      const nonDeletable = selectedRows.filter((r) => !['requested', 'rejected', 'cancelled'].includes(r.status));
-      if (nonDeletable.length > 0) {
-        toast('error', `Cannot delete returns in active statuses (approved/received/credited)`);
-        setDeleting(false);
-        setDeleteModalOpen(false);
-        return;
-      }
-      const ids = selectedRows.map((r) => r.id);
-      // Soft delete via deleted_at timestamp
-      const result = await supabase
-        .from('returns')
-        .update({ deleted_at: new Date().toISOString() })
-        .in('id', ids)
-        .select();
-      checkMutationResult(result, 'Delete returns');
-
-      toast('success', `Deleted ${ids.length} return(s)`);
-      clearSelection();
-      fetchReturns();
-    } catch (err: unknown) {
-      toast('error', sanitizeError(err));
+    // Only allow deleting returns in 'requested' or 'rejected' status
+    const nonDeletable = selectedRows.filter((r) => !['requested', 'rejected', 'cancelled'].includes(r.status));
+    if (nonDeletable.length > 0) {
+      toast('error', `Cannot delete returns in active statuses (approved/received/credited)`);
+      setDeleteModalOpen(false);
+      return;
     }
-    setDeleting(false);
-    setDeleteModalOpen(false);
+
+    await runCriticalAction({
+      action: async () => {
+        const ids = selectedRows.map((r) => r.id);
+        // Soft delete via deleted_at timestamp
+        const result = await supabase
+          .from('returns')
+          .update({ deleted_at: new Date().toISOString() })
+          .in('id', ids)
+          .select();
+        checkMutationResult(result, 'Delete returns');
+      },
+      toast,
+      setLoading: setDeleting,
+      successMessage: `Deleted ${selectedRows.length} return(s)`,
+      sentryTag: 'bulk_delete_returns',
+      onSuccess: () => {
+        clearSelection();
+        fetchReturns();
+        setDeleteModalOpen(false);
+      },
+    });
   };
 
   const bulkActions = [

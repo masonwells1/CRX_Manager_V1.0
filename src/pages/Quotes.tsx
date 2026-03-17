@@ -17,6 +17,8 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
+import { Sentry } from '../lib/sentry';
+import { SkeletonTable } from '../components/ui/Skeleton';
 import type { Quote } from '../types';
 
 const DELETABLE = ['draft', 'sent', 'revised'];
@@ -68,7 +70,7 @@ export default function Quotes() {
       .order('created_at', { ascending: false })
       .limit(500);
     if (error) {
-      console.error('Failed to load quotes:', error.message);
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_quotes' } });
       toast('error', 'Failed to load quotes. Please try again.');
       setLoading(false);
       return;
@@ -245,6 +247,14 @@ export default function Quotes() {
   ];
 
   const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <SkeletonTable rows={8} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

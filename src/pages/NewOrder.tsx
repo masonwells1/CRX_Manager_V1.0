@@ -16,6 +16,8 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useFormDraft } from '../hooks/useFormDraft';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
@@ -120,11 +122,11 @@ export default function NewOrder() {
     ]);
 
     if (customersRes.error) {
-      console.error('Failed to load customers:', customersRes.error);
+      Sentry.captureException(customersRes.error, { tags: { source: 'fetch', action: 'load_customers' } });
       toast('error', 'Failed to load customers. Please refresh.');
     }
     if (productsRes.error) {
-      console.error('Failed to load products:', productsRes.error);
+      Sentry.captureException(productsRes.error, { tags: { source: 'fetch', action: 'load_products' } });
       toast('error', 'Failed to load products. Please refresh.');
     }
 
@@ -292,84 +294,81 @@ export default function NewOrder() {
     const validItems = items.filter((item) => item.product_id && item.quantity > 0);
     setSaving(true);
 
-    try {
-      const idemKey = createOrderIdem.getKey();
-      const rpcItems = validItems.map((item) => ({
-        product_id: item.product_id,
-        product_name: item.product_name,
-        quantity: item.quantity,
-        price_per_unit: item.price_per_unit,
-        unit_cost: item.unit_cost,
-        unit_size: item.unit_size,
-      }));
+    await runCriticalAction({
+      action: async () => {
+        const idemKey = createOrderIdem.getKey();
+        const rpcItems = validItems.map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          price_per_unit: item.price_per_unit,
+          unit_cost: item.unit_cost,
+          unit_size: item.unit_size,
+        }));
 
-      const { data, error } = await supabase.rpc('create_direct_order', {
-        p_customer_id: customerId,
-        p_order_date: orderDate,
-        p_order_name: orderName || null,
-        p_notes: notes || null,
-        p_items: rpcItems,
-        p_performed_by: profile.id,
-        p_idempotency_key: idemKey,
-      });
+        const { data, error } = await supabase.rpc('create_direct_order', {
+          p_customer_id: customerId,
+          p_order_date: orderDate,
+          p_order_name: orderName || null,
+          p_notes: notes || null,
+          p_items: rpcItems,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        });
 
-      if (error) throw error;
+        if (error) throw error;
 
-      createOrderIdem.resetKey();
-      const result = data as Record<string, unknown> | null;
-      const orderId = result?.order_id as string | undefined;
-      if (!orderId) {
-        toast('error', 'Order creation failed — no order ID returned');
-        setSaving(false);
-        return;
-      }
-
-      // Save customer PO# if provided
-      if (customerPoNumber.trim() && orderId) {
-        const poResult = await supabase.from('orders').update({ customer_po_number: customerPoNumber.trim() }).eq('id', orderId).select();
-        checkMutationResult(poResult, 'Update customer PO number');
-      }
-
-      clearDraft();
-      toast('success', 'Order created successfully');
-
-      // Show inventory warnings (non-blocking)
-      const warnings = result?.warnings as string[] | undefined;
-      if (warnings && warnings.length > 0) {
-        for (const w of warnings) {
-          toast('warning', 'Inventory: ' + w);
+        createOrderIdem.resetKey();
+        const result = data as Record<string, unknown> | null;
+        const orderId = result?.order_id as string | undefined;
+        if (!orderId) {
+          throw new Error('Order creation failed — no order ID returned');
         }
-      }
-      trackBusinessEvent('order_created', {
-        message: `Direct order created${orderName ? ` (${orderName})` : ''}`,
-        data: { orderId: orderId!, orderName: orderName || null, itemCount: items.filter((i) => i.product_id).length },
-      });
 
-      // Phase 3.3: Credit limit check — warn (not block) if exceeded
-      if (customerId) {
-        try {
-          const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
-            p_customer_id: customerId,
-          });
-          const cl = creditCheck as { exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null;
-          if (cl && cl.exceeded) {
-            const fmtUsd = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
-            toast('warning', `Credit limit warning: ${cl.farm_name} outstanding AR ${fmtUsd(cl.outstanding_ar ?? 0)} exceeds limit ${fmtUsd(cl.credit_limit ?? 0)}`);
-            notifyCreditLimitExceeded(cl.farm_name ?? 'Unknown', cl.outstanding_ar ?? 0, cl.credit_limit ?? 0, customerId);
+        // Save customer PO# if provided
+        if (customerPoNumber.trim() && orderId) {
+          const poResult = await supabase.from('orders').update({ customer_po_number: customerPoNumber.trim() }).eq('id', orderId).select();
+          checkMutationResult(poResult, 'Update customer PO number');
+        }
+
+        clearDraft();
+
+        // Show inventory warnings (non-blocking)
+        const warnings = result?.warnings as string[] | undefined;
+        if (warnings && warnings.length > 0) {
+          for (const w of warnings) {
+            toast('warning', 'Inventory: ' + w);
           }
-        } catch {
-          // Non-blocking — credit limit check failure should not prevent navigation
         }
-      }
+        trackBusinessEvent('order_created', {
+          message: `Direct order created${orderName ? ` (${orderName})` : ''}`,
+          data: { orderId: orderId!, orderName: orderName || null, itemCount: items.filter((i) => i.product_id).length },
+        });
 
-      navigate(`/orders/${orderId}`);
-    } catch (err) {
-      console.error('Error creating order:', err);
-      const msg = err instanceof Error ? err.message : (err as Record<string, unknown>)?.message || String(err);
-      toast('error', 'Failed to create order: ' + msg);
-    } finally {
-      setSaving(false);
-    }
+        // Phase 3.3: Credit limit check — warn (not block) if exceeded
+        if (customerId) {
+          try {
+            const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
+              p_customer_id: customerId,
+            });
+            const cl = creditCheck as { exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null;
+            if (cl && cl.exceeded) {
+              const fmtUsd = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+              toast('warning', `Credit limit warning: ${cl.farm_name} outstanding AR ${fmtUsd(cl.outstanding_ar ?? 0)} exceeds limit ${fmtUsd(cl.credit_limit ?? 0)}`);
+              notifyCreditLimitExceeded(cl.farm_name ?? 'Unknown', cl.outstanding_ar ?? 0, cl.credit_limit ?? 0, customerId);
+            }
+          } catch {
+            // Non-blocking — credit limit check failure should not prevent navigation
+          }
+        }
+
+        navigate(`/orders/${orderId}`);
+      },
+      toast,
+      successMessage: 'Order created successfully',
+      setLoading: setSaving,
+      sentryTag: 'create_order',
+    });
   };
 
   const filteredProducts = productSearch

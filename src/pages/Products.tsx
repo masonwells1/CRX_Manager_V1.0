@@ -12,10 +12,13 @@ import BulkProductImport from '../components/products/BulkProductImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
+import { SkeletonTable } from '../components/ui/Skeleton';
 import type { Product } from '../types';
 
 export default function Products() {
@@ -45,7 +48,7 @@ export default function Products() {
       .order('product_name')
       .limit(500);
     if (error) {
-      console.error('Failed to load products:', error.message);
+      Sentry.captureException(error);
       toast('error', 'Failed to load products. Please try again.');
       setLoading(false);
       return;
@@ -246,38 +249,40 @@ export default function Products() {
   };
 
   const handleDeactivate = async () => {
-    setDeactivating(true);
-    try {
-      const ids = selectedRows.map((p) => p.id);
+    const ids = selectedRows.map((p) => p.id);
 
-      // H22: Block deactivation if any selected product has open PO lines
-      const { data: openPoLines } = await supabase
-        .from('purchase_order_items')
-        .select('id, product_id, purchase_order:purchase_orders!inner(status)')
-        .in('product_id', ids)
-        .in('purchase_order.status', ['draft', 'submitted', 'partially_received'])
-        .limit(1);
-      if (openPoLines && openPoLines.length > 0) {
-        toast('error', 'Cannot deactivate: one or more selected products have open purchase order lines. Receive or cancel those POs first.');
-        setDeactivating(false);
-        setDeactivateModalOpen(false);
-        return;
-      }
-
-      const result = await supabase
-        .from('products')
-        .update({ is_active: false, updated_at: new Date().toISOString() })
-        .in('id', ids)
-        .select();
-      checkMutationResult(result, 'Deactivate products');
-      toast('success', `Deactivated ${ids.length} product(s)`);
-      clearSelection();
-      fetchProducts();
-    } catch (err) {
-      toast('error', sanitizeError(err));
+    // H22: Block deactivation if any selected product has open PO lines
+    const { data: openPoLines } = await supabase
+      .from('purchase_order_items')
+      .select('id, product_id, purchase_order:purchase_orders!inner(status)')
+      .in('product_id', ids)
+      .in('purchase_order.status', ['draft', 'submitted', 'partially_received'])
+      .limit(1);
+    if (openPoLines && openPoLines.length > 0) {
+      toast('error', 'Cannot deactivate: one or more selected products have open purchase order lines. Receive or cancel those POs first.');
+      setDeactivateModalOpen(false);
+      return;
     }
-    setDeactivating(false);
-    setDeactivateModalOpen(false);
+
+    await runCriticalAction({
+      action: async () => {
+        const result = await supabase
+          .from('products')
+          .update({ is_active: false, updated_at: new Date().toISOString() })
+          .in('id', ids)
+          .select();
+        checkMutationResult(result, 'Deactivate products');
+      },
+      toast,
+      setLoading: setDeactivating,
+      successMessage: `Deactivated ${ids.length} product(s)`,
+      sentryTag: 'deactivate_products',
+      onSuccess: () => {
+        clearSelection();
+        fetchProducts();
+        setDeactivateModalOpen(false);
+      },
+    });
   };
 
   const bulkActions = [
@@ -406,7 +411,7 @@ export default function Products() {
             new_tier3_price: 'tier3_price' in fields ? fields.tier3_price : original.tier3_price,
             change_note: 'Updated via inline bulk edit',
           });
-          if (costResult.error) console.error('Cost history insert failed:', costResult.error);
+          if (costResult.error) Sentry.captureException(costResult.error);
           checkMutationResult(costResult, 'Insert cost history for inline bulk edit');
         }
 
@@ -545,6 +550,14 @@ export default function Products() {
   const columns: EditableColumn<Product>[] = canBulkAction
     ? [checkboxCol as unknown as EditableColumn<Product>, ...dataColumns]
     : dataColumns;
+
+  if (loading) {
+    return (
+      <div className="p-6">
+        <SkeletonTable rows={8} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
