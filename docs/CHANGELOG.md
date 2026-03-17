@@ -4,6 +4,25 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-16 — Code Quality Session: Sentry Migration, A11y, Safety-Net Tests
+
+### Error Reporting
+- **Sentry migration** — Migrated ~30 remaining `console.error` calls to `Sentry.captureException` across components, hooks, edge functions, and contexts. Now all production errors route to Sentry for visibility
+- **Test update** — Updated `useOCRProcessor.test.tsx` to mock `@sentry/react` instead of `console.error` (ESM-compatible `vi.hoisted` pattern)
+
+### Accessibility
+- **click-events-have-key-events** — Fixed all 13 remaining jsx-a11y warnings with `role="button"`, `tabIndex={0}`, and `onKeyDown` handlers (BulkFieldImport, CustomerContextCard, CropPrograms, Deliveries, Products, QuoteBuilder, TeamBoard, BulkPOImport, YesterdayRecap, DeliveryDetail)
+
+### Safety-Net Tests
+- **Function overload detection contracts** — 42 critical functions listed; validates no duplicates, all snake_case, all mutating RPCs covered
+- **Mutating RPC idempotency contracts** — 28 RPCs that must accept `p_idempotency_key`; validates critical business RPCs are covered
+- **SECURITY DEFINER pg_temp contracts** — 38 functions requiring `pg_temp` in search_path; validates overlap with mutating RPCs
+
+### Commission Audit Trail
+- **Reports.tsx** — Replaced direct `.update()` commission mark-paid with `create_commission_payment` RPC for proper audit trail (creates payment record, payment items, updates status, logs to `financial_audit_log`)
+
+---
+
 ## 2026-03-16 — Overnight Session: DB Security, Code Quality, Delivery Features
 
 ### Phase A: Database Housekeeping
