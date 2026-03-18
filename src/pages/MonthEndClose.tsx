@@ -101,7 +101,7 @@ export default function MonthEndClose() {
       p_period_end: current.end,
     });
     if (!error && summaryData) {
-      setSummary(summaryData as MonthlySummary);
+      setSummary(assertRpcResult<MonthlySummary>(summaryData, 'get_monthly_summary'));
     }
 
     setLoading(false);
@@ -264,7 +264,7 @@ export default function MonthEndClose() {
         setYeLoading(false);
         return;
       }
-      const summaries = (batchResult as unknown as YearEndSummaryData[]) || [];
+      const summaries = assertRpcResult<YearEndSummaryData[]>(batchResult as unknown, 'get_batch_year_end_summaries');
       await downloadBatchYearEndSummaries(summaries, options);
       toast('success', `Generated ${summaries.length} year-end summary PDF(s)`);
       setShowYeDialog(false);

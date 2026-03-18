@@ -29,7 +29,7 @@ import Button from '../components/ui/Button';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
 
@@ -266,7 +266,7 @@ export default function Dashboard() {
       const { data: rpc, error } = await supabase.rpc('operational_dashboard_summary');
       if (error) throw error;
 
-      const d = rpc as OperationalRpc;
+      const d = assertRpcResult<OperationalRpc>(rpc, 'operational_dashboard_summary');
 
       setData({
         activeOrdersCount: Number(d.active_orders_count) || 0,

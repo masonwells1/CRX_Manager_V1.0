@@ -825,7 +825,8 @@ export default function QuoteBuilder() {
       }
 
       saveQuoteIdem.resetKey();
-      const savedQuoteId = data?.quote_id || quoteId;
+      const result = assertRpcResult<{ quote_id: string }>(data, 'save_quote');
+      const savedQuoteId = result.quote_id || quoteId;
       if (!quoteId || !isEditing) {
         setQuoteId(savedQuoteId);
       }
@@ -1010,10 +1011,11 @@ export default function QuoteBuilder() {
           Sentry.captureException(versionError, { tags: { source: 'mutation', action: 'create_quote_version' } });
           toast('error', 'Quote sent but version snapshot failed.');
         } else {
+          const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
           createVersionIdem.resetKey();
           await logActivity(
             'quote_sent',
-            `Quote ${quoteNumber} v${versionData?.version_number || '?'} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
+            `Quote ${quoteNumber} v${ver.version_number} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
             profile.id,
             'quote',
             result,
@@ -1199,16 +1201,17 @@ export default function QuoteBuilder() {
       p_idempotency_key: presVerIdemKey,
     });
     if (error) { toast('error', 'Failed to mark as presented'); return; }
+    const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
     createVersionIdem.resetKey();
     await logActivity(
       'quote_presented',
-      `Quote ${quoteNumber} V${versionData?.version_number || '?'} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`,
+      `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`,
       profile.id,
       'quote',
       savedId,
       customerId
     );
-    toast('success', `Quote marked as presented (V${versionData?.version_number || '?'})`);
+    toast('success', `Quote marked as presented (V${ver.version_number})`);
     setShowPreviewModal(false);
     if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
     setPreviewPdfUrl(null);

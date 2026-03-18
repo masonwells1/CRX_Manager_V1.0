@@ -4,6 +4,20 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-17 — Code Audit Phase 2: assertRpcResult + Sentry + Safety Fixes (7 files)
+
+### assertRpcResult Coverage (Phase 2 — 7 more files, ~20 RPC calls)
+- Added `assertRpcResult()` to read & mutation RPCs that were casting `data` without null guard
+- **Dashboard.tsx** — `operational_dashboard_summary`
+- **FinancialDashboard.tsx** — `financial_dashboard_summary`
+- **QuickReceive.tsx** — `match_quick_receive_items` + `receive_po_items`
+- **AccountsPayable.tsx** — `get_ap_dashboard_summary` + `get_ap_aging`
+- **Reports.tsx** — 8 RPCs: `get_bottom_line_pnl`, `get_gross_sales_report`, `get_customer_balance_listing`, `get_commission_balance_report`, `get_chemical_history`, `get_inventory_cost_report`, `get_batch_year_end_summaries`, `get_customer_year_end_summary`
+- **QuoteBuilder.tsx** — `save_quote` + `create_quote_version` (×2 locations)
+- **MonthEndClose.tsx** — `get_monthly_summary` + `get_batch_year_end_summaries`
+
+---
+
 ## 2026-03-17 — Comprehensive Code Audit & Hardening (29 files, +1053/-107)
 
 ### assertRpcResult Coverage (~30 RPC calls)

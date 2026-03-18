@@ -7,7 +7,7 @@ import Button from '../components/ui/Button';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import LogbookReport from '../components/reports/LogbookReport';
@@ -246,7 +246,7 @@ export default function Reports() {
     if (!startDate || !endDate) { setPnlData([]); return; }
     const { data, error } = await supabase.rpc('get_bottom_line_pnl', { p_start_date: startDate, p_end_date: endDate });
     if (error) { toast('error', `P&L failed: ${error.message}`); return; }
-    setPnlData((data || []) as PnLRow[]);
+    setPnlData(assertRpcResult<PnLRow[]>(data, 'get_bottom_line_pnl'));
   }, [startDate, endDate, toast]);
 
   const fetchGrossSales = useCallback(async () => {
@@ -257,21 +257,21 @@ export default function Reports() {
       p_group_by: grossSalesGroupBy,
     });
     if (error) { toast('error', `Gross sales failed: ${error.message}`); return; }
-    setGrossSalesData((data || []) as GrossSalesRow[]);
+    setGrossSalesData(assertRpcResult<GrossSalesRow[]>(data, 'get_gross_sales_report'));
   }, [startDate, endDate, grossSalesGroupBy, toast]);
 
   const fetchCustomerBalance = useCallback(async () => {
     const asOf = endDate || localToday();
     const { data, error } = await supabase.rpc('get_customer_balance_listing', { p_as_of_date: asOf });
     if (error) { toast('error', `Customer balance failed: ${error.message}`); return; }
-    setCustBalanceData((data || []) as CustomerBalanceRow[]);
+    setCustBalanceData(assertRpcResult<CustomerBalanceRow[]>(data, 'get_customer_balance_listing'));
   }, [endDate, toast]);
 
   const fetchCommissionBalance = useCallback(async () => {
     const asOf = endDate || localToday();
     const { data, error } = await supabase.rpc('get_commission_balance_report', { p_as_of_date: asOf });
     if (error) { toast('error', `Commission balance failed: ${error.message}`); return; }
-    setCommBalanceData((data || []) as CommissionBalanceRow[]);
+    setCommBalanceData(assertRpcResult<CommissionBalanceRow[]>(data, 'get_commission_balance_report'));
   }, [endDate, toast]);
 
   // ─── FINANCIAL parent fetcher ─────────────────────────────────
@@ -293,13 +293,13 @@ export default function Reports() {
       p_end_date: endDate,
     });
     if (error) { toast('error', `Chemical history failed: ${error.message}`); return; }
-    setChemHistoryData((data || []) as ChemicalHistoryRow[]);
+    setChemHistoryData(assertRpcResult<ChemicalHistoryRow[]>(data, 'get_chemical_history'));
   }, [chemProductId, startDate, endDate, toast]);
 
   const fetchInventoryCost = useCallback(async () => {
     const { data, error } = await supabase.rpc('get_inventory_cost_report');
     if (error) { toast('error', `Inventory cost failed: ${error.message}`); return; }
-    setInventoryCostData((data || []) as InventoryCostRow[]);
+    setInventoryCostData(assertRpcResult<InventoryCostRow[]>(data, 'get_inventory_cost_report'));
   }, [toast]);
 
   const fetchPriceList = useCallback(async () => {
@@ -389,7 +389,7 @@ export default function Reports() {
           setYeLoading(false);
           return;
         }
-        const summaries = (batchResult as unknown as YearEndSummaryData[]) || [];
+        const summaries = assertRpcResult<YearEndSummaryData[]>(batchResult as unknown, 'get_batch_year_end_summaries');
         await downloadBatchYearEndSummaries(summaries, options);
         toast('success', `Generated ${summaries.length} season summary PDF(s)`);
       } else {
@@ -400,7 +400,7 @@ export default function Reports() {
           p_season: season,
         });
         if (error) throw error;
-        await downloadYearEndSummaryPdf(data as unknown as YearEndSummaryData, options);
+        await downloadYearEndSummaryPdf(assertRpcResult<YearEndSummaryData>(data as unknown, 'get_customer_year_end_summary'), options);
         toast('success', `Season ${season} summary generated`);
       }
       setShowYeDialog(false);
