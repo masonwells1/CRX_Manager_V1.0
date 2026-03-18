@@ -4,6 +4,27 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-18 — Full Sales Cycle Live UI Test + Bug Fixes
+
+### Live Browser Test (Playwright)
+- Tested complete sales cycle: Quote → Order → Delivery → Invoice → Payment → Partial Return
+- Used [E2E] test fixtures only — no real data touched
+- All financial integrity verified: inventory tracking, invoice balance, payment allocation
+- All test data cleaned up after completion
+
+### Bug Fix: Returns Product Select (Returns.tsx)
+- **Bug:** Product select `onChange` handler called `updateItem()` 3 times sequentially, each spreading from stale closure `newItems`. React 18 batching meant only the last `setNewItems` won, losing `product_id` and `product_name`
+- **Fix:** Batched all field updates into a single `setNewItems` call
+- **Impact:** Product selection in New Return modal was silently failing — selected product would revert to empty
+
+### Migration: Fix save_quote Idempotency + Activity Feed Columns (20260333100000)
+- Fixed `save_quote()` RPC with wrong `idempotency_keys` column names (`key`→`idempotency_key`, `entity_type`/`entity_id`→`operation`/`result`)
+- Fixed `v_server_totals` field aliases (`.sum`→`.total_price`)
+- Fixed `activity_feed` column names (`action`→`event_type`, `entity_type`→`related_entity_type`, `entity_id`→`related_entity_id`)
+- Added `pg_temp` to search_path
+
+---
+
 ## 2026-03-17 — Code Quality Enforcement (Phase 1-4)
 
 ### assertRpcResult Final Sweep (28+ violations → 0)

@@ -680,15 +680,19 @@ export default function Returns() {
                     value={item.product_id}
                     onChange={(e) => {
                       const p = products.find((pr) => pr.id === e.target.value);
-                      updateItem(idx, 'product_id', e.target.value);
+                      const updated = [...newItems];
+                      updated[idx] = {
+                        ...updated[idx],
+                        product_id: e.target.value,
+                        product_name: p?.product_name || '',
+                      };
                       if (p) {
-                        updateItem(idx, 'product_name', p.product_name);
-                        // Use correct tier price based on customer's assigned tier
                         const selectedCust = customers.find((c) => c.id === newForm.customer_id);
                         const tier = selectedCust?.assigned_tier || 1;
                         const tierPrice = tier === 3 ? p.tier3_price : tier === 2 ? p.tier2_price : p.tier1_price;
-                        updateItem(idx, 'unit_price_cents', Math.round((tierPrice || p.tier1_price || 0) * 100));
+                        updated[idx].unit_price_cents = Math.round((tierPrice || p.tier1_price || 0) * 100);
                       }
+                      setNewItems(updated);
                     }}
                     className="flex-1 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   >

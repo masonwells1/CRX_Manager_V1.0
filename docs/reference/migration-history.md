@@ -1,4 +1,4 @@
-# Migration History (200 migrations)
+# Migration History (205 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -204,3 +204,5 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 198 | 20260332700000 | Fix idempotency column refs round 3 — surgical fix of 4 RPCs + safety-net scan of all public functions + self-testing verification |
 | 199 | 20260332800000 | **pg_temp search_path fix** — ALTER FUNCTION on ALL SECURITY DEFINER functions to add `pg_temp` to search_path. Verification block raises EXCEPTION if any functions still missing. Prevents temp schema hijacking attacks |
 | 200 | 20260332900000 | **Data validation & cleanup** — Fixes negative inventory quantities, recalculates prebooked from actual pending orders, verifies commission splits sum to 100%, checks invoice paid_amount_cents integrity, fixes invalid commission statuses |
+| 201 | 20260333000000 | **Fix reverse_cycle_count** — Adds `pg_temp` to search_path, fixes idempotency column refs (`key`→`idempotency_key`, `entity_type`/`entity_id`→`operation`/`result`) |
+| 202 | 20260333100000 | **Fix save_quote idempotency + activity_feed columns** — Corrects idempotency_keys refs (`key`→`idempotency_key`, `entity_type`/`entity_id`→`operation`/`result`), fixes `v_server_totals` field aliases (`.sum`→`.total_price`), fixes activity_feed column names (`action`→`event_type`, `entity_type`→`related_entity_type`, `entity_id`→`related_entity_id`), adds `pg_temp` to search_path |
