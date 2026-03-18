@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link as LinkIcon } from 'lucide-react';
 import { supabase } from '../../lib/db';
+import { Sentry } from '../../lib/sentry';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import Modal from '../ui/Modal';
@@ -102,6 +103,7 @@ export default function QuickTaskModal({
       toast('success', 'Task created successfully');
       onClose();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickTaskModal.handleSave' } });
       const message = err instanceof Error ? err.message : 'Failed to create task';
       toast('error', message);
     } finally {

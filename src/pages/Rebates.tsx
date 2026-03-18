@@ -352,6 +352,7 @@ export default function Rebates() {
       if (profile) logActivity({ event: 'rebate_program_deleted', description: `Rebate program "${programName}" deleted`, performedBy: profile.id });
       fetchPrograms();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'delete_rebate_program' } });
       toast('error', err instanceof Error ? err.message : 'Failed to delete program');
     }
   };
@@ -374,6 +375,7 @@ export default function Rebates() {
       if (profile) logActivity({ event: 'rebate_claim_deleted', description: `Rebate claim ${claimNumber} deleted`, performedBy: profile.id });
       fetchClaims();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'delete_rebate_claim' } });
       toast('error', err instanceof Error ? err.message : 'Failed to delete claim');
     }
   };

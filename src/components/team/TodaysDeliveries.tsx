@@ -109,6 +109,7 @@ export default function TodaysDeliveries() {
       }
       setData(assertRpcResult<TeamBoardDeliveryData>(result, 'get_team_board_deliveries'));
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'TodaysDeliveries.fetchDeliveries' } });
       toast('error', err instanceof Error ? err.message : 'Failed to load deliveries');
     } finally {
       setLoading(false);

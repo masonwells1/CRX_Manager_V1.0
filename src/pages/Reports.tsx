@@ -16,6 +16,7 @@ import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '.
 import { downloadYearEndSummaryPdf, downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
+import { Sentry } from '../lib/sentry';
 import type {
   PnLRow, GrossSalesRow, CustomerBalanceRow,
   ChemicalHistoryRow, CommissionBalanceRow, InventoryCostRow,
@@ -405,6 +406,7 @@ export default function Reports() {
       }
       setShowYeDialog(false);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'generate_year_end_summary' } });
       toast('error', err instanceof Error ? err.message : 'Failed to generate summary');
     }
     setYeLoading(false);
@@ -450,6 +452,7 @@ export default function Reports() {
       if (profile) logActivity({ event: 'commissions_paid', description: `${totalPaid} commission(s) marked as paid via Reports`, performedBy: profile.id });
       fetchCommissions();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_commissions_paid' } });
       toast('error', err instanceof Error ? err.message : 'Failed to update commissions');
     }
     setMarkingPaid(false);

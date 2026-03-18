@@ -221,7 +221,7 @@ export default function BlendRecipes() {
             sort_order: idx,
             notes: item.notes || null,
           }));
-          const recipeItemsResult = await supabase.from('blend_recipe_items').insert(itemsPayload);
+          const recipeItemsResult = await supabase.from('blend_recipe_items').insert(itemsPayload).select();
           if (recipeItemsResult.error) throw recipeItemsResult.error;
           checkMutationResult(recipeItemsResult, 'Insert blend recipe items');
         }
@@ -273,7 +273,7 @@ export default function BlendRecipes() {
             sort_order: item.sort_order,
             notes: item.notes,
           }));
-          const copyItemsResult = await supabase.from('blend_recipe_items').insert(copies);
+          const copyItemsResult = await supabase.from('blend_recipe_items').insert(copies).select();
           if (copyItemsResult.error) throw copyItemsResult.error;
           checkMutationResult(copyItemsResult, 'Insert duplicated blend recipe items');
         }

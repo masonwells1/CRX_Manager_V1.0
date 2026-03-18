@@ -415,6 +415,7 @@ export function BlendTicketDetail() {
       setShowLinkModal(false);
       await loadTicketData();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'link_blend_ticket_to_order' } });
       toast('error', err instanceof Error ? err.message : 'Failed to link');
     } finally {
       setLinking(false);
@@ -438,6 +439,7 @@ export function BlendTicketDetail() {
       toast('success', 'Blend ticket unlinked from order');
       await loadTicketData();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'unlink_blend_ticket_from_order' } });
       toast('error', err instanceof Error ? err.message : 'Failed to unlink');
     }
   }
@@ -463,6 +465,7 @@ export function BlendTicketDetail() {
       setShowCreateOrderModal(false);
       navigate(`/orders/${result.order_id}`);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_order_from_blend_ticket' } });
       toast('error', err instanceof Error ? err.message : 'Failed to create order');
     } finally {
       setLinking(false);
@@ -493,6 +496,7 @@ export function BlendTicketDetail() {
       logActivity({ event: 'application_record_created', description: `Application record created from blend ticket ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       toast('success', 'Application record created successfully');
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_application_record_from_blend_ticket' } });
       toast('error', err instanceof Error ? err.message : 'Failed to create application record');
     } finally {
       setCreatingAppRecord(false);

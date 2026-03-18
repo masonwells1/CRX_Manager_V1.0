@@ -254,7 +254,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
             old_tier3_price: product.tier3_price,
             new_tier3_price: row.tier3_price ?? product.tier3_price,
             change_note: 'Bulk pricing update',
-          });
+          }).select();
           if (costHistResult.error) Sentry.captureException(costHistResult.error instanceof Error ? costHistResult.error : new Error(String(costHistResult.error)), { extra: { context: 'Cost history audit failed' } });
           checkMutationResult(costHistResult, 'Insert cost history for bulk pricing import');
         }

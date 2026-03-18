@@ -18,6 +18,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
 import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 
 interface CustomerPrepay {
   [k: string]: unknown;
@@ -338,6 +339,7 @@ export default function PrepaymentManager() {
       );
       fetchCustomers();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'apply_remaining_prepayments' } });
       toast('error', err instanceof Error ? err.message : 'Failed to apply prepayments');
     }
     setApplying(null);
@@ -365,6 +367,7 @@ export default function PrepaymentManager() {
       }
       fetchCustomers();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'batch_apply_all_prepayments' } });
       toast('error', err instanceof Error ? err.message : 'Failed to apply batch prepayments');
     }
     setBatchApplying(false);

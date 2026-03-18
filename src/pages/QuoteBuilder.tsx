@@ -832,6 +832,7 @@ export default function QuoteBuilder() {
       }
       return savedQuoteId;
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_quote' } });
       toast('error', err instanceof Error ? err.message : 'Failed to save quote');
       return null;
     }

@@ -374,6 +374,7 @@ export default function TeamBoard() {
         resetForm();
         fetchNotes();
       } catch (err: unknown) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'update_team_note' } });
         toast('error', err instanceof Error ? err.message : 'Failed to update note');
       }
     } else {
@@ -422,6 +423,7 @@ export default function TeamBoard() {
       toast('success', 'Note deleted');
       fetchNotes();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'delete_team_note' } });
       toast('error', err instanceof Error ? err.message : 'Failed to delete note');
     }
     setDeleteConfirmId(null);
@@ -447,6 +449,7 @@ export default function TeamBoard() {
       checkMutationResult(result, 'Toggle note completion');
       fetchNotes();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'toggle_note_completion' } });
       toast('error', err instanceof Error ? err.message : 'Failed to update note');
     }
   };
@@ -461,6 +464,7 @@ export default function TeamBoard() {
       checkMutationResult(result, 'Toggle note pin');
       fetchNotes();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'toggle_note_pin' } });
       toast('error', err instanceof Error ? err.message : 'Failed to update note');
     }
   };

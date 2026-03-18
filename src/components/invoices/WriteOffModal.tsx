@@ -10,6 +10,7 @@ import Input from '../ui/Input';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/db';
+import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../../lib/parseCents';
 
@@ -73,6 +74,7 @@ export default function WriteOffModal({
       onClose();
       onSuccess();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'WriteOffModal.handleSubmit' } });
       toast('error', err instanceof Error ? err.message : 'Failed to apply write-off');
     }
     setSubmitting(false);

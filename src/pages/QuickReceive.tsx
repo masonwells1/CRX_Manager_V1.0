@@ -20,6 +20,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { Sentry } from '../lib/sentry';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
 import type {
   Product,
@@ -198,6 +199,7 @@ export default function QuickReceive() {
       setUnmatchedActions({});
       setStep('review');
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'match_quick_receive_items' } });
       toast('error', err instanceof Error ? err.message : 'Failed to match items');
     }
     setMatching(false);
@@ -338,6 +340,7 @@ export default function QuickReceive() {
       setStep('success');
       toast('success', `Successfully received ${itemsPayload.length} item(s)`);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'confirm_quick_receive' } });
       toast('error', err instanceof Error ? err.message : 'Failed to receive items');
     }
     setSaving(false);

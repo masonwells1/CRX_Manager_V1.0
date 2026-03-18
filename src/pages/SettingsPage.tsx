@@ -16,6 +16,7 @@ import { logActivity } from '../lib/activityLogger';
 import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getPagesForRole, getCategories } from '../lib/pagePermissions';
+import { Sentry } from '../lib/sentry';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 // --- Permissions Panel ---
@@ -279,6 +280,7 @@ export default function SettingsPage() {
         fetchUsers();
       }
     } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_user' } });
       toast('error', err instanceof Error ? err.message : 'Failed to create user');
     }
     setCreatingUser(false);

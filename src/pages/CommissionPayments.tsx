@@ -18,6 +18,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
+import { Sentry } from '../lib/sentry';
 
 interface CommissionPaymentRow {
   [k: string]: unknown;
@@ -205,6 +206,7 @@ export default function CommissionPayments() {
       setShowCreate(false);
       fetchPayments();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'create_commission_payment' } });
       toast('error', err instanceof Error ? err.message : 'Failed to create payment');
     }
     setCreating(false);
@@ -225,6 +227,7 @@ export default function CommissionPayments() {
       toast('success', 'Commission payment posted');
       fetchPayments();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_commission_payment' } });
       toast('error', err instanceof Error ? err.message : 'Failed to post');
     }
     setPosting(null);
@@ -250,6 +253,7 @@ export default function CommissionPayments() {
       setVoidTarget(null);
       fetchPayments();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_commission_payment' } });
       toast('error', err instanceof Error ? err.message : 'Failed to void payment');
     }
     setVoiding(false);

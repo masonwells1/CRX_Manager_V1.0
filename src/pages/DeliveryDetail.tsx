@@ -505,7 +505,7 @@ export default function DeliveryDetail() {
           uploaded_by: profile.id,
           file_size: file.size,
           sort_order: photos.length + uploadCount,
-        });
+        }).select();
         if (photoResult.error) {
           toast('error', `Photo saved to storage but DB record failed: ${photoResult.error.message}`);
           continue;

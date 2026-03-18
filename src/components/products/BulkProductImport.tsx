@@ -312,7 +312,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
       const productResult = await supabase.from('products').insert({
         ...product,
         is_active: true,
-      });
+      }).select();
 
       if (productResult.error) {
         Sentry.captureException(productResult.error instanceof Error ? productResult.error : new Error(String(productResult.error)), { extra: { context: 'Failed to insert product' } });

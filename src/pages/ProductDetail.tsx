@@ -159,7 +159,7 @@ export default function ProductDetail() {
 
     setSaving(true);
     if (isNew) {
-      const productInsertResult = await supabase.from('products').insert([product]);
+      const productInsertResult = await supabase.from('products').insert([product]).select();
       if (productInsertResult.error) {
         toast('error', productInsertResult.error.message);
       } else {
@@ -197,7 +197,7 @@ export default function ProductDetail() {
           old_tier3_price: current.tier3_price,
           new_tier3_price: product.tier3_price,
           change_note: 'Updated via product detail save',
-        });
+        }).select();
         if (costHistoryResult.error) Sentry.captureException(costHistoryResult.error, { tags: { source: 'critical_action', action: 'insert_cost_history' } });
         checkMutationResult(costHistoryResult, 'Insert cost history (pricing change)');
       }
@@ -214,6 +214,7 @@ export default function ProductDetail() {
         logActivity({ event: 'product_updated', description: `Product ${product.product_name} updated`, performedBy: profile!.id, entityType: 'product', entityId: id });
         if (pricingChanged) fetchCostHistory();
       } catch (err: unknown) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'update_product' } });
         toast('error', err instanceof Error ? err.message : 'Failed to update product');
       }
     }
@@ -240,7 +241,7 @@ export default function ProductDetail() {
         new_tier3_price: product.tier3_price,
         change_note: costNote || 'Manual cost update',
       },
-    ]);
+    ]).select();
     if (!manualCostResult.error) {
       checkMutationResult(manualCostResult, 'Insert cost history (manual update)');
       try {
@@ -258,6 +259,7 @@ export default function ProductDetail() {
         toast('success', 'Cost updated');
         logActivity({ event: 'product_cost_updated', description: `Product cost updated to $${cost}`, performedBy: profile!.id, entityType: 'product', entityId: id });
       } catch (err: unknown) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'update_product_cost' } });
         toast('error', err instanceof Error ? err.message : 'Failed to update product cost');
       }
     }

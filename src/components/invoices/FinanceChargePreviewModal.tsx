@@ -16,6 +16,7 @@ import Badge from '../ui/Badge';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
+import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import type { FinanceChargePreview } from '../../types';
 
@@ -55,6 +56,7 @@ export default function FinanceChargePreviewModal({
       // Select all by default
       setSelected(new Set(rows.map((r) => r.customer_id)));
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'FinanceChargePreviewModal.fetchPreview' } });
       toast('error', err instanceof Error ? err.message : 'Failed to load finance charge preview');
     }
     setLoading(false);
@@ -117,6 +119,7 @@ export default function FinanceChargePreviewModal({
       onClose();
       onSuccess();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'FinanceChargePreviewModal.handleGenerate' } });
       toast('error', err instanceof Error ? err.message : 'Failed to generate finance charges');
     }
     setGenerating(false);

@@ -303,7 +303,7 @@ export default function BulkCustomerImport({ open, onClose, onSuccess }: BulkCus
       const customerResult = await supabase.from('customers').insert({
         ...customer,
         is_active: true,
-      });
+      }).select();
 
       if (customerResult.error) {
         Sentry.captureException(customerResult.error instanceof Error ? customerResult.error : new Error(String(customerResult.error)), { extra: { context: 'Failed to insert customer' } });

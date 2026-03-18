@@ -413,6 +413,7 @@ export default function CustomerDetail() {
         }
       }
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_customer' } });
       toast('error', err instanceof Error ? err.message : 'Failed to save customer');
     }
     setSaving(false);
@@ -451,6 +452,7 @@ export default function CustomerDetail() {
       toast('success', `Season ${season} summary generated`);
       setShowSummaryDialog(false);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'generate_customer_year_end_summary' } });
       toast('error', err instanceof Error ? err.message : 'Failed to generate summary');
     }
     setSummaryLoading(false);

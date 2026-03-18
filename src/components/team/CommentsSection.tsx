@@ -151,6 +151,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       setEditContent('');
       fetchComments();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'CommentsSection.handleEditComment' } });
       toast('error', err instanceof Error ? err.message : 'Failed to update comment');
     }
     setSending(false);
@@ -172,6 +173,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       toast('success', 'Comment deleted');
       fetchComments();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'CommentsSection.handleDeleteComment' } });
       toast('error', err instanceof Error ? err.message : 'Failed to delete comment');
     }
   };

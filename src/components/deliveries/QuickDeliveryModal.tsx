@@ -13,6 +13,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { localToday } from '../../lib/dateUtils';
+import { Sentry } from '../../lib/sentry';
 import type { Product, Profile } from '../../types';
 
 interface QuickItem {
@@ -246,6 +247,7 @@ export default function QuickDeliveryModal({
       onCreated?.();
       navigate(`/deliveries/${result.delivery_id}`);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.handleSubmit' } });
       const msg = err instanceof Error ? err.message : 'Failed to create quick delivery';
       toast('error', msg);
     } finally {

@@ -410,7 +410,7 @@ export default function Products() {
             old_tier3_price: original.tier3_price,
             new_tier3_price: 'tier3_price' in fields ? fields.tier3_price : original.tier3_price,
             change_note: 'Updated via inline bulk edit',
-          });
+          }).select();
           if (costResult.error) Sentry.captureException(costResult.error);
           checkMutationResult(costResult, 'Insert cost history for inline bulk edit');
         }

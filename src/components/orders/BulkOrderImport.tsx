@@ -378,7 +378,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           })
         );
 
-        const itemsResult = await supabase.from('order_items').insert(orderItems);
+        const itemsResult = await supabase.from('order_items').insert(orderItems).select();
 
         if (itemsResult.error) throw itemsResult.error;
         checkMutationResult(itemsResult, 'Insert order_items');

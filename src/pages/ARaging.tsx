@@ -562,7 +562,7 @@ export default function ARaging() {
                 reminder_level: reminderLevel,
                 sent_date: localToday(),
                 email_log_id: emailResult.email_log_id || null,
-              });
+              }).select();
               if (trackResult.error) Sentry.captureException(trackResult.error, { tags: { source: 'mutation', action: 'ar_reminder_tracking_insert' } });
               checkMutationResult(trackResult, 'Insert AR reminder tracking');
               sent++;

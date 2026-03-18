@@ -8,6 +8,7 @@ import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import type { Notification as NotificationType } from '../types';
 
 export default function Notifications() {
@@ -51,6 +52,7 @@ export default function Notifications() {
           prev.map((n) => (n.id === notification.id ? { ...n, is_read: true } : n))
         );
       } catch (err: unknown) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_notification_read' } });
         toast('error', err instanceof Error ? err.message : 'Failed to mark as read');
       }
     }
@@ -88,6 +90,7 @@ export default function Notifications() {
       checkMutationResult(markAllResult, 'Mark all notifications as read');
       setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_all_notifications_read' } });
       toast('error', err instanceof Error ? err.message : 'Failed to mark all as read');
     }
   };
