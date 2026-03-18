@@ -5,7 +5,7 @@ import Button from '../ui/Button';
 import Badge from '../ui/Badge';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
@@ -337,18 +337,14 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
           continue;
         }
 
-        // Generate PO number
-        const year = new Date().getFullYear();
-        const { count, error: countError } = await supabase
-          .from('purchase_orders')
-          .select('*', { count: 'exact', head: true })
-          .like('po_number', `PO-${year}-%`);
-        if (countError) {
-          Sentry.captureException(new Error(`Failed to get PO count: ${countError.message}`));
+        // Generate PO number via server-side sequence (advisory-locked, race-safe)
+        const { data: poNumData, error: poNumError } = await supabase.rpc('next_po_number');
+        if (poNumError || !poNumData) {
+          Sentry.captureException(new Error(`Failed to generate PO number: ${poNumError?.message || 'no data'}`));
           failedCount++;
           continue;
         }
-        const poNumber = `PO-${year}-${String((count || 0) + 1).padStart(4, '0')}`;
+        const poNumber = assertRpcResult<string>(poNumData, 'next_po_number');
 
         const totalCost = validItems.reduce((sum, i) => sum + i.quantity_ordered * i.unit_cost, 0);
 

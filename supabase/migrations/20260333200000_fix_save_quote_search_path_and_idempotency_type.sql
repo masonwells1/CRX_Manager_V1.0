@@ -58,7 +58,7 @@ BEGIN
       );
     END IF;
     INSERT INTO idempotency_keys (idempotency_key, operation, result)
-    VALUES (p_idempotency_key, 'save_quote', COALESCE(p_quote_id, gen_random_uuid())::text);
+    VALUES (p_idempotency_key, 'save_quote', to_jsonb(COALESCE(p_quote_id, gen_random_uuid())::text));
   END IF;
 
   v_status := COALESCE(p_quote_payload->>'status', 'draft');
