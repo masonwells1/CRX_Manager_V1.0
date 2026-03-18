@@ -4,6 +4,28 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-18 — Fix 5 RPCs Missing p_idempotency_key (PostgREST Schema Cache Errors)
+
+### Root Cause
+Five RPCs were created AFTER the idempotency injection (20260306200000) and consolidation (20260331600000) migrations, so neither pass added `p_idempotency_key` to their signatures. The frontend sends this parameter on every call, and PostgREST matches by exact parameter names — causing "Could not find function in schema cache" errors.
+
+### Migration: 20260333300000_fix_missing_idempotency_params.sql
+- **reverse_receiving_record** — Added `p_idempotency_key`, restored `set_config('app.reversal_rpc_active')` for trigger safety
+- **void_payment** — Added `p_idempotency_key` with full idempotency check/save
+- **edit_prepay_credit** — Added `p_idempotency_key` with full idempotency check/save
+- **delete_prepay_credit** — Added `p_idempotency_key` with full idempotency check/save
+- **batch_post_invoices** — Recreated entirely (was dropped in 20260311200000 and never recreated). Now returns `jsonb` with `{ success, count, total_cents }`
+- All functions: `SET search_path = public, pg_temp` for security
+- Verification block ensures exactly 1 overload per function
+
+### Audit Methodology
+- Searched all `supabase.rpc()` calls passing `p_idempotency_key` in frontend (71 call sites)
+- Cross-referenced with latest SQL function definitions in migrations
+- Filtered out RPCs already handled by the consolidation migration (20260331600000)
+- Identified 5 RPCs created post-consolidation that were never swept into any fix pass
+
+---
+
 ## 2026-03-18 — Full Sales Cycle Live UI Test + Bug Fixes
 
 ### Live Browser Test (Playwright)

@@ -1,4 +1,4 @@
-# Migration History (205 migrations)
+# Migration History (208 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -206,3 +206,5 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 200 | 20260332900000 | **Data validation & cleanup** — Fixes negative inventory quantities, recalculates prebooked from actual pending orders, verifies commission splits sum to 100%, checks invoice paid_amount_cents integrity, fixes invalid commission statuses |
 | 201 | 20260333000000 | **Fix reverse_cycle_count** — Adds `pg_temp` to search_path, fixes idempotency column refs (`key`→`idempotency_key`, `entity_type`/`entity_id`→`operation`/`result`) |
 | 202 | 20260333100000 | **Fix save_quote idempotency + activity_feed columns** — Corrects idempotency_keys refs (`key`→`idempotency_key`, `entity_type`/`entity_id`→`operation`/`result`), fixes `v_server_totals` field aliases (`.sum`→`.total_price`), fixes activity_feed column names (`action`→`event_type`, `entity_type`→`related_entity_type`, `entity_id`→`related_entity_id`), adds `pg_temp` to search_path |
+| 203 | 20260333200000 | **Fix save_quote search_path + idempotency type** — Surgical fix for save_quote search_path and idempotency key column type mismatch |
+| 204 | 20260333300000 | **Fix 5 RPCs missing p_idempotency_key** — Adds p_idempotency_key to reverse_receiving_record, void_payment, edit_prepay_credit, delete_prepay_credit. Recreates batch_post_invoices (was dropped in 20260311200000). All created after consolidation migration so never got the parameter. Restores set_config trigger awareness in reverse_receiving_record. |
