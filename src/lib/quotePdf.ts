@@ -201,7 +201,8 @@ export async function generateQuotePdf(data: PdfQuoteData, columns?: string[]) {
     );
 
     // Build column styles: right-align columns that need it, last col bold
-    const colStyles: Record<number, Partial<{ cellWidth: string | number; halign: string; fontStyle: string }>> = { 0: { cellWidth: 'auto' } };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- jspdf-autotable Styles type is overly strict for dynamic column config
+    const colStyles: Record<number, any> = { 0: { cellWidth: 'auto' } };
     activeCols.forEach((c, i) => {
       if (PDF_COLUMN_DEFS[c].align === 'right') {
         colStyles[i] = { ...(colStyles[i] || {}), halign: 'right' };
