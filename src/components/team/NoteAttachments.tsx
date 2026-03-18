@@ -149,7 +149,7 @@ export default function NoteAttachments({ noteId, canDelete, refreshKey }: NoteA
           if (confirmDelete) handleDelete(confirmDelete);
           setConfirmDelete(null);
         }}
-        onCancel={() => setConfirmDelete(null)}
+        onClose={() => setConfirmDelete(null)}
       />
     </>
   );
