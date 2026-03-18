@@ -571,7 +571,7 @@ export interface Commission {
   order_date: string;
   order_number: string;
   customer_name: string;
-  season: number;
+  season: number | null;
   status: 'pending' | 'paid' | 'cancelled';
   paid_date: string | null;
   paid_note: string | null;
@@ -1110,6 +1110,7 @@ export interface InvoiceLineAllocation {
   id: string;
   allocation_set_id: string;
   invoice_item_id: string;
+  invoice_id: string | null;
   bill_to_customer_id: string;
   split_percentage: number;
   amount_cents: number;
@@ -1772,6 +1773,7 @@ export interface WriteOff {
   approved_by: string | null;
   created_by: string | null;
   reversed_at: string | null;
+  reversed_by: string | null;
   reversed_reason: string | null;
   created_at: string;
 }
