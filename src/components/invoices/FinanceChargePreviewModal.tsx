@@ -50,7 +50,7 @@ export default function FinanceChargePreviewModal({
         p_as_of_date: asOfDate,
       });
       if (error) throw error;
-      const rows = (data || []) as FinanceChargePreview[];
+      const rows = assertRpcResult<FinanceChargePreview[]>(data, 'preview_finance_charges');
       setPreviews(rows);
       // Select all by default
       setSelected(new Set(rows.map((r) => r.customer_id)));

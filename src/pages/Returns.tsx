@@ -12,7 +12,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
@@ -204,7 +204,7 @@ export default function Returns() {
         if (rpcError || !rpcNum) {
           throw new Error(rpcError?.message || 'Failed to generate return number');
         }
-        const returnNum = rpcNum as string;
+        const returnNum = assertRpcResult<string>(rpcNum, 'next_return_number');
 
         const { data: ret, error: retError } = await supabase
           .from('returns')
@@ -239,14 +239,7 @@ export default function Returns() {
         if (returnItemsResult.error) throw returnItemsResult.error;
         checkMutationResult(returnItemsResult, 'Insert return items');
 
-        await logActivity(
-          'return_requested',
-          `Return ${returnNum} requested for ${newItems.length} product(s)`,
-          profile.id,
-          'return',
-          ret.id,
-          newForm.customer_id
-        );
+        await logActivity({ event: 'return_requested', description: `Return ${returnNum} requested for ${newItems.length} product(s)`, performedBy: profile.id, entityType: 'return', entityId: ret.id, customerId: newForm.customer_id });
       },
       toast,
       setLoading: setCreating,
@@ -289,7 +282,7 @@ export default function Returns() {
         if (error) throw error;
 
         approveIdem.resetKey();
-        await logActivity('return_approved', `Return ${activeReturn.return_number} approved`, profile.id, 'return', activeReturn.id);
+        await logActivity({ event: 'return_approved', description: `Return ${activeReturn.return_number} approved`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },
       toast,
       successMessage: 'Return approved',
@@ -316,7 +309,7 @@ export default function Returns() {
           .select();
         checkMutationResult(result, 'Reject return');
 
-        await logActivity('return_rejected', `Return ${activeReturn.return_number} rejected`, profile.id, 'return', activeReturn.id);
+        await logActivity({ event: 'return_rejected', description: `Return ${activeReturn.return_number} rejected`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },
       toast,
       successMessage: 'Return rejected',
@@ -344,7 +337,7 @@ export default function Returns() {
           .eq('id', activeReturn.id)
           .select();
         checkMutationResult(result, 'Cancel return');
-        await logActivity('return_cancelled', `Return ${activeReturn.return_number} cancelled`, profile.id, 'return', activeReturn.id);
+        await logActivity({ event: 'return_cancelled', description: `Return ${activeReturn.return_number} cancelled`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },
       toast,
       successMessage: 'Return cancelled',
@@ -369,7 +362,7 @@ export default function Returns() {
         if (error) throw error;
 
         receiveIdem.resetKey();
-        await logActivity('return_received', `Return ${activeReturn.return_number} received, inventory restocked`, profile.id, 'return', activeReturn.id);
+        await logActivity({ event: 'return_received', description: `Return ${activeReturn.return_number} received, inventory restocked`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },
       toast,
       successMessage: 'Return received and inventory restocked',
@@ -394,7 +387,7 @@ export default function Returns() {
         if (error) throw error;
 
         creditIdem.resetKey();
-        await logActivity('return_credited', `Credit issued for return ${activeReturn.return_number}`, profile.id, 'return', activeReturn.id);
+        await logActivity({ event: 'return_credited', description: `Credit issued for return ${activeReturn.return_number}`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },
       toast,
       successMessage: 'Credit issued',

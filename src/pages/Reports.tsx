@@ -389,7 +389,7 @@ export default function Reports() {
           setYeLoading(false);
           return;
         }
-        const summaries = assertRpcResult<YearEndSummaryData[]>(batchResult as unknown, 'get_batch_year_end_summaries');
+        const summaries = assertRpcResult<YearEndSummaryData[]>(batchResult, 'get_batch_year_end_summaries');
         await downloadBatchYearEndSummaries(summaries, options);
         toast('success', `Generated ${summaries.length} season summary PDF(s)`);
       } else {
@@ -400,7 +400,7 @@ export default function Reports() {
           p_season: season,
         });
         if (error) throw error;
-        await downloadYearEndSummaryPdf(assertRpcResult<YearEndSummaryData>(data as unknown, 'get_customer_year_end_summary'), options);
+        await downloadYearEndSummaryPdf(assertRpcResult<YearEndSummaryData>(data, 'get_customer_year_end_summary'), options);
         toast('success', `Season ${season} summary generated`);
       }
       setShowYeDialog(false);
@@ -447,7 +447,7 @@ export default function Reports() {
       }
 
       toast('success', `${totalPaid} commission(s) marked as paid (${byRecipient.size} payment${byRecipient.size > 1 ? 's' : ''} created)`);
-      if (profile) logActivity('commissions_paid', `${totalPaid} commission(s) marked as paid via Reports`, profile.id);
+      if (profile) logActivity({ event: 'commissions_paid', description: `${totalPaid} commission(s) marked as paid via Reports`, performedBy: profile.id });
       fetchCommissions();
     } catch (err: unknown) {
       toast('error', err instanceof Error ? err.message : 'Failed to update commissions');

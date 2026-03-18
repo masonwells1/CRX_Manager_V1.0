@@ -6,7 +6,7 @@ import Button from '../components/ui/Button';
 import SplitHeading from '../components/ui/SplitHeading';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, fmtCurrency } from '../lib/reportPdf';
 import { computeSeason, seasonStartDate, seasonEndDate, getSeasonDates } from '../utils/season';
@@ -129,12 +129,12 @@ export default function SalesReports() {
     const cid = selectedCustomerIds[0];
     supabase.rpc('get_customer_farm_group', { p_customer_id: cid })
       .then(({ data, error }) => {
-        if (error || !data || (data as FarmGroupMember[]).length <= 1) {
+        if (error || !data || (assertRpcResult<FarmGroupMember[]>(data, 'get_customer_farm_group')).length <= 1) {
           setFarmGroupMembers([]);
           setFarmGroupCustomerIds([]);
           return;
         }
-        const members = data as FarmGroupMember[];
+        const members = assertRpcResult<FarmGroupMember[]>(data, 'get_customer_farm_group');
         setFarmGroupMembers(members);
         setFarmGroupCustomerIds(members.map(m => m.id));
       });
@@ -155,7 +155,7 @@ export default function SalesReports() {
     if (tab === 'detail') {
       const { data, error } = await supabase.rpc('get_sales_detail_report', params);
       if (error) { toast('error', `Failed to load: ${error.message}`); setLoading(false); return; }
-      setDetailData((data || []) as SalesDetailRow[]);
+      setDetailData(assertRpcResult<SalesDetailRow[]>(data, 'get_sales_detail_report'));
     } else {
       const groupByMap: Record<Tab, string> = {
         by_product: 'product', by_customer: 'customer',
@@ -165,7 +165,7 @@ export default function SalesReports() {
         ...params, p_group_by: groupByMap[tab],
       });
       if (error) { toast('error', `Failed to load: ${error.message}`); setLoading(false); return; }
-      setSummaryData((data || []) as SalesSummaryRow[]);
+      setSummaryData(assertRpcResult<SalesSummaryRow[]>(data, 'get_sales_summary_report'));
     }
     setLoading(false);
   }, [tab, startDate, endDate, productId, effectiveCustomerIds, salesRepId, category, season, toast]);

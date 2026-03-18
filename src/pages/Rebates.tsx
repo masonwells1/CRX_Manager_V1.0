@@ -241,7 +241,7 @@ export default function Rebates() {
         } else {
           const result = await supabase.from('rebate_programs').insert(payload).select();
           checkMutationResult(result, 'Create rebate program');
-          if (profile) logActivity('rebate_program_created', `Rebate program "${pForm.program_name}" created`, profile.id);
+          if (profile) logActivity({ event: 'rebate_program_created', description: `Rebate program "${pForm.program_name}" created`, performedBy: profile.id });
         }
       },
       toast,
@@ -298,7 +298,7 @@ export default function Rebates() {
       action: async () => {
         const result = await supabase.from('rebate_claims').insert(payload).select();
         checkMutationResult(result, 'Create rebate claim');
-        if (profile) logActivity('rebate_claim_created', `Rebate claim ${claimNum} created`, profile.id);
+        if (profile) logActivity({ event: 'rebate_claim_created', description: `Rebate claim ${claimNum} created`, performedBy: profile.id });
       },
       toast,
       setLoading: setSaving,
@@ -321,7 +321,7 @@ export default function Rebates() {
       action: async () => {
         const result = await supabase.from('rebate_claims').update(updatePayload).eq('id', claimId).select();
         checkMutationResult(result, `Update claim to ${newStatus}`);
-        if (profile) logActivity('rebate_claim_updated', `Rebate claim status → ${newStatus}`, profile.id);
+        if (profile) logActivity({ event: 'rebate_claim_updated', description: `Rebate claim status → ${newStatus}`, performedBy: profile.id });
       },
       toast,
       successMessage: `Claim marked as ${newStatus}`,
@@ -349,7 +349,7 @@ export default function Rebates() {
       const result = await supabase.from('rebate_programs').delete().eq('id', programId).select();
       checkMutationResult(result, 'Delete rebate program');
       toast('success', `Rebate program "${programName}" deleted`);
-      if (profile) logActivity('rebate_program_deleted', `Rebate program "${programName}" deleted`, profile.id);
+      if (profile) logActivity({ event: 'rebate_program_deleted', description: `Rebate program "${programName}" deleted`, performedBy: profile.id });
       fetchPrograms();
     } catch (err: unknown) {
       toast('error', err instanceof Error ? err.message : 'Failed to delete program');
@@ -371,7 +371,7 @@ export default function Rebates() {
       const result = await supabase.from('rebate_claims').delete().eq('id', claimId).select();
       checkMutationResult(result, 'Delete rebate claim');
       toast('success', `Claim ${claimNumber} deleted`);
-      if (profile) logActivity('rebate_claim_deleted', `Rebate claim ${claimNumber} deleted`, profile.id);
+      if (profile) logActivity({ event: 'rebate_claim_deleted', description: `Rebate claim ${claimNumber} deleted`, performedBy: profile.id });
       fetchClaims();
     } catch (err: unknown) {
       toast('error', err instanceof Error ? err.message : 'Failed to delete claim');

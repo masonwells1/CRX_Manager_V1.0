@@ -426,6 +426,7 @@ describe('notifyDamagedReceiving', () => {
       p_po_number: 'PO-001',
       p_items_summary: expect.stringContaining('Atrazine'),
       p_po_id: 'po-uuid',
+      p_idempotency_key: expect.any(String),
     });
   });
 

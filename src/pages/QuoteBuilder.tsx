@@ -234,7 +234,7 @@ export default function QuoteBuilder() {
       if (!cancelled) {
         setRupWarnings(res.warnings);
         if (res.warnings.length > 0) {
-          logActivity('rup_compliance_warning', `RUP products (${res.rupProductNames.join(', ')}) on quote for customer without valid license`, profile?.id ?? '', 'customer', customerId, customerId);
+          logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on quote for customer without valid license`, performedBy: profile?.id ?? '', entityType: 'customer', entityId: customerId, customerId });
         }
       }
     });
@@ -282,7 +282,7 @@ export default function QuoteBuilder() {
       const next = (count || 0) + 1;
       setQuoteNumber(`Q-${year}-${String(next).padStart(4, '0')}`);
     } else {
-      setQuoteNumber(data as string);
+      setQuoteNumber(assertRpcResult<string>(data, 'generate_quote_number'));
     }
   };
 
@@ -849,14 +849,7 @@ export default function QuoteBuilder() {
       });
       // === GAP FIX #5: Log activity for quote created/updated ===
       if (profile) {
-        await logActivity(
-          isEditing ? 'quote_updated' : 'quote_created',
-          `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'} for ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
-          profile.id,
-          'quote',
-          result,
-          customerId
-        );
+        await logActivity({ event: isEditing ? 'quote_updated' : 'quote_created', description: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'} for ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`, performedBy: profile.id, entityType: 'quote', entityId: result, customerId });
       }
       // Planned program hold management
       if (isPlanned && profile) {
@@ -1013,14 +1006,7 @@ export default function QuoteBuilder() {
         } else {
           const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
           createVersionIdem.resetKey();
-          await logActivity(
-            'quote_sent',
-            `Quote ${quoteNumber} v${ver.version_number} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
-            profile.id,
-            'quote',
-            result,
-            customerId
-          );
+          await logActivity({ event: 'quote_sent', description: `Quote ${quoteNumber} v${ver.version_number} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`, performedBy: profile.id, entityType: 'quote', entityId: result, customerId });
         }
       }
 
@@ -1203,14 +1189,7 @@ export default function QuoteBuilder() {
     if (error) { toast('error', 'Failed to mark as presented'); return; }
     const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
     createVersionIdem.resetKey();
-    await logActivity(
-      'quote_presented',
-      `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`,
-      profile.id,
-      'quote',
-      savedId,
-      customerId
-    );
+    await logActivity({ event: 'quote_presented', description: `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`, performedBy: profile.id, entityType: 'quote', entityId: savedId, customerId });
     toast('success', `Quote marked as presented (V${ver.version_number})`);
     setShowPreviewModal(false);
     if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
@@ -1335,7 +1314,7 @@ export default function QuoteBuilder() {
           const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
             p_customer_id: customerId,
           });
-          const cl = creditCheck as { exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null;
+          const cl = assertRpcResult<{ exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null>(creditCheck, 'check_customer_credit_limit');
           if (cl && cl.exceeded) {
             const fmtCl = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
             toast('warning', `Credit limit warning: ${selectedCustomer?.farm_name || 'Customer'} outstanding AR ${fmtCl(cl.outstanding_ar ?? 0)} exceeds limit ${fmtCl(cl.credit_limit ?? 0)}`);

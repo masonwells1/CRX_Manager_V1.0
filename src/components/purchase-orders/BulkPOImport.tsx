@@ -389,13 +389,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
 
         if (itemError) throw itemError;
 
-        await logActivity(
-          'po_created',
-          `PO ${poNumber} imported from PDF (vendor: ${po.vendor_name || 'Unknown'})`,
-          profile.id,
-          'purchase_order',
-          poData.id,
-        );
+        await logActivity({ event: 'po_created', description: `PO ${poNumber} imported from PDF (vendor: ${po.vendor_name || 'Unknown'})`, performedBy: profile.id, entityType: 'purchase_order', entityId: poData.id });
 
         successCount++;
       } catch (error) {

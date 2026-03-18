@@ -117,8 +117,9 @@ export default function FieldDetail() {
         Sentry.captureException(geoError, { tags: { source: 'fetch', action: 'load_field_geometry' } });
         toast('warning', 'Could not load field boundary');
       }
-      if (geoData && geoData.length > 0) {
-        const geo = geoData[0];
+      const geoRows = assertRpcResult<Array<{ boundary_geojson?: string; centroid_geojson?: string }>>(geoData, 'get_field_geojson');
+      if (geoRows && geoRows.length > 0) {
+        const geo = geoRows[0];
         if (geo.boundary_geojson) {
           try {
             const parsed = JSON.parse(geo.boundary_geojson);

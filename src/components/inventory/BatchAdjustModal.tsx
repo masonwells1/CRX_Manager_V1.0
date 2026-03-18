@@ -98,12 +98,7 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
 
     if (successCount > 0) {
       setBatchKeys([]);
-      await logActivity(
-        'inventory_batch_adjusted',
-        `Batch adjusted ${successCount} product(s) by ${delta > 0 ? '+' : ''}${delta}: ${reason.trim()}`,
-        userId,
-        'inventory',
-      );
+      await logActivity({ event: 'inventory_batch_adjusted', description: `Batch adjusted ${successCount} product(s) by ${delta > 0 ? '+' : ''}${delta}: ${reason.trim()}`, performedBy: userId, entityType: 'inventory' });
     }
 
     if (errorCount > 0) {

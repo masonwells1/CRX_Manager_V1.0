@@ -204,7 +204,7 @@ export default function SettingsPage() {
         saveSetting('company_address', companyAddress),
       ]);
       toast('success', 'Company info saved');
-      if (profile) logActivity('settings_updated', 'Company info updated', profile.id);
+      if (profile) logActivity({ event: 'settings_updated', description: 'Company info updated', performedBy: profile.id });
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
@@ -219,7 +219,7 @@ export default function SettingsPage() {
         saveSetting('default_tier', defaultTier),
       ]);
       toast('success', 'Default settings saved');
-      if (profile) logActivity('settings_updated', 'Default settings updated', profile.id);
+      if (profile) logActivity({ event: 'settings_updated', description: 'Default settings updated', performedBy: profile.id });
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
@@ -265,7 +265,7 @@ export default function SettingsPage() {
         toast('error', data?.error || `Request failed (${response.status})`);
       } else {
         toast('success', 'User created successfully');
-        if (profile) logActivity('user_created', `User ${newName} (${newRole}) created`, profile.id);
+        if (profile) logActivity({ event: 'user_created', description: `User ${newName} (${newRole}) created`, performedBy: profile.id });
         setUserModalOpen(false);
         setNewEmail('');
         setNewName('');
@@ -335,7 +335,7 @@ export default function SettingsPage() {
         } else {
           adminUpdateIdem.resetKey();
           toast('success', 'User updated successfully');
-          if (profile) logActivity('user_updated', `User ${editName} updated (role: ${editRole}, active: ${editIsActive})`, profile.id);
+          if (profile) logActivity({ event: 'user_updated', description: `User ${editName} updated (role: ${editRole}, active: ${editIsActive})`, performedBy: profile.id });
           setEditModalOpen(false);
           setEditingUser(null);
           fetchUsers();

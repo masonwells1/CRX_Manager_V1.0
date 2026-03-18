@@ -10,7 +10,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
@@ -51,10 +51,10 @@ export default function Fields() {
       return;
     }
 
-    const rows = (data || []).map((f: Record<string, unknown>) => ({
+    const rows = assertRpcResult<FieldWithCustomer[]>(data, 'get_fields_with_geojson').map((f) => ({
       ...f,
       customer_name: (f.customer_name as string) || 'Unknown',
-    })) as unknown as FieldWithCustomer[];
+    }));
     setFields(rows);
     setLoading(false);
   }, [toast]);

@@ -19,7 +19,8 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
@@ -37,9 +38,10 @@ const conditionLabel = (c: string) =>
   c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
 
 export default function ReceivingLog() {
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const reverseRecIdem = useIdempotencyKey('reverse_receiving_record', profile?.id || '');
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
   const [records, setRecords] = useState<ReceivingRecord[]>([]);
@@ -75,7 +77,7 @@ export default function ReceivingLog() {
     try {
       const { data: sumData, error: sumError } = await supabase.rpc('get_receiving_summary');
       if (!sumError && sumData) {
-        setSummary(sumData as ReceivingSummary);
+        setSummary(assertRpcResult<ReceivingSummary>(sumData, 'get_receiving_summary'));
       }
     } catch (err) {
       Sentry.captureException(err);
@@ -102,7 +104,7 @@ export default function ReceivingLog() {
         return;
       }
 
-      const rows = (logData || []) as ReceivingRecord[];
+      const rows = assertRpcResult<ReceivingRecord[]>(logData, 'get_receiving_log');
       setRecords(rows);
 
       // Extract unique vendors for filter dropdown
@@ -180,11 +182,14 @@ export default function ReceivingLog() {
         // C5 fix: must call reverse_receiving_record() per item to undo inventory changes.
         // Direct .delete() bypasses the inventory rollback and leaves phantom stock.
         for (const id of ids) {
+          const idemKey = reverseRecIdem.getKey();
           const { error } = await supabase.rpc('reverse_receiving_record', {
             p_record_id: id,
             p_reason: 'Bulk deleted from receiving log',
+            p_idempotency_key: idemKey,
           });
           if (error) throw new Error(`Failed to reverse record ${id}: ${error.message}`);
+          reverseRecIdem.resetKey();
         }
       },
       toast,

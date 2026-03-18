@@ -21,6 +21,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { createClient } from '@supabase/supabase-js';
+import { assertRpcResult } from './db';
 
 // ─── Setup ────────────────────────────────────────────────────────────
 
@@ -42,7 +43,8 @@ async function queryInformationSchema(sql: string) {
   // We query via PostgREST views that expose schema metadata
   const { data, error } = await supabase.rpc('execute_sql_readonly', { sql_query: sql });
   if (error) throw error;
-  return data;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return assertRpcResult<any[]>(data, 'execute_sql_readonly');
 }
 
 // ─── Column Type Mapping ──────────────────────────────────────────────

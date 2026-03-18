@@ -264,7 +264,7 @@ export default function MonthEndClose() {
         setYeLoading(false);
         return;
       }
-      const summaries = assertRpcResult<YearEndSummaryData[]>(batchResult as unknown, 'get_batch_year_end_summaries');
+      const summaries = assertRpcResult<YearEndSummaryData[]>(batchResult, 'get_batch_year_end_summaries');
       await downloadBatchYearEndSummaries(summaries, options);
       toast('success', `Generated ${summaries.length} year-end summary PDF(s)`);
       setShowYeDialog(false);

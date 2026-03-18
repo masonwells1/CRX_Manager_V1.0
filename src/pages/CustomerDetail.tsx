@@ -171,7 +171,7 @@ export default function CustomerDetail() {
         Sentry.captureException(fieldError, { tags: { source: 'fetch', action: 'load_customer_fields' } });
         toast('error', 'Failed to load fields');
       }
-      const rows = ((data || []) as FieldGeoRow[]).map((f) => ({
+      const rows = (assertRpcResult<FieldGeoRow[]>(data, 'get_fields_with_geojson')).map((f) => ({
         ...f,
         customer_name: f.customer_name || '',
       }));
@@ -256,10 +256,10 @@ export default function CustomerDetail() {
       if (agingRes.error) toast('error', 'Failed to load AR aging');
       if (txnRes.error) toast('error', 'Failed to load transactions');
       if (prepayRes.error) toast('error', 'Failed to load prepay credits');
-      const allAging = (agingRes.data || []) as AgingRow[];
+      const allAging = assertRpcResult<AgingRow[]>(agingRes.data, 'get_ar_aging');
       const myAging = allAging.find((a) => a.customer_id === id) || null;
       setAging(myAging);
-      setTransactions((txnRes.data || []) as TxnRow[]);
+      setTransactions(assertRpcResult<TxnRow[]>(txnRes.data, 'get_customer_statement'));
       setPrepayCredits((prepayRes.data || []) as PrepayRow[]);
       financialsFetched.current = true;
       setFinancialsLoading(false);
@@ -447,7 +447,7 @@ export default function CustomerDetail() {
         p_season: season,
       });
       if (error) throw error;
-      await downloadYearEndSummaryPdf(data as unknown as YearEndSummaryData, options);
+      await downloadYearEndSummaryPdf(assertRpcResult<YearEndSummaryData>(data, 'get_customer_year_end_summary'), options);
       toast('success', `Season ${season} summary generated`);
       setShowSummaryDialog(false);
     } catch (err: unknown) {

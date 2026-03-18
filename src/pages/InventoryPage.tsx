@@ -8,7 +8,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
@@ -363,7 +363,7 @@ export default function InventoryPage() {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
       toast('error', 'Failed to load forecast data');
     } else if (data) {
-      setForecastData(data as typeof forecastData);
+      setForecastData(assertRpcResult<typeof forecastData>(data, 'get_inventory_forecast'));
     }
     setForecastLoading(false);
   }, [toast]);
@@ -771,7 +771,7 @@ export default function InventoryPage() {
       const realChanges = [...changes.keys()].filter((k) => !k.startsWith('virtual-')).length;
       toast('success', `Updated ${realChanges} inventory item(s)`);
       if (profile) {
-        logActivity('inventory_bulk_updated', `${realChanges} inventory item(s) updated via inline edit`, profile.id, 'inventory', undefined);
+        logActivity({ event: 'inventory_bulk_updated', description: `${realChanges} inventory item(s) updated via inline edit`, performedBy: profile.id, entityType: 'inventory' });
       }
       fetchInventory();
     } catch (err: unknown) {

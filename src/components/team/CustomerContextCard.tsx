@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { DollarSign, ShoppingCart, Truck, Star } from 'lucide-react';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 
 interface CustomerContext {
   farm_name: string;
@@ -44,7 +44,7 @@ export default function CustomerContextCard({ customerId }: Props) {
 
         if (!custRes.data) return;
 
-        const arRow = (arRes.data as Record<string, unknown>[] | null)?.find(
+        const arRow = assertRpcResult<Record<string, unknown>[]>(arRes.data, 'get_ar_aging')?.find(
           (r: Record<string, unknown>) => r.customer_id === customerId
         );
 

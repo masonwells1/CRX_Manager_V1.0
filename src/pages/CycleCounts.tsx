@@ -9,7 +9,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -142,7 +142,7 @@ export default function CycleCounts() {
         // Generate sequential count number via advisory-lock RPC
         const { data: countNumData, error: countNumError } = await supabase.rpc('next_cycle_count_number');
         if (countNumError) throw countNumError;
-        const countNum = countNumData as string;
+        const countNum = assertRpcResult<string>(countNumData, 'next_cycle_count_number');
 
         // Fetch inventory items for the selected warehouse
         const { data: invData, error: invError } = await supabase
@@ -186,13 +186,7 @@ export default function CycleCounts() {
 
         if (itemsError) throw itemsError;
 
-        await logActivity(
-          'cycle_count_started',
-          `Cycle count ${countNum} started for ${newWarehouse} (${invItems.length} products)`,
-          profile.id,
-          'cycle_count',
-          cc.id
-        );
+        await logActivity({ event: 'cycle_count_started', description: `Cycle count ${countNum} started for ${newWarehouse} (${invItems.length} products)`, performedBy: profile.id, entityType: 'cycle_count', entityId: cc.id });
 
         return `Cycle count ${countNum} created with ${invItems.length} products`;
       },
@@ -312,13 +306,7 @@ export default function CycleCounts() {
 
         const varianceItems = countItems.filter((i) => i.variance && i.variance !== 0);
 
-        await logActivity(
-          'cycle_count_completed',
-          `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`,
-          profile.id,
-          'cycle_count',
-          activeCount.id
-        );
+        await logActivity({ event: 'cycle_count_completed', description: `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
       },
       toast,
       setLoading: setCompleting,
@@ -382,13 +370,7 @@ export default function CycleCounts() {
       if (error) throw error;
       reverseCycleCountIdem.resetKey();
 
-      await logActivity(
-        'cycle_count_reversed',
-        `Cycle count ${activeCount.count_number} reversed — inventory adjustments undone`,
-        profile.id,
-        'cycle_count',
-        activeCount.id
-      );
+      await logActivity({ event: 'cycle_count_reversed', description: `Cycle count ${activeCount.count_number} reversed — inventory adjustments undone`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
 
       toast('success', `Cycle count ${activeCount.count_number} reversed. Inventory restored.`);
       setShowDetail(false);

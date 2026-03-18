@@ -322,14 +322,7 @@ export default function OrderDetail() {
       checkMutationResult(result, 'Toggle planned status');
       setOrder({ ...order, is_planned: newValue });
       toast('success', newValue ? 'Order marked as Planned' : 'Order marked as Committed');
-      logActivity(
-        'order_updated',
-        `Order ${order.order_number} marked as ${newValue ? 'planned' : 'committed'}`,
-        profile.id,
-        'order',
-        order.id,
-        order.customer_id,
-      );
+      logActivity({ event: 'order_updated', description: `Order ${order.order_number} marked as ${newValue ? 'planned' : 'committed'}`, performedBy: profile.id, entityType: 'order', entityId: order.id, customerId: order.customer_id });
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
@@ -359,14 +352,15 @@ export default function OrderDetail() {
           });
           if (error) throw error;
           cancelOrderIdem.resetKey();
+          const result = assertRpcResult<{ success: boolean; holds_released: number; commissions_cancelled: number; draft_invoices_cancelled: number; posted_invoices_flagged: number; paid_commissions_flagged: number }>(cancelResult, 'cancel_order');
           // Show summary toast with cascade details
-          if (cancelResult && cancelResult.success) {
+          if (result && result.success) {
             const parts: string[] = ['Order cancelled.'];
-            if (cancelResult.holds_released > 0) parts.push(`${cancelResult.holds_released} hold(s) released.`);
-            if (cancelResult.commissions_cancelled > 0) parts.push(`${cancelResult.commissions_cancelled} commission(s) zeroed.`);
-            if (cancelResult.draft_invoices_cancelled > 0) parts.push(`${cancelResult.draft_invoices_cancelled} draft invoice(s) cancelled.`);
-            if (cancelResult.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
-            if (cancelResult.paid_commissions_flagged > 0) parts.push(`Admin notified about ${cancelResult.paid_commissions_flagged} paid commission(s).`);
+            if (result.holds_released > 0) parts.push(`${result.holds_released} hold(s) released.`);
+            if (result.commissions_cancelled > 0) parts.push(`${result.commissions_cancelled} commission(s) zeroed.`);
+            if (result.draft_invoices_cancelled > 0) parts.push(`${result.draft_invoices_cancelled} draft invoice(s) cancelled.`);
+            if (result.posted_invoices_flagged > 0) parts.push(`Admin notified about ${result.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
+            if (result.paid_commissions_flagged > 0) parts.push(`Admin notified about ${result.paid_commissions_flagged} paid commission(s).`);
             toast('success', parts.join(' '));
           }
         } else {
@@ -391,7 +385,7 @@ export default function OrderDetail() {
           toast('success', `Status changed to ${targetStatus.replace('_', ' ')}`);
         }
 
-        logActivity('order_status_changed', `Order ${order.order_number} status changed to ${targetStatus}`, profile.id, 'order', order.id, order.customer_id);
+        logActivity({ event: 'order_status_changed', description: `Order ${order.order_number} status changed to ${targetStatus}`, performedBy: profile.id, entityType: 'order', entityId: order.id, customerId: order.customer_id });
         notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', targetStatus, order.created_by ?? undefined);
 
         // === Email customer when order is confirmed ===

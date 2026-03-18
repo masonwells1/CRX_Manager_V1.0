@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { History, ChevronDown, ChevronUp, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import type { YesterdayRecapData } from '../../types';
 import Badge from '../ui/Badge';
@@ -20,7 +20,7 @@ export default function YesterdayRecap() {
         setLoading(false);
         return;
       }
-      const result = recap as unknown as YesterdayRecapData;
+      const result = assertRpcResult<YesterdayRecapData>(recap, 'get_yesterday_delivery_recap');
       setData(result);
       // Default expanded if there are issues
       if (result?.summary?.total_with_issues > 0) {

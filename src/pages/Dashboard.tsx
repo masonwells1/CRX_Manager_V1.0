@@ -317,7 +317,7 @@ export default function Dashboard() {
       });
       // Fetch expiring planned holds count
       const { data: holdsData } = await supabase.rpc('get_expiring_planned_holds', { p_days_ahead: 7 });
-      if (holdsData) {
+      if (assertRpcResult(holdsData, 'get_expiring_planned_holds')) {
         const parsed = typeof holdsData === 'string' ? JSON.parse(holdsData) : holdsData;
         setExpiringPlannedHoldsCount(Array.isArray(parsed) ? parsed.length : 0);
       }

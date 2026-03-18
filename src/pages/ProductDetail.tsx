@@ -166,7 +166,7 @@ export default function ProductDetail() {
         checkMutationResult(productInsertResult, 'Insert product');
         setIsDirty(false);
         toast('success', 'Product created');
-        logActivity('product_created', `Product ${product.product_name} created`, profile!.id, 'product');
+        logActivity({ event: 'product_created', description: `Product ${product.product_name} created`, performedBy: profile!.id, entityType: 'product' });
         navigate('/products');
       }
     } else {
@@ -211,7 +211,7 @@ export default function ProductDetail() {
         checkMutationResult(result, 'Update product');
         setIsDirty(false);
         toast('success', 'Product updated');
-        logActivity('product_updated', `Product ${product.product_name} updated`, profile!.id, 'product', id);
+        logActivity({ event: 'product_updated', description: `Product ${product.product_name} updated`, performedBy: profile!.id, entityType: 'product', entityId: id });
         if (pricingChanged) fetchCostHistory();
       } catch (err: unknown) {
         toast('error', err instanceof Error ? err.message : 'Failed to update product');
@@ -256,7 +256,7 @@ export default function ProductDetail() {
         setNewCost('');
         setCostNote('');
         toast('success', 'Cost updated');
-        logActivity('product_cost_updated', `Product cost updated to $${cost}`, profile!.id, 'product', id);
+        logActivity({ event: 'product_cost_updated', description: `Product cost updated to $${cost}`, performedBy: profile!.id, entityType: 'product', entityId: id });
       } catch (err: unknown) {
         toast('error', err instanceof Error ? err.message : 'Failed to update product cost');
       }

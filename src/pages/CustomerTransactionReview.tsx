@@ -10,7 +10,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge from '../components/ui/Badge';
 import ReportShell from '../components/reports/ReportShell';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import type { CustomerTransactionRow } from '../types';
@@ -49,7 +49,7 @@ export default function CustomerTransactionReview() {
     if (error) {
       toast('error', `Failed to load transactions: ${error.message}`);
     } else {
-      setData((rows || []) as CustomerTransactionRow[]);
+      setData(assertRpcResult<CustomerTransactionRow[]>(rows, 'get_customer_transaction_review'));
     }
     setLoading(false);
   }, [customerId, startDate, endDate, toast]);

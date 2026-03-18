@@ -1,33 +1,28 @@
 import { supabase } from './db';
 import { Sentry } from './sentry';
 
+export interface LogActivityParams {
+  event: string;
+  description: string;
+  performedBy: string;
+  entityType?: string;
+  entityId?: string;
+  customerId?: string;
+}
+
 /**
  * Log an event to the activity_feed table.
  * Call this whenever something important happens in the app.
- * 
- * @param eventType - Short label like 'quote_created', 'order_created', 'delivery_completed'
- * @param description - Human-readable description like "Quote Q-2026-0015 sent to Smith Farms"
- * @param performedBy - The user ID who did the action
- * @param relatedEntityType - Optional: 'quote', 'order', 'delivery', 'customer', 'product', 'purchase_order'
- * @param relatedEntityId - Optional: the UUID of the related record
- * @param customerId - Optional: link to a customer for customer-specific activity views
  */
-export async function logActivity(
-  eventType: string,
-  description: string,
-  performedBy: string,
-  relatedEntityType?: string,
-  relatedEntityId?: string,
-  customerId?: string
-) {
+export async function logActivity(params: LogActivityParams) {
   try {
     const { error: logErr } = await supabase.from('activity_feed').insert({
-      event_type: eventType,
-      description,
-      performed_by: performedBy,
-      related_entity_type: relatedEntityType || null,
-      related_entity_id: relatedEntityId || null,
-      customer_id: customerId || null,
+      event_type: params.event,
+      description: params.description,
+      performed_by: params.performedBy,
+      related_entity_type: params.entityType || null,
+      related_entity_id: params.entityId || null,
+      customer_id: params.customerId || null,
     });
     if (logErr) Sentry.captureException(logErr, { tags: { source: 'activity_logger', action: 'log_activity' } });
   } catch (err) {

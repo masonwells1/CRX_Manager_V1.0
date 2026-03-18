@@ -347,11 +347,7 @@ export default function JobDetail() {
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
 
-      if (profile) logActivity(
-        isNew ? 'job_created' : 'job_updated',
-        isNew ? `Job created for ${customers.find(c => c.id === customerId)?.farm_name}` : `Job ${jobNumber} updated`,
-        profile.id
-      );
+      if (profile) logActivity({ event: isNew ? 'job_created' : 'job_updated', description: isNew ? `Job created for ${customers.find(c => c.id === customerId)?.farm_name}` : `Job ${jobNumber} updated`, performedBy: profile.id });
 
       toast('success', isNew ? 'Job created' : 'Job saved');
       setIsDirty(false);
@@ -380,7 +376,7 @@ export default function JobDetail() {
       if (error) throw error;
       completeJobIdem.resetKey();
       const result = assertRpcResult<CompleteJobResult>(data, 'complete_job');
-      if (profile) logActivity('job_completed', `Job ${jobNumber} completed → App Record ${result.record_number}`, profile.id);
+      if (profile) logActivity({ event: 'job_completed', description: `Job ${jobNumber} completed → App Record ${result.record_number}`, performedBy: profile.id });
       toast('success', `Job completed! Application record ${result.record_number} created.`);
       setShowCompleteModal(false);
       setIsDirty(false);
@@ -405,7 +401,7 @@ export default function JobDetail() {
         .eq('id', id!)
         .select();
       checkMutationResult(result, 'Cancel job');
-      if (profile) logActivity('job_cancelled', `Job ${jobNumber} cancelled`, profile.id);
+      if (profile) logActivity({ event: 'job_cancelled', description: `Job ${jobNumber} cancelled`, performedBy: profile.id });
       toast('success', 'Job cancelled');
       setIsDirty(false);
       await fetchJob();
@@ -427,7 +423,7 @@ export default function JobDetail() {
       if (error) throw error;
       transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
-      if (profile) logActivity('job_invoiced', `Job ${jobNumber} → Invoice ${result.invoice_number}`, profile.id);
+      if (profile) logActivity({ event: 'job_invoiced', description: `Job ${jobNumber} → Invoice ${result.invoice_number}`, performedBy: profile.id });
       toast('success', `Invoice ${result.invoice_number} created`);
       setIsDirty(false);
       navigate(`/invoices/${result.invoice_id}`);

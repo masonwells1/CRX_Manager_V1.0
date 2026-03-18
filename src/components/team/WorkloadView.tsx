@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Users, Truck, ClipboardList, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import Badge from '../ui/Badge';
 
 interface TeamMemberWorkload {
@@ -41,7 +41,7 @@ export default function WorkloadView() {
   useEffect(() => {
     async function load() {
       const { data } = await supabase.rpc('get_team_workload');
-      if (data) setMembers(data as TeamMemberWorkload[]);
+      if (data) setMembers(assertRpcResult<TeamMemberWorkload[]>(data, 'get_team_workload'));
       setLoading(false);
     }
     load();

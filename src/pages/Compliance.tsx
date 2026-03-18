@@ -15,7 +15,7 @@ import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
@@ -137,7 +137,7 @@ export default function Compliance() {
       Sentry.captureException(error);
       return;
     }
-    setRUPSales((data || []) as RUPSalesRecord[]);
+    setRUPSales(assertRpcResult<RUPSalesRecord[]>(data, 'get_rup_sales_register'));
   }, [rupStartDate, rupEndDate, rupComplianceFilter, toast]);
 
   const fetchData = useCallback(async () => {
@@ -246,7 +246,7 @@ export default function Compliance() {
             .insert(payload)
             .select();
           checkMutationResult(result, 'Create license');
-          if (profile) logActivity('license_created', `Applicator license added for ${form.holder_name}`, profile.id);
+          if (profile) logActivity({ event: 'license_created', description: `Applicator license added for ${form.holder_name}`, performedBy: profile.id });
         }
       },
       toast,

@@ -429,7 +429,7 @@ export default function DeliveryDetail() {
         parts.push('Warning: posted invoices linked to this order require manual review.');
       }
       toast('success', parts.join(' '));
-      await logActivity('delivery_voided', `Delivery ${delivery.delivery_number} voided`, profile.id, 'delivery', id!, delivery.customer_id);
+      await logActivity({ event: 'delivery_voided', description: `Delivery ${delivery.delivery_number} voided`, performedBy: profile.id, entityType: 'delivery', entityId: id!, customerId: delivery.customer_id });
       setVoidOpen(false);
       setVoidReason('');
       fetchDelivery();
@@ -674,7 +674,7 @@ export default function DeliveryDetail() {
       } else {
         toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
       }
-      logActivity('delivery_completed', `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, profile.id, 'delivery', delivery.id, delivery.customer_id);
+      logActivity({ event: 'delivery_completed', description: `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, performedBy: profile.id, entityType: 'delivery', entityId: delivery.id, customerId: delivery.customer_id });
 
       // F15: Notify about delivery remainders
       if (isPartialDelivery) {

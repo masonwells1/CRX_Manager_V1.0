@@ -282,7 +282,7 @@ export function BlendTicketDetail() {
           .eq('id', ticket.id)
           .select();
         checkMutationResult(approveResult, 'Approve blend ticket');
-        logActivity('blend_ticket_approved', `Blend ticket ${ticket.ticket_number} approved`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
+        logActivity({ event: 'blend_ticket_approved', description: `Blend ticket ${ticket.ticket_number} approved`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       },
       toast,
       sentryTag: 'approve_blend_ticket',
@@ -306,7 +306,7 @@ export function BlendTicketDetail() {
           .eq('id', ticket.id)
           .select();
         checkMutationResult(rejectResult, 'Reject blend ticket');
-        logActivity('blend_ticket_rejected', `Blend ticket ${ticket.ticket_number} rejected`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
+        logActivity({ event: 'blend_ticket_rejected', description: `Blend ticket ${ticket.ticket_number} rejected`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       },
       toast,
       sentryTag: 'reject_blend_ticket',
@@ -490,7 +490,7 @@ export function BlendTicketDetail() {
       });
       if (error) throw error;
       appRecordIdem.resetKey();
-      logActivity('application_record_created', `Application record created from blend ticket ${ticket.ticket_number}`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
+      logActivity({ event: 'application_record_created', description: `Application record created from blend ticket ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       toast('success', 'Application record created successfully');
     } catch (err: unknown) {
       toast('error', err instanceof Error ? err.message : 'Failed to create application record');

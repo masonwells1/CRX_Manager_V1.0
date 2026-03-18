@@ -471,7 +471,7 @@ export default function InvoiceDetail() {
       });
       if (error) throw error;
       reverseWoIdem.resetKey();
-      await logActivity('write_off_reversed', `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, profile?.id ?? '', 'invoice', id);
+      await logActivity({ event: 'write_off_reversed', description: `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, performedBy: profile?.id ?? '', entityType: 'invoice', entityId: id });
       toast('success', 'Write-off reversed and balance restored');
       setShowReverseWoModal(false);
       setReverseWoReason('');
@@ -606,14 +606,7 @@ export default function InvoiceDetail() {
         });
 
         if (result.success) {
-          logActivity(
-            'invoice_emailed',
-            `Invoice ${invoice.invoice_number} emailed to ${cust.email}`,
-            profile?.id || '',
-            'invoice',
-            id,
-            invoice.customer_id,
-          );
+          logActivity({ event: 'invoice_emailed', description: `Invoice ${invoice.invoice_number} emailed to ${cust.email}`, performedBy: profile?.id || '', entityType: 'invoice', entityId: id, customerId: invoice.customer_id });
         } else {
           throw new Error(result.error || 'Failed to send email');
         }

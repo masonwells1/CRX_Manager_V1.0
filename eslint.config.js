@@ -3,6 +3,7 @@ import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import jsxA11y from 'eslint-plugin-jsx-a11y';
+import localRules from 'eslint-plugin-local-rules';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -18,6 +19,7 @@ export default tseslint.config(
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,
       'jsx-a11y': jsxA11y,
+      'local-rules': localRules,
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
@@ -44,7 +46,9 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true },
       ],
-      'no-console': ['warn', { allow: ['warn'] }],
+      'local-rules/require-assert-rpc-result': 'error',
+      'local-rules/no-direct-sentry-import': 'error',
+      'no-console': 'warn',
       '@typescript-eslint/no-unused-vars': [
         'error',
         {

@@ -151,7 +151,7 @@ export default function NewPurchaseOrder() {
           if (rpcError || !rpcNumber) {
             throw new Error(rpcError?.message || 'Failed to generate PO number');
           }
-          poNumber = rpcNumber as string;
+          poNumber = assertRpcResult<string>(rpcNumber, 'next_po_number');
         }
 
         const poPayload = {

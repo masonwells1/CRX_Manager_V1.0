@@ -4,6 +4,41 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-17 — Code Quality Enforcement (Phase 1-4)
+
+### assertRpcResult Final Sweep (28+ violations → 0)
+- Added assertRpcResult() to all remaining RPC data casts across 30+ files
+- Files: ARaging, CustomerDetail, Compliance, FieldDetail, Fields, InventoryPage,
+  NewOrder, QuoteBuilder, ReceivingLog, SalesReports, ManualTicketCreate,
+  FinanceChargePreviewModal, LogbookReport, TodaysDeliveries, YesterdayRecap,
+  WorkloadView, RelatedNotes, CustomerContextCard, BulkTicketUpload,
+  BulkFieldImport, CustomerTransactionReview, CycleCounts, Dashboard,
+  MonthEndClose, NewDelivery, NewPurchaseOrder, OrderDetail,
+  PurchaseOrderDetail, Reports, Returns
+
+### Idempotency Key Gaps (5 → 0)
+- Added p_idempotency_key to: BulkFieldImport (save_field, save_field_geometry),
+  ReceivingLog (reverse_receiving_record), notificationTriggers
+  (log_failed_notification, notify_damaged_receiving)
+
+### Local ESLint Plugin (2 rules)
+- `require-assert-rpc-result`: blocks .rpc() data usage without assertRpcResult()
+- `no-direct-sentry-import`: blocks direct @sentry/react imports
+- `no-console` tightened: console.warn no longer allowed
+- Lives in `eslint-local-rules/` — works on all machines via git pull
+
+### logActivity Type Safety
+- Refactored from 6 positional string params to single typed object (LogActivityParams)
+- Updated all 57 call sites across 23 files
+- TypeScript compiler now catches parameter-shift bugs
+
+### Safety-Net Unit Tests (+3 tests)
+- assertRpcCoverage.test.ts — scans for .rpc() data usage without assertRpcResult
+- sentryImportEnforcement.test.ts — scans for direct @sentry/react imports
+- logActivitySignature.test.ts — verifies logActivity uses typed object params
+
+---
+
 ## 2026-03-17 — Code Audit Phase 2: assertRpcResult + Sentry + Safety Fixes (7 files)
 
 ### assertRpcResult Coverage (Phase 2 — 7 more files, ~20 RPC calls)
