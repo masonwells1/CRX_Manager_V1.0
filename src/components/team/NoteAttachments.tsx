@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { X, Loader2, Image } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import type { TeamNoteAttachment } from '../../types';
 

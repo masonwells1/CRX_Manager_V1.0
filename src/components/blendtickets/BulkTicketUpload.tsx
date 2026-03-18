@@ -205,7 +205,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
         body: { blend_ticket_id: ticket.id },
       }).catch((err) => {
         // Non-fatal: the fallback polling in useOCRProcessor will pick it up
-        console.warn('Edge Function trigger failed, will retry via polling:', err);
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { level: 'warning', extra: { context: 'Edge Function trigger failed — will retry via polling' } });
       });
 
       images.forEach(img => URL.revokeObjectURL(img.preview));

@@ -27,7 +27,7 @@ import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../lib/sentry';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type {
@@ -655,7 +655,7 @@ export default function DeliveryDetail() {
             checkMutationResult(sigResult, 'Update delivery signature');
           }
         } catch (sigErr) {
-          console.warn('Signature upload failed:', sigErr);
+          Sentry.captureException(sigErr instanceof Error ? sigErr : new Error(String(sigErr)), { extra: { context: 'Signature upload failed during delivery completion' } });
           toast('error', 'Signature could not be saved. Please try completing the delivery again.');
           return;
         }
@@ -775,7 +775,7 @@ export default function DeliveryDetail() {
             idempotency_key: `delivery-completed-${delivery.id}-${Date.now()}`,
           });
         } catch (emailErr) {
-          console.warn('Delivery completion email failed:', emailErr);
+          Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), { level: 'warning', extra: { context: 'Delivery completion email failed — delivery already succeeded' } });
           // Delivery already succeeded — don't show error for email
         }
       }

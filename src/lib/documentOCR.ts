@@ -8,6 +8,7 @@
  *   if (result.success) { ... result.parsed_data ... }
  */
 
+import { Sentry } from './sentry';
 import * as pdfjsLib from 'pdfjs-dist';
 // Use Vite's asset URL import to bundle the worker locally (avoids CSP violation from CDN)
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -87,7 +88,7 @@ async function pdfToImages(file: File): Promise<PageImage[]> {
   }
 
   if (pdf.numPages > MAX_PAGES) {
-    console.warn(`PDF has ${pdf.numPages} pages, only processing first ${MAX_PAGES}`);
+    Sentry.captureException(new Error(`PDF has ${pdf.numPages} pages, only processing first ${MAX_PAGES}`), { level: 'warning' });
   }
 
   return pages;

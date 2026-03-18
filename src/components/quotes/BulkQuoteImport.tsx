@@ -6,7 +6,7 @@ import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 
 interface BulkQuoteImportProps {
   open: boolean;

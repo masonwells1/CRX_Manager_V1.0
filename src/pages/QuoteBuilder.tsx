@@ -1109,7 +1109,7 @@ export default function QuoteBuilder() {
             toast('success', 'Quote sent (email delivery failed — check email log)');
           }
         } catch (emailErr) {
-          console.warn('Quote email failed:', emailErr);
+          Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), { level: 'warning', extra: { context: 'Quote email failed — quote already sent' } });
           toast('success', 'Quote sent (email could not be sent)');
         }
       } else {

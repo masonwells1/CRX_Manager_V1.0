@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { History, ChevronDown, ChevronUp, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 import { supabase } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 import type { YesterdayRecapData } from '../../types';
 import Badge from '../ui/Badge';
 

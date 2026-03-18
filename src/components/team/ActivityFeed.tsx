@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Activity, CheckCircle2, XCircle, Edit, MessageCircle, UserPlus, Plus, Trash } from 'lucide-react';
 import { supabase } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 import { useRealtimeActivity } from '../../hooks/useRealtimeSubscription';
 
 interface ActivityEntry {

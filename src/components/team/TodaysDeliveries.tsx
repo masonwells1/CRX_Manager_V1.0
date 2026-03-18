@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Truck, ChevronDown, ChevronUp, Clock, Package, AlertTriangle, User } from 'lucide-react';
 import { supabase } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import type { TeamBoardDeliveryData, TeamBoardDelivery } from '../../types';

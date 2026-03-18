@@ -227,7 +227,7 @@ export default function Invoices() {
             .eq('id', inv.customer_id)
             .single();
           if (custError) {
-            console.warn(`Customer ${inv.customer_id} not found for invoice ${inv.invoice_number}, using defaults`);
+            Sentry.captureException(new Error(`Customer ${inv.customer_id} not found for invoice ${inv.invoice_number}`), { level: 'warning', extra: { context: 'Using defaults for batch statement generation' } });
           }
 
           // Fetch items with product details

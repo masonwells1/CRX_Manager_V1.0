@@ -457,7 +457,7 @@ export default function OrderDetail() {
             }
             // If email fails, the status toast above already showed success
           } catch (emailErr) {
-            console.warn('Order confirmation email failed:', emailErr);
+            Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), { level: 'warning', extra: { context: 'Order confirmation email failed — status change already succeeded' } });
             // Status change already succeeded — don't show error for email
           }
         }

@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Camera, Loader2 } from 'lucide-react';
 import { supabase } from '../../lib/db';
-import * as Sentry from '@sentry/react';
+import { Sentry } from '../../lib/sentry';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { compressImage } from '../../lib/imageCompression';
