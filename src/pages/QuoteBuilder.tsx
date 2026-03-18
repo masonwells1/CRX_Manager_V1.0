@@ -157,7 +157,6 @@ export default function QuoteBuilder() {
   const [_sending, __setSending] = useState(false);
   const [converting, setConverting] = useState(false);
   const [confirmConvertOpen, setConfirmConvertOpen] = useState(false);
-  const [recentOrderWarning, setRecentOrderWarning] = useState<string | null>(null);
   const [duplicateOrderConfirmOpen, setDuplicateOrderConfirmOpen] = useState(false);
   const [duplicateOrderMsg, setDuplicateOrderMsg] = useState('');
 
@@ -2425,18 +2424,6 @@ export default function QuoteBuilder() {
           </div>
         </div>
       </Modal>
-
-      {/* Recent order duplicate warning */}
-      <ConfirmModal
-        open={!!recentOrderWarning}
-        onClose={() => setRecentOrderWarning(null)}
-        onConfirm={executeConvertToOrder}
-        title="Duplicate Order Warning"
-        message={recentOrderWarning || ''}
-        confirmLabel="Convert Anyway"
-        variant="warning"
-        loading={converting}
-      />
 
       <Modal
         open={showPreviewModal}
