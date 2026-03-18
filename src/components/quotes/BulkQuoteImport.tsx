@@ -378,6 +378,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
               .single();
 
             if (sectionError || !section) {
+              Sentry.captureException(sectionError instanceof Error ? sectionError : new Error(String(sectionError || 'Section insert returned no data')), { extra: { context: 'BulkQuoteImport section insert failed', sectionName } });
               continue;
             }
 
@@ -433,7 +434,7 @@ export default function BulkQuoteImport({ open, onClose, onSuccess }: BulkQuoteI
                 profit,
                 net_margin,
                 notes: item.notes || '',
-              });
+              }).select();
 
               if (!quoteItemResult.error) {
                 checkMutationResult(quoteItemResult, 'Insert quote_item');

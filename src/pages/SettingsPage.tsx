@@ -176,10 +176,14 @@ export default function SettingsPage() {
   };
 
   const fetchUsers = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .order('full_name');
+    if (error) {
+      toast('error', 'Failed to load users');
+      return;
+    }
     setUsers((data || []) as Profile[]);
   };
 

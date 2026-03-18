@@ -18,6 +18,7 @@ import { localToday, parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
+import { Sentry } from '../lib/sentry';
 import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, LinkedEntityType } from '../types';
 
 interface JobDbRow {
@@ -358,6 +359,7 @@ export default function JobDetail() {
         await fetchJob();
       }
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_job' } });
       toast('error', err instanceof Error ? err.message : 'Failed to save job');
     }
     setSaving(false);
@@ -382,6 +384,7 @@ export default function JobDetail() {
       setIsDirty(false);
       await fetchJob();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'complete_job' } });
       toast('error', err instanceof Error ? err.message : 'Failed to complete job');
     }
     setCompleting(false);
@@ -406,6 +409,7 @@ export default function JobDetail() {
       setIsDirty(false);
       await fetchJob();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'cancel_job' } });
       toast('error', err instanceof Error ? err.message : 'Failed to cancel job');
     }
     setCancelling(false);
@@ -428,6 +432,7 @@ export default function JobDetail() {
       setIsDirty(false);
       navigate(`/invoices/${result.invoice_id}`);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
       toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
     }
     setTransferring(false);
@@ -451,6 +456,7 @@ export default function JobDetail() {
       setIsDirty(false);
       await fetchJob();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_recipe_into_job' } });
       toast('error', err instanceof Error ? err.message : 'Failed to load recipe');
     }
     setLoadingRecipe(false);

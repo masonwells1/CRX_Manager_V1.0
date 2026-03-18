@@ -387,7 +387,7 @@ export default function TeamBoard() {
         linked_entity_type: linkedEntityType || null,
         linked_entity_id: linkedEntityId || null,
         created_by: profile.id,
-      });
+      }).select();
       if (noteResult.error) {
         toast('error', 'Failed to add note');
       } else {

@@ -3,6 +3,7 @@ import { X, Loader2, Image } from 'lucide-react';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
+import ConfirmModal from '../ui/ConfirmModal';
 import type { TeamNoteAttachment } from '../../types';
 
 interface NoteAttachmentsProps {
@@ -16,6 +17,7 @@ export default function NoteAttachments({ noteId, canDelete, refreshKey }: NoteA
   const [attachments, setAttachments] = useState<TeamNoteAttachment[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<TeamNoteAttachment | null>(null);
 
   const fetchAttachments = useCallback(async () => {
     const { data, error } = await supabase
@@ -89,6 +91,7 @@ export default function NoteAttachments({ noteId, canDelete, refreshKey }: NoteA
   if (attachments.length === 0) return null;
 
   return (
+    <>
     <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
       {attachments.map((attachment) => (
         <div key={attachment.id} className="group relative">
@@ -115,7 +118,7 @@ export default function NoteAttachments({ noteId, canDelete, refreshKey }: NoteA
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                handleDelete(attachment);
+                setConfirmDelete(attachment);
               }}
               disabled={deletingId === attachment.id}
               className="absolute top-1 right-1 p-1 bg-red-600 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-700 disabled:opacity-50"
@@ -135,5 +138,19 @@ export default function NoteAttachments({ noteId, canDelete, refreshKey }: NoteA
         </div>
       ))}
     </div>
+
+      <ConfirmModal
+        open={!!confirmDelete}
+        title="Delete Photo"
+        message={`Are you sure you want to delete "${confirmDelete?.file_name}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={() => {
+          if (confirmDelete) handleDelete(confirmDelete);
+          setConfirmDelete(null);
+        }}
+        onCancel={() => setConfirmDelete(null)}
+      />
+    </>
   );
 }

@@ -360,6 +360,8 @@ export default function ARaging() {
     });
     if (error) {
       toast('error', 'Failed to load statement');
+      setLoading(false);
+      return;
     }
     setStatementData(assertRpcResult<CustomerStatementRow[]>(data, 'get_customer_statement'));
     setTab('statement');

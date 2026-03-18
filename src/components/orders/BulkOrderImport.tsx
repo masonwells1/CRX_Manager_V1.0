@@ -7,6 +7,8 @@ import { supabase, checkMutationResult } from '../../lib/db';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
+import { logActivity } from '../../lib/activityLogger';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface BulkOrderImportProps {
   open: boolean;
@@ -56,6 +58,7 @@ const ITEM_FIELD_MAPPINGS: Record<string, string[]> = {
 
 export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderImportProps) {
   const { toast } = useToast();
+  const { profile } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -391,6 +394,9 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
     setUploading(false);
 
     if (successCount > 0) {
+      if (profile) {
+        await logActivity({ event: 'orders_bulk_imported', description: `Bulk imported ${successCount} order(s)`, performedBy: profile.id });
+      }
       toast('success', `Imported ${successCount} order${successCount !== 1 ? 's' : ''}`);
       onSuccess();
     }

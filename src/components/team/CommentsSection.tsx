@@ -114,7 +114,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       created_by: profile.id,
       content: content.trim(),
       mentions,
-    });
+    }).select();
 
     if (commentResult.error) {
       toast('error', 'Failed to post comment');

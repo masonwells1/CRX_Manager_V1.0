@@ -3,7 +3,7 @@ import { Plus, Trash2, Save, AlertCircle, Beaker } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Input from '../ui/Input';
-import { supabase, assertRpcResult } from '../../lib/db';
+import { supabase, assertRpcResult, checkMutationResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { logActivity } from '../../lib/activityLogger';
 import { validateBlendMath } from '../../lib/blendMathValidator';
@@ -204,11 +204,13 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
           manually_corrected: false,
         }));
 
-        const { error: prodErr } = await supabase
+        const prodResult = await supabase
           .from('blend_ticket_products')
-          .insert(productInserts);
+          .insert(productInserts)
+          .select();
 
-        if (prodErr) throw prodErr;
+        if (prodResult.error) throw prodResult.error;
+        checkMutationResult(prodResult, 'Insert blend_ticket_products');
       }
 
       // Log activity

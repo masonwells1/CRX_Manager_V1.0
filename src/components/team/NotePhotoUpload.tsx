@@ -62,12 +62,12 @@ export default function NotePhotoUpload({ noteId, onUploadComplete }: NotePhotoU
           file_size_bytes: file.size,
           uploaded_by: profile.id,
         }).select();
-        checkMutationResult(insertResult, 'Insert note photo attachment');
 
         if (insertResult.error) {
           toast('error', `Photo saved to storage but DB record failed: ${insertResult.error.message}`);
           continue;
         }
+        checkMutationResult(insertResult, 'Insert note photo attachment');
 
         uploadCount++;
       } catch (err) {

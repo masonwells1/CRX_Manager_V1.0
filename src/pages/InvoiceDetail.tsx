@@ -18,6 +18,7 @@ import { downloadInvoicePdf, generateInvoicePdf, type InvoicePdfData, type Invoi
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
+import { Sentry } from '../lib/sentry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -400,6 +401,7 @@ export default function InvoiceDetail() {
       toast('success', 'Invoice posted');
       fetchInvoice(id!);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_invoice' } });
       toast('error', sanitizeError(err));
     }
     setPosting(false);
@@ -421,6 +423,7 @@ export default function InvoiceDetail() {
       setShowVoidModal(false);
       fetchInvoice(id!);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'void_invoice' } });
       toast('error', sanitizeError(err));
     }
     setVoiding(false);
@@ -453,6 +456,7 @@ export default function InvoiceDetail() {
       setPayNotes('');
       fetchInvoice(id!);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'record_invoice_payment' } });
       toast('error', sanitizeError(err));
     }
     setPayingInvoice(false);

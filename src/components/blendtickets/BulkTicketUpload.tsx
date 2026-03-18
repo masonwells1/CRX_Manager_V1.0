@@ -183,7 +183,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
           file_size: compressedFile.size,
           mime_type: compressedFile.type,
           upload_order: i + 1,
-        });
+        }).select();
         if (imgResult.error) throw imgResult.error;
         checkMutationResult(imgResult, 'Insert blend_ticket_images record');
 
@@ -196,7 +196,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
         priority: 0,
         retry_count: 0,
         max_retries: 3,
-      });
+      }).select();
       if (ocrResult.error) throw ocrResult.error;
       checkMutationResult(ocrResult, 'Insert ocr_processing_queue record');
 

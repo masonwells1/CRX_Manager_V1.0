@@ -302,9 +302,9 @@ checkMutationResult(result, 'Context description');  // ALWAYS — import from l
 
 **Before writing `logActivity()`:**
 ```typescript
-// Signature: logActivity(eventType, description, performedBy, entityType?, entityId?, customerId?)
+// Uses object parameter — NOT positional args
 // performedBy is ALWAYS profile.id — never a string like 'delivery'
-await logActivity('event_type', 'Description', profile.id, 'entity_type', entityId);
+await logActivity({ event: 'event_type', description: 'Description', performedBy: profile.id, entityType: 'entity_type', entityId: entityId });
 ```
 
 **Before importing Sentry:**
