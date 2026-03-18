@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageSquare, Plus, CheckCircle, Clock, ChevronDown, ChevronUp } from 'lucide-react';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
@@ -40,7 +40,7 @@ export default function RelatedNotes({ entityType, entityId, onCreateTask }: Rel
         p_entity_id: entityId,
       });
       if (cancelled) return;
-      const result = (data as TeamNote[] | null) ?? [];
+      const result = assertRpcResult<TeamNote[] | null>(data, 'get_notes_for_entity') ?? [];
       setNotes(result);
       // Default expanded if notes exist, collapsed if empty
       setExpanded(result.length > 0);

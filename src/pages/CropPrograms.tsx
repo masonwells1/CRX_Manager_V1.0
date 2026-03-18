@@ -230,7 +230,7 @@ export default function CropPrograms() {
           );
           await savePrograms(updated);
           if (profile) {
-            await logActivity('program_updated', `Crop program "${formName}" updated`, profile.id, 'setting', editingProgram.id);
+            await logActivity({ event: 'program_updated', description: `Crop program "${formName}" updated`, performedBy: profile.id, entityType: 'setting', entityId: editingProgram.id });
           }
         } else {
           const newProg: CropProgram = {
@@ -246,7 +246,7 @@ export default function CropPrograms() {
           };
           await savePrograms([...programs, newProg]);
           if (profile) {
-            await logActivity('program_created', `Crop program "${formName}" created with ${cleanItems.length} products`, profile.id, 'setting', newProg.id);
+            await logActivity({ event: 'program_created', description: `Crop program "${formName}" created with ${cleanItems.length} products`, performedBy: profile.id, entityType: 'setting', entityId: newProg.id });
           }
         }
       },

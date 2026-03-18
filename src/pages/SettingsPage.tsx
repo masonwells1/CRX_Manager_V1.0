@@ -13,7 +13,8 @@ import EmptyState from '../components/ui/EmptyState';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getPagesForRole, getCategories } from '../lib/pagePermissions';
 import type { Profile, AppSetting, UserRole } from '../types';
 
@@ -117,6 +118,7 @@ export default function SettingsPage() {
   const { role, profile } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const adminUpdateIdem = useIdempotencyKey('admin_update_profile', profile?.id || '');
 
   const [companyName, setCompanyName] = useState('');
   const [companyPhone, setCompanyPhone] = useState('');
@@ -202,7 +204,7 @@ export default function SettingsPage() {
         saveSetting('company_address', companyAddress),
       ]);
       toast('success', 'Company info saved');
-      if (profile) logActivity('settings_updated', 'Company info updated', profile.id);
+      if (profile) logActivity({ event: 'settings_updated', description: 'Company info updated', performedBy: profile.id });
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
@@ -217,7 +219,7 @@ export default function SettingsPage() {
         saveSetting('default_tier', defaultTier),
       ]);
       toast('success', 'Default settings saved');
-      if (profile) logActivity('settings_updated', 'Default settings updated', profile.id);
+      if (profile) logActivity({ event: 'settings_updated', description: 'Default settings updated', performedBy: profile.id });
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
@@ -263,7 +265,7 @@ export default function SettingsPage() {
         toast('error', data?.error || `Request failed (${response.status})`);
       } else {
         toast('success', 'User created successfully');
-        if (profile) logActivity('user_created', `User ${newName} (${newRole}) created`, profile.id);
+        if (profile) logActivity({ event: 'user_created', description: `User ${newName} (${newRole}) created`, performedBy: profile.id });
         setUserModalOpen(false);
         setNewEmail('');
         setNewName('');
@@ -314,6 +316,7 @@ export default function SettingsPage() {
     setDeactivateConfirmOpen(false);
     setSavingUser(true);
     try {
+      const idemKey = adminUpdateIdem.getKey();
       const { data, error } = await supabase.rpc('admin_update_profile', {
         target_user_id: editingUser.id,
         new_role: editRole,
@@ -321,17 +324,22 @@ export default function SettingsPage() {
         new_phone: editPhone || null,
         new_is_active: editIsActive,
         new_denied_pages: editRole === 'admin' ? [] : editDeniedPages,
+        p_idempotency_key: idemKey,
       });
       if (error) {
         toast('error', sanitizeError(error));
-      } else if (data?.error) {
-        toast('error', data.error);
       } else {
-        toast('success', 'User updated successfully');
-        if (profile) logActivity('user_updated', `User ${editName} updated (role: ${editRole}, active: ${editIsActive})`, profile.id);
-        setEditModalOpen(false);
-        setEditingUser(null);
-        fetchUsers();
+        assertRpcResult(data, 'admin_update_profile');
+        if (data?.error) {
+          toast('error', data.error);
+        } else {
+          adminUpdateIdem.resetKey();
+          toast('success', 'User updated successfully');
+          if (profile) logActivity({ event: 'user_updated', description: `User ${editName} updated (role: ${editRole}, active: ${editIsActive})`, performedBy: profile.id });
+          setEditModalOpen(false);
+          setEditingUser(null);
+          fetchUsers();
+        }
       }
     } catch {
       toast('error', 'Failed to update user');

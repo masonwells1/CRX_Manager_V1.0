@@ -5,12 +5,13 @@
  * and reconcile payments received.
  */
 import { useEffect, useState , useCallback } from 'react';
-import { Plus, DollarSign, TrendingUp, FileText } from 'lucide-react';
+import { Plus, DollarSign, TrendingUp, FileText, Trash2, Pencil } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -95,6 +96,12 @@ export default function Rebates() {
   });
 
   const [saving, setSaving] = useState(false);
+
+  // Confirm modal states
+  const [deleteProgramConfirmOpen, setDeleteProgramConfirmOpen] = useState(false);
+  const [deleteProgramTarget, setDeleteProgramTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deleteClaimConfirmOpen, setDeleteClaimConfirmOpen] = useState(false);
+  const [deleteClaimTarget, setDeleteClaimTarget] = useState<{ id: string; number: string } | null>(null);
 
   useEffect(() => {
     fetchLookups();
@@ -234,7 +241,7 @@ export default function Rebates() {
         } else {
           const result = await supabase.from('rebate_programs').insert(payload).select();
           checkMutationResult(result, 'Create rebate program');
-          if (profile) logActivity('rebate_program_created', `Rebate program "${pForm.program_name}" created`, profile.id);
+          if (profile) logActivity({ event: 'rebate_program_created', description: `Rebate program "${pForm.program_name}" created`, performedBy: profile.id });
         }
       },
       toast,
@@ -291,7 +298,7 @@ export default function Rebates() {
       action: async () => {
         const result = await supabase.from('rebate_claims').insert(payload).select();
         checkMutationResult(result, 'Create rebate claim');
-        if (profile) logActivity('rebate_claim_created', `Rebate claim ${claimNum} created`, profile.id);
+        if (profile) logActivity({ event: 'rebate_claim_created', description: `Rebate claim ${claimNum} created`, performedBy: profile.id });
       },
       toast,
       setLoading: setSaving,
@@ -314,13 +321,61 @@ export default function Rebates() {
       action: async () => {
         const result = await supabase.from('rebate_claims').update(updatePayload).eq('id', claimId).select();
         checkMutationResult(result, `Update claim to ${newStatus}`);
-        if (profile) logActivity('rebate_claim_updated', `Rebate claim status → ${newStatus}`, profile.id);
+        if (profile) logActivity({ event: 'rebate_claim_updated', description: `Rebate claim status → ${newStatus}`, performedBy: profile.id });
       },
       toast,
       successMessage: `Claim marked as ${newStatus}`,
       sentryTag: 'update_rebate_claim_status',
       onSuccess: () => fetchClaims(),
     });
+  };
+
+  // ===== Delete Program =====
+  const handleDeleteProgram = (programId: string, programName: string) => {
+    setDeleteProgramTarget({ id: programId, name: programName });
+    setDeleteProgramConfirmOpen(true);
+  };
+
+  const doDeleteProgram = async () => {
+    if (!deleteProgramTarget) return;
+    const { id: programId, name: programName } = deleteProgramTarget;
+    setDeleteProgramConfirmOpen(false);
+    setDeleteProgramTarget(null);
+    try {
+      // Delete claims first (FK constraint) — may be zero claims, so only check for error
+      const claimsResult = await supabase.from('rebate_claims').delete().eq('program_id', programId).select();
+      if (claimsResult.error) throw claimsResult.error;
+      // Zero rows valid (program may have no claims) — only check for error, not empty result
+      const result = await supabase.from('rebate_programs').delete().eq('id', programId).select();
+      checkMutationResult(result, 'Delete rebate program');
+      toast('success', `Rebate program "${programName}" deleted`);
+      if (profile) logActivity({ event: 'rebate_program_deleted', description: `Rebate program "${programName}" deleted`, performedBy: profile.id });
+      fetchPrograms();
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to delete program');
+    }
+  };
+
+  // ===== Delete Claim =====
+  const handleDeleteClaim = (claimId: string, claimNumber: string) => {
+    setDeleteClaimTarget({ id: claimId, number: claimNumber });
+    setDeleteClaimConfirmOpen(true);
+  };
+
+  const doDeleteClaim = async () => {
+    if (!deleteClaimTarget) return;
+    const { id: claimId, number: claimNumber } = deleteClaimTarget;
+    setDeleteClaimConfirmOpen(false);
+    setDeleteClaimTarget(null);
+    try {
+      const result = await supabase.from('rebate_claims').delete().eq('id', claimId).select();
+      checkMutationResult(result, 'Delete rebate claim');
+      toast('success', `Claim ${claimNumber} deleted`);
+      if (profile) logActivity({ event: 'rebate_claim_deleted', description: `Rebate claim ${claimNumber} deleted`, performedBy: profile.id });
+      fetchClaims();
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to delete claim');
+    }
   };
 
   // Stats
@@ -375,6 +430,32 @@ export default function Rebates() {
         </Badge>
       ),
     },
+    ...(isAdmin
+      ? [
+          {
+            key: 'id' as string,
+            header: 'Actions',
+            render: (r: ProgramRow) => (
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={(e) => { e.stopPropagation(); openEditProgram(r); }}
+                  className="p-1.5 text-gray-400 hover:text-crx-green rounded-lg hover:bg-gray-100 transition-colors"
+                  title="Edit program"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleDeleteProgram(r.id, r.program_name); }}
+                  className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                  title="Delete program"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ),
+          },
+        ]
+      : []),
   ];
 
   const claimColumns: Column<ClaimRow>[] = [
@@ -409,25 +490,32 @@ export default function Rebates() {
       header: 'Actions',
       render: (r) => {
         if (!isAdmin) return null;
-        if (r.status === 'pending')
-          return (
-            <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'submitted'); }}>
-              Submit
-            </Button>
-          );
-        if (r.status === 'submitted')
-          return (
-            <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'approved'); }}>
-              Approve
-            </Button>
-          );
-        if (r.status === 'approved')
-          return (
-            <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'paid'); }}>
-              Mark Paid
-            </Button>
-          );
-        return null;
+        return (
+          <div className="flex items-center gap-1">
+            {r.status === 'pending' && (
+              <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'submitted'); }}>
+                Submit
+              </Button>
+            )}
+            {r.status === 'submitted' && (
+              <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'approved'); }}>
+                Approve
+              </Button>
+            )}
+            {r.status === 'approved' && (
+              <Button size="sm" variant="primary" onClick={(e) => { e.stopPropagation(); updateClaimStatus(r.id, 'paid'); }}>
+                Mark Paid
+              </Button>
+            )}
+            <button
+              onClick={(e) => { e.stopPropagation(); handleDeleteClaim(r.id, r.claim_number); }}
+              className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+              title="Delete claim"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        );
       },
     },
   ];
@@ -680,6 +768,26 @@ export default function Rebates() {
           </div>
         </div>
       </Modal>
+
+      {/* Confirm Modals */}
+      <ConfirmModal
+        open={deleteProgramConfirmOpen}
+        onClose={() => { setDeleteProgramConfirmOpen(false); setDeleteProgramTarget(null); }}
+        onConfirm={doDeleteProgram}
+        title="Delete Rebate Program"
+        message={`Delete rebate program "${deleteProgramTarget?.name}"? This will also delete all claims under this program.`}
+        confirmLabel="Delete Program"
+        variant="danger"
+      />
+      <ConfirmModal
+        open={deleteClaimConfirmOpen}
+        onClose={() => { setDeleteClaimConfirmOpen(false); setDeleteClaimTarget(null); }}
+        onConfirm={doDeleteClaim}
+        title="Delete Rebate Claim"
+        message={`Delete rebate claim ${deleteClaimTarget?.number}?`}
+        confirmLabel="Delete Claim"
+        variant="danger"
+      />
 
       {/* ========== CLAIM MODAL ========== */}
       <Modal open={cModalOpen} onClose={() => setCModalOpen(false)} title="New Rebate Claim">

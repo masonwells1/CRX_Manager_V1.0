@@ -15,7 +15,7 @@ import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -319,11 +319,8 @@ export default function NewOrder() {
         if (error) throw error;
 
         createOrderIdem.resetKey();
-        const result = data as Record<string, unknown> | null;
-        const orderId = result?.order_id as string | undefined;
-        if (!orderId) {
-          throw new Error('Order creation failed — no order ID returned');
-        }
+        const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(data, 'create_direct_order');
+        const orderId = result.order_id;
 
         // Save customer PO# if provided
         if (customerPoNumber.trim() && orderId) {
@@ -334,7 +331,7 @@ export default function NewOrder() {
         clearDraft();
 
         // Show inventory warnings (non-blocking)
-        const warnings = result?.warnings as string[] | undefined;
+        const warnings = result.warnings;
         if (warnings && warnings.length > 0) {
           for (const w of warnings) {
             toast('warning', 'Inventory: ' + w);
@@ -342,7 +339,7 @@ export default function NewOrder() {
         }
         trackBusinessEvent('order_created', {
           message: `Direct order created${orderName ? ` (${orderName})` : ''}`,
-          data: { orderId: orderId!, orderName: orderName || null, itemCount: items.filter((i) => i.product_id).length },
+          data: { orderId, orderName: orderName || null, itemCount: items.filter((i) => i.product_id).length },
         });
 
         // Phase 3.3: Credit limit check — warn (not block) if exceeded
@@ -351,7 +348,7 @@ export default function NewOrder() {
             const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
               p_customer_id: customerId,
             });
-            const cl = creditCheck as { exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null;
+            const cl = assertRpcResult<{ exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null>(creditCheck, 'check_customer_credit_limit');
             if (cl && cl.exceeded) {
               const fmtUsd = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
               toast('warning', `Credit limit warning: ${cl.farm_name} outstanding AR ${fmtUsd(cl.outstanding_ar ?? 0)} exceeds limit ${fmtUsd(cl.credit_limit ?? 0)}`);

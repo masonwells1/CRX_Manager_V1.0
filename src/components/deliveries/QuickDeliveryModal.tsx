@@ -8,7 +8,7 @@ import { AlertTriangle, Plus, Search, Trash2, Zap } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
@@ -231,7 +231,7 @@ export default function QuickDeliveryModal({
       if (error) throw error;
       quickDeliveryIdem.resetKey();
 
-      const result = data as { delivery_id: string; delivery_number: string; invoice_number: string };
+      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string }>(data, 'create_quick_delivery');
       toast('success', `Quick delivery ${result.delivery_number} created with draft invoice ${result.invoice_number}`);
 
       // Reset form

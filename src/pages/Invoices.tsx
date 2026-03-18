@@ -7,7 +7,7 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -165,7 +165,7 @@ export default function Invoices() {
         });
         if (error) throw error;
         batchPostIdem.resetKey();
-        return data;
+        return assertRpcResult(data, 'batch_post_invoices');
       },
       toast,
       successMessage: `Posted ${ids.length} invoice(s)`,
@@ -197,7 +197,7 @@ export default function Invoices() {
         });
         if (error) throw error;
         batchVoidIdem.resetKey();
-        return data;
+        return assertRpcResult(data, 'batch_void_invoices');
       },
       toast,
       successMessage: `Voided ${ids.length} invoice(s)`,
@@ -227,7 +227,7 @@ export default function Invoices() {
             .eq('id', inv.customer_id)
             .single();
           if (custError) {
-            console.warn(`Customer ${inv.customer_id} not found for invoice ${inv.invoice_number}, using defaults`);
+            Sentry.captureException(new Error(`Customer ${inv.customer_id} not found for invoice ${inv.invoice_number}`), { level: 'warning', extra: { context: 'Using defaults for batch statement generation' } });
           }
 
           // Fetch items with product details

@@ -25,7 +25,7 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import type { BottomProduct, BottomCustomer, MonthlyMargin } from '../types';
 
@@ -184,7 +184,7 @@ export default function FinancialDashboard() {
       const { data: rpc, error } = await supabase.rpc('financial_dashboard_summary');
       if (error) throw error;
 
-      const d = rpc as FinancialRpc;
+      const d = assertRpcResult<FinancialRpc>(rpc, 'financial_dashboard_summary');
 
       setData({
         totalRevenue: Number(d.total_revenue) || 0,

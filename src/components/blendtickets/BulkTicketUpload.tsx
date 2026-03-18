@@ -3,7 +3,7 @@ import { Upload, X, Image as ImageIcon, AlertCircle } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Input from '../ui/Input';
-import { supabase, checkMutationResult } from '../../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { compressImage } from '../../lib/imageCompression';
 import { localToday } from '../../lib/dateUtils';
@@ -118,7 +118,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
         .rpc('generate_ticket_number');
 
       if (ticketError) throw ticketError;
-      const ticketNumber = ticketNumberData;
+      const ticketNumber = assertRpcResult<string>(ticketNumberData, 'generate_ticket_number');
 
       const ticketData: Record<string, unknown> = {
         ticket_number: ticketNumber,
@@ -205,7 +205,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
         body: { blend_ticket_id: ticket.id },
       }).catch((err) => {
         // Non-fatal: the fallback polling in useOCRProcessor will pick it up
-        console.warn('Edge Function trigger failed, will retry via polling:', err);
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { level: 'warning', extra: { context: 'Edge Function trigger failed — will retry via polling' } });
       });
 
       images.forEach(img => URL.revokeObjectURL(img.preview));

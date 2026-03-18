@@ -18,7 +18,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
 import type {
@@ -193,7 +193,7 @@ export default function QuickReceive() {
         p_vendor: vendor || null,
       });
       if (error) throw error;
-      setMatchResults(data as QuickReceiveMatchResult[]);
+      setMatchResults(assertRpcResult<QuickReceiveMatchResult[]>(data, 'match_quick_receive_items'));
       setOverrides({});
       setUnmatchedActions({});
       setStep('review');
@@ -284,6 +284,7 @@ export default function QuickReceive() {
         p_allow_over_receive: true,
       });
       if (error) throw error;
+      assertRpcResult(data, 'receive_po_items');
       receiveIdem.resetKey();
 
       // Notify if damaged

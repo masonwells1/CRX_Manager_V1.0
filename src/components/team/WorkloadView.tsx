@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Users, Truck, ClipboardList, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { useToast } from '../ui/Toast';
 import Badge from '../ui/Badge';
 
@@ -44,7 +44,7 @@ export default function WorkloadView() {
     async function load() {
       try {
         const { data } = await supabase.rpc('get_team_workload');
-        if (data) setMembers(data as TeamMemberWorkload[]);
+        if (data) setMembers(assertRpcResult<TeamMemberWorkload[]>(data, 'get_team_workload'));
       } catch (err: unknown) {
         toast('error', err instanceof Error ? err.message : 'Failed to load workload data');
       } finally {

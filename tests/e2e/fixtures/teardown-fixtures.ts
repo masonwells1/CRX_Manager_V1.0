@@ -235,7 +235,8 @@ export default async function teardownFixtures(): Promise<void> {
   await del('inventory (product)', () => deleteByFk(token, 'inventory', 'product_id', productIds));
   await del('inventory_transactions (product)', () => deleteByFk(token, 'inventory_transactions', 'product_id', productIds));
   await del('cost_history', () => deleteByFk(token, 'cost_history', 'product_id', productIds));
-  await del('idempotency_keys', () => deleteByFk(token, 'idempotency_keys', 'entity_id', [...orderIds, ...invoiceIds, ...deliveryIds]));
+  // idempotency_keys has no entity_id column — keys expire automatically via DB TTL
+  // If test cleanup is needed, use: DELETE FROM idempotency_keys WHERE operation LIKE 'test_%'
 
   // ── Phase 3: Transactional parent tables ──
   console.log('Phase 3: Transactional tables...');

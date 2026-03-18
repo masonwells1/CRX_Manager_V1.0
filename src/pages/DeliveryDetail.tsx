@@ -10,6 +10,7 @@ import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import SignatureCanvas from '../components/ui/SignatureCanvas';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -27,7 +28,6 @@ import { queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
-import ConfirmModal from '../components/ui/ConfirmModal';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type {
@@ -76,6 +76,7 @@ export default function DeliveryDetail() {
   const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_delivery', profile?.id || '');
+  const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [delivery, setDelivery] = useState<Delivery | null>(null);
@@ -103,8 +104,6 @@ export default function DeliveryDetail() {
   const [autoInvoiceId, setAutoInvoiceId] = useState<string | null>(null);
   const [emailOnComplete, setEmailOnComplete] = useState(true);
   const isOnline = useOnlineStatus();
-  const [reassignConfirmOpen, setReassignConfirmOpen] = useState(false);
-  const [completeDeliveryConfirmOpen, setCompleteDeliveryConfirmOpen] = useState(false);
 
   // Edit mode state
   const [editing, setEditing] = useState(false);
@@ -135,8 +134,12 @@ export default function DeliveryDetail() {
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
 
-  // Reassign loading state
+  // Reassign state
   const [reassigning, setReassigning] = useState(false);
+  const [reassignConfirmOpen, setReassignConfirmOpen] = useState(false);
+
+  // Complete delivery confirm state
+  const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
 
   // Photo upload state
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
@@ -390,6 +393,7 @@ export default function DeliveryDetail() {
       toast('error', sanitizeError(error));
     } else {
       cancelIdem.resetKey();
+      assertRpcResult(cancelResult, 'cancel_delivery');
       // Show detailed summary toast with cascade info
       const parts: string[] = ['Delivery cancelled.'];
       if (cancelResult?.items_restored > 0) parts.push(`Inventory restored for ${cancelResult.items_restored} item(s).`);
@@ -419,12 +423,13 @@ export default function DeliveryDetail() {
       toast('error', sanitizeError(error));
     } else {
       voidIdem.resetKey();
+      assertRpcResult(voidResult, 'void_delivery');
       const parts: string[] = [`Delivery ${delivery.delivery_number} voided.`];
       if (voidResult?.posted_invoices_exist) {
         parts.push('Warning: posted invoices linked to this order require manual review.');
       }
       toast('success', parts.join(' '));
-      await logActivity('delivery_voided', `Delivery ${delivery.delivery_number} voided`, profile!.id, 'delivery', id!, delivery.customer_id);
+      await logActivity({ event: 'delivery_voided', description: `Delivery ${delivery.delivery_number} voided`, performedBy: profile.id, entityType: 'delivery', entityId: id!, customerId: delivery.customer_id });
       setVoidOpen(false);
       setVoidReason('');
       fetchDelivery();
@@ -434,26 +439,24 @@ export default function DeliveryDetail() {
 
   // ── Reassign (Take This Delivery) ─────────────────────────────────────
 
-  const handleReassign = () => {
-    if (!profile || !delivery) return;
-    setReassignConfirmOpen(true);
-  };
-
-  const executeReassign = async () => {
-    setReassignConfirmOpen(false);
+  const handleReassign = async () => {
     if (!profile || !delivery) return;
 
     setReassigning(true);
+    setReassignConfirmOpen(false);
     try {
+      const idemKey = reassignIdem.getKey();
       const { error } = await supabase.rpc('reassign_delivery', {
         p_delivery_id: id!,
         p_new_driver: profile.id,
         p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) {
         toast('error', sanitizeError(error));
       } else {
+        reassignIdem.resetKey();
         toast('success', 'Delivery assigned to you');
         fetchDelivery();
       }
@@ -572,7 +575,7 @@ export default function DeliveryDetail() {
 
   // ── Complete Delivery (Driver) ─────────────────────────────────────────
 
-  const handleComplete = () => {
+  const requestComplete = () => {
     if (!signedBy.trim()) {
       toast('error', 'Please enter a signature name');
       return;
@@ -582,12 +585,12 @@ export default function DeliveryDetail() {
       toast('error', 'At least one item must have a quantity greater than 0');
       return;
     }
-    setCompleteDeliveryConfirmOpen(true);
+    setCompleteConfirmOpen(true);
   };
 
-  const executeComplete = async () => {
-    setCompleteDeliveryConfirmOpen(false);
+  const handleComplete = async () => {
     if (!delivery || !profile) return;
+    setCompleteConfirmOpen(false);
     setCompleting(true);
 
     const quantitiesJson = isPartialDelivery
@@ -625,6 +628,7 @@ export default function DeliveryDetail() {
       const { data: completeResult, error } = await supabase.rpc('complete_delivery', rpcParams);
       if (error) throw error;
       completeIdem.resetKey();
+      assertRpcResult(completeResult, 'complete_delivery');
 
       // Upload signature image if provided
       if (signatureDataUrl) {
@@ -651,7 +655,7 @@ export default function DeliveryDetail() {
             checkMutationResult(sigResult, 'Update delivery signature');
           }
         } catch (sigErr) {
-          console.warn('Signature upload failed:', sigErr);
+          Sentry.captureException(sigErr instanceof Error ? sigErr : new Error(String(sigErr)), { extra: { context: 'Signature upload failed during delivery completion' } });
           toast('error', 'Signature could not be saved. Please try completing the delivery again.');
           return;
         }
@@ -670,7 +674,7 @@ export default function DeliveryDetail() {
       } else {
         toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
       }
-      logActivity('delivery_completed', `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, profile.id, 'delivery', delivery.id, delivery.customer_id);
+      logActivity({ event: 'delivery_completed', description: `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, performedBy: profile.id, entityType: 'delivery', entityId: delivery.id, customerId: delivery.customer_id });
 
       // F15: Notify about delivery remainders
       if (isPartialDelivery) {
@@ -771,7 +775,7 @@ export default function DeliveryDetail() {
             idempotency_key: `delivery-completed-${delivery.id}-${Date.now()}`,
           });
         } catch (emailErr) {
-          console.warn('Delivery completion email failed:', emailErr);
+          Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), { level: 'warning', extra: { context: 'Delivery completion email failed — delivery already succeeded' } });
           // Delivery already succeeded — don't show error for email
         }
       }
@@ -948,7 +952,7 @@ export default function DeliveryDetail() {
           {/* Take delivery button */}
           {canTakeDelivery && (
             <button
-              onClick={handleReassign}
+              onClick={() => setReassignConfirmOpen(true)}
               disabled={reassigning}
               className="flex items-center gap-4 w-full bg-gray-800 rounded-xl p-5 border border-crx-green active:bg-gray-700 transition-colors disabled:opacity-50"
             >
@@ -1186,7 +1190,7 @@ export default function DeliveryDetail() {
                 </div>
               )}
               <button
-                onClick={handleComplete}
+                onClick={requestComplete}
                 disabled={completing}
                 className="w-full py-4 bg-crx-green text-white text-lg font-semibold rounded-xl active:bg-crx-green-hover disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
               >
@@ -1282,7 +1286,7 @@ export default function DeliveryDetail() {
                 size="sm"
                 icon={<UserPlus className="w-4 h-4" />}
                 showChevron={false}
-                onClick={handleReassign}
+                onClick={() => setReassignConfirmOpen(true)}
                 disabled={reassigning}
                 loading={reassigning}
               >
@@ -1757,7 +1761,7 @@ export default function DeliveryDetail() {
 
           <div className="flex justify-end">
             <Button
-              onClick={handleComplete}
+              onClick={requestComplete}
               loading={completing}
               icon={<CheckCircle2 className="w-4 h-4" />}
             >
@@ -2029,26 +2033,30 @@ export default function DeliveryDetail() {
         prefillAssignee={delivery.assigned_driver || ''}
       />
 
+      {/* Reassign confirm modal */}
       <ConfirmModal
         open={reassignConfirmOpen}
         onClose={() => setReassignConfirmOpen(false)}
-        onConfirm={executeReassign}
+        onConfirm={handleReassign}
         title="Take This Delivery"
         message={`Take delivery ${delivery.delivery_number}? The current driver will be notified.`}
         confirmLabel="Take Delivery"
         variant="warning"
+        loading={reassigning}
       />
 
+      {/* Complete delivery confirm modal */}
       <ConfirmModal
-        open={completeDeliveryConfirmOpen}
-        onClose={() => setCompleteDeliveryConfirmOpen(false)}
-        onConfirm={executeComplete}
+        open={completeConfirmOpen}
+        onClose={() => setCompleteConfirmOpen(false)}
+        onConfirm={handleComplete}
         title="Complete Delivery"
         message={isPartialDelivery
           ? 'Complete this delivery with partial quantities? This will update inventory and cannot be undone.'
           : 'Complete this delivery? This will update inventory and cannot be undone.'}
         confirmLabel="Complete Delivery"
         variant="warning"
+        loading={completing}
       />
     </div>
   );

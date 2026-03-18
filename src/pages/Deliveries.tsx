@@ -24,7 +24,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -383,7 +383,7 @@ export default function Deliveries() {
         });
         if (error) throw error;
         batchCancelIdem.resetKey();
-        return data;
+        return assertRpcResult(data, 'batch_cancel_deliveries');
       },
       toast,
       successMessage: `Cancelled ${ids.length} delivery(ies)`,

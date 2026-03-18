@@ -40,6 +40,7 @@ async function logNotificationFailure(
       p_entity_id: entityId || null,
       p_error_message: errorMessage,
       p_payload: payload || {},
+      p_idempotency_key: crypto.randomUUID(),
     });
   } catch (logErr) {
     // Last-resort: if even logging fails, report to Sentry
@@ -272,6 +273,7 @@ export async function notifyDamagedReceiving(
       p_po_number: poNumber,
       p_items_summary: summary,
       p_po_id: poId,
+      p_idempotency_key: crypto.randomUUID(),
     });
     if (error) {
       await logNotificationFailure('damaged_receiving', error, 'purchase_order', poId, {

@@ -10,7 +10,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { localToday } from '../lib/dateUtils';
 import type { Product } from '../types';
@@ -151,7 +151,7 @@ export default function NewPurchaseOrder() {
           if (rpcError || !rpcNumber) {
             throw new Error(rpcError?.message || 'Failed to generate PO number');
           }
-          poNumber = rpcNumber as string;
+          poNumber = assertRpcResult<string>(rpcNumber, 'next_po_number');
         }
 
         const poPayload = {
@@ -183,8 +183,9 @@ export default function NewPurchaseOrder() {
         if (error) throw error;
         saveIdem.resetKey();
 
+        const result = assertRpcResult<{ po_id: string }>(data, 'save_purchase_order');
         const isFirstSave = !savedPoId;
-        const returnedId = (data as { po_id: string })?.po_id;
+        const returnedId = result.po_id;
 
         if (isFirstSave && returnedId) {
           setSavedPoId(returnedId);

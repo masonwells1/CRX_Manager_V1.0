@@ -59,7 +59,8 @@ for file in $STAGED_TS; do
 
   # --- Check 3: Direct Sentry import instead of lib/sentry wrapper ---
   # Exempt src/lib/sentry.ts — it IS the wrapper and legitimately imports @sentry/react
-  if [ "$file" != "src/lib/sentry.ts" ]; then
+  # Exempt test files — they may intentionally test the enforcement rule
+  if [ "$file" != "src/lib/sentry.ts" ] && ! echo "$file" | grep -qE '\.(test|spec)\.(ts|tsx)$'; then
     if echo "$CONTENT" | grep -qE "from\s+['\"]@sentry/react['\"]"; then
       echo "BLOCKED: $file"
       echo "  Imports directly from '@sentry/react' — use { Sentry } from '../lib/sentry' instead."

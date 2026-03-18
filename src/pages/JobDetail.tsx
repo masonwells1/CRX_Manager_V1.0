@@ -7,16 +7,16 @@ import Input from '../components/ui/Input';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
-import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, LinkedEntityType } from '../types';
 
@@ -109,6 +109,7 @@ export default function JobDetail() {
   const saveJobIdem = useIdempotencyKey('save_job', profile?.id || '');
   const completeJobIdem = useIdempotencyKey('complete_job', profile?.id || '');
   const transferJobIdem = useIdempotencyKey('transfer_job_to_invoice', profile?.id || '');
+  const loadRecipeIdem = useIdempotencyKey('load_recipe_into_job', profile?.id || '');
   const isNew = id === 'new';
   const isEditable = role === 'admin' || role === 'sales_rep';
 
@@ -162,9 +163,9 @@ export default function JobDetail() {
   const [transferring, setTransferring] = useState(false);
 
   // Confirm modals
-  const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
-  const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
-  const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
+  const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [showTransferConfirm, setShowTransferConfirm] = useState(false);
 
   // Recipe load modal
   const [showRecipeModal, setShowRecipeModal] = useState(false);
@@ -344,13 +345,9 @@ export default function JobDetail() {
 
       if (error) throw error;
       saveJobIdem.resetKey();
-      const result = data as unknown as SaveJobResult;
+      const result = assertRpcResult<SaveJobResult>(data, 'save_job');
 
-      if (profile) logActivity(
-        isNew ? 'job_created' : 'job_updated',
-        isNew ? `Job created for ${customers.find(c => c.id === customerId)?.farm_name}` : `Job ${jobNumber} updated`,
-        profile.id
-      );
+      if (profile) logActivity({ event: isNew ? 'job_created' : 'job_updated', description: isNew ? `Job created for ${customers.find(c => c.id === customerId)?.farm_name}` : `Job ${jobNumber} updated`, performedBy: profile.id });
 
       toast('success', isNew ? 'Job created' : 'Job saved');
       setIsDirty(false);
@@ -366,12 +363,7 @@ export default function JobDetail() {
     setSaving(false);
   };
 
-  const handleComplete = () => {
-    setCompleteConfirmOpen(true);
-  };
-
-  const executeComplete = async () => {
-    setCompleteConfirmOpen(false);
+  const handleComplete = async () => {
     setCompleting(true);
     try {
       const idemKey = completeJobIdem.getKey();
@@ -383,8 +375,8 @@ export default function JobDetail() {
       });
       if (error) throw error;
       completeJobIdem.resetKey();
-      const result = data as unknown as CompleteJobResult;
-      if (profile) logActivity('job_completed', `Job ${jobNumber} completed → App Record ${result.record_number}`, profile.id);
+      const result = assertRpcResult<CompleteJobResult>(data, 'complete_job');
+      if (profile) logActivity({ event: 'job_completed', description: `Job ${jobNumber} completed → App Record ${result.record_number}`, performedBy: profile.id });
       toast('success', `Job completed! Application record ${result.record_number} created.`);
       setShowCompleteModal(false);
       setIsDirty(false);
@@ -395,17 +387,12 @@ export default function JobDetail() {
     setCompleting(false);
   };
 
-  const handleCancelJob = () => {
+  const handleCancelJob = async () => {
     // Only scheduled or in_progress jobs can be cancelled
     if (status !== 'scheduled' && status !== 'in_progress') {
       toast('error', `Cannot cancel a job in '${status}' status — only scheduled or in-progress jobs can be cancelled`);
       return;
     }
-    setCancelConfirmOpen(true);
-  };
-
-  const executeCancelJob = async () => {
-    setCancelConfirmOpen(false);
     setCancelling(true);
     try {
       const result = await supabase
@@ -414,7 +401,7 @@ export default function JobDetail() {
         .eq('id', id!)
         .select();
       checkMutationResult(result, 'Cancel job');
-      if (profile) logActivity('job_cancelled', `Job ${jobNumber} cancelled`, profile.id);
+      if (profile) logActivity({ event: 'job_cancelled', description: `Job ${jobNumber} cancelled`, performedBy: profile.id });
       toast('success', 'Job cancelled');
       setIsDirty(false);
       await fetchJob();
@@ -424,12 +411,7 @@ export default function JobDetail() {
     setCancelling(false);
   };
 
-  const handleTransferToInvoice = () => {
-    setTransferConfirmOpen(true);
-  };
-
-  const executeTransferToInvoice = async () => {
-    setTransferConfirmOpen(false);
+  const handleTransferToInvoice = async () => {
     setTransferring(true);
     try {
       const idemKey = transferJobIdem.getKey();
@@ -440,8 +422,8 @@ export default function JobDetail() {
       });
       if (error) throw error;
       transferJobIdem.resetKey();
-      const result = data as unknown as TransferJobResult;
-      if (profile) logActivity('job_invoiced', `Job ${jobNumber} → Invoice ${result.invoice_number}`, profile.id);
+      const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
+      if (profile) logActivity({ event: 'job_invoiced', description: `Job ${jobNumber} → Invoice ${result.invoice_number}`, performedBy: profile.id });
       toast('success', `Invoice ${result.invoice_number} created`);
       setIsDirty(false);
       navigate(`/invoices/${result.invoice_id}`);
@@ -455,12 +437,16 @@ export default function JobDetail() {
     if (!selectedRecipeId || !id) return;
     setLoadingRecipe(true);
     try {
+      const idemKey = loadRecipeIdem.getKey();
       const { data, error } = await supabase.rpc('load_recipe_into_job', {
         p_job_id: id,
         p_recipe_id: selectedRecipeId,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      toast('success', `Loaded ${(data as unknown as LoadRecipeResult).items_loaded} items from recipe`);
+      loadRecipeIdem.resetKey();
+      const recipeResult = assertRpcResult<LoadRecipeResult>(data, 'load_recipe_into_job');
+      toast('success', `Loaded ${recipeResult.items_loaded} items from recipe`);
       setShowRecipeModal(false);
       setIsDirty(false);
       await fetchJob();
@@ -550,7 +536,7 @@ export default function JobDetail() {
         </div>
         <div className="flex items-center gap-2">
           {!isNew && (status === 'scheduled' || status === 'in_progress') && (
-            <Button variant="danger" onClick={handleCancelJob} loading={cancelling}>
+            <Button variant="danger" onClick={() => setShowCancelConfirm(true)} loading={cancelling}>
               <Ban className="w-4 h-4" />
               Cancel Job
             </Button>
@@ -562,7 +548,7 @@ export default function JobDetail() {
             </Button>
           )}
           {canTransfer && (
-            <Button variant="secondary" onClick={handleTransferToInvoice} loading={transferring}>
+            <Button variant="secondary" onClick={() => setShowTransferConfirm(true)} loading={transferring}>
               <FileText className="w-4 h-4" />
               Transfer to Invoice
             </Button>
@@ -874,7 +860,7 @@ export default function JobDetail() {
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setShowCompleteModal(false)}>Cancel</Button>
-            <Button onClick={handleComplete} loading={completing}>
+            <Button onClick={() => setShowCompleteConfirm(true)} loading={completing}>
               <Check className="w-4 h-4" /> Complete Job
             </Button>
           </div>
@@ -917,34 +903,40 @@ export default function JobDetail() {
         />
       )}
 
+      {/* Complete Job Confirm */}
       <ConfirmModal
-        open={completeConfirmOpen}
-        onClose={() => setCompleteConfirmOpen(false)}
-        onConfirm={executeComplete}
+        open={showCompleteConfirm}
+        onClose={() => setShowCompleteConfirm(false)}
+        onConfirm={() => { setShowCompleteConfirm(false); handleComplete(); }}
         title="Complete Job"
         message="Complete this job? This will deduct inventory and create application records."
-        confirmLabel="Complete"
+        confirmLabel="Complete Job"
         variant="warning"
+        loading={completing}
       />
 
+      {/* Cancel Job Confirm */}
       <ConfirmModal
-        open={cancelConfirmOpen}
-        onClose={() => setCancelConfirmOpen(false)}
-        onConfirm={executeCancelJob}
+        open={showCancelConfirm}
+        onClose={() => setShowCancelConfirm(false)}
+        onConfirm={() => { setShowCancelConfirm(false); handleCancelJob(); }}
         title="Cancel Job"
         message="Cancel this job? This action cannot be undone."
         confirmLabel="Cancel Job"
         variant="danger"
+        loading={cancelling}
       />
 
+      {/* Transfer to Invoice Confirm */}
       <ConfirmModal
-        open={transferConfirmOpen}
-        onClose={() => setTransferConfirmOpen(false)}
-        onConfirm={executeTransferToInvoice}
+        open={showTransferConfirm}
+        onClose={() => setShowTransferConfirm(false)}
+        onConfirm={() => { setShowTransferConfirm(false); handleTransferToInvoice(); }}
         title="Transfer to Invoice"
         message="Transfer this job to an invoice? This will create a new invoice from the job chemicals."
-        confirmLabel="Transfer"
+        confirmLabel="Transfer to Invoice"
         variant="warning"
+        loading={transferring}
       />
     </div>
   );

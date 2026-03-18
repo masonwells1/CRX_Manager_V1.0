@@ -9,7 +9,7 @@ import Card from '../ui/Card';
 import DataTable, { type Column } from '../ui/DataTable';
 import Badge from '../ui/Badge';
 import ReportShell from './ReportShell';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { useToast } from '../ui/Toast';
 import { exportToCSV, fmtDateCSV } from '../../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../../lib/reportPdf';
@@ -95,7 +95,7 @@ export default function LogbookReport() {
     if (error) {
       toast('error', `Failed to load logbook: ${error.message}`);
     } else {
-      setData((rows || []) as LogbookRow[]);
+      setData(assertRpcResult<LogbookRow[]>(rows, rpcName));
     }
     setLoading(false);
   }, [tab, entityId, startDate, endDate, toast]);
@@ -109,7 +109,7 @@ export default function LogbookReport() {
     if (error) {
       toast('error', `Failed to load FAA logbook: ${error.message}`);
     } else {
-      setFaaData((rows || []) as FAALogbookRow[]);
+      setFaaData(assertRpcResult<FAALogbookRow[]>(rows, 'get_logbook_faa'));
     }
     setLoading(false);
   }, [startDate, endDate, toast]);

@@ -14,7 +14,7 @@ import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
@@ -60,6 +60,8 @@ export default function CommissionPayments() {
   const [payments, setPayments] = useState<CommissionPaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [posting, setPosting] = useState<string | null>(null);
+  const [showPostConfirm, setShowPostConfirm] = useState(false);
+  const [postTargetId, setPostTargetId] = useState<string | null>(null);
 
   // Void payment modal (admin only, posted payments)
   const [showVoid, setShowVoid] = useState(false);
@@ -77,10 +79,6 @@ export default function CommissionPayments() {
   const [payDate, setPayDate] = useState(localToday());
   const [payNotes, setPayNotes] = useState('');
   const [creating, setCreating] = useState(false);
-
-  // Post confirmation modal
-  const [postConfirmOpen, setPostConfirmOpen] = useState(false);
-  const [postTargetId, setPostTargetId] = useState<string | null>(null);
 
   const fetchPayments = useCallback(async () => {
     setLoading(true);
@@ -212,19 +210,13 @@ export default function CommissionPayments() {
     setCreating(false);
   };
 
-  const handlePost = (paymentId: string) => {
-    setPostTargetId(paymentId);
-    setPostConfirmOpen(true);
-  };
-
-  const executePost = async () => {
-    if (!postTargetId) return;
-    setPostConfirmOpen(false);
-    setPosting(postTargetId);
+  const handlePost = async (paymentId: string) => {
+    setShowPostConfirm(false);
+    setPosting(paymentId);
     try {
       const postKey = postPaymentIdem.getKey();
       const { error } = await supabase.rpc('post_commission_payment', {
-        p_payment_id: postTargetId,
+        p_payment_id: paymentId,
         p_performed_by: profile?.id,
         p_idempotency_key: postKey,
       });
@@ -250,8 +242,9 @@ export default function CommissionPayments() {
         p_idempotency_key: voidKey,
       });
       if (error) throw error;
+      const result = assertRpcResult<{ commissions_reset: number }>(voidResult, 'void_commission_payment');
       voidPaymentIdem.resetKey();
-      toast('success', `Payment ${voidTarget.payment_number} voided. ${voidResult?.commissions_reset || 0} commission(s) reset to pending.`);
+      toast('success', `Payment ${voidTarget.payment_number} voided. ${result.commissions_reset || 0} commission(s) reset to pending.`);
       setShowVoid(false);
       setVoidReason('');
       setVoidTarget(null);
@@ -319,7 +312,8 @@ export default function CommissionPayments() {
                 icon={<Send className="w-3 h-3" />}
                 onClick={(e: React.MouseEvent) => {
                   e.stopPropagation();
-                  handlePost(r.id);
+                  setPostTargetId(r.id);
+                  setShowPostConfirm(true);
                 }}
                 loading={posting === r.id}
                 showChevron={false}
@@ -482,6 +476,20 @@ export default function CommissionPayments() {
         </div>
       </Modal>
 
+      {/* Post Payment Confirm Modal */}
+      <ConfirmModal
+        open={showPostConfirm}
+        onClose={() => setShowPostConfirm(false)}
+        onConfirm={() => {
+          if (postTargetId) handlePost(postTargetId);
+        }}
+        title="Post Commission Payment"
+        message="Post these commission payments? This action cannot be undone."
+        confirmLabel="Post Payments"
+        variant="warning"
+        loading={posting !== null}
+      />
+
       {/* Create Payment Modal */}
       <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create Commission Payment" size="large">
         <div className="space-y-4">
@@ -608,16 +616,6 @@ export default function CommissionPayments() {
           </div>
         </div>
       </Modal>
-
-      <ConfirmModal
-        open={postConfirmOpen}
-        onClose={() => setPostConfirmOpen(false)}
-        onConfirm={executePost}
-        title="Post Commission Payment"
-        message="Post these commission payments? This action cannot be undone."
-        confirmLabel="Post"
-        variant="warning"
-      />
     </div>
   );
 }

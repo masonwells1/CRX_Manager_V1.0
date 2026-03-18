@@ -10,7 +10,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
@@ -21,8 +21,8 @@ import { runCriticalAction } from '../lib/criticalAction';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
-import ConfirmModal from '../components/ui/ConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
+import ConfirmModal from '../components/ui/ConfirmModal';
 
 interface LineItem {
   id?: string;
@@ -119,9 +119,6 @@ export default function InvoiceDetail() {
   const [showPrintDialog, setShowPrintDialog] = useState(false);
   const [shares, setShares] = useState<InvoiceShare[]>([]);
 
-  // Post confirm
-  const [postConfirmOpen, setPostConfirmOpen] = useState(false);
-
   // Void modal
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState('');
@@ -146,6 +143,7 @@ export default function InvoiceDetail() {
 
   // Post loading
   const [posting, setPosting] = useState(false);
+  const [showPostConfirm, setShowPostConfirm] = useState(false);
 
   // Fetch reference data
   useEffect(() => {
@@ -378,7 +376,8 @@ export default function InvoiceDetail() {
         saveIdem.resetKey();
 
         if (isNew && data) {
-          navigate(`/invoices/${data}`, { replace: true });
+          const savedId = assertRpcResult<string>(data, 'save_invoice');
+          navigate(`/invoices/${savedId}`, { replace: true });
         } else {
           fetchInvoice(id!);
         }
@@ -391,12 +390,7 @@ export default function InvoiceDetail() {
   };
 
   // Post invoice
-  const handlePost = () => {
-    setPostConfirmOpen(true);
-  };
-
-  const executePost = async () => {
-    setPostConfirmOpen(false);
+  const handlePost = async () => {
     setPosting(true);
     try {
       const idemKey = postIdem.getKey();
@@ -477,7 +471,7 @@ export default function InvoiceDetail() {
       });
       if (error) throw error;
       reverseWoIdem.resetKey();
-      await logActivity('write_off_reversed', `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, 'invoice', id);
+      await logActivity({ event: 'write_off_reversed', description: `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, performedBy: profile?.id ?? '', entityType: 'invoice', entityId: id });
       toast('success', 'Write-off reversed and balance restored');
       setShowReverseWoModal(false);
       setReverseWoReason('');
@@ -612,14 +606,7 @@ export default function InvoiceDetail() {
         });
 
         if (result.success) {
-          logActivity(
-            'invoice_emailed',
-            `Invoice ${invoice.invoice_number} emailed to ${cust.email}`,
-            profile?.id || '',
-            'invoice',
-            id,
-            invoice.customer_id,
-          );
+          logActivity({ event: 'invoice_emailed', description: `Invoice ${invoice.invoice_number} emailed to ${cust.email}`, performedBy: profile?.id || '', entityType: 'invoice', entityId: id, customerId: invoice.customer_id });
         } else {
           throw new Error(result.error || 'Failed to send email');
         }
@@ -683,7 +670,7 @@ export default function InvoiceDetail() {
             </Button>
           )}
           {!isNew && editable && isAdmin && (
-            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={handlePost} loading={posting}>
+            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={() => setShowPostConfirm(true)} loading={posting}>
               Post
             </Button>
           )}
@@ -1253,14 +1240,16 @@ export default function InvoiceDetail() {
         loading={printing}
       />
 
+      {/* Post Invoice Confirm */}
       <ConfirmModal
-        open={postConfirmOpen}
-        onClose={() => setPostConfirmOpen(false)}
-        onConfirm={executePost}
+        open={showPostConfirm}
+        onClose={() => setShowPostConfirm(false)}
+        onConfirm={() => { setShowPostConfirm(false); handlePost(); }}
         title="Post Invoice"
         message="Post this invoice? This will lock amounts and start AR aging."
         confirmLabel="Post Invoice"
         variant="warning"
+        loading={posting}
       />
     </div>
   );

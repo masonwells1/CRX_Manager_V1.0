@@ -163,6 +163,7 @@ export function collectConsoleErrors(page: Page): string[] {
       if (text.includes('favicon')) return;
       if (text.includes('Profile fetch attempt')) return;
       if (text.includes('Failed to load resource') && text.includes('favicon')) return;
+      if (text.includes('__cf_bm')) return;
       errors.push(text);
     }
   });

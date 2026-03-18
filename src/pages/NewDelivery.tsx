@@ -9,9 +9,9 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+
 import { logActivity } from '../lib/activityLogger';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -34,7 +34,8 @@ export default function NewDelivery() {
   const [searchParams] = useSearchParams();
   const { profile } = useAuth();
   const { toast } = useToast();
-  const createDeliveryIdem = useIdempotencyKey('create_delivery', profile?.id || '');
+  // No idempotency hook — delivery creation uses direct .insert(), not an RPC.
+  // Double-submit is guarded by the `saving` state disabling the submit button.
 
   const preselectedOrderId = searchParams.get('order') || '';
 
@@ -198,7 +199,7 @@ export default function NewDelivery() {
       if (!cancelled) {
         setRupWarnings(res.warnings);
         if (res.warnings.length > 0) {
-          logActivity('rup_compliance_warning', `RUP products (${res.rupProductNames.join(', ')}) on delivery for customer without valid license`, profile?.id ?? '', 'customer', customer.id, customer.id);
+          logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on delivery for customer without valid license`, performedBy: profile?.id ?? '', entityType: 'customer', entityId: customer.id, customerId: customer.id });
         }
       }
     });
@@ -281,7 +282,7 @@ export default function NewDelivery() {
     if (!profile) return;
     const activeItems = deliveryItems.filter((item) => item.quantity > 0);
     setSaving(true);
-    const _idemKey = createDeliveryIdem.getKey();
+    // No idempotency key — see comment at top of component
 
     const order = orders.find((o) => o.id === selectedOrderId);
     if (!order) {
@@ -296,7 +297,7 @@ export default function NewDelivery() {
       setSaving(false);
       return;
     }
-    const deliveryNumber = rpcNumber as string;
+    const deliveryNumber = assertRpcResult<string>(rpcNumber, 'next_delivery_number');
 
     const { data: delData, error: delError } = await supabase
       .from('deliveries')
@@ -342,10 +343,9 @@ export default function NewDelivery() {
       return;
     }
 
-    createDeliveryIdem.resetKey();
     setIsDirty(false);
     toast('success', `Delivery ${deliveryNumber} scheduled`);
-    logActivity('delivery_created', `Delivery ${deliveryNumber} created for order ${order.order_number}`, profile.id, 'delivery', delData.id, order.customer_id);
+    logActivity({ event: 'delivery_created', description: `Delivery ${deliveryNumber} created for order ${order.order_number}`, performedBy: profile.id, entityType: 'delivery', entityId: delData.id, customerId: order.customer_id });
 
     // GAP FIX #17: Notify the assigned driver
     if (selectedDriverId) {

@@ -5,15 +5,15 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
-import ConfirmModal from '../components/ui/ConfirmModal';
 import type { CycleCount, CycleCountItem } from '../types';
 
 type CountRow = CycleCount & {
@@ -52,6 +52,7 @@ export default function CycleCounts() {
   const { profile, role } = useAuth();
   const { toast } = useToast();
   const completeCycleCountIdem = useIdempotencyKey('complete_cycle_count', profile?.id || '');
+  const reverseCycleCountIdem = useIdempotencyKey('reverse_cycle_count', profile?.id || '');
   const [counts, setCounts] = useState<CountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -70,8 +71,10 @@ export default function CycleCounts() {
   const [loadingItems, setLoadingItems] = useState(false);
   const [completing, setCompleting] = useState(false);
   const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
-  const [completeConfirmMsg, setCompleteConfirmMsg] = useState('');
+  const [completeConfirmMsg, setCompleteConfirmMsg] = useState("");
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [reversing, setReversing] = useState(false);
+  const [reverseConfirmOpen, setReverseConfirmOpen] = useState(false);
 
   const isAdmin = role === 'admin';
 
@@ -137,7 +140,7 @@ export default function CycleCounts() {
         // Generate sequential count number via advisory-lock RPC
         const { data: countNumData, error: countNumError } = await supabase.rpc('next_cycle_count_number');
         if (countNumError) throw countNumError;
-        const countNum = countNumData as string;
+        const countNum = assertRpcResult<string>(countNumData, 'next_cycle_count_number');
 
         // Fetch inventory items for the selected warehouse
         const { data: invData, error: invError } = await supabase
@@ -181,13 +184,7 @@ export default function CycleCounts() {
 
         if (itemsError) throw itemsError;
 
-        await logActivity(
-          'cycle_count_started',
-          `Cycle count ${countNum} started for ${newWarehouse} (${invItems.length} products)`,
-          profile.id,
-          'cycle_count',
-          cc.id
-        );
+        await logActivity({ event: 'cycle_count_started', description: `Cycle count ${countNum} started for ${newWarehouse} (${invItems.length} products)`, performedBy: profile.id, entityType: 'cycle_count', entityId: cc.id });
 
         return `Cycle count ${countNum} created with ${invItems.length} products`;
       },
@@ -238,20 +235,19 @@ export default function CycleCounts() {
       ? ((variance || 0) / item.expected_qty) * 100
       : null;
 
-    const result = await supabase
-      .from('cycle_count_items')
-      .update({
-        counted_qty: countedQty,
-        variance: variance,
-        variance_pct: variancePct !== null ? Math.round(variancePct * 100) / 100 : null,
-        is_counted: countedQty !== null,
-        counted_by: profile.id,
-        counted_at: new Date().toISOString(),
-      })
-      .eq('id', itemId)
-      .select();
-
     try {
+      const result = await supabase
+        .from('cycle_count_items')
+        .update({
+          counted_qty: countedQty,
+          variance: variance,
+          variance_pct: variancePct !== null ? Math.round(variancePct * 100) / 100 : null,
+          is_counted: countedQty !== null,
+          counted_by: profile.id,
+          counted_at: new Date().toISOString(),
+        })
+        .eq('id', itemId)
+        .select();
       checkMutationResult(result, 'Update count item');
     } catch {
       toast('error', 'Failed to update count');
@@ -308,13 +304,7 @@ export default function CycleCounts() {
 
         const varianceItems = countItems.filter((i) => i.variance && i.variance !== 0);
 
-        await logActivity(
-          'cycle_count_completed',
-          `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`,
-          profile.id,
-          'cycle_count',
-          activeCount.id
-        );
+        await logActivity({ event: 'cycle_count_completed', description: `Cycle count ${activeCount.count_number} completed — ${varianceItems.length} variances found`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
       },
       toast,
       setLoading: setCompleting,
@@ -354,6 +344,40 @@ export default function CycleCounts() {
         fetchCounts();
       },
     });
+  };
+
+  // Reverse a completed cycle count (undo inventory adjustments)
+  const handleReverse = () => {
+    if (!activeCount || !profile) return;
+    setReverseConfirmOpen(true);
+  };
+
+  const doReverse = async () => {
+    if (!activeCount || !profile) return;
+    setReverseConfirmOpen(false);
+
+    setReversing(true);
+    try {
+      const key = reverseCycleCountIdem.getKey();
+      const { error } = await supabase.rpc('reverse_completed_cycle_count', {
+        p_cycle_count_id: activeCount.id,
+        p_reversed_by: profile.id,
+        p_idempotency_key: key,
+      });
+
+      if (error) throw error;
+      reverseCycleCountIdem.resetKey();
+
+      await logActivity({ event: 'cycle_count_reversed', description: `Cycle count ${activeCount.count_number} reversed — inventory adjustments undone`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
+
+      toast('success', `Cycle count ${activeCount.count_number} reversed. Inventory restored.`);
+      setShowDetail(false);
+      fetchCounts();
+    } catch (err: unknown) {
+      toast('error', err instanceof Error ? err.message : 'Failed to reverse cycle count');
+    } finally {
+      setReversing(false);
+    }
   };
 
   const statusBadge = (status: string) => {
@@ -502,6 +526,37 @@ export default function CycleCounts() {
         </div>
       </Modal>
 
+      {/* Confirm Modals */}
+      <ConfirmModal
+        open={completeConfirmOpen}
+        onClose={() => setCompleteConfirmOpen(false)}
+        onConfirm={executeComplete}
+        title="Complete with Uncounted Items"
+        message={completeConfirmMsg || `Some products have not been counted yet. Complete anyway?`}
+        confirmLabel="Complete Anyway"
+        variant="warning"
+        loading={completing}
+      />
+      <ConfirmModal
+        open={cancelConfirmOpen}
+        onClose={() => setCancelConfirmOpen(false)}
+        onConfirm={executeCancelCount}
+        title="Cancel Cycle Count"
+        message="Cancel this cycle count? No inventory adjustments will be made."
+        confirmLabel="Cancel Count"
+        variant="warning"
+      />
+      <ConfirmModal
+        open={reverseConfirmOpen}
+        onClose={() => setReverseConfirmOpen(false)}
+        onConfirm={doReverse}
+        title="Reverse Cycle Count"
+        message="Reverse this completed cycle count? All inventory adjustments will be undone."
+        confirmLabel="Reverse Count"
+        variant="danger"
+        loading={reversing}
+      />
+
       {/* Cycle Count Detail Modal */}
       <Modal
         open={showDetail}
@@ -639,29 +694,22 @@ export default function CycleCounts() {
                 </Button>
               </div>
             )}
+            {activeCount.status === 'completed' && isAdmin && (
+              <div className="flex justify-end pt-2 border-t">
+                <Button
+                  variant="secondary"
+                  onClick={handleReverse}
+                  loading={reversing}
+                  icon={<XCircle className="w-4 h-4" />}
+                >
+                  Reverse &amp; Undo Adjustments
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </Modal>
 
-      <ConfirmModal
-        open={completeConfirmOpen}
-        onClose={() => setCompleteConfirmOpen(false)}
-        onConfirm={executeComplete}
-        title="Complete Cycle Count"
-        message={completeConfirmMsg}
-        confirmLabel="Complete Anyway"
-        variant="warning"
-      />
-
-      <ConfirmModal
-        open={cancelConfirmOpen}
-        onClose={() => setCancelConfirmOpen(false)}
-        onConfirm={executeCancelCount}
-        title="Cancel Cycle Count"
-        message="Cancel this cycle count? No inventory adjustments will be made."
-        confirmLabel="Cancel Count"
-        variant="danger"
-      />
     </div>
   );
 }

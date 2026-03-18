@@ -10,7 +10,8 @@ import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase } from '../lib/db';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { supabase, assertRpcResult } from '../lib/db';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate, localToday } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -48,6 +49,8 @@ export default function CustomerDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
+  const saveCustomerIdem = useIdempotencyKey('save_customer', profile?.id || '');
   const isNew = id === 'new';
 
   const [customer, setCustomer] = useState<Partial<Customer>>({
@@ -168,7 +171,7 @@ export default function CustomerDetail() {
         Sentry.captureException(fieldError, { tags: { source: 'fetch', action: 'load_customer_fields' } });
         toast('error', 'Failed to load fields');
       }
-      const rows = ((data || []) as FieldGeoRow[]).map((f) => ({
+      const rows = (assertRpcResult<FieldGeoRow[]>(data, 'get_fields_with_geojson')).map((f) => ({
         ...f,
         customer_name: f.customer_name || '',
       }));
@@ -253,10 +256,10 @@ export default function CustomerDetail() {
       if (agingRes.error) toast('error', 'Failed to load AR aging');
       if (txnRes.error) toast('error', 'Failed to load transactions');
       if (prepayRes.error) toast('error', 'Failed to load prepay credits');
-      const allAging = (agingRes.data || []) as AgingRow[];
+      const allAging = assertRpcResult<AgingRow[]>(agingRes.data, 'get_ar_aging');
       const myAging = allAging.find((a) => a.customer_id === id) || null;
       setAging(myAging);
-      setTransactions((txnRes.data || []) as TxnRow[]);
+      setTransactions(assertRpcResult<TxnRow[]>(txnRes.data, 'get_customer_statement'));
       setPrepayCredits((prepayRes.data || []) as PrepayRow[]);
       financialsFetched.current = true;
       setFinancialsLoading(false);
@@ -386,20 +389,24 @@ export default function CustomerDetail() {
         is_default: addr.is_default,
       }));
 
+      const idemKey = saveCustomerIdem.getKey();
       const { data, error } = await supabase.rpc('save_customer', {
         p_customer_id: isNew ? null : id,
         p_customer_payload: customerPayload,
         p_addresses: addressesPayload,
         p_performed_by: profile?.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) {
         toast('error', error.message);
       } else {
+        saveCustomerIdem.resetKey();
+        const result = assertRpcResult<{ customer_id: string }>(data, 'save_customer');
         setIsDirty(false);
         if (isNew) {
           toast('success', 'Customer created');
-          navigate(`/customers/${data?.customer_id ?? data}`, { replace: true });
+          navigate(`/customers/${result.customer_id ?? data}`, { replace: true });
         } else {
           toast('success', 'Customer updated');
           fetchAddresses();
@@ -440,7 +447,7 @@ export default function CustomerDetail() {
         p_season: season,
       });
       if (error) throw error;
-      await downloadYearEndSummaryPdf(data as unknown as YearEndSummaryData, options);
+      await downloadYearEndSummaryPdf(assertRpcResult<YearEndSummaryData>(data, 'get_customer_year_end_summary'), options);
       toast('success', `Season ${season} summary generated`);
       setShowSummaryDialog(false);
     } catch (err: unknown) {
@@ -830,12 +837,15 @@ export default function CustomerDetail() {
                     <button
                       onClick={async () => {
                         const lastQuote = quotes[0];
+                        const idemKey = duplicateQuoteIdem.getKey();
                         const { data, error } = await supabase.rpc('duplicate_quote', {
                           p_source_quote_id: lastQuote.id,
                           p_performed_by: profile?.id,
+                          p_idempotency_key: idemKey,
                         });
                         if (error) { toast('error', 'Failed to duplicate quote'); return; }
-                        const result = data as { quote_id: string };
+                        const result = assertRpcResult<{ quote_id: string }>(data, 'duplicate_quote');
+                        duplicateQuoteIdem.resetKey();
                         navigate(`/quotes/${result.quote_id}`);
                       }}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-crx-green text-crx-green rounded-lg hover:bg-crx-green-tint"

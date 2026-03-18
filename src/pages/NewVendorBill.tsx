@@ -12,7 +12,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
@@ -128,6 +128,7 @@ export default function NewVendorBill() {
 
       if (error) throw error;
       createBillIdem.resetKey();
+      assertRpcResult(data, 'create_vendor_bill');
 
       toast('success', 'Vendor bill created');
       navigate(`/accounts-payable/bills/${data}`);

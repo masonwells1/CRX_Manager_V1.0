@@ -11,7 +11,8 @@ import DrawControl from '../components/map/DrawControl';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import area from '@turf/area';
 import turfCentroid from '@turf/centroid';
@@ -33,6 +34,8 @@ export default function FieldDetail() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { profile } = useAuth();
+  const saveFieldIdem = useIdempotencyKey('save_field', profile?.id || '');
+  const saveFieldGeoIdem = useIdempotencyKey('save_field_geometry', profile?.id || '');
   const isNew = id === 'new';
 
   const [field, setField] = useState<Partial<Field>>({
@@ -114,8 +117,9 @@ export default function FieldDetail() {
         Sentry.captureException(geoError, { tags: { source: 'fetch', action: 'load_field_geometry' } });
         toast('warning', 'Could not load field boundary');
       }
-      if (geoData && geoData.length > 0) {
-        const geo = geoData[0];
+      const geoRows = assertRpcResult<Array<{ boundary_geojson?: string; centroid_geojson?: string }>>(geoData, 'get_field_geojson');
+      if (geoRows && geoRows.length > 0) {
+        const geo = geoRows[0];
         if (geo.boundary_geojson) {
           try {
             const parsed = JSON.parse(geo.boundary_geojson);
@@ -257,16 +261,20 @@ export default function FieldDetail() {
         pricing_note: s.pricing_note || null,
       }));
 
+      const idemKey = saveFieldIdem.getKey();
       const { data, error } = await supabase.rpc('save_field', {
         p_field_id: isNew ? null : id,
         p_field_payload: fieldPayload,
         p_billing_defaults: billingPayload,
         p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
       });
 
       if (error) {
         toast('error', error.message);
       } else {
+        saveFieldIdem.resetKey();
+        assertRpcResult(data, 'save_field');
         const savedFieldId = isNew ? data : id;
 
         // Save geometry if a boundary was drawn
@@ -275,14 +283,18 @@ export default function FieldDetail() {
           const centroidGeoJSON = JSON.stringify(centroidResult.geometry);
           const boundaryGeoJSONStr = JSON.stringify(boundaryGeoJSON.geometry);
 
+          const geoIdemKey = saveFieldGeoIdem.getKey();
           const { error: geoError } = await supabase.rpc('save_field_geometry', {
             p_field_id: savedFieldId,
             p_centroid_geojson: centroidGeoJSON,
             p_boundary_geojson: boundaryGeoJSONStr,
+            p_idempotency_key: geoIdemKey,
           });
           if (geoError) {
             Sentry.captureException(geoError, { tags: { source: 'critical_action', action: 'save_field_geometry' } });
             toast('error', 'Field saved but boundary could not be saved. Please try re-drawing.');
+          } else {
+            saveFieldGeoIdem.resetKey();
           }
         }
 

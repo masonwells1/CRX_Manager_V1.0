@@ -3,7 +3,7 @@ import { Plus, Trash2, Save, AlertCircle, Beaker } from 'lucide-react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Input from '../ui/Input';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { logActivity } from '../../lib/activityLogger';
 import { validateBlendMath } from '../../lib/blendMathValidator';
@@ -152,7 +152,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       // Generate ticket number
       const { data: ticketNumberData, error: ticketNumErr } = await supabase.rpc('generate_ticket_number');
       if (ticketNumErr) throw ticketNumErr;
-      const ticketNumber = ticketNumberData as string;
+      const ticketNumber = assertRpcResult<string>(ticketNumberData, 'generate_ticket_number');
 
       // Insert blend ticket
       const { data: ticket, error: ticketErr } = await supabase
@@ -212,14 +212,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
       }
 
       // Log activity
-      await logActivity(
-        'blend_ticket_created',
-        `Blend ticket ${ticketNumber} created manually`,
-        profile.id,
-        'blend_ticket',
-        ticket.id,
-        formData.customer_id || undefined
-      );
+      await logActivity({ event: 'blend_ticket_created', description: `Blend ticket ${ticketNumber} created manually`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: formData.customer_id || undefined });
 
       onComplete();
     } catch (err: unknown) {

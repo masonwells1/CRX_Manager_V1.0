@@ -3,10 +3,11 @@ import globals from 'globals';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import jsxA11y from 'eslint-plugin-jsx-a11y';
+import localRules from 'eslint-plugin-local-rules';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  { ignores: ['dist', 'CRX_Manager_V1.0'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
@@ -18,6 +19,7 @@ export default tseslint.config(
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,
       'jsx-a11y': jsxA11y,
+      'local-rules': localRules,
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
@@ -67,6 +69,8 @@ export default tseslint.config(
           message: 'Import { Sentry } from "../lib/sentry" instead. See CLAUDE.md.',
         }],
       }],
+      'local-rules/require-assert-rpc-result': 'error',
+      'local-rules/no-direct-sentry-import': 'error',
       'no-console': ['warn', { allow: ['warn'] }],
       '@typescript-eslint/no-unused-vars': [
         'error',

@@ -116,14 +116,14 @@ export default function VehicleDetail() {
       if (isNew) {
         const result = await supabase.from('vehicles').insert(payload).select().single();
         checkMutationResult(result, 'Create vehicle');
-        if (profile) logActivity('vehicle_created', `Vehicle "${form.vehicle_name}" created`, profile.id);
+        if (profile) logActivity({ event: 'vehicle_created', description: `Vehicle "${form.vehicle_name}" created`, performedBy: profile.id });
         toast('success', 'Vehicle created');
         setIsDirty(false);
         navigate(`/vehicles/${result.data!.id}`);
       } else {
         const result = await supabase.from('vehicles').update(payload).eq('id', id).select().single();
         checkMutationResult(result, 'Update vehicle');
-        if (profile) logActivity('vehicle_updated', `Vehicle "${form.vehicle_name}" updated`, profile.id);
+        if (profile) logActivity({ event: 'vehicle_updated', description: `Vehicle "${form.vehicle_name}" updated`, performedBy: profile.id });
         toast('success', 'Vehicle saved');
         setIsDirty(false);
       }

@@ -17,7 +17,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
@@ -201,7 +201,7 @@ export default function PrepayWorkspace() {
         });
         if (error) throw error;
         batchApplyIdem.resetKey();
-        const result = data as { applied_count: number; total_applied_cents: number };
+        const result = assertRpcResult<{ applied_count: number; total_applied_cents: number }>(data, 'batch_apply_prepayments');
         toast('success', `Applied ${fmt(result.total_applied_cents)} across ${result.applied_count} allocation(s)`);
         setPendingAllocations([]);
         fetchData();

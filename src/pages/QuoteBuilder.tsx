@@ -23,8 +23,8 @@ import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
-import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
@@ -144,6 +144,12 @@ export default function QuoteBuilder() {
   const { profile } = useAuth();
   const saveQuoteIdem = useIdempotencyKey('save_quote', profile?.id || '');
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
+  const plannedHoldsIdem = useIdempotencyKey('create_planned_holds', profile?.id || '');
+  const saveTemplateIdem = useIdempotencyKey('save_quote_template', profile?.id || '');
+  const fromTemplateIdem = useIdempotencyKey('create_quote_from_template', profile?.id || '');
+  const rolloverIdem = useIdempotencyKey('rollover_quote_to_season', profile?.id || '');
+  const createVersionIdem = useIdempotencyKey('create_quote_version', profile?.id || '');
+  const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
   const isEditing = Boolean(id);
 
   const [loading, setLoading] = useState(isEditing);
@@ -151,6 +157,7 @@ export default function QuoteBuilder() {
   const [_sending, __setSending] = useState(false);
   const [converting, setConverting] = useState(false);
   const [confirmConvertOpen, setConfirmConvertOpen] = useState(false);
+  const [recentOrderWarning, setRecentOrderWarning] = useState<string | null>(null);
   const [duplicateOrderConfirmOpen, setDuplicateOrderConfirmOpen] = useState(false);
   const [duplicateOrderMsg, setDuplicateOrderMsg] = useState('');
 
@@ -229,7 +236,7 @@ export default function QuoteBuilder() {
       if (!cancelled) {
         setRupWarnings(res.warnings);
         if (res.warnings.length > 0) {
-          logActivity('rup_compliance_warning', `RUP products (${res.rupProductNames.join(', ')}) on quote for customer without valid license`, profile?.id ?? '', 'customer', customerId, customerId);
+          logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on quote for customer without valid license`, performedBy: profile?.id ?? '', entityType: 'customer', entityId: customerId, customerId });
         }
       }
     });
@@ -277,7 +284,7 @@ export default function QuoteBuilder() {
       const next = (count || 0) + 1;
       setQuoteNumber(`Q-${year}-${String(next).padStart(4, '0')}`);
     } else {
-      setQuoteNumber(data as string);
+      setQuoteNumber(assertRpcResult<string>(data, 'generate_quote_number'));
     }
   };
 
@@ -820,7 +827,8 @@ export default function QuoteBuilder() {
       }
 
       saveQuoteIdem.resetKey();
-      const savedQuoteId = data?.quote_id || quoteId;
+      const result = assertRpcResult<{ quote_id: string }>(data, 'save_quote');
+      const savedQuoteId = result.quote_id || quoteId;
       if (!quoteId || !isEditing) {
         setQuoteId(savedQuoteId);
       }
@@ -843,31 +851,28 @@ export default function QuoteBuilder() {
       });
       // === GAP FIX #5: Log activity for quote created/updated ===
       if (profile) {
-        await logActivity(
-          isEditing ? 'quote_updated' : 'quote_created',
-          `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'} for ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
-          profile.id,
-          'quote',
-          result,
-          customerId
-        );
+        await logActivity({ event: isEditing ? 'quote_updated' : 'quote_created', description: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'} for ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`, performedBy: profile.id, entityType: 'quote', entityId: result, customerId });
       }
       // Planned program hold management
       if (isPlanned && profile) {
+        const holdIdemKey = plannedHoldsIdem.getKey();
         const { error: holdError } = await supabase.rpc('create_planned_holds', {
           p_quote_id: result,
           p_performed_by: profile.id,
+          p_idempotency_key: holdIdemKey,
         });
         if (holdError) toast('error', 'Failed to create inventory holds');
-        else toast('success', 'Inventory holds created for planned program');
+        else { plannedHoldsIdem.resetKey(); toast('success', 'Inventory holds created for planned program'); }
       } else if (!isPlanned && wasPlanned) {
-        // Release holds when toggled off
-        const holdResult = await supabase.from('inventory_holds')
+        // Release holds when toggled off — zero rows is valid (no holds may exist)
+        const releaseResult = await supabase.from('inventory_holds')
           .update({ is_active: false, updated_at: new Date().toISOString() })
           .eq('source_id', result)
           .eq('is_active', true)
           .select();
-        checkMutationResult(holdResult, 'Release inventory holds');
+        // Zero rows is valid (no holds may exist), so only check for actual errors
+        if (releaseResult.error) toast('error', 'Failed to release inventory holds: ' + releaseResult.error.message);
+        else if (releaseResult.data && releaseResult.data.length > 0) checkMutationResult(releaseResult, 'Release inventory holds');
         setWasPlanned(false);
       }
 
@@ -879,13 +884,16 @@ export default function QuoteBuilder() {
   // Save as template handler
   const handleSaveTemplate = async () => {
     if (!quoteId || !profile) return;
+    const tmplIdemKey = saveTemplateIdem.getKey();
     const { error } = await supabase.rpc('save_quote_template', {
       p_quote_id: quoteId,
       p_template_name: templateName.trim(),
       p_description: templateDescription.trim() || null,
       p_performed_by: profile.id,
+      p_idempotency_key: tmplIdemKey,
     });
     if (error) { toast('error', 'Failed to save template'); return; }
+    saveTemplateIdem.resetKey();
     toast('success', `Template "${templateName}" saved`);
     setShowSaveTemplateModal(false);
     setTemplateName('');
@@ -896,26 +904,32 @@ export default function QuoteBuilder() {
   const handleSelectTemplate = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const templateId = e.target.value;
     if (!templateId || !customerId || !profile) return;
+    const ftIdemKey = fromTemplateIdem.getKey();
     const { data, error } = await supabase.rpc('create_quote_from_template', {
       p_template_id: templateId,
       p_customer_id: customerId,
       p_performed_by: profile.id,
+      p_idempotency_key: ftIdemKey,
     });
     if (error) { toast('error', 'Failed to create from template'); return; }
-    const result = data as { quote_id: string; quote_number: string };
+    fromTemplateIdem.resetKey();
+    const result = assertRpcResult<{ quote_id: string; quote_number: string }>(data, 'create_quote_from_template');
     navigate(`/quotes/${result.quote_id}`);
   };
 
   // Seasonal rollover handler
   const handleRollover = async () => {
     if (!quoteId || !profile) return;
+    const rollIdemKey = rolloverIdem.getKey();
     const { data, error } = await supabase.rpc('rollover_quote_to_season', {
       p_quote_id: quoteId,
       p_new_season: rolloverSeason,
       p_performed_by: profile.id,
+      p_idempotency_key: rollIdemKey,
     });
     if (error) { toast('error', 'Failed to roll over quote'); return; }
-    const result = data as { quote_id: string; quote_number: string; season: number };
+    rolloverIdem.resetKey();
+    const result = assertRpcResult<{ quote_id: string; quote_number: string; season: number }>(data, 'rollover_quote_to_season');
     toast('success', `Rolled over to season ${result.season} — ${result.quote_number}`);
     navigate(`/quotes/${result.quote_id}`);
   };
@@ -981,23 +995,20 @@ export default function QuoteBuilder() {
     if (result) {
       // Create version snapshot via RPC
       if (profile) {
+        const sendVerIdemKey = createVersionIdem.getKey();
         const { data: versionData, error: versionError } = await supabase.rpc('create_quote_version', {
           p_quote_id: result,
           p_performed_by: profile.id,
           p_method: 'manual',
+          p_idempotency_key: sendVerIdemKey,
         });
         if (versionError) {
           Sentry.captureException(versionError, { tags: { source: 'mutation', action: 'create_quote_version' } });
           toast('error', 'Quote sent but version snapshot failed.');
         } else {
-          await logActivity(
-            'quote_sent',
-            `Quote ${quoteNumber} v${versionData?.version_number || '?'} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`,
-            profile.id,
-            'quote',
-            result,
-            customerId
-          );
+          const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
+          createVersionIdem.resetKey();
+          await logActivity({ event: 'quote_sent', description: `Quote ${quoteNumber} v${ver.version_number} sent to ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`, performedBy: profile.id, entityType: 'quote', entityId: result, customerId });
         }
       }
 
@@ -1088,7 +1099,7 @@ export default function QuoteBuilder() {
             toast('success', 'Quote sent (email delivery failed — check email log)');
           }
         } catch (emailErr) {
-          console.warn('Quote email failed:', emailErr);
+          Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), { level: 'warning', extra: { context: 'Quote email failed — quote already sent' } });
           toast('success', 'Quote sent (email could not be sent)');
         }
       } else {
@@ -1170,21 +1181,18 @@ export default function QuoteBuilder() {
     const savedId = await saveQuote(status === 'draft' ? 'draft' : status);
     if (!savedId) return;
     // Create version snapshot via RPC
+    const presVerIdemKey = createVersionIdem.getKey();
     const { data: versionData, error } = await supabase.rpc('create_quote_version', {
       p_quote_id: savedId,
       p_performed_by: profile.id,
       p_method: 'presented',
+      p_idempotency_key: presVerIdemKey,
     });
     if (error) { toast('error', 'Failed to mark as presented'); return; }
-    await logActivity(
-      'quote_presented',
-      `Quote ${quoteNumber} V${versionData?.version_number || '?'} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`,
-      profile.id,
-      'quote',
-      savedId,
-      customerId
-    );
-    toast('success', `Quote marked as presented (V${versionData?.version_number || '?'})`);
+    const ver = assertRpcResult<{ version_number: number }>(versionData, 'create_quote_version');
+    createVersionIdem.resetKey();
+    await logActivity({ event: 'quote_presented', description: `Quote ${quoteNumber} V${ver.version_number} marked as presented to ${selectedCustomer?.farm_name || 'customer'}`, performedBy: profile.id, entityType: 'quote', entityId: savedId, customerId });
+    toast('success', `Quote marked as presented (V${ver.version_number})`);
     setShowPreviewModal(false);
     if (previewPdfUrl) URL.revokeObjectURL(previewPdfUrl);
     setPreviewPdfUrl(null);
@@ -1225,12 +1233,15 @@ export default function QuoteBuilder() {
 
   const handleRestoreVersion = async (versionId: string) => {
     if (!quoteId || !profile) return;
+    const restoreIdemKey = restoreVersionIdem.getKey();
     const { error } = await supabase.rpc('restore_quote_version', {
       p_quote_id: quoteId,
       p_version_id: versionId,
       p_performed_by: profile.id,
+      p_idempotency_key: restoreIdemKey,
     });
     if (error) { toast('error', 'Failed to restore version'); return; }
+    restoreVersionIdem.resetKey();
     toast('success', `Restored from V${selectedVersion?.version_number || '?'}`);
     setConfirmRestore(null);
     setSelectedVersion(null);
@@ -1306,7 +1317,7 @@ export default function QuoteBuilder() {
           const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', {
             p_customer_id: customerId,
           });
-          const cl = creditCheck as { exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null;
+          const cl = assertRpcResult<{ exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null>(creditCheck, 'check_customer_credit_limit');
           if (cl && cl.exceeded) {
             const fmtCl = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
             toast('warning', `Credit limit warning: ${selectedCustomer?.farm_name || 'Customer'} outstanding AR ${fmtCl(cl.outstanding_ar ?? 0)} exceeds limit ${fmtCl(cl.credit_limit ?? 0)}`);
@@ -2414,6 +2425,18 @@ export default function QuoteBuilder() {
           </div>
         </div>
       </Modal>
+
+      {/* Recent order duplicate warning */}
+      <ConfirmModal
+        open={!!recentOrderWarning}
+        onClose={() => setRecentOrderWarning(null)}
+        onConfirm={executeConvertToOrder}
+        title="Duplicate Order Warning"
+        message={recentOrderWarning || ''}
+        confirmLabel="Convert Anyway"
+        variant="warning"
+        loading={converting}
+      />
 
       <Modal
         open={showPreviewModal}

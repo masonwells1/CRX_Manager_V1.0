@@ -10,18 +10,19 @@ import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Modal from '../components/ui/Modal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
-import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { sendEmail, buildEmailHtml } from '../lib/emailService';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
 import { parseLocalDate } from '../lib/dateUtils';
-import ConfirmModal from '../components/ui/ConfirmModal';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery, Product, LinkedEntityType } from '../types';
@@ -47,6 +48,9 @@ export default function OrderDetail() {
   const { toast } = useToast();
   const { role, profile } = useAuth();
   const updateOrderIdem = useIdempotencyKey('update_order_items', profile?.id || '');
+  const voidOrderIdem = useIdempotencyKey('void_order', profile?.id || '');
+  const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '');
+  const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -54,7 +58,6 @@ export default function OrderDetail() {
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name?: string })[]>([]);
   const [loading, setLoading] = useState(true);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
-  const [statusChangeConfirmOpen, setStatusChangeConfirmOpen] = useState(false);
 
   // Related blend tickets
   const [relatedTickets, setRelatedTickets] = useState<{ id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }[]>([]);
@@ -86,6 +89,8 @@ export default function OrderDetail() {
   const [statusModalOpen, setStatusModalOpen] = useState(false);
   const [newStatus, setNewStatus] = useState('');
   const [changingStatus, setChangingStatus] = useState(false);
+  const [statusConfirmOpen, setStatusConfirmOpen] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<string>('');
 
   // Void order (fulfilled → voided, admin-only)
   const [voidModalOpen, setVoidModalOpen] = useState(false);
@@ -317,14 +322,7 @@ export default function OrderDetail() {
       checkMutationResult(result, 'Toggle planned status');
       setOrder({ ...order, is_planned: newValue });
       toast('success', newValue ? 'Order marked as Planned' : 'Order marked as Committed');
-      logActivity(
-        'order_updated',
-        `Order ${order.order_number} marked as ${newValue ? 'planned' : 'committed'}`,
-        profile.id,
-        'order',
-        order.id,
-        order.customer_id,
-      );
+      logActivity({ event: 'order_updated', description: `Order ${order.order_number} marked as ${newValue ? 'planned' : 'committed'}`, performedBy: profile.id, entityType: 'order', entityId: order.id, customerId: order.customer_id });
     } catch (err: unknown) {
       toast('error', sanitizeError(err));
     }
@@ -333,32 +331,36 @@ export default function OrderDetail() {
 
   const handleStatusChange = () => {
     if (!newStatus || !order || !profile) return;
-    setStatusChangeConfirmOpen(true);
+    setPendingStatus(newStatus);
+    setStatusConfirmOpen(true);
   };
 
   const executeStatusChange = async () => {
-    setStatusChangeConfirmOpen(false);
-    if (!newStatus || !order || !profile) return;
+    if (!pendingStatus || !order || !profile) return;
+    setStatusConfirmOpen(false);
+    const targetStatus = pendingStatus;
 
     await runCriticalAction({
       action: async () => {
-        if (newStatus === 'cancelled' && order.status !== 'cancelled') {
+        if (targetStatus === 'cancelled' && order.status !== 'cancelled') {
           // Atomic RPC: cancellation + inventory release + cascade (void drafts, zero commissions, release holds)
-          const idempotencyKey = crypto.randomUUID();
+          const cancelKey = cancelOrderIdem.getKey();
           const { data: cancelResult, error } = await supabase.rpc('cancel_order', {
             p_order_id: id!,
             p_performed_by: profile.id,
-            p_idempotency_key: idempotencyKey,
+            p_idempotency_key: cancelKey,
           });
           if (error) throw error;
+          cancelOrderIdem.resetKey();
+          const result = assertRpcResult<{ success: boolean; holds_released: number; commissions_cancelled: number; draft_invoices_cancelled: number; posted_invoices_flagged: number; paid_commissions_flagged: number }>(cancelResult, 'cancel_order');
           // Show summary toast with cascade details
-          if (cancelResult && cancelResult.success) {
+          if (result && result.success) {
             const parts: string[] = ['Order cancelled.'];
-            if (cancelResult.holds_released > 0) parts.push(`${cancelResult.holds_released} hold(s) released.`);
-            if (cancelResult.commissions_cancelled > 0) parts.push(`${cancelResult.commissions_cancelled} commission(s) zeroed.`);
-            if (cancelResult.draft_invoices_cancelled > 0) parts.push(`${cancelResult.draft_invoices_cancelled} draft invoice(s) cancelled.`);
-            if (cancelResult.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
-            if (cancelResult.paid_commissions_flagged > 0) parts.push(`Admin notified about ${cancelResult.paid_commissions_flagged} paid commission(s).`);
+            if (result.holds_released > 0) parts.push(`${result.holds_released} hold(s) released.`);
+            if (result.commissions_cancelled > 0) parts.push(`${result.commissions_cancelled} commission(s) zeroed.`);
+            if (result.draft_invoices_cancelled > 0) parts.push(`${result.draft_invoices_cancelled} draft invoice(s) cancelled.`);
+            if (result.posted_invoices_flagged > 0) parts.push(`Admin notified about ${result.posted_invoices_flagged} posted invoice(s) requiring manual void.`);
+            if (result.paid_commissions_flagged > 0) parts.push(`Admin notified about ${result.paid_commissions_flagged} paid commission(s).`);
             toast('success', parts.join(' '));
           }
         } else {
@@ -369,25 +371,25 @@ export default function OrderDetail() {
             partially_fulfilled: ['cancelled'],
           };
           const allowed = validTransitions[order.status] || [];
-          if (!allowed.includes(newStatus)) {
-            toast('error', `Cannot change status from '${order.status}' to '${newStatus}'`);
+          if (!allowed.includes(targetStatus)) {
+            toast('error', `Cannot change status from '${order.status}' to '${targetStatus}'`);
             setStatusModalOpen(false);
             return;
           }
           const statusResult = await supabase
             .from('orders')
-            .update({ status: newStatus, updated_at: new Date().toISOString() })
+            .update({ status: targetStatus, updated_at: new Date().toISOString() })
             .eq('id', id!)
             .select();
           checkMutationResult(statusResult, 'Update order status');
-          toast('success', `Status changed to ${newStatus.replace('_', ' ')}`);
+          toast('success', `Status changed to ${targetStatus.replace('_', ' ')}`);
         }
 
-        logActivity('order_status_changed', `Order ${order.order_number} status changed to ${newStatus}`, profile.id, 'order', order.id, order.customer_id);
-        notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', newStatus, order.created_by ?? undefined);
+        logActivity({ event: 'order_status_changed', description: `Order ${order.order_number} status changed to ${targetStatus}`, performedBy: profile.id, entityType: 'order', entityId: order.id, customerId: order.customer_id });
+        notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', targetStatus, order.created_by ?? undefined);
 
         // === Email customer when order is confirmed ===
-        if (newStatus === 'confirmed' && customer?.email) {
+        if (targetStatus === 'confirmed' && customer?.email) {
           try {
             const itemSummary = items
               .slice(0, 10)
@@ -450,7 +452,7 @@ export default function OrderDetail() {
             }
             // If email fails, the status toast above already showed success
           } catch (emailErr) {
-            console.warn('Order confirmation email failed:', emailErr);
+            Sentry.captureException(emailErr instanceof Error ? emailErr : new Error(String(emailErr)), { level: 'warning', extra: { context: 'Order confirmation email failed — status change already succeeded' } });
             // Status change already succeeded — don't show error for email
           }
         }
@@ -469,12 +471,16 @@ export default function OrderDetail() {
     if (!order || !profile) return;
     setVoiding(true);
     try {
+      const idemKey = voidOrderIdem.getKey();
       const { data: voidResult, error } = await supabase.rpc('void_order', {
         p_order_id: order.id,
         p_performed_by: profile.id,
         p_reason: voidReason.trim() || 'Voided by admin',
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      voidOrderIdem.resetKey();
+      assertRpcResult(voidResult, 'void_order');
 
       const parts: string[] = ['Order voided.'];
       if (voidResult?.inventory_products_restored > 0)
@@ -579,13 +585,15 @@ export default function OrderDetail() {
     if (!profile || !id) return;
     await runCriticalAction({
       action: async () => {
+        const invoiceKey = createInvoiceIdem.getKey();
         const { data, error } = await supabase.rpc('create_invoice_from_order', {
           p_order_id: id,
           p_salesman_id: profile.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: invoiceKey,
         });
         if (error) throw error;
-        const invoiceId = data as string;
+        createInvoiceIdem.resetKey();
+        const invoiceId = assertRpcResult<string>(data, 'create_invoice_from_order');
         navigate(`/invoices/${invoiceId}`);
       },
       toast,
@@ -1353,6 +1361,17 @@ export default function OrderDetail() {
         </div>
       </Modal>
 
+      <ConfirmModal
+        open={statusConfirmOpen}
+        onClose={() => setStatusConfirmOpen(false)}
+        onConfirm={executeStatusChange}
+        title="Change Order Status"
+        message={`Change order status to ${pendingStatus.replace('_', ' ')}?`}
+        variant="warning"
+        confirmLabel="Change Status"
+        loading={changingStatus}
+      />
+
       <QuickTaskModal
         open={quickTaskOpen}
         onClose={() => setQuickTaskOpen(false)}
@@ -1362,15 +1381,6 @@ export default function OrderDetail() {
         prefillContent={`Customer: ${customer?.farm_name || 'Unknown'}`}
       />
 
-      <ConfirmModal
-        open={statusChangeConfirmOpen}
-        onClose={() => setStatusChangeConfirmOpen(false)}
-        onConfirm={executeStatusChange}
-        title="Change Order Status"
-        message={`Change order status to ${newStatus.replace('_', ' ')}?`}
-        confirmLabel="Change Status"
-        variant="warning"
-      />
     </div>
   );
 }

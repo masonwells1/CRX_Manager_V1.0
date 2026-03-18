@@ -13,7 +13,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { exportToCSV } from '../lib/csvExport';
 import { parseLocalDate } from '../lib/dateUtils';
@@ -154,7 +154,7 @@ export default function PaymentHistory() {
           p_idempotency_key: crypto.randomUUID(),
         });
         if (error) throw error;
-        const result = data as { success: boolean; reversed_cents: number; invoices_affected: number };
+        const result = assertRpcResult<{ success: boolean; reversed_cents: number; invoices_affected: number }>(data, 'void_payment');
         if (!result?.success) throw new Error('Void failed');
       },
       toast,

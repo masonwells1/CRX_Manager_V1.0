@@ -9,7 +9,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
+import { supabase, sanitizeError, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { notifyDamagedReceiving, notifyOverReceive } from '../lib/notificationTriggers';
@@ -199,6 +199,7 @@ export default function PurchaseOrderDetail() {
           p_allow_over_receive: true,
         });
         if (error) throw error;
+        assertRpcResult(data, 'receive_po_items');
         receiveIdem.resetKey();
 
         // AUDIT 3.2: Notify admins about damaged/non-good items
@@ -318,14 +319,16 @@ export default function PurchaseOrderDetail() {
     }
     setReversing(true);
     try {
+      const reverseKey = reverseIdem.getKey();
       const { error } = await supabase.rpc('reverse_receiving_record', {
         p_record_id: reverseRecord.id,
         p_reason: reverseReason.trim(),
         p_performed_by: profile.id,
+        p_idempotency_key: reverseKey,
       });
       if (error) throw error;
       reverseIdem.resetKey();
-      await logActivity('receiving_reversed', `Receiving record reversed for PO ${po?.po_number}: ${reverseReason.trim()}`, profile.id, 'purchase_order', po?.id);
+      await logActivity({ event: 'receiving_reversed', description: `Receiving record reversed for PO ${po?.po_number}: ${reverseReason.trim()}`, performedBy: profile.id, entityType: 'purchase_order', entityId: po?.id });
       toast('success', 'Receiving record reversed and inventory adjusted');
       setReverseOpen(false);
       setReverseRecord(null);
@@ -434,7 +437,7 @@ export default function PurchaseOrderDetail() {
         .select();
       checkMutationResult(result, 'Submit purchase order');
       toast('success', `Purchase order ${po.po_number} submitted`);
-      await logActivity('po_submitted', `PO ${po.po_number} submitted`, profile.id, 'purchase_order', po.id);
+      await logActivity({ event: 'po_submitted', description: `PO ${po.po_number} submitted`, performedBy: profile.id, entityType: 'purchase_order', entityId: po.id });
       fetchPO();
     } catch (err: unknown) {
       toast('error', sanitizeError(err));

@@ -4,6 +4,111 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-18 — Full Sales Cycle Live UI Test + Bug Fixes
+
+### Live Browser Test (Playwright)
+- Tested complete sales cycle: Quote → Order → Delivery → Invoice → Payment → Partial Return
+- Used [E2E] test fixtures only — no real data touched
+- All financial integrity verified: inventory tracking, invoice balance, payment allocation
+- All test data cleaned up after completion
+
+### Bug Fix: Returns Product Select (Returns.tsx)
+- **Bug:** Product select `onChange` handler called `updateItem()` 3 times sequentially, each spreading from stale closure `newItems`. React 18 batching meant only the last `setNewItems` won, losing `product_id` and `product_name`
+- **Fix:** Batched all field updates into a single `setNewItems` call
+- **Impact:** Product selection in New Return modal was silently failing — selected product would revert to empty
+
+### Migration: Fix save_quote Idempotency + Activity Feed Columns (20260333100000)
+- Fixed `save_quote()` RPC with wrong `idempotency_keys` column names (`key`→`idempotency_key`, `entity_type`/`entity_id`→`operation`/`result`)
+- Fixed `v_server_totals` field aliases (`.sum`→`.total_price`)
+- Fixed `activity_feed` column names (`action`→`event_type`, `entity_type`→`related_entity_type`, `entity_id`→`related_entity_id`)
+- Added `pg_temp` to search_path
+
+---
+
+## 2026-03-17 — Code Quality Enforcement (Phase 1-4)
+
+### assertRpcResult Final Sweep (28+ violations → 0)
+- Added assertRpcResult() to all remaining RPC data casts across 30+ files
+- Files: ARaging, CustomerDetail, Compliance, FieldDetail, Fields, InventoryPage,
+  NewOrder, QuoteBuilder, ReceivingLog, SalesReports, ManualTicketCreate,
+  FinanceChargePreviewModal, LogbookReport, TodaysDeliveries, YesterdayRecap,
+  WorkloadView, RelatedNotes, CustomerContextCard, BulkTicketUpload,
+  BulkFieldImport, CustomerTransactionReview, CycleCounts, Dashboard,
+  MonthEndClose, NewDelivery, NewPurchaseOrder, OrderDetail,
+  PurchaseOrderDetail, Reports, Returns
+
+### Idempotency Key Gaps (5 → 0)
+- Added p_idempotency_key to: BulkFieldImport (save_field, save_field_geometry),
+  ReceivingLog (reverse_receiving_record), notificationTriggers
+  (log_failed_notification, notify_damaged_receiving)
+
+### Local ESLint Plugin (2 rules)
+- `require-assert-rpc-result`: blocks .rpc() data usage without assertRpcResult()
+- `no-direct-sentry-import`: blocks direct @sentry/react imports
+- `no-console` tightened: console.warn no longer allowed
+- Lives in `eslint-local-rules/` — works on all machines via git pull
+
+### logActivity Type Safety
+- Refactored from 6 positional string params to single typed object (LogActivityParams)
+- Updated all 57 call sites across 23 files
+- TypeScript compiler now catches parameter-shift bugs
+
+### Safety-Net Unit Tests (+3 tests)
+- assertRpcCoverage.test.ts — scans for .rpc() data usage without assertRpcResult
+- sentryImportEnforcement.test.ts — scans for direct @sentry/react imports
+- logActivitySignature.test.ts — verifies logActivity uses typed object params
+
+---
+
+## 2026-03-17 — Code Audit Phase 2: assertRpcResult + Sentry + Safety Fixes (7 files)
+
+### assertRpcResult Coverage (Phase 2 — 7 more files, ~20 RPC calls)
+- Added `assertRpcResult()` to read & mutation RPCs that were casting `data` without null guard
+- **Dashboard.tsx** — `operational_dashboard_summary`
+- **FinancialDashboard.tsx** — `financial_dashboard_summary`
+- **QuickReceive.tsx** — `match_quick_receive_items` + `receive_po_items`
+- **AccountsPayable.tsx** — `get_ap_dashboard_summary` + `get_ap_aging`
+- **Reports.tsx** — 8 RPCs: `get_bottom_line_pnl`, `get_gross_sales_report`, `get_customer_balance_listing`, `get_commission_balance_report`, `get_chemical_history`, `get_inventory_cost_report`, `get_batch_year_end_summaries`, `get_customer_year_end_summary`
+- **QuoteBuilder.tsx** — `save_quote` + `create_quote_version` (×2 locations)
+- **MonthEndClose.tsx** — `get_monthly_summary` + `get_batch_year_end_summaries`
+
+---
+
+## 2026-03-17 — Comprehensive Code Audit & Hardening (29 files, +1053/-107)
+
+### assertRpcResult Coverage (~30 RPC calls)
+- Added `assertRpcResult()` to mutation RPC calls across 18 pages/components to catch silent RLS permission denial (data=null). Carefully excluded void-returning RPCs that would false-positive
+- Files: NewOrder, NewPurchaseOrder, NewVendorBill, QuickDeliveryModal, JobDetail, Invoices, InvoiceDetail, Deliveries, DeliveryDetail, CommissionPayments, PaymentHistory, PrepayWorkspace, PrepaymentManager, FinanceChargePreviewModal, OrderDetail, FieldDetail, SettingsPage, CustomerDetail
+
+### ConfirmModal Replacement (9 pages)
+- Replaced all bare `confirm()`/`window.confirm()` calls with proper `ConfirmModal` component per project rules
+- Files: DeliveryDetail (2), OrderDetail (1), CycleCounts (3), Rebates (2), ARaging (2), CommissionPayments (1), InvoiceDetail (1), JobDetail (3), PaymentAllocation (1)
+
+### Idempotency Key Wiring (15 RPC calls)
+- Added `useIdempotencyKey` hooks and `p_idempotency_key` params to 15 frontend RPC calls
+- Files: FieldDetail (save_field, save_field_geometry), SettingsPage (admin_update_profile), OrderDetail (void_order), JobDetail (load_recipe_into_job), CustomerDetail (save_customer), QuoteBuilder (create_planned_holds, save_quote_template, create_quote_from_template, rollover_quote_to_season, create_quote_version ×2, restore_quote_version), DeliveryDetail (reassign_delivery)
+
+### DB Migration: `20260320100000_add_idempotency_to_remaining_rpcs.sql`
+- Added `p_idempotency_key text DEFAULT NULL` to 5 RPCs: save_field, save_field_geometry, admin_update_profile, void_order, load_recipe_into_job
+- Each function explicitly rewritten (no pg_get_functiondef + regex anti-pattern)
+- DROP old signature → CREATE new → GRANT → verify no overloads
+
+### Bug Fixes
+- **Returns.tsx** — Removed references to non-existent `updated_at` column on `returns` table (lines 314, 343)
+- **teardown-fixtures.ts** — Fixed reference to non-existent `entity_id` column on `idempotency_keys` table
+- **Rebates.tsx** — Fixed `keyof ProgramRow` type error (strict tsconfig.app.json compatibility)
+
+### Infrastructure
+- **eslint.config.js** — Added `CRX_Manager_V1.0` to ignores to exclude stale nested directory copy that was causing 100+ false lint errors
+- **Test mocks** — Added `assertRpcResult` to test mocks for FinanceChargePreviewModal and QuickDeliveryModal
+
+### Audit Findings (logged for future sessions)
+- ~50 mutation handlers across 21 files missing `logActivity()` audit trail calls
+- 6 TypeScript/DB type mismatches: Order has dropped columns (balance_due, total_paid, created_by), WriteOff missing reversed_by, InvoiceLineAllocation missing invoice_id, Commission.season should be nullable
+- `rate_limit_log` table should get explicit deny-all RLS policy for consistency
+
+---
+
 ## 2026-03-16 — Code Quality Session: Sentry Migration, A11y, Safety-Net Tests
 
 ### Error Reporting

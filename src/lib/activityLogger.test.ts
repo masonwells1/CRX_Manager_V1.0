@@ -16,7 +16,7 @@ beforeEach(() => {
 
 describe('logActivity', () => {
   it('inserts into activity_feed with required fields', async () => {
-    await logActivity('quote_created', 'Quote Q-001 created', 'user-1');
+    await logActivity({ event: 'quote_created', description: 'Quote Q-001 created', performedBy: 'user-1' });
 
     expect(mockFrom).toHaveBeenCalledWith('activity_feed');
     expect(mockInsert).toHaveBeenCalledWith({
@@ -30,7 +30,7 @@ describe('logActivity', () => {
   });
 
   it('includes optional fields when provided', async () => {
-    await logActivity('order_created', 'Order O-001', 'user-1', 'order', 'order-uuid', 'cust-uuid');
+    await logActivity({ event: 'order_created', description: 'Order O-001', performedBy: 'user-1', entityType: 'order', entityId: 'order-uuid', customerId: 'cust-uuid' });
 
     expect(mockInsert).toHaveBeenCalledWith({
       event_type: 'order_created',
@@ -45,7 +45,7 @@ describe('logActivity', () => {
   it('does not throw when insert fails', async () => {
     mockInsert.mockRejectedValueOnce(new Error('DB error'));
     // Should silently catch — activity logging must never break the main flow
-    await expect(logActivity('test', 'desc', 'u')).resolves.toBeUndefined();
+    await expect(logActivity({ event: 'test', description: 'desc', performedBy: 'u' })).resolves.toBeUndefined();
   });
 });
 

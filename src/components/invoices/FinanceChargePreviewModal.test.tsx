@@ -17,6 +17,7 @@ const { mockRpc, mockToast } = vi.hoisted(() => {
 
 vi.mock('../../lib/db', () => ({
   supabase: { rpc: mockRpc },
+  assertRpcResult: (data: unknown) => data,
 }));
 
 vi.mock('../../contexts/AuthContext', () => ({

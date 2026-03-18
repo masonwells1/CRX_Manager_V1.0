@@ -7,11 +7,14 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-03-16)
-- 56 pages, 88+ tables, ~144 RPCs, 200 migrations, 6 Edge Functions
-- 1,629 unit tests (104 files) + 82 E2E spec files, all passing
+## Current State (2026-03-18)
+- 56 pages, 88+ tables, ~144 RPCs, 205 migrations, 6 Edge Functions
+- 1,633 unit tests (107 files) + 82 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
+- All RPC data usage wrapped with `assertRpcResult()` — enforced by ESLint + safety-net test
+- All destructive actions use `ConfirmModal` (no bare `confirm()` calls)
+- 15+ RPC calls wired with `useIdempotencyKey` for double-submit prevention
 
 ---
 
@@ -24,8 +27,9 @@
 6. **Tailwind CSS only** — brand color `crx-green` (#28A26A)
 7. **Types in `src/types/index.ts`** — all shared interfaces
 8. **Single Supabase client** — `src/lib/db.ts` only
-9. **Activity logging** — `logActivity()` from `src/lib/activityLogger.ts`
+9. **Activity logging** — `logActivity({ event, description, performedBy, ... })` from `src/lib/activityLogger.ts` (typed object param, NOT positional)
 10. **Idempotency** — `useIdempotencyKey()` hook for critical writes
+11. **Local ESLint rules** — `eslint-local-rules/` enforces `assertRpcResult` usage and blocks direct `@sentry/react` imports
 
 ---
 

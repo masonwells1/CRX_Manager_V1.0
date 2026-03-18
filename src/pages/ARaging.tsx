@@ -11,20 +11,20 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { downloadStatementPdf, downloadBatchStatements, generateStatementPdf } from '../lib/statementPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
 import FinanceChargePreviewModal from '../components/invoices/FinanceChargePreviewModal';
 import { useAuth } from '../contexts/AuthContext';
 import { computeSeason } from '../utils/season';
 import { localToday, parseLocalDate, localDatePlusDays } from '../lib/dateUtils';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
-import ConfirmModal from '../components/ui/ConfirmModal';
 import type { ARAgingRow, CustomerStatementRow, SeasonComparisonRow, DetailedStatementData, StatementOptions } from '../types';
 
 type TabKey = 'aging' | 'statement' | 'season';
@@ -49,9 +49,10 @@ export default function ARaging() {
   const [sendingReminders, setSendingReminders] = useState(false);
   // Batch email statements
   const [emailingStatements, setEmailingStatements] = useState(false);
+
   // Confirm modals
-  const [arReminderConfirmOpen, setArReminderConfirmOpen] = useState(false);
-  const [emailStatementsConfirmOpen, setEmailStatementsConfirmOpen] = useState(false);
+  const [showARReminderConfirm, setShowARReminderConfirm] = useState(false);
+  const [showEmailStatementsConfirm, setShowEmailStatementsConfirm] = useState(false);
 
   // Aging
   const [agingData, setAgingData] = useState<ARAgingRow[]>([]);
@@ -94,7 +95,7 @@ export default function ARaging() {
       setLoading(false);
       return;
     }
-    setAgingData((data || []) as ARAgingRow[]);
+    setAgingData(assertRpcResult<ARAgingRow[]>(data, 'get_ar_aging'));
     setLoading(false);
   }, [asOfDate, toast]);
 
@@ -110,7 +111,7 @@ export default function ARaging() {
       setLoading(false);
       return;
     }
-    setSeasonData((data || []) as SeasonComparisonRow[]);
+    setSeasonData(assertRpcResult<SeasonComparisonRow[]>(data, 'get_season_comparison'));
     setLoading(false);
   }, [seasonA, seasonB, toast]);
 
@@ -144,7 +145,7 @@ export default function ARaging() {
       setLoading(false);
       return;
     }
-    setStatementData((data || []) as CustomerStatementRow[]);
+    setStatementData(assertRpcResult<CustomerStatementRow[]>(data, 'get_customer_statement'));
     setTab('statement');
     setLoading(false);
   };
@@ -360,7 +361,7 @@ export default function ARaging() {
     if (error) {
       toast('error', 'Failed to load statement');
     }
-    setStatementData((data || []) as CustomerStatementRow[]);
+    setStatementData(assertRpcResult<CustomerStatementRow[]>(data, 'get_customer_statement'));
     setTab('statement');
     setLoading(false);
   };
@@ -387,7 +388,7 @@ export default function ARaging() {
         });
         if (error) throw error;
 
-        const stmtData = data as DetailedStatementData;
+        const stmtData = assertRpcResult<DetailedStatementData>(data, 'get_detailed_statement_data');
         if (!stmtData || !stmtData.transactions || stmtData.transactions.length === 0) {
           toast('info', `No outstanding balance for ${printCustomerName}`);
           return;
@@ -435,7 +436,7 @@ export default function ARaging() {
             Sentry.captureException(error, { tags: { source: 'batch_statement', customer_id: custId } });
             continue;
           }
-          const stmtData = data as DetailedStatementData;
+          const stmtData = assertRpcResult<DetailedStatementData>(data, 'get_detailed_statement_data');
           if (stmtData && stmtData.transactions && stmtData.transactions.length > 0) {
             stmtDataList.push(stmtData);
           }
@@ -458,25 +459,20 @@ export default function ARaging() {
   // === A5: Send AR Reminders to all overdue customers ===
   const handleSendARReminders = async () => {
     if (!profile) return;
-    setArReminderConfirmOpen(true);
-  };
-
-  const executeSendARReminders = async () => {
-    setArReminderConfirmOpen(false);
-    if (!profile) return;
+    setShowARReminderConfirm(false);
     await runCriticalAction({
       action: async () => {
         const { data, error } = await supabase.rpc('get_ar_reminder_candidates');
         if (error) throw error;
 
-        const candidates = (data || []) as Array<{
+        const candidates = assertRpcResult<Array<{
           customer_id: string;
           farm_name: string;
           email: string;
           total_balance_cents: number;
           max_days_past_due: number;
           invoices: Array<{ invoice_number: string; balance_cents: number; days_past_due: number }>;
-        }>;
+        }>>(data, 'get_ar_reminder_candidates');
 
         if (candidates.length === 0) {
           toast('info', 'No customers with 30+ day overdue invoices');
@@ -575,7 +571,7 @@ export default function ARaging() {
           }
         }
 
-        logActivity('ar_reminders_sent', `Sent ${sent} AR reminder(s) to overdue customers (${skipped} skipped/deduped)`, profile.id, 'system');
+        logActivity({ event: 'ar_reminders_sent', description: `Sent ${sent} AR reminder(s) to overdue customers (${skipped} skipped/deduped)`, performedBy: profile.id, entityType: 'system' });
         toast('success', `Sent ${sent} AR reminder(s)${skipped > 0 ? `, ${skipped} skipped (already sent today)` : ''}`);
       },
       toast,
@@ -604,7 +600,7 @@ export default function ARaging() {
             continue;
           }
 
-          const stmtData = data as DetailedStatementData;
+          const stmtData = assertRpcResult<DetailedStatementData>(data, 'get_detailed_statement_data');
           if (!stmtData || !stmtData.transactions || stmtData.transactions.length === 0) continue;
 
           const custEmail = stmtData.customer.email;
@@ -669,7 +665,7 @@ export default function ARaging() {
         }
 
         if (profile) {
-          logActivity('batch_statements_emailed', `Emailed ${sent} statement(s)${noEmail > 0 ? ` (${noEmail} had no email)` : ''}`, profile.id, 'system');
+          logActivity({ event: 'batch_statements_emailed', description: `Emailed ${sent} statement(s)${noEmail > 0 ? ` (${noEmail} had no email)` : ''}`, performedBy: profile.id, entityType: 'system' });
         }
         toast('success', `Emailed ${sent} statement(s)${noEmail > 0 ? ` — ${noEmail} customer(s) had no email on file` : ''}`);
       },
@@ -715,7 +711,7 @@ export default function ARaging() {
                 variant="secondary"
                 size="sm"
                 icon={<Mail className="w-4 h-4" />}
-                onClick={() => setEmailStatementsConfirmOpen(true)}
+                onClick={() => setShowEmailStatementsConfirm(true)}
                 loading={emailingStatements}
               >
                 Email Statements ({selectedCustomers.size})
@@ -728,7 +724,7 @@ export default function ARaging() {
                 variant="secondary"
                 size="sm"
                 icon={<Send className="w-4 h-4" />}
-                onClick={handleSendARReminders}
+                onClick={() => setShowARReminderConfirm(true)}
                 loading={sendingReminders}
               >
                 Send AR Reminders
@@ -1089,27 +1085,31 @@ export default function ARaging() {
         onSuccess={handleFinanceChargeSuccess}
       />
 
+      {/* AR Reminder Confirm Modal */}
       <ConfirmModal
-        open={arReminderConfirmOpen}
-        onClose={() => setArReminderConfirmOpen(false)}
-        onConfirm={executeSendARReminders}
+        open={showARReminderConfirm}
+        onClose={() => setShowARReminderConfirm(false)}
+        onConfirm={handleSendARReminders}
         title="Send AR Reminders"
         message="Send AR reminder emails to all customers with 30+ day overdue invoices?"
-        confirmLabel="Send Reminders"
-        variant="warning"
+        confirmLabel="Send Emails"
+        variant="info"
+        loading={sendingReminders}
       />
 
+      {/* Email Statements Confirm Modal */}
       <ConfirmModal
-        open={emailStatementsConfirmOpen}
-        onClose={() => setEmailStatementsConfirmOpen(false)}
+        open={showEmailStatementsConfirm}
+        onClose={() => setShowEmailStatementsConfirm(false)}
         onConfirm={() => {
-          setEmailStatementsConfirmOpen(false);
+          setShowEmailStatementsConfirm(false);
           handleEmailBatchStatements({ mode: 'summary', show_shares: true, as_of_date: asOfDate });
         }}
         title="Email Statements"
         message={`Email statements to ${selectedCustomers.size} selected customer(s)?`}
         confirmLabel="Send Emails"
         variant="info"
+        loading={emailingStatements}
       />
     </div>
   );

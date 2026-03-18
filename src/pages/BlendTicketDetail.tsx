@@ -60,6 +60,13 @@ export function BlendTicketDetail() {
   const [newOrderDate, setNewOrderDate] = useState(localToday());
   const [newOrderNotes, setNewOrderNotes] = useState('');
 
+  // Confirm modal states
+  const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
+  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
+  const [removeProductConfirmOpen, setRemoveProductConfirmOpen] = useState(false);
+  const [removeProductIndex, setRemoveProductIndex] = useState<number | null>(null);
+  const [unlinkConfirmOpen, setUnlinkConfirmOpen] = useState(false);
+
   const [formData, setFormData] = useState({
     customer_id: '',
     ticket_date: '',
@@ -259,14 +266,9 @@ export function BlendTicketDetail() {
     });
   }
 
-  function handleApprove() {
+  async function handleApprove() {
     if (!ticket || !profile) return;
-    setApproveConfirmOpen(true);
-  }
-
-  async function executeApprove() {
     setApproveConfirmOpen(false);
-    if (!ticket || !profile) return;
 
     await runCriticalAction({
       action: async () => {
@@ -280,7 +282,7 @@ export function BlendTicketDetail() {
           .eq('id', ticket.id)
           .select();
         checkMutationResult(approveResult, 'Approve blend ticket');
-        logActivity('blend_ticket_approved', `Blend ticket ${ticket.ticket_number} approved`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
+        logActivity({ event: 'blend_ticket_approved', description: `Blend ticket ${ticket.ticket_number} approved`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       },
       toast,
       sentryTag: 'approve_blend_ticket',
@@ -288,14 +290,9 @@ export function BlendTicketDetail() {
     });
   }
 
-  function handleReject() {
+  async function handleReject() {
     if (!ticket || !profile) return;
-    setRejectConfirmOpen(true);
-  }
-
-  async function executeReject() {
     setRejectConfirmOpen(false);
-    if (!ticket || !profile) return;
 
     await runCriticalAction({
       action: async () => {
@@ -309,7 +306,7 @@ export function BlendTicketDetail() {
           .eq('id', ticket.id)
           .select();
         checkMutationResult(rejectResult, 'Reject blend ticket');
-        logActivity('blend_ticket_rejected', `Blend ticket ${ticket.ticket_number} rejected`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
+        logActivity({ event: 'blend_ticket_rejected', description: `Blend ticket ${ticket.ticket_number} rejected`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       },
       toast,
       sentryTag: 'reject_blend_ticket',
@@ -355,17 +352,10 @@ export function BlendTicketDetail() {
     }
   }
 
-  function removeProduct(index: number) {
-    setRemoveProductIndex(index);
-    setRemoveProductConfirmOpen(true);
-  }
-
-  async function executeRemoveProduct() {
+  async function removeProduct(index: number) {
     setRemoveProductConfirmOpen(false);
-    if (removeProductIndex === null) return;
-    const product = products[removeProductIndex];
-    const capturedIndex = removeProductIndex;
     setRemoveProductIndex(null);
+    const product = products[index];
 
     await runCriticalAction({
       action: async () => {
@@ -378,7 +368,7 @@ export function BlendTicketDetail() {
       },
       toast,
       sentryTag: 'remove_blend_ticket_product',
-      onSuccess: () => setProducts(products.filter((_, i) => i !== capturedIndex)),
+      onSuccess: () => setProducts(products.filter((_, i) => i !== index)),
     });
   }
 
@@ -431,14 +421,9 @@ export function BlendTicketDetail() {
     }
   }
 
-  function handleUnlink() {
+  async function handleUnlink() {
     if (!ticket || !profile) return;
-    setUnlinkConfirmOpen(true);
-  }
-
-  async function executeUnlink() {
     setUnlinkConfirmOpen(false);
-    if (!ticket || !profile) return;
     try {
       const unlinkKey = unlinkIdem.getKey();
       const { data, error } = await supabase.rpc('unlink_blend_ticket_from_order', {
@@ -486,11 +471,6 @@ export function BlendTicketDetail() {
 
   const [creatingAppRecord, setCreatingAppRecord] = useState(false);
   const [appRecordConfirmOpen, setAppRecordConfirmOpen] = useState(false);
-  const [approveConfirmOpen, setApproveConfirmOpen] = useState(false);
-  const [rejectConfirmOpen, setRejectConfirmOpen] = useState(false);
-  const [removeProductConfirmOpen, setRemoveProductConfirmOpen] = useState(false);
-  const [removeProductIndex, setRemoveProductIndex] = useState<number | null>(null);
-  const [unlinkConfirmOpen, setUnlinkConfirmOpen] = useState(false);
 
   function handleCreateApplicationRecord() {
     if (!ticket || !profile) return;
@@ -510,7 +490,7 @@ export function BlendTicketDetail() {
       });
       if (error) throw error;
       appRecordIdem.resetKey();
-      logActivity('application_record_created', `Application record created from blend ticket ${ticket.ticket_number}`, profile.id, 'blend_ticket', ticket.id, ticket.customer_id || undefined);
+      logActivity({ event: 'application_record_created', description: `Application record created from blend ticket ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       toast('success', 'Application record created successfully');
     } catch (err: unknown) {
       toast('error', err instanceof Error ? err.message : 'Failed to create application record');
@@ -932,7 +912,7 @@ export function BlendTicketDetail() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => removeProduct(index)}
+                  onClick={() => { setRemoveProductIndex(index); setRemoveProductConfirmOpen(true); }}
                   className="text-red-600 hover:text-red-700 hover:bg-red-50"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -1000,7 +980,7 @@ export function BlendTicketDetail() {
                 );
               })()}
             </div>
-            <Button variant="secondary" size="sm" onClick={handleUnlink} className="text-red-600">
+            <Button variant="secondary" size="sm" onClick={() => setUnlinkConfirmOpen(true)} className="text-red-600">
               <Unlink className="h-4 w-4" />
               Unlink from Order
             </Button>
@@ -1144,11 +1124,11 @@ export function BlendTicketDetail() {
         </Button>
         {ticket.review_status === 'unreviewed' && (
           <>
-            <Button variant="secondary" onClick={handleReject} className="text-red-600 hover:text-red-700">
+            <Button variant="secondary" onClick={() => setRejectConfirmOpen(true)} className="text-red-600 hover:text-red-700">
               <X className="h-4 w-4" />
               Reject
             </Button>
-            <Button variant="secondary" onClick={handleApprove} className="text-green-600 hover:text-green-700">
+            <Button variant="secondary" onClick={() => setApproveConfirmOpen(true)} className="text-green-600 hover:text-green-700">
               <Check className="h-4 w-4" />
               Approve
             </Button>
@@ -1187,18 +1167,17 @@ export function BlendTicketDetail() {
       <ConfirmModal
         open={approveConfirmOpen}
         onClose={() => setApproveConfirmOpen(false)}
-        onConfirm={executeApprove}
+        onConfirm={handleApprove}
         title="Approve Blend Ticket"
         message="Approve this blend ticket?"
         confirmLabel="Approve"
         variant="info"
-        icon={Check}
       />
 
       <ConfirmModal
         open={rejectConfirmOpen}
         onClose={() => setRejectConfirmOpen(false)}
-        onConfirm={executeReject}
+        onConfirm={handleReject}
         title="Reject Blend Ticket"
         message="Reject this blend ticket?"
         confirmLabel="Reject"
@@ -1208,7 +1187,7 @@ export function BlendTicketDetail() {
       <ConfirmModal
         open={removeProductConfirmOpen}
         onClose={() => { setRemoveProductConfirmOpen(false); setRemoveProductIndex(null); }}
-        onConfirm={executeRemoveProduct}
+        onConfirm={() => { if (removeProductIndex !== null) removeProduct(removeProductIndex); }}
         title="Remove Product"
         message="Remove this product from the ticket?"
         confirmLabel="Remove"
@@ -1218,7 +1197,7 @@ export function BlendTicketDetail() {
       <ConfirmModal
         open={unlinkConfirmOpen}
         onClose={() => setUnlinkConfirmOpen(false)}
-        onConfirm={executeUnlink}
+        onConfirm={handleUnlink}
         title="Unlink Blend Ticket"
         message="Unlink this blend ticket from its order? The order itself will not be deleted."
         confirmLabel="Unlink"

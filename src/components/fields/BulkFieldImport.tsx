@@ -12,7 +12,7 @@ import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import {
   parseShapefileBundle,
   parseGeoJSONFile,
@@ -348,17 +348,19 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           p_field_payload: fieldPayload,
           p_billing_defaults: [],
           p_performed_by: profile!.id,
+          p_idempotency_key: crypto.randomUUID(),
         });
 
         if (saveError) {
           failed++;
           errors.push(`"${pf.field_name}": ${saveError.message}`);
-        } else if (fieldId) {
+        } else if (assertRpcResult(fieldId, 'save_field')) {
           // Save geometry
           const { error: geoError } = await supabase.rpc('save_field_geometry', {
             p_field_id: fieldId,
             p_centroid_geojson: JSON.stringify(pf.centroid_geojson),
             p_boundary_geojson: JSON.stringify(pf.boundary_geojson),
+            p_idempotency_key: crypto.randomUUID(),
           });
 
           if (geoError) {

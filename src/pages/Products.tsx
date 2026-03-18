@@ -426,7 +426,7 @@ export default function Products() {
 
       toast('success', `Updated ${changes.size} product(s)`);
       if (profile) {
-        logActivity('products_bulk_updated', `${changes.size} product(s) updated via inline edit`, profile.id, 'product', undefined);
+        logActivity({ event: 'products_bulk_updated', description: `${changes.size} product(s) updated via inline edit`, performedBy: profile.id, entityType: 'product' });
       }
       fetchProducts();
     } catch (err: unknown) {

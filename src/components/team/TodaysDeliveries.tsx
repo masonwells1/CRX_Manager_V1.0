@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Truck, ChevronDown, ChevronUp, Clock, Package, AlertTriangle, User } from 'lucide-react';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import Card from '../ui/Card';
@@ -107,7 +107,7 @@ export default function TodaysDeliveries() {
         setLoading(false);
         return;
       }
-      setData(result as unknown as TeamBoardDeliveryData);
+      setData(assertRpcResult<TeamBoardDeliveryData>(result, 'get_team_board_deliveries'));
     } catch (err: unknown) {
       toast('error', err instanceof Error ? err.message : 'Failed to load deliveries');
     } finally {
