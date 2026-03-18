@@ -243,20 +243,19 @@ export default function CycleCounts() {
       ? ((variance || 0) / item.expected_qty) * 100
       : null;
 
-    const result = await supabase
-      .from('cycle_count_items')
-      .update({
-        counted_qty: countedQty,
-        variance: variance,
-        variance_pct: variancePct !== null ? Math.round(variancePct * 100) / 100 : null,
-        is_counted: countedQty !== null,
-        counted_by: profile.id,
-        counted_at: new Date().toISOString(),
-      })
-      .eq('id', itemId)
-      .select();
-
     try {
+      const result = await supabase
+        .from('cycle_count_items')
+        .update({
+          counted_qty: countedQty,
+          variance: variance,
+          variance_pct: variancePct !== null ? Math.round(variancePct * 100) / 100 : null,
+          is_counted: countedQty !== null,
+          counted_by: profile.id,
+          counted_at: new Date().toISOString(),
+        })
+        .eq('id', itemId)
+        .select();
       checkMutationResult(result, 'Update count item');
     } catch {
       toast('error', 'Failed to update count');

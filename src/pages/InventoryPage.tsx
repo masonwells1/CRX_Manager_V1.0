@@ -457,7 +457,7 @@ export default function InventoryPage() {
       notes: holdNotes || null,
       created_by: profile.id,
       expires_at: holdExpires || null,
-    });
+    }).select();
 
     if (holdResult.error) {
       toast('error', sanitizeError(holdResult.error));

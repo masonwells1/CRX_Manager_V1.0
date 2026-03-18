@@ -343,8 +343,9 @@ export default function Rebates() {
     setDeleteProgramTarget(null);
     try {
       // Delete claims first (FK constraint) — may be zero claims, so only check for error
-      const { error: claimsError } = await supabase.from('rebate_claims').delete().eq('program_id', programId);
-      if (claimsError) throw claimsError;
+      const claimsResult = await supabase.from('rebate_claims').delete().eq('program_id', programId).select();
+      if (claimsResult.error) throw claimsResult.error;
+      // Zero rows valid (program may have no claims) — only check for error, not empty result
       const result = await supabase.from('rebate_programs').delete().eq('id', programId).select();
       checkMutationResult(result, 'Delete rebate program');
       toast('success', `Rebate program "${programName}" deleted`);
