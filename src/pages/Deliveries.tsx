@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
-  Printer,
   CalendarRange,
   MapPin,
   Clock,
@@ -108,7 +107,6 @@ export default function Deliveries() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [cancelling, setCancelling] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
-  const [printing, setPrinting] = useState(false);
   const [printingLoadSheet, setPrintingLoadSheet] = useState(false);
   const [showReschedule, setShowReschedule] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState('');
@@ -394,60 +392,6 @@ export default function Deliveries() {
       },
     });
     setShowCancelModal(false);
-  };
-
-  const handleBatchPrint = async () => {
-    await runCriticalAction({
-      action: async () => {
-        const { generateBatchDeliveryPdf } = await import('../lib/deliveryPdf');
-        const pdfDataList = [];
-
-        for (const del of selectedDeliveries) {
-          const { data: items } = await supabase
-            .from('delivery_items')
-            .select('*, product:products(product_name)')
-            .eq('delivery_id', del.id)
-            .order('id');
-
-          const delAny = del as unknown as Record<string, unknown>;
-          pdfDataList.push({
-            delivery_number: del.delivery_number,
-            order_number: (delAny.order_number as string) || '-',
-            customer_name: del.customer_name,
-            customer_address: (delAny.delivery_address as string) || undefined,
-            driver_name: del.driver_name,
-            scheduled_date: del.scheduled_date,
-            completed_at: del.completed_at || undefined,
-            status: del.status,
-            signed_by: del.signed_by || undefined,
-            delivery_notes: del.delivery_notes || undefined,
-            priority: del.priority || 'normal',
-            issue_type: del.issue_type || undefined,
-            issue_notes: del.issue_notes || undefined,
-            // M14: sort items by product name for consistent manifest ordering
-            items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>)
-              .map((it) => ({
-                product_name: it.product?.product_name || (it.product_name as string),
-                quantity: it.quantity as number,
-                unit_size: (it.unit_size as string) || '-',
-                quantity_delivered: it.quantity_delivered as number,
-                tote_number: (it.tote_number as string) || undefined,
-              }))
-              .sort((a, b) => (a.product_name || '').localeCompare(b.product_name || '')),
-          });
-        }
-
-        if (pdfDataList.length === 0) {
-          throw new Error('No deliveries to print');
-        }
-
-        await generateBatchDeliveryPdf(pdfDataList);
-      },
-      toast,
-      successMessage: 'Printed delivery receipt(s) to PDF',
-      setLoading: setPrinting,
-      sentryTag: 'batch_print_deliveries',
-    });
   };
 
   const handlePrintLoadSheet = async () => {
@@ -990,14 +934,6 @@ export default function Deliveries() {
           </Button>
           {selected.size > 0 && (
             <>
-              <Button
-                variant="secondary"
-                icon={<Printer className="w-4 h-4" />}
-                onClick={handleBatchPrint}
-                loading={printing}
-              >
-                Print {selected.size} Selected
-              </Button>
               {selectedCancellable.length > 0 && (
                 <Button
                   variant="danger"
