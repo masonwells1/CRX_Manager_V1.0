@@ -699,6 +699,39 @@ export default function OrderDetail() {
         </div>
       </div>
 
+      {/* Active delivery banner — shows when scheduled/in_progress deliveries exist */}
+      {(() => {
+        const activeDeliveries = deliveries.filter((d) => d.status === 'scheduled' || d.status === 'in_progress');
+        if (activeDeliveries.length === 0) return null;
+        const scheduledCount = activeDeliveries.filter((d) => d.status === 'scheduled').length;
+        const inProgressCount = activeDeliveries.filter((d) => d.status === 'in_progress').length;
+        const parts: string[] = [];
+        if (scheduledCount > 0) parts.push(`${scheduledCount} scheduled`);
+        if (inProgressCount > 0) parts.push(`${inProgressCount} in progress`);
+        return (
+          <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-blue-50 border border-blue-200">
+            <Truck className="w-5 h-5 text-blue-600 flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-blue-800">
+                {activeDeliveries.length} active {activeDeliveries.length === 1 ? 'delivery' : 'deliveries'} — {parts.join(', ')}
+              </p>
+              <div className="flex flex-wrap gap-2 mt-1">
+                {activeDeliveries.map((d) => (
+                  <button
+                    key={d.id}
+                    onClick={() => navigate(`/deliveries/${d.id}`)}
+                    className="text-xs text-blue-700 hover:text-blue-900 underline"
+                  >
+                    {d.delivery_number} — {parseLocalDate(d.scheduled_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    {d.driver_name ? ` (${d.driver_name})` : ''}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       <Card>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>

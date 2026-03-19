@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload, Download, FileText, Trash2, Users } from 'lucide-react';
+import { Plus, Upload, Download, FileText, Trash2, Users, Truck } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -25,6 +25,8 @@ interface OrderWithFulfillment extends Order {
   invoiced_pct: number;
   farm_group_name: string | null;
   customer_name: string;
+  active_delivery_count: number;
+  earliest_delivery_date: string | null;
 }
 
 export default function Orders() {
@@ -73,8 +75,8 @@ export default function Orders() {
         .filter(Boolean) as string[]
     )];
 
-    // Run all three queries in parallel — they depend on ordersData but not on each other
-    const [itemsResult, invoiceResult, parentsResult] = await Promise.all([
+    // Run all four queries in parallel — they depend on ordersData but not on each other
+    const [itemsResult, invoiceResult, parentsResult, deliveryResult] = await Promise.all([
       supabase
         .from('order_items')
         .select('order_id, total_units_needed, quantity_delivered, price_per_unit')
@@ -89,6 +91,11 @@ export default function Orders() {
             .select('id, farm_name')
             .in('id', parentIds)
         : Promise.resolve({ data: null, error: null }),
+      supabase
+        .from('deliveries')
+        .select('order_id, scheduled_date, status')
+        .in('order_id', orderIds.length > 0 ? orderIds : ['__none__'])
+        .in('status', ['scheduled', 'in_progress']),
     ]);
 
     const { data: itemsData, error: itemsError } = itemsResult;
@@ -120,6 +127,22 @@ export default function Orders() {
     const { data: parents } = parentsResult;
     (parents || []).forEach((p: { id: string; farm_name: string }) => { parentNameMap[p.id] = p.farm_name; });
 
+    // Build active delivery info per order (scheduled + in_progress only)
+    const { data: deliveryData, error: deliveryError } = deliveryResult;
+    if (deliveryError) {
+      Sentry.captureException(deliveryError);
+    }
+    const deliveryByOrder: Record<string, { count: number; earliestDate: string | null }> = {};
+    (deliveryData || []).forEach((del: { order_id: string; scheduled_date: string; status: string }) => {
+      if (!deliveryByOrder[del.order_id]) {
+        deliveryByOrder[del.order_id] = { count: 0, earliestDate: null };
+      }
+      deliveryByOrder[del.order_id].count += 1;
+      if (!deliveryByOrder[del.order_id].earliestDate || del.scheduled_date < deliveryByOrder[del.order_id].earliestDate!) {
+        deliveryByOrder[del.order_id].earliestDate = del.scheduled_date;
+      }
+    });
+
     const enriched = ((ordersData || []) as Order[]).map((o) => {
       const counts = itemsByOrder[o.id] || { neededValue: 0, deliveredValue: 0 };
       const pct = counts.neededValue > 0 ? Math.round((counts.deliveredValue / counts.neededValue) * 100) : 0;
@@ -129,7 +152,16 @@ export default function Orders() {
       const cust = o.customer as unknown as { farm_name: string; parent_customer_id: string | null } | null;
       const farmGroupName = cust?.parent_customer_id ? parentNameMap[cust.parent_customer_id] || null : null;
       const customerName = cust?.farm_name || '';
-      return { ...o, fulfillment_pct: pct, invoiced_pct: Math.min(invPct, 100), farm_group_name: farmGroupName, customer_name: customerName };
+      const delInfo = deliveryByOrder[o.id] || { count: 0, earliestDate: null };
+      return {
+        ...o,
+        fulfillment_pct: pct,
+        invoiced_pct: Math.min(invPct, 100),
+        farm_group_name: farmGroupName,
+        customer_name: customerName,
+        active_delivery_count: delInfo.count,
+        earliest_delivery_date: delInfo.earliestDate,
+      };
     });
 
     setOrders(enriched);
@@ -262,12 +294,20 @@ export default function Orders() {
       header: 'Status',
       sortable: true,
       render: (row) => (
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
           <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
             {row.status.replace('_', ' ')}
           </Badge>
           {row.is_planned && (
             <Badge variant="warning">Planned</Badge>
+          )}
+          {row.active_delivery_count > 0 && row.earliest_delivery_date && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
+              <Truck className="w-3 h-3" />
+              {row.active_delivery_count > 1
+                ? `${row.active_delivery_count} Deliveries`
+                : new Date(row.earliest_delivery_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+            </span>
           )}
         </div>
       ),

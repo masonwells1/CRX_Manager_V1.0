@@ -463,6 +463,34 @@ export default function Deliveries() {
           throw new Error('No deliveries to include in load sheet');
         }
 
+        // Batch-fetch customer contact info and order numbers for all deliveries
+        const customerIds = [...new Set(rows.map((d) => d.customer_id).filter(Boolean))];
+        const orderIds = [...new Set(rows.map((d) => d.order_id).filter(Boolean))];
+
+        const [customerResult, orderResult] = await Promise.all([
+          customerIds.length > 0
+            ? supabase.from('customers').select('id, contact_name, phone').in('id', customerIds)
+            : Promise.resolve({ data: null, error: null }),
+          orderIds.length > 0
+            ? supabase.from('orders').select('id, order_number').in('id', orderIds)
+            : Promise.resolve({ data: null, error: null }),
+        ]);
+
+        const { data: customerData, error: customerErr } = customerResult;
+        if (customerErr) Sentry.captureException(customerErr, { tags: { source: 'load_sheet', page: 'deliveries' } });
+        const { data: orderData, error: orderErr } = orderResult;
+        if (orderErr) Sentry.captureException(orderErr, { tags: { source: 'load_sheet', page: 'deliveries' } });
+
+        const customerMap: Record<string, { contact_name: string | null; phone: string | null }> = {};
+        ((customerData || []) as Array<{ id: string; contact_name: string | null; phone: string | null }>).forEach((c) => {
+          customerMap[c.id] = { contact_name: c.contact_name, phone: c.phone };
+        });
+
+        const orderMap: Record<string, string> = {};
+        ((orderData || []) as Array<{ id: string; order_number: string }>).forEach((o) => {
+          orderMap[o.id] = o.order_number;
+        });
+
         // Fetch items for each delivery
         const stops = [];
         for (const del of rows) {
@@ -473,13 +501,18 @@ export default function Deliveries() {
             .order('sort_order');
 
           const delAny = del as unknown as Record<string, unknown>;
+          const custInfo = customerMap[del.customer_id] || { contact_name: null, phone: null };
           stops.push({
             delivery_number: del.delivery_number,
+            order_number: del.order_id ? orderMap[del.order_id] : undefined,
             customer_name: del.customer_name,
             customer_address: (delAny.delivery_address as string) || undefined,
+            contact_name: custInfo.contact_name,
+            phone: custInfo.phone,
             driver_name: del.driver_name,
             scheduled_date: del.scheduled_date,
             priority: del.priority || 'normal',
+            delivery_notes: del.delivery_notes || undefined,
             // M14: sort items by product name for consistent load sheet ordering
             items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>)
               .map((it) => ({
