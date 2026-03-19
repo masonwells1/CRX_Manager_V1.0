@@ -8,7 +8,6 @@
  */
 
 import {
-  E2E_PREFIX,
   TEST_CUSTOMER_A,
   TEST_CUSTOMER_B,
   TEST_PRODUCT_ALPHA,
@@ -68,29 +67,15 @@ async function rest(
   });
 
   const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`REST ${method} ${path} failed (${resp.status}): ${text}`);
+  }
   try {
     const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? parsed : [parsed];
   } catch {
-    throw new Error(`REST ${method} ${path} failed: ${text}`);
+    throw new Error(`REST ${method} ${path} failed to parse: ${text}`);
   }
-}
-
-/**
- * Check if a fixture already exists by name prefix match.
- */
-async function exists(
-  token: string,
-  table: string,
-  nameCol: string,
-  nameValue: string,
-): Promise<boolean> {
-  const rows = await rest(
-    token,
-    'GET',
-    `${table}?${nameCol}=eq.${encodeURIComponent(nameValue)}&select=id&limit=1`,
-  );
-  return rows.length > 0;
 }
 
 /**
@@ -140,21 +125,27 @@ export default async function setupFixtures(): Promise<void> {
 
   // ── Vendor ──
   console.log('Vendor:');
-  const vendorExists = await exists(token, 'vendors', 'name', TEST_VENDOR.name);
-  if (!vendorExists) {
-    await rest(token, 'POST', 'vendors', TEST_VENDOR);
-    console.log(`  + Created ${TEST_VENDOR.name}`);
-  } else {
-    console.log(`  ✓ ${TEST_VENDOR.name} already exists`);
-  }
+  await ensureFixture(token, 'vendors', 'name', TEST_VENDOR);
 
   // ── Inventory (seed stock for test products) ──
   console.log('Inventory:');
-  const products = await rest(
-    token,
-    'GET',
-    `products?product_name=like.${encodeURIComponent(`${E2E_PREFIX}*`)}&select=id,product_name`,
-  );
+  // Fetch each E2E product individually to avoid bracket encoding issues
+  const productNames = [
+    TEST_PRODUCT_ALPHA.product_name,
+    TEST_PRODUCT_BETA.product_name,
+    TEST_PRODUCT_GAMMA.product_name,
+  ];
+  const products: Array<{ id: string; product_name: string }> = [];
+  for (const pName of productNames) {
+    const rows = await rest(
+      token,
+      'GET',
+      `products?product_name=eq.${encodeURIComponent(pName)}&select=id,product_name`,
+    );
+    if (rows.length > 0) {
+      products.push(rows[0] as { id: string; product_name: string });
+    }
+  }
   for (const prod of products as Array<{ id: string; product_name: string }>) {
     const inv = await rest(
       token,
@@ -166,8 +157,8 @@ export default async function setupFixtures(): Promise<void> {
         product_id: prod.id,
         location: 'Main Warehouse',
         quantity_available: 500,
-        quantity_on_hand: 500,
-        quantity_committed: 0,
+        quantity_prebooked: 0,
+        quantity_on_order: 0,
       });
       console.log(`  + Stocked ${prod.product_name} (500 units)`);
     } else {

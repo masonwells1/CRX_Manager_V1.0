@@ -69,36 +69,42 @@ export const TEST_CUSTOMER_B = {
 
 export const TEST_PRODUCT_ALPHA = {
   product_name: `${E2E_PREFIX} Herbicide Alpha`,
-  category: 'Herbicide' as const,
-  unit_of_measure: 'Gallon' as const,
+  category: 'Herbicide',
+  inventory_unit: 'gal',
   container_size: 2.5,
-  container_type: 'Jug' as const,
-  unit_cost_cents: 5000, // $50.00
-  margin_percentage: 30,
+  container_type: 'Jug',
+  current_cost: 50.00, // $50.00 (dollars, not cents)
+  tier1_price: 65.00,
+  tier2_price: 68.00,
+  tier3_price: 72.00,
   is_active: true,
   is_rup: false,
 };
 
 export const TEST_PRODUCT_BETA = {
   product_name: `${E2E_PREFIX} Adjuvant Beta`,
-  category: 'Adjuvant' as const,
-  unit_of_measure: 'Gallon' as const,
+  category: 'Adjuvant',
+  inventory_unit: 'gal',
   container_size: 2.5,
-  container_type: 'Jug' as const,
-  unit_cost_cents: 8000, // $80.00
-  margin_percentage: 25,
+  container_type: 'Jug',
+  current_cost: 80.00, // $80.00
+  tier1_price: 100.00,
+  tier2_price: 106.00,
+  tier3_price: 112.00,
   is_active: true,
   is_rup: false,
 };
 
 export const TEST_PRODUCT_GAMMA = {
   product_name: `${E2E_PREFIX} Fertilizer Gamma`,
-  category: 'Fertilizer' as const,
-  unit_of_measure: 'Pound' as const,
+  category: 'Fertilizer',
+  inventory_unit: 'lb',
   container_size: 50,
-  container_type: 'Bag' as const,
-  unit_cost_cents: 3000, // $30.00
-  margin_percentage: 40,
+  container_type: 'Bag',
+  current_cost: 30.00, // $30.00
+  tier1_price: 42.00,
+  tier2_price: 45.00,
+  tier3_price: 48.00,
   is_active: true,
   is_rup: false,
 };
@@ -110,5 +116,4 @@ export const TEST_VENDOR = {
   contact_name: 'Vendor Contact',
   email: 'vendor@test.com',
   phone: '555-0099',
-  is_active: true,
 };
