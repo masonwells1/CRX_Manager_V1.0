@@ -88,6 +88,7 @@ export default function DeliveryDetail() {
   const [remainders, setRemainders] = useState<DeliveryRemainder[]>([]);
   const [loading, setLoading] = useState(true);
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
+  const [inventoryWarnings, setInventoryWarnings] = useState<string[]>([]);
 
   // Signature signed URL (generated on demand for privacy)
   const [signedSignatureUrl, setSignedSignatureUrl] = useState<string | null>(null);
@@ -302,6 +303,45 @@ export default function DeliveryDetail() {
     });
     return () => { cancelled = true; };
   }, [customer, items]);
+
+  // Inventory availability check — warn (don't block) if stock is low
+  useEffect(() => {
+    if (!items.length || !delivery || (delivery.status !== 'scheduled' && delivery.status !== 'in_progress')) {
+      setInventoryWarnings([]);
+      return;
+    }
+    const productIds = [...new Set(items.map((i) => i.product_id).filter(Boolean))];
+    if (!productIds.length) { setInventoryWarnings([]); return; }
+    let cancelled = false;
+
+    (async () => {
+      const { data: invData, error: invErr } = await supabase
+        .from('inventory')
+        .select('product_id, quantity_available')
+        .in('product_id', productIds)
+        .eq('location', 'Main Warehouse');
+
+      if (cancelled || invErr) return;
+
+      const invMap: Record<string, number> = {};
+      for (const row of (invData || []) as Array<{ product_id: string; quantity_available: number }>) {
+        invMap[row.product_id] = (invMap[row.product_id] || 0) + Number(row.quantity_available);
+      }
+
+      const warnings: string[] = [];
+      for (const item of items) {
+        if (item.quantity <= 0) continue;
+        const available = invMap[item.product_id] ?? 0;
+        if (available < item.quantity) {
+          const productName = (item.product as unknown as { product_name: string })?.product_name || 'Unknown';
+          warnings.push(`${productName}: need ${item.quantity}, only ${available} on hand`);
+        }
+      }
+      if (!cancelled) setInventoryWarnings(warnings);
+    })();
+
+    return () => { cancelled = true; };
+  }, [items, delivery]);
 
   const updateDeliveryQty = (itemId: string, qty: number, max: number) => {
     setDeliveryQtys((prev) => ({ ...prev, [itemId]: Math.max(0, Math.min(qty, max)) }));
@@ -1010,6 +1050,22 @@ export default function DeliveryDetail() {
             </div>
           )}
 
+          {/* Inventory Warning (driver view) */}
+          {inventoryWarnings.length > 0 && (delivery.status === 'scheduled' || delivery.status === 'in_progress') && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-800">Low Inventory Warning</p>
+                  <div className="text-sm text-amber-700 mt-1">
+                    {inventoryWarnings.map((w, i) => <p key={i}>{w}</p>)}
+                  </div>
+                  <p className="text-xs text-amber-600 mt-1">Delivery can still proceed — verify physical stock.</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Products */}
           <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
             <h3 className="text-white font-semibold mb-4">Products</h3>
@@ -1601,6 +1657,22 @@ export default function DeliveryDetail() {
             </div>
           </div>
         </Card>
+      )}
+
+      {/* Inventory Warning */}
+      {inventoryWarnings.length > 0 && (delivery.status === 'scheduled' || delivery.status === 'in_progress') && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-amber-800">Low Inventory Warning</p>
+              <div className="text-sm text-amber-700 mt-1">
+                {inventoryWarnings.map((w, i) => <p key={i}>{w}</p>)}
+              </div>
+              <p className="text-xs text-amber-600 mt-1">Delivery can still proceed — verify physical stock.</p>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Products table with order context */}

@@ -122,6 +122,9 @@ export default function Deliveries() {
   /* Remainder count for summary */
   const [remainderCount, setRemainderCount] = useState(0);
 
+  /* Inventory shortage tracking */
+  const [shortageDeliveryIds, setShortageDeliveryIds] = useState<Set<string>>(new Set());
+
   /* Driver-specific: unassigned deliveries they can claim */
   const [unassigned, setUnassigned] = useState<DeliveryRow[]>([]);
 
@@ -243,6 +246,50 @@ export default function Deliveries() {
     }));
 
     setDeliveries(rows);
+
+    // Inventory shortage check for active (non-completed) deliveries
+    const activeIds = rows
+      .filter((d) => d.status === 'scheduled' || d.status === 'in_progress')
+      .map((d) => d.id);
+
+    if (activeIds.length > 0) {
+      try {
+        const { data: diData } = await supabase
+          .from('delivery_items')
+          .select('delivery_id, product_id, quantity')
+          .in('delivery_id', activeIds.slice(0, 500));
+
+        const productIds = [...new Set((diData || []).map((i: { product_id: string }) => i.product_id).filter(Boolean))];
+
+        if (productIds.length > 0) {
+          const { data: invData } = await supabase
+            .from('inventory')
+            .select('product_id, quantity_available')
+            .in('product_id', productIds)
+            .eq('location', 'Main Warehouse');
+
+          const invMap: Record<string, number> = {};
+          for (const row of (invData || []) as Array<{ product_id: string; quantity_available: number }>) {
+            invMap[row.product_id] = (invMap[row.product_id] || 0) + Number(row.quantity_available);
+          }
+
+          const shortageIds = new Set<string>();
+          for (const item of (diData || []) as Array<{ delivery_id: string; product_id: string; quantity: number }>) {
+            if (item.quantity > 0 && (invMap[item.product_id] ?? 0) < item.quantity) {
+              shortageIds.add(item.delivery_id);
+            }
+          }
+          setShortageDeliveryIds(shortageIds);
+        } else {
+          setShortageDeliveryIds(new Set());
+        }
+      } catch {
+        setShortageDeliveryIds(new Set());
+      }
+    } else {
+      setShortageDeliveryIds(new Set());
+    }
+
     setLoading(false);
   }, [isDriver, profile, toast]);
 
@@ -622,7 +669,12 @@ export default function Deliveries() {
         className="bg-gray-800 rounded-xl p-4 space-y-2 cursor-pointer active:bg-gray-700 transition-colors"
       >
         <div className="flex items-center justify-between">
-          <span className="text-white font-semibold">{d.delivery_number}</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-white font-semibold">{d.delivery_number}</span>
+            {shortageDeliveryIds.has(d.id) && (
+              <span title="Inventory shortage"><AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" /></span>
+            )}
+          </div>
           <Badge variant={statusToBadgeVariant[d.status] || 'default'}>{d.status.replace('_', ' ')}</Badge>
         </div>
         <p className="text-gray-300 text-sm">{d.customer_name}</p>
@@ -789,6 +841,9 @@ export default function Deliveries() {
         <div className="flex items-center gap-2">
           <Truck className="w-4 h-4 text-crx-green flex-shrink-0" />
           <span className="font-medium text-nav-dark">{row.delivery_number}</span>
+          {shortageDeliveryIds.has(row.id) && (
+            <span title="Inventory shortage"><AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" /></span>
+          )}
         </div>
       ),
     },
