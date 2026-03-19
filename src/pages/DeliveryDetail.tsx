@@ -1305,7 +1305,9 @@ export default function DeliveryDetail() {
                   customer_name: customer?.farm_name || 'Customer',
                   customer_address: address
                     ? [address.address_line, address.city, address.state, address.zip].filter(Boolean).join(', ')
-                    : customer?.billing_address || undefined,
+                    : customer?.shipping_address || customer?.billing_address || undefined,
+                  contact_name: customer?.contact_name || undefined,
+                  contact_phone: customer?.phone || undefined,
                   driver_name: driver?.full_name || 'Unassigned',
                   scheduled_date: delivery.scheduled_date,
                   completed_at: delivery.completed_at || undefined,

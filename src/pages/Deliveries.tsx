@@ -407,7 +407,7 @@ export default function Deliveries() {
             .from('delivery_items')
             .select('*, product:products(product_name)')
             .eq('delivery_id', del.id)
-            .order('sort_order');
+            .order('id');
 
           const delAny = del as unknown as Record<string, unknown>;
           pdfDataList.push({
@@ -514,7 +514,7 @@ export default function Deliveries() {
             .from('delivery_items')
             .select('*, product:products(product_name)')
             .eq('delivery_id', del.id)
-            .order('sort_order');
+            .order('id');
 
           const delAny = del as unknown as Record<string, unknown>;
           const custInfo = customerMap[del.customer_id] || { contact_name: null, phone: null, shipping_address: null, billing_address: null };
