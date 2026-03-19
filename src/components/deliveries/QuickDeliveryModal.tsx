@@ -8,6 +8,7 @@ import { AlertTriangle, Plus, Search, Trash2, Zap } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
+import ConfirmModal from '../ui/ConfirmModal';
 import { supabase, assertRpcResult } from '../../lib/db';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../ui/Toast';
@@ -68,25 +69,37 @@ export default function QuickDeliveryModal({
   const [scheduledDate, setScheduledDate] = useState(localToday());
   const [deliveryNotes, setDeliveryNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [createInvoice, setCreateInvoice] = useState(true);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   // Fetch products and drivers on open
   useEffect(() => {
     if (!open) return;
     const fetchData = async () => {
-      const [{ data: prodData }, { data: driverData }] = await Promise.all([
-        supabase.from('products').select('*').eq('is_active', true).order('product_name'),
-        supabase.from('profiles').select('*').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
-      ]);
-      setProducts((prodData || []) as Product[]);
-      setDrivers((driverData || []) as Profile[]);
+      try {
+        const [prodResult, driverResult] = await Promise.all([
+          supabase.from('products').select('*').eq('is_active', true).order('product_name'),
+          supabase.from('profiles').select('*').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
+        ]);
+        if (prodResult.error || driverResult.error) {
+          toast('error', 'Failed to load products or drivers. Please close and try again.');
+          Sentry.captureException(prodResult.error || driverResult.error, { extra: { context: 'QuickDeliveryModal.fetchData' } });
+          return;
+        }
+        setProducts((prodResult.data || []) as Product[]);
+        setDrivers((driverResult.data || []) as Profile[]);
 
-      // Auto-select current user as driver if they're a driver
-      if (profile?.role === 'driver') {
-        setSelectedDriver(profile.id);
+        // Auto-select current user as driver if they're a driver
+        if (profile?.role === 'driver') {
+          setSelectedDriver(profile.id);
+        }
+      } catch (err) {
+        toast('error', 'Failed to load products or drivers. Please close and try again.');
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'QuickDeliveryModal.fetchData' } });
       }
     };
     fetchData();
-  }, [open, profile]);
+  }, [open, profile, toast]);
 
   // Customer search debounce
   useEffect(() => {
@@ -227,13 +240,17 @@ export default function QuickDeliveryModal({
         p_delivery_notes: deliveryNotes || null,
         p_performed_by: profile?.id,
         p_idempotency_key: key,
+        p_skip_invoice: !createInvoice,
       });
 
       if (error) throw error;
       quickDeliveryIdem.resetKey();
 
-      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string }>(data, 'create_quick_delivery');
-      toast('success', `Quick delivery ${result.delivery_number} created with draft invoice ${result.invoice_number}`);
+      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null }>(data, 'create_quick_delivery');
+      const invoiceMsg = result.invoice_number
+        ? ` with draft invoice ${result.invoice_number}`
+        : ' (no invoice created)';
+      toast('success', `Quick delivery ${result.delivery_number} created${invoiceMsg}`);
 
       // Reset form
       setSelectedCustomer(null);
@@ -242,6 +259,7 @@ export default function QuickDeliveryModal({
       setDeliveryNotes('');
       setSelectedDriver(profile?.role === 'driver' ? profile.id : '');
       setScheduledDate(localToday());
+      setCreateInvoice(true);
 
       onClose();
       onCreated?.();
@@ -278,11 +296,13 @@ export default function QuickDeliveryModal({
             <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-medium text-amber-800">
-                This will create an order, delivery, and draft invoice.
+                This will create an order and delivery{createInvoice ? ', plus a draft invoice' : ''}.
               </p>
-              <p className="text-xs text-amber-700 mt-1">
-                The invoice must be reviewed and posted by a sales rep before it can be billed.
-              </p>
+              {createInvoice && (
+                <p className="text-xs text-amber-700 mt-1">
+                  The invoice must be reviewed and posted by a sales rep before it can be billed.
+                </p>
+              )}
             </div>
           </div>
 
@@ -453,6 +473,17 @@ export default function QuickDeliveryModal({
             />
           </div>
 
+          {/* Invoice option */}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={createInvoice}
+              onChange={(e) => setCreateInvoice(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green/30"
+            />
+            <span className="text-sm text-secondary">Create draft invoice</span>
+          </label>
+
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="ghost" onClick={handleClose}>
@@ -460,15 +491,26 @@ export default function QuickDeliveryModal({
             </Button>
             <Button
               icon={<Zap className="w-4 h-4" />}
-              onClick={handleSubmit}
-              loading={submitting}
-              disabled={!selectedCustomer || items.length === 0}
+              onClick={() => setShowConfirm(true)}
+              disabled={!selectedCustomer || items.length === 0 || submitting}
             >
               Create Quick Delivery
             </Button>
           </div>
         </div>
       </Modal>
+
+      {/* Confirmation dialog */}
+      <ConfirmModal
+        open={showConfirm}
+        onClose={() => setShowConfirm(false)}
+        onConfirm={() => { setShowConfirm(false); handleSubmit(); }}
+        title="Create Quick Delivery"
+        message={`Create delivery for ${selectedCustomer?.farm_name || 'customer'} with ${items.length} product(s) totaling ${fmtCurrency(totalCents)}${selectedDriver ? ` assigned to ${drivers.find(d => d.id === selectedDriver)?.full_name || 'driver'}` : ''}${createInvoice ? '. A draft invoice will also be created.' : '. No invoice will be created.'}`}
+        confirmLabel="Create"
+        variant="warning"
+        loading={submitting}
+      />
 
       {/* Product picker sub-modal */}
       <Modal

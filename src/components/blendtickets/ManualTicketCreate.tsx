@@ -146,6 +146,12 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
   async function handleSave() {
     if (!profile) return;
     setError(null);
+
+    if (!formData.customer_id) {
+      setError('Please select a customer before saving.');
+      return;
+    }
+
     setSaving(true);
 
     try {

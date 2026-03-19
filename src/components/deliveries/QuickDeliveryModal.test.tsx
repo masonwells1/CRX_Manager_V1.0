@@ -96,7 +96,7 @@ describe('QuickDeliveryModal', () => {
 
   it('shows warning banner about creating order + delivery + invoice', async () => {
     await renderModal();
-    expect(screen.getByText(/create an order, delivery, and draft invoice/i)).toBeInTheDocument();
+    expect(screen.getByText(/create an order and delivery, plus a draft invoice/i)).toBeInTheDocument();
   });
 
   it('shows customer search input', async () => {

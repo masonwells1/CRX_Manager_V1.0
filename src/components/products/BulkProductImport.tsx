@@ -77,6 +77,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
   const [uploading, setUploading] = useState(false);
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [uploadResults, setUploadResults] = useState<{ success: number; failed: number } | null>(null);
+  const [importWarnings, setImportWarnings] = useState<string[]>([]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -96,6 +97,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
       setFile(selectedFile);
       setValidation(null);
       setUploadResults(null);
+      setImportWarnings([]);
     }
   };
 
@@ -276,7 +278,7 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
             } else if (field === 'tier1_margin' || field === 'tier2_margin' || field === 'tier3_margin') {
               const num = parseFloat(value);
               if (!isNaN(num) && num >= 0) {
-                product[field] = num > 1 ? num / 100 : num;
+                product[field] = num;
               }
             }
           }
@@ -293,6 +295,30 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
 
         valid.push(product as ParsedProduct);
       });
+
+      // Validation warnings (non-blocking)
+      const warnings: string[] = [];
+      valid.forEach((p, idx) => {
+        const row = idx + 2;
+        // Margin > 1 warning
+        for (const mf of ['tier1_margin', 'tier2_margin', 'tier3_margin'] as const) {
+          if (p[mf] != null && p[mf]! > 1) {
+            warnings.push(`Row ${row}: ${mf} is ${p[mf]} — margins should be 0–1 (e.g., 0.25 = 25%). Verify your data.`);
+          }
+        }
+        // Tier price hierarchy warnings
+        if (p.tier1_price != null && p.tier2_price != null && p.tier1_price > p.tier2_price) {
+          warnings.push(`Row ${row}: tier1_price ($${p.tier1_price}) > tier2_price ($${p.tier2_price}) — tier 1 is usually the lowest price.`);
+        }
+        if (p.tier2_price != null && p.tier3_price != null && p.tier2_price > p.tier3_price) {
+          warnings.push(`Row ${row}: tier2_price ($${p.tier2_price}) > tier3_price ($${p.tier3_price}) — verify pricing tiers.`);
+        }
+        // Cost vs price warning
+        if (p.current_cost != null && p.tier1_price != null && p.current_cost > p.tier1_price) {
+          warnings.push(`Row ${row}: cost ($${p.current_cost}) > tier1_price ($${p.tier1_price}) — selling below cost.`);
+        }
+      });
+      setImportWarnings(warnings);
 
       setValidation({ valid, invalid });
     } catch {
@@ -438,6 +464,20 @@ export default function BulkProductImport({ open, onClose, onSuccess }: BulkProd
                     <p key={idx} className="text-xs text-secondary">
                       Row {inv.row}: {inv.error}
                     </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {importWarnings.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg max-h-32 overflow-y-auto">
+                <div className="flex items-center gap-2 mb-1">
+                  <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                  <p className="text-xs font-medium text-amber-800">Data Warnings ({importWarnings.length})</p>
+                </div>
+                <div className="space-y-1">
+                  {importWarnings.map((w, idx) => (
+                    <p key={idx} className="text-xs text-amber-700">{w}</p>
                   ))}
                 </div>
               </div>

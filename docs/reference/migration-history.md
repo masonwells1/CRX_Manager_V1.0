@@ -1,4 +1,4 @@
-# Migration History (208 migrations)
+# Migration History (211 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -208,3 +208,6 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 202 | 20260333100000 | **Fix save_quote idempotency + activity_feed columns** — Corrects idempotency_keys refs (`key`→`idempotency_key`, `entity_type`/`entity_id`→`operation`/`result`), fixes `v_server_totals` field aliases (`.sum`→`.total_price`), fixes activity_feed column names (`action`→`event_type`, `entity_type`→`related_entity_type`, `entity_id`→`related_entity_id`), adds `pg_temp` to search_path |
 | 203 | 20260333200000 | **Fix save_quote search_path + idempotency type** — Surgical fix for save_quote search_path and idempotency key column type mismatch |
 | 204 | 20260333300000 | **Fix 5 RPCs missing p_idempotency_key** — Adds p_idempotency_key to reverse_receiving_record, void_payment, edit_prepay_credit, delete_prepay_credit. Recreates batch_post_invoices (was dropped in 20260311200000). All created after consolidation migration so never got the parameter. Restores set_config trigger awareness in reverse_receiving_record. |
+| 205 | 20260333400000 | **Fix reverse_receiving and idempotency bugs** — Fixes reverse_receiving_record and other idempotency-related issues |
+| 206 | 20260333500000 | **Allow PO reverse transitions** — Enables purchase order status rollback for admin corrections |
+| 207 | 20260333600000 | **Quick delivery optional invoice** — Adds `p_skip_invoice boolean DEFAULT false` to `create_quick_delivery`. Fixes missing `save_idempotency()` call (was checking but never saving). Fixes `search_path` missing `pg_temp`. Wraps invoice creation in conditional. Frontend adds "Create draft invoice" checkbox (ON by default) + confirmation dialog |

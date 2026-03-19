@@ -4,6 +4,26 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-19 — Pre-Production Audit Fixes (7 Issues)
+
+### Changes
+- **Fix broken routes**: Added `/customers/new` and `/fields/new` routes in App.tsx — both were navigating to non-existent routes, silently redirecting to dashboard
+- **QuickDeliveryModal error handling**: Added try/catch + Sentry logging to product/driver fetch — was silently showing empty lists on network error
+- **ManualTicketCreate validation**: Added customer_id required check before save — was allowing blend tickets with null customer
+- **BulkProductImport margin bug**: Removed broken `num > 1 ? num/100 : num` auto-normalization heuristic — was corrupting margins like 1.5 (150%). Now stores raw value and shows warnings for values > 1
+- **BulkProductImport tier validation**: Added non-blocking warnings for inverted tier pricing (tier1 > tier2) and below-cost pricing
+- **QuickDeliveryModal optional invoice**: Added "Create draft invoice" checkbox (ON by default) + confirmation dialog before submit. Previously auto-created invoice with no user choice and no confirmation
+- **Migration 20260333600000**: Updated `create_quick_delivery` RPC with `p_skip_invoice boolean DEFAULT false`, fixed missing `save_idempotency()` call (idempotency was check-only, never saved), fixed `search_path` missing `pg_temp`
+
+### Files Modified
+- `src/App.tsx` — 2 new route entries
+- `src/components/deliveries/QuickDeliveryModal.tsx` — error handling, checkbox, confirm dialog
+- `src/components/blendtickets/ManualTicketCreate.tsx` — customer validation
+- `src/components/products/BulkProductImport.tsx` — margin fix + tier warnings
+- `supabase/migrations/20260333600000_quick_delivery_optional_invoice.sql` — new migration
+
+---
+
 ## 2026-03-18 — Fix 5 RPCs Missing p_idempotency_key (PostgREST Schema Cache Errors)
 
 ### Root Cause
