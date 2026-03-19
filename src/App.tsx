@@ -4,6 +4,8 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './components/ui/Toast';
 import ErrorBoundary from './components/ErrorBoundary';
 import LoginPage from './components/auth/LoginPage';
+import ForgotPasswordPage from './components/auth/ForgotPasswordPage';
+import ResetPasswordPage from './components/auth/ResetPasswordPage';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import AppLayout from './components/layout/AppLayout';
 import { checkEnvVars, EnvErrorScreen } from './components/EnvCheck';
@@ -132,6 +134,8 @@ const router = createBrowserRouter([
     element: <RootLayout />,
     children: [
       { path: 'login', element: <LoginPage /> },
+      { path: 'forgot-password', element: <ForgotPasswordPage /> },
+      { path: 'reset-password', element: <ResetPasswordPage /> },
       {
         element: (
           <ProtectedRoute>

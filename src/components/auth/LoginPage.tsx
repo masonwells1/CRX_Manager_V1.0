@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { useNavigate, Navigate } from 'react-router-dom';
+import { useNavigate, Navigate, Link } from 'react-router-dom';
 import { ChevronRight, Loader2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import logoWhite from '../../assets/logo_3-01_(3).png';
@@ -99,6 +99,15 @@ export default function LoginPage() {
                   transition-colors"
                 placeholder="Enter your password"
               />
+            </div>
+
+            <div className="flex justify-end">
+              <Link
+                to="/forgot-password"
+                className="text-sm text-crx-green hover:text-crx-green-hover font-medium"
+              >
+                Forgot your password?
+              </Link>
             </div>
 
             <button
