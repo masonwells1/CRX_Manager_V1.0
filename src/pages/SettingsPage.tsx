@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Save, UserPlus, Pencil, Shield, Users } from 'lucide-react';
+import { Save, UserPlus, Pencil, Shield, Users, KeyRound } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -148,6 +148,11 @@ export default function SettingsPage() {
   const [editDeniedPages, setEditDeniedPages] = useState<string[]>([]);
   const [savingUser, setSavingUser] = useState(false);
   const [deactivateConfirmOpen, setDeactivateConfirmOpen] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [passwordTarget, setPasswordTarget] = useState<Profile | null>(null);
+  const [adminSetPassword, setAdminSetPassword] = useState('');
+  const [adminConfirmPassword, setAdminConfirmPassword] = useState('');
+  const [settingPassword, setSettingPassword] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
 
   useEffect(() => {
@@ -351,6 +356,66 @@ export default function SettingsPage() {
       toast('error', 'Failed to update user');
     }
     setSavingUser(false);
+  };
+
+  const openPasswordModal = (user: Profile) => {
+    setPasswordTarget(user);
+    setAdminSetPassword('');
+    setAdminConfirmPassword('');
+    setPasswordModalOpen(true);
+  };
+
+  const handleSetPassword = async () => {
+    if (!passwordTarget) return;
+    if (adminSetPassword.length < 8) {
+      toast('error', 'Password must be at least 8 characters');
+      return;
+    }
+    if (adminSetPassword !== adminConfirmPassword) {
+      toast('error', 'Passwords do not match');
+      return;
+    }
+    setSettingPassword(true);
+    try {
+      const session = (await supabase.auth.getSession()).data.session;
+      if (!session) {
+        toast('error', 'You are not logged in. Please sign in again.');
+        setSettingPassword(false);
+        return;
+      }
+
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/reset-user-password`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({
+            user_id: passwordTarget.id,
+            password: adminSetPassword,
+          }),
+        }
+      );
+
+      const data = await response.json();
+      if (!response.ok || data?.error) {
+        toast('error', data?.error || `Request failed (${response.status})`);
+      } else {
+        toast('success', `Password updated for ${passwordTarget.full_name}`);
+        if (profile) logActivity({ event: 'user_password_reset', description: `Admin reset password for ${passwordTarget.full_name}`, performedBy: profile.id });
+        setPasswordModalOpen(false);
+        setPasswordTarget(null);
+        setAdminSetPassword('');
+        setAdminConfirmPassword('');
+      }
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'admin_reset_password' } });
+      toast('error', err instanceof Error ? err.message : 'Failed to set password');
+    }
+    setSettingPassword(false);
   };
 
   const roleColors: Record<UserRole, 'success' | 'info' | 'warning'> = {
@@ -582,9 +647,23 @@ export default function SettingsPage() {
             onChange={setEditDeniedPages}
           />
 
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="secondary" onClick={() => setEditModalOpen(false)}>Cancel</Button>
-            <Button onClick={handleEditUser} loading={savingUser}>Save Changes</Button>
+          <div className="flex items-center justify-between pt-2">
+            <div>
+              {editingUser && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<KeyRound className="w-3.5 h-3.5" />}
+                  onClick={() => { setEditModalOpen(false); openPasswordModal(editingUser); }}
+                >
+                  Set Password
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => setEditModalOpen(false)}>Cancel</Button>
+              <Button onClick={handleEditUser} loading={savingUser}>Save Changes</Button>
+            </div>
           </div>
         </div>
       </Modal>
@@ -598,6 +677,34 @@ export default function SettingsPage() {
         confirmLabel="Deactivate"
         variant="warning"
       />
+
+      <Modal open={passwordModalOpen} onClose={() => setPasswordModalOpen(false)} title="Set" accent="Password">
+        <div className="space-y-4">
+          {passwordTarget && (
+            <p className="text-sm text-secondary">
+              Setting a new password for <strong>{passwordTarget.full_name}</strong> ({passwordTarget.email})
+            </p>
+          )}
+          <Input
+            label="New Password"
+            type="password"
+            value={adminSetPassword}
+            onChange={(e) => setAdminSetPassword(e.target.value)}
+            placeholder="At least 8 characters"
+          />
+          <Input
+            label="Confirm Password"
+            type="password"
+            value={adminConfirmPassword}
+            onChange={(e) => setAdminConfirmPassword(e.target.value)}
+            placeholder="Re-enter the password"
+          />
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setPasswordModalOpen(false)}>Cancel</Button>
+            <Button onClick={handleSetPassword} loading={settingPassword}>Update Password</Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
