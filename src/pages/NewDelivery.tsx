@@ -56,6 +56,7 @@ export default function NewDelivery() {
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
+  const [inventoryWarnings, setInventoryWarnings] = useState<string[]>([]);
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
 
   // Track dirty state for unsaved changes warning
@@ -205,6 +206,43 @@ export default function NewDelivery() {
     });
     return () => { cancelled = true; };
   }, [customer, deliveryItems, profile?.id]);
+
+  // Inventory availability check — warn (don't block) if stock is low
+  useEffect(() => {
+    if (!deliveryItems.length) { setInventoryWarnings([]); return; }
+    const productIds = [...new Set(deliveryItems.map((i) => i.product_id).filter(Boolean))];
+    if (!productIds.length) { setInventoryWarnings([]); return; }
+    let cancelled = false;
+
+    (async () => {
+      const { data: invData, error: invErr } = await supabase
+        .from('inventory')
+        .select('product_id, quantity_available, quantity_prebooked')
+        .in('product_id', productIds)
+        .eq('location', 'Main Warehouse');
+
+      if (cancelled || invErr) return;
+
+      const invMap: Record<string, number> = {};
+      for (const row of (invData || []) as Array<{ product_id: string; quantity_available: number; quantity_prebooked: number }>) {
+        invMap[row.product_id] = (invMap[row.product_id] || 0) + Number(row.quantity_available);
+      }
+
+      const warnings: string[] = [];
+      for (const item of deliveryItems) {
+        if (item.quantity <= 0) continue;
+        const available = invMap[item.product_id] ?? 0;
+        if (available < item.quantity) {
+          warnings.push(
+            `${item.product_name}: need ${item.quantity}, only ${available} on hand`
+          );
+        }
+      }
+      if (!cancelled) setInventoryWarnings(warnings);
+    })();
+
+    return () => { cancelled = true; };
+  }, [deliveryItems]);
 
   const updateItemQty = (orderItemId: string, qty: number) => {
     setDeliveryItems((prev) =>
@@ -467,6 +505,21 @@ export default function NewDelivery() {
             <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-amber-800">
               {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {inventoryWarnings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-amber-800">Low Inventory Warning</p>
+              <div className="text-sm text-amber-700 mt-1">
+                {inventoryWarnings.map((w, i) => <p key={i}>{w}</p>)}
+              </div>
+              <p className="text-xs text-amber-600 mt-1">Delivery can still be scheduled — verify physical stock.</p>
             </div>
           </div>
         </div>

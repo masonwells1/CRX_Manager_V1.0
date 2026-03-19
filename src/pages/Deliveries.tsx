@@ -32,7 +32,6 @@ import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
-import { generateLoadSheetPdf } from '../lib/loadSheetPdf';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import DeliveryCalendar from '../components/deliveries/DeliveryCalendar';
@@ -454,6 +453,8 @@ export default function Deliveries() {
   const handlePrintLoadSheet = async () => {
     await runCriticalAction({
       action: async () => {
+        const { generateBatchDeliveryPdf } = await import('../lib/deliveryPdf');
+
         // Use selected deliveries, or all filtered scheduled/in_progress for today
         const rows = selected.size > 0
           ? selectedDeliveries
@@ -463,16 +464,23 @@ export default function Deliveries() {
           throw new Error('No deliveries to include in load sheet');
         }
 
-        // Batch-fetch customer contact info and order numbers for all deliveries
+        // Batch-fetch customer contact info, addresses, and order numbers
         const customerIds = [...new Set(rows.map((d) => d.customer_id).filter(Boolean))];
         const orderIds = [...new Set(rows.map((d) => d.order_id).filter(Boolean))];
+        const addressIds = [...new Set(
+          rows.map((d) => (d as unknown as Record<string, unknown>).delivery_address_id as string)
+            .filter(Boolean),
+        )];
 
-        const [customerResult, orderResult] = await Promise.all([
+        const [customerResult, orderResult, addressResult] = await Promise.all([
           customerIds.length > 0
-            ? supabase.from('customers').select('id, contact_name, phone').in('id', customerIds)
+            ? supabase.from('customers').select('id, contact_name, phone, shipping_address, billing_address').in('id', customerIds)
             : Promise.resolve({ data: null, error: null }),
           orderIds.length > 0
             ? supabase.from('orders').select('id, order_number').in('id', orderIds)
+            : Promise.resolve({ data: null, error: null }),
+          addressIds.length > 0
+            ? supabase.from('customer_addresses').select('id, address_line, city, state, zip').in('id', addressIds)
             : Promise.resolve({ data: null, error: null }),
         ]);
 
@@ -480,10 +488,12 @@ export default function Deliveries() {
         if (customerErr) Sentry.captureException(customerErr, { tags: { source: 'load_sheet', page: 'deliveries' } });
         const { data: orderData, error: orderErr } = orderResult;
         if (orderErr) Sentry.captureException(orderErr, { tags: { source: 'load_sheet', page: 'deliveries' } });
+        const { data: addressData, error: addressErr } = addressResult;
+        if (addressErr) Sentry.captureException(addressErr, { tags: { source: 'load_sheet', page: 'deliveries' } });
 
-        const customerMap: Record<string, { contact_name: string | null; phone: string | null }> = {};
-        ((customerData || []) as Array<{ id: string; contact_name: string | null; phone: string | null }>).forEach((c) => {
-          customerMap[c.id] = { contact_name: c.contact_name, phone: c.phone };
+        const customerMap: Record<string, { contact_name: string | null; phone: string | null; shipping_address: string | null; billing_address: string | null }> = {};
+        ((customerData || []) as Array<{ id: string; contact_name: string | null; phone: string | null; shipping_address: string | null; billing_address: string | null }>).forEach((c) => {
+          customerMap[c.id] = { contact_name: c.contact_name, phone: c.phone, shipping_address: c.shipping_address, billing_address: c.billing_address };
         });
 
         const orderMap: Record<string, string> = {};
@@ -491,8 +501,14 @@ export default function Deliveries() {
           orderMap[o.id] = o.order_number;
         });
 
-        // Fetch items for each delivery
-        const stops = [];
+        const addressMap: Record<string, string> = {};
+        ((addressData || []) as Array<{ id: string; address_line: string | null; city: string | null; state: string | null; zip: string | null }>).forEach((a) => {
+          const parts = [a.address_line, a.city, a.state, a.zip].filter(Boolean);
+          addressMap[a.id] = parts.join(', ');
+        });
+
+        // Build PdfDeliveryData for each delivery (same format as Receipt PDF)
+        const pdfDataList = [];
         for (const del of rows) {
           const { data: items } = await supabase
             .from('delivery_items')
@@ -501,35 +517,51 @@ export default function Deliveries() {
             .order('sort_order');
 
           const delAny = del as unknown as Record<string, unknown>;
-          const custInfo = customerMap[del.customer_id] || { contact_name: null, phone: null };
-          stops.push({
+          const custInfo = customerMap[del.customer_id] || { contact_name: null, phone: null, shipping_address: null, billing_address: null };
+
+          // Address fallback: delivery address → customer shipping → customer billing
+          const deliveryAddrId = delAny.delivery_address_id as string | null;
+          const address = (deliveryAddrId && addressMap[deliveryAddrId])
+            || custInfo.shipping_address
+            || custInfo.billing_address
+            || undefined;
+
+          pdfDataList.push({
             delivery_number: del.delivery_number,
-            order_number: del.order_id ? orderMap[del.order_id] : undefined,
+            order_number: del.order_id ? (orderMap[del.order_id] || '-') : '-',
             customer_name: del.customer_name,
-            customer_address: (delAny.delivery_address as string) || undefined,
-            contact_name: custInfo.contact_name,
-            phone: custInfo.phone,
+            customer_address: address,
+            contact_name: custInfo.contact_name || undefined,
+            contact_phone: custInfo.phone || undefined,
             driver_name: del.driver_name,
             scheduled_date: del.scheduled_date,
-            priority: del.priority || 'normal',
+            completed_at: del.completed_at || undefined,
+            status: del.status,
+            signed_by: del.signed_by || undefined,
             delivery_notes: del.delivery_notes || undefined,
-            // M14: sort items by product name for consistent load sheet ordering
+            priority: del.priority || 'normal',
+            issue_type: del.issue_type || undefined,
+            issue_notes: del.issue_notes || undefined,
             items: ((items || []) as Array<Record<string, unknown> & { product?: { product_name?: string } }>)
               .map((it) => ({
                 product_name: it.product?.product_name || (it.product_name as string) || 'Unknown',
                 quantity: it.quantity as number,
                 unit_size: (it.unit_size as string) || '-',
+                quantity_delivered: (it.quantity_delivered as number) || undefined,
                 tote_number: (it.tote_number as string) || undefined,
-                notes: (it.notes as string) || undefined,
               }))
-              .sort((a, b) => a.product_name.localeCompare(b.product_name)),
+              .sort((a, b) => (a.product_name || '').localeCompare(b.product_name || '')),
           });
         }
 
-        await generateLoadSheetPdf(stops);
+        if (pdfDataList.length === 0) {
+          throw new Error('No deliveries to print');
+        }
+
+        await generateBatchDeliveryPdf(pdfDataList);
       },
       toast,
-      successMessage: 'Load sheet generated',
+      successMessage: 'Delivery receipt(s) generated',
       setLoading: setPrintingLoadSheet,
       sentryTag: 'print_load_sheet',
     });

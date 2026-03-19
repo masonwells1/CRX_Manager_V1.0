@@ -31,6 +31,8 @@ export interface PdfDeliveryData {
   order_number: string;
   customer_name: string;
   customer_address?: string;
+  contact_name?: string;
+  contact_phone?: string;
   driver_name: string;
   scheduled_date: string;
   completed_at?: string;
@@ -90,11 +92,13 @@ function renderDeliveryPage(
   const infoLeft = [
     ['Customer', data.customer_name],
     ['Address', data.customer_address || '-'],
+    ['Contact', data.contact_name || '-'],
     ['Driver', data.driver_name],
   ];
   const infoRight = [
     ['Scheduled', new Date(data.scheduled_date + 'T00:00:00').toLocaleDateString()],
     ['Completed', data.completed_at ? new Date(data.completed_at).toLocaleDateString() : 'Pending'],
+    ['Phone', data.contact_phone || '-'],
     ['Signed By', data.signed_by || '-'],
   ];
 
