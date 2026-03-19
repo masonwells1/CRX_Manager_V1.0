@@ -176,6 +176,7 @@ export default function Deliveries() {
     let query = supabase
       .from('deliveries')
       .select('*, customer:customers(farm_name, parent_customer_id), driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+      .neq('status', 'cancelled')
       .order('scheduled_date', { ascending: false })
       .limit(500);
 
@@ -1145,7 +1146,6 @@ export default function Deliveries() {
                   <option value="scheduled">Scheduled</option>
                   <option value="in_progress">In Progress</option>
                   <option value="completed">Completed</option>
-                  <option value="cancelled">Cancelled</option>
                 </select>
                 <select
                   value={driverFilter}

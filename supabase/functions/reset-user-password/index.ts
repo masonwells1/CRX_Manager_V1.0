@@ -1,22 +1,24 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
-function getAllowedOrigin(): string {
-  const origin = Deno.env.get("ALLOWED_ORIGIN");
-  if (origin) return origin;
-  const url = Deno.env.get("SUPABASE_URL") || "";
-  if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  console.warn("ALLOWED_ORIGIN not set — CORS will block all requests");
-  return "";
+const ALLOWED_ORIGINS = [
+  "https://croprxsolutions.app",
+  "http://localhost:5173",
+];
+
+function getCorsHeaders(req: Request) {
+  const origin = req.headers.get("Origin") || "";
+  const allowedOrigin = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, x-client-info",
+  };
 }
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": getAllowedOrigin(),
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, apikey, x-client-info",
-};
-
 Deno.serve(async (req: Request) => {
+  const corsHeaders = getCorsHeaders(req);
+
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
