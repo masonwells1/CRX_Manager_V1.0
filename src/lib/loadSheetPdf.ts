@@ -7,6 +7,7 @@
  *
  * Follows the same dynamic-import + color-scheme pattern as deliveryPdf.ts.
  */
+import type jsPDF from 'jspdf';
 
 export interface LoadSheetItem {
   product_name: string;
@@ -35,7 +36,7 @@ const CRX_GREEN: [number, number, number] = [40, 162, 106];
 const CHARCOAL: [number, number, number] = [46, 46, 46];
 const GRAY: [number, number, number] = [78, 78, 78];
 
-type JsPDFWithAutoTable = InstanceType<Awaited<ReturnType<typeof import('jspdf')>>['default']> & {
+type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
   lastAutoTable: { finalY: number };
 };
 
