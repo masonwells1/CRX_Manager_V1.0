@@ -63,7 +63,39 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    const { email, password, full_name, role, phone } = await req.json();
+    const body = await req.json();
+    const { action } = body;
+
+    // --- Reset Password action ---
+    if (action === "reset_password") {
+      const { user_id, password: newPw } = body;
+      if (!user_id || !newPw) {
+        return new Response(
+          JSON.stringify({ error: "user_id and password are required" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      if (newPw.length < 8) {
+        return new Response(
+          JSON.stringify({ error: "Password must be at least 8 characters" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      const { error: updateError } = await adminClient.auth.admin.updateUserById(user_id, { password: newPw });
+      if (updateError) {
+        return new Response(JSON.stringify({ error: updateError.message }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({ success: true }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // --- Create User action (default) ---
+    const { email, password, full_name, role, phone } = body;
 
     if (!email || !password || !full_name) {
       return new Response(

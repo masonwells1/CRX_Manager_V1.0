@@ -385,7 +385,7 @@ export default function SettingsPage() {
       }
 
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/reset-user-password`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-user`,
         {
           method: 'POST',
           headers: {
@@ -394,6 +394,7 @@ export default function SettingsPage() {
             'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
           },
           body: JSON.stringify({
+            action: 'reset_password',
             user_id: passwordTarget.id,
             password: adminSetPassword,
           }),
