@@ -38,6 +38,7 @@ export interface PdfDeliveryData {
   completed_at?: string;
   status: string;
   signed_by?: string;
+  signature_image_data_url?: string;  // Base64 PNG data URL of captured signature
   delivery_notes?: string;
   priority?: string;
   issue_type?: string;
@@ -199,14 +200,37 @@ function renderDeliveryPage(
     y += lines.length * 12 + 24;
   }
 
-  // Signature line
+  // Signature section
   y += 20;
-  doc.setDrawColor(180, 180, 180);
-  doc.line(margin, y, margin + 250, y);
+  if (data.signature_image_data_url) {
+    // Embed captured signature image
+    try {
+      const sigWidth = 200;
+      const sigHeight = 60;
+      doc.addImage(data.signature_image_data_url, 'PNG', margin, y, sigWidth, sigHeight);
+      y += sigHeight + 5;
+    } catch {
+      // Fallback to blank line if image fails
+      doc.setDrawColor(180, 180, 180);
+      doc.line(margin, y, margin + 250, y);
+    }
+  } else {
+    // No signature captured — blank line
+    doc.setDrawColor(180, 180, 180);
+    doc.line(margin, y, margin + 250, y);
+  }
+
+  // Signed-by name below signature
   doc.setFontSize(8);
   doc.setTextColor(160, 160, 160);
-  doc.text('Customer Signature', margin, y + 14);
+  if (data.signed_by) {
+    doc.text(`Signed by: ${data.signed_by}`, margin, y + 14);
+  } else {
+    doc.text('Customer Signature', margin, y + 14);
+  }
 
+  // Date line on the right
+  doc.setDrawColor(180, 180, 180);
   doc.line(pageW - margin - 150, y, pageW - margin, y);
   doc.text('Date', pageW - margin - 150, y + 14);
 

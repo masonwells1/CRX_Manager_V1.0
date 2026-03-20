@@ -1118,6 +1118,24 @@ export default function DeliveryDetail() {
             </div>
           </div>
 
+          {/* Signature display (completed deliveries) */}
+          {delivery.status === 'completed' && delivery.signature_url && signedSignatureUrl && (
+            <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
+              <h3 className="text-white font-semibold mb-3">Signature</h3>
+              <div className="flex items-start gap-4">
+                <img
+                  src={signedSignatureUrl}
+                  alt="Customer signature"
+                  className="border border-gray-600 rounded-lg max-w-xs bg-white"
+                />
+                <div className="text-sm text-gray-400">
+                  <p>Signed by: <span className="font-medium text-white">{delivery.signed_by || '-'}</span></p>
+                  {delivery.completed_at && <p>Completed: {new Date(delivery.completed_at).toLocaleString()}</p>}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Photo upload (driver) */}
           {canUploadPhoto && (
             <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
@@ -1354,7 +1372,22 @@ export default function DeliveryDetail() {
               size="sm"
               icon={<Download className="w-4 h-4" />}
               showChevron={false}
-              onClick={() =>
+              onClick={async () => {
+                // Pre-fetch signature image as base64 data URL for jsPDF
+                let sigDataUrl: string | undefined;
+                if (signedSignatureUrl) {
+                  try {
+                    const resp = await fetch(signedSignatureUrl);
+                    const blob = await resp.blob();
+                    sigDataUrl = await new Promise<string>((resolve) => {
+                      const reader = new FileReader();
+                      reader.onloadend = () => resolve(reader.result as string);
+                      reader.readAsDataURL(blob);
+                    });
+                  } catch {
+                    // Fall back to no signature in PDF
+                  }
+                }
                 downloadDeliveryPdf({
                   delivery_number: delivery.delivery_number,
                   order_number: parentOrder?.order_number || '-',
@@ -1369,6 +1402,7 @@ export default function DeliveryDetail() {
                   completed_at: delivery.completed_at || undefined,
                   status: delivery.status,
                   signed_by: delivery.signed_by || undefined,
+                  signature_image_data_url: sigDataUrl,
                   delivery_notes: delivery.delivery_notes || undefined,
                   items: items.map((i) => ({
                     product_name: i.product?.product_name || 'Unknown',
@@ -1377,7 +1411,8 @@ export default function DeliveryDetail() {
                     unit_size: i.unit_size || '-',
                     tote_number: i.tote_number || undefined,
                   })),
-                })
+                });
+              }
               }
             >
               Receipt PDF
@@ -1820,6 +1855,14 @@ export default function DeliveryDetail() {
               />
             </div>
           )}
+
+          <div className="mb-4 border border-gray-200 rounded-lg p-3 bg-white">
+            <SignatureCanvas
+              onSignatureChange={setSignatureDataUrl}
+              label="Customer Signature (Optional)"
+              height={120}
+            />
+          </div>
 
           {customer?.email && (
             <label className="flex items-center gap-2 text-sm text-secondary cursor-pointer mb-4">
