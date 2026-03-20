@@ -33,6 +33,7 @@ import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
+import HelpTip from '../components/ui/HelpTip';
 import DeliveryCalendar from '../components/deliveries/DeliveryCalendar';
 import type { Delivery, Profile } from '../types';
 
@@ -836,7 +837,7 @@ export default function Deliveries() {
     },
     {
       key: 'delivery_number',
-      header: 'Delivery #',
+      header: (<span className="flex items-center">Delivery #<HelpTip text="This delivery has items where warehouse stock is running low. Check inventory before dispatching." className="ml-1" /></span>),
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">

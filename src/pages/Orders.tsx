@@ -17,6 +17,7 @@ import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { SkeletonTable } from '../components/ui/Skeleton';
+import HelpTip from '../components/ui/HelpTip';
 import type { Order } from '../types';
 import { getSeasonDates } from '../utils/season';
 
@@ -331,7 +332,7 @@ export default function Orders() {
     },
     {
       key: 'fulfillment_pct',
-      header: 'Fulfillment',
+      header: (<span className="flex items-center">Fulfillment<HelpTip text="Fulfillment shows delivery progress. Invoiced shows billing progress. Both are weighted by dollar value." className="ml-1" /></span>),
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">

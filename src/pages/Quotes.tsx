@@ -19,6 +19,7 @@ import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { SkeletonTable } from '../components/ui/Skeleton';
+import HelpTip from '../components/ui/HelpTip';
 import type { Quote } from '../types';
 
 const DELETABLE = ['draft', 'sent', 'revised'];
@@ -328,6 +329,7 @@ export default function Quotes() {
                 >
                   Planned Programs
                 </button>
+                <HelpTip text="Planned quotes reserve inventory but aren't committed orders yet. Use the Planned Programs filter to see all of them." className="ml-1" />
                 {(statusFilter || plannedFilter) && (
                   <button
                     onClick={() => { setStatusFilter(''); setPlannedFilter(false); }}

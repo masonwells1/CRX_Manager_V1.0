@@ -4,7 +4,7 @@ import EmptyState from './EmptyState';
 
 export interface Column<T> {
   key: string;
-  header: string;
+  header: ReactNode;
   render?: (row: T) => ReactNode;
   sortable?: boolean;
   className?: string;
@@ -126,7 +126,7 @@ export default function DataTable<T extends Record<string, any>>({
                     {col.sortable ? (
                       <button
                         onClick={() => toggleSort(col.key)}
-                        aria-label={`Sort by ${col.header}${sortKey === col.key ? (sortDir === 'asc' ? ', sorted ascending' : ', sorted descending') : ''}`}
+                        aria-label={`Sort by ${typeof col.header === 'string' ? col.header : col.key}${sortKey === col.key ? (sortDir === 'asc' ? ', sorted ascending' : ', sorted descending') : ''}`}
                         className="inline-flex items-center gap-1 hover:text-nav-dark transition-colors"
                       >
                         {col.header}
