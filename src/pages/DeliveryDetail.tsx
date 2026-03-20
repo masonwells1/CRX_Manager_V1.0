@@ -6,6 +6,7 @@ import {
   PlayCircle, Lock, Zap, FileText, Mail, RotateCcw, MessageSquarePlus,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
+import HelpTip from '../components/ui/HelpTip';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import Input from '../components/ui/Input';
@@ -1068,7 +1069,7 @@ export default function DeliveryDetail() {
 
           {/* Products */}
           <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
-            <h3 className="text-white font-semibold mb-4">Products</h3>
+            <h3 className="text-white font-semibold mb-4">Products<HelpTip text="Adjust quantities down if you couldn't deliver everything. The remaining items automatically create a follow-up delivery." className="ml-1" /></h3>
             <div className="space-y-3">
               {items.map((item) => {
                 const isActive = delivery.status !== 'completed' && delivery.status !== 'cancelled';
@@ -1140,7 +1141,7 @@ export default function DeliveryDetail() {
           {canUploadPhoto && (
             <div className="bg-gray-800 rounded-xl p-5 border border-gray-700">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-white font-semibold">Delivery Photos</h3>
+                <h3 className="text-white font-semibold">Delivery Photos<HelpTip text="Take up to 10 photos as proof of delivery — product condition, drop location, etc. These attach to the delivery record and can be included in the customer email." className="ml-1" /></h3>
                 <span className="text-sm text-gray-400">{photos.length}/10</span>
               </div>
               {photos.length > 0 && (
@@ -1194,6 +1195,7 @@ export default function DeliveryDetail() {
                   >
                     <PlayCircle className="w-6 h-6" />
                     Start Delivery
+                    <HelpTip text="Marks this delivery as in-progress. You can now adjust quantities, capture photos, and get the customer's signature." className="ml-1" />
                   </button>
                 )}
               </div>
@@ -1228,7 +1230,7 @@ export default function DeliveryDetail() {
           {/* Complete delivery section — only when in_progress */}
           {delivery.status === 'in_progress' && (
             <div className="bg-gray-800 rounded-xl p-5 border border-gray-700 space-y-4">
-              <h3 className="text-white font-semibold">Complete Delivery</h3>
+              <h3 className="text-white font-semibold">Complete Delivery<HelpTip text="Finalizes the delivery. Inventory is deducted, the customer gets an email receipt, and a draft invoice is created automatically." className="ml-1" /></h3>
               <div>
                 <label className="block text-sm font-medium text-gray-400 mb-1">Signed By</label>
                 <input
@@ -1239,10 +1241,14 @@ export default function DeliveryDetail() {
                   className="w-full px-4 py-3 text-base text-white bg-gray-700 border border-gray-600 rounded-lg placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-crx-green"
                 />
               </div>
+              <div className="flex items-center gap-1 mb-1">
+                <span className="text-sm font-medium text-gray-400">Customer Signature</span>
+                <HelpTip text="Have the customer sign with their finger or mouse. This saves as part of the delivery record for your files." className="ml-1" />
+              </div>
               <div className="bg-gray-700 rounded-lg p-3">
                 <SignatureCanvas
                   onSignatureChange={setSignatureDataUrl}
-                  label="Customer Signature"
+                  label=""
                   height={120}
                 />
               </div>
@@ -1255,6 +1261,7 @@ export default function DeliveryDetail() {
                     className="w-4 h-4 rounded border-gray-600 text-crx-green focus:ring-crx-green bg-gray-700"
                   />
                   Email delivery receipt to customer
+                  <HelpTip text="If checked, the customer receives an email with the items delivered, photos, and signature. Uncheck if this is an internal transfer." className="ml-1" />
                 </label>
               )}
               {!isOnline && (
@@ -1783,7 +1790,7 @@ export default function DeliveryDetail() {
 
           {/* Quantity adjustments per item */}
           <div className="space-y-2 mb-4">
-            <p className="text-sm text-secondary">Adjust quantities if partial delivery:</p>
+            <p className="text-sm text-secondary">Adjust quantities if partial delivery:<HelpTip text="Adjust quantities down if you couldn't deliver everything. The remaining items automatically create a follow-up delivery." className="ml-1" /></p>
             {items.map((item) => {
               const currentQty = deliveryQtys[item.id] ?? item.quantity;
               return (
@@ -1873,6 +1880,7 @@ export default function DeliveryDetail() {
                 className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green"
               />
               Email delivery receipt to customer
+              <HelpTip text="If checked, the customer receives an email with the items delivered, photos, and signature. Uncheck if this is an internal transfer." className="ml-1" />
             </label>
           )}
 
