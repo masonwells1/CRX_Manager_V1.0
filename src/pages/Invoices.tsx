@@ -561,8 +561,8 @@ export default function Invoices() {
                   { key: 'customer_name', header: 'Customer' },
                   { key: 'invoice_type', header: 'Type' },
                   { key: 'invoice_date', header: 'Date' },
-                  { key: 'total_amount_cents', header: 'Total (cents)' },
-                  { key: 'balance_cents', header: 'Balance (cents)' },
+                  { key: 'total_amount_cents', header: 'Total ($)', format: (v: unknown) => ((Number(v) || 0) / 100).toFixed(2) },
+                  { key: 'balance_cents', header: 'Balance ($)', format: (v: unknown) => ((Number(v) || 0) / 100).toFixed(2) },
                   { key: 'status', header: 'Status' },
                 ],
                 'invoices'

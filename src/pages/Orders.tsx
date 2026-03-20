@@ -53,6 +53,7 @@ export default function Orders() {
       .select('*, customer:customers(farm_name, parent_customer_id)')
       .gte('order_date', seasonStart)
       .lte('order_date', seasonEnd)
+      .is('deleted_at', null)
       .order('order_date', { ascending: false })
       .limit(QUERY_LIMIT);
 
@@ -237,8 +238,8 @@ export default function Orders() {
     await runCriticalAction({
       action: async () => {
         const ids = selectedRows.map((o) => o.id);
-        const result = await supabase.from('orders').delete().in('id', ids).select();
-        checkMutationResult(result, 'Delete orders');
+        const result = await supabase.from('orders').update({ deleted_at: new Date().toISOString() }).in('id', ids).select();
+        checkMutationResult(result, 'Soft-delete orders');
       },
       toast,
       setLoading: setDeleting,
@@ -297,7 +298,7 @@ export default function Orders() {
       render: (row) => (
         <div className="flex items-center gap-1.5 flex-wrap">
           <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
-            {row.status.replace('_', ' ')}
+            {row.status.replaceAll('_', ' ')}
           </Badge>
           {row.is_planned && (
             <Badge variant="warning">Planned</Badge>

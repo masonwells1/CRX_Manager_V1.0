@@ -188,6 +188,7 @@ export default function CustomerDetail() {
         .from('orders')
         .select('*')
         .eq('customer_id', id)
+        .is('deleted_at', null)
         .order('order_date', { ascending: false });
       const rows = ((data || []) as Order[]).map((o) => {
         const { data: items } = { data: null as null };
@@ -268,7 +269,8 @@ export default function CustomerDetail() {
       const { data: orderIds, error: orderIdsError } = await supabase
         .from('orders')
         .select('id')
-        .eq('customer_id', id);
+        .eq('customer_id', id)
+        .is('deleted_at', null);
       if (orderIdsError) toast('error', 'Failed to load order history');
       if (orderIds && orderIds.length > 0) {
         const { data: allItems, error: allItemsError } = await supabase

@@ -68,6 +68,7 @@ export default function Quotes() {
     const { data, error } = await supabase
       .from('quotes')
       .select('*, customer:customers(farm_name)')
+      .is('deleted_at', null)
       .order('created_at', { ascending: false })
       .limit(500);
     if (error) {

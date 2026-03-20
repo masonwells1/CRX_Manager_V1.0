@@ -419,7 +419,7 @@ export default function Returns() {
       { key: 'order_number', header: 'Order' },
       { key: 'status', header: 'Status' },
       { key: 'reason', header: 'Reason' },
-      { key: 'total_credit_cents', header: 'Credit (cents)' },
+      { key: 'total_credit_cents', header: 'Credit ($)', format: (v: unknown) => ((Number(v) || 0) / 100).toFixed(2) },
       { key: 'requested_at', header: 'Requested' },
     ], 'returns');
     toast('success', `Exported ${selectedRows.length} return(s) to CSV`);
