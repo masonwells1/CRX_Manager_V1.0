@@ -18,6 +18,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
+import HelpTip from '../components/ui/HelpTip';
 import type { PurchaseOrder, PurchaseOrderItem, POStatus, ReceivingRecord, ReceivingCondition, LinkedEntityType } from '../types';
 
 /* ─── Condition badge helpers ─── */
@@ -503,7 +504,10 @@ export default function PurchaseOrderDetail() {
         { label: po.po_number || 'PO' },
       ]} />
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">{po.po_number}</h2>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">
+          {po.po_number}
+          <HelpTip text="View and manage this PO. Click 'Receive Items' to record what arrived — enter quantities, conditions, and lot numbers. Items marked damaged trigger automatic notifications. Check receiving history below for a full audit trail." className="ml-1" />
+        </h2>
         <div className="flex items-center gap-2">
           {canReceive && (po.status === 'submitted' || po.status === 'partially_received') && (
             <Button icon={<PackageCheck className="w-4 h-4" />} onClick={openReceiveModal}>

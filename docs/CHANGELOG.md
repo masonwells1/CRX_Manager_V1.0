@@ -4,6 +4,21 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-19 — Transaction Ledger Fix + Outstanding PO Tab + HelpTip Expansion (Night Session)
+
+### Changes
+- **Transaction Ledger sign logic fix** (`TransactionLedgerModal.tsx`): The `computeRunningBalance()` function was summing raw positive quantities instead of applying sign based on transaction type. Booked/delivered/prebooked/job_applied now correctly shown as negative (subtracts from inventory), while received/returned/released/reversals show as positive. New `signedQuantity()` function matches `reconciliation.ts` logic. Running balance now accurately reflects inventory position.
+- **Outstanding PO Items tab** (`PurchaseOrders.tsx`): New "Outstanding Items" tab showing all PO line items not yet fully received across all vendors. Grouped by vendor with columns: PO#, Product, Ordered, Received, Remaining, Value, PO Status, Expected Date. Overdue items highlighted in red. Summary cards for total items, qty, value, vendor count, and overdue count. Vendor filter dropdown. CSV and PDF export.
+- **HelpTip expansion**: Added contextual help tooltips to 8 more pages: InventoryPage, Products, PurchaseOrderDetail, QuickReceive, ReceivingLog, CycleCounts, CropPrograms, DeliveryRemainders
+- **Getting Started page major expansion**: From 3 section cards to 9 expandable guide sections covering: Quote Building (6 steps), Planned Programs & Inventory Holds, Managing Orders, Deliveries (two-step flow), Supplier POs, Inventory Management, Invoicing & Payments, Reports & Analytics, Common Mistakes, Pro Tips, and Roles & Permissions matrix. Role-aware (drivers see simplified version).
+- **Updated tests**: TransactionLedgerModal tests rewritten for new sign logic — 20 tests covering all 11 transaction types, real-world scenario matching screenshot data, and edge cases
+
+### Stats
+- 0 new migrations, 0 new RPCs, 0 new tables
+- 12 files modified, 1653 unit tests passing, build clean
+
+---
+
 ## 2026-03-19 — Launch Readiness UX (Evening Session)
 
 ### Changes

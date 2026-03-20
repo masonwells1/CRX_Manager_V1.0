@@ -21,6 +21,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
+import HelpTip from '../components/ui/HelpTip';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
 import type {
   Product,
@@ -377,6 +378,7 @@ export default function QuickReceive() {
         <PackageCheck className="w-6 h-6 text-crx-green" />
         <h2 className="text-xl font-semibold font-heading text-nav-dark">
           Quick <span className="split-heading-accent">Receive</span>
+          <HelpTip text="Fast-track receiving without opening a specific PO. Add products, enter quantities and conditions, then submit. The system auto-matches items to open PO line items (oldest PO first)." className="ml-1" />
         </h2>
         {step !== 'add_items' && step !== 'success' && (
           <Badge variant="default">Step 2 of 2</Badge>

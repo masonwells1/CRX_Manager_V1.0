@@ -21,6 +21,7 @@ import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
+import HelpTip from '../components/ui/HelpTip';
 import type { Inventory, Product, InventoryHold, Customer } from '../types';
 
 interface InventoryRow extends Inventory {
@@ -1002,6 +1003,7 @@ export default function InventoryPage() {
         >
           <Package className="w-4 h-4 inline mr-1.5" />
           Inventory
+          <HelpTip text="Track on-hand quantities, prebooked amounts, and net free inventory. Click the ledger icon on any row to see the full transaction history. 'Net Free' = Available − Prebooked − Planned Holds." className="ml-1" />
         </button>
         <button
           onClick={() => setActiveTab('forecast')}

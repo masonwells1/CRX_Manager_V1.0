@@ -19,6 +19,7 @@ import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection'
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { SkeletonTable } from '../components/ui/Skeleton';
+import HelpTip from '../components/ui/HelpTip';
 import type { Product } from '../types';
 
 export default function Products() {
@@ -563,7 +564,10 @@ export default function Products() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-3">
-          <h2 className="text-xl font-semibold font-heading text-nav-dark">Products</h2>
+          <h2 className="text-xl font-semibold font-heading text-nav-dark">
+            Products
+            <HelpTip text="Your product master list. Set tier pricing (1/2/3) for customer-specific pricing, mark products as RUP for compliance tracking, and manage unit sizes. Edit inline by clicking any editable cell." className="ml-1" />
+          </h2>
           {canBulkAction && (
             <BulkActionBar
               selectedCount={selectedCount}

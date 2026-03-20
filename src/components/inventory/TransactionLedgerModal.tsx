@@ -45,13 +45,42 @@ const TYPE_CONFIG: Record<string, { label: string; color: string; icon: React.El
   job_applied:                 { label: 'Job Applied', color: 'text-orange-600', icon: FlaskConical },
 };
 
+/**
+ * Determine the signed delta for a transaction based on its type.
+ * Convention matches reconciliation.ts:
+ *   positive → adds to inventory (received, returned, released, reversals)
+ *   negative → subtracts from inventory (delivered, booked, prebooked, job_applied)
+ *   signed   → already has correct sign (adjusted, transferred)
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function signedQuantity(qty: number, type: string): number {
+  switch (type) {
+    case 'received':
+    case 'returned':
+    case 'released':
+    case 'cancelled_delivery_reversal':
+    case 'void_delivery_reversal':
+      return Math.abs(qty);
+    case 'delivered':
+    case 'booked':
+    case 'prebooked':
+    case 'job_applied':
+      return -Math.abs(qty);
+    case 'adjusted':
+    case 'transferred':
+      return qty; // already signed
+    default:
+      return qty;
+  }
+}
+
 /** Exported for testing */
 // eslint-disable-next-line react-refresh/only-export-components
-export function computeRunningBalance(txns: Array<{ quantity: number }>): number[] {
+export function computeRunningBalance(txns: Array<{ quantity: number; transaction_type: string }>): number[] {
   const balances: number[] = [];
   let running = 0;
   for (const t of txns) {
-    running += t.quantity;
+    running += signedQuantity(t.quantity, t.transaction_type);
     balances.push(running);
   }
   return balances;
@@ -140,7 +169,8 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
                     icon: Pencil,
                   };
                   const Icon = config.icon;
-                  const isPositive = t.quantity > 0;
+                  const displayQty = signedQuantity(t.quantity, t.transaction_type);
+                  const isPositive = displayQty > 0;
                   const ref = buildReference(t);
                   const customerName = t.order?.customer?.farm_name || '';
 
@@ -158,8 +188,8 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
                           {config.label}
                         </span>
                       </td>
-                      <td className={`py-2 px-3 text-right font-mono font-medium whitespace-nowrap ${isPositive ? 'text-crx-green' : 'text-red-600'}`}>
-                        {isPositive ? '+' : ''}{t.quantity}
+                      <td className={`py-2 px-3 text-right font-mono font-medium whitespace-nowrap ${isPositive ? 'text-crx-green' : displayQty === 0 ? 'text-gray-500' : 'text-red-600'}`}>
+                        {isPositive ? '+' : ''}{displayQty}
                       </td>
                       <td className="py-2 px-3 text-right font-mono text-nav-dark whitespace-nowrap">
                         {balances[i]}

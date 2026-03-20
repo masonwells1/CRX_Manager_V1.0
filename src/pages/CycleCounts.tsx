@@ -14,6 +14,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
+import HelpTip from '../components/ui/HelpTip';
 import type { CycleCount, CycleCountItem } from '../types';
 
 type CountRow = CycleCount & {
@@ -450,7 +451,10 @@ export default function CycleCounts() {
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-        <h2 className="text-xl font-semibold font-heading text-nav-dark">Cycle Counts</h2>
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">
+          Cycle Counts
+          <HelpTip text="Verify physical inventory against system records. Create a count, enter actual quantities, then complete to auto-adjust inventory. Variances are logged in the transaction ledger for audit." className="ml-1" />
+        </h2>
         {isAdmin && (
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => setShowNew(true)}>
             New Cycle Count

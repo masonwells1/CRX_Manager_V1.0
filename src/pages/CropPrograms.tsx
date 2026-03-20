@@ -22,6 +22,7 @@ import { supabase, checkMutationResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
+import HelpTip from '../components/ui/HelpTip';
 import { computeSeason } from '../utils/season';
 import type { Product } from '../types';
 
@@ -285,7 +286,10 @@ export default function CropPrograms() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <SplitHeading title="Crop" accent="Programs" />
+        <span className="flex items-center gap-1">
+          <SplitHeading title="Crop" accent="Programs" />
+          <HelpTip text="Reusable product templates for common crop programs (e.g. '2026 Corn Program'). When building a quote, use 'Apply Program' to auto-fill sections and items with pre-set products and rates." />
+        </span>
         <Button icon={<Plus className="w-4 h-4" />} onClick={openNew}>
           New Program
         </Button>

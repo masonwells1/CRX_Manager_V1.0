@@ -23,6 +23,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
+import HelpTip from '../components/ui/HelpTip';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { ReceivingRecord, ReceivingSummary, Profile } from '../types';
@@ -321,7 +322,10 @@ export default function ReceivingLog() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <div className="flex items-center gap-3 min-w-0">
-          <h2 className="text-xl font-semibold font-heading text-nav-dark whitespace-nowrap">Receiving Log</h2>
+          <h2 className="text-xl font-semibold font-heading text-nav-dark whitespace-nowrap">
+            Receiving Log
+            <HelpTip text="Full audit trail of everything received. Filter by vendor, condition, or date range. Reverse a receiving record if there was an error — inventory and PO quantities will be adjusted automatically." className="ml-1" />
+          </h2>
           {canBulkAction && <BulkActionBar selectedCount={selectedCount} actions={bulkActions} onDeselectAll={clearSelection} />}
         </div>
         <button

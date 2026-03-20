@@ -203,9 +203,13 @@ const [quickTaskOpen, setQuickTaskOpen] = useState(false);
 ## Transaction Ledger Pattern (Inventory Improvements)
 - `TransactionLedgerModal` in `src/components/inventory/TransactionLedgerModal.tsx` — shows full transaction history per product
 - Queries `inventory_transactions` joined with `profiles` for performer names, ordered chronologically
-- `computeRunningBalance()` exported pure function — accumulates quantities for running balance column
+- `signedQuantity(qty, type)` determines the signed delta per transaction type:
+  - **Positive (adds):** received, returned, released, cancelled_delivery_reversal, void_delivery_reversal
+  - **Negative (subtracts):** delivered, booked, prebooked, job_applied
+  - **Signed (as-is):** adjusted, transferred
+- `computeRunningBalance(txns)` accumulates `signedQuantity()` for running balance — matches reconciliation.ts logic
 - Triggered via inline FileText icon button next to product name in InventoryPage table
-- 3 unit tests in `TransactionLedgerModal.test.ts`
+- 20 unit tests in `TransactionLedgerModal.test.ts` covering all 11 types + real-world scenarios
 
 ## Batch Inventory Adjustment Pattern (Inventory Improvements)
 - `BatchAdjustModal` in `src/components/inventory/BatchAdjustModal.tsx` — applies uniform delta to selected products
