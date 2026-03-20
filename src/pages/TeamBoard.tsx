@@ -25,6 +25,7 @@ import NoteCard from '../components/team/NoteCard';
 import EntityBadge from '../components/team/EntityBadge';
 import NoteAttachments from '../components/team/NoteAttachments';
 import NotePhotoUpload from '../components/team/NotePhotoUpload';
+import EmptyState from '../components/ui/EmptyState';
 import TodaysDeliveries from '../components/team/TodaysDeliveries';
 import YesterdayRecap from '../components/team/YesterdayRecap';
 import StaleTasksAlert from '../components/team/StaleTasksAlert';
@@ -842,6 +843,20 @@ export default function TeamBoard() {
             </Button>
           </div>
 
+          {notes.length === 0 ? (
+            <Card>
+              <EmptyState
+                icon={<LayoutGrid className="w-6 h-6 text-gray-400" />}
+                title="Your team board is empty"
+                description="Create notes, tasks, and announcements to keep your team coordinated."
+                action={
+                  <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal}>
+                    Create First Note
+                  </Button>
+                }
+              />
+            </Card>
+          ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card padding={false}>
               <div className="p-5">
@@ -879,6 +894,7 @@ export default function TeamBoard() {
               </div>
             </Card>
           </div>
+          )}
         </>
       )}
 

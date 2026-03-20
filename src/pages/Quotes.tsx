@@ -299,10 +299,10 @@ export default function Quotes() {
             searchKeys={['quote_number', 'customer_name']}
             onRowClick={(row) => navigate(`/quotes/${row.id}`)}
             emptyTitle="No quotes yet"
-            emptyDescription="Create your first quote to get started"
+            emptyDescription="Quotes are the first step — build a quote, send it to your customer, then convert it to an order."
             emptyAction={
-              <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/quotes/new')}>
-                New Quote
+              <Button icon={<FileText className="w-4 h-4" />} onClick={() => navigate('/quotes/new')}>
+                Create Your First Quote
               </Button>
             }
             loading={loading}

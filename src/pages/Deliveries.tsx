@@ -1131,8 +1131,13 @@ export default function Deliveries() {
             searchPlaceholder="Search deliveries..."
             searchKeys={['delivery_number', 'customer_name', 'driver_name', 'farm_group_name']}
             onRowClick={(row) => navigate(`/deliveries/${row.id}`)}
-            emptyTitle="No deliveries"
-            emptyDescription="Schedule a delivery from an order"
+            emptyTitle="No deliveries scheduled"
+            emptyDescription="Deliveries are created from orders. Open an order and click 'Schedule Delivery' to get started."
+            emptyAction={
+              <Button icon={<Truck className="w-4 h-4" />} onClick={() => navigate('/orders')}>
+                View Orders
+              </Button>
+            }
             loading={loading}
             filters={
               <div className="flex gap-2 items-center flex-wrap">

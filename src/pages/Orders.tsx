@@ -404,7 +404,17 @@ export default function Orders() {
             searchKeys={['order_number', 'farm_group_name', 'customer_name']}
             onRowClick={(row) => navigate(`/orders/${row.id}`)}
             emptyTitle="No orders yet"
-            emptyDescription="Orders are created from accepted quotes"
+            emptyDescription="Start by creating a quote in Sales → Quotes, then convert it to an order. Or create a direct order below."
+            emptyAction={
+              <div className="flex gap-2">
+                <Button variant="secondary" icon={<FileText className="w-4 h-4" />} onClick={() => navigate('/quotes/new')}>
+                  New Quote
+                </Button>
+                <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/orders/new')}>
+                  New Order
+                </Button>
+              </div>
+            }
             loading={loading}
             filters={
               <>
