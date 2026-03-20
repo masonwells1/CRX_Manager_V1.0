@@ -24,6 +24,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
 import { parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
+import HelpTip from '../components/ui/HelpTip';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery, Product, LinkedEntityType } from '../types';
 
@@ -667,7 +668,7 @@ export default function OrderDetail() {
                   Edit Order
                 </Button>
               )}
-              {order.status !== 'cancelled' && order.status !== 'fulfilled' && (
+              {order.status !== 'cancelled' && order.status !== 'fulfilled' && (<>
                 <Button
                   variant="secondary"
                   icon={<FileText className="w-4 h-4" />}
@@ -677,15 +678,17 @@ export default function OrderDetail() {
                 >
                   Create Invoice
                 </Button>
-              )}
-              {order.status !== 'cancelled' && order.status !== 'fulfilled' && (
+                <HelpTip text="Generates a draft invoice from the order. It stays in draft until you review and post it — nothing is sent to the customer yet." className="ml-1" />
+              </>)}
+              {order.status !== 'cancelled' && order.status !== 'fulfilled' && (<>
                 <Button
                   icon={<Truck className="w-4 h-4" />}
                   onClick={() => navigate(`/deliveries/new?order=${order.id}`)}
                 >
                   Schedule Delivery
                 </Button>
-              )}
+                <HelpTip text="Creates a new delivery from this order's items. The driver will see it on their dashboard and can start it when ready." className="ml-1" />
+              </>)}
               <Button
                 variant="secondary"
                 icon={<MessageSquarePlus className="w-4 h-4" />}
@@ -841,7 +844,7 @@ export default function OrderDetail() {
           <div className="flex items-start gap-3">
             <FileText className="w-4 h-4 text-secondary mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-xs text-secondary font-medium mb-1">Order Notes</p>
+              <p className="text-xs text-secondary font-medium mb-1">Order Notes <HelpTip text="Notes about this order that carry through to the load sheet and delivery. Use for special instructions like 'Call before delivering'." className="ml-1" /></p>
               <p className="text-sm text-nav-dark whitespace-pre-wrap">{order.notes}</p>
             </div>
           </div>
@@ -968,7 +971,7 @@ export default function OrderDetail() {
                     <th className="px-4 py-3 text-left font-medium text-secondary">Units Needed</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary">Delivered</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary">Remaining</th>
-                    <th className="px-4 py-3 text-left font-medium text-secondary w-40">Progress</th>
+                    <th className="px-4 py-3 text-left font-medium text-secondary w-40">Progress <HelpTip text="Shows how much of the order has been delivered, weighted by dollar value. 100% means all items are fully delivered." className="ml-1" /></th>
                     {editing && <th className="px-4 py-3 w-10"></th>}
                   </tr>
                 </thead>
