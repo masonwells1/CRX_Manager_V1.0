@@ -1134,6 +1134,7 @@ export default function QuoteBuilder() {
           .from('orders')
           .select('order_number, order_date')
           .eq('customer_id', customerId)
+          .is('deleted_at', null)
           .gte('order_date', sevenDaysAgo)
           .order('order_date', { ascending: false })
           .limit(1);

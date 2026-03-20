@@ -16,7 +16,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { exportToCSV } from '../lib/csvExport';
+import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 
@@ -368,7 +368,7 @@ export default function CommissionPayments() {
                 [
                   { key: 'payment_number', header: 'Payment #' },
                   { key: 'recipient_name', header: 'Recipient' },
-                  { key: 'total_amount', header: 'Amount' },
+                  { key: 'total_amount', header: 'Amount ($)', format: (v: unknown) => fmtCSV(Number(v) || 0) },
                   { key: 'payment_method', header: 'Method' },
                   { key: 'reference_number', header: 'Reference' },
                   { key: 'payment_date', header: 'Date' },

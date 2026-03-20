@@ -42,7 +42,7 @@ export default function CustomerContextCard({ customerId }: Props) {
         const [custRes, arRes, ordersRes, delRes] = await Promise.all([
           supabase.from('customers').select('farm_name, assigned_tier, credit_limit_cents').eq('id', customerId).single(),
           supabase.rpc('get_ar_aging', { p_as_of_date: new Date().toISOString().slice(0, 10) }),
-          supabase.from('orders').select('id', { count: 'exact', head: true }).eq('customer_id', customerId).in('status', ['confirmed', 'partially_fulfilled']),
+          supabase.from('orders').select('id', { count: 'exact', head: true }).eq('customer_id', customerId).in('status', ['confirmed', 'partially_fulfilled']).is('deleted_at', null),
           supabase.from('deliveries').select('completed_at').eq('customer_id', customerId).eq('status', 'completed').order('completed_at', { ascending: false }).limit(1),
         ]);
 

@@ -15,7 +15,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
-import { exportToCSV } from '../lib/csvExport';
+import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { parseLocalDate } from '../lib/dateUtils';
 
 interface AllocationSet {
@@ -259,8 +259,8 @@ export default function PaymentHistory() {
                   { key: 'farm_name', header: 'Customer' },
                   { key: 'payment_method', header: 'Method' },
                   { key: 'check_number', header: 'Check #' },
-                  { key: 'total_payment_cents', header: 'Total (cents)' },
-                  { key: 'total_allocated_cents', header: 'Allocated (cents)' },
+                  { key: 'total_payment_cents', header: 'Total ($)', format: (v: unknown) => fmtCSV((Number(v) || 0) / 100) },
+                  { key: 'total_allocated_cents', header: 'Allocated ($)', format: (v: unknown) => fmtCSV((Number(v) || 0) / 100) },
                   { key: 'is_active', header: 'Active' },
                 ],
                 'payment-history',

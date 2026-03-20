@@ -182,16 +182,97 @@ describe('checkInventoryLedger', () => {
     expect(checkInventoryLedger(inventory, transactions)).toEqual([]);
   });
 
-  it('handles booked as subtraction', () => {
+  it('treats booked as no effect on quantity_available (affects prebooked only)', () => {
     const inventory: InventoryRow[] = [
-      { id: 'inv1', product_id: 'p1', product_name: 'Product A', quantity_available: 80 },
+      { id: 'inv1', product_id: 'p1', product_name: 'Product A', quantity_available: 100 },
     ];
     const transactions: InventoryTransactionRow[] = [
       { product_id: 'p1', transaction_type: 'received', quantity: 100 },
       { product_id: 'p1', transaction_type: 'booked', quantity: 20 },
     ];
 
-    // 100 - 20 = 80
+    // booked affects quantity_prebooked, NOT quantity_available
+    // expected = 100 (received only), actual = 100 → match
+    expect(checkInventoryLedger(inventory, transactions)).toEqual([]);
+  });
+
+  it('treats prebooked and released as no effect on quantity_available', () => {
+    const inventory: InventoryRow[] = [
+      { id: 'inv1', product_id: 'p1', product_name: 'Product A', quantity_available: 100 },
+    ];
+    const transactions: InventoryTransactionRow[] = [
+      { product_id: 'p1', transaction_type: 'received', quantity: 100 },
+      { product_id: 'p1', transaction_type: 'prebooked', quantity: 30 },
+      { product_id: 'p1', transaction_type: 'released', quantity: 10 },
+    ];
+
+    // prebooked/released only affect quantity_prebooked
+    // expected = 100 (received only), actual = 100 → match
+    expect(checkInventoryLedger(inventory, transactions)).toEqual([]);
+  });
+
+  it('handles job_applied as subtraction from quantity_available', () => {
+    const inventory: InventoryRow[] = [
+      { id: 'inv1', product_id: 'p1', product_name: 'Product A', quantity_available: 85 },
+    ];
+    const transactions: InventoryTransactionRow[] = [
+      { product_id: 'p1', transaction_type: 'received', quantity: 100 },
+      { product_id: 'p1', transaction_type: 'job_applied', quantity: 15 },
+    ];
+
+    // 100 - 15 = 85
+    expect(checkInventoryLedger(inventory, transactions)).toEqual([]);
+  });
+
+  it('handles cancelled_delivery_reversal as addition to quantity_available', () => {
+    const inventory: InventoryRow[] = [
+      { id: 'inv1', product_id: 'p1', product_name: 'Product A', quantity_available: 60 },
+    ];
+    const transactions: InventoryTransactionRow[] = [
+      { product_id: 'p1', transaction_type: 'received', quantity: 100 },
+      { product_id: 'p1', transaction_type: 'delivered', quantity: 50 },
+      { product_id: 'p1', transaction_type: 'cancelled_delivery_reversal', quantity: 10 },
+    ];
+
+    // 100 - 50 + 10 = 60
+    expect(checkInventoryLedger(inventory, transactions)).toEqual([]);
+  });
+
+  it('handles void_delivery_reversal as addition to quantity_available', () => {
+    const inventory: InventoryRow[] = [
+      { id: 'inv1', product_id: 'p1', product_name: 'Product A', quantity_available: 75 },
+    ];
+    const transactions: InventoryTransactionRow[] = [
+      { product_id: 'p1', transaction_type: 'received', quantity: 100 },
+      { product_id: 'p1', transaction_type: 'delivered', quantity: 50 },
+      { product_id: 'p1', transaction_type: 'void_delivery_reversal', quantity: 25 },
+    ];
+
+    // 100 - 50 + 25 = 75
+    expect(checkInventoryLedger(inventory, transactions)).toEqual([]);
+  });
+
+  it('handles all 11 transaction types together', () => {
+    const inventory: InventoryRow[] = [
+      { id: 'inv1', product_id: 'p1', product_name: 'Product A', quantity_available: 78 },
+    ];
+    const transactions: InventoryTransactionRow[] = [
+      { product_id: 'p1', transaction_type: 'received', quantity: 100 },
+      { product_id: 'p1', transaction_type: 'delivered', quantity: 40 },
+      { product_id: 'p1', transaction_type: 'returned', quantity: 5 },
+      { product_id: 'p1', transaction_type: 'adjusted', quantity: -10 },
+      { product_id: 'p1', transaction_type: 'transferred', quantity: 8 },
+      { product_id: 'p1', transaction_type: 'job_applied', quantity: 15 },
+      { product_id: 'p1', transaction_type: 'cancelled_delivery_reversal', quantity: 20 },
+      { product_id: 'p1', transaction_type: 'void_delivery_reversal', quantity: 10 },
+      // These 3 should NOT affect quantity_available:
+      { product_id: 'p1', transaction_type: 'booked', quantity: 30 },
+      { product_id: 'p1', transaction_type: 'prebooked', quantity: 25 },
+      { product_id: 'p1', transaction_type: 'released', quantity: 10 },
+    ];
+
+    // 100 - 40 + 5 + (-10) + 8 - 15 + 20 + 10 = 78
+    // booked/prebooked/released have zero effect
     expect(checkInventoryLedger(inventory, transactions)).toEqual([]);
   });
 

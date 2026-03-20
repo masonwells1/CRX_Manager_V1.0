@@ -157,7 +157,8 @@ export default function Customers() {
         .from('invoices')
         .select('id, customer_id')
         .in('customer_id', ids)
-        .in('status', ['posted'])
+        .in('status', ['posted', 'overdue'])
+        .is('deleted_at', null)
         .limit(1);
       if (openInvoices && openInvoices.length > 0) {
         toast('error', 'Cannot deactivate: one or more selected customers have open invoices. Resolve all invoices first.');

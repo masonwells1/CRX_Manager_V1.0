@@ -13,6 +13,7 @@ import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../../lib/parseCents';
+import { logActivity } from '../../lib/activityLogger';
 
 interface WriteOffModalProps {
   open: boolean;
@@ -68,6 +69,7 @@ export default function WriteOffModal({
       });
       if (error) throw error;
       writeOffIdem.resetKey();
+      logActivity({ event: 'apply_write_off', description: `Write-off of ${fmt(amountCents)} applied to invoice ${invoiceNumber}. Reason: ${reason.trim()}`, performedBy: profile?.id || '', entityType: 'invoice', entityId: invoiceId });
       toast('success', `Write-off of ${fmt(amountCents)} applied to ${invoiceNumber}`);
       setAmount('');
       setReason('');

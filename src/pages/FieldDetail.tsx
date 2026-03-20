@@ -14,6 +14,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
+import { parseDollarsToCents } from '../lib/parseCents';
 import area from '@turf/area';
 import turfCentroid from '@turf/centroid';
 import type { Feature, Polygon } from 'geojson';
@@ -639,7 +640,7 @@ export default function FieldDetail() {
                           value={split.price_override_cents != null ? (split.price_override_cents / 100).toFixed(2) : ''}
                           onChange={(e) => {
                             const val = e.target.value;
-                            updateSplit(idx, 'price_override_cents', val ? Math.round(parseFloat(val) * 100) : null);
+                            updateSplit(idx, 'price_override_cents', val ? parseDollarsToCents(val) : null);
                           }}
                           min={0}
                           step={0.01}

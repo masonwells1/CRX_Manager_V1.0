@@ -967,7 +967,7 @@ export default function InvoiceDetail() {
                           type="number"
                           value={(item.unit_price_cents / 100).toFixed(2)}
                           onChange={(e) =>
-                            updateItem(idx, 'unit_price_cents', Math.round(Number(e.target.value) * 100) || 0)
+                            updateItem(idx, 'unit_price_cents', parseDollarsToCents(e.target.value))
                           }
                           min={0}
                           step={0.01}

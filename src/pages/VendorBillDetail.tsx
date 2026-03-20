@@ -26,6 +26,7 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { parseDollarsToCents } from '../lib/parseCents';
 import type { VendorBill, VendorPayment } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -111,7 +112,7 @@ export default function VendorBillDetail() {
 
   const handleRecordPayment = async () => {
     if (!id) return;
-    const amountCents = Math.round(Number(payAmount) * 100);
+    const amountCents = parseDollarsToCents(payAmount);
     if (amountCents <= 0) { toast('error', 'Enter a valid payment amount'); return; }
 
     setPaying(true);

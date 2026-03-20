@@ -10,6 +10,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { parseLocalDate } from '../../lib/dateUtils';
 import { Zap, CheckSquare, Square } from 'lucide-react';
+import { logActivity } from '../../lib/activityLogger';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Badge from '../ui/Badge';
@@ -114,6 +115,7 @@ export default function FinanceChargePreviewModal({
       if (result.charges_generated === 0) {
         toast('info', 'No finance charges were generated');
       } else {
+        logActivity({ event: 'generate_finance_charges', description: `Generated ${result.charges_generated} finance charge invoice(s) as of ${asOfDate}`, performedBy: profile?.id || '' });
         toast('success', `Generated ${result.charges_generated} finance charge invoice(s)`);
       }
       onClose();

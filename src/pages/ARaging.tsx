@@ -988,8 +988,8 @@ export default function ARaging() {
                         { key: 'transaction_type', header: 'Type' },
                         { key: 'reference_number', header: 'Ref #' },
                         { key: 'description', header: 'Description' },
-                        { key: 'amount_cents', header: 'Amount (cents)' },
-                        { key: 'running_balance', header: 'Balance (cents)' },
+                        { key: 'amount_cents', header: 'Amount ($)', format: (v: unknown) => fmtCSV((Number(v) || 0) / 100) },
+                        { key: 'running_balance', header: 'Balance ($)', format: (v: unknown) => fmtCSV((Number(v) || 0) / 100) },
                       ],
                       `statement_${stmtCustomerName.replace(/\s+/g, '_')}`
                     )

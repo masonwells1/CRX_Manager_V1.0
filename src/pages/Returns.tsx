@@ -150,6 +150,7 @@ export default function Returns() {
       .select('id, order_number, order_date')
       .eq('customer_id', customerId)
       .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled'])
+      .is('deleted_at', null)
       .order('order_date', { ascending: false });
     setCustomerOrders((data || []) as Order[]);
   };

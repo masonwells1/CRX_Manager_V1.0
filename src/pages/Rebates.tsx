@@ -20,6 +20,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { parseDollarsToCents } from '../lib/parseCents';
 import type { RebateProgram, RebateClaim } from '../types';
 
 type TabKey = 'programs' | 'claims';
@@ -112,7 +113,7 @@ export default function Rebates() {
     const [prodRes, custRes, ordRes] = await Promise.all([
       supabase.from('products').select('id, product_name, vendor, manufacturer').eq('is_active', true).order('product_name'),
       supabase.from('customers').select('id, farm_name').order('farm_name'),
-      supabase.from('orders').select('id, order_number, customer_id').order('order_date', { ascending: false }).limit(200),
+      supabase.from('orders').select('id, order_number, customer_id').is('deleted_at', null).order('order_date', { ascending: false }).limit(200),
     ]);
     if (prodRes.error) toast('error', 'Failed to load products');
     if (custRes.error) toast('error', 'Failed to load customers');
@@ -290,7 +291,7 @@ export default function Rebates() {
       product_id: cForm.product_id || null,
       claim_number: claimNum,
       quantity: Number(cForm.quantity),
-      claim_amount_cents: Math.round(Number(cForm.claim_amount_cents) * 100),
+      claim_amount_cents: parseDollarsToCents(String(cForm.claim_amount_cents)),
       notes: cForm.notes || null,
     };
 

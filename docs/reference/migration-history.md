@@ -1,4 +1,4 @@
-# Migration History (213 migrations)
+# Migration History (215 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -211,3 +211,6 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 205 | 20260333400000 | **Fix reverse_receiving and idempotency bugs** — Fixes reverse_receiving_record and other idempotency-related issues |
 | 206 | 20260333500000 | **Allow PO reverse transitions** — Enables purchase order status rollback for admin corrections |
 | 207 | 20260333600000 | **Quick delivery optional invoice** — Adds `p_skip_invoice boolean DEFAULT false` to `create_quick_delivery`. Fixes missing `save_idempotency()` call (was checking but never saving). Fixes `search_path` missing `pg_temp`. Wraps invoice creation in conditional. Frontend adds "Create draft invoice" checkbox (ON by default) + confirmation dialog |
+| 208 | 20260333700000 | **Rate limit log RLS** — Deny-all policy on `rate_limit_log` table to prevent unauthorized access |
+| 209 | 20260333800000 | **Drop inventory qty_available CHECK** — Removes `chk_inventory_qty_available` CHECK constraint that blocked the "allow negative inventory" design in `complete_delivery()` |
+| 210 | 20260333900000 | **Mega audit Phase 1 & 2 fixes** — 12 RPC fixes: get_ar_aging (include overdue), get_monthly_summary (commission cents), financial_dashboard_summary (overdue AR + order filters), apply_prepay_to_invoice (update customer balance), cancel_delivery (save idempotency), generate_finance_charges (season >= 10), allocate_payment (audit log), convert_quote_to_order (release holds), create_invoice_from_order (filter duplicates), update_order_items (recalc cost/profit/margin), save_quote (preserve is_planned), void_invoice (cancel commissions). 6 frontend fixes: CSV cents conversion, deleted_at filters, soft delete, regex replace |

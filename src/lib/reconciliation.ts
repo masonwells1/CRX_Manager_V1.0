@@ -133,7 +133,18 @@ export interface InventoryRow {
 
 export interface InventoryTransactionRow {
   product_id: string;
-  transaction_type: 'received' | 'booked' | 'delivered' | 'returned' | 'adjusted' | 'transferred';
+  transaction_type:
+    | 'received'
+    | 'booked'
+    | 'delivered'
+    | 'returned'
+    | 'adjusted'
+    | 'transferred'
+    | 'job_applied'
+    | 'cancelled_delivery_reversal'
+    | 'void_delivery_reversal'
+    | 'prebooked'
+    | 'released';
   quantity: number; // signed: positive = add, negative = subtract (for adjustments)
 }
 
@@ -141,8 +152,11 @@ export function checkInventoryLedger(
   inventory: InventoryRow[],
   transactions: InventoryTransactionRow[],
 ): Discrepancy[] {
-  // Build expected quantity from transactions
-  // Convention: received/returned add, delivered subtracts, adjusted is signed
+  // Build expected quantity_available from transactions.
+  //
+  // Only transactions that affect quantity_available are counted.
+  // Transactions that affect quantity_prebooked (booked, prebooked,
+  // released) are excluded — they don't change the available count.
   const expectedByProduct = new Map<string, number>();
 
   for (const tx of transactions) {
@@ -150,19 +164,33 @@ export function checkInventoryLedger(
     let delta: number;
 
     switch (tx.transaction_type) {
+      // ── Add to quantity_available ──
       case 'received':
       case 'returned':
+      case 'cancelled_delivery_reversal':
+      case 'void_delivery_reversal':
         delta = Math.abs(tx.quantity);
         break;
+
+      // ── Subtract from quantity_available ──
       case 'delivered':
-      case 'booked':
+      case 'job_applied':
         delta = -Math.abs(tx.quantity);
         break;
+
+      // ── Signed: positive = add, negative = subtract ──
       case 'adjusted':
       case 'transferred':
-        // adjusted quantity is signed: positive = add, negative = subtract
         delta = tx.quantity;
         break;
+
+      // ── Affect quantity_prebooked, NOT quantity_available ──
+      case 'booked':
+      case 'prebooked':
+      case 'released':
+        delta = 0;
+        break;
+
       default:
         delta = 0;
     }

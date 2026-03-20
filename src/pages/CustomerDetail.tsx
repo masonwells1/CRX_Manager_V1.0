@@ -18,6 +18,7 @@ import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType } from '../types';
 import { Sentry } from '../lib/sentry';
+import { parseDollarsToCents } from '../lib/parseCents';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
@@ -542,7 +543,7 @@ export default function CustomerDetail() {
                 min={0}
                 step={100}
                 value={customer.credit_limit_cents != null ? (customer.credit_limit_cents as number) / 100 : ''}
-                onChange={(e) => update('credit_limit_cents', e.target.value ? Math.round(parseFloat(e.target.value) * 100) : 0)}
+                onChange={(e) => update('credit_limit_cents', e.target.value ? parseDollarsToCents(e.target.value) : 0)}
               />
               <Input
                 label="Finance Charge Rate (%)"

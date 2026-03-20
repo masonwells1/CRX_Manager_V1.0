@@ -4,6 +4,90 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-20 — Mega Logic Audit Phase 1 & 2 Fixes (12 RPCs + 6 Frontend)
+
+### Summary
+Comprehensive logic audit found 105+ issues across 8 domains. Phase 1 (Critical) and Phase 2 (High) fixes applied — 12 RPC functions fixed and 6 frontend files corrected.
+
+### SQL Fixes (12 RPCs)
+- **get_ar_aging** (FIN-1): Include `overdue` invoices in AR aging, not just `posted`
+- **get_monthly_summary** (FIN-5): Fix commission cents conversion (`commission_amount * 100`), include overdue in AR, add order status/deleted filters
+- **financial_dashboard_summary** (FIN-1/12/13): Include overdue AR, filter cancelled/deleted orders from revenue/profitability, add deleted_at filter to AR queries
+- **apply_prepay_to_invoice** (XD-2): Update `customers.prepay_balance_cents` when applying prepay, allow overdue invoices, auto-pay when balance reaches 0
+- **cancel_delivery** (DEL-1): Add missing `save_idempotency()` call — was checking but never saving
+- **generate_finance_charges** (XD-3): Fix season calculation from `>= 7` to `>= 10` (October, not July)
+- **allocate_payment** (XD-6): Add `financial_audit_log` entry for payment allocations
+- **convert_quote_to_order** (INV-1): Release inventory holds (`is_active = false`) when converting planned quote to order
+- **create_invoice_from_order** (FIN-4): Filter out already-invoiced order items, delete empty invoices
+- **update_order_items** (ORD-3/4): Recalculate cost_per_unit, profit, net_margin on same-product edits + order-level totals
+- **save_quote** (QTE-1): Preserve `is_planned` and `section_header_notes` in both UPDATE and INSERT paths
+- **void_invoice** (FIN-6): Cancel pending commissions when no active invoices remain for the order
+
+### Frontend Fixes (6 files)
+- **Returns.tsx** (FE-1): CSV export divides `total_credit_cents` by 100 for dollars
+- **Invoices.tsx** (FE-2): CSV export divides `total_amount_cents` and `balance_cents` by 100
+- **Orders.tsx** (XD-5/7, FE-11): Add `.is('deleted_at', null)` filter, change hard delete to soft delete, fix regex replace for status badges
+- **Quotes.tsx** (XD-9): Add `.is('deleted_at', null)` filter
+- **CustomerDetail.tsx** (XD-5): Add `.is('deleted_at', null)` to both order queries
+
+### Migrations
+- `20260333800000_drop_inventory_qty_available_check.sql` — Drop CHECK constraint blocking negative inventory (INV-4)
+- `20260333900000_mega_audit_phase1_fixes.sql` — 7 full RPC definitions + documentation for 5 large RPCs applied directly
+
+### Stats
+- 2 new migrations (213 → 215), 12 RPCs fixed, 6 frontend files modified
+- 1,653 unit tests passing, 0 lint/TS errors, CI green
+
+### Audit Reference
+- Full audit: `docs/audits/2026-03-20-mega-logic-audit.md` (105+ issues found)
+- Phase 3 (Medium) fixes applied in same session (see below)
+
+---
+
+## 2026-03-20 — Mega Logic Audit Phase 3 Fixes (26 Frontend Files)
+
+### Summary
+Phase 3 (Medium priority) sweeps across 6 categories, fixing consistency issues found in the mega logic audit. All frontend-only changes — no new SQL migrations.
+
+### Soft Delete Filtering Sweep (8 files)
+Added `.is('deleted_at', null)` to queries that were missing it:
+- **Reports.tsx** — Customer profitability + revenue queries (also added status filter for confirmed/fulfilled)
+- **NewDelivery.tsx** — Orders lookup
+- **Rebates.tsx** — Orders lookup
+- **NewOrder.tsx** — Duplicate order check
+- **Returns.tsx** — Customer orders query
+- **QuoteBuilder.tsx** — Duplicate order warning
+- **Customers.tsx** — Open invoices check (also added `overdue` status)
+- **CustomerContextCard.tsx** — Orders count
+
+### CSV Export Formatting Sweep (4 files)
+Used `fmtCSV()` for proper dollar formatting in CSV exports:
+- **PrepaymentManager.tsx** — prepay_balance_cents, unpaid_balance_cents
+- **CommissionPayments.tsx** — total_amount (dollars, not cents)
+- **PaymentHistory.tsx** — amount_cents
+- **ARaging.tsx** — statement export amount_cents, running_balance
+
+### parseDollarsToCents Sweep (7 files)
+Replaced `Math.round(parseFloat(x) * 100)` with `parseDollarsToCents()` to avoid floating-point bugs:
+- **CustomerDetail.tsx**, **FieldDetail.tsx**, **InvoiceDetail.tsx**, **NewVendorBill.tsx** (3 instances), **PrepaymentManager.tsx** (3 instances), **Rebates.tsx**, **VendorBillDetail.tsx**
+
+### Missing logActivity Sweep (4 files, 6 critical operations)
+Added audit logging to 6 critical financial operations that were missing it:
+- **MonthEndClose.tsx** — `close_accounting_period`, `reopen_accounting_period`
+- **Deliveries.tsx** — `batch_cancel_deliveries`, `batch_reschedule_deliveries`, `reassign_delivery`
+- **WriteOffModal.tsx** — `apply_write_off`
+- **FinanceChargePreviewModal.tsx** — `generate_finance_charges`
+
+### Reconciliation Function Fix (2 files)
+- **reconciliation.ts** — Fixed `checkInventoryLedger` to handle all 11 transaction types (was only handling 6). Fixed `booked` incorrectly subtracting from `quantity_available` (it only affects `quantity_prebooked`). Added: `job_applied`, `cancelled_delivery_reversal`, `void_delivery_reversal`, `prebooked`, `released`.
+- **reconciliation.test.ts** — 8 new tests for all transaction type behaviors including comprehensive combined test
+
+### Stats
+- 0 new migrations, 26 files modified, 1,658 unit tests passing (was 1,653)
+- 0 lint/TS errors, build clean
+
+---
+
 ## 2026-03-19 — Transaction Ledger Fix + Outstanding PO Tab + HelpTip Expansion (Night Session)
 
 ### Changes

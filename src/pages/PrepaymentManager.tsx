@@ -16,9 +16,10 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
-import { exportToCSV } from '../lib/csvExport';
+import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
+import { parseDollarsToCents } from '../lib/parseCents';
 
 interface CustomerPrepay {
   [k: string]: unknown;
@@ -173,7 +174,7 @@ export default function PrepaymentManager() {
 
   const handleSaveEdit = async () => {
     if (!editCredit) return;
-    const newBalanceCents = Math.round(parseFloat(editForm.balance) * 100);
+    const newBalanceCents = parseDollarsToCents(editForm.balance);
     if (isNaN(newBalanceCents) || newBalanceCents < 0) {
       toast('error', 'Balance must be a non-negative number');
       return;
@@ -271,14 +272,14 @@ export default function PrepaymentManager() {
       toast('error', 'Fill in customer, check #, and total amount');
       return;
     }
-    const totalCents = Math.round(parseFloat(checkForm.total) * 100);
+    const totalCents = parseDollarsToCents(checkForm.total);
     if (totalCents <= 0) { toast('error', 'Total must be positive'); return; }
 
     const validSplits = bucketSplits.filter((s) => s.label && parseFloat(s.amount) > 0);
     if (validSplits.length === 0) { toast('error', 'Add at least one bucket split'); return; }
 
     // M3: use per-split rounded cents to avoid float rounding mismatch
-    const splitAmountsCents = validSplits.map((s) => Math.round(parseFloat(s.amount) * 100));
+    const splitAmountsCents = validSplits.map((s) => parseDollarsToCents(s.amount));
     const splitTotal = splitAmountsCents.reduce((sum, c) => sum + c, 0);
     // Allow 1-cent tolerance for floating-point rounding edge cases
     if (Math.abs(splitTotal - totalCents) > 1) {
@@ -498,9 +499,9 @@ export default function PrepaymentManager() {
                 customers as unknown as Record<string, unknown>[],
                 [
                   { key: 'farm_name', header: 'Customer' },
-                  { key: 'prepay_balance_cents', header: 'Prepay Balance (cents)' },
+                  { key: 'prepay_balance_cents', header: 'Prepay Balance ($)', format: (v: unknown) => fmtCSV((Number(v) || 0) / 100) },
                   { key: 'unpaid_invoice_count', header: 'Unpaid Invoices' },
-                  { key: 'unpaid_balance_cents', header: 'Unpaid Balance (cents)' },
+                  { key: 'unpaid_balance_cents', header: 'Unpaid Balance ($)', format: (v: unknown) => fmtCSV((Number(v) || 0) / 100) },
                 ],
                 'prepayments',
               )

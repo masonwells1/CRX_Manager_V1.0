@@ -14,6 +14,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { logActivity } from '../lib/activityLogger';
 import { downloadBatchStatements } from '../lib/statementPdf';
 import { downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
@@ -171,6 +172,7 @@ export default function MonthEndClose() {
       });
       if (error) throw error;
       closePeriodIdem.resetKey();
+      logActivity({ event: 'close_accounting_period', description: `Closed accounting period: ${current.label}`, performedBy: profile?.id || '' });
       toast('success', `Period closed: ${current.label}`);
       setShowCloseModal(false);
       fetchData();
@@ -193,6 +195,7 @@ export default function MonthEndClose() {
       });
       if (error) throw error;
       reopenPeriodIdem.resetKey();
+      logActivity({ event: 'reopen_accounting_period', description: `Reopened accounting period: ${reopenTarget.id}. Reason: ${reopenReason}`, performedBy: profile?.id || '' });
       toast('success', 'Accounting period reopened');
       setShowReopenModal(false);
       setReopenReason('');

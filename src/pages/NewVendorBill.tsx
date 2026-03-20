@@ -17,6 +17,7 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
+import { parseDollarsToCents } from '../lib/parseCents';
 import type { Vendor, PurchaseOrder } from '../types';
 
 export default function NewVendorBill() {
@@ -104,8 +105,8 @@ export default function NewVendorBill() {
 
     setSaving(true);
     try {
-      const subtotalCents = Math.round(Number(subtotalDollars) * 100);
-      const adjustmentCents = Math.round(Number(adjustmentDollars || 0) * 100);
+      const subtotalCents = parseDollarsToCents(subtotalDollars);
+      const adjustmentCents = parseDollarsToCents(adjustmentDollars || '0');
 
       const idemKey = createBillIdem.getKey();
       // Compute due_date from bill_date + paymentTermsDays
@@ -138,7 +139,7 @@ export default function NewVendorBill() {
     setSaving(false);
   };
 
-  const totalCents = Math.round(Number(subtotalDollars || 0) * 100) + Math.round(Number(adjustmentDollars || 0) * 100);
+  const totalCents = parseDollarsToCents(subtotalDollars || '0') + parseDollarsToCents(adjustmentDollars || '0');
   const fmt = (cents: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 

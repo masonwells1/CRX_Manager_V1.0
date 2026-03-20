@@ -156,7 +156,9 @@ export default function Reports() {
   const fetchCustomerProfitability = useCallback(async () => {
     let query = supabase
       .from('orders')
-      .select('total_price, total_profit, total_margin_pct, customer:customers(farm_name)');
+      .select('total_price, total_profit, total_margin_pct, customer:customers(farm_name)')
+      .is('deleted_at', null)
+      .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled']);
     if (startDate) query = query.gte('order_date', startDate);
     if (endDate) query = query.lte('order_date', endDate);
     const { data, error } = await query;
@@ -215,7 +217,10 @@ export default function Reports() {
   }, [isAdmin, profile, startDate, endDate, toast]);
 
   const fetchRevenue = useCallback(async () => {
-    let query = supabase.from('orders').select('order_date, total_price, total_profit').order('order_date');
+    let query = supabase.from('orders').select('order_date, total_price, total_profit')
+      .is('deleted_at', null)
+      .in('status', ['confirmed', 'partially_fulfilled', 'fulfilled'])
+      .order('order_date');
     if (startDate) query = query.gte('order_date', startDate);
     if (endDate) query = query.lte('order_date', endDate);
     const { data, error } = await query;

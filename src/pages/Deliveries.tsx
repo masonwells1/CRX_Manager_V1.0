@@ -26,6 +26,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
+import { logActivity } from '../lib/activityLogger';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
@@ -429,6 +430,7 @@ export default function Deliveries() {
         });
         if (error) throw error;
         batchCancelIdem.resetKey();
+        logActivity({ event: 'batch_cancel_deliveries', description: `Batch cancelled ${ids.length} delivery(ies). Reason: ${reason}`, performedBy: profile?.id || '' });
         return assertRpcResult(data, 'batch_cancel_deliveries');
       },
       toast,
@@ -577,6 +579,7 @@ export default function Deliveries() {
         });
         if (error) throw error;
         batchRescheduleIdem.resetKey();
+        logActivity({ event: 'batch_reschedule_deliveries', description: `Rescheduled ${ids.length} delivery(ies) to ${rescheduleDate}`, performedBy: profile?.id || '' });
       },
       toast,
       successMessage: `Rescheduled ${ids.length} delivery(ies) to ${parseLocalDate(rescheduleDate).toLocaleDateString()}`,
@@ -654,6 +657,7 @@ export default function Deliveries() {
           });
           if (error) throw error;
           reassignIdem.resetKey();
+          logActivity({ event: 'reassign_delivery', description: `Took delivery ${deliveryId}`, performedBy: profile?.id || '', entityType: 'delivery', entityId: deliveryId });
         },
         toast,
         successMessage: 'Delivery assigned to you',

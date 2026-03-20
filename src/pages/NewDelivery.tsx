@@ -69,6 +69,7 @@ export default function NewDelivery() {
       .from('orders')
       .select('*, customer:customers(farm_name)')
       .in('status', ['confirmed', 'partially_fulfilled'])
+      .is('deleted_at', null)
       .order('order_date', { ascending: false });
 
     if (error) {
