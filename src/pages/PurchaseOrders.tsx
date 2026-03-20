@@ -102,6 +102,7 @@ export default function PurchaseOrders() {
         quantity_received,
         unit_cost,
         unit_size,
+        product:products(product_name),
         purchase_orders!inner(po_number, vendor, status, expected_delivery_date)
       `)
       .not('purchase_orders.status', 'in', '("cancelled","fully_received")');
@@ -124,7 +125,7 @@ export default function PurchaseOrders() {
           vendor: po.vendor as string,
           po_status: po.status as string,
           product_id: row.product_id as string,
-          product_name: (row.product_name as string) || 'Unknown Product',
+          product_name: (row.product as { product_name: string } | null)?.product_name || (row.product_name as string) || 'Unknown Product',
           quantity_ordered: ordered,
           quantity_received: received,
           quantity_remaining: remaining,

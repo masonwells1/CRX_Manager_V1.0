@@ -372,6 +372,7 @@ export default function BulkPOImport({ open, onClose, onSuccess }: BulkPOImportP
         const itemInserts = validItems.map((item) => ({
           purchase_order_id: poData.id,
           product_id: item.matched_product!.id,
+          product_name: item.matched_product!.product_name,
           quantity_ordered: item.quantity_ordered,
           unit_cost: item.unit_cost,
           unit_size: item.unit_size || null,

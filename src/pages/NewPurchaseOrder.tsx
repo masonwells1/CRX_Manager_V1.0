@@ -165,6 +165,7 @@ export default function NewPurchaseOrder() {
 
         const itemsPayload = validItems.map((i) => ({
           product_id: i.product_id,
+          product_name: products.find((p) => p.id === i.product_id)?.product_name || null,
           quantity_ordered: i.quantity_ordered,
           unit_cost: i.unit_cost,
           unit_size: i.unit_size || null,
