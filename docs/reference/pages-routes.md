@@ -1,8 +1,9 @@
-# Pages & Routes Reference (56 total)
+# Pages & Routes Reference (57 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
 | `/` | Dashboard | KPIs, today's jobs, recent activity |
+| `/getting-started` | GettingStarted | Role-aware workflow guide (admin/sales: Quote→Order→Deliver stepper; driver: Dashboard→Deliver stepper) |
 | `/products` | Products | Product catalog with search/filter, bulk import |
 | `/products/:id` | ProductDetail | Product CRUD (pricing tiers, EPA info, RUP status). Combobox dropdowns for Vendor/Manufacturer/Category. Grouped sections: Product Form → Container (size+unit+type) → Inventory Unit → Application Rates |
 | `/customers` | Customers | Customer list with search/filter, bulk import |

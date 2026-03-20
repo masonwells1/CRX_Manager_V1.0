@@ -4,6 +4,23 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-19 — Launch Readiness UX (Evening Session)
+
+### Changes
+- **HelpTip component** (`src/components/ui/HelpTip.tsx`): Reusable click-to-show contextual help popover with HelpCircle icon
+- **Getting Started page** (`/getting-started`): Role-aware workflow guide — admin/sales see Quote→Order→Deliver stepper, drivers see Dashboard→Deliver stepper. Sidebar link with BookOpen icon
+- **Enhanced empty states**: Quotes, Orders, Deliveries, and TeamBoard pages now show workflow guidance and action buttons when empty
+- **~26 contextual help tips** across QuoteBuilder (8), OrderDetail (4), DeliveryDetail (6), TeamBoard (4), and list pages (3) — business-process explanations for planned programs, delivery completion, signatures, invoicing, etc.
+- **DataTable column headers**: Now accept ReactNode (not just string) to support inline HelpTip components
+- **RLS security fix**: Deny-all policy on `rate_limit_log` table (migration `20260333700000`)
+- **New migration:** `20260333700000_rate_limit_log_rls.sql`
+
+### Stats
+- 1 new page, 1 new component, 3 new tests, 1 migration
+- 12 files modified across pages and components
+
+---
+
 ## 2026-03-19 — Pre-Production Audit Fixes (7 Issues)
 
 ### Changes
