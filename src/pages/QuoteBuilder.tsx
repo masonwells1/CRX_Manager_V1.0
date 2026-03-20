@@ -40,6 +40,7 @@ import { localDatePlusDays } from '../lib/dateUtils';
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
+import HelpTip from '../components/ui/HelpTip';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
 import type {
   Quote,
@@ -1289,6 +1290,7 @@ export default function QuoteBuilder() {
               disabled={!canEdit && isEditing}
             />
             <span className="font-medium">Planned Program</span>
+            <HelpTip text="Mark as Planned if the customer intends to buy but hasn't committed yet. This reserves inventory with a hold so it's not sold to someone else. Set the Needed By date so you can forecast when product will move." className="ml-1" />
           </label>
           {isPlanned && (
             <span className="px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 rounded-full">
@@ -1335,6 +1337,7 @@ export default function QuoteBuilder() {
                 <Copy className="w-4 h-4" />
                 Save as Template
               </button>
+              <HelpTip text="Saves this quote's structure as a reusable template. Great for customers who reorder the same products each season." className="ml-1" />
               <button
                 onClick={() => setShowRolloverModal(true)}
                 className="flex items-center gap-2 px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50"
@@ -1342,6 +1345,7 @@ export default function QuoteBuilder() {
                 <RotateCcw className="w-4 h-4" />
                 Roll Over to New Season
               </button>
+              <HelpTip text="Copies this planned program into the next season (Oct–Sep) with the same products and quantities. Dates update automatically." className="ml-1" />
             </>
           )}
           {canSend && (
@@ -1354,14 +1358,17 @@ export default function QuoteBuilder() {
             </Button>
           )}
           {isEditing && canConvert && (
-            <Button
-              variant="primary"
-              icon={<ShoppingCart className="w-4 h-4" />}
-              onClick={() => setConfirmConvertOpen(true)}
-              loading={converting}
-            >
-              Convert to Order
-            </Button>
+            <>
+              <Button
+                variant="primary"
+                icon={<ShoppingCart className="w-4 h-4" />}
+                onClick={() => setConfirmConvertOpen(true)}
+                loading={converting}
+              >
+                Convert to Order
+              </Button>
+              <HelpTip text="Creates a confirmed order from this quote. Inventory holds transfer to the order and the customer gets a confirmation email." className="ml-1" />
+            </>
           )}
           {isEditing && currentStatus === 'sent' && (
             <Button
@@ -1375,14 +1382,17 @@ export default function QuoteBuilder() {
             </Button>
           )}
           {isEditing && quoteVersions.length > 0 && (
-            <Button
-              variant="ghost"
-              icon={<History className="w-4 h-4" />}
-              showChevron={false}
-              onClick={() => setShowVersionHistory(!showVersionHistory)}
-            >
-              Versions ({quoteVersions.length})
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                icon={<History className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => setShowVersionHistory(!showVersionHistory)}
+              >
+                Versions ({quoteVersions.length})
+              </Button>
+              <HelpTip text="Every time you send or revise, a snapshot is saved. You can compare versions side-by-side or restore an older version if needed." className="ml-1" />
+            </>
           )}
         </div>
       </div>
@@ -1789,7 +1799,7 @@ export default function QuoteBuilder() {
                   </span>
                   {isPlanned && (
                     <div className="flex items-center gap-2 ml-2">
-                      <label className="text-xs text-secondary whitespace-nowrap">Needed By:</label>
+                      <label className="text-xs text-secondary whitespace-nowrap flex items-center">Needed By:<HelpTip text="This is when the customer needs the product — different from the quote expiration. Used for inventory forecasting and delivery scheduling." className="ml-1" /></label>
                       <input
                         type="date"
                         value={sec.needed_by_date || ''}
@@ -1825,6 +1835,10 @@ export default function QuoteBuilder() {
               <>
               {/* Section Header Notes — above items table */}
               <div className="px-5 pb-2">
+                <div className="flex items-center gap-1 mb-1">
+                  <span className="text-xs text-secondary">Section Header Notes</span>
+                  <HelpTip text="These notes print above the items in the PDF. Use for delivery instructions like 'Apply before 10am' or 'Requires cool storage'." className="ml-1" />
+                </div>
                 <textarea
                   value={sec.section_header_notes || ''}
                   onChange={(e) => updateSectionField(sec._key, 'section_header_notes', e.target.value || null)}
@@ -2368,6 +2382,7 @@ export default function QuoteBuilder() {
           >
             Mark as Presented
           </Button>
+          <HelpTip text="Sends the quote PDF to the customer's email and locks it as 'Sent'. A version snapshot is saved automatically so you can always see what the customer received." className="ml-1" />
           <button
             disabled
             title="Coming Soon"
