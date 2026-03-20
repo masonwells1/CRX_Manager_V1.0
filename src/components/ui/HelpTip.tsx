@@ -9,7 +9,7 @@ interface HelpTipProps {
 
 export default function HelpTip({ text, className = '' }: HelpTipProps) {
   const [open, setOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
+  const buttonRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number; placement: 'above' | 'below' }>({ top: 0, left: 0, placement: 'below' });
 
@@ -51,15 +51,17 @@ export default function HelpTip({ text, className = '' }: HelpTipProps) {
 
   return (
     <span className={`inline-flex items-center ${className}`}>
-      <button
+      <span
         ref={buttonRef}
-        type="button"
+        role="button"
+        tabIndex={0}
         onClick={() => setOpen(!open)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
         aria-label="help"
-        className="text-gray-400 hover:text-crx-green transition-colors p-0.5"
+        className="text-gray-400 hover:text-crx-green transition-colors p-0.5 cursor-pointer"
       >
         <HelpCircle className="w-4 h-4" />
-      </button>
+      </span>
       {open && createPortal(
         <div
           ref={popoverRef}
