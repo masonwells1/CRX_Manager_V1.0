@@ -26,6 +26,7 @@ import EntityBadge from '../components/team/EntityBadge';
 import NoteAttachments from '../components/team/NoteAttachments';
 import NotePhotoUpload from '../components/team/NotePhotoUpload';
 import EmptyState from '../components/ui/EmptyState';
+import HelpTip from '../components/ui/HelpTip';
 import TodaysDeliveries from '../components/team/TodaysDeliveries';
 import YesterdayRecap from '../components/team/YesterdayRecap';
 import StaleTasksAlert from '../components/team/StaleTasksAlert';
@@ -838,9 +839,12 @@ export default function TeamBoard() {
             <div className="flex-1">
               <TeamBoardFilters filters={filters} onChange={setFilters} />
             </div>
-            <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal} className="hidden sm:flex">
-              Add Note
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button icon={<Plus className="w-4 h-4" />} onClick={openAddModal} className="hidden sm:flex">
+                Add Note
+              </Button>
+              <HelpTip text="Notes can be tasks, reminders, or announcements. Assign to a team member, set a due date, and link to an order or delivery for context." className="ml-1 hidden sm:inline-flex" />
+            </div>
           </div>
 
           {notes.length === 0 ? (
@@ -1263,7 +1267,7 @@ export default function TeamBoard() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-secondary mb-1">Link to Entity</label>
+              <label className="block text-sm font-medium text-secondary mb-1">Link to Entity<HelpTip text="Link this note to an order, quote, delivery, or customer. The note will show up on that record's detail page too." className="ml-1" /></label>
               <select
                 value={linkedEntityType}
                 onChange={(e) => { setLinkedEntityType(e.target.value); setLinkedEntityId(''); }}

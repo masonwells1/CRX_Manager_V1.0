@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Search, Filter, X, Tag, User, AlertCircle } from 'lucide-react';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
+import HelpTip from '../ui/HelpTip';
 
 interface NoteTag {
   id: string;
@@ -151,6 +152,7 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
             <div className="flex items-center gap-2 mb-2">
               <Tag className="w-4 h-4 text-secondary" />
               <label className="text-sm font-medium text-nav-dark">Tags</label>
+              <HelpTip text="Color-coded tags help organize notes. Filter by tag to see only what's relevant — like 'Urgent' or 'Follow-up'." className="ml-1" />
             </div>
             <div className="flex flex-wrap gap-2">
               {tags.length === 0 ? (

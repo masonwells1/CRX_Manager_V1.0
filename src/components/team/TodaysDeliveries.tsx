@@ -6,6 +6,7 @@ import { Sentry } from '../../lib/sentry';
 import { useToast } from '../ui/Toast';
 import Card from '../ui/Card';
 import Badge from '../ui/Badge';
+import HelpTip from '../ui/HelpTip';
 import type { TeamBoardDeliveryData, TeamBoardDelivery } from '../../types';
 
 const priorityBorderColors: Record<string, string> = {
@@ -125,6 +126,7 @@ export default function TodaysDeliveries() {
           <h3 className="text-lg font-semibold font-heading text-nav-dark">
             Today&apos;s Deliveries
           </h3>
+          <HelpTip text="Shows today's scheduled deliveries and yesterday's completed ones. Quick way to see what's moving without leaving the board." className="ml-1" />
           {data && (
             <span className="px-2 py-0.5 text-xs font-semibold bg-crx-green/10 text-crx-green rounded-full">
               {data.today_total}
