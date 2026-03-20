@@ -70,6 +70,7 @@ const VendorBills = lazy(() => import('./pages/VendorBills'));
 const NewVendorBill = lazy(() => import('./pages/NewVendorBill'));
 const VendorBillDetail = lazy(() => import('./pages/VendorBillDetail'));
 const SalesReports = lazy(() => import('./pages/SalesReports'));
+const GettingStarted = lazy(() => import('./pages/GettingStarted'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -151,6 +152,7 @@ const router = createBrowserRouter([
           { index: true, element: <Dashboard /> },
           { path: 'team-board', element: <TeamBoard /> },
           { path: 'notifications', element: <Notifications /> },
+          { path: 'getting-started', element: <GettingStarted /> },
 
           // Admin + Sales Rep
           { path: 'products', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Products /></ProtectedRoute> },

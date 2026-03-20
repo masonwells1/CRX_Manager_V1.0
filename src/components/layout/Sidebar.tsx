@@ -36,6 +36,7 @@ import {
   ChevronLeft,
   ChevronRight,
   PackageCheck,
+  BookOpen,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
@@ -80,6 +81,15 @@ const navigation: NavEntry[] = [
       path: '/',
       label: 'Operations',
       icon: <LayoutDashboard className="w-5 h-5" />,
+    },
+  },
+  {
+    type: 'standalone',
+    link: {
+      id: 'getting-started',
+      path: '/getting-started',
+      label: 'Getting Started',
+      icon: <BookOpen className="w-5 h-5" />,
     },
   },
   {
