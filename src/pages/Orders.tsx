@@ -298,7 +298,7 @@ export default function Orders() {
       render: (row) => (
         <div className="flex items-center gap-1.5 flex-wrap">
           <Badge variant={statusToBadgeVariant[row.status] || 'default'}>
-            {row.status.replaceAll('_', ' ')}
+            {row.status.replace(/_/g, ' ')}
           </Badge>
           {row.is_planned && (
             <Badge variant="warning">Planned</Badge>
