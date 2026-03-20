@@ -751,13 +751,17 @@ export default function DeliveryDetail() {
       // === Email customer when delivery is completed (opt-out via checkbox) ===
       if (emailOnComplete && customer?.email) {
         try {
-          const deliveredItems = items.map((item) => {
-            const qty = isPartialDelivery ? (deliveryQtys[item.id] ?? item.quantity) : item.quantity;
-            return `<tr>
-              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${item.product?.product_name || 'Product'}</td>
-              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${qty}</td>
-            </tr>`;
-          }).join('');
+          const deliveredItems = items
+            .map((item) => {
+              const qty = isPartialDelivery ? (deliveryQtys[item.id] ?? item.quantity) : item.quantity;
+              return { name: item.product?.product_name || 'Product', qty };
+            })
+            .filter((row) => row.qty > 0)
+            .map((row) => `<tr>
+              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${row.name}</td>
+              <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${row.qty}</td>
+            </tr>`)
+            .join('');
 
           const photoCount = photos.length;
           const photoImages = photos.slice(0, 6).map((p) =>
@@ -837,12 +841,14 @@ export default function DeliveryDetail() {
     }
     setSendingEmail(true);
     try {
-      const deliveredItems = items.map((item) =>
-        `<tr>
-          <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${item.product?.product_name || 'Product'}</td>
-          <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${item.quantity_delivered || item.quantity}</td>
-        </tr>`
-      ).join('');
+      const deliveredItems = items
+        .filter((item) => (item.quantity_delivered ?? item.quantity) > 0)
+        .map((item) =>
+          `<tr>
+            <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;">${item.product?.product_name || 'Product'}</td>
+            <td style="padding:6px 12px;border:1px solid #e2e8f0;font-size:13px;text-align:right;">${item.quantity_delivered ?? item.quantity}</td>
+          </tr>`
+        ).join('');
 
       const photoImages = photos.slice(0, 6).map((p) =>
         `<img src="${p.image_url}" alt="${p.caption || 'Delivery photo'}" style="width:140px;height:105px;object-fit:cover;border-radius:6px;border:1px solid #e2e8f0;" />`
