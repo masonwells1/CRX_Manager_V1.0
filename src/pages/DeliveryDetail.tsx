@@ -1108,7 +1108,6 @@ export default function DeliveryDetail() {
                           className="w-16 text-center px-1 py-1.5 text-sm text-white bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green"
                           min="0"
                           step="any"
-                          max={item.quantity}
                           aria-label={`Quantity for ${(item.product as unknown as { product_name: string })?.product_name || 'item'}`}
                         />
                         <button
@@ -1821,7 +1820,6 @@ export default function DeliveryDetail() {
                       className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                       min="0"
                       step="any"
-                      max={item.quantity}
                     />
                     <button
                       onClick={() => updateDeliveryQty(item.id, currentQty + 1, item.quantity)}
