@@ -366,7 +366,7 @@ export default function DeliveryDetail() {
     // Fetch addresses, drivers, order items for edit dropdowns
     const [addrRes, driverRes, oiRes] = await Promise.all([
       supabase.from('customer_addresses').select('*').eq('customer_id', customer.id).order('is_default', { ascending: false }),
-      supabase.from('profiles').select('*').in('role', ['driver', 'admin']).eq('is_active', true).order('full_name'),
+      supabase.from('profiles').select('*').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       supabase.from('order_items').select('*').eq('order_id', delivery.order_id).order('section_name'),
     ]);
     setAddresses((addrRes.data || []) as CustomerAddress[]);

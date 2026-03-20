@@ -89,7 +89,7 @@ export default function NewDelivery() {
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
-      .in('role', ['driver', 'admin'])
+      .in('role', ['driver', 'admin', 'sales_rep'])
       .eq('is_active', true)
       .order('full_name');
     if (error) {
