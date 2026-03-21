@@ -383,6 +383,7 @@ export default function CustomerDetail() {
       };
 
       const addressesPayload = addresses.map((addr) => ({
+        id: addr.id || undefined,
         label: addr.label,
         address_line: addr.address_line,
         city: addr.city,
