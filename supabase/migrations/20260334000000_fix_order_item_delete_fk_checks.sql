@@ -127,15 +127,16 @@ BEGIN
          SELECT id FROM returns WHERE status IN ('cancelled', 'rejected')
        );
 
-    -- 3. Delivery remainders — clean up from cancelled/voided deliveries, block for active
+    -- 3. Delivery remainders — clean up resolved/cancelled, block for active
     DELETE FROM delivery_remainders
      WHERE order_item_id = v_old_item.id
-       AND delivery_id IN (
-         SELECT id FROM deliveries WHERE status IN ('cancelled', 'voided')
-       );
+       AND (status IN ('resolved', 'cancelled')
+            OR original_delivery_id IN (
+              SELECT id FROM deliveries WHERE status IN ('cancelled', 'voided')
+            ));
 
     IF EXISTS (SELECT 1 FROM delivery_remainders WHERE order_item_id = v_old_item.id LIMIT 1) THEN
-      RAISE EXCEPTION 'Cannot remove "%" — it has delivery remainder records. Clear remainders first.',
+      RAISE EXCEPTION 'Cannot remove "%" — it has active delivery remainder records. Resolve or cancel them first.',
         v_old_item.product_name;
     END IF;
 
