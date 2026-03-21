@@ -5,7 +5,7 @@
  */
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle, MessageSquarePlus } from 'lucide-react';
+import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle, MessageSquarePlus, Printer, ClipboardList } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -26,6 +26,10 @@ import { parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import HelpTip from '../components/ui/HelpTip';
 import RelatedNotes from '../components/team/RelatedNotes';
+import { downloadOrderSummaryPdf } from '../lib/orderSummaryPdf';
+import { downloadPickListPdf } from '../lib/orderPickListPdf';
+import type { OrderSummaryData } from '../lib/orderSummaryPdf';
+import type { PickListData } from '../lib/orderPickListPdf';
 import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery, Product, LinkedEntityType } from '../types';
 
 /** Temporary new item (not yet saved to DB — has no real id) */
@@ -100,6 +104,10 @@ export default function OrderDetail() {
 
   // Planned/Committed toggle
   const [togglingPlanned, setTogglingPlanned] = useState(false);
+
+  // Print state
+  const [printingSummary, setPrintingSummary] = useState(false);
+  const [printingPickList, setPrintingPickList] = useState(false);
 
   const isAdmin = role === 'admin';
   const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled';
@@ -215,6 +223,104 @@ export default function OrderDetail() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
+
+  // ── Print Handlers ────────────────────────────────────────────────────
+
+  const handlePrintSummary = async () => {
+    if (!order || !customer) return;
+    setPrintingSummary(true);
+    try {
+      const data: OrderSummaryData = {
+        order_number: order.order_number,
+        order_name: order.order_name,
+        order_date: order.order_date,
+        status: order.status,
+        customer_po_number: order.customer_po_number,
+        farm_name: customer.farm_name,
+        contact_name: customer.contact_name || null,
+        phone: customer.phone || null,
+        billing_address: customer.billing_address || null,
+        items: items.map((it) => ({
+          product_name: it.product_name,
+          quantity: it.total_units_needed,
+          unit_size: it.unit_size,
+          price_per_unit: it.price_per_unit,
+          extended_price: it.total_price,
+        })),
+        total_price: order.total_price,
+        notes: order.notes,
+      };
+      await downloadOrderSummaryPdf(data);
+      toast('success', 'Order summary downloaded');
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'print_order_summary' } });
+      toast('error', 'Failed to generate PDF');
+    }
+    setPrintingSummary(false);
+  };
+
+  const handlePrintPickList = async () => {
+    if (!order || !customer) return;
+    setPrintingPickList(true);
+    try {
+      // Fetch customer addresses + inventory in parallel
+      const [addrRes, invRes] = await Promise.all([
+        supabase.from('customer_addresses').select('*').eq('customer_id', customer.id).order('is_default', { ascending: false }),
+        supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked'),
+      ]);
+
+      // Build inventory map
+      const invMap: Record<string, { available: number; prebooked: number }> = {};
+      for (const row of invRes.data || []) {
+        const pid = row.product_id as string;
+        if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0 };
+        invMap[pid].available += Number(row.quantity_available);
+        invMap[pid].prebooked += Number(row.quantity_prebooked);
+      }
+
+      // Format delivery addresses
+      const addresses = (addrRes.data || []).map((a: Record<string, unknown>) => {
+        const parts = [a.label, a.address_line, a.city, a.state, a.zip].filter(Boolean);
+        return parts.join(', ');
+      }).filter((s: string) => s.length > 0);
+
+      // Fall back to billing address if no delivery addresses
+      if (addresses.length === 0 && customer.billing_address) {
+        addresses.push(customer.billing_address);
+      }
+
+      const data: PickListData = {
+        order_number: order.order_number,
+        order_name: order.order_name,
+        order_date: order.order_date,
+        farm_name: customer.farm_name,
+        contact_name: customer.contact_name || null,
+        phone: customer.phone || null,
+        delivery_addresses: addresses,
+        items: items.map((it) => {
+          const inv = invMap[it.product_id];
+          const netFree = inv ? inv.available - inv.prebooked : null;
+          return {
+            product_name: it.product_name,
+            unit_size: it.unit_size,
+            total_units_needed: it.total_units_needed,
+            quantity_delivered: it.quantity_delivered,
+            quantity_remaining: it.quantity_remaining,
+            inventory_available: netFree,
+            has_shortage: netFree !== null ? it.quantity_remaining > netFree : false,
+          };
+        }),
+        notes: order.notes,
+        program_notes: order.program_notes,
+      };
+      await downloadPickListPdf(data);
+      toast('success', 'Pick list downloaded');
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'print_pick_list' } });
+      toast('error', 'Failed to generate pick list');
+    }
+    setPrintingPickList(false);
+  };
 
   const handleAddProduct = (product: Product) => {
     const tierNum = customer?.assigned_tier || 1;
@@ -689,6 +795,24 @@ export default function OrderDetail() {
                 </Button>
                 <HelpTip text="Creates a new delivery from this order's items. The driver will see it on their dashboard and can start it when ready." className="ml-1" />
               </>)}
+              <Button
+                variant="secondary"
+                icon={<Printer className="w-4 h-4" />}
+                showChevron={false}
+                onClick={handlePrintSummary}
+                loading={printingSummary}
+              >
+                Print Summary
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<ClipboardList className="w-4 h-4" />}
+                showChevron={false}
+                onClick={handlePrintPickList}
+                loading={printingPickList}
+              >
+                Print Pick List
+              </Button>
               <Button
                 variant="secondary"
                 icon={<MessageSquarePlus className="w-4 h-4" />}

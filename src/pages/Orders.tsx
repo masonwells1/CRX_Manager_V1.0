@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload, Download, FileText, Trash2, Users, Truck } from 'lucide-react';
+import { Plus, Upload, Download, FileText, Trash2, Users, Truck, Printer, ClipboardList } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -16,6 +16,10 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
+import { downloadBatchOrderSummaryPdf } from '../lib/orderSummaryPdf';
+import { downloadBatchPickListPdf } from '../lib/orderPickListPdf';
+import type { OrderSummaryData } from '../lib/orderSummaryPdf';
+import type { PickListData } from '../lib/orderPickListPdf';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
 import type { Order } from '../types';
@@ -42,6 +46,8 @@ export default function Orders() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [printingSummary, setPrintingSummary] = useState(false);
+  const [printingPickList, setPrintingPickList] = useState(false);
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
@@ -234,6 +240,149 @@ export default function Orders() {
     setExporting(false);
   };
 
+  const handleBulkPrintSummaries = async () => {
+    setPrintingSummary(true);
+    try {
+      const orderIds = selectedRows.map((o) => o.id);
+      const customerIds = [...new Set(selectedRows.map((o) => o.customer_id))];
+
+      const [itemsRes, customersRes] = await Promise.all([
+        supabase.from('order_items').select('*').in('order_id', orderIds),
+        supabase.from('customers').select('*').in('id', customerIds),
+      ]);
+
+      const customerMap: Record<string, { farm_name: string; contact_name: string | null; phone: string | null; billing_address: string | null }> = {};
+      for (const c of customersRes.data || []) {
+        customerMap[c.id] = { farm_name: c.farm_name, contact_name: c.contact_name, phone: c.phone, billing_address: c.billing_address };
+      }
+
+      const itemsByOrder: Record<string, typeof itemsRes.data> = {};
+      for (const item of itemsRes.data || []) {
+        if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
+        itemsByOrder[item.order_id].push(item);
+      }
+
+      const dataList: OrderSummaryData[] = selectedRows.map((o) => {
+        const cust = customerMap[o.customer_id] || { farm_name: '', contact_name: null, phone: null, billing_address: null };
+        const orderItems = itemsByOrder[o.id] || [];
+        return {
+          order_number: o.order_number,
+          order_name: o.order_name,
+          order_date: o.order_date,
+          status: o.status,
+          customer_po_number: o.customer_po_number,
+          farm_name: cust.farm_name,
+          contact_name: cust.contact_name,
+          phone: cust.phone,
+          billing_address: cust.billing_address,
+          items: orderItems.map((it: Record<string, unknown>) => ({
+            product_name: it.product_name as string,
+            quantity: Number(it.total_units_needed),
+            unit_size: (it.unit_size as string | null),
+            price_per_unit: Number(it.price_per_unit),
+            extended_price: Number(it.total_price),
+          })),
+          total_price: o.total_price,
+          notes: o.notes,
+        };
+      });
+
+      await downloadBatchOrderSummaryPdf(dataList);
+      toast('success', `Downloaded ${dataList.length} order summary PDF(s)`);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'bulk_print_summaries' } });
+      toast('error', sanitizeError(err));
+    }
+    setPrintingSummary(false);
+  };
+
+  const handleBulkPrintPickLists = async () => {
+    setPrintingPickList(true);
+    try {
+      const orderIds = selectedRows.map((o) => o.id);
+      const customerIds = [...new Set(selectedRows.map((o) => o.customer_id))];
+
+      const [itemsRes, customersRes, addrRes, invRes] = await Promise.all([
+        supabase.from('order_items').select('*').in('order_id', orderIds),
+        supabase.from('customers').select('*').in('id', customerIds),
+        supabase.from('customer_addresses').select('*').in('customer_id', customerIds).order('is_default', { ascending: false }),
+        supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked'),
+      ]);
+
+      const customerMap: Record<string, { farm_name: string; contact_name: string | null; phone: string | null; billing_address: string | null }> = {};
+      for (const c of customersRes.data || []) {
+        customerMap[c.id] = { farm_name: c.farm_name, contact_name: c.contact_name, phone: c.phone, billing_address: c.billing_address };
+      }
+
+      // Group addresses by customer
+      const addrByCustomer: Record<string, string[]> = {};
+      for (const a of addrRes.data || []) {
+        const cid = a.customer_id as string;
+        if (!addrByCustomer[cid]) addrByCustomer[cid] = [];
+        const parts = [a.label, a.address_line, a.city, a.state, a.zip].filter(Boolean);
+        const formatted = parts.join(', ');
+        if (formatted) addrByCustomer[cid].push(formatted);
+      }
+
+      // Build inventory map
+      const invMap: Record<string, { available: number; prebooked: number }> = {};
+      for (const row of invRes.data || []) {
+        const pid = row.product_id as string;
+        if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0 };
+        invMap[pid].available += Number(row.quantity_available);
+        invMap[pid].prebooked += Number(row.quantity_prebooked);
+      }
+
+      const itemsByOrder: Record<string, typeof itemsRes.data> = {};
+      for (const item of itemsRes.data || []) {
+        if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
+        itemsByOrder[item.order_id].push(item);
+      }
+
+      const dataList: PickListData[] = selectedRows.map((o) => {
+        const cust = customerMap[o.customer_id] || { farm_name: '', contact_name: null, phone: null, billing_address: null };
+        const orderItems = itemsByOrder[o.id] || [];
+        let addresses = addrByCustomer[o.customer_id] || [];
+        if (addresses.length === 0 && cust.billing_address) {
+          addresses = [cust.billing_address];
+        }
+        return {
+          order_number: o.order_number,
+          order_name: o.order_name,
+          order_date: o.order_date,
+          farm_name: cust.farm_name,
+          contact_name: cust.contact_name,
+          phone: cust.phone,
+          delivery_addresses: addresses,
+          items: orderItems.map((it: Record<string, unknown>) => {
+            const pid = it.product_id as string;
+            const inv = invMap[pid];
+            const netFree = inv ? inv.available - inv.prebooked : null;
+            const remaining = Number(it.quantity_remaining);
+            return {
+              product_name: it.product_name as string,
+              unit_size: (it.unit_size as string | null),
+              total_units_needed: Number(it.total_units_needed),
+              quantity_delivered: Number(it.quantity_delivered),
+              quantity_remaining: remaining,
+              inventory_available: netFree,
+              has_shortage: netFree !== null ? remaining > netFree : false,
+            };
+          }),
+          notes: o.notes,
+          program_notes: o.program_notes,
+        };
+      });
+
+      await downloadBatchPickListPdf(dataList);
+      toast('success', `Downloaded ${dataList.length} pick list PDF(s)`);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'bulk_print_pick_lists' } });
+      toast('error', sanitizeError(err));
+    }
+    setPrintingPickList(false);
+  };
+
   const handleBulkDelete = async () => {
     await runCriticalAction({
       action: async () => {
@@ -256,6 +405,8 @@ export default function Orders() {
   const bulkActions = [
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    { key: 'print-summary', label: 'Print Summaries', icon: <Printer className="w-4 h-4" />, onClick: handleBulkPrintSummaries, loading: printingSummary },
+    { key: 'print-picklist', label: 'Print Pick Lists', icon: <ClipboardList className="w-4 h-4" />, onClick: handleBulkPrintPickLists, loading: printingPickList },
     { key: 'delete', label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
   ];
 

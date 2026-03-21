@@ -4,6 +4,30 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-21 — Order Print Feature: Order Summary + Pick List PDFs
+
+### Summary
+Added print functionality for orders — both a customer-facing Order Summary and a warehouse Pick List with inventory shortage warnings. Eliminates the workaround of creating/cancelling deliveries just to get a printable product list.
+
+### New Files
+- **`src/lib/orderSummaryPdf.ts`** — Customer-facing order summary PDF (order details, items with pricing, excludes internal cost/margin)
+- **`src/lib/orderSummaryPdf.test.ts`** — 21 unit tests
+- **`src/lib/orderPickListPdf.ts`** — Warehouse pick list PDF with ordered/delivered/remaining columns, inventory availability, and shortage warnings highlighted in red
+- **`src/lib/orderPickListPdf.test.ts`** — 23 unit tests
+
+### Modified Files
+- **`src/pages/OrderDetail.tsx`** — Added "Print Summary" and "Print Pick List" buttons in action bar (available for all order statuses)
+- **`src/pages/Orders.tsx`** — Added "Print Summaries" and "Print Pick Lists" bulk actions (select multiple orders, generate multi-page PDFs)
+
+### Bug Fix
+- **`save_customer` FK violation** — Applied migration to fix `save_customer` RPC that crashed when editing customers with deliveries (FK constraint on `customer_addresses`). Now uses smart upsert instead of delete-all.
+
+### Stats
+- 1,713 unit tests (110 files), all passing
+- 0 lint errors, build clean
+
+---
+
 ## 2026-03-20 — Mega Logic Audit Phase 1 & 2 Fixes (12 RPCs + 6 Frontend)
 
 ### Summary
