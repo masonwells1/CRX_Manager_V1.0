@@ -256,8 +256,9 @@ export default function Orders() {
         customerMap[c.id] = { farm_name: c.farm_name, contact_name: c.contact_name, phone: c.phone, billing_address: c.billing_address };
       }
 
-      const itemsByOrder: Record<string, typeof itemsRes.data> = {};
-      for (const item of itemsRes.data || []) {
+      const allItems = itemsRes.data || [];
+      const itemsByOrder: Record<string, typeof allItems> = {};
+      for (const item of allItems) {
         if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
         itemsByOrder[item.order_id].push(item);
       }
@@ -333,8 +334,9 @@ export default function Orders() {
         invMap[pid].prebooked += Number(row.quantity_prebooked);
       }
 
-      const itemsByOrder: Record<string, typeof itemsRes.data> = {};
-      for (const item of itemsRes.data || []) {
+      const allItems = itemsRes.data || [];
+      const itemsByOrder: Record<string, typeof allItems> = {};
+      for (const item of allItems) {
         if (!itemsByOrder[item.order_id]) itemsByOrder[item.order_id] = [];
         itemsByOrder[item.order_id].push(item);
       }
