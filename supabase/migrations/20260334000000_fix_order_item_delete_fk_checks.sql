@@ -83,24 +83,57 @@ BEGIN
      WHERE oi.order_id = p_order_id
        AND (v_passed_ids IS NULL OR oi.id != ALL(v_passed_ids))
   LOOP
-    -- 1. Delivery items (hard block — items that have been delivered cannot be removed)
+    -- 1. Delivery items — block only for ACTIVE deliveries, clean up cancelled/voided
     IF v_old_item.quantity_delivered > 0 THEN
       RAISE EXCEPTION 'Cannot remove "%" — % unit(s) have already been delivered. Edit the quantity instead.',
         v_old_item.product_name, v_old_item.quantity_delivered;
     END IF;
 
-    IF EXISTS (SELECT 1 FROM delivery_items WHERE order_item_id = v_old_item.id LIMIT 1) THEN
-      RAISE EXCEPTION 'Cannot remove "%" — it is linked to a delivery. Remove it from the delivery first.',
+    -- Block if linked to an active (non-cancelled, non-voided) delivery
+    IF EXISTS (
+      SELECT 1 FROM delivery_items di
+        JOIN deliveries d ON d.id = di.delivery_id
+       WHERE di.order_item_id = v_old_item.id
+         AND d.status NOT IN ('cancelled', 'voided')
+       LIMIT 1
+    ) THEN
+      RAISE EXCEPTION 'Cannot remove "%" — it is linked to an active delivery. Remove it from the delivery first.',
         v_old_item.product_name;
     END IF;
 
-    -- 2. Return items (hard block)
-    IF EXISTS (SELECT 1 FROM return_items WHERE order_item_id = v_old_item.id LIMIT 1) THEN
+    -- Safe: delete delivery_items from cancelled/voided deliveries
+    DELETE FROM delivery_items
+     WHERE order_item_id = v_old_item.id
+       AND delivery_id IN (
+         SELECT id FROM deliveries WHERE status IN ('cancelled', 'voided')
+       );
+
+    -- 2. Return items — block only for active returns, clean up cancelled/rejected
+    IF EXISTS (
+      SELECT 1 FROM return_items ri
+        JOIN returns r ON r.id = ri.return_id
+       WHERE ri.order_item_id = v_old_item.id
+         AND r.status NOT IN ('cancelled', 'rejected')
+       LIMIT 1
+    ) THEN
       RAISE EXCEPTION 'Cannot remove "%" — it is linked to a return/RMA. Process or cancel the return first.',
         v_old_item.product_name;
     END IF;
 
-    -- 3. Delivery remainders (hard block)
+    -- Safe: NULL out order_item_id on cancelled/rejected return items
+    UPDATE return_items SET order_item_id = NULL
+     WHERE order_item_id = v_old_item.id
+       AND return_id IN (
+         SELECT id FROM returns WHERE status IN ('cancelled', 'rejected')
+       );
+
+    -- 3. Delivery remainders — clean up from cancelled/voided deliveries, block for active
+    DELETE FROM delivery_remainders
+     WHERE order_item_id = v_old_item.id
+       AND delivery_id IN (
+         SELECT id FROM deliveries WHERE status IN ('cancelled', 'voided')
+       );
+
     IF EXISTS (SELECT 1 FROM delivery_remainders WHERE order_item_id = v_old_item.id LIMIT 1) THEN
       RAISE EXCEPTION 'Cannot remove "%" — it has delivery remainder records. Clear remainders first.',
         v_old_item.product_name;
@@ -109,7 +142,7 @@ BEGIN
     -- 4. Order line allocations — safe to delete (they track payment splits per line)
     DELETE FROM order_line_allocations WHERE order_item_id = v_old_item.id;
 
-    -- 5. Invoice items — NULL out the order_item_id for draft invoices, block for posted/paid
+    -- 5. Invoice items — NULL out for draft/voided/cancelled invoices, block for posted/paid
     IF EXISTS (
       SELECT 1 FROM invoice_items ii
         JOIN invoices inv ON inv.id = ii.invoice_id
