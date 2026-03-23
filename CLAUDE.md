@@ -8,7 +8,7 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-03-21)
-- 57 pages, 88+ tables, ~144 RPCs, 217 migrations, 6 Edge Functions
+- 57 pages, 88+ tables, ~144 RPCs, 218 migrations, 6 Edge Functions
 - 1,713 unit tests (110 files) + 82 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
@@ -44,7 +44,7 @@
 
 ### Business Logic
 - NEVER skip delivery confirm→complete flow (scheduled → in_progress → completed)
-- NEVER allow editing delivery item quantities — locked to original order
+- NEVER allow editing delivery items once delivery is in_progress or beyond — items are only editable while status = 'scheduled'
 - NEVER create invoices without an order — always linked via order_id
 - NEVER bypass `check_period_open()` — closed periods block backdated transactions
 - NEVER allow non-admin access to month-end, commissions, or settings
@@ -96,7 +96,7 @@ These rules exist because **migration drift caused 40+ bugs** in March 2026.
 
 ### Delivery: `scheduled → in_progress → completed → cancelled → voided`
 - Two-step: `confirm_delivery()` then `complete_delivery()`
-- Items locked to order quantities — only logistics editable
+- Items editable while scheduled (add/remove/adjust qty); locked once in_progress or beyond
 - Quick Delivery: `create_quick_delivery()` = atomic order + delivery + draft invoice
 
 ### Invoice: `draft → posted → paid → overdue → voided`

@@ -30,7 +30,7 @@
 - `update_order_items()` — update items on an existing order
 - `confirm_delivery()` — scheduled -> in_progress transition
 - `complete_delivery()` — requires in_progress, creates remainder rows for partial deliveries, copies `tote_number` from delivery items
-- `edit_delivery()` — logistics only, items param ignored (locked to order)
+- `edit_delivery()` — logistics always editable; items (add/remove/adjust) editable only when status = 'scheduled'. Validates quantities against order_items.quantity_remaining minus other active deliveries.
 - `cancel_delivery()` — cancels delivery, releases prebooked inventory
 - `batch_cancel_deliveries()` — batch cancel multiple deliveries
 - `batch_reschedule_deliveries()` — batch reschedule deliveries to new dates

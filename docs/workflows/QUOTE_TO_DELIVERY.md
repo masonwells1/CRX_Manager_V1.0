@@ -132,7 +132,7 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 ### Key RPCs
 - `confirm_delivery()` — scheduled -> in_progress
 - `complete_delivery()` — in_progress -> completed (requires in_progress status)
-- `edit_delivery()` — logistics only (date, driver, notes). Items are LOCKED to the order.
+- `edit_delivery()` — logistics (date, driver, notes) always; items editable only when status = 'scheduled'
 - `cancel_delivery()`, `batch_cancel_deliveries()` — cancel one or many
 - `reassign_delivery()` — change the assigned driver
 - `create_followup_delivery()` — create a new delivery for remainder items
@@ -140,8 +140,9 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 - `create_quick_delivery()` — atomic: creates order + delivery + draft invoice in one transaction
 
 ### Rules
-- Delivery items are LOCKED to the original order quantities. You cannot edit item quantities on a delivery.
-- Only logistics (date, driver, notes, priority) can be edited.
+- Delivery items are editable while status = 'scheduled' (add, remove, adjust quantities from the parent order).
+- Once delivery is in_progress or beyond, items are LOCKED — only logistics (date, driver, notes, priority) can be edited.
+- Removed items remain on the order's `quantity_remaining` for future deliveries.
 - Drivers can upload up to 10 photos per delivery (compressed client-side).
 - Drivers can report issues (issue_type + issue_notes fields).
 - Quick deliveries have `is_quick_delivery = true` flag and skip the quote/order flow.
@@ -150,7 +151,7 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 
 ### What can go wrong
 - Trying to complete a delivery that's still in "scheduled" status
-- Editing delivery item quantities (not allowed — items are locked)
+- Editing delivery items after delivery has started (items are locked once in_progress)
 - Completing a delivery when inventory is insufficient (the RPC warns but proceeds)
 - Forgetting to handle delivery remainders after a partial delivery
 

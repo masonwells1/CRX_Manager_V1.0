@@ -1,4 +1,4 @@
-# Migration History (215 migrations)
+# Migration History (218 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -214,3 +214,6 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 208 | 20260333700000 | **Rate limit log RLS** — Deny-all policy on `rate_limit_log` table to prevent unauthorized access |
 | 209 | 20260333800000 | **Drop inventory qty_available CHECK** — Removes `chk_inventory_qty_available` CHECK constraint that blocked the "allow negative inventory" design in `complete_delivery()` |
 | 210 | 20260333900000 | **Mega audit Phase 1 & 2 fixes** — 12 RPC fixes: get_ar_aging (include overdue), get_monthly_summary (commission cents), financial_dashboard_summary (overdue AR + order filters), apply_prepay_to_invoice (update customer balance), cancel_delivery (save idempotency), generate_finance_charges (season >= 10), allocate_payment (audit log), convert_quote_to_order (release holds), create_invoice_from_order (filter duplicates), update_order_items (recalc cost/profit/margin), save_quote (preserve is_planned), void_invoice (cancel commissions). 6 frontend fixes: CSV cents conversion, deleted_at filters, soft delete, regex replace |
+| 211 | 20260334000000 | **Fix order_item delete FK checks** — Adjusts FK constraints for order item deletion |
+| 212 | 20260334100000 | **Fix save_customer_address FK** — Fixes FK validation in save_customer_address RPC |
+| 213 | 20260334200000 | **Edit delivery items when scheduled** — Replaces `edit_delivery()` to honor `p_items` when status = 'scheduled'. Validates quantities against `order_items.quantity_remaining` minus other active deliveries. Blocks item editing on in_progress. Includes overload verification. |

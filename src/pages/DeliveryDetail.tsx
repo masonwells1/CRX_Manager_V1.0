@@ -121,6 +121,11 @@ export default function DeliveryDetail() {
     order_item_id: string; product_id: string; product_name: string;
     quantity: number; max_quantity: number; unit_size: string;
   }>>([]);
+  // Order items available to add (not already on delivery)
+  const [availableOrderItems, setAvailableOrderItems] = useState<Array<{
+    order_item_id: string; product_id: string; product_name: string;
+    max_quantity: number; unit_size: string;
+  }>>([]);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [drivers, setDrivers] = useState<Profile[]>([]);
   const [, setOrderItems] = useState<OrderItem[]>([]);
@@ -372,26 +377,103 @@ export default function DeliveryDetail() {
     ]);
     setAddresses((addrRes.data || []) as CustomerAddress[]);
     setDrivers((driverRes.data || []) as Profile[]);
-    setOrderItems((oiRes.data || []) as OrderItem[]);
+    const allOrderItems = (oiRes.data || []) as OrderItem[];
+    setOrderItems(allOrderItems);
 
-    // Map current items for editing
-    setEditItems(items.map((item) => ({
-      order_item_id: item.order_item_id,
-      product_id: item.product_id,
-      product_name: (item.product as unknown as { product_name: string })?.product_name || 'Unknown',
-      quantity: item.quantity,
-      max_quantity: item.quantity, // Will be calculated below
-      unit_size: item.unit_size || '',
-    })));
+    // For scheduled deliveries, calculate real max quantities
+    // by checking what other active deliveries have scheduled for each order item
+    const isScheduled = delivery.status === 'scheduled';
+    const otherScheduledMap: Record<string, number> = {};
+
+    if (isScheduled) {
+      // Step 1: Find OTHER active delivery IDs for this order
+      const { data: otherDeliveries } = await supabase
+        .from('deliveries')
+        .select('id')
+        .eq('order_id', delivery.order_id)
+        .in('status', ['scheduled', 'in_progress'])
+        .neq('id', delivery.id);
+
+      const otherDelIds = (otherDeliveries || []).map((d) => d.id);
+
+      // Step 2: Fetch delivery_items on those other deliveries
+      if (otherDelIds.length > 0) {
+        const { data: otherDelItems } = await supabase
+          .from('delivery_items')
+          .select('order_item_id, quantity')
+          .in('delivery_id', otherDelIds);
+
+        for (const row of (otherDelItems || []) as Array<{ order_item_id: string; quantity: number }>) {
+          otherScheduledMap[row.order_item_id] = (otherScheduledMap[row.order_item_id] || 0) + Number(row.quantity);
+        }
+      }
+    }
+
+    // Map current items for editing with correct max_quantity
+    const currentItemIds = new Set(items.map((i) => i.order_item_id));
+    setEditItems(items.map((item) => {
+      const oi = allOrderItems.find((o) => o.id === item.order_item_id);
+      const remaining = oi?.quantity_remaining ?? item.quantity;
+      const otherScheduled = otherScheduledMap[item.order_item_id] || 0;
+      // Max = what's remaining on the order minus what other deliveries claim
+      const maxQty = isScheduled ? Math.max(remaining - otherScheduled, 0) : item.quantity;
+      return {
+        order_item_id: item.order_item_id,
+        product_id: item.product_id,
+        product_name: (item.product as unknown as { product_name: string })?.product_name || 'Unknown',
+        quantity: item.quantity,
+        max_quantity: maxQty,
+        unit_size: item.unit_size || '',
+      };
+    }));
+
+    // Build list of order items NOT on this delivery that still have quantity remaining
+    if (isScheduled) {
+      const addable = allOrderItems
+        .filter((oi) => !currentItemIds.has(oi.id) && oi.quantity_remaining > 0)
+        .map((oi) => {
+          const otherScheduled = otherScheduledMap[oi.id] || 0;
+          const maxQty = Math.max(oi.quantity_remaining - otherScheduled, 0);
+          return {
+            order_item_id: oi.id,
+            product_id: oi.product_id,
+            product_name: oi.product_name,
+            max_quantity: maxQty,
+            unit_size: oi.unit_size || '',
+          };
+        })
+        .filter((item) => item.max_quantity > 0);
+      setAvailableOrderItems(addable);
+    } else {
+      setAvailableOrderItems([]);
+    }
 
     setEditing(true);
   };
 
   const saveEdit = async () => {
     if (!delivery || !profile) return;
+
+    // Validate: if scheduled and items changed, must have at least 1 item with qty > 0
+    const isScheduled = delivery.status === 'scheduled';
+    const activeEditItems = editItems.filter((i) => i.quantity > 0);
+    if (isScheduled && activeEditItems.length === 0) {
+      toast('error', 'Delivery must have at least one item. Cancel the delivery instead.');
+      return;
+    }
+
     setSavingEdit(true);
 
-    // Items are locked to the order — only save logistics changes
+    // Build items payload only for scheduled deliveries
+    const itemsPayload = isScheduled
+      ? activeEditItems.map((i) => ({
+          order_item_id: i.order_item_id,
+          product_id: i.product_id,
+          quantity: i.quantity,
+          unit_size: i.unit_size || null,
+        }))
+      : null;
+
     const idemKey = editIdem.getKey();
     const { error } = await supabase.rpc('edit_delivery', {
       p_delivery_id: id!,
@@ -403,6 +485,7 @@ export default function DeliveryDetail() {
       p_delivery_address_id: editAddress || null,
       p_delivery_notes: editNotes || null,
       p_priority: editPriority,
+      p_items: itemsPayload,
       p_performed_by: profile.id,
       p_idempotency_key: idemKey,
     });
@@ -411,7 +494,7 @@ export default function DeliveryDetail() {
       toast('error', sanitizeError(error));
     } else {
       editIdem.resetKey();
-      toast('success', 'Delivery updated');
+      toast('success', isScheduled ? 'Delivery and items updated' : 'Delivery updated');
       setEditing(false);
       fetchDelivery();
     }
@@ -1601,27 +1684,139 @@ export default function DeliveryDetail() {
               placeholder="Special instructions, gate codes, etc."
             />
 
-            {/* Delivery items — locked to order */}
+            {/* Delivery items — editable when scheduled, locked when in_progress */}
             <div>
               <h4 className="text-sm font-medium text-secondary mb-2">Delivery Items</h4>
-              <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-700 mb-3 flex items-start gap-2">
-                <Lock className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="font-medium">Delivery items are locked to the order</p>
-                  <p className="text-xs mt-1">To change quantities, update the order or cancel this delivery and create a new one.</p>
+              {delivery.status !== 'scheduled' && (
+                <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm text-blue-700 mb-3 flex items-start gap-2">
+                  <Lock className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium">Items are locked while delivery is in progress</p>
+                    <p className="text-xs mt-1">Adjust quantities during completion if needed.</p>
+                  </div>
                 </div>
-              </div>
+              )}
+              {delivery.status === 'scheduled' && (
+                <div className="p-3 bg-green-50 rounded-lg border border-green-200 text-sm text-green-700 mb-3 flex items-start gap-2">
+                  <Pencil className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium">You can add, remove, or adjust items</p>
+                    <p className="text-xs mt-1">Removed items will stay on the order for a future delivery.</p>
+                  </div>
+                </div>
+              )}
               <div className="space-y-2">
                 {editItems.map((item) => (
-                  <div key={item.order_item_id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div>
-                      <p className="text-sm font-medium text-nav-dark">{item.product_name}</p>
-                      <p className="text-xs text-secondary">{item.unit_size || 'units'}</p>
+                  <div key={item.order_item_id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-nav-dark truncate">{item.product_name}</p>
+                      <p className="text-xs text-secondary">
+                        {item.unit_size || 'units'}
+                        {delivery.status === 'scheduled' && (
+                          <span className="ml-2 text-secondary">· max {item.max_quantity}</span>
+                        )}
+                      </p>
                     </div>
-                    <p className="text-sm font-mono font-medium text-nav-dark">{item.quantity}</p>
+                    {delivery.status === 'scheduled' ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setEditItems((prev) =>
+                            prev.map((i) =>
+                              i.order_item_id === item.order_item_id
+                                ? { ...i, quantity: Math.max(0, i.quantity - 1) }
+                                : i
+                            )
+                          )}
+                          className="w-8 h-8 rounded-lg border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
+                        >
+                          <Minus className="w-3.5 h-3.5 text-secondary" />
+                        </button>
+                        <input
+                          type="number"
+                          value={item.quantity}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setEditItems((prev) =>
+                              prev.map((i) =>
+                                i.order_item_id === item.order_item_id
+                                  ? { ...i, quantity: Math.max(0, Math.min(val, i.max_quantity)) }
+                                  : i
+                              )
+                            );
+                          }}
+                          className="w-20 text-center px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                          min="0"
+                          max={item.max_quantity}
+                          step="any"
+                        />
+                        <button
+                          onClick={() => setEditItems((prev) =>
+                            prev.map((i) =>
+                              i.order_item_id === item.order_item_id
+                                ? { ...i, quantity: Math.min(i.quantity + 1, i.max_quantity) }
+                                : i
+                            )
+                          )}
+                          className="w-8 h-8 rounded-lg border border-gray-200 flex items-center justify-center hover:bg-gray-100 transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5 text-secondary" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            // Move item back to available list
+                            setAvailableOrderItems((prev) => [
+                              ...prev,
+                              {
+                                order_item_id: item.order_item_id,
+                                product_id: item.product_id,
+                                product_name: item.product_name,
+                                max_quantity: item.max_quantity,
+                                unit_size: item.unit_size,
+                              },
+                            ]);
+                            setEditItems((prev) => prev.filter((i) => i.order_item_id !== item.order_item_id));
+                          }}
+                          className="w-8 h-8 rounded-lg border border-red-200 flex items-center justify-center hover:bg-red-50 transition-colors"
+                          title="Remove from delivery"
+                        >
+                          <Ban className="w-3.5 h-3.5 text-red-500" />
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-sm font-mono font-medium text-nav-dark">{item.quantity}</p>
+                    )}
                   </div>
                 ))}
               </div>
+
+              {/* Add item from order — only for scheduled deliveries */}
+              {delivery.status === 'scheduled' && availableOrderItems.length > 0 && (
+                <div className="mt-3">
+                  <label className="block text-xs font-medium text-secondary mb-1">Add item from order</label>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const oiId = e.target.value;
+                      if (!oiId) return;
+                      const toAdd = availableOrderItems.find((a) => a.order_item_id === oiId);
+                      if (!toAdd) return;
+                      setEditItems((prev) => [
+                        ...prev,
+                        { ...toAdd, quantity: toAdd.max_quantity },
+                      ]);
+                      setAvailableOrderItems((prev) => prev.filter((a) => a.order_item_id !== oiId));
+                    }}
+                    className="w-full px-3 py-2 text-sm text-nav-dark bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  >
+                    <option value="">Select a product to add...</option>
+                    {availableOrderItems.map((a) => (
+                      <option key={a.order_item_id} value={a.order_item_id}>
+                        {a.product_name} — up to {a.max_quantity} {a.unit_size || 'units'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-3 pt-2">

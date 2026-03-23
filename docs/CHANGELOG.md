@@ -4,6 +4,30 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-23 — Edit Scheduled Delivery Items
+
+### Summary
+Added the ability to edit delivery items (add, remove, adjust quantities) while a delivery is still in the `scheduled` status. Previously, items were permanently locked to the original order, requiring cancellation and recreation if any product couldn't be delivered. Now sales reps can quickly swap out unavailable products without losing the rest of the delivery.
+
+### How It Works
+- **Scheduled deliveries**: Full item editing — +/- quantity buttons, remove item (red X), "Add item from order" dropdown
+- **In-progress deliveries**: Items remain locked (no change to existing behavior)
+- **Removed items**: Stay on the order's `quantity_remaining` and appear automatically for future deliveries
+- **Validation**: Backend validates quantities against `order_items.quantity_remaining` minus what other active deliveries have scheduled
+
+### Changed Files
+- **`supabase/migrations/20260334200000_edit_delivery_items_when_scheduled.sql`** — Replaces `edit_delivery()` RPC to process `p_items` when scheduled
+- **`src/pages/DeliveryDetail.tsx`** — Edit mode now shows interactive item controls for scheduled deliveries
+- **`CLAUDE.md`** — Updated Hard Red Line and delivery lifecycle to reflect new rule
+- **`docs/workflows/SAFE_DEVELOPMENT_RULES.md`** — Updated business logic rule
+- **`docs/workflows/QUOTE_TO_DELIVERY.md`** — Updated delivery rules section
+
+### Business Rule Change
+- **Old rule**: "NEVER allow editing delivery item quantities — locked to original order"
+- **New rule**: "Items editable while scheduled; locked once in_progress or beyond"
+
+---
+
 ## 2026-03-21 — Order Print Feature: Order Summary + Pick List PDFs
 
 ### Summary

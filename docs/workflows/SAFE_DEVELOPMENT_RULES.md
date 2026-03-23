@@ -57,7 +57,7 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 | Rule | Consequence of breaking |
 |------|------------------------|
 | NEVER skip delivery confirm->complete flow | Must go scheduled -> in_progress -> completed. Skipping breaks inventory. |
-| NEVER allow editing delivery item quantities | Items are locked to original order. Only logistics (date, driver) editable. |
+| NEVER allow editing delivery items once in_progress or beyond | Items are only editable while status = 'scheduled'. Once started, items are locked. |
 | NEVER create invoices without an order | Invoices always link to an order via order_id. |
 | NEVER bypass `check_period_open()` | Closed periods prevent backdated transactions. Bypassing corrupts financials. |
 | NEVER allow non-admin access to month-end, commissions, or settings | These are admin-only features. |
