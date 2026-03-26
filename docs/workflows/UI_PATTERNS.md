@@ -40,7 +40,7 @@ const MyNewPage = lazy(() => import('./pages/MyNewPage'));
 
 ---
 
-## Existing Pages (56 total)
+## Existing Pages (57 total)
 
 Before creating a new page, check that it doesn't already exist. Here are all current pages grouped by area:
 
@@ -112,14 +112,14 @@ async function updateCustomer(id: string, updates: Partial<Customer>) {
 
   checkMutationResult(result, 'Update customer');
 
-  // Log the activity
-  logActivity(
-    'customer_updated',
-    `Updated ${updates.farm_name}`,
-    currentUser.id,
-    'customer',
-    id
-  );
+  // Log the activity (object param — NOT positional args)
+  await logActivity({
+    event: 'customer_updated',
+    description: `Updated ${updates.farm_name}`,
+    performedBy: currentUser.id,
+    entityType: 'customer',
+    entityId: id
+  });
 }
 ```
 

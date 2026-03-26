@@ -28,7 +28,7 @@ There is also a **Quick Delivery** shortcut that creates an order + delivery + d
 
 ### Status transitions
 ```
-draft -> sent -> revised -> accepted -> declined -> expired
+draft -> sent -> revised -> accepted -> declined -> expired -> cancelled
 ```
 - **draft**: Initial state. Can be edited freely.
 - **sent**: Quote was sent to the customer. A `quote_versions` snapshot is created.
@@ -68,7 +68,7 @@ draft -> sent -> revised -> accepted -> declined -> expired
 
 ### Status transitions
 ```
-confirmed -> partially_fulfilled -> fulfilled -> cancelled
+confirmed -> partially_fulfilled -> fulfilled -> cancelled -> voided
 ```
 - **confirmed**: Order is active and ready for delivery.
 - **partially_fulfilled**: Some items have been delivered (quantity_remaining > 0 for some items).
@@ -170,7 +170,7 @@ You **CANNOT** skip from scheduled directly to completed. The in_progress step i
 
 ### Status transitions
 ```
-draft -> posted -> paid -> overdue -> voided
+draft -> unposted -> posted -> paid -> overdue -> voided -> cancelled
 ```
 - **draft**: Created from order or quick delivery. Can be edited.
 - **posted**: Locked. Starts AR aging. Amounts cannot be changed.

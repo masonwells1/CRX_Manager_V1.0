@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-26 — Full Documentation Sweep
+
+### Summary
+Systematic audit and fix of all project documentation. Compared every doc file against the actual codebase and fixed all discrepancies found.
+
+### Fixes Applied
+- **CLAUDE.md** — Edge Functions 6→7 (added `reset-user-password`), updated date, fixed E2E count (82→83), added missing statuses to all lifecycles (quote: `cancelled`, order: `voided`, invoice: `unposted`/`cancelled`), corrected "Tables WITHOUT updated_at" list (removed 8 tables that actually have the column), updated `orders.total_paid`/`balance_due` note from "DEPRECATED" to "DROPPED"
+- **UI_PATTERNS.md** — Fixed `logActivity()` example from wrong positional args to correct object parameter format, updated page count (56→57)
+- **QUOTE_TO_DELIVERY.md** — Added missing statuses: quote `cancelled`, order `voided`, invoice `unposted` and `cancelled`
+- **SAFE_DEVELOPMENT_RULES.md** — Updated page count (56→57)
+- **migration-history.md** — Added 6 missing entries (#198-203), renumbered entries #204-219 to match
+- **project-details.md** — Updated page count (48→57)
+- **TEST_COVERAGE_ANALYSIS.md** — Updated test counts (104→110 files, 1629→1713 tests, 82→83 E2E)
+
+---
+
 ## 2026-03-26 — Fix TypeScript/DB Type Mismatches (A16)
 
 ### Summary

@@ -15,7 +15,7 @@ These are mandatory safety rules for anyone (human or AI) making changes to CRX 
 
 ### 2. Research before coding
 - Search the codebase for existing patterns before writing new code
-- Check if similar functionality already exists (there are 56 pages — don't recreate one)
+- Check if similar functionality already exists (there are 57 pages — don't recreate one)
 - Look at how the existing code handles the same type of operation
 
 ### 3. Plan before building

@@ -7,9 +7,9 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-03-21)
-- 57 pages, 88+ tables, ~144 RPCs, 218 migrations, 6 Edge Functions
-- 1,713 unit tests (110 files) + 82 E2E spec files, all passing
+## Current State (2026-03-26)
+- 57 pages, 88+ tables, ~144 RPCs, 218 migrations, 7 Edge Functions
+- 1,713 unit tests (110 files) + 83 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 - All RPC data usage wrapped with `assertRpcResult()` — enforced by ESLint + safety-net test
@@ -85,13 +85,13 @@ These rules exist because **migration drift caused 40+ bugs** in March 2026.
 
 ## Business Logic Lifecycles
 
-### Quote: `draft → sent → revised → accepted → declined → expired`
+### Quote: `draft → sent → revised → accepted → declined → expired → cancelled`
 - `is_planned` reserves inventory via holds (linked via `source_id`)
 - Accepted quotes convert via `convert_quote_to_order()` — holds released
 - Declined/expired auto-release holds AND restore `quantity_available`
 
-### Order: `confirmed → partially_fulfilled → fulfilled → cancelled`
-- AR derived from linked invoices (`orders.total_paid`/`balance_due` are DEPRECATED)
+### Order: `confirmed → partially_fulfilled → fulfilled → cancelled → voided`
+- AR derived from linked invoices (use `invoices.balance_cents` — `orders.total_paid`/`balance_due` columns were dropped)
 - Commission records created per order per recipient
 
 ### Delivery: `scheduled → in_progress → completed → cancelled → voided`
@@ -99,7 +99,7 @@ These rules exist because **migration drift caused 40+ bugs** in March 2026.
 - Items editable while scheduled (add/remove/adjust qty); locked once in_progress or beyond
 - Quick Delivery: `create_quick_delivery()` = atomic order + delivery + draft invoice
 
-### Invoice: `draft → posted → paid → overdue → voided`
+### Invoice: `draft → unposted → posted → paid → overdue → voided → cancelled`
 - `post_invoice()` calls `check_period_open()` — rejects if period closed
 - `balance_cents` = single source of truth for AR (GENERATED ALWAYS column)
 - All changes logged to `financial_audit_log`
@@ -140,10 +140,11 @@ checkMutationResult(result, 'Update context');
 
 ---
 
-## Edge Functions (6 in `supabase/functions/`)
+## Edge Functions (7 in `supabase/functions/`)
 - **create-user** — Admin-only user creation
 - **process-blend-ticket** — OCR via Google Vision AI
 - **process-document** — Document processing
+- **reset-user-password** — Admin-only password reset
 - **seed-admin** — One-time admin setup
 - **send-email** — Resend API, JWT auth, idempotency, PDF attachments
 - **setup-blend-tickets-storage** — Storage bucket config
@@ -170,15 +171,13 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 - `invoice_items.extended_cents` (not `line_total_cents`)
 - `create_direct_order` returns `{ order_id }` not `{ id }`
 - `complete_delivery` requires `p_signed_by text`
-- `orders.total_paid` / `orders.balance_due` — DEPRECATED, use `invoices.balance_cents`
+- `orders.total_paid` / `orders.balance_due` — DROPPED (use `invoices.balance_cents`)
 
 ### Tables WITHOUT `updated_at` (DO NOT SET updated_at on these!)
 These tables have NO `updated_at` column. Setting it in an UPDATE will crash the RPC:
-`commissions`, `purchase_order_items`, `payments`, `write_offs`, `delivery_items`,
-`order_items`, `quote_items`, `return_items`, `finance_charges`, `prepay_applications`,
-`cycle_counts`, `cycle_count_items`, `activity_feed`, `financial_audit_log`,
-`idempotency_keys`, `receiving_records`, `inventory_transactions`,
-`invoice_line_allocations`, `commission_payment_items`
+`payments`, `write_offs`, `delivery_items`, `finance_charges`, `prepay_applications`,
+`cycle_counts`, `cycle_count_items`, `financial_audit_log`,
+`idempotency_keys`, `receiving_records`, `commission_payment_items`
 
 **Rule:** ALWAYS check `information_schema.columns` before referencing `updated_at` in any UPDATE statement.
 

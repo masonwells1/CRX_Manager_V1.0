@@ -17,7 +17,7 @@ A business management system for **Crop RX Solutions**, an agricultural product 
 | **Driver** | Assigned deliveries, confirm/complete with signature/photos, quick deliveries, issue reporting |
 | **Applicator** | Assigned jobs, record applied info (weather, gallons), view customers/products/fields/recipes |
 
-## Feature Map (48 pages)
+## Feature Map (57 pages)
 
 ### Core Business
 - **Customers** — Farm accounts, tiered pricing (1-4), addresses, credit limits, finance charges, season summary, bulk import
