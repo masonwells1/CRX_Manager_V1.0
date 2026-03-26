@@ -74,8 +74,8 @@ Detailed doc: `docs/plans/2026-03-01-gap-remediation-handoff.md`
 | A13 | Replace all bare confirm() with ConfirmModal | 1-2 hrs | ✅ Done (Mar 17 — 9 pages, 16 calls) |
 | A14 | Wire idempotency keys to all frontend RPCs | 1-2 hrs | ✅ Done (Mar 17 — 15 RPCs across 6 files) |
 | A15 | Add logActivity() to ~50 mutation handlers | 3-4 hrs | TODO |
-| A16 | Fix TypeScript/DB type mismatches (6 critical) | 1 hr | TODO |
-| A17 | Add deny-all RLS policy to rate_limit_log | 5 min | TODO |
+| A16 | Fix TypeScript/DB type mismatches (6 critical) | 1 hr | ✅ Done (4 fixed prior sessions, 2 fixed Mar 26 — removed dropped `balance_due`/`total_paid` from Order type) |
+| A17 | Add deny-all RLS policy to rate_limit_log | 5 min | ✅ Done (migration 20260333700000) |
 
 ---
 

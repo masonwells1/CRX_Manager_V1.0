@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-26 — Fix TypeScript/DB Type Mismatches (A16)
+
+### Summary
+Removed deprecated `balance_due` and `total_paid` fields from the `Order` TypeScript interface. These columns were dropped from the database in migration `20260332100000` but the TypeScript type still included them. Also confirmed that 4 of the original 6 reported mismatches (WriteOff.reversed_by, InvoiceLineAllocation.invoice_id, Commission.season nullable) had already been fixed in prior sessions. Updated ROADMAP to mark A16 and A17 as complete.
+
+### Changes
+- `src/types/index.ts` — Removed `balance_due: number` and `total_paid: number` from `Order` interface
+- `docs/ROADMAP.md` — Marked A16 and A17 as Done
+
+---
+
 ## 2026-03-23 — Edit Scheduled Delivery Items
 
 ### Summary

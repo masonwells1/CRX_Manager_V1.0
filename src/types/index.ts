@@ -311,8 +311,6 @@ export interface Order {
   created_by: string | null;
   created_at: string;
   updated_at: string;
-  balance_due: number;
-  total_paid: number;
   customer?: Customer;
 }
 
