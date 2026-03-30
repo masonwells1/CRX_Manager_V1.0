@@ -15,8 +15,9 @@ import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import type { Field } from '../types';
-import MapContainer from '../components/map/MapContainer';
-import FieldMarkers from '../components/map/FieldMarkers';
+import CRXMap from '../components/map/CRXMap';
+import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
+import FieldMarkerLayer from '../components/map/FieldMarkerLayer';
 import BulkFieldImport from '../components/fields/BulkFieldImport';
 
 type FieldWithCustomer = Field & { customer_name: string };
@@ -29,6 +30,8 @@ export default function Fields() {
   const [loading, setLoading] = useState(true);
   const [cropFilter, setCropFilter] = useState('');
   const [countyFilter, setCountyFilter] = useState('');
+  const [customerFilter, setCustomerFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('active');
   const [viewMode, setViewMode] = useState<'list' | 'map'>('list');
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -40,6 +43,7 @@ export default function Fields() {
   // Collect unique values for filter dropdowns
   const cropTypes = [...new Set(fields.map((f) => f.crop_type).filter(Boolean))] as string[];
   const counties = [...new Set(fields.map((f) => f.county).filter(Boolean))] as string[];
+  const customerNames = [...new Set(fields.map((f) => f.customer_name).filter(Boolean))].sort() as string[];
 
   const fetchFields = useCallback(async () => {
     const { data, error } = await supabase.rpc('get_fields_with_geojson');
@@ -66,8 +70,14 @@ export default function Fields() {
   const filtered = fields.filter((f) => {
     if (cropFilter && f.crop_type !== cropFilter) return false;
     if (countyFilter && f.county !== countyFilter) return false;
+    if (customerFilter && f.customer_name !== customerFilter) return false;
+    if (statusFilter === 'active' && !f.is_active) return false;
+    if (statusFilter === 'inactive' && f.is_active) return false;
     return true;
   });
+
+  const totalAcres = filtered.reduce((sum, f) => sum + (f.total_acres || 0), 0);
+  const withBoundary = filtered.filter((f) => f.boundary_geojson).length;
 
   const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
     useRowSelection({ data: filtered, getId: (f) => f.id });
@@ -206,6 +216,8 @@ export default function Fields() {
 
   const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
 
+  const filterSelect = "px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green";
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center flex-wrap gap-2">
@@ -254,44 +266,44 @@ export default function Fields() {
         </div>
       </div>
 
+      {/* Stats Bar */}
+      <div className="flex gap-4 text-sm text-secondary">
+        <span><strong className="text-nav-dark">{filtered.length}</strong> fields</span>
+        <span><strong className="text-nav-dark">{totalAcres.toLocaleString()}</strong> total acres</span>
+        <span><strong className="text-nav-dark">{withBoundary}</strong> with boundaries</span>
+      </div>
+
       {viewMode === 'map' ? (
         <Card>
           {/* Filters for map view */}
-          <div className="flex gap-2 mb-4">
-            <select
-              value={cropFilter}
-              onChange={(e) => setCropFilter(e.target.value)}
-              aria-label="Filter by crop"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">All Crops</option>
-              {cropTypes.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
+          <div className="flex gap-2 mb-4 flex-wrap">
+            <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} aria-label="Filter by customer" className={filterSelect}>
+              <option value="">All Customers</option>
+              {customerNames.map((c) => (<option key={c} value={c}>{c}</option>))}
             </select>
-            <select
-              value={countyFilter}
-              onChange={(e) => setCountyFilter(e.target.value)}
-              aria-label="Filter by county"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
+            <select value={cropFilter} onChange={(e) => setCropFilter(e.target.value)} aria-label="Filter by crop" className={filterSelect}>
+              <option value="">All Crops</option>
+              {cropTypes.map((c) => (<option key={c} value={c}>{c}</option>))}
+            </select>
+            <select value={countyFilter} onChange={(e) => setCountyFilter(e.target.value)} aria-label="Filter by county" className={filterSelect}>
               <option value="">All Counties</option>
-              {counties.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
+              {counties.map((c) => (<option key={c} value={c}>{c}</option>))}
+            </select>
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as 'all' | 'active' | 'inactive')} aria-label="Filter by status" className={filterSelect}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+              <option value="all">All Status</option>
             </select>
           </div>
 
-          <MapContainer className="h-[500px] w-full rounded-lg overflow-hidden">
-            <FieldMarkers
-              fields={filtered}
-              onFieldClick={(fieldId) => navigate(`/fields/${fieldId}`)}
-            />
-          </MapContainer>
+          <CRXMap className="h-[500px] w-full rounded-lg overflow-hidden" showLayerToggle showLocateMe>
+            <FieldBoundaryLayer fields={filtered} />
+            <FieldMarkerLayer fields={filtered} onFieldClick={(fieldId) => navigate(`/fields/${fieldId}/dashboard`)} />
+          </CRXMap>
 
-          {filtered.some((f) => f.centroid_geojson) ? (
+          {filtered.some((f) => f.centroid_geojson || f.boundary_geojson) ? (
             <p className="text-xs text-secondary mt-2">
-              Showing {filtered.filter((f) => f.centroid_geojson).length} of {filtered.length} fields on map. Fields without location data are not shown.
+              Showing {withBoundary} boundar{withBoundary === 1 ? 'y' : 'ies'} and {filtered.filter((f) => f.centroid_geojson && !f.boundary_geojson).length} marker(s) of {filtered.length} fields.
             </p>
           ) : (
             <p className="text-xs text-secondary mt-2">
@@ -308,7 +320,7 @@ export default function Fields() {
               searchable
               searchPlaceholder="Search fields..."
               searchKeys={['field_name', 'customer_name', 'county', 'legal_description', 'crop_type']}
-              onRowClick={(row) => navigate(`/fields/${row.id}`)}
+              onRowClick={(row) => navigate(`/fields/${row.id}/dashboard`)}
               emptyTitle="No fields yet"
               emptyDescription="Add your first field to start tracking farm locations"
               emptyAction={
@@ -319,27 +331,22 @@ export default function Fields() {
               loading={loading}
               filters={
                 <>
-                  <select
-                    value={cropFilter}
-                    onChange={(e) => setCropFilter(e.target.value)}
-                    aria-label="Filter by crop"
-                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                  >
-                    <option value="">All Crops</option>
-                    {cropTypes.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
+                  <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} aria-label="Filter by customer" className={filterSelect}>
+                    <option value="">All Customers</option>
+                    {customerNames.map((c) => (<option key={c} value={c}>{c}</option>))}
                   </select>
-                  <select
-                    value={countyFilter}
-                    onChange={(e) => setCountyFilter(e.target.value)}
-                    aria-label="Filter by county"
-                    className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                  >
+                  <select value={cropFilter} onChange={(e) => setCropFilter(e.target.value)} aria-label="Filter by crop" className={filterSelect}>
+                    <option value="">All Crops</option>
+                    {cropTypes.map((c) => (<option key={c} value={c}>{c}</option>))}
+                  </select>
+                  <select value={countyFilter} onChange={(e) => setCountyFilter(e.target.value)} aria-label="Filter by county" className={filterSelect}>
                     <option value="">All Counties</option>
-                    {counties.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
+                    {counties.map((c) => (<option key={c} value={c}>{c}</option>))}
+                  </select>
+                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as 'all' | 'active' | 'inactive')} aria-label="Filter by status" className={filterSelect}>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                    <option value="all">All Status</option>
                   </select>
                   {canBulkAction && filtered.length > 0 && (
                     <button
