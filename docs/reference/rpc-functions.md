@@ -75,6 +75,11 @@
 - `link_blend_ticket_to_order()` — link a blend ticket to an existing order
 - `unlink_blend_ticket_from_order()` — remove blend ticket / order linkage
 
+## Blend Ticket Phase 1
+- `batch_approve_blend_tickets(p_ticket_ids, p_approved_by, p_idempotency_key)` — bulk approve completed+unreviewed tickets
+- `save_blend_ticket_fields(p_blend_ticket_id, p_fields, p_performed_by, p_idempotency_key)` — save per-field application assignments (delete+reinsert)
+- `check_duplicate_blend_ticket(p_ticket_number, p_ticket_date)` — check for duplicate ticket by number+date
+
 ## Returns & Credits
 - `approve_return()` — approve a return request
 - `receive_return()` — receive returned items, update inventory

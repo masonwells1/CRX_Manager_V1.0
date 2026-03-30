@@ -54,6 +54,7 @@
 - `blend_tickets` - OCR ticket records (ticket_number, status, review_status, ocr_confidence_score, raw_ocr_text)
 - `blend_ticket_products` - Extracted products (product_name, quantity, confidence_score, manually_corrected)
 - `blend_ticket_images` - Uploaded images (storage_path, image_url, file_size)
+- `blend_ticket_fields` - Per-field application tracking (field_id, customer_id, planned_acres, actual_acres, applied_at)
 - `ocr_processing_queue` - Background queue (status, priority, retry_count)
 
 ## Collaboration
@@ -181,6 +182,7 @@
 | blend_recipes | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin |
 | blend_recipe_items | All authenticated | Admin / Sales Rep | Admin / Sales Rep | Admin / Sales Rep |
 | blend_ticket_to_order_items | All authenticated | Admin / Sales Rep | - | Admin |
+| blend_ticket_fields | All authenticated | All authenticated | All authenticated | All authenticated |
 | warehouses | All authenticated | Admin | Admin | Admin |
 | cycle_counts | Admin | Admin | Admin | Admin |
 | cycle_count_items | Admin | Admin | Admin | Admin |

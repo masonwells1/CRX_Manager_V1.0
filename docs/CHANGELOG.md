@@ -4,6 +4,39 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-29 — Blend Ticket Phase 1: OCR Bridge
+
+### Summary
+Phase 1 implementation for the blend ticket system — aligning the existing schema with the full lifecycle data model, adding multi-field/multi-customer support, configurable OCR thresholds, and several UX improvements for the OCR review workflow.
+
+### Schema Changes (6 migrations)
+- **app_settings** — Extended with `description` and `created_at` columns; seeded OCR confidence threshold
+- **blend_ticket_fields** — New table for per-field application tracking with multi-customer billing support
+- **blend_tickets** — Added `applicator_id` (FK→profiles), `vehicle_id` (FK→vehicles), `source` enum
+- **batch_approve_blend_tickets** — New RPC for bulk ticket approval
+- **check_duplicate_blend_ticket** — New RPC for duplicate detection
+- **save_blend_ticket_fields** — New RPC for saving field assignments (pending subagent)
+
+### Frontend Changes
+- **Configurable OCR thresholds** — `useOCRThresholds` hook + `OCRThresholdSettings` component on Settings page; replaces hardcoded 70/50 values
+- **Per-field confidence badges** — Color-coded dots (green/yellow/red) next to each product's confidence score
+- **Raw OCR text viewer** — Collapsible `<details>` section showing raw Google Vision output
+- **Re-process OCR button** — Allows re-running OCR on ticket images with ConfirmModal
+- **Duplicate detection** — Yellow warning banner when another ticket with same number+date exists
+- **Auto-suggest order match** — Blue info banner suggesting matching confirmed orders based on shared products
+- **Batch approve** — Checkbox selection + batch approve from list page (subagent)
+- **Multi-field entry UI** — Field assignments with customer override and planned acres (subagent)
+
+### Types
+- Added `BlendTicketSource`, `BlendTicketField`, extended `AppSetting` and `BlendTicket` interfaces
+
+### Context
+- All 10 open questions from the 2026-03-23 brainstorm answered
+- Key decisions: no mixer role (all roles can mix), single ticket with per-field customer assignments (Q6-B), skip Chem Man detection for Phase 1
+- Full plan: `docs/plans/2026-03-29-blend-ticket-phase1-implementation.md`
+
+---
+
 ## 2026-03-26 — Full Documentation Sweep
 
 ### Summary

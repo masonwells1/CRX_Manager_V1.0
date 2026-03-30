@@ -1,4 +1,4 @@
-# Migration History (218 migrations)
+# Migration History (224 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -223,3 +223,8 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 217 | 20260334000000 | **Fix order_item delete FK checks** — Adjusts FK constraints for order item deletion |
 | 218 | 20260334100000 | **Fix save_customer_address FK** — Fixes FK validation in save_customer_address RPC |
 | 219 | 20260334200000 | **Edit delivery items when scheduled** — Replaces `edit_delivery()` to honor `p_items` when status = 'scheduled'. Validates quantities against `order_items.quantity_remaining` minus other active deliveries. Blocks item editing on in_progress. Includes overload verification. |
+| 220 | 20260334300000 | **App settings OCR thresholds** — Extends `app_settings` with `description` and `created_at` columns. Seeds `ocr_confidence_threshold` setting with `auto_approve=85, needs_review=50`. |
+| 221 | 20260334400000 | **Blend ticket fields table** — Creates `blend_ticket_fields` for per-field application tracking. Supports multi-field loads, multi-customer billing (Q6-B), and planned vs actual acres. RLS enabled. |
+| 222 | 20260334500000 | **Blend tickets Phase 1 columns** — Adds `applicator_id` (FK→profiles), `vehicle_id` (FK→vehicles), `source` ('ocr'\|'manual'\|'digital') to `blend_tickets`. Indexed. |
+| 223 | 20260334600000 | **Batch approve blend tickets** — `batch_approve_blend_tickets(p_ticket_ids, p_approved_by, p_idempotency_key)` RPC. Bulk approves completed+unreviewed tickets. |
+| 224 | 20260334800000 | **Duplicate blend ticket detection** — `check_duplicate_blend_ticket(p_ticket_number, p_ticket_date)` RPC. Returns matching tickets for duplicate warning. |

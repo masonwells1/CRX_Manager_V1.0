@@ -712,7 +712,9 @@ export interface AppSetting {
   id: string;
   setting_key: string;
   setting_value: string;
+  description: string | null;
   updated_by: string | null;
+  created_at: string;
   updated_at: string;
 }
 
@@ -738,6 +740,7 @@ export type BlendTicketStatus = 'pending' | 'processing' | 'completed' | 'failed
 export type BlendTicketReviewStatus = 'unreviewed' | 'approved' | 'rejected';
 export type BlendTicketOrderLinkStatus = 'unlinked' | 'linked';
 export type BlendTicketPaymentStatus = 'unbilled' | 'billed' | 'prepaid' | 'no_charge';
+export type BlendTicketSource = 'ocr' | 'manual' | 'digital';
 export type OCRQueueStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 export interface BlendTicket {
@@ -770,6 +773,10 @@ export interface BlendTicket {
   total_volume_unit: string | null;
   season: number | null;
   deleted_at: string | null;
+  // Phase 1: Entity FKs (alongside text fields for OCR compat)
+  applicator_id: string | null;
+  vehicle_id: string | null;
+  source: BlendTicketSource;
   // Phase 3: Order linkage
   field_id: string | null;
   salesman_id: string | null;
@@ -782,8 +789,11 @@ export interface BlendTicket {
   customer?: Customer;
   field?: Field;
   salesman?: Profile;
+  applicator?: Profile;
+  vehicle?: Vehicle;
   images?: BlendTicketImage[];
   products?: BlendTicketProduct[];
+  blend_ticket_fields?: BlendTicketField[];
 }
 
 export interface BlendTicketProduct {
@@ -829,6 +839,25 @@ export interface BlendTicketToOrderItem {
   // Joined relations
   order?: Order;
   order_item?: OrderItem;
+}
+
+// Phase 1: Per-field tracking for blend tickets
+export interface BlendTicketField {
+  id: string;
+  blend_ticket_id: string;
+  field_id: string;
+  customer_id: string | null;
+  planned_acres: number | null;
+  actual_acres: number | null;
+  applied_at: string | null;
+  applied_by: string | null;
+  notes: string | null;
+  sort_order: number;
+  created_at: string;
+  // Joined
+  field?: Field;
+  customer?: Customer;
+  applied_by_profile?: Profile;
 }
 
 // Phase 4A: Saved Blend Recipes
