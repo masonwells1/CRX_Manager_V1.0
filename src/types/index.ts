@@ -1227,6 +1227,61 @@ export interface FieldBillingDefault {
   customer?: Customer;
 }
 
+// Field Dashboard (from get_field_dashboard RPC)
+export interface FieldDashboardResponse {
+  field: Field & {
+    customer_name: string;
+    billing_defaults: (FieldBillingDefault & { customer_name: string })[];
+  };
+  season_summary: FieldSeasonSummary;
+  application_records: FieldApplicationRecord[];
+  recent_activity: FieldActivityEntry[];
+}
+
+export interface FieldSeasonSummary {
+  total_applications: number;
+  total_acres_treated: number;
+  distinct_products: number;
+  season: number;
+}
+
+export interface FieldApplicationRecord {
+  id: string;
+  record_number: string;
+  application_date: string;
+  application_time: string | null;
+  total_acres: number | null;
+  total_volume: number | null;
+  total_volume_unit: string | null;
+  product_data: Array<{
+    product_name?: string;
+    product_id?: string;
+    rate?: number;
+    rate_unit?: string;
+    quantity?: number;
+    unit?: string;
+  }>;
+  weather_conditions: {
+    wind_speed?: number;
+    wind_direction?: string;
+    temperature?: number;
+    humidity?: number;
+  } | null;
+  notes: string | null;
+  source_type: 'job' | 'blend_ticket';
+  source_id: string;
+  applicator_name: string;
+  vehicle_name: string | null;
+}
+
+export interface FieldActivityEntry {
+  id: string;
+  event_type: string;
+  description: string;
+  performed_by_name: string;
+  created_at: string;
+}
+
 // Field Import
 export interface ParsedImportField {
   index: number;

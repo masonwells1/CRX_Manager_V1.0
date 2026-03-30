@@ -39,6 +39,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 // Payments.tsx removed — PaymentAllocation is now the sole payment page at /payments
 const Fields = lazy(() => import('./pages/Fields'));
 const FieldDetail = lazy(() => import('./pages/FieldDetail'));
+const FieldDashboard = lazy(() => import('./pages/FieldDashboard'));
 const BlendTickets = lazy(() => import('./pages/BlendTickets').then(m => ({ default: m.BlendTickets })));
 const BlendTicketDetail = lazy(() => import('./pages/BlendTicketDetail').then(m => ({ default: m.BlendTicketDetail })));
 const Invoices = lazy(() => import('./pages/Invoices'));
@@ -161,6 +162,7 @@ const router = createBrowserRouter([
           { path: 'customers/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><CustomerDetail /></ProtectedRoute> },
           { path: 'fields', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Fields /></ProtectedRoute> },
           { path: 'fields/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldDetail /></ProtectedRoute> },
+          { path: 'fields/:id/dashboard', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldDashboard /></ProtectedRoute> },
           { path: 'quotes', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Quotes /></ProtectedRoute> },
           { path: 'quotes/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><QuoteBuilder /></ProtectedRoute> },
           { path: 'quotes/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><QuoteBuilder /></ProtectedRoute> },

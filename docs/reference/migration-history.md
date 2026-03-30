@@ -228,3 +228,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 222 | 20260334500000 | **Blend tickets Phase 1 columns** — Adds `applicator_id` (FK→profiles), `vehicle_id` (FK→vehicles), `source` ('ocr'\|'manual'\|'digital') to `blend_tickets`. Indexed. |
 | 223 | 20260334600000 | **Batch approve blend tickets** — `batch_approve_blend_tickets(p_ticket_ids, p_approved_by, p_idempotency_key)` RPC. Bulk approves completed+unreviewed tickets. |
 | 224 | 20260334800000 | **Duplicate blend ticket detection** — `check_duplicate_blend_ticket(p_ticket_number, p_ticket_date)` RPC. Returns matching tickets for duplicate warning. |
+| 225 | 20260330032232 | **get_field_dashboard RPC** — Returns comprehensive JSONB for field dashboard: field data with customer/billing defaults/geometry, season summary stats, application records with applicator/vehicle/weather, and recent activity feed. |

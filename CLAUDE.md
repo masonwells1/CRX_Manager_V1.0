@@ -8,7 +8,7 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-03-29)
-- 57 pages, 89+ tables, ~146 RPCs, 224 migrations, 7 Edge Functions
+- 58 pages, 89+ tables, ~147 RPCs, 225 migrations, 7 Edge Functions
 - 1,713 unit tests (110 files) + 83 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest

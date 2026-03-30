@@ -245,3 +245,6 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 
 ### Blend Ticket Helpers
 - `update_blend_ticket_billing_status()` — update billing status on blend ticket changes
+
+### Field Dashboard
+- `get_field_dashboard(p_field_id, p_season)` — returns JSONB: field data + season summary + application records + recent activity
