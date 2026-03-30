@@ -1228,11 +1228,17 @@ export interface FieldBillingDefault {
 }
 
 // Field Dashboard (from get_field_dashboard RPC)
+export interface FieldDashboardBillingDefault extends FieldBillingDefault {
+  customer_name: string;
+}
+
+export interface FieldDashboardField extends Omit<Field, 'billing_defaults'> {
+  customer_name: string;
+  billing_defaults: FieldDashboardBillingDefault[];
+}
+
 export interface FieldDashboardResponse {
-  field: Field & {
-    customer_name: string;
-    billing_defaults: (FieldBillingDefault & { customer_name: string })[];
-  };
+  field: FieldDashboardField;
   season_summary: FieldSeasonSummary;
   application_records: FieldApplicationRecord[];
   recent_activity: FieldActivityEntry[];

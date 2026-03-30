@@ -7,9 +7,6 @@ import {
   MapPin,
   Calendar,
   Droplets,
-  Truck,
-  Wind,
-  Thermometer,
   FileText,
   Clock,
   Download,
@@ -29,6 +26,7 @@ import CRXMap from '../components/map/CRXMap';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
 import type {
   FieldDashboardResponse,
+  FieldDashboardBillingDefault,
   FieldApplicationRecord,
   FieldActivityEntry,
 } from '../types';
@@ -43,7 +41,6 @@ export default function FieldDashboard() {
   const [data, setData] = useState<FieldDashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [expandedRow, setExpandedRow] = useState<string | null>(null);
 
   const fetchDashboard = useCallback(async () => {
     if (!id) return;
@@ -57,7 +54,7 @@ export default function FieldDashboard() {
       setData(dashboard);
     } catch (err) {
       Sentry.captureException(err);
-      toast({ title: 'Error', description: 'Failed to load field dashboard', variant: 'error' });
+      toast('error', 'Failed to load field dashboard');
     } finally {
       setLoading(false);
     }
@@ -67,7 +64,6 @@ export default function FieldDashboard() {
     fetchDashboard();
   }, [fetchDashboard]);
 
-  // Map center from centroid
   const mapCenter = useMemo<[number, number] | undefined>(() => {
     if (!data?.field.centroid_geojson) return undefined;
     try {
@@ -89,7 +85,16 @@ export default function FieldDashboard() {
       Source: r.source_type,
       Notes: r.notes ?? '',
     }));
-    exportToCSV(rows, `field-${data.field.field_name}-applications`);
+    exportToCSV(rows as unknown as Record<string, unknown>[], [
+      { key: 'Date', header: 'Date' },
+      { key: 'Record #', header: 'Record #' },
+      { key: 'Products', header: 'Products' },
+      { key: 'Acres Treated', header: 'Acres Treated' },
+      { key: 'Applicator', header: 'Applicator' },
+      { key: 'Vehicle', header: 'Vehicle' },
+      { key: 'Source', header: 'Source' },
+      { key: 'Notes', header: 'Notes' },
+    ], `field-${data.field.field_name}-applications`);
   }, [data]);
 
   if (loading) {
@@ -170,13 +175,13 @@ export default function FieldDashboard() {
             </div>
             <div className="flex justify-between">
               <span className="text-secondary">Irrigation</span>
-              <Badge variant={field.irrigation ? 'success' : 'secondary'}>
+              <Badge variant={field.irrigation ? 'success' : 'default'}>
                 {field.irrigation ? 'Yes' : 'No'}
               </Badge>
             </div>
             <div className="flex justify-between">
               <span className="text-secondary">Status</span>
-              <Badge variant={field.is_active ? 'success' : 'secondary'}>
+              <Badge variant={field.is_active ? 'success' : 'default'}>
                 {field.is_active ? 'Active' : 'Inactive'}
               </Badge>
             </div>
@@ -212,25 +217,14 @@ export default function FieldDashboard() {
 
       {/* Tab Content */}
       {activeTab === 'overview' && (
-        <OverviewTab
-          summary={season_summary}
-          activity={recent_activity}
-        />
+        <OverviewTab summary={season_summary} activity={recent_activity} />
       )}
-
       {activeTab === 'applications' && (
-        <ApplicationsTab
-          records={application_records}
-          expandedRow={expandedRow}
-          onToggleExpand={(id) => setExpandedRow(expandedRow === id ? null : id)}
-          onExport={handleExportCSV}
-        />
+        <ApplicationsTab records={application_records} onExport={handleExportCSV} />
       )}
-
       {activeTab === 'billing' && (
         <BillingTab billingDefaults={field.billing_defaults} />
       )}
-
       {activeTab === 'details' && (
         <DetailsTab field={field} activity={recent_activity} />
       )}
@@ -255,7 +249,6 @@ function OverviewTab({
 
   return (
     <div className="space-y-6">
-      {/* Season Summary Cards */}
       <div>
         <h3 className="text-sm font-medium text-secondary mb-3">
           Season {summary.season} Summary
@@ -277,7 +270,6 @@ function OverviewTab({
         </div>
       </div>
 
-      {/* Recent Activity Timeline */}
       <Card className="p-4">
         <h3 className="text-sm font-medium text-secondary mb-4">Recent Activity</h3>
         {activity.length === 0 ? (
@@ -309,22 +301,18 @@ function OverviewTab({
 
 function ApplicationsTab({
   records,
-  expandedRow,
-  onToggleExpand,
   onExport,
 }: {
   records: FieldApplicationRecord[];
-  expandedRow: string | null;
-  onToggleExpand: (id: string) => void;
   onExport: () => void;
 }) {
   const columns: Column<FieldApplicationRecord>[] = useMemo(
     () => [
       {
         key: 'application_date',
-        label: 'Date',
+        header: 'Date',
         sortable: true,
-        render: (row) => (
+        render: (row: FieldApplicationRecord) => (
           <span className="whitespace-nowrap">
             {formatLocalDate(new Date(row.application_date))}
           </span>
@@ -332,15 +320,15 @@ function ApplicationsTab({
       },
       {
         key: 'record_number',
-        label: 'Record #',
-        render: (row) => (
+        header: 'Record #',
+        render: (row: FieldApplicationRecord) => (
           <span className="font-mono text-xs">{row.record_number}</span>
         ),
       },
       {
         key: 'product_data',
-        label: 'Products',
-        render: (row) => {
+        header: 'Products',
+        render: (row: FieldApplicationRecord) => {
           const products = row.product_data || [];
           if (products.length === 0) return <span className="text-gray-400">—</span>;
           return (
@@ -364,24 +352,24 @@ function ApplicationsTab({
       },
       {
         key: 'total_acres',
-        label: 'Acres',
+        header: 'Acres',
         sortable: true,
-        render: (row) => row.total_acres?.toLocaleString() ?? '—',
+        render: (row: FieldApplicationRecord) => row.total_acres?.toLocaleString() ?? '—',
       },
       {
         key: 'applicator_name',
-        label: 'Applicator',
+        header: 'Applicator',
         sortable: true,
       },
       {
         key: 'vehicle_name',
-        label: 'Vehicle',
-        render: (row) => row.vehicle_name ?? '—',
+        header: 'Vehicle',
+        render: (row: FieldApplicationRecord) => row.vehicle_name ?? '—',
       },
       {
         key: 'weather_conditions',
-        label: 'Weather',
-        render: (row) => {
+        header: 'Weather',
+        render: (row: FieldApplicationRecord) => {
           const w = row.weather_conditions;
           if (!w) return <span className="text-gray-400">—</span>;
           const parts: string[] = [];
@@ -393,9 +381,9 @@ function ApplicationsTab({
       },
       {
         key: 'source_type',
-        label: 'Source',
-        render: (row) => (
-          <Badge variant={row.source_type === 'job' ? 'info' : 'secondary'}>
+        header: 'Source',
+        render: (row: FieldApplicationRecord) => (
+          <Badge variant={row.source_type === 'job' ? 'info' : 'default'}>
             {row.source_type === 'job' ? 'Job' : 'Blend Ticket'}
           </Badge>
         ),
@@ -422,75 +410,7 @@ function ApplicationsTab({
           <p className="text-sm text-gray-500">No application records for this field this season.</p>
         </Card>
       ) : (
-        <DataTable
-          columns={columns}
-          data={records}
-          defaultSort={{ key: 'application_date', direction: 'desc' }}
-          onRowClick={(row) => onToggleExpand(row.id)}
-          expandedRowRender={
-            expandedRow
-              ? (row) =>
-                  row.id === expandedRow ? (
-                    <ExpandedAppRecord record={row} />
-                  ) : null
-              : undefined
-          }
-        />
-      )}
-    </div>
-  );
-}
-
-function ExpandedAppRecord({ record }: { record: FieldApplicationRecord }) {
-  const w = record.weather_conditions;
-  return (
-    <div className="p-4 bg-gray-50 rounded-lg space-y-3">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {w?.temperature !== undefined && (
-          <div className="flex items-center gap-2 text-sm">
-            <Thermometer className="w-4 h-4 text-orange-500" />
-            <span>{w.temperature}°F</span>
-          </div>
-        )}
-        {w?.wind_speed !== undefined && (
-          <div className="flex items-center gap-2 text-sm">
-            <Wind className="w-4 h-4 text-blue-500" />
-            <span>
-              {w.wind_speed} mph {w.wind_direction ?? ''}
-            </span>
-          </div>
-        )}
-        {w?.humidity !== undefined && (
-          <div className="flex items-center gap-2 text-sm">
-            <Droplets className="w-4 h-4 text-blue-400" />
-            <span>{w.humidity}% RH</span>
-          </div>
-        )}
-        {record.total_volume && (
-          <div className="flex items-center gap-2 text-sm">
-            <Truck className="w-4 h-4 text-gray-500" />
-            <span>
-              {record.total_volume} {record.total_volume_unit ?? 'gal'}
-            </span>
-          </div>
-        )}
-      </div>
-      {record.notes && (
-        <p className="text-sm text-secondary border-t pt-2">{record.notes}</p>
-      )}
-      {record.product_data?.length > 0 && (
-        <div className="border-t pt-2">
-          <p className="text-xs font-medium text-secondary mb-1">All Products:</p>
-          <div className="space-y-1">
-            {record.product_data.map((p, i) => (
-              <div key={i} className="text-xs flex gap-4">
-                <span className="font-medium">{p.product_name || 'Unknown'}</span>
-                {p.rate && <span>{p.rate} {p.rate_unit}</span>}
-                {p.quantity && <span>{p.quantity} {p.unit}</span>}
-              </div>
-            ))}
-          </div>
-        </div>
+        <DataTable columns={columns} data={records} />
       )}
     </div>
   );
@@ -501,7 +421,7 @@ function ExpandedAppRecord({ record }: { record: FieldApplicationRecord }) {
 function BillingTab({
   billingDefaults,
 }: {
-  billingDefaults: FieldDashboardResponse['field']['billing_defaults'];
+  billingDefaults: FieldDashboardBillingDefault[];
 }) {
   if (!billingDefaults || billingDefaults.length === 0) {
     return (
@@ -512,43 +432,32 @@ function BillingTab({
     );
   }
 
+  const colors = ['bg-crx-green', 'bg-blue-500', 'bg-orange-500', 'bg-purple-500', 'bg-yellow-500'];
+
   return (
     <div className="space-y-4">
       <h3 className="text-sm font-medium text-secondary">Billing Splits</h3>
 
-      {/* Visual Split Bar */}
       <div className="h-6 rounded-full overflow-hidden flex bg-gray-100">
-        {billingDefaults.map((bd, i) => {
-          const colors = [
-            'bg-crx-green',
-            'bg-blue-500',
-            'bg-orange-500',
-            'bg-purple-500',
-            'bg-yellow-500',
-          ];
-          return (
-            <div
-              key={bd.customer_id}
-              className={`${colors[i % colors.length]} flex items-center justify-center text-xs text-white font-medium`}
-              style={{ width: `${bd.split_pct}%` }}
-              title={`${bd.customer_name}: ${bd.split_pct}%`}
-            >
-              {bd.split_pct >= 10 ? `${bd.split_pct}%` : ''}
-            </div>
-          );
-        })}
+        {billingDefaults.map((bd, i) => (
+          <div
+            key={bd.customer_id}
+            className={`${colors[i % colors.length]} flex items-center justify-center text-xs text-white font-medium`}
+            style={{ width: `${bd.split_pct}%` }}
+            title={`${bd.customer_name}: ${bd.split_pct}%`}
+          >
+            {bd.split_pct >= 10 ? `${bd.split_pct}%` : ''}
+          </div>
+        ))}
       </div>
 
-      {/* Split Details */}
       <div className="space-y-2">
         {billingDefaults.map((bd) => (
           <Card key={bd.customer_id} className="p-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="font-medium text-sm">{bd.customer_name}</span>
-                {bd.is_primary && (
-                  <Badge variant="success">Primary</Badge>
-                )}
+                {bd.is_primary && <Badge variant="success">Primary</Badge>}
               </div>
               <span className="font-bold text-crx-green">{bd.split_pct}%</span>
             </div>
@@ -581,7 +490,6 @@ function DetailsTab({
 
   return (
     <div className="space-y-6">
-      {/* FSA Numbers */}
       {(field.fsa_farm_number || field.fsa_tract_number || field.fsa_field_number) && (
         <Card className="p-4">
           <h3 className="text-sm font-medium text-secondary mb-3">FSA Numbers</h3>
@@ -602,7 +510,6 @@ function DetailsTab({
         </Card>
       )}
 
-      {/* Legal Description */}
       {field.legal_description && (
         <Card className="p-4">
           <h3 className="text-sm font-medium text-secondary mb-2">Legal Description</h3>
@@ -610,7 +517,6 @@ function DetailsTab({
         </Card>
       )}
 
-      {/* Notes */}
       {field.notes && (
         <Card className="p-4">
           <h3 className="text-sm font-medium text-secondary mb-2">Notes</h3>
@@ -618,7 +524,6 @@ function DetailsTab({
         </Card>
       )}
 
-      {/* Timestamps */}
       <Card className="p-4">
         <h3 className="text-sm font-medium text-secondary mb-3">Record Info</h3>
         <div className="grid grid-cols-2 gap-4 text-sm">
@@ -633,7 +538,6 @@ function DetailsTab({
         </div>
       </Card>
 
-      {/* Activity Log */}
       <Card className="p-4">
         <h3 className="text-sm font-medium text-secondary mb-3">Activity Log</h3>
         {activity.length === 0 ? (
@@ -661,13 +565,9 @@ function DetailsTab({
                 className="mt-3 text-xs text-crx-green hover:underline flex items-center gap-1"
               >
                 {showAllActivity ? (
-                  <>
-                    <ChevronUp className="w-3 h-3" /> Show less
-                  </>
+                  <><ChevronUp className="w-3 h-3" /> Show less</>
                 ) : (
-                  <>
-                    <ChevronDown className="w-3 h-3" /> Show all {activity.length} entries
-                  </>
+                  <><ChevronDown className="w-3 h-3" /> Show all {activity.length} entries</>
                 )}
               </button>
             )}
