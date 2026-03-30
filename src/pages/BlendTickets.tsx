@@ -1,8 +1,11 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus, LinkIcon, Download, Trash2 } from 'lucide-react';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
+import { logActivity } from '../lib/activityLogger';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { useOCRProcessor } from '../hooks/useOCRProcessor';
 import Button from '../components/ui/Button';
 import Card from '../components/ui/Card';
@@ -23,12 +26,14 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { useToast } from '../components/ui/Toast';
 import { parseLocalDate } from '../lib/dateUtils';
+import { useOCRThresholds } from '../hooks/useOCRThresholds';
 import type { BlendTicket, Customer } from '../types';
 
 export function BlendTickets() {
   usePageMeta();
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const { toast } = useToast();
+  const ocrThresholds = useOCRThresholds();
   const [tickets, setTickets] = useState<BlendTicket[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +47,10 @@ export function BlendTickets() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [batchApproveModalOpen, setBatchApproveModalOpen] = useState(false);
+  const [batchApproving, setBatchApproving] = useState(false);
+
+  const batchApproveIdem = useIdempotencyKey('batch_approve_blend_tickets', profile?.id || '');
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
   const { isProcessing, processedCount } = useOCRProcessor(true);
@@ -180,7 +189,51 @@ export function BlendTickets() {
     setDeleteModalOpen(false);
   };
 
+  // Only tickets that are completed + unreviewed are eligible for batch approve
+  const approvableIds = selectedRows
+    .filter((t) => t.status === 'completed' && t.review_status === 'unreviewed')
+    .map((t) => t.id);
+
+  const handleBatchApprove = async () => {
+    if (!profile?.id || approvableIds.length === 0) return;
+    setBatchApproving(true);
+    try {
+      const key = batchApproveIdem.getKey();
+      const result = await supabase.rpc('batch_approve_blend_tickets', {
+        p_ticket_ids: approvableIds,
+        p_approved_by: profile.id,
+        p_idempotency_key: key,
+      });
+      assertRpcResult(result, 'Batch approve blend tickets');
+      const approvedCount = result.data?.approved_count ?? approvableIds.length;
+      batchApproveIdem.resetKey();
+      toast('success', `Approved ${approvedCount} blend ticket(s)`);
+      await logActivity({
+        event: 'blend_ticket_batch_approved',
+        description: `Batch approved ${approvedCount} blend tickets`,
+        performedBy: profile.id,
+        entityType: 'blend_ticket',
+      });
+      clearSelection();
+      loadData();
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'action', action: 'batch_approve_blend_tickets' } });
+      toast('error', sanitizeError(err));
+    }
+    setBatchApproving(false);
+    setBatchApproveModalOpen(false);
+  };
+
   const bulkActions = [
+    ...(approvableIds.length > 0
+      ? [{
+          key: 'batch-approve',
+          label: `Batch Approve (${approvableIds.length})`,
+          icon: <CheckCircle className="w-4 h-4" />,
+          onClick: () => setBatchApproveModalOpen(true),
+          loading: batchApproving,
+        }]
+      : []),
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
     { key: 'delete', label: 'Delete Tickets', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
@@ -303,9 +356,9 @@ export function BlendTickets() {
           <div className="flex-1 bg-gray-200 rounded-full h-2 max-w-[80px]">
             <div
               className={`h-2 rounded-full ${
-                ticket.ocr_confidence_score >= 70
+                ticket.ocr_confidence_score >= ocrThresholds.auto_approve
                   ? 'bg-green-500'
-                  : ticket.ocr_confidence_score >= 50
+                  : ticket.ocr_confidence_score >= ocrThresholds.needs_review
                   ? 'bg-yellow-500'
                   : 'bg-red-500'
               }`}
@@ -524,6 +577,18 @@ export function BlendTickets() {
         entityName="blend ticket"
         onConfirm={handleDelete}
         loading={deleting}
+      />
+
+      <ConfirmModal
+        open={batchApproveModalOpen}
+        onClose={() => setBatchApproveModalOpen(false)}
+        onConfirm={handleBatchApprove}
+        title="Batch Approve Blend Tickets"
+        message={`Are you sure you want to approve ${approvableIds.length} blend ticket(s)? Only completed, unreviewed tickets will be approved.`}
+        confirmLabel="Approve"
+        variant="info"
+        icon={CheckCircle}
+        loading={batchApproving}
       />
     </div>
   );

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck } from 'lucide-react';
+import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck, RefreshCw, MapPin } from 'lucide-react';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
@@ -21,6 +21,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { validateBlendMath } from '../lib/blendMathValidator';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday } from '../lib/dateUtils';
+import { useOCRThresholds } from '../hooks/useOCRThresholds';
 import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field } from '../types';
 
 export function BlendTicketDetail() {
@@ -29,11 +30,13 @@ export function BlendTicketDetail() {
   const { profile } = useAuth();
   usePageMeta();
   const { toast } = useToast();
+  const ocrThresholds = useOCRThresholds();
   const saveIdem = useIdempotencyKey('save_blend_ticket', profile?.id || '');
   const linkIdem = useIdempotencyKey('link_blend_ticket_to_order', profile?.id || '');
   const unlinkIdem = useIdempotencyKey('unlink_blend_ticket_from_order', profile?.id || '');
   const createOrderIdem = useIdempotencyKey('create_order_from_blend_ticket', profile?.id || '');
   const appRecordIdem = useIdempotencyKey('create_application_record_from_blend_ticket', profile?.id || '');
+  const fieldsIdem = useIdempotencyKey('save_blend_ticket_fields', profile?.id || '');
 
   const [ticket, setTicket] = useState<BlendTicket | null>(null);
   const [images, setImages] = useState<BlendTicketImage[]>([]);
@@ -49,7 +52,9 @@ export function BlendTicketDetail() {
   const blocker = useUnsavedChanges(isDirty);
 
   // Phase 3: Order linkage state
-  const [, setFields] = useState<Field[]>([]);
+  const [availableFields, setAvailableFields] = useState<Field[]>([]);
+  const [ticketFields, setTicketFields] = useState<{ field_id: string; customer_id: string | null; planned_acres: string; field_name?: string; customer_name?: string }[]>([]);
+  const [savingFields, setSavingFields] = useState(false);
   const [linkedOrders, setLinkedOrders] = useState<BlendTicketToOrderItem[]>([]);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [showCreateOrderModal, setShowCreateOrderModal] = useState(false);
@@ -66,6 +71,10 @@ export function BlendTicketDetail() {
   const [removeProductConfirmOpen, setRemoveProductConfirmOpen] = useState(false);
   const [removeProductIndex, setRemoveProductIndex] = useState<number | null>(null);
   const [unlinkConfirmOpen, setUnlinkConfirmOpen] = useState(false);
+  const [reprocessConfirmOpen, setReprocessConfirmOpen] = useState(false);
+  const [reprocessing, setReprocessing] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+  const [suggestedOrder, setSuggestedOrder] = useState<{ id: string; order_number: string; matchCount: number } | null>(null);
 
   const [formData, setFormData] = useState({
     customer_id: '',
@@ -153,8 +162,22 @@ export function BlendTicketDetail() {
       setProducts(productsResult.data || []);
       setAllProducts(allProductsResult.data || []);
       setCustomers(customersResult.data || []);
-      setFields((fieldsResult.data || []) as Field[]);
+      const allFields = (fieldsResult.data || []) as Field[];
+      setAvailableFields(allFields);
       setLinkedOrders(linkedResult.data || []);
+
+      // Load existing blend_ticket_fields
+      const { data: btfData } = await supabase
+        .from('blend_ticket_fields')
+        .select('field_id, customer_id, planned_acres, sort_order')
+        .eq('blend_ticket_id', id)
+        .order('sort_order');
+      if (btfData?.length) {
+        setTicketFields(btfData.map((btf: { field_id: string; customer_id: string | null; planned_acres: number | null }) => {
+          const f = allFields.find(af => af.id === btf.field_id);
+          return { field_id: btf.field_id, customer_id: btf.customer_id, planned_acres: btf.planned_acres?.toString() || '', field_name: f?.field_name || '' };
+        }));
+      }
 
       setFormData({
         customer_id: ticketResult.data.customer_id || '',
@@ -176,6 +199,41 @@ export function BlendTicketDetail() {
       });
       // Mark initial load complete so future changes trigger isDirty
       requestAnimationFrame(() => { initialLoadDone.current = true; });
+      // Duplicate detection (informational only)
+      if (ticketResult.data.ticket_number && ticketResult.data.ticket_date) {
+        const dupeResult = await supabase.rpc('check_duplicate_blend_ticket', {
+          p_ticket_number: ticketResult.data.ticket_number,
+          p_ticket_date: ticketResult.data.ticket_date,
+        });
+        assertRpcResult(dupeResult, 'check_duplicate_blend_ticket');
+        const otherDupes = (dupeResult.data || []).filter((d: { id: string }) => d.id !== ticketResult.data.id);
+        if (otherDupes.length > 0) {
+          setDuplicateWarning(`A ticket with this number and date already exists (${otherDupes[0].ticket_number}). This may be a duplicate.`);
+        }
+      }
+
+      // Suggest matching orders (read-only hint, no auto-link)
+      // Wrapped in its own try/catch so suggestion failures don't block page load
+      try {
+        const custId = ticketResult.data.customer_id;
+        const prods = productsResult.data || [];
+        const pids = prods.filter((p: BlendTicketProduct) => p.product_id).map((p: BlendTicketProduct) => p.product_id);
+        if (ticketResult.data.order_link_status === 'unlinked' && custId && pids.length) {
+          const { data: co } = await supabase.from('orders').select('id, order_number').eq('customer_id', custId).eq('status', 'confirmed');
+          if (co?.length) {
+            const { data: mi } = await supabase.from('order_items').select('order_id, product_id').in('order_id', co.map(o => o.id)).in('product_id', pids);
+            if (mi?.length) {
+              const ct: Record<string, number> = {};
+              mi.forEach(m => { ct[m.order_id] = (ct[m.order_id] || 0) + 1; });
+              const best = Object.entries(ct).sort((a, b) => b[1] - a[1])[0];
+              const bo = co.find(o => o.id === best[0]);
+              if (bo) setSuggestedOrder({ id: bo.id, order_number: bo.order_number, matchCount: best[1] });
+            }
+          }
+        }
+      } catch {
+        // Non-critical: suggestion just won't appear
+      }
     } catch (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'blend_ticket_detail' } });
       toast('error', 'Failed to load blend ticket. Please try again.');
@@ -312,6 +370,52 @@ export function BlendTicketDetail() {
       sentryTag: 'reject_blend_ticket',
       onSuccess: () => navigate('/blend-tickets'),
     });
+  }
+
+  async function handleSaveFields() {
+    if (!ticket || !profile || ticketFields.length === 0) return;
+    setSavingFields(true);
+    try {
+      const payload = ticketFields.map(tf => ({
+        field_id: tf.field_id,
+        customer_id: tf.customer_id,
+        planned_acres: tf.planned_acres ? Number(tf.planned_acres) : null,
+      }));
+      const result = await supabase.rpc('save_blend_ticket_fields', {
+        p_blend_ticket_id: ticket.id,
+        p_fields: payload,
+        p_performed_by: profile.id,
+        p_idempotency_key: fieldsIdem.getKey(),
+      });
+      assertRpcResult(result, 'Save blend ticket fields');
+      fieldsIdem.resetKey();
+      await logActivity({ event: 'blend_ticket_fields_saved', description: `Saved ${payload.length} field assignments for ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id });
+      toast('success', `Saved ${payload.length} field assignment${payload.length !== 1 ? 's' : ''}`);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_fields' } });
+      toast('error', err instanceof Error ? err.message : 'Failed to save fields');
+    }
+    setSavingFields(false);
+  }
+
+  async function handleReprocessOCR() {
+    if (!ticket || !profile) return;
+    setReprocessConfirmOpen(false);
+    setReprocessing(true);
+    try {
+      const { data: imgs } = await supabase.from('blend_ticket_images').select('image_url').eq('blend_ticket_id', ticket.id).order('upload_order').limit(1);
+      if (!imgs?.length) { toast('error', 'No image found'); setReprocessing(false); return; }
+      const resp = await supabase.functions.invoke('process-blend-ticket', { body: { blend_ticket_id: ticket.id, image_url: imgs[0].image_url, reprocess: true } });
+      if (resp.error) throw resp.error;
+      toast('success', 'OCR re-processing complete');
+      await logActivity({ event: 'blend_ticket_reprocessed', description: `Re-processed OCR for ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id });
+      initialLoadDone.current = false;
+      await loadTicketData();
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'reprocess_ocr' } });
+      toast('error', err instanceof Error ? err.message : 'Re-process failed');
+    }
+    setReprocessing(false);
   }
 
   function updateProduct(index: number, field: keyof BlendTicketProduct, value: BlendTicketProduct[keyof BlendTicketProduct]) {
@@ -529,6 +633,14 @@ export function BlendTicketDetail() {
         { label: 'Blend Tickets', href: '/blend-tickets' },
         { label: ticket.ticket_number },
       ]} />
+
+      {duplicateWarning && (
+        <div className="flex items-center gap-2 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg px-4 py-3 text-sm">
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          {duplicateWarning}
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <div>
@@ -594,9 +706,9 @@ export function BlendTicketDetail() {
                     <span className="font-medium">OCR Confidence:</span>{' '}
                     <span
                       className={`font-semibold ${
-                        ticket.ocr_confidence_score >= 70
+                        ticket.ocr_confidence_score >= ocrThresholds.auto_approve
                           ? 'text-green-600'
-                          : ticket.ocr_confidence_score >= 50
+                          : ticket.ocr_confidence_score >= ocrThresholds.needs_review
                           ? 'text-yellow-600'
                           : 'text-red-600'
                       }`}
@@ -611,6 +723,17 @@ export function BlendTicketDetail() {
             <p className="text-gray-500 text-center py-8">No images available</p>
           )}
         </Card>
+
+        {ticket.raw_ocr_text && (
+          <details className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <summary className="px-6 py-3 cursor-pointer text-sm font-medium text-gray-700 hover:bg-gray-50 select-none">
+              Raw OCR Text
+            </summary>
+            <pre className="px-6 py-4 text-xs text-gray-600 bg-gray-50 whitespace-pre-wrap break-words max-h-64 overflow-y-auto border-t border-gray-200">
+              {ticket.raw_ocr_text}
+            </pre>
+          </details>
+        )}
 
         <Card className="p-6">
           <h2 className="text-lg font-semibold mb-4">Ticket Information</h2>
@@ -924,7 +1047,16 @@ export function BlendTicketDetail() {
               </div>
 
               {product.confidence_score > 0 && (
-                <div className="col-span-12 text-xs text-gray-500">
+                <div className="col-span-12 flex items-center gap-1.5 text-xs text-gray-500">
+                  <span
+                    className={`inline-block w-2 h-2 rounded-full ${
+                      product.confidence_score >= ocrThresholds.auto_approve
+                        ? 'bg-green-500'
+                        : product.confidence_score >= ocrThresholds.needs_review
+                        ? 'bg-yellow-500'
+                        : 'bg-red-500'
+                    }`}
+                  />
                   Confidence: {product.confidence_score}%
                   {product.manually_corrected && ' (manually corrected)'}
                 </div>
@@ -938,6 +1070,103 @@ export function BlendTicketDetail() {
             </p>
           )}
         </div>
+      </Card>
+
+      {/* Application Fields Section */}
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <MapPin className="h-5 w-5" />
+            Application Fields
+          </h2>
+          {ticket.review_status === 'unreviewed' && (
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setTicketFields([...ticketFields, { field_id: '', customer_id: ticket.customer_id, planned_acres: '', field_name: '' }])}
+              >
+                <Plus className="h-4 w-4" /> Add Field
+              </Button>
+              {ticketFields.length > 0 && (
+                <Button size="sm" onClick={handleSaveFields} loading={savingFields}>
+                  <Save className="h-4 w-4" /> Save Fields
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {ticketFields.length > 0 ? (
+          <div className="space-y-3">
+            {ticketFields.map((tf, idx) => (
+              <div key={idx} className="grid grid-cols-12 gap-3 items-end">
+                <div className="col-span-5">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Field</label>
+                  <select
+                    value={tf.field_id}
+                    onChange={(e) => {
+                      const updated = [...ticketFields];
+                      const selectedField = availableFields.find(f => f.id === e.target.value);
+                      updated[idx] = { ...updated[idx], field_id: e.target.value, field_name: selectedField?.field_name || '', customer_id: selectedField?.customer_id || tf.customer_id };
+                      setTicketFields(updated);
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  >
+                    <option value="">Select field...</option>
+                    {availableFields
+                      .filter(f => !ticket.customer_id || f.customer_id === ticket.customer_id || f.customer_id === tf.customer_id)
+                      .map(f => (
+                        <option key={f.id} value={f.id}>{f.field_name}</option>
+                      ))}
+                  </select>
+                </div>
+                <div className="col-span-4">
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Planned Acres</label>
+                  <input
+                    type="number"
+                    value={tf.planned_acres}
+                    onChange={(e) => {
+                      const updated = [...ticketFields];
+                      updated[idx] = { ...updated[idx], planned_acres: e.target.value };
+                      setTicketFields(updated);
+                    }}
+                    placeholder="0"
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                  />
+                </div>
+                <div className="col-span-3 flex justify-end">
+                  {ticket.review_status === 'unreviewed' && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setTicketFields(ticketFields.filter((_, i) => i !== idx))}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {(() => {
+              const totalPlanned = ticketFields.reduce((sum, tf) => sum + (Number(tf.planned_acres) || 0), 0);
+              const ticketAcres = ticket.total_acres || 0;
+              const diff = ticketAcres > 0 ? Math.abs(totalPlanned - ticketAcres) / ticketAcres * 100 : 0;
+              return (
+                <div className={`text-sm mt-2 ${diff > 5 ? 'text-yellow-600' : 'text-gray-500'}`}>
+                  Total planned: {totalPlanned} acres
+                  {ticketAcres > 0 && <> | Ticket total: {ticketAcres} acres</>}
+                  {diff > 5 && <span className="ml-2 font-medium">({diff.toFixed(0)}% difference)</span>}
+                </div>
+              );
+            })()}
+          </div>
+        ) : (
+          <p className="text-gray-500 text-center py-4 text-sm">
+            No fields assigned. {ticket.review_status === 'unreviewed' ? 'Click "Add Field" to assign application fields.' : ''}
+          </p>
+        )}
       </Card>
 
       {/* Phase 3: Order Linkage Section */}
@@ -960,6 +1189,13 @@ export function BlendTicketDetail() {
             </Badge>
           </div>
         </div>
+
+        {suggestedOrder && ticket.order_link_status === 'unlinked' && (
+          <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm mb-4">
+            <ShoppingCart className="h-4 w-4 flex-shrink-0" />
+            This ticket may match <strong>Order {suggestedOrder.order_number}</strong> ({suggestedOrder.matchCount} matching product{suggestedOrder.matchCount !== 1 ? 's' : ''}).
+          </div>
+        )}
 
         {ticket.order_link_status === 'linked' && linkedOrders.length > 0 ? (
           <div className="space-y-3">
@@ -1123,6 +1359,12 @@ export function BlendTicketDetail() {
       )}
 
       <div className="flex justify-end gap-3">
+        {ticket.source === 'ocr' && ticket.review_status === 'unreviewed' && (
+          <Button variant="secondary" onClick={() => setReprocessConfirmOpen(true)} loading={reprocessing}>
+            <RefreshCw className="h-4 w-4" />
+            Re-process OCR
+          </Button>
+        )}
         <Button variant="secondary" onClick={() => navigate('/blend-tickets')}>
           Cancel
         </Button>
@@ -1205,6 +1447,16 @@ export function BlendTicketDetail() {
         title="Unlink Blend Ticket"
         message="Unlink this blend ticket from its order? The order itself will not be deleted."
         confirmLabel="Unlink"
+        variant="warning"
+      />
+
+      <ConfirmModal
+        open={reprocessConfirmOpen}
+        onClose={() => setReprocessConfirmOpen(false)}
+        onConfirm={handleReprocessOCR}
+        title="Re-process OCR"
+        message="This will re-run OCR on the ticket image and may overwrite current values. Continue?"
+        confirmLabel="Re-process"
         variant="warning"
       />
     </div>
