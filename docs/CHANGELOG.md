@@ -4,6 +4,45 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-30 — Field Management V2: Dashboard + Map Layer System
+
+### Summary
+Major field management upgrade implementing Approach 2 from the brainstorm: reusable CRXMap component with pluggable layer architecture, new Field Dashboard page, and Fields list improvements.
+
+### New Components (7 map components)
+- **CRXMap** — reusable map wrapper with base layer switching (satellite/roads/hybrid/terrain), GPS locate, print mode
+- **LayerToggle** — layer picker UI for CRXMap
+- **LocateMe** — GPS button using browser Geolocation API
+- **AddressSearch** — Mapbox geocoding search bar for address/coordinate lookup
+- **FieldBoundaryLayer** — filled polygon overlay for field boundaries with labels
+- **FieldMarkerLayer** — centroid markers for fields without boundaries (filters out fields with boundaries)
+- **DrawLayer** — wrapper around DrawControl with auto-acreage calculation via turf.js
+
+### New Page
+- **FieldDashboard** (`/fields/:id/dashboard`) — read-only field profile with 4 tabs:
+  - Overview: season summary cards (total apps, acres treated, products) + activity timeline
+  - Applications: full history table with weather details, expandable rows, CSV export
+  - Billing: visual split bar + per-grower details with price overrides
+  - Details: FSA numbers, legal description, notes, timestamps, activity log
+
+### New RPC
+- **get_field_dashboard(p_field_id, p_season)** — aggregates field data, application records, season stats, and activity feed in a single server-side query
+
+### Fields List Improvements
+- Upgraded from MapContainer+FieldMarkers to CRXMap+FieldBoundaryLayer+FieldMarkerLayer
+- Added customer and active/inactive status filter dropdowns
+- Added stats bar (field count, total acres, boundary count)
+- Enabled layer toggle and GPS locate on map view
+- Row/marker click now navigates to Field Dashboard
+
+### Stats
+- Page count: 57 → 58
+- Migration count: 224 → 225
+- RPC count: ~146 → ~147
+- Tests: 1,719 passing (111 files)
+
+---
+
 ## 2026-03-29 — Blend Ticket Phase 1: OCR Bridge
 
 ### Summary
