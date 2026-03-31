@@ -1207,10 +1207,27 @@ export interface Field {
   is_active: boolean;
   centroid_geojson?: string | null;
   boundary_geojson?: string | null;
+  parent_field_id?: string | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;
   billing_defaults?: FieldBillingDefault[];
+}
+
+export interface FieldPolygon {
+  id: string;
+  field_id: string;
+  polygon_geojson: object;
+  label: string | null;
+  acres: number | null;
+  sort_order: number;
+  created_at?: string;
+}
+
+export interface FieldWithGroup extends Field {
+  child_count?: number;
+  children?: Field[];
+  polygons?: FieldPolygon[];
 }
 
 export interface FieldBillingDefault {

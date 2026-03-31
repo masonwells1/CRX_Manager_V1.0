@@ -7,8 +7,8 @@ import type { GeoJSON } from 'geojson';
 interface DrawControlProps {
   onDrawCreate?: (feature: GeoJSON.Feature) => void;
   onDrawUpdate?: (feature: GeoJSON.Feature) => void;
-  onDrawDelete?: () => void;
-  initialGeoJSON?: GeoJSON.Feature | null;
+  onDrawDelete?: (featureIds: string[]) => void;
+  initialGeoJSON?: GeoJSON.Feature | GeoJSON.Feature[] | null;
 }
 
 export default function DrawControl({
@@ -83,8 +83,8 @@ export default function DrawControl({
       map.on('draw.update', (e: { features: GeoJSON.Feature[] }) => {
         if (e.features?.length > 0) onDrawUpdate?.(e.features[0]);
       });
-      map.on('draw.delete', () => {
-        onDrawDelete?.();
+      map.on('draw.delete', (e: { features: GeoJSON.Feature[] }) => {
+        onDrawDelete?.(e.features?.map((f) => f.id as string) || []);
       });
     },
     ({ map }) => {
@@ -95,15 +95,17 @@ export default function DrawControl({
     { position: 'top-left' }
   );
 
-  // Load initial geometry when available
+  // Load initial geometry when available — supports single feature or array
   const loadInitial = useCallback(() => {
-    if (initialGeoJSON && draw) {
-      try {
-        draw.deleteAll();
-        draw.add(initialGeoJSON as unknown as GeoJSON.FeatureCollection);
-      } catch {
-        // Silently handle invalid GeoJSON
+    if (!initialGeoJSON || !draw) return;
+    try {
+      draw.deleteAll();
+      const features = Array.isArray(initialGeoJSON) ? initialGeoJSON : [initialGeoJSON];
+      for (const f of features) {
+        draw.add(f as unknown as GeoJSON.FeatureCollection);
       }
+    } catch {
+      // Silently handle invalid GeoJSON
     }
   }, [initialGeoJSON, draw]);
 

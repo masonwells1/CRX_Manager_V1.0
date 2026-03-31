@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { Source, Layer } from 'react-map-gl/mapbox';
+import { useMemo, useEffect } from 'react';
+import { Source, Layer, useMap } from 'react-map-gl/mapbox';
 import type { Field } from '../../types';
 
 interface FieldWithCustomer extends Field {
@@ -9,11 +9,13 @@ interface FieldWithCustomer extends Field {
 interface FieldBoundaryLayerProps {
   fields: FieldWithCustomer[];
   showLabels?: boolean;
+  onFieldClick?: (fieldId: string) => void;
 }
 
 export default function FieldBoundaryLayer({
   fields,
   showLabels = true,
+  onFieldClick,
 }: FieldBoundaryLayerProps) {
   const geojson = useMemo(() => {
     const features = fields
@@ -44,6 +46,38 @@ export default function FieldBoundaryLayer({
 
     return { type: 'FeatureCollection' as const, features };
   }, [fields]);
+
+  // Click handler for boundary polygons
+  const { current: map } = useMap();
+  useEffect(() => {
+    if (!map || !onFieldClick) return;
+
+    const handleClick = (e: mapboxgl.MapMouseEvent) => {
+      const features = map.queryRenderedFeatures(e.point, {
+        layers: ['field-boundaries-fill'],
+      });
+      if (features && features.length > 0) {
+        const fieldId = features[0].properties?.id;
+        if (fieldId) onFieldClick(fieldId);
+      }
+    };
+    const handleMouseEnter = () => {
+      map.getCanvas().style.cursor = 'pointer';
+    };
+    const handleMouseLeave = () => {
+      map.getCanvas().style.cursor = '';
+    };
+
+    map.on('click', 'field-boundaries-fill', handleClick);
+    map.on('mouseenter', 'field-boundaries-fill', handleMouseEnter);
+    map.on('mouseleave', 'field-boundaries-fill', handleMouseLeave);
+
+    return () => {
+      map.off('click', 'field-boundaries-fill', handleClick);
+      map.off('mouseenter', 'field-boundaries-fill', handleMouseEnter);
+      map.off('mouseleave', 'field-boundaries-fill', handleMouseLeave);
+    };
+  }, [map, onFieldClick]);
 
   return (
     <Source id="field-boundaries" type="geojson" data={geojson}>

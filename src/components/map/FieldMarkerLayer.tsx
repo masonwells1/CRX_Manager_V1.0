@@ -24,7 +24,7 @@ export default function FieldMarkerLayer({
   onFieldClick,
   showAll = false,
 }: FieldMarkerLayerProps) {
-  const [hovered, setHovered] = useState<FieldGeo | null>(null);
+  const [selected, setSelected] = useState<FieldGeo | null>(null);
 
   const markers = useMemo(() => {
     const result: FieldGeo[] = [];
@@ -66,40 +66,45 @@ export default function FieldMarkerLayer({
           anchor="center"
           onClick={(e) => {
             e.originalEvent.stopPropagation();
-            onFieldClick?.(m.id);
+            setSelected(m);
           }}
         >
           <div
             className="w-4 h-4 rounded-full bg-crx-green border-2 border-white shadow-md cursor-pointer hover:scale-125 transition-transform"
-            onMouseEnter={() => setHovered(m)}
-            onMouseLeave={() => setHovered(null)}
           />
         </Marker>
       ))}
 
-      {hovered && (
+      {selected && (
         <Popup
-          longitude={hovered.lng}
-          latitude={hovered.lat}
+          longitude={selected.lng}
+          latitude={selected.lat}
           anchor="bottom"
           offset={12}
-          closeButton={false}
+          closeButton
           closeOnClick={false}
+          onClose={() => setSelected(null)}
           className="field-marker-popup"
         >
-          <div className="text-xs px-1 py-0.5">
-            <p className="font-semibold text-nav-dark">{hovered.field_name}</p>
-            {hovered.total_acres && (
+          <div className="text-xs px-1 py-1 space-y-0.5">
+            <p className="font-semibold text-nav-dark">{selected.field_name}</p>
+            {selected.total_acres && (
               <p className="text-secondary">
-                {hovered.total_acres.toLocaleString()} acres
+                {selected.total_acres.toLocaleString()} acres
               </p>
             )}
-            {hovered.crop_type && (
-              <p className="text-secondary capitalize">{hovered.crop_type}</p>
+            {selected.crop_type && (
+              <p className="text-secondary capitalize">{selected.crop_type}</p>
             )}
-            {hovered.customer_name && (
-              <p className="text-secondary">{hovered.customer_name}</p>
+            {selected.customer_name && (
+              <p className="text-secondary">{selected.customer_name}</p>
             )}
+            <button
+              onClick={() => onFieldClick?.(selected.id)}
+              className="mt-1 text-xs font-medium text-crx-green hover:underline"
+            >
+              View Dashboard &rarr;
+            </button>
           </div>
         </Popup>
       )}

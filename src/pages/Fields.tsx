@@ -1,6 +1,6 @@
-import { useEffect, useState, useMemo , useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, MapPin, List, Map as MapIcon, Upload, Download, FileText, Trash2 } from 'lucide-react';
+import { Plus, MapPin, List, Map as MapIcon, Upload, Download, FileText, Trash2, ChevronDown, ChevronRight, Link } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -19,8 +19,13 @@ import CRXMap from '../components/map/CRXMap';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
 import FieldMarkerLayer from '../components/map/FieldMarkerLayer';
 import BulkFieldImport from '../components/fields/BulkFieldImport';
+import { useFitBounds } from '../hooks/useFitBounds';
 
-type FieldWithCustomer = Field & { customer_name: string };
+import Modal from '../components/ui/Modal';
+import { computeBounds } from '../hooks/useFitBounds';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+
+type FieldWithCustomer = Field & { customer_name: string; parent_field_id?: string | null; child_count?: number };
 
 export default function Fields() {
   const navigate = useNavigate();
@@ -37,8 +42,15 @@ export default function Fields() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [groupParentId, setGroupParentId] = useState<string>('');
+  const [grouping, setGrouping] = useState(false);
+  const [selectedFieldId, setSelectedFieldId] = useState<string | null>(null);
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
+  const { profile } = useAuth();
+  const groupIdem = useIdempotencyKey('link_fields', profile?.id || '');
 
   // Collect unique values for filter dropdowns
   const cropTypes = [...new Set(fields.map((f) => f.crop_type).filter(Boolean))] as string[];
@@ -79,8 +91,61 @@ export default function Fields() {
   const totalAcres = filtered.reduce((sum, f) => sum + (f.total_acres || 0), 0);
   const withBoundary = filtered.filter((f) => f.boundary_geojson).length;
 
+  // Compute map bounds from all filtered fields with geo data
+  const geoStrings = useMemo(
+    () => filtered.flatMap((f) => [f.boundary_geojson, f.centroid_geojson]),
+    [filtered]
+  );
+  const mapBounds = useFitBounds(geoStrings);
+
+  // For click-to-zoom on map
+  const selectedFieldBounds = useMemo(() => {
+    if (!selectedFieldId) return null;
+    const f = filtered.find((fld) => fld.id === selectedFieldId);
+    if (!f) return null;
+    return computeBounds([f.boundary_geojson, f.centroid_geojson]);
+  }, [selectedFieldId, filtered]);
+
+  // Tree view: group parent/child fields
+  const displayRows = useMemo(() => {
+    const childMap = new Map<string, FieldWithCustomer[]>();
+    for (const f of filtered) {
+      if (f.parent_field_id) {
+        const siblings = childMap.get(f.parent_field_id) || [];
+        siblings.push(f);
+        childMap.set(f.parent_field_id, siblings);
+      }
+    }
+
+    const rows: (FieldWithCustomer & { _isChild?: boolean; _isParent?: boolean })[] = [];
+    for (const f of filtered) {
+      if (f.parent_field_id) continue; // children shown under parent
+      const hasChildren = (f.child_count && f.child_count > 0) || childMap.has(f.id);
+      if (hasChildren) {
+        rows.push({ ...f, _isParent: true });
+        if (expandedParents.has(f.id)) {
+          const children = childMap.get(f.id) || [];
+          for (const c of children) {
+            rows.push({ ...c, _isChild: true });
+          }
+        }
+      } else {
+        rows.push(f);
+      }
+    }
+    return rows;
+  }, [filtered, expandedParents]);
+
+  const toggleExpand = (id: string) => {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) { next.delete(id); } else { next.add(id); }
+      return next;
+    });
+  };
+
   const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
-    useRowSelection({ data: filtered, getId: (f) => f.id });
+    useRowSelection({ data: displayRows, getId: (f) => f.id });
 
   const checkboxCol = useMemo(
     () => createCheckboxColumn<FieldWithCustomer>(selected, toggleSelect, (f) => f.id),
@@ -138,9 +203,34 @@ export default function Fields() {
     setDeleteModalOpen(false);
   };
 
+  const handleGroupFields = async () => {
+    if (!groupParentId || selectedRows.length < 2) return;
+    setGrouping(true);
+    try {
+      const childIds = selectedRows.filter((f) => f.id !== groupParentId).map((f) => f.id);
+      const idemKey = groupIdem.getKey();
+      const { error } = await supabase.rpc('link_fields_to_parent', {
+        p_parent_id: groupParentId,
+        p_child_ids: childIds,
+        p_performed_by: profile!.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      groupIdem.resetKey();
+      toast('success', `Grouped ${childIds.length} field(s) under parent`);
+      clearSelection();
+      setGroupModalOpen(false);
+      fetchFields();
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setGrouping(false);
+  };
+
   const bulkActions = [
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
+    ...(selectedCount >= 2 ? [{ key: 'group', label: 'Group Fields', icon: <Link className="w-4 h-4" />, onClick: () => { setGroupParentId(selectedRows[0]?.id || ''); setGroupModalOpen(true); } }] : []),
     { key: 'delete', label: 'Delete', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
   ];
 
@@ -151,8 +241,26 @@ export default function Fields() {
       sortable: true,
       render: (row) => (
         <div className="flex items-center gap-2">
-          <MapPin className="w-4 h-4 text-crx-green flex-shrink-0" />
+          {(row as FieldWithCustomer & { _isParent?: boolean })._isParent ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); toggleExpand(row.id); }}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); toggleExpand(row.id); } }}
+              className="p-0.5"
+            >
+              {expandedParents.has(row.id)
+                ? <ChevronDown className="w-4 h-4 text-secondary" />
+                : <ChevronRight className="w-4 h-4 text-secondary" />
+              }
+            </button>
+          ) : (row as FieldWithCustomer & { _isChild?: boolean })._isChild ? (
+            <span className="w-5 ml-2 border-l-2 border-gray-200 h-4" />
+          ) : (
+            <MapPin className="w-4 h-4 text-crx-green flex-shrink-0" />
+          )}
           <span className="font-medium text-nav-dark">{row.field_name}</span>
+          {(row as FieldWithCustomer & { _isParent?: boolean })._isParent && row.child_count != null && row.child_count > 0 && (
+            <Badge variant="info" className="text-[10px]">{row.child_count} sub-fields</Badge>
+          )}
         </div>
       ),
     },
@@ -296,8 +404,8 @@ export default function Fields() {
             </select>
           </div>
 
-          <CRXMap className="h-[500px] w-full rounded-lg overflow-hidden" showLayerToggle showLocateMe>
-            <FieldBoundaryLayer fields={filtered} />
+          <CRXMap className="h-[500px] w-full rounded-lg overflow-hidden" showLayerToggle showLocateMe bounds={selectedFieldBounds || mapBounds} boundsOptions={selectedFieldBounds ? { padding: 80, maxZoom: 16 } : undefined}>
+            <FieldBoundaryLayer fields={filtered} onFieldClick={(id) => setSelectedFieldId(id)} />
             <FieldMarkerLayer fields={filtered} onFieldClick={(fieldId) => navigate(`/fields/${fieldId}/dashboard`)} />
           </CRXMap>
 
@@ -315,7 +423,7 @@ export default function Fields() {
         <Card padding={false}>
           <div className="p-5">
             <DataTable<FieldWithCustomer>
-              data={filtered}
+              data={displayRows}
               columns={columns}
               searchable
               searchPlaceholder="Search fields..."
@@ -377,6 +485,36 @@ export default function Fields() {
         onConfirm={handleBulkDelete}
         loading={deleting}
       />
+
+      {/* Group Fields Modal */}
+      <Modal open={groupModalOpen} onClose={() => setGroupModalOpen(false)} title="Group Fields as Sub-fields">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Select which field becomes the parent. The other {selectedCount - 1} field(s) will become its sub-fields.
+          </p>
+          <div className="space-y-2">
+            {selectedRows.map((f) => (
+              <label key={f.id} className="flex items-center gap-2 p-2 rounded-lg border border-gray-100 hover:bg-gray-50 cursor-pointer">
+                <input
+                  type="radio"
+                  name="parent_field"
+                  checked={groupParentId === f.id}
+                  onChange={() => setGroupParentId(f.id)}
+                  className="text-crx-green focus:ring-crx-green"
+                />
+                <span className="text-sm font-medium">{f.field_name}</span>
+                <span className="text-xs text-secondary ml-auto">{f.customer_name}</span>
+              </label>
+            ))}
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setGroupModalOpen(false)}>Cancel</Button>
+            <Button onClick={handleGroupFields} loading={grouping} disabled={!groupParentId}>
+              <Link className="w-4 h-4 mr-1" /> Group Fields
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

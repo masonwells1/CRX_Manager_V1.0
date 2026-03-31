@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Trash2, MapPin, Search, ChevronDown, ChevronUp, AlertTriangle } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -7,7 +7,7 @@ import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
 import UnsavedChangesModal from '../components/ui/UnsavedChangesModal';
 import CRXMap from '../components/map/CRXMap';
-import DrawLayer from '../components/map/DrawLayer';
+import DrawLayer, { type DrawnPolygon } from '../components/map/DrawLayer';
 import AddressSearch from '../components/map/AddressSearch';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -15,6 +15,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
+import { computeBounds } from '../hooks/useFitBounds';
 import { parseDollarsToCents } from '../lib/parseCents';
 import turfCentroid from '@turf/centroid';
 import type { Feature, Polygon } from 'geojson';
@@ -62,6 +63,7 @@ export default function FieldSetup() {
 
   // Map / geo state
   const [boundaryGeoJSON, setBoundaryGeoJSON] = useState<Feature<Polygon> | null>(null);
+  const [drawnPolygons, setDrawnPolygons] = useState<DrawnPolygon[]>([]);
   const [mapCenter, setMapCenter] = useState<[number, number] | undefined>(undefined);
   const [mapZoom, setMapZoom] = useState<number | undefined>(undefined);
 
@@ -78,6 +80,12 @@ export default function FieldSetup() {
   // Collapsible sections
   const [fsaOpen, setFsaOpen] = useState(false);
   const [billingOpen, setBillingOpen] = useState(false);
+
+  // Auto-zoom to existing boundary
+  const initialBounds = useMemo(() => {
+    if (!boundaryGeoJSON) return null;
+    return computeBounds([JSON.stringify(boundaryGeoJSON.geometry)]);
+  }, [boundaryGeoJSON]);
 
   // Duplicate detection
   const [duplicateWarning, setDuplicateWarning] = useState('');
@@ -148,6 +156,21 @@ export default function FieldSetup() {
               setMapZoom(14);
             }
           } catch { /* invalid geojson */ }
+        }
+      }
+
+      // Load multi-polygon data if available
+      const { data: polyData, error: polyError } = await supabase.rpc('get_field_polygons', { p_field_id: id });
+      if (!polyError && polyData) {
+        const polyRows = assertRpcResult<Array<{ id: string; polygon_geojson: object; label: string | null; acres: number | null; sort_order: number }>>(polyData, 'get_field_polygons');
+        if (polyRows.length > 0) {
+          const loaded: DrawnPolygon[] = polyRows.map((p, i) => ({
+            drawId: p.id,
+            polygon: { type: 'Feature' as const, properties: {}, geometry: p.polygon_geojson as GeoJSON.Polygon },
+            acres: p.acres ?? 0,
+            label: p.label || `Polygon ${i + 1}`,
+          }));
+          setDrawnPolygons(loaded);
         }
       }
 
@@ -309,8 +332,29 @@ export default function FieldSetup() {
         assertRpcResult(data, 'save_field');
         const savedFieldId = isNew ? data : id;
 
-        // Save geometry if a boundary was drawn
-        if (boundaryGeoJSON && savedFieldId) {
+        // Save polygons (multi-polygon mode) or single boundary (legacy mode)
+        if (drawnPolygons.length > 0 && savedFieldId) {
+          const polygonPayload = drawnPolygons.map((p, i) => ({
+            polygon_geojson: p.polygon.geometry,
+            label: p.label,
+            acres: p.acres,
+            sort_order: i,
+          }));
+          const geoIdemKey = saveFieldGeoIdem.getKey();
+          const { error: geoError } = await supabase.rpc('save_field_polygons', {
+            p_field_id: savedFieldId,
+            p_polygons: polygonPayload,
+            p_performed_by: profile!.id,
+            p_idempotency_key: geoIdemKey,
+          });
+          if (geoError) {
+            Sentry.captureException(geoError, { tags: { source: 'critical_action', action: 'save_field_polygons' } });
+            toast('error', 'Field saved but polygons could not be saved.');
+          } else {
+            saveFieldGeoIdem.resetKey();
+          }
+        } else if (boundaryGeoJSON && savedFieldId) {
+          // Legacy single-polygon fallback
           const centroidResult = turfCentroid(boundaryGeoJSON);
           const centroidGeoJSON = JSON.stringify(centroidResult.geometry);
           const boundaryGeoJSONStr = JSON.stringify(boundaryGeoJSON.geometry);
@@ -794,18 +838,62 @@ export default function FieldSetup() {
             <CRXMap
               center={mapCenter}
               zoom={mapZoom}
+              bounds={initialBounds}
               showLocateMe
               showLayerToggle
               className="h-[400px] w-full"
             >
               <AddressSearch onSelect={handleAddressSelect} />
               <DrawLayer
-                initialGeoJSON={boundaryGeoJSON}
-                onBoundaryChange={handleBoundaryChange}
-                onBoundaryDelete={handleBoundaryDelete}
+                initialPolygons={drawnPolygons.length > 0 ? drawnPolygons : undefined}
+                onPolygonsChange={(polys) => {
+                  setDrawnPolygons(polys);
+                  const totalAcres = polys.reduce((sum, p) => sum + p.acres, 0);
+                  update('total_acres', Math.round(totalAcres * 100) / 100);
+                  if (polys.length > 0) {
+                    const center = turfCentroid(polys[0].polygon);
+                    setMapCenter([center.geometry.coordinates[0], center.geometry.coordinates[1]]);
+                  }
+                }}
+                initialGeoJSON={drawnPolygons.length === 0 ? boundaryGeoJSON : undefined}
+                onBoundaryChange={drawnPolygons.length === 0 ? handleBoundaryChange : undefined}
+                onBoundaryDelete={drawnPolygons.length === 0 ? handleBoundaryDelete : undefined}
               />
             </CRXMap>
-            {boundaryGeoJSON && (
+            {/* Polygon list panel */}
+            {drawnPolygons.length > 0 && (
+              <div className="mt-3 space-y-2">
+                <p className="text-xs font-medium text-secondary">Drawn Polygons</p>
+                {drawnPolygons.map((poly, idx) => (
+                  <div key={poly.drawId} className="flex items-center gap-3 p-2 border border-gray-100 rounded-lg">
+                    <div className="w-3 h-3 rounded-full bg-crx-green flex-shrink-0" />
+                    <input
+                      type="text"
+                      value={poly.label}
+                      onChange={(e) => {
+                        const updated = [...drawnPolygons];
+                        updated[idx] = { ...updated[idx], label: e.target.value };
+                        setDrawnPolygons(updated);
+                      }}
+                      className="flex-1 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
+                      placeholder={`Polygon ${idx + 1}`}
+                    />
+                    <span className="text-xs text-secondary whitespace-nowrap">{poly.acres.toFixed(2)} ac</span>
+                    <button
+                      onClick={() => setDrawnPolygons((prev) => prev.filter((_, i) => i !== idx))}
+                      className="text-gray-400 hover:text-red-500 p-1"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <div className="flex justify-between text-xs px-2 pt-1 font-medium text-crx-green">
+                  <span>Total</span>
+                  <span>{drawnPolygons.reduce((s, p) => s + p.acres, 0).toFixed(2)} acres</span>
+                </div>
+              </div>
+            )}
+            {drawnPolygons.length === 0 && boundaryGeoJSON && (
               <p className="text-xs text-secondary mt-2">
                 Boundary drawn — acreage auto-calculated from polygon area.
               </p>

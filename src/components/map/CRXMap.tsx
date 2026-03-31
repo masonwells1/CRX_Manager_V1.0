@@ -1,4 +1,4 @@
-import { useState, useCallback, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import Map, { NavigationControl, type MapRef } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import LayerToggle from './LayerToggle';
@@ -23,6 +23,8 @@ export interface CRXMapProps {
   showLayerToggle?: boolean;
   showLocateMe?: boolean;
   printMode?: boolean;
+  bounds?: [number, number, number, number] | null; // [minLng, minLat, maxLng, maxLat]
+  boundsOptions?: { padding?: number; maxZoom?: number };
   className?: string;
   children?: ReactNode;
   onMapLoad?: (map: MapRef) => void;
@@ -38,6 +40,8 @@ export default function CRXMap({
   interactive = true,
   showLayerToggle = false,
   showLocateMe = false,
+  bounds = null,
+  boundsOptions = { padding: 60, maxZoom: 16 },
   printMode = false,
   className = 'h-[500px] w-full',
   children,
@@ -52,12 +56,31 @@ export default function CRXMap({
 
   const effectiveLayer = printMode ? 'roads' : activeLayer;
 
+  const mapRef = useRef<MapRef | null>(null);
+
   const handleLoad = useCallback(
     (evt: { target: MapRef }) => {
+      mapRef.current = evt.target;
       onMapLoad?.(evt.target);
+      // If bounds were set before map loaded, apply now
+      if (bounds) {
+        evt.target.fitBounds(
+          [[bounds[0], bounds[1]], [bounds[2], bounds[3]]],
+          { padding: boundsOptions?.padding ?? 60, maxZoom: boundsOptions?.maxZoom ?? 16 }
+        );
+      }
     },
-    [onMapLoad]
+    [onMapLoad, bounds, boundsOptions]
   );
+
+  // Re-fit bounds when they change after initial load
+  useEffect(() => {
+    if (!bounds || !mapRef.current) return;
+    mapRef.current.fitBounds(
+      [[bounds[0], bounds[1]], [bounds[2], bounds[3]]],
+      { padding: boundsOptions?.padding ?? 60, maxZoom: boundsOptions?.maxZoom ?? 16 }
+    );
+  }, [bounds, boundsOptions]);
 
   const handleLocate = useCallback((longitude: number, latitude: number) => {
     setViewState((prev) => ({ ...prev, longitude, latitude, zoom: 15 }));

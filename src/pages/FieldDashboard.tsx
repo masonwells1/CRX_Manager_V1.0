@@ -21,6 +21,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
+import { computeBounds } from '../hooks/useFitBounds';
 import { formatLocalDate } from '../lib/dateUtils';
 import CRXMap from '../components/map/CRXMap';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
@@ -41,6 +42,7 @@ export default function FieldDashboard() {
   const [data, setData] = useState<FieldDashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
+  const [children, setChildren] = useState<Array<{ id: string; field_name: string; total_acres: number | null; boundary_geojson?: string; centroid_geojson?: string }>>([]);
 
   const fetchDashboard = useCallback(async () => {
     if (!id) return;
@@ -52,6 +54,14 @@ export default function FieldDashboard() {
       if (error) throw error;
       const dashboard = assertRpcResult<FieldDashboardResponse>(result, 'get_field_dashboard');
       setData(dashboard);
+
+      // Fetch child fields if this is a parent
+      const { data: allFields, error: childErr } = await supabase.rpc('get_fields_with_geojson');
+      if (!childErr) {
+        const allRows = assertRpcResult<Array<{ id: string; field_name: string; total_acres: number | null; boundary_geojson?: string; centroid_geojson?: string; parent_field_id?: string }>>(allFields, 'get_fields_with_geojson');
+        const childFields = allRows.filter((f) => f.parent_field_id === id);
+        setChildren(childFields);
+      }
     } catch (err) {
       Sentry.captureException(err);
       toast('error', 'Failed to load field dashboard');
@@ -64,14 +74,12 @@ export default function FieldDashboard() {
     fetchDashboard();
   }, [fetchDashboard]);
 
-  const mapCenter = useMemo<[number, number] | undefined>(() => {
-    if (!data?.field.centroid_geojson) return undefined;
-    try {
-      const geo = JSON.parse(data.field.centroid_geojson);
-      if (geo?.type === 'Point') return [geo.coordinates[0], geo.coordinates[1]];
-    } catch { /* use default */ }
-    return undefined;
-  }, [data]);
+  const mapBounds = useMemo(() => {
+    if (!data) return null;
+    const allFields = [data.field, ...children];
+    const geoStrings = allFields.flatMap((f) => [f.boundary_geojson, f.centroid_geojson]).filter(Boolean);
+    return computeBounds(geoStrings as string[]);
+  }, [data, children]);
 
   const handleExportCSV = useCallback(() => {
     if (!data) return;
@@ -139,12 +147,11 @@ export default function FieldDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <CRXMap
-            center={mapCenter}
-            zoom={mapCenter ? 14 : 7}
+            bounds={mapBounds}
             showLayerToggle
             className="h-[300px] w-full"
           >
-            <FieldBoundaryLayer fields={[field]} showLabels={false} />
+            <FieldBoundaryLayer fields={[field, ...children as unknown as typeof field[]]} showLabels={children.length > 0} />
           </CRXMap>
         </div>
         <Card className="p-4 space-y-3">
@@ -217,7 +224,29 @@ export default function FieldDashboard() {
 
       {/* Tab Content */}
       {activeTab === 'overview' && (
-        <OverviewTab summary={season_summary} activity={recent_activity} />
+        <>
+          <OverviewTab summary={season_summary} activity={recent_activity} />
+          {children.length > 0 && (
+            <Card className="p-4 mt-6">
+              <h3 className="text-sm font-medium text-secondary mb-3">Sub-fields ({children.length})</h3>
+              <div className="space-y-2">
+                {children.map((child) => (
+                  <button
+                    key={child.id}
+                    onClick={() => navigate(`/fields/${child.id}/dashboard`)}
+                    className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-gray-50 transition-colors text-left"
+                  >
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-3.5 h-3.5 text-crx-green" />
+                      <span className="text-sm font-medium">{child.field_name}</span>
+                    </div>
+                    <span className="text-xs text-secondary">{child.total_acres?.toLocaleString() ?? '—'} ac</span>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          )}
+        </>
       )}
       {activeTab === 'applications' && (
         <ApplicationsTab records={application_records} onExport={handleExportCSV} />
