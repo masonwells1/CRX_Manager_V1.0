@@ -169,6 +169,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
           upload_date: new Date().toISOString(),
           status: 'completed',
           review_status: 'unreviewed',
+          source: 'manual',
           ocr_confidence_score: 100,
           signature_detected: false,
           customer_id: formData.customer_id || null,
