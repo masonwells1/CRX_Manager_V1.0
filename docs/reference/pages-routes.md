@@ -1,4 +1,4 @@
-# Pages & Routes Reference (57 total)
+# Pages & Routes Reference (58 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -49,7 +49,7 @@
 | `/sales-reports` | SalesReports | Comprehensive sales & chemical history. 5 tabs (Detail, By Product, By Customer, By Month, By Sales Rep), 6 filters, multi-customer select with farm group support, Customer View toggle (hides cost/margin), CSV/PDF export |
 | `/reports` | Reports | 14 reports: 4 logbook, 6 financial, 4 operational. CSV/PDF export. |
 | `/fields` | Fields | Field list with Mapbox map view + bulk import (shapefile/KML/GeoJSON) |
-| `/fields/:id` | FieldDetail | Field CRUD with polygon drawing on satellite map |
+| `/fields/:id` | FieldSetup | Field CRUD with two-panel layout and satellite map with polygon drawing |
 | `/recipes` | BlendRecipes | Reusable blend recipe management, create job from recipe |
 | `/cycle-counts` | CycleCounts | Inventory cycle counting with variance tracking |
 | `/returns` | Returns | Returns/RMA workflow (request -> approve -> receive -> credit) |

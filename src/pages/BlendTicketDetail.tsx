@@ -201,12 +201,13 @@ export function BlendTicketDetail() {
       requestAnimationFrame(() => { initialLoadDone.current = true; });
       // Duplicate detection (informational only)
       if (ticketResult.data.ticket_number && ticketResult.data.ticket_date) {
-        const dupeResult = await supabase.rpc('check_duplicate_blend_ticket', {
+        const { data: dupeData, error: dupeError } = await supabase.rpc('check_duplicate_blend_ticket', {
           p_ticket_number: ticketResult.data.ticket_number,
           p_ticket_date: ticketResult.data.ticket_date,
         });
-        assertRpcResult(dupeResult, 'check_duplicate_blend_ticket');
-        const otherDupes = (dupeResult.data || []).filter((d: { id: string }) => d.id !== ticketResult.data.id);
+        if (dupeError) throw dupeError;
+        assertRpcResult(dupeData, 'check_duplicate_blend_ticket');
+        const otherDupes = (dupeData || []).filter((d: { id: string }) => d.id !== ticketResult.data.id);
         if (otherDupes.length > 0) {
           setDuplicateWarning(`A ticket with this number and date already exists (${otherDupes[0].ticket_number}). This may be a duplicate.`);
         }
@@ -305,7 +306,7 @@ export function BlendTicketDetail() {
         }));
 
         const saveKey = saveIdem.getKey();
-        const { error } = await supabase.rpc('save_blend_ticket', {
+        const { data: saveData, error } = await supabase.rpc('save_blend_ticket', {
           p_ticket_id: ticket.id,
           p_ticket_payload: ticketPayload,
           p_products: productsPayload,
@@ -313,6 +314,7 @@ export function BlendTicketDetail() {
           p_idempotency_key: saveKey,
         });
         if (error) throw error;
+        assertRpcResult(saveData, 'save_blend_ticket');
         saveIdem.resetKey();
 
         setIsDirty(false);
@@ -590,12 +592,13 @@ export function BlendTicketDetail() {
     setCreatingAppRecord(true);
     try {
       const appRecKey = appRecordIdem.getKey();
-      const { error } = await supabase.rpc('create_application_record_from_blend_ticket', {
+      const { data: appRecData, error } = await supabase.rpc('create_application_record_from_blend_ticket', {
         p_blend_ticket_id: ticket.id,
         p_performed_by: profile.id,
         p_idempotency_key: appRecKey,
       });
       if (error) throw error;
+      assertRpcResult(appRecData, 'create_application_record_from_blend_ticket');
       appRecordIdem.resetKey();
       logActivity({ event: 'application_record_created', description: `Application record created from blend ticket ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       toast('success', 'Application record created successfully');
