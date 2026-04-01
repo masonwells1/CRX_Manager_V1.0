@@ -6,7 +6,7 @@
  * state regulatory compliance (FIFRA).
  */
 import { useEffect, useState, useCallback } from 'react';
-import { Plus, AlertTriangle, Award, Package, FileText, Download } from 'lucide-react';
+import { Plus, AlertTriangle, Award, Package, FileText, Download, MapPin } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -23,7 +23,7 @@ import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils';
 import type { ApplicatorLicense, RUPSalesRecord } from '../types';
 
-type TabKey = 'licenses' | 'rup_products' | 'rup_sales';
+type TabKey = 'licenses' | 'rup_products' | 'rup_sales' | 'field_listing';
 
 interface LicenseWithCustomer extends ApplicatorLicense {
   [k: string]: unknown;
@@ -65,6 +65,22 @@ export default function Compliance() {
   });
   const [rupEndDate, setRUPEndDate] = useState(localToday());
   const [rupComplianceFilter, setRUPComplianceFilter] = useState('');
+
+  // Field listing with FSA numbers (B8)
+  interface FieldWithFSA {
+    [k: string]: unknown;
+    id: string;
+    field_name: string;
+    customer_name: string;
+    county: string | null;
+    state: string;
+    total_acres: number | null;
+    crop_type: string | null;
+    fsa_farm_number: string | null;
+    fsa_tract_number: string | null;
+    fsa_field_number: string | null;
+  }
+  const [fieldListings, setFieldListings] = useState<FieldWithFSA[]>([]);
 
   // Customers for dropdowns
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
@@ -140,6 +156,26 @@ export default function Compliance() {
     setRUPSales(assertRpcResult<RUPSalesRecord[]>(data, 'get_rup_sales_register'));
   }, [rupStartDate, rupEndDate, rupComplianceFilter, toast]);
 
+  const fetchFieldListings = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('fields')
+      .select('id, field_name, county, state, total_acres, crop_type, fsa_farm_number, fsa_tract_number, fsa_field_number, customer:customers(farm_name)')
+      .eq('is_active', true)
+      .order('field_name');
+
+    if (error) {
+      toast('error', 'Failed to load fields');
+      Sentry.captureException(error);
+      return;
+    }
+
+    const mapped = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string } }>).map((f) => ({
+      ...f,
+      customer_name: f.customer?.farm_name || 'Unknown',
+    })) as unknown as FieldWithFSA[];
+    setFieldListings(mapped);
+  }, [toast]);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
     if (tab === 'licenses') {
@@ -148,9 +184,11 @@ export default function Compliance() {
       await fetchRUPProducts();
     } else if (tab === 'rup_sales') {
       await fetchRUPSales();
+    } else if (tab === 'field_listing') {
+      await fetchFieldListings();
     }
     setLoading(false);
-  }, [tab, fetchLicenses, fetchCustomers, fetchRUPProducts, fetchRUPSales]);
+  }, [tab, fetchLicenses, fetchCustomers, fetchRUPProducts, fetchRUPSales, fetchFieldListings]);
 
   useEffect(() => {
     fetchData();
@@ -460,6 +498,14 @@ export default function Compliance() {
         >
           <FileText className="w-4 h-4" /> RUP Sales Register
         </button>
+        <button
+          onClick={() => setTab('field_listing')}
+          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors flex items-center gap-2 ${
+            tab === 'field_listing' ? 'bg-white text-nav-dark shadow-sm' : 'text-secondary hover:text-nav-dark'
+          }`}
+        >
+          <MapPin className="w-4 h-4" /> Field Listing / FSA
+        </button>
       </div>
 
       {/* ========== LICENSES TAB ========== */}
@@ -691,6 +737,110 @@ export default function Compliance() {
                 searchKeys={['buyer_name', 'product_name', 'epa_registration', 'buyer_certification_number']}
                 emptyTitle="No RUP sales records"
                 emptyDescription="RUP sales records are auto-generated when invoices with RUP products are posted."
+              />
+            </div>
+          </Card>
+        </>
+      )}
+
+      {/* ========== FIELD LISTING / FSA TAB ========== */}
+      {tab === 'field_listing' && (
+        <>
+          {/* Summary */}
+          {fieldListings.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <Card>
+                <p className="text-xs text-secondary mb-1">Total Fields</p>
+                <p className="text-2xl font-semibold font-heading text-nav-dark">{fieldListings.length}</p>
+              </Card>
+              <Card>
+                <p className="text-xs text-secondary mb-1">With FSA Numbers</p>
+                <p className="text-2xl font-semibold font-heading text-crx-green">
+                  {fieldListings.filter((f) => f.fsa_farm_number || f.fsa_tract_number || f.fsa_field_number).length}
+                </p>
+              </Card>
+              <Card>
+                <p className="text-xs text-secondary mb-1">Missing FSA</p>
+                <p className="text-2xl font-semibold font-heading text-yellow-600">
+                  {fieldListings.filter((f) => !f.fsa_farm_number && !f.fsa_tract_number && !f.fsa_field_number).length}
+                </p>
+              </Card>
+              <Card>
+                <p className="text-xs text-secondary mb-1">Total Acres</p>
+                <p className="text-2xl font-semibold font-heading text-nav-dark">
+                  {fieldListings.reduce((sum, f) => sum + (f.total_acres || 0), 0).toLocaleString()}
+                </p>
+              </Card>
+            </div>
+          )}
+
+          {/* Export button */}
+          {fieldListings.length > 0 && (
+            <div className="flex justify-end">
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Download className="w-4 h-4" />}
+                onClick={() =>
+                  exportToCSV(
+                    fieldListings as unknown as Record<string, unknown>[],
+                    [
+                      { key: 'field_name', header: 'Field Name' },
+                      { key: 'customer_name', header: 'Customer' },
+                      { key: 'county', header: 'County' },
+                      { key: 'state', header: 'State' },
+                      { key: 'total_acres', header: 'Acres' },
+                      { key: 'crop_type', header: 'Crop' },
+                      { key: 'fsa_farm_number', header: 'FSA Farm #' },
+                      { key: 'fsa_tract_number', header: 'FSA Tract #' },
+                      { key: 'fsa_field_number', header: 'FSA Field #' },
+                    ],
+                    'field_listing_fsa'
+                  )
+                }
+              >
+                Export CSV
+              </Button>
+            </div>
+          )}
+
+          <Card padding={false}>
+            <div className="p-5">
+              <DataTable<FieldWithFSA>
+                columns={[
+                  {
+                    key: 'field_name',
+                    header: 'Field Name',
+                    sortable: true,
+                    render: (r) => <span className="font-medium text-nav-dark">{r.field_name}</span>,
+                  },
+                  { key: 'customer_name', header: 'Customer', sortable: true },
+                  { key: 'county', header: 'County', render: (r) => r.county || '-' },
+                  { key: 'total_acres', header: 'Acres', sortable: true, render: (r) => r.total_acres?.toLocaleString() || '-' },
+                  { key: 'crop_type', header: 'Crop', render: (r) => r.crop_type || '-' },
+                  {
+                    key: 'fsa_farm_number',
+                    header: 'FSA Farm #',
+                    render: (r) => r.fsa_farm_number || <span className="text-gray-300">—</span>,
+                  },
+                  {
+                    key: 'fsa_tract_number',
+                    header: 'FSA Tract #',
+                    render: (r) => r.fsa_tract_number || <span className="text-gray-300">—</span>,
+                  },
+                  {
+                    key: 'fsa_field_number',
+                    header: 'FSA Field #',
+                    render: (r) => r.fsa_field_number || <span className="text-gray-300">—</span>,
+                  },
+                ]}
+                data={fieldListings}
+                loading={loading}
+                searchable
+                searchPlaceholder="Search fields..."
+                searchKeys={['field_name', 'customer_name', 'county', 'fsa_farm_number', 'fsa_tract_number', 'fsa_field_number']}
+                emptyTitle="No fields found"
+                emptyDescription="Fields with FSA numbers will appear here."
               />
             </div>
           </Card>

@@ -64,6 +64,7 @@ interface LocalSection {
   section_notes: string | null;
   section_header_notes: string | null;
   needed_by_date: string | null;
+  field_id: string | null;
   items: LocalItem[];
 }
 
@@ -132,6 +133,7 @@ function makeEmptySection(order: number): LocalSection {
     section_notes: null,
     section_header_notes: null,
     needed_by_date: null,
+    field_id: null,
     items: [],
   };
 }
@@ -178,6 +180,7 @@ export default function QuoteBuilder() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [unitConversions, setUnitConversions] = useState<UnitConversion[]>([]);
+  const [fields, setFields] = useState<{ id: string; field_name: string; customer_id: string | null }[]>([]);
 
   const [productSearchOpen, setProductSearchOpen] = useState<{
     sectionKey: string;
@@ -243,10 +246,11 @@ export default function QuoteBuilder() {
   }, [customerId, sections, profile?.id]);
 
   const fetchReferenceData = useCallback(async () => {
-    const [custRes, prodRes, convRes] = await Promise.all([
+    const [custRes, prodRes, convRes, fieldsRes] = await Promise.all([
       supabase.from('customers').select('*').eq('is_active', true).order('farm_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('unit_conversions').select('*'),
+      supabase.from('fields').select('id, field_name, customer_id').eq('is_active', true).order('field_name'),
     ]);
 
     if (custRes.error) {
@@ -264,6 +268,7 @@ export default function QuoteBuilder() {
     setCustomers((custRes.data || []) as Customer[]);
     setProducts((prodRes.data || []) as Product[]);
     setUnitConversions((convRes.data || []) as UnitConversion[]);
+    setFields((fieldsRes.data || []) as { id: string; field_name: string; customer_id: string | null }[]);
   }, [toast]);
 
   const generateQuoteNumber = async () => {
@@ -328,6 +333,7 @@ export default function QuoteBuilder() {
       section_notes: s.section_notes,
       section_header_notes: s.section_header_notes,
       needed_by_date: s.needed_by_date || null,
+      field_id: s.field_id || null,
       items: dbItems
         .filter((item) => item.section_id === s.id)
         .map((item) => {
@@ -786,6 +792,7 @@ export default function QuoteBuilder() {
       section_notes: sec.section_notes || null,
       section_header_notes: sec.section_header_notes || null,
       needed_by_date: sec.needed_by_date || null,
+      field_id: sec.field_id || null,
       items: sec.items
         .filter((item) => item.product_id)
         .map((item) => ({
@@ -1809,6 +1816,22 @@ export default function QuoteBuilder() {
                       />
                     </div>
                   )}
+                  <div className="flex items-center gap-2 ml-2">
+                    <label className="text-xs text-secondary whitespace-nowrap">Field:</label>
+                    <select
+                      value={sec.field_id || ''}
+                      onChange={(e) => updateSectionField(sec._key, 'field_id', e.target.value || null)}
+                      className="text-sm border border-gray-200 rounded px-2 py-1 max-w-[180px]"
+                    >
+                      <option value="">— None —</option>
+                      {(customerId
+                        ? fields.filter(f => f.customer_id === customerId)
+                        : fields
+                      ).map(f => (
+                        <option key={f.id} value={f.id}>{f.field_name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Button

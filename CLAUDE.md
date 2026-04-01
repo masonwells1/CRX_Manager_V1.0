@@ -7,9 +7,9 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-03-29)
-- 58 pages, 89+ tables, ~147 RPCs, 225 migrations, 7 Edge Functions
-- 1,713 unit tests (110 files) + 83 E2E spec files, all passing
+## Current State (2026-04-01)
+- 59 pages, 90+ tables, ~153 RPCs, 232 migrations, 7 Edge Functions
+- 1,744 unit tests (115 files) + 92 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 - All RPC data usage wrapped with `assertRpcResult()` — enforced by ESLint + safety-net test
@@ -45,7 +45,7 @@
 ### Business Logic
 - NEVER skip delivery confirm→complete flow (scheduled → in_progress → completed)
 - NEVER allow editing delivery items once delivery is in_progress or beyond — items are only editable while status = 'scheduled'
-- NEVER create invoices without an order — always linked via order_id
+- NEVER create invoices without an order OR blend ticket — must have order_id or blend_ticket_id
 - NEVER bypass `check_period_open()` — closed periods block backdated transactions
 - NEVER allow non-admin access to month-end, commissions, or settings
 - Season = October 1 to September 30

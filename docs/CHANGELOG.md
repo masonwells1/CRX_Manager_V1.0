@@ -4,6 +4,52 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-03-31 — Workflow Gaps Remediation: Broken Connections + Billing Splits + Dispatch
+
+### Summary
+Five-phase migration session fixing workflow gaps across blend tickets, invoicing, field billing, dispatch, and crop history tracking. Adds a new Dispatch Board page.
+
+### New Page
+- **DispatchBoard** (`/dispatch`) — Map-based dispatch view for job scheduling with applicator assignment
+
+### New Table
+- **field_crop_history** — Tracks multi-year crop rotation per field per season with auto-snapshot trigger
+
+### New RPCs
+- `create_invoice_from_blend_ticket(p_blend_ticket_id, p_created_by, p_idempotency_key)` — creates draft invoice from approved blend ticket
+- `get_field_billing_splits_for_order(p_order_id)` — returns billing splits for order fields
+- `get_field_billing_splits_for_blend_ticket(p_blend_ticket_id)` — returns billing splits for blend ticket fields
+- `create_split_invoices_from_order(p_order_id, p_salesman_id, p_invoice_type, p_idempotency_key)` — creates proportional split invoices
+
+### Modified RPCs
+- `create_application_record_from_blend_ticket` — now returns `uuid[]` (one record per field) instead of single `uuid`
+
+### New Triggers
+- `sync_blend_ticket_payment_status()` — auto-syncs payment_status when invoice voided
+- `snapshot_field_crop_history()` — auto-snapshots crop_type changes to field_crop_history
+
+### New Columns
+- `blend_ticket_products.unit_cost_cents`, `blend_ticket_products.unit_price_cents`
+- `blend_tickets.job_id` (FK to jobs)
+- `quote_sections.field_id` (FK to fields)
+- `invoices.invoice_group_id` (groups split invoices)
+- `jobs.priority`, `jobs.estimated_hours`
+
+### Migrations (5)
+- `20260335000000` — Phase 1: broken connections (blend ticket cost/price, multi-field app records, job linkage)
+- `20260335100000` — Phase 2: blend ticket invoicing + payment status sync trigger
+- `20260335200000` — Phase 3: field billing splits + split invoice creation
+- `20260335300000` — Phase 4: dispatch columns (priority + estimated hours on jobs)
+- `20260335400000` — Phase 5: crop history table + auto-snapshot trigger
+
+### Stats
+- Page count: 58 → 59
+- Migration count: 226 → 231
+- RPC count: ~148 → ~153
+- Table count: 88 → 89
+
+---
+
 ## 2026-03-30 — Field Management V2: Dashboard + Map Layer System
 
 ### Summary

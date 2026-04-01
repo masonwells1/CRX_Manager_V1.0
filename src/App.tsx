@@ -55,6 +55,7 @@ const VehicleDetail = lazy(() => import('./pages/VehicleDetail'));
 const ApplicationRecords = lazy(() => import('./pages/ApplicationRecords'));
 const Jobs = lazy(() => import('./pages/Jobs'));
 const JobDetail = lazy(() => import('./pages/JobDetail'));
+const DispatchBoard = lazy(() => import('./pages/DispatchBoard'));
 const MonthEndClose = lazy(() => import('./pages/MonthEndClose'));
 const CommissionPayments = lazy(() => import('./pages/CommissionPayments'));
 const CustomerTransactionReview = lazy(() => import('./pages/CustomerTransactionReview'));
@@ -204,6 +205,7 @@ const router = createBrowserRouter([
           // Admin + Sales Rep + Applicator (applicators need job access)
           { path: 'jobs', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><Jobs /></ProtectedRoute> },
           { path: 'jobs/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><JobDetail /></ProtectedRoute> },
+          { path: 'dispatch', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><DispatchBoard /></ProtectedRoute> },
 
           // Admin only
           { path: 'financial-dashboard', element: <ProtectedRoute allowedRoles={['admin']}><FinancialDashboard /></ProtectedRoute> },

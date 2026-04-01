@@ -32,7 +32,20 @@ import type {
   FieldActivityEntry,
 } from '../types';
 
-type Tab = 'overview' | 'applications' | 'billing' | 'details';
+type Tab = 'overview' | 'applications' | 'billing' | 'details' | 'crop_history';
+
+interface CropHistoryRecord {
+  [k: string]: unknown;
+  id: string;
+  season: number;
+  crop_type: string;
+  variety: string | null;
+  planting_date: string | null;
+  harvest_date: string | null;
+  yield_per_acre: number | null;
+  yield_unit: string | null;
+  notes: string | null;
+}
 
 export default function FieldDashboard() {
   const { id } = useParams<{ id: string }>();
@@ -42,6 +55,7 @@ export default function FieldDashboard() {
   const [data, setData] = useState<FieldDashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('overview');
+  const [cropHistory, setCropHistory] = useState<CropHistoryRecord[]>([]);
   const [children, setChildren] = useState<Array<{ id: string; field_name: string; total_acres: number | null; boundary_geojson?: string; centroid_geojson?: string }>>([]);
 
   const fetchDashboard = useCallback(async () => {
@@ -54,6 +68,14 @@ export default function FieldDashboard() {
       if (error) throw error;
       const dashboard = assertRpcResult<FieldDashboardResponse>(result, 'get_field_dashboard');
       setData(dashboard);
+
+      // Fetch crop history
+      const { data: histData } = await supabase
+        .from('field_crop_history')
+        .select('*')
+        .eq('field_id', id)
+        .order('season', { ascending: false });
+      setCropHistory((histData || []) as CropHistoryRecord[]);
 
       // Fetch child fields if this is a parent
       const { data: allFields, error: childErr } = await supabase.rpc('get_fields_with_geojson');
@@ -204,6 +226,7 @@ export default function FieldDashboard() {
             { key: 'applications', label: 'Applications', icon: Droplets },
             { key: 'billing', label: 'Billing', icon: FileText },
             { key: 'details', label: 'Details', icon: MapPin },
+            { key: 'crop_history', label: 'Crop History', icon: Calendar },
           ] as const).map(({ key, label, icon: Icon }) => (
             <button
               key={key}
@@ -256,6 +279,9 @@ export default function FieldDashboard() {
       )}
       {activeTab === 'details' && (
         <DetailsTab field={field} activity={recent_activity} />
+      )}
+      {activeTab === 'crop_history' && (
+        <CropHistoryTab history={cropHistory} currentCrop={field.crop_type} />
       )}
     </div>
   );
@@ -602,6 +628,63 @@ function DetailsTab({
             )}
           </>
         )}
+      </Card>
+    </div>
+  );
+}
+
+/* ─── Crop History Tab ─────────────────────────────────────────── */
+
+function CropHistoryTab({ history, currentCrop }: { history: CropHistoryRecord[]; currentCrop: string | null }) {
+  const columns: Column<CropHistoryRecord>[] = [
+    {
+      key: 'season',
+      header: 'Season',
+      sortable: true,
+      render: (r) => <span className="font-medium text-nav-dark">{r.season - 1}–{r.season}</span>,
+    },
+    {
+      key: 'crop_type',
+      header: 'Crop',
+      sortable: true,
+      render: (r) => <Badge variant="default">{r.crop_type}</Badge>,
+    },
+    { key: 'variety', header: 'Variety', render: (r) => r.variety || '—' },
+    { key: 'planting_date', header: 'Planted', render: (r) => r.planting_date || '—' },
+    { key: 'harvest_date', header: 'Harvested', render: (r) => r.harvest_date || '—' },
+    {
+      key: 'yield_per_acre',
+      header: 'Yield/Acre',
+      render: (r) => r.yield_per_acre != null ? `${r.yield_per_acre.toLocaleString()} ${r.yield_unit || ''}` : '—',
+    },
+    { key: 'notes', header: 'Notes', render: (r) => r.notes || '—' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {currentCrop && (
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <Sprout className="w-5 h-5 text-crx-green" />
+            <div>
+              <p className="text-sm font-medium text-nav-dark">Current Crop</p>
+              <p className="text-lg font-semibold text-crx-green">{currentCrop}</p>
+            </div>
+          </div>
+        </Card>
+      )}
+      <Card padding={false}>
+        <div className="p-5">
+          <DataTable<CropHistoryRecord>
+            columns={columns}
+            data={history}
+            searchable
+            searchPlaceholder="Search crop history..."
+            searchKeys={['crop_type', 'variety', 'notes']}
+            emptyTitle="No crop history"
+            emptyDescription="Crop history is auto-recorded when the field's crop type changes between seasons."
+          />
+        </div>
       </Card>
     </div>
   );

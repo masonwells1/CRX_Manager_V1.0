@@ -1,4 +1,4 @@
-# Migration History (224 migrations)
+# Migration History (231 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -230,3 +230,8 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 224 | 20260334700000 | **Save blend ticket fields** — `save_blend_ticket_fields(p_blend_ticket_id, p_fields, p_performed_by, p_idempotency_key)` RPC. Replaces all field assignments for a blend ticket atomically. |
 | 225 | 20260334800000 | **Duplicate blend ticket detection** — `check_duplicate_blend_ticket(p_ticket_number, p_ticket_date)` RPC. Returns matching tickets for duplicate warning. |
 | 226 | 20260330032232 | **get_field_dashboard RPC** — Returns comprehensive JSONB for field dashboard: field data with customer/billing defaults/geometry, season summary stats, application records with applicator/vehicle/weather, and recent activity feed. |
+| 227 | 20260335000000 | **Workflow gaps Phase 1: broken connections** — Adds `unit_cost_cents`/`unit_price_cents` to `blend_ticket_products`, updates `create_application_record_from_blend_ticket` to return `uuid[]` (one per field), adds `blend_tickets.job_id` FK column |
+| 228 | 20260335100000 | **Workflow gaps Phase 2: blend ticket invoice** — `create_invoice_from_blend_ticket` RPC + `sync_blend_ticket_payment_status()` trigger for auto-syncing payment_status when invoice voided |
+| 229 | 20260335200000 | **Workflow gaps Phase 3: field billing splits** — Adds `quote_sections.field_id`, `invoices.invoice_group_id`, field billing split helper RPCs + `create_split_invoices_from_order` RPC |
+| 230 | 20260335300000 | **Workflow gaps Phase 4: dispatch columns** — Adds `jobs.priority` and `jobs.estimated_hours` columns |
+| 231 | 20260335400000 | **Workflow gaps Phase 5: crop history** — Creates `field_crop_history` table with auto-snapshot trigger (`snapshot_field_crop_history`) for tracking multi-year crop rotation |

@@ -1,4 +1,4 @@
-# Pages & Routes Reference (58 total)
+# Pages & Routes Reference (59 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -60,4 +60,5 @@
 | `/team-board` | TeamBoard | Team communication hub: notes/todos/announcements with entity linking (delivery, order, customer, job, PO, quote), today's deliveries bulletin (role-aware), yesterday's recap, photo attachments, comments, activity log, search/filter, real-time. 8 sub-components in `src/components/team/` |
 | `/notifications` | Notifications | User notification center |
 | `/settings` | SettingsPage | Admin only: company settings, user management |
+| `/dispatch` | DispatchBoard | Map-based dispatch view for job scheduling with applicator assignment |
 | `/fields/:id/dashboard` | FieldDashboard | Read-only field profile: overview (season stats, activity), applications (history table with weather), billing (splits visualization), details (FSA, legal desc, notes) |

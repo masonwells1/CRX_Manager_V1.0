@@ -1,4 +1,4 @@
-# RPC Functions Reference (~144 unique functions)
+# RPC Functions Reference (~153 unique functions)
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -44,6 +44,8 @@
 ## Invoice & Payments
 - `create_invoice_from_order()` — create invoice from order items
 - `create_invoice_from_delivery()` — create invoice from delivery items
+- `create_invoice_from_blend_ticket(p_blend_ticket_id, p_created_by, p_idempotency_key)` → uuid — creates draft invoice from approved blend ticket with cost/price from blend_ticket_products
+- `create_split_invoices_from_order(p_order_id, p_salesman_id, p_invoice_type, p_idempotency_key)` → uuid[] — creates proportional split invoices based on field billing splits for an order
 - `post_invoice()` — posts invoice; calls `check_period_open()` before posting; raises error if accounting period is closed. Also triggers `generate_rup_sales_records()` for RUP products.
 - `void_invoice()` — void a posted invoice, reversing all related records
 - `batch_post_invoices()` — batch post multiple invoices at once
@@ -69,7 +71,7 @@
 - `complete_job()` — marks completed, creates application_record, deducts inventory
 - `transfer_job_to_invoice()` — creates invoice from job, sets status='invoiced'
 - `load_recipe_into_job()` — copies recipe items into job chemicals
-- `create_application_record_from_blend_ticket()` — create application record from blend ticket data
+- `create_application_record_from_blend_ticket(p_blend_ticket_id, p_performed_by, p_idempotency_key)` → uuid[] — create application records from blend ticket data (one per field, returns array of record IDs)
 
 ## Blend Ticket Linkage
 - `link_blend_ticket_to_order()` — link a blend ticket to an existing order
@@ -173,6 +175,10 @@
 ## Seasonal Rollover
 - `rollover_quote_to_season(p_quote_id uuid, p_new_season integer, p_performed_by uuid, p_idempotency_key text DEFAULT NULL)` → Returns jsonb with new quote_id, quote_number, season. Creates duplicate quote with updated pricing for the new season. SECURITY DEFINER, search_path = public, pg_temp
 
+## Field Billing Splits
+- `get_field_billing_splits_for_order(p_order_id)` → table — returns billing splits for all fields associated with an order
+- `get_field_billing_splits_for_blend_ticket(p_blend_ticket_id)` → table — returns billing splits for all fields associated with a blend ticket
+
 ## Automation
 - `auto_expire_quotes()` — cron-callable: expires quotes past their expiration date, releases inventory holds
 - `check_remainder_reminders()` — cron-callable: checks for delivery remainders needing follow-up reminders
@@ -245,6 +251,10 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 
 ### Blend Ticket Helpers
 - `update_blend_ticket_billing_status()` — update billing status on blend ticket changes
+- `sync_blend_ticket_payment_status()` → trigger — auto-syncs blend ticket payment_status when linked invoice is voided
+
+### Crop History
+- `snapshot_field_crop_history()` → trigger — auto-snapshots crop_type changes on fields to field_crop_history table
 
 ### Field Dashboard
 - `get_field_dashboard(p_field_id, p_season)` — returns JSONB: field data + season summary + application records + recent activity

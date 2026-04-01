@@ -663,6 +663,11 @@ export default function InvoiceDetail() {
                     Posted {new Date(invoice.posted_at).toLocaleDateString()}
                   </span>
                 )}
+                {invoice.invoice_group_id && (
+                  <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
+                    Split Invoice Group
+                  </span>
+                )}
               </div>
             )}
           </div>

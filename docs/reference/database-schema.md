@@ -1,4 +1,4 @@
-# Database Schema Reference (88 Tables)
+# Database Schema Reference (89 Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -12,7 +12,7 @@
 
 ## Quotes & Orders
 - `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at)
-- `quote_sections` - Sections within a quote (section_name, sort_order)
+- `quote_sections` - Sections within a quote (section_name, sort_order, field_id)
 - `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals)
 - `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)
 - `quote_pdf_templates` - Saved column presets for quote PDF generation (template_name, columns jsonb)
@@ -42,7 +42,7 @@
 - `receiving_photos` - Photos attached to receiving events (receiving_record_id, storage_path, image_url)
 
 ## Job Scheduling
-- `jobs` - Job headers (status: scheduled/in_progress/completed/cancelled/invoiced, customer, applicator, vehicle, recipe)
+- `jobs` - Job headers (status: scheduled/in_progress/completed/cancelled/invoiced, customer, applicator, vehicle, recipe, priority, estimated_hours)
 - `job_fields` - Fields assigned to a job (many-to-many with sort order)
 - `job_chemicals` - Chemicals/products for a job with rates and pricing
 - `job_applied_info` - Recorded data when completed: actual times, weather, gallons applied
@@ -51,8 +51,8 @@
 - `application_records` - Single source of truth for "what was applied, where, when, by whom." Fed from completed jobs AND approved blend tickets. JSONB for products and weather.
 
 ## OCR / Blend Tickets
-- `blend_tickets` - OCR ticket records (ticket_number, status, review_status, ocr_confidence_score, raw_ocr_text)
-- `blend_ticket_products` - Extracted products (product_name, quantity, confidence_score, manually_corrected)
+- `blend_tickets` - OCR ticket records (ticket_number, status, review_status, ocr_confidence_score, raw_ocr_text, job_id)
+- `blend_ticket_products` - Extracted products (product_name, quantity, confidence_score, manually_corrected, unit_cost_cents, unit_price_cents)
 - `blend_ticket_images` - Uploaded images (storage_path, image_url, file_size)
 - `blend_ticket_fields` - Per-field application tracking (field_id, customer_id, planned_acres, actual_acres, applied_at)
 - `ocr_processing_queue` - Background queue (status, priority, retry_count)
@@ -68,7 +68,7 @@
 - `notifications` - Per-user notifications (user_id, title, message, notification_type, is_read)
 
 ## Billing / Invoices
-- `invoices` - Invoice headers (invoice_number, order_id, customer_id, status: draft/posted/void, balance_cents bigint, due_date)
+- `invoices` - Invoice headers (invoice_number, order_id, customer_id, status: draft/posted/void, balance_cents bigint, due_date, invoice_group_id)
 - `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, line_total_cents)
 - `allocation_sets` - Payment-to-invoice allocation groups (payment_id, allocated_at, customer_id, total_payment_cents, total_allocated_cents, payment_method, reference_number, check_number, payment_date, season)
 - `order_line_allocations` - Payment portions applied to order items
@@ -119,6 +119,9 @@
 ## Billing Shares
 - `invoice_shares` - Split-bill invoice shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order)
 - `order_shares` - Split-bill order shares (order_id, customer_id, customer_name, split_percentage, amount_cents, is_primary, sort_order)
+
+## Crop History
+- `field_crop_history` - Tracks multi-year crop rotation per field per season (id, field_id, season, crop_type, variety, planting_date, harvest_date, yield_per_acre, yield_unit, notes, created_at). Auto-populated via `snapshot_field_crop_history()` trigger on field crop_type changes. RLS enabled for authenticated users.
 
 ## Document Processing
 - `document_processing_log` - OCR/document processing audit (user_id, document_type CHECK: invoice/purchase_order/price_list/product_list/customer_list/quote_list, file_name, file_size_bytes, page_count, processing_time_ms, confidence, items_extracted, success, error_message)
@@ -208,3 +211,4 @@
 | note_tags | All authenticated | All authenticated | Admin / Own | Admin |
 | team_note_tags | All authenticated | All authenticated | - | All authenticated |
 | note_activity_log | All authenticated | All authenticated | - | - |
+| field_crop_history | All authenticated | All authenticated | All authenticated | - |

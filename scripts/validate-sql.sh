@@ -129,7 +129,9 @@ for file in $STAGED_SQL; do
   fi
 
   # 4d: entity_type, entity_id in idempotency_keys INSERT
-  if echo "$CODE_ONLY" | grep -qiE 'idempotency_keys' && echo "$CODE_ONLY" | grep -qiE 'entity_type\s*,\s*entity_id'; then
+  # Must check that entity_type/entity_id appear in an INSERT INTO idempotency_keys context,
+  # not just anywhere in the file (financial_audit_log and activity_feed also use these column names)
+  if echo "$CODE_ONLY" | grep -qiE 'INTO\s+idempotency_keys\s*\([^)]*entity_type'; then
     echo "BLOCKED: $file"
     echo "  Uses 'entity_type, entity_id' columns on idempotency_keys — wrong column names."
     echo "  CORRECT: operation, result"

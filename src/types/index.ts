@@ -163,6 +163,7 @@ export interface QuoteSection {
   section_notes: string | null;
   section_header_notes: string | null;
   needed_by_date: string | null;
+  field_id: string | null;
 }
 
 export interface QuoteItem {
@@ -782,12 +783,14 @@ export interface BlendTicket {
   salesman_id: string | null;
   order_link_status: BlendTicketOrderLinkStatus;
   payment_status: BlendTicketPaymentStatus;
+  job_id: string | null;
   created_at: string;
   updated_at: string;
   uploader?: Profile;
   reviewer?: Profile;
   customer?: Customer;
   field?: Field;
+  job?: Job;
   salesman?: Profile;
   applicator?: Profile;
   vehicle?: Vehicle;
@@ -809,6 +812,8 @@ export interface BlendTicketProduct {
   manually_corrected: boolean;
   rate_per_acre: number | null;
   rate_per_acre_unit: string | null;
+  unit_cost_cents: number | null;
+  unit_price_cents: number | null;
   created_at: string;
   product?: Product;
 }
@@ -959,6 +964,7 @@ export interface Invoice {
 
   is_quick_delivery?: boolean;
   write_off_cents: number;
+  invoice_group_id: string | null;
 
   deleted_at: string | null;
   created_at: string;
@@ -1627,6 +1633,8 @@ export interface Job {
   total_acres: number | null;
   total_cost_cents: number;
   total_price_cents: number;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  estimated_hours: number | null;
   invoice_id: string | null;
   created_by: string | null;
   deleted_at: string | null;

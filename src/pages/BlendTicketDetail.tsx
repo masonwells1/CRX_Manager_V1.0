@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck, RefreshCw, MapPin } from 'lucide-react';
+import { Save, Check, X, Plus, Trash2, Image as ImageIcon, AlertCircle, Link2, Unlink, ShoppingCart, ClipboardCheck, RefreshCw, MapPin, FileText } from 'lucide-react';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
@@ -22,7 +22,7 @@ import { validateBlendMath } from '../lib/blendMathValidator';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday } from '../lib/dateUtils';
 import { useOCRThresholds } from '../hooks/useOCRThresholds';
-import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field } from '../types';
+import type { BlendTicket, BlendTicketProduct, BlendTicketImage, BlendTicketToOrderItem, Customer, Product, Order, OrderItem, Field, Job } from '../types';
 
 export function BlendTicketDetail() {
   const { id } = useParams<{ id: string }>();
@@ -51,6 +51,10 @@ export function BlendTicketDetail() {
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
 
+  // Jobs for job linking (B6)
+  const [availableJobs, setAvailableJobs] = useState<Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]>([]);
+  const [selectedJobId, setSelectedJobId] = useState<string>('');
+
   // Phase 3: Order linkage state
   const [availableFields, setAvailableFields] = useState<Field[]>([]);
   const [ticketFields, setTicketFields] = useState<{ field_id: string; customer_id: string | null; planned_acres: string; field_name?: string; customer_name?: string }[]>([]);
@@ -75,6 +79,9 @@ export function BlendTicketDetail() {
   const [reprocessing, setReprocessing] = useState(false);
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
   const [suggestedOrder, setSuggestedOrder] = useState<{ id: string; order_number: string; matchCount: number } | null>(null);
+  const [createInvoiceConfirmOpen, setCreateInvoiceConfirmOpen] = useState(false);
+  const [creatingInvoice, setCreatingInvoice] = useState(false);
+  const invoiceIdem = useIdempotencyKey('create_invoice_from_blend_ticket', profile?.id || '');
 
   const [formData, setFormData] = useState({
     customer_id: '',
@@ -97,7 +104,7 @@ export function BlendTicketDetail() {
 
   const loadTicketData = useCallback(async () => {
     try {
-      const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult, fieldsResult, linkedResult] = await Promise.all([
+      const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult, fieldsResult, linkedResult, jobsResult] = await Promise.all([
         supabase
           .from('blend_tickets')
           .select(`
@@ -137,7 +144,13 @@ export function BlendTicketDetail() {
         supabase
           .from('blend_ticket_to_order_items')
           .select('*, order:orders(id, order_number, status, customer_id, total_price)')
-          .eq('blend_ticket_id', id!)
+          .eq('blend_ticket_id', id!),
+        supabase
+          .from('jobs')
+          .select('id, job_number, job_date, status')
+          .is('deleted_at', null)
+          .order('job_date', { ascending: false })
+          .limit(200)
       ]);
 
       if (ticketResult.error) throw ticketResult.error;
@@ -165,6 +178,8 @@ export function BlendTicketDetail() {
       const allFields = (fieldsResult.data || []) as Field[];
       setAvailableFields(allFields);
       setLinkedOrders(linkedResult.data || []);
+      setAvailableJobs((jobsResult.data || []) as Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]);
+      setSelectedJobId(ticketResult.data.job_id || '');
 
       // Load existing blend_ticket_fields
       const { data: btfData } = await supabase
@@ -280,6 +295,7 @@ export function BlendTicketDetail() {
           ticket_date: formData.ticket_date || null,
           ticket_time: formData.ticket_time || null,
           job_number: formData.job_number || null,
+          job_id: selectedJobId || null,
           invoice_number: formData.invoice_number || null,
           driver_name: formData.driver_name || null,
           applicator_name: formData.applicator_name || null,
@@ -550,6 +566,29 @@ export function BlendTicketDetail() {
     }
   }
 
+  async function handleCreateInvoice() {
+    if (!ticket || !profile) return;
+
+    await runCriticalAction({
+      action: async () => {
+        const key = invoiceIdem.getKey();
+        const { data, error } = await supabase.rpc('create_invoice_from_blend_ticket', {
+          p_blend_ticket_id: ticket.id,
+          p_created_by: profile.id,
+          p_idempotency_key: key,
+        });
+        if (error) throw error;
+        const invoiceId = assertRpcResult<string>(data, 'create_invoice_from_blend_ticket');
+        if (profile) logActivity({ event: 'invoice_created_from_blend_ticket', description: `Invoice created from blend ticket ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'invoice', entityId: invoiceId });
+        navigate(`/invoices/${invoiceId}`);
+      },
+      toast,
+      setLoading: setCreatingInvoice,
+      successMessage: 'Invoice created from blend ticket',
+      sentryTag: 'create_invoice_from_blend_ticket',
+    });
+  }
+
   async function handleCreateOrder() {
     if (!ticket || !profile || !newOrderNumber.trim()) return;
     setLinking(true);
@@ -785,7 +824,7 @@ export function BlendTicketDetail() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Job #
+                Job # <span className="text-xs text-secondary font-normal">(OCR text)</span>
               </label>
               <Input
                 type="text"
@@ -793,6 +832,23 @@ export function BlendTicketDetail() {
                 onChange={(e) => setFormData({ ...formData, job_number: e.target.value })}
                 placeholder="Job / work order number"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Link to Job
+              </label>
+              <select
+                value={selectedJobId}
+                onChange={(e) => { setSelectedJobId(e.target.value); setIsDirty(true); }}
+                className="w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              >
+                <option value="">— No linked job —</option>
+                {availableJobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {j.job_number} ({j.job_date}) — {j.status}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>
@@ -1255,6 +1311,47 @@ export function BlendTicketDetail() {
           </div>
         )}
       </Card>
+
+      {/* Create Invoice directly from Blend Ticket (Pillar 1) */}
+      {ticket.review_status === 'approved' && ticket.payment_status !== 'billed' && (
+        <Card className="p-6 border-crx-green/30 bg-crx-green-light/20">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-nav-dark flex items-center gap-2">
+                <FileText className="h-4 w-4 text-crx-green" />
+                Direct Invoice
+              </h3>
+              <p className="text-xs text-secondary mt-1">
+                Create an invoice directly from this blend ticket — no order required.
+              </p>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => setCreateInvoiceConfirmOpen(true)}
+              loading={creatingInvoice}
+              disabled={!ticket.customer_id || products.length === 0}
+            >
+              <FileText className="h-4 w-4" />
+              Create Invoice
+            </Button>
+          </div>
+          {(!ticket.customer_id || products.length === 0) && (
+            <p className="text-xs text-yellow-600 mt-2">
+              {!ticket.customer_id ? 'Assign a customer before creating an invoice.' : 'No products on this ticket.'}
+            </p>
+          )}
+        </Card>
+      )}
+
+      <ConfirmModal
+        open={createInvoiceConfirmOpen}
+        onClose={() => setCreateInvoiceConfirmOpen(false)}
+        onConfirm={handleCreateInvoice}
+        title="Create Invoice from Blend Ticket"
+        message={`This will create a draft invoice for ${ticket.customer?.farm_name || 'this customer'} with ${products.length} product(s). The blend ticket will be marked as "billed".`}
+        confirmLabel="Create Invoice"
+        variant="info"
+      />
 
       {/* Link to Order Modal */}
       <Modal open={showLinkModal} onClose={() => setShowLinkModal(false)} title="Link to Existing Order" size="large">
