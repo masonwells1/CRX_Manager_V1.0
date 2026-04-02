@@ -183,7 +183,7 @@ export async function generateStatementPdf(
     { label: '30 Days', cents: aging.days_30_cents },
     { label: '60 Days', cents: aging.days_60_cents },
     { label: '90 Days', cents: aging.days_90_cents },
-    { label: 'Over 90', cents: aging.over_90_cents },
+    { label: 'Over 120', cents: aging.over_120_cents },
   ];
 
   agingBuckets.forEach((bucket, i) => {
@@ -700,7 +700,7 @@ function drawRemittanceStub(
     { label: '30 Days', cents: aging.days_30_cents },
     { label: '60 Days', cents: aging.days_60_cents },
     { label: '90 Days', cents: aging.days_90_cents },
-    { label: 'Over 90', cents: aging.over_90_cents },
+    { label: 'Over 120', cents: aging.over_120_cents },
   ];
 
   agingItems.forEach((item, i) => {

@@ -118,7 +118,7 @@ function makeStatementData(overrides: Partial<DetailedStatementData> = {}): Deta
       days_30_cents: 0,
       days_60_cents: 0,
       days_90_cents: 0,
-      over_90_cents: 0,
+      over_120_cents: 0,
     },
     outstanding_balance_cents: 50000,
     as_of_date: '2026-03-15',
@@ -223,7 +223,7 @@ describe('generateStatementPdf', () => {
         days_30_cents: 20000,
         days_60_cents: 15000,
         days_90_cents: 5000,
-        over_90_cents: 2000,
+        over_120_cents: 2000,
       },
       outstanding_balance_cents: 52000,
     }));

@@ -1059,7 +1059,7 @@ export interface DetailedStatementData {
     days_30_cents: number;
     days_60_cents: number;
     days_90_cents: number;
-    over_90_cents: number;
+    over_120_cents: number;
   };
   outstanding_balance_cents: number;
   as_of_date: string;

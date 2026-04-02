@@ -162,7 +162,27 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
   doc.setFont('helvetica', 'bold');
   doc.text('INVOICE', pageW - margin, 28, { align: 'right' });
   doc.setFontSize(12);
-  doc.text(data.invoice_number, pageW - margin, 48, { align: 'right' });
+  doc.text(data.invoice_number, pageW - margin, 44, { align: 'right' });
+
+  // Status badge
+  if (data.status) {
+    const statusLabel = data.status.toUpperCase();
+    const statusColors: Record<string, [number, number, number]> = {
+      draft: [156, 163, 175],     // gray
+      unposted: [234, 179, 8],    // amber
+      posted: [59, 130, 246],     // blue
+      paid: [34, 197, 94],        // green
+      overdue: [239, 68, 68],     // red
+      voided: [107, 114, 128],    // slate
+      cancelled: [107, 114, 128], // slate
+    };
+    const color = statusColors[data.status] || [107, 114, 128];
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(...color);
+    doc.text(statusLabel, pageW - margin, 57, { align: 'right' });
+    doc.setTextColor(255, 255, 255); // reset for header area
+  }
 
   y = 90;
 
@@ -178,7 +198,10 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
   doc.setFontSize(12);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(...CHARCOAL);
-  doc.text(data.customer_name.toUpperCase(), margin + 12, y + 33);
+  // Wrap long customer names within the left half of the info box
+  const maxNameWidth = (pageW - margin * 2) / 2 - 24;
+  const nameLines = doc.splitTextToSize(data.customer_name.toUpperCase(), maxNameWidth);
+  doc.text(nameLines.slice(0, 2).join('\n'), margin + 12, y + 33);
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...GRAY);
@@ -753,22 +776,41 @@ export async function generateBatchInvoicePdf(dataList: InvoicePdfData[]) {
   // but only trigger ONE browser download using the first doc, and append
   // remaining as individual saves with requestAnimationFrame to avoid
   // popup blockers.
-  const docs = await Promise.all(dataList.map((d) => generateInvoicePdf(d)));
+  // Use allSettled so one bad invoice doesn't crash the entire batch
+  const results = await Promise.allSettled(dataList.map((d) => generateInvoicePdf(d)));
+
+  const docs: { doc: jsPDF; name: string }[] = [];
+  const failures: string[] = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') {
+      docs.push({ doc: r.value, name: dataList[i].invoice_number });
+    } else {
+      failures.push(dataList[i].invoice_number);
+    }
+  });
+
+  if (docs.length === 0) {
+    throw new Error(`All ${failures.length} invoice PDFs failed to generate`);
+  }
 
   // Save first immediately (always allowed by browser)
-  docs[0].save(`${dataList[0].invoice_number}.pdf`);
+  docs[0].doc.save(`${docs[0].name}.pdf`);
 
   // Queue remaining downloads spaced out via rAF to avoid popup blockers.
   // Most browsers allow sequential downloads from user-initiated actions.
   for (let i = 1; i < docs.length; i++) {
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => {
-        docs[i].save(`${dataList[i].invoice_number}.pdf`);
+        docs[i].doc.save(`${docs[i].name}.pdf`);
         resolve();
       });
     });
   }
 
-  return docs[docs.length - 1];
+  if (failures.length > 0) {
+    console.warn(`Batch PDF: ${failures.length} invoice(s) failed:`, failures);
+  }
+
+  return docs[docs.length - 1].doc;
 }
 

@@ -91,7 +91,7 @@ export default function Invoices() {
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
     const { start: seasonStart, end: seasonEnd } = getSeasonDates();
-    const QUERY_LIMIT = 500;
+    const QUERY_LIMIT = 2000;
     const { data, error } = await supabase
       .from('invoices')
       .select('*, customer:customers!invoices_customer_id_fkey(farm_name), salesman:profiles!invoices_salesman_id_fkey(full_name)')

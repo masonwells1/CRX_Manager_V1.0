@@ -115,14 +115,14 @@
 ## AR & Statements
 - `get_ar_aging()` — AR aging report with current/30/60/90+ day buckets
 - `get_customer_statement()` — customer statement with invoice/payment history
-- `get_detailed_statement_data()` — detailed statement data for PDF generation
+- `get_detailed_statement_data()` — detailed statement data for PDF generation. Includes both 'posted' and 'overdue' invoices. Aging buckets: current(0-30), 31-60, 61-90, 91-120, over-120 (non-overlapping).
 - `generate_batch_statements()` — generate batch PDF statements for multiple customers
 - `get_season_comparison()` — compare two seasons side-by-side
 
 ## Financial
 - `close_accounting_period()`, `check_period_open()`, `get_monthly_summary()`
 - `create_commission_payment()`, `post_commission_payment()`
-- `apply_write_off(invoice_id, amount_cents, reason, performed_by, idempotency_key?)` — writes off balance with idempotency guard, creates write-off record and audit log entry
+- `apply_write_off(invoice_id, amount_cents, reason, performed_by, idempotency_key?)` — writes off balance with idempotency guard, creates write-off record and audit log entry. Auto-sets status='paid' when write-off brings balance to 0. Accepts 'posted' or 'overdue' invoices.
 - `generate_finance_charges(performed_by, ...)` — admin-only (role check enforced in RPC body), generates finance charge invoices excluding prior charges
 - `get_customer_transaction_review()`, `apply_remaining_prepayments()`
 - `apply_prepay_to_invoice(credit_id, invoice_id, amount_cents, performed_by)` — atomic single allocation with `FOR UPDATE` locks, creates `prepay_applications` record, deducts from both balances, writes `financial_audit_log` entry
