@@ -7,8 +7,8 @@ function getAllowedOrigin(): string {
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  console.warn("ALLOWED_ORIGIN not set — CORS will block all requests");
-  return "";
+  // Fallback to production domain when secret not configured
+  return "https://croprxsolutions.app";
 }
 
 const corsHeaders = {
