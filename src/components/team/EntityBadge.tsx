@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Truck, ShoppingCart, Users, Briefcase, Package, FileText } from 'lucide-react';
+import { Truck, ShoppingCart, Users, Briefcase, Package, FileText, Receipt } from 'lucide-react';
 import type { LinkedEntityType } from '../../types';
 
 interface EntityBadgeProps {
@@ -56,6 +56,20 @@ const entityConfig: Record<LinkedEntityType, {
     bg: 'bg-indigo-100',
     text: 'text-indigo-700',
     displayName: 'Quote',
+  },
+  invoice: {
+    route: (id) => `/invoices/${id}`,
+    icon: Receipt,
+    bg: 'bg-green-100',
+    text: 'text-green-700',
+    displayName: 'Invoice',
+  },
+  product: {
+    route: (id) => `/products/${id}`,
+    icon: Package,
+    bg: 'bg-rose-100',
+    text: 'text-rose-700',
+    displayName: 'Product',
   },
 };
 

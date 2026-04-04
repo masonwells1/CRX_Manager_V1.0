@@ -26,6 +26,8 @@ const entityDisplayNames: Record<LinkedEntityType, string> = {
   job: 'Job',
   purchase_order: 'Purchase Order',
   quote: 'Quote',
+  invoice: 'Invoice',
+  product: 'Product',
 };
 
 export default function QuickTaskModal({
