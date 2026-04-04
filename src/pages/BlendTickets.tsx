@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, Plus, LinkIcon, Download, Trash2 } from 'lucide-react';
+import { FileText, Upload, Search, CheckCircle, Clock, AlertCircle, XCircle, X, Plus, LinkIcon, Download, Trash2 } from 'lucide-react';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { logActivity } from '../lib/activityLogger';
@@ -113,6 +113,15 @@ export function BlendTickets() {
 
     return matchesSearch && matchesStatus && matchesReview && matchesLink && matchesPayment;
   });
+
+  // E6: Detect duplicate ticket numbers across all tickets
+  const duplicateTicketNumbers = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of tickets) {
+      if (t.ticket_number) counts[t.ticket_number] = (counts[t.ticket_number] || 0) + 1;
+    }
+    return new Set(Object.entries(counts).filter(([, c]) => c > 1).map(([num]) => num));
+  }, [tickets]);
 
   const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
     useRowSelection({
@@ -321,12 +330,19 @@ export function BlendTickets() {
       key: 'ticket_number',
       header: 'Ticket #',
       render: (ticket: BlendTicket) => (
-        <Link
-          to={`/blend-tickets/${ticket.id}`}
-          className="text-blue-600 hover:text-blue-700 font-medium"
-        >
-          {ticket.ticket_number}
-        </Link>
+        <span className="flex items-center gap-1.5">
+          <Link
+            to={`/blend-tickets/${ticket.id}`}
+            className="text-blue-600 hover:text-blue-700 font-medium"
+          >
+            {ticket.ticket_number}
+          </Link>
+          {duplicateTicketNumbers.has(ticket.ticket_number) && (
+            <span className="inline-flex items-center px-1.5 py-0.5 text-[10px] font-semibold rounded bg-yellow-100 text-yellow-700" title="Duplicate ticket number detected">
+              Dup
+            </span>
+          )}
+        </span>
       ),
     },
     {
@@ -501,6 +517,59 @@ export function BlendTickets() {
           }}
         />
       )}
+
+      {/* E9: Quick filter chips */}
+      <div className="flex flex-wrap gap-2">
+        {(() => {
+          const needsReviewCount = tickets.filter(t => t.status === 'completed' && t.review_status === 'unreviewed').length;
+          const lowConfidenceCount = tickets.filter(t => t.ocr_confidence_score > 0 && t.ocr_confidence_score < ocrThresholds.needs_review).length;
+          const dupeCount = tickets.filter(t => duplicateTicketNumbers.has(t.ticket_number)).length;
+          return (
+            <>
+              {needsReviewCount > 0 && (
+                <button
+                  onClick={() => { setStatusFilter('completed'); setReviewFilter('unreviewed'); }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                    statusFilter === 'completed' && reviewFilter === 'unreviewed'
+                      ? 'bg-amber-200 text-amber-900'
+                      : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                  }`}
+                >
+                  <AlertCircle className="w-3 h-3" />
+                  Needs Review ({needsReviewCount})
+                </button>
+              )}
+              {lowConfidenceCount > 0 && (
+                <button
+                  onClick={() => { setStatusFilter('all'); setReviewFilter('all'); setSearchTerm(''); }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
+                  title="Tickets with OCR confidence below review threshold"
+                >
+                  Low Confidence ({lowConfidenceCount})
+                </button>
+              )}
+              {dupeCount > 0 && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-yellow-50 text-yellow-700 hover:bg-yellow-100 transition-colors"
+                  title="Tickets with duplicate ticket numbers"
+                >
+                  Duplicates ({dupeCount})
+                </button>
+              )}
+              {(statusFilter !== 'all' || reviewFilter !== 'all' || linkFilter !== 'all' || paymentFilter !== 'all') && (
+                <button
+                  onClick={() => { setStatusFilter('all'); setReviewFilter('all'); setLinkFilter('all'); setPaymentFilter('all'); setSearchTerm(''); }}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                  Clear Filters
+                </button>
+              )}
+            </>
+          );
+        })()}
+      </div>
 
       <Card className="p-6">
         <div className="mb-6 space-y-4">

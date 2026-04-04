@@ -47,6 +47,7 @@ export function BlendTicketDetail() {
   const [saving, setSaving] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [showRawOcr, setShowRawOcr] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const initialLoadDone = useRef(false);
   const blocker = useUnsavedChanges(isDirty);
@@ -77,7 +78,7 @@ export function BlendTicketDetail() {
   const [unlinkConfirmOpen, setUnlinkConfirmOpen] = useState(false);
   const [reprocessConfirmOpen, setReprocessConfirmOpen] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
-  const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+  const [duplicateWarning, setDuplicateWarning] = useState<{ message: string; dupeId: string; dupeNumber: string } | null>(null);
   const [suggestedOrder, setSuggestedOrder] = useState<{ id: string; order_number: string; matchCount: number } | null>(null);
   const [createInvoiceConfirmOpen, setCreateInvoiceConfirmOpen] = useState(false);
   const [creatingInvoice, setCreatingInvoice] = useState(false);
@@ -224,7 +225,12 @@ export function BlendTicketDetail() {
         assertRpcResult(dupeData, 'check_duplicate_blend_ticket');
         const otherDupes = (dupeData || []).filter((d: { id: string }) => d.id !== ticketResult.data.id);
         if (otherDupes.length > 0) {
-          setDuplicateWarning(`A ticket with this number and date already exists (${otherDupes[0].ticket_number}). This may be a duplicate.`);
+          const dupe = otherDupes[0] as { id: string; ticket_number: string };
+          setDuplicateWarning({
+            message: `A ticket with this number and date already exists (${dupe.ticket_number}). This may be a duplicate.`,
+            dupeId: dupe.id,
+            dupeNumber: dupe.ticket_number,
+          });
         }
       }
 
@@ -677,9 +683,17 @@ export function BlendTicketDetail() {
       ]} />
 
       {duplicateWarning && (
-        <div className="flex items-center gap-2 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg px-4 py-3 text-sm">
-          <AlertCircle className="h-4 w-4 flex-shrink-0" />
-          {duplicateWarning}
+        <div className="flex items-center justify-between gap-2 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg px-4 py-3 text-sm">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            {duplicateWarning.message}
+          </div>
+          <button
+            onClick={() => navigate(`/blend-tickets/${duplicateWarning.dupeId}`)}
+            className="text-yellow-700 hover:text-yellow-900 underline font-medium flex-shrink-0 text-xs"
+          >
+            View {duplicateWarning.dupeNumber}
+          </button>
         </div>
       )}
 
@@ -1009,7 +1023,11 @@ export function BlendTicketDetail() {
 
         <div className="space-y-4">
           {products.map((product, index) => (
-            <div key={product.id} className="grid grid-cols-12 gap-3 items-start p-4 bg-gray-50 rounded-lg">
+            <div key={product.id} className={`grid grid-cols-12 gap-3 items-start p-4 rounded-lg ${
+              !product.manually_corrected && product.confidence_score > 0 && product.confidence_score < 70
+                ? 'bg-yellow-50 border border-yellow-200'
+                : 'bg-gray-50'
+            }`}>
               <div className="col-span-12 md:col-span-3">
                 <label className="block text-xs font-medium text-gray-700 mb-1">
                   Product
@@ -1105,19 +1123,37 @@ export function BlendTicketDetail() {
                 </Button>
               </div>
 
-              {product.confidence_score > 0 && (
-                <div className="col-span-12 flex items-center gap-1.5 text-xs text-gray-500">
-                  <span
-                    className={`inline-block w-2 h-2 rounded-full ${
-                      product.confidence_score >= ocrThresholds.auto_approve
-                        ? 'bg-green-500'
-                        : product.confidence_score >= ocrThresholds.needs_review
-                        ? 'bg-yellow-500'
-                        : 'bg-red-500'
-                    }`}
-                  />
-                  Confidence: {product.confidence_score}%
-                  {product.manually_corrected && ' (manually corrected)'}
+              {(product.confidence_score > 0 || product.manually_corrected) && (
+                <div className="col-span-12 flex items-center gap-2 text-xs">
+                  {product.manually_corrected ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
+                      <Check className="w-3 h-3" /> Verified
+                    </span>
+                  ) : product.confidence_score < 70 ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                      <AlertCircle className="w-3 h-3" /> Low confidence — verify
+                    </span>
+                  ) : product.confidence_score < ocrThresholds.auto_approve ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">
+                      <AlertCircle className="w-3 h-3" /> {product.confidence_score}% — review
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-50 text-green-600">
+                      {product.confidence_score}%
+                    </span>
+                  )}
+                  {!product.manually_corrected && product.confidence_score > 0 && (
+                    <div className="flex-1 max-w-[120px] h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${
+                          product.confidence_score >= ocrThresholds.auto_approve ? 'bg-green-500'
+                          : product.confidence_score >= 70 ? 'bg-yellow-500'
+                          : 'bg-red-500'
+                        }`}
+                        style={{ width: `${product.confidence_score}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1250,9 +1286,48 @@ export function BlendTicketDetail() {
         </div>
 
         {suggestedOrder && ticket.order_link_status === 'unlinked' && (
-          <div className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm mb-4">
-            <ShoppingCart className="h-4 w-4 flex-shrink-0" />
-            This ticket may match <strong>Order {suggestedOrder.order_number}</strong> ({suggestedOrder.matchCount} matching product{suggestedOrder.matchCount !== 1 ? 's' : ''}).
+          <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 text-sm mb-4">
+            <div className="flex items-center gap-2">
+              <ShoppingCart className="h-4 w-4 flex-shrink-0" />
+              <span>May match <strong>Order {suggestedOrder.order_number}</strong> ({suggestedOrder.matchCount} matching product{suggestedOrder.matchCount !== 1 ? 's' : ''})</span>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={async () => {
+                  if (!ticket || !profile || linking) return;
+                  setLinking(true);
+                  try {
+                    const linkKey = linkIdem.getKey();
+                    const { data, error } = await supabase.rpc('link_blend_ticket_to_order', {
+                      p_blend_ticket_id: ticket.id,
+                      p_order_id: suggestedOrder.id,
+                      p_performed_by: profile.id,
+                      p_idempotency_key: linkKey,
+                    });
+                    if (error) throw error;
+                    linkIdem.resetKey();
+                    const result = assertRpcResult<{ success: boolean; error?: string; order_number?: string; items_linked?: number }>(data, 'link_blend_ticket_to_order');
+                    if (!result.success) throw new Error(result.error);
+                    toast('success', `Linked to order ${result.order_number} (${result.items_linked} items matched)`);
+                    await loadTicketData();
+                  } catch (err: unknown) {
+                    Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'quick_link_blend_ticket' } });
+                    toast('error', err instanceof Error ? err.message : 'Failed to link');
+                  } finally {
+                    setLinking(false);
+                  }
+                }}
+                loading={linking}
+              >
+                <Link2 className="h-3.5 w-3.5" />
+                Link
+              </Button>
+              <button onClick={() => setSuggestedOrder(null)} className="text-blue-400 hover:text-blue-600 text-xs">
+                Dismiss
+              </button>
+            </div>
           </div>
         )}
 
@@ -1458,8 +1533,29 @@ export function BlendTicketDetail() {
         </div>
       )}
 
+      {/* E2: Raw OCR Text Viewer */}
+      {ticket.raw_ocr_text && (
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setShowRawOcr(!showRawOcr)}
+            className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-gray-100 transition-colors text-sm font-medium text-gray-700"
+          >
+            <span className="flex items-center gap-2">
+              <FileText className="w-4 h-4" />
+              Raw OCR Text
+            </span>
+            <span className="text-xs text-gray-400">{showRawOcr ? 'Hide' : 'Show'}</span>
+          </button>
+          {showRawOcr && (
+            <pre className="p-4 text-xs text-gray-600 bg-white overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto font-mono border-t border-gray-200">
+              {ticket.raw_ocr_text}
+            </pre>
+          )}
+        </div>
+      )}
+
       <div className="flex justify-end gap-3">
-        {ticket.source === 'ocr' && ticket.review_status === 'unreviewed' && (
+        {ticket.source === 'ocr' && (
           <Button variant="secondary" onClick={() => setReprocessConfirmOpen(true)} loading={reprocessing}>
             <RefreshCw className="h-4 w-4" />
             Re-process OCR

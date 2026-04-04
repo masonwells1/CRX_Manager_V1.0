@@ -4,6 +4,36 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-04 — Blend Ticket Enhancement Suite (E1–E10)
+
+### E1+E10: Per-Product Confidence Display + Low-Confidence Highlight
+- Products with confidence < 70% get yellow background + "Low confidence — verify" pill
+- Products with 70-89% show yellow "review" pill with progress bar
+- High confidence shows green pill; manually corrected products show green "Verified" badge
+
+### E2: Raw OCR Text Viewer
+- Collapsible "Raw OCR Text" panel at bottom of BlendTicketDetail
+- Shows the full extracted text in monospace for debugging bad OCR
+
+### E4: One-Click Order Linking from Suggestion Banner
+- Suggestion banner now includes a "Link" button for instant order linking
+- No need to open the link modal — single click directly from the suggestion
+
+### E6: Duplicate Ticket Detection
+- "Dup" badge on BlendTickets list page for tickets sharing a ticket_number
+- Detail page warning now includes a clickable link to the duplicate ticket
+
+### E7: Reprocess OCR Available on Any Ticket
+- Relaxed guard from `source === 'ocr' && review_status === 'unreviewed'` to `source === 'ocr'`
+- Can now re-run OCR on already-approved/rejected tickets
+
+### E8: Blend Math Validation (already existed)
+### E9: Quick Filter Chips
+- "Needs Review (N)" / "Low Confidence (N)" / "Duplicates (N)" filter chips above table
+- "Clear Filters" button to reset all filters at once
+
+---
+
 ## 2026-04-04 — F14 + E3: Alert→Task + Batch Reject Blend Tickets
 
 ### F14: Alert → Task Conversion
