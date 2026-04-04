@@ -251,23 +251,29 @@ export default function CustomerDetail() {
     } else if (selectedTab === 'financials') {
       if (financialsFetched.current) { setTabLoading(false); return; }
       setFinancialsLoading(true);
-      const today = localToday();
-      const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
-      const [agingRes, txnRes, prepayRes] = await Promise.all([
-        supabase.rpc('get_ar_aging', { p_as_of_date: today }),
-        supabase.rpc('get_customer_statement', { p_customer_id: id, p_start_date: ninetyDaysAgo, p_end_date: today }),
-        supabase.from('prepay_credits').select('*').eq('customer_id', id!).gt('balance_cents', 0),
-      ]);
-      if (agingRes.error) toast('error', 'Failed to load AR aging');
-      if (txnRes.error) toast('error', 'Failed to load transactions');
-      if (prepayRes.error) toast('error', 'Failed to load prepay credits');
-      const allAging = assertRpcResult<AgingRow[]>(agingRes.data, 'get_ar_aging');
-      const myAging = allAging.find((a) => a.customer_id === id) || null;
-      setAging(myAging);
-      setTransactions(assertRpcResult<TxnRow[]>(txnRes.data, 'get_customer_statement'));
-      setPrepayCredits((prepayRes.data || []) as PrepayRow[]);
-      financialsFetched.current = true;
-      setFinancialsLoading(false);
+      try {
+        const today = localToday();
+        const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+        const [agingRes, txnRes, prepayRes] = await Promise.all([
+          supabase.rpc('get_ar_aging', { p_as_of_date: today }),
+          supabase.rpc('get_customer_statement', { p_customer_id: id, p_start_date: ninetyDaysAgo, p_end_date: today }),
+          supabase.from('prepay_credits').select('*').eq('customer_id', id!).gt('balance_cents', 0),
+        ]);
+        if (agingRes.error) toast('error', 'Failed to load AR aging');
+        if (txnRes.error) toast('error', 'Failed to load transactions');
+        if (prepayRes.error) toast('error', 'Failed to load prepay credits');
+        const allAging = (agingRes.data || []) as AgingRow[];
+        const myAging = allAging.find((a) => a.customer_id === id) || null;
+        setAging(myAging);
+        setTransactions(((txnRes.data || []) as TxnRow[]));
+        setPrepayCredits((prepayRes.data || []) as PrepayRow[]);
+        financialsFetched.current = true;
+      } catch (err: unknown) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'customer_financials_tab' } });
+        toast('error', 'Failed to load financials');
+      } finally {
+        setFinancialsLoading(false);
+      }
     } else if (selectedTab === 'timeline') {
       setTimelineLoading(true);
       try {

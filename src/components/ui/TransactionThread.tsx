@@ -140,12 +140,11 @@ export default function TransactionThread({
       {orders.length > 1 ? (
         <MultiDropdown
           icon={<ClipboardList className="w-4 h-4" />}
-          label={`${orders.length} Orders`}
+          label="Orders"
           items={orders}
           basePath="/orders"
-          isActive={(id) => isActive('order', id)}
-          activeClass={activeClass}
-          inactiveClass={inactiveClass}
+          currentId={currentEntity === 'order' ? currentEntityId : undefined}
+          activeColor="text-gray-600 hover:text-crx-green hover:bg-gray-50"
         />
       ) : hasOrder ? (
         <Link
