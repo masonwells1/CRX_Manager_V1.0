@@ -41,7 +41,10 @@ import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import HelpTip from '../components/ui/HelpTip';
+import TransactionThread from '../components/ui/TransactionThread';
 import CommissionSplitEditor from '../components/ui/CommissionSplitEditor';
+import { useStaleQuoteCheck } from '../hooks/useGuardrails';
+import GuardrailBanner from '../components/ui/GuardrailBanner';
 import type {
   Quote,
   QuoteSection,
@@ -152,12 +155,14 @@ export default function QuoteBuilder() {
   const rolloverIdem = useIdempotencyKey('rollover_quote_to_season', profile?.id || '');
   const createVersionIdem = useIdempotencyKey('create_quote_version', profile?.id || '');
   const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
+  const { warning: staleWarning, check: checkStaleQuote, dismiss: dismissStaleWarning } = useStaleQuoteCheck();
   const isEditing = Boolean(id);
 
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
 
   const [converting, setConverting] = useState(false);
+  const [quoteCreatedAt, setQuoteCreatedAt] = useState<string | null>(null);
   const [confirmConvertOpen, setConfirmConvertOpen] = useState(false);
   const [duplicateOrderConfirmOpen, setDuplicateOrderConfirmOpen] = useState(false);
   const [duplicateOrderMsg, setDuplicateOrderMsg] = useState('');
@@ -197,6 +202,9 @@ export default function QuoteBuilder() {
   const [revising, setRevising] = useState(false);
   const [customerView, setCustomerView] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
+
+  // Transaction thread: related orders, deliveries, invoices from this quote
+  const [threadOrders, setThreadOrders] = useState<{ id: string; order_number: string; deliveries: { id: string; delivery_number: string }[]; invoices: { id: string; invoice_number: string }[] }[]>([]);
   const [previewPdfUrl, setPreviewPdfUrl] = useState<string | null>(null);
   const [pdfTemplates, setPdfTemplates] = useState<QuotePdfTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
@@ -244,6 +252,33 @@ export default function QuoteBuilder() {
     });
     return () => { cancelled = true; };
   }, [customerId, sections, profile?.id]);
+
+  // Fetch transaction thread data (orders/deliveries/invoices linked to this quote)
+  useEffect(() => {
+    if (!isEditing || !id) { setThreadOrders([]); return; }
+    let cancelled = false;
+    (async () => {
+      const { data: orders } = await supabase
+        .from('orders').select('id, order_number')
+        .eq('quote_id', id).order('order_number');
+      if (cancelled || !orders?.length) { if (!cancelled) setThreadOrders([]); return; }
+      const orderIds = orders.map(o => o.id);
+      const [delRes, invRes] = await Promise.all([
+        supabase.from('deliveries').select('id, delivery_number, order_id').in('order_id', orderIds),
+        supabase.from('invoices').select('id, invoice_number, order_id').in('order_id', orderIds)
+          .not('status', 'in', '("voided","cancelled")'),
+      ]);
+      if (cancelled) return;
+      setThreadOrders(orders.map(o => ({
+        id: o.id, order_number: o.order_number as string,
+        deliveries: (delRes.data || []).filter((d: Record<string, unknown>) => d.order_id === o.id)
+          .map((d: Record<string, unknown>) => ({ id: d.id as string, delivery_number: d.delivery_number as string })),
+        invoices: (invRes.data || []).filter((i: Record<string, unknown>) => i.order_id === o.id)
+          .map((i: Record<string, unknown>) => ({ id: i.id as string, invoice_number: i.invoice_number as string })),
+      })));
+    })();
+    return () => { cancelled = true; };
+  }, [isEditing, id]);
 
   const fetchReferenceData = useCallback(async () => {
     const [custRes, prodRes, convRes, fieldsRes] = await Promise.all([
@@ -321,6 +356,7 @@ export default function QuoteBuilder() {
     setIsPlanned(q.is_planned || false);
     setWasPlanned(q.is_planned || false);
     if (q.commission_split) setCommissionSplit(q.commission_split);
+    setQuoteCreatedAt(q.created_at || null);
 
     const dbSections = (sectionsRes.data || []) as QuoteSection[];
     const dbItems = (itemsRes.data || []) as QuoteItem[];
@@ -1133,6 +1169,12 @@ export default function QuoteBuilder() {
   };
 
   const handleConvertToOrder = async () => {
+    // Guardrail: check for stale quote before converting
+    if (quoteCreatedAt) {
+      const fresh = checkStaleQuote(quoteCreatedAt);
+      if (!fresh && !staleWarning?.dismissed) return;
+    }
+
     // Duplicate order warning: check for recent orders for same customer
     if (customerId) {
       try {
@@ -1276,6 +1318,18 @@ export default function QuoteBuilder() {
         { label: 'Quotes', href: '/quotes' },
         { label: isEditing ? (quoteNumber || 'Quote') : 'New Quote' },
       ]} />
+      {isEditing && threadOrders.length > 0 && (
+        <TransactionThread
+          quoteId={quoteId || undefined}
+          quoteNumber={quoteNumber || undefined}
+          orderId={threadOrders[0]?.id}
+          orderNumber={threadOrders[0]?.order_number}
+          deliveries={threadOrders.flatMap(o => o.deliveries.map(d => ({ id: d.id, number: d.delivery_number })))}
+          invoices={threadOrders.flatMap(o => o.invoices.map(i => ({ id: i.id, number: i.invoice_number })))}
+          currentEntity="quote"
+          currentEntityId={quoteId || undefined}
+        />
+      )}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-2xl font-semibold font-heading text-nav-dark">
@@ -2315,6 +2369,7 @@ export default function QuoteBuilder() {
         accent="Order"
       >
         <div className="space-y-4">
+          <GuardrailBanner warning={staleWarning} onDismiss={dismissStaleWarning} />
           <p className="text-sm text-secondary">
             This will accept the quote and create a new order for{' '}
             {selectedCustomer?.farm_name || 'the customer'} with all line items. The

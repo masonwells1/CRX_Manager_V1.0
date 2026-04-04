@@ -31,6 +31,7 @@ import { parseLocalDate } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
+import TransactionThread from '../components/ui/TransactionThread';
 import type {
   Delivery, DeliveryItem, DeliveryPhoto, DeliveryRemainder,
   Customer, CustomerAddress, Profile, OrderItem, DeliveryIssueType,
@@ -170,6 +171,10 @@ export default function DeliveryDetail() {
     total_amount_cents: number;
   }>>([]);
 
+  // Sibling deliveries + quote context for transaction thread
+  const [siblingDeliveries, setSiblingDeliveries] = useState<{ id: string; delivery_number: string }[]>([]);
+  const [parentQuote, setParentQuote] = useState<{ id: string; quote_number: string } | null>(null);
+
   const isDriver = role === 'driver';
   const isAdmin = role === 'admin';
   const isAdminOrRep = role === 'admin' || role === 'sales_rep';
@@ -228,7 +233,7 @@ export default function DeliveryDetail() {
               .eq('order_id', del.order_id),
             supabase
               .from('orders')
-              .select('id, order_number')
+              .select('id, order_number, quote_id')
               .eq('id', del.order_id)
               .maybeSingle(),
             supabase
@@ -260,6 +265,25 @@ export default function DeliveryDetail() {
               total_amount_cents: Number(inv.total_amount_cents || 0),
             }))
           );
+
+          // Fetch sibling deliveries for transaction thread
+          const { data: sibDels } = await supabase
+            .from('deliveries').select('id, delivery_number')
+            .eq('order_id', del.order_id).order('delivery_number');
+          setSiblingDeliveries((sibDels || []).map((d: Record<string, unknown>) => ({
+            id: d.id as string, delivery_number: d.delivery_number as string,
+          })));
+
+          // Fetch quote context via parent order
+          if (orderRes.data) {
+            const parentOrderData = orderRes.data as { id: string; order_number: string; quote_id?: string | null };
+            if (parentOrderData.quote_id) {
+              const { data: qData } = await supabase
+                .from('quotes').select('id, quote_number')
+                .eq('id', parentOrderData.quote_id).maybeSingle();
+              setParentQuote(qData as { id: string; quote_number: string } | null);
+            } else { setParentQuote(null); }
+          }
         }
 
         // Fetch remainders for completed deliveries
@@ -1399,6 +1423,17 @@ export default function DeliveryDetail() {
         { label: 'Deliveries', href: '/deliveries' },
         { label: delivery.delivery_number },
       ]} />
+
+      <TransactionThread
+        quoteId={parentQuote?.id}
+        quoteNumber={parentQuote?.quote_number}
+        orderId={parentOrder?.id}
+        orderNumber={parentOrder?.order_number}
+        deliveries={siblingDeliveries.map(d => ({ id: d.id, number: d.delivery_number }))}
+        invoices={relatedInvoices.map(i => ({ id: i.id, number: i.invoice_number }))}
+        currentEntity="delivery"
+        currentEntityId={delivery.id}
+      />
 
       {/* Header Card */}
       <Card>

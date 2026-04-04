@@ -147,6 +147,8 @@
 - `dashboard_summary()` — legacy operational summary (inventory levels, deliveries, recent activity, integrity alerts). Slimmed from original 8-query version; financial KPIs moved to `financial_dashboard_summary()`
 - `operational_dashboard_summary()` — comprehensive 25-CTE RPC powering the Operational Dashboard. Returns KPIs (active orders, open quotes, pending deliveries, open POs), team board action items, inventory position, upcoming deliveries, delivery stats, sales pipeline, 9 operational alert counts, 12-month activity chart data, season progress, accounting period status, and recent activity feed
 - `financial_dashboard_summary()` — admin-only RPC returning all financial KPIs: AR aging buckets, revenue totals, payment activity, prepay balances, finance charge summary, period status. Includes 3 margin alert fields: `bottom_products_by_margin`, `bottom_customers_by_margin`, `monthly_margin_trend`. Total CTEs: 16.
+- `get_customer_summary(p_customer_id uuid)` → jsonb — Returns 5 KPIs for CustomerDetail summary bar: `ar_balance_cents`, `order_count`, `delivery_count`, `credit_tier`, `last_activity`. Season-aware (Oct 1 - Sep 30).
+- `get_dashboard_action_items(p_limit int DEFAULT 5)` → jsonb — Returns specific actionable items per category for Dashboard Action Queue: overdue invoices, cancelled+posted orders, overdue deliveries, low stock items, expiring quotes, unassigned deliveries. Each item includes entity ID, primary text, secondary text, and category-specific details.
 
 ## Accounts Payable
 - `create_vendor_bill(p_vendor_id, p_purchase_order_id, p_bill_number, p_bill_date, p_payment_terms, p_subtotal_cents, p_adjustment_cents, p_notes)` — creates vendor bill with auto-calculated due_date from payment terms (Net 15/30/45/60/90/Due on Receipt). Returns bill UUID. Backfills vendor from existing PO data if needed
@@ -258,3 +260,6 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 
 ### Field Dashboard
 - `get_field_dashboard(p_field_id, p_season)` — returns JSONB: field data + season summary + application records + recent activity
+
+### Global Search
+- `global_search(p_query text, p_limit int DEFAULT 5)` → TABLE(entity_type text, id uuid, primary_text text, secondary_text text) — Searches customers, orders, invoices, deliveries, products with ILIKE. Used by Command Palette (Ctrl+K).

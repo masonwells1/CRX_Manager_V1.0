@@ -1,4 +1,4 @@
-# Migration History (231 migrations)
+# Migration History (234 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -236,3 +236,6 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 230 | 20260335300000 | **Workflow gaps Phase 4: dispatch columns** — Adds `jobs.priority` and `jobs.estimated_hours` columns |
 | 231 | 20260335400000 | **Workflow gaps Phase 5: crop history** — Creates `field_crop_history` table with auto-snapshot trigger (`snapshot_field_crop_history`) for tracking multi-year crop rotation |
 | 232 | 20260335500000 | **Invoice audit fixes** — (1) Adds `trg_guard_audit_log_immutable` trigger to block UPDATE/DELETE on `financial_audit_log`. (2) Fixes `apply_write_off` to auto-set status='paid' when write-off brings balance to 0. (3) Fixes `get_detailed_statement_data` to include 'overdue' invoices and corrects aging bucket overlap (over_90 → over_120). |
+| 233 | 20260404040100 | **Add global_search() RPC** — `global_search(p_query, p_limit)` for Command Palette entity search across customers, orders, invoices, deliveries, products with ILIKE |
+| 234 | 20260404040200 | **Add get_customer_summary() RPC** — `get_customer_summary(p_customer_id)` for Customer 360 KPI bar |
+| 235 | 20260404040300 | **Add get_dashboard_action_items() RPC** — Returns specific actionable items per category for Dashboard Action Queue |

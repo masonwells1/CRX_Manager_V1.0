@@ -20,6 +20,8 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useFormDraft } from '../hooks/useFormDraft';
+import { useCreditLimitCheck } from '../hooks/useGuardrails';
+import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { trackBusinessEvent } from '../lib/metrics';
 import { localToday, localDatePlusDays } from '../lib/dateUtils';
@@ -67,6 +69,7 @@ export default function NewOrder() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const createOrderIdem = useIdempotencyKey('create_direct_order', profile?.id || '');
+  const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -287,6 +290,12 @@ export default function NewOrder() {
       }
     } catch { /* ignore — don't block order creation if check fails */ }
 
+    // Guardrail: check credit limit before creating order
+    const totalCents = items.filter(i => i.product_id && i.quantity > 0)
+      .reduce((sum, i) => sum + Math.round(i.total_price * 100), 0);
+    const creditOk = await checkCreditLimit({ customerId, newAmountCents: totalCents });
+    if (!creditOk && !creditWarning?.dismissed) return;
+
     await submitOrder();
   };
 
@@ -407,6 +416,7 @@ export default function NewOrder() {
             <p className="text-sm text-secondary">Create a direct order</p>
           </div>
         </div>
+        <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
         <Button onClick={handleSave} disabled={saving}>
           <Save className="w-4 h-4" />
           {saving ? 'Creating...' : 'Create Order'}

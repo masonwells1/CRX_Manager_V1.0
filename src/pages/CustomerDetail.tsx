@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy } from 'lucide-react';
+import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -16,9 +16,10 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { parseLocalDate, localToday } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
-import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType } from '../types';
+import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType, ActivityFeedItem } from '../types';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
+import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
 import MapContainer from '../components/map/MapContainer';
 import FieldMarkers from '../components/map/FieldMarkers';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
@@ -74,7 +75,9 @@ export default function CustomerDetail() {
   const [addresses, setAddresses] = useState<Partial<CustomerAddress>[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
-  const [tab, setTab] = useState<'info' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
+  const [tab, setTab] = useState<'info' | 'timeline' | 'fields' | 'quotes' | 'orders' | 'deliveries' | 'financials' | 'history'>('info');
+  const [timeline, setTimeline] = useState<ActivityFeedItem[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
 
   const [quotes, setQuotes] = useState<Quote[]>([]);
   const [orders, setOrders] = useState<(Order & { fulfillment_pct: number })[]>([]);
@@ -265,6 +268,16 @@ export default function CustomerDetail() {
       setPrepayCredits((prepayRes.data || []) as PrepayRow[]);
       financialsFetched.current = true;
       setFinancialsLoading(false);
+    } else if (selectedTab === 'timeline') {
+      setTimelineLoading(true);
+      const { data: tlData } = await supabase
+        .from('activity_feed')
+        .select('*, performer:profiles!activity_feed_performed_by_fkey(id, full_name, role)')
+        .eq('customer_id', id)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      setTimeline((tlData || []) as ActivityFeedItem[]);
+      setTimelineLoading(false);
     } else if (selectedTab === 'history') {
       // GAP FIX #15: Fetch purchase history — all products this customer has ordered
       const { data: orderIds, error: orderIdsError } = await supabase
@@ -441,7 +454,7 @@ export default function CustomerDetail() {
     );
   }
 
-  const tabs = ['info', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
+  const tabs = ['info', 'timeline', 'fields', 'quotes', 'orders', 'deliveries', 'financials', 'history'] as const;
 
   const handleGenerateSummary = async (season: number, options: YearEndSummaryOptions) => {
     if (!id || isNew) return;
@@ -485,20 +498,33 @@ export default function CustomerDetail() {
             </Button>
           )}
           {!isNew && (profile?.role === 'admin' || profile?.role === 'sales_rep') && (
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<FileText className="w-4 h-4" />}
-              onClick={() => setShowSummaryDialog(true)}
-            >
-              Season Summary
-            </Button>
+            <>
+              <Button variant="secondary" size="sm" icon={<FileText className="w-4 h-4" />} onClick={() => navigate(`/quotes/new?customer_id=${id}`)}>
+                New Quote
+              </Button>
+              <Button variant="secondary" size="sm" icon={<ClipboardList className="w-4 h-4" />} onClick={() => navigate(`/orders/new?customer_id=${id}`)}>
+                New Order
+              </Button>
+              <Button variant="secondary" size="sm" icon={<Truck className="w-4 h-4" />} onClick={() => navigate(`/deliveries/new?customer_id=${id}`)}>
+                Sched. Delivery
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<FileText className="w-4 h-4" />}
+                onClick={() => setShowSummaryDialog(true)}
+              >
+                Season Summary
+              </Button>
+            </>
           )}
         </div>
       </div>
 
+      {!isNew && id && <CustomerSummaryBar customerId={id} />}
+
       {!isNew && (
-        <div className="flex gap-1 border-b border-gray-200">
+        <div className="flex gap-1 border-b border-gray-200 overflow-x-auto">
           {tabs.map((t) => (
             <button
               key={t}
@@ -731,6 +757,39 @@ export default function CustomerDetail() {
               entityId={id}
               onCreateTask={() => setQuickTaskOpen(true)}
             />
+          )}
+        </div>
+      )}
+
+      {tab === 'timeline' && !isNew && (
+        <div className="space-y-2">
+          {timelineLoading || tabLoading ? (
+            <div className="text-center py-8 text-sm text-gray-400">Loading timeline...</div>
+          ) : timeline.length === 0 ? (
+            <div className="text-center py-8 text-sm text-gray-400">No activity recorded yet</div>
+          ) : (
+            <div className="relative pl-6 space-y-4">
+              <div className="absolute left-2.5 top-2 bottom-2 w-px bg-gray-200" />
+              {timeline.map((item) => (
+                <div key={item.id} className="relative">
+                  <div className="absolute -left-6 top-1.5 w-5 h-5 rounded-full bg-crx-green/10 border-2 border-crx-green flex items-center justify-center">
+                    <div className="w-2 h-2 rounded-full bg-crx-green" />
+                  </div>
+                  <div className="bg-white rounded-lg border border-gray-100 p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-medium text-nav-dark">{item.description}</span>
+                      <span className="text-xs text-gray-400">
+                        {new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-secondary">
+                      {item.performer?.full_name && <span>{item.performer.full_name}</span>}
+                      {item.event_type && <span className="px-1.5 py-0.5 bg-gray-100 rounded">{item.event_type.replace(/_/g, ' ')}</span>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

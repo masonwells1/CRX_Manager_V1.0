@@ -124,9 +124,15 @@ describe('InvoiceDetail', () => {
       created_at: '2026-03-15T00:00:00Z',
     };
 
+    let invoiceCallCount = 0;
     mockFrom.mockImplementation((table: string) => {
       if (table === 'invoices') {
-        return buildChain({ data: invoiceData, error: null });
+        invoiceCallCount++;
+        // First call: fetch invoice (single), subsequent: sibling invoices (array)
+        if (invoiceCallCount === 1) {
+          return buildChain({ data: invoiceData, error: null });
+        }
+        return buildChain({ data: [], error: null });
       }
       return buildChain({ data: [], error: null });
     });

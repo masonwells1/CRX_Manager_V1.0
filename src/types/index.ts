@@ -2238,3 +2238,41 @@ export interface MonthlyMargin {
   cost: number;
   margin_pct: number;
 }
+
+// ── Global Search ───────────────────────────────────────────────────
+
+export interface CustomerSummary {
+  ar_balance_cents: number;
+  order_count: number;
+  delivery_count: number;
+  credit_tier: number;
+  last_activity: string | null;
+}
+
+export interface ActionQueueCategory {
+  items: ActionQueueItem[];
+  label: string;
+  path: string;
+}
+
+export interface ActionQueueItem {
+  id: string;
+  primary_text: string;
+  secondary_text: string;
+  days_overdue?: number;
+  days_until_expiry?: number;
+  amount_cents?: number;
+  current_qty?: number;
+  reorder_point?: number;
+  invoice_number?: string;
+  scheduled_date?: string;
+}
+
+export type SearchEntityType = 'customer' | 'order' | 'invoice' | 'delivery' | 'product';
+
+export interface GlobalSearchResult {
+  entity_type: SearchEntityType;
+  id: string;
+  primary_text: string;
+  secondary_text: string;
+}

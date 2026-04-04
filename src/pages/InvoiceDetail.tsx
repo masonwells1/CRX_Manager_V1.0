@@ -24,6 +24,9 @@ import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import TransactionThread from '../components/ui/TransactionThread';
+import { useCreditLimitCheck } from '../hooks/useGuardrails';
+import GuardrailBanner from '../components/ui/GuardrailBanner';
 
 interface LineItem {
   id?: string;
@@ -70,6 +73,7 @@ export default function InvoiceDetail() {
   const voidIdem = useIdempotencyKey('void_invoice', profile?.id || '');
   const payIdem = useIdempotencyKey('record_invoice_payment', profile?.id || '');
   const reverseWoIdem = useIdempotencyKey('reverse_write_off', profile?.id || '');
+  const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
   const isNew = id === 'new';
 
   // Invoice header
@@ -142,6 +146,10 @@ export default function InvoiceDetail() {
     driver_name: string | null;
   }>>([]);
 
+  // Sibling invoices + quote context for transaction thread
+  const [siblingInvoices, setSiblingInvoices] = useState<{ id: string; invoice_number: string }[]>([]);
+  const [parentQuote, setParentQuote] = useState<{ id: string; quote_number: string } | null>(null);
+
   // Post loading
   const [posting, setPosting] = useState(false);
   const [showPostConfirm, setShowPostConfirm] = useState(false);
@@ -178,10 +186,10 @@ export default function InvoiceDetail() {
 
     // Fetch parent order for breadcrumb + related deliveries for cross-link
     if (data.order_id) {
-      const [orderRes, delRes] = await Promise.all([
+      const [orderRes, delRes, invRes] = await Promise.all([
         supabase
           .from('orders')
-          .select('id, order_number')
+          .select('id, order_number, quote_id')
           .eq('id', data.order_id)
           .maybeSingle(),
         supabase
@@ -189,6 +197,12 @@ export default function InvoiceDetail() {
           .select('id, delivery_number, scheduled_date, status, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
           .eq('order_id', data.order_id)
           .order('scheduled_date', { ascending: false }),
+        supabase
+          .from('invoices')
+          .select('id, invoice_number')
+          .eq('order_id', data.order_id)
+          .not('status', 'in', '("voided","cancelled")')
+          .order('invoice_number'),
       ]);
       setParentOrder(orderRes.data as { id: string; order_number: string } | null);
       setRelatedDeliveries(
@@ -200,9 +214,23 @@ export default function InvoiceDetail() {
           driver_name: (d.driver as { full_name: string } | null)?.full_name || null,
         }))
       );
+      setSiblingInvoices((invRes.data || []).map((i: Record<string, unknown>) => ({
+        id: i.id as string, invoice_number: i.invoice_number as string,
+      })));
+
+      // Fetch quote context via parent order
+      const orderWithQuote = orderRes.data as { id: string; order_number: string; quote_id?: string | null } | null;
+      if (orderWithQuote?.quote_id) {
+        const { data: qData } = await supabase
+          .from('quotes').select('id, quote_number')
+          .eq('id', orderWithQuote.quote_id).maybeSingle();
+        setParentQuote(qData as { id: string; quote_number: string } | null);
+      } else { setParentQuote(null); }
     } else {
       setParentOrder(null);
       setRelatedDeliveries([]);
+      setSiblingInvoices([]);
+      setParentQuote(null);
     }
 
     // Fetch items
@@ -392,6 +420,9 @@ export default function InvoiceDetail() {
 
   // Post invoice
   const handlePost = async () => {
+    const totalCents = items.reduce((sum, i) => sum + (i.extended_cents || 0), 0);
+    const creditOk = await checkCreditLimit({ customerId: invoice.customer_id!, newAmountCents: totalCents });
+    if (!creditOk && !creditWarning?.dismissed) return;
     setPosting(true);
     try {
       const idemKey = postIdem.getKey();
@@ -649,6 +680,18 @@ export default function InvoiceDetail() {
         ...(parentOrder ? [{ label: parentOrder.order_number, href: `/orders/${parentOrder.id}` }] : []),
         { label: isNew ? 'New Invoice' : invoice.invoice_number || 'Invoice' },
       ]} />
+      {!isNew && (
+        <TransactionThread
+          quoteId={parentQuote?.id}
+          quoteNumber={parentQuote?.quote_number}
+          orderId={parentOrder?.id}
+          orderNumber={parentOrder?.order_number}
+          deliveries={relatedDeliveries.map(d => ({ id: d.id, number: d.delivery_number }))}
+          invoices={siblingInvoices.map(i => ({ id: i.id, number: i.invoice_number }))}
+          currentEntity="invoice"
+          currentEntityId={id}
+        />
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <div className="flex items-center gap-3 min-w-0">
           <div>
@@ -678,6 +721,7 @@ export default function InvoiceDetail() {
               Save
             </Button>
           )}
+          <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
           {!isNew && editable && isAdmin && (
             <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={() => setShowPostConfirm(true)} loading={posting}>
               Post

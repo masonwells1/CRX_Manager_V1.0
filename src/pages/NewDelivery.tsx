@@ -13,6 +13,8 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 
 import { logActivity } from '../lib/activityLogger';
+import { useOverloadedDriverCheck } from '../hooks/useGuardrails';
+import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { localToday } from '../lib/dateUtils';
@@ -36,6 +38,7 @@ export default function NewDelivery() {
   const { toast } = useToast();
   // No idempotency hook — delivery creation uses direct .insert(), not an RPC.
   // Double-submit is guarded by the `saving` state disabling the submit button.
+  const { warning: driverWarning, check: checkDriverLoad, dismiss: dismissDriverWarning } = useOverloadedDriverCheck();
 
   const preselectedOrderId = searchParams.get('order') || '';
 
@@ -207,6 +210,14 @@ export default function NewDelivery() {
     });
     return () => { cancelled = true; };
   }, [customer, deliveryItems, profile?.id]);
+
+  // Guardrail: check if driver is overloaded when driver or date changes
+  useEffect(() => {
+    if (selectedDriverId && scheduledDate) {
+      const driver = drivers.find(d => d.id === selectedDriverId);
+      checkDriverLoad({ driverId: selectedDriverId, scheduledDate, driverName: driver?.full_name });
+    }
+  }, [selectedDriverId, scheduledDate, drivers, checkDriverLoad]);
 
   // Inventory availability check — warn (don't block) if stock is low
   useEffect(() => {
@@ -490,6 +501,8 @@ export default function NewDelivery() {
               onChange={(e) => setScheduledTime(e.target.value)}
             />
           </div>
+
+          <GuardrailBanner warning={driverWarning} onDismiss={dismissDriverWarning} />
 
           <Input
             label="Delivery Notes (optional)"

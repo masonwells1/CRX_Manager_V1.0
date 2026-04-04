@@ -4,6 +4,46 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-04 — Tier 1: Office Speed + Money Visibility
+
+### Feature 1: Global Command Palette
+- Added `Ctrl+K` / `Cmd+K` global command palette for instant search
+- Searches across pages (fuzzy), customers, orders, invoices, deliveries, products
+- Tracks recent page visits in localStorage for quick access
+- New RPC: `global_search()` for server-side entity search
+- New components: `CommandPalette.tsx`, integrated into `AppLayout.tsx`
+
+### Feature 2: Transaction Thread Cross-Links
+- New `TransactionThread` component shows full pipeline: Quote → Order → Delivery → Invoice
+- Integrated into OrderDetail, QuoteBuilder, DeliveryDetail, InvoiceDetail
+- Each step is clickable; current page is highlighted in crx-green
+- Multiple deliveries/invoices show as dropdown with count
+- No new migrations — uses existing FK relationships
+
+### Feature 3: Workflow Guardrails
+- Credit limit soft-block on NewOrder and InvoiceDetail (uses existing `credit_limit_cents`)
+- Stale quote warning on QuoteBuilder conversion (>30 days old)
+- Overloaded driver warning on NewDelivery (5+ deliveries on same date)
+- New hook: `useGuardrails.ts` with `useCreditLimitCheck`, `useStaleQuoteCheck`, `useOverloadedDriverCheck`
+- New component: `GuardrailBanner.tsx` — reusable warning/danger banner with dismiss
+- All warnings are soft blocks — admin can always proceed
+
+### Feature 4: Customer 360 View Enhancement
+- New `CustomerSummaryBar` component: 5 KPI cards (AR balance, orders, deliveries, tier, last activity)
+- New Timeline tab on CustomerDetail showing chronological activity feed
+- Quick action buttons: New Quote, New Order, Sched. Delivery (pre-fills customer)
+- New RPC: `get_customer_summary()` returns all 5 KPIs in one call
+- Season-aware counts (Oct 1 – Sep 30)
+
+### Feature 5: Dashboard Action Queue
+- New `ActionQueue` component replaces passive Operational Alerts on Dashboard
+- Each item is specific and clickable — shows entity number, customer, and details
+- Collapsible categories: Overdue Invoices, Cancelled+Posted, Overdue Deliveries, Low Stock, Expiring Quotes, Unassigned Deliveries
+- "Dismiss for today" per item (sessionStorage, resets on reload)
+- New RPC: `get_dashboard_action_items()` returns specific entity details per category
+
+---
+
 ## 2026-03-31 — Workflow Gaps Remediation: Broken Connections + Billing Splits + Dispatch
 
 ### Summary

@@ -26,6 +26,7 @@ import { parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import HelpTip from '../components/ui/HelpTip';
 import RelatedNotes from '../components/team/RelatedNotes';
+import TransactionThread from '../components/ui/TransactionThread';
 import { downloadOrderSummaryPdf } from '../lib/orderSummaryPdf';
 import { downloadPickListPdf } from '../lib/orderPickListPdf';
 import type { OrderSummaryData } from '../lib/orderSummaryPdf';
@@ -63,6 +64,9 @@ export default function OrderDetail() {
   const [deliveries, setDeliveries] = useState<(Delivery & { driver_name?: string })[]>([]);
   const [loading, setLoading] = useState(true);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
+
+  // Parent quote for transaction thread
+  const [parentQuote, setParentQuote] = useState<{ id: string; quote_number: string } | null>(null);
 
   // Related blend tickets
   const [relatedTickets, setRelatedTickets] = useState<{ id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }[]>([]);
@@ -121,6 +125,15 @@ export default function OrderDetail() {
 
     if (orderData) {
       setOrder(orderData as Order);
+
+      // Fetch parent quote for transaction thread
+      if (orderData.quote_id) {
+        const { data: qData } = await supabase
+          .from('quotes').select('id, quote_number')
+          .eq('id', orderData.quote_id).maybeSingle();
+        setParentQuote(qData as { id: string; quote_number: string } | null);
+      } else { setParentQuote(null); }
+
       const { data: custData } = await supabase
         .from('customers')
         .select('*')
@@ -750,6 +763,16 @@ export default function OrderDetail() {
         { label: 'Orders', href: '/orders' },
         { label: order?.order_number || 'Order' },
       ]} />
+      <TransactionThread
+        quoteId={parentQuote?.id}
+        quoteNumber={parentQuote?.quote_number}
+        orderId={order.id}
+        orderNumber={order.order_number}
+        deliveries={deliveries.map(d => ({ id: d.id, number: d.delivery_number }))}
+        invoices={invoices.map(i => ({ id: i.id, number: i.invoice_number }))}
+        currentEntity="order"
+        currentEntityId={order.id}
+      />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
         <h2 className="text-xl font-semibold font-heading text-nav-dark">{order?.order_number || 'Order'}</h2>
         <div className="flex gap-2 flex-wrap">

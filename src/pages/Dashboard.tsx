@@ -32,6 +32,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
+import ActionQueue from '../components/dashboard/ActionQueue';
 
 // --- Types ---
 
@@ -383,8 +384,8 @@ export default function Dashboard() {
   const seasonTotalDays = data.seasonDaysElapsed + data.seasonDaysRemaining;
   const seasonPercent = seasonTotalDays > 0 ? Math.round((data.seasonDaysElapsed / seasonTotalDays) * 100) : 0;
 
-  // Build operational alerts array (always visible, data-driven)
-  const alerts: Array<{
+  // Legacy alert counts — kept for reference; ActionQueue now handles display
+  const _alerts: Array<{
     key: string;
     count: number;
     label: string;
@@ -511,7 +512,7 @@ export default function Dashboard() {
   ];
 
   // Filter alerts: only non-zero, and filter by role for drivers
-  const visibleAlerts = alerts.filter((a) => a.count > 0 && (showFull || a.driverVisible));
+  void _alerts; // ActionQueue replaces the old alerts rendering
 
   return (
     <div className="space-y-6">
@@ -913,36 +914,9 @@ export default function Dashboard() {
       )}
 
       {/* ═══════════════════════════════════════════════════════════ */}
-      {/* Section 6: Operational Alerts (always visible)            */}
+      {/* Section 6: Action Queue (replaces Operational Alerts)     */}
       {/* ═══════════════════════════════════════════════════════════ */}
-      <div>
-        <h2 className="text-sm font-semibold text-secondary uppercase tracking-wide mb-3">Operational Alerts</h2>
-        {visibleAlerts.length === 0 ? (
-          <div className="flex items-center gap-3 p-4 bg-crx-green-tint rounded-xl border border-crx-green/20">
-            <CheckCircle2 className="w-5 h-5 text-crx-green" />
-            <p className="text-sm text-crx-green font-medium">All Clear — No operational issues detected</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {visibleAlerts.map((alert) => (
-              <div
-                key={alert.key}
-                role="button"
-                tabIndex={0}
-                onClick={() => navigate(alert.path)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(alert.path); }}
-                className={`${alert.bg} border ${alert.border} rounded-xl p-4 flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity`}
-              >
-                <span className={alert.iconColor}>{alert.icon}</span>
-                <div>
-                  <p className={`text-sm font-semibold ${alert.textColor}`}>{alert.label}</p>
-                  <p className={`text-xs ${alert.subColor}`}>{alert.sublabel}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      <ActionQueue />
 
       {/* ═══════════════════════════════════════════════════════════ */}
       {/* Section 7: Monthly Activity Chart (hidden from drivers)   */}
