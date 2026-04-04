@@ -11,9 +11,12 @@ import {
   ChevronRight,
   CheckCircle2,
   ExternalLink,
+  ListTodo,
 } from 'lucide-react';
 import { supabase, assertRpcResult } from '../../lib/db';
-import type { ActionQueueItem } from '../../types';
+import { useAuth } from '../../contexts/AuthContext';
+import QuickTaskModal from '../team/QuickTaskModal';
+import type { ActionQueueItem, LinkedEntityType } from '../../types';
 
 interface CategoryConfig {
   key: string;
@@ -24,6 +27,8 @@ interface CategoryConfig {
   iconColor: string;
   textColor: string;
   entityPath: string;
+  entityType: LinkedEntityType;
+  highPriority?: boolean;
   formatSubtitle: (item: ActionQueueItem) => string;
 }
 
@@ -35,6 +40,8 @@ const CATEGORIES: CategoryConfig[] = [
     bg: 'bg-red-50', border: 'border-red-200',
     iconColor: 'text-red-600', textColor: 'text-red-800',
     entityPath: '/invoices/',
+    entityType: 'invoice',
+    highPriority: true,
     formatSubtitle: (item) => {
       const amt = item.amount_cents
         ? '$' + (item.amount_cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })
@@ -50,6 +57,8 @@ const CATEGORIES: CategoryConfig[] = [
     bg: 'bg-red-50', border: 'border-red-200',
     iconColor: 'text-red-600', textColor: 'text-red-800',
     entityPath: '/orders/',
+    entityType: 'order',
+    highPriority: true,
     formatSubtitle: (item) => [item.secondary_text, item.invoice_number].filter(Boolean).join(' \u2014 '),
   },
   {
@@ -59,6 +68,8 @@ const CATEGORIES: CategoryConfig[] = [
     bg: 'bg-orange-50', border: 'border-orange-200',
     iconColor: 'text-orange-600', textColor: 'text-orange-800',
     entityPath: '/deliveries/',
+    entityType: 'delivery',
+    highPriority: true,
     formatSubtitle: (item) => {
       const days = item.days_overdue ? item.days_overdue + 'd overdue' : '';
       return [item.secondary_text, days].filter(Boolean).join(' \u2014 ');
@@ -71,6 +82,7 @@ const CATEGORIES: CategoryConfig[] = [
     bg: 'bg-amber-50', border: 'border-amber-200',
     iconColor: 'text-amber-600', textColor: 'text-amber-800',
     entityPath: '/products/',
+    entityType: 'product',
     formatSubtitle: (item) => {
       const qty = item.current_qty !== undefined ? item.current_qty + ' avail' : '';
       const rp = item.reorder_point ? 'reorder at ' + item.reorder_point : '';
@@ -84,6 +96,7 @@ const CATEGORIES: CategoryConfig[] = [
     bg: 'bg-yellow-50', border: 'border-yellow-200',
     iconColor: 'text-yellow-600', textColor: 'text-yellow-800',
     entityPath: '/quotes/',
+    entityType: 'quote',
     formatSubtitle: (item) => {
       const days = item.days_until_expiry !== undefined ? 'expires in ' + item.days_until_expiry + 'd' : '';
       return [item.secondary_text, days].filter(Boolean).join(' \u2014 ');
@@ -96,6 +109,7 @@ const CATEGORIES: CategoryConfig[] = [
     bg: 'bg-sky-50', border: 'border-sky-200',
     iconColor: 'text-sky-600', textColor: 'text-sky-800',
     entityPath: '/deliveries/',
+    entityType: 'delivery',
     formatSubtitle: (item) => {
       const date = item.scheduled_date
         ? new Date(item.scheduled_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
@@ -109,9 +123,13 @@ const DEFAULT_VISIBLE = 5;
 
 export default function ActionQueue() {
   const navigate = useNavigate();
+  const { profile } = useAuth();
   const [data, setData] = useState<Record<string, ActionQueueItem[]>>({});
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [taskModal, setTaskModal] = useState<{ open: boolean; entityType: LinkedEntityType; entityId: string; title: string; priority: 'high' | 'medium' }>({
+    open: false, entityType: 'delivery', entityId: '', title: '', priority: 'medium',
+  });
   const [dismissed, setDismissed] = useState<Set<string>>(() => {
     try {
       const stored = sessionStorage.getItem('crx-aq-dismissed');
@@ -145,6 +163,17 @@ export default function ActionQueue() {
       next.add(itemId);
       try { sessionStorage.setItem('crx-aq-dismissed', JSON.stringify([...next])); } catch { /* ignore */ }
       return next;
+    });
+  }, []);
+
+  const openTaskForItem = useCallback((cat: CategoryConfig, item: ActionQueueItem) => {
+    const subtitle = cat.formatSubtitle(item);
+    setTaskModal({
+      open: true,
+      entityType: cat.entityType,
+      entityId: item.id,
+      title: `Action: ${item.primary_text}${subtitle ? ' \u2014 ' + subtitle : ''}`,
+      priority: cat.highPriority ? 'high' : 'medium',
     });
   }, []);
 
@@ -232,6 +261,14 @@ export default function ActionQueue() {
                           <ExternalLink className="w-3.5 h-3.5" />
                         </button>
                         <button
+                          onClick={(e) => { e.stopPropagation(); openTaskForItem(cat, item); }}
+                          className="flex-shrink-0 p-1 rounded text-gray-400 hover:text-crx-green hover:bg-white/80 opacity-0 group-hover:opacity-100 transition-opacity"
+                          aria-label={'Create task for ' + item.primary_text}
+                          title="Create task"
+                        >
+                          <ListTodo className="w-3.5 h-3.5" />
+                        </button>
+                        <button
                           onClick={(e) => { e.stopPropagation(); dismissItem(item.id); }}
                           className="flex-shrink-0 text-xs px-1.5 py-0.5 rounded text-gray-400 hover:text-gray-600 hover:bg-white/80 opacity-0 group-hover:opacity-100 transition-opacity"
                           aria-label="Dismiss for today"
@@ -252,6 +289,15 @@ export default function ActionQueue() {
           })}
         </div>
       )}
+
+      <QuickTaskModal
+        open={taskModal.open}
+        onClose={() => setTaskModal((prev) => ({ ...prev, open: false }))}
+        entityType={taskModal.entityType}
+        entityId={taskModal.entityId}
+        prefillTitle={taskModal.title}
+        prefillAssignee={profile?.id}
+      />
     </div>
   );
 }

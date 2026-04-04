@@ -581,7 +581,7 @@ export interface Commission {
 export type NotePriority = 'low' | 'medium' | 'high' | 'urgent';
 export type NoteType = 'note' | 'todo' | 'announcement';
 
-export type LinkedEntityType = 'delivery' | 'order' | 'customer' | 'job' | 'purchase_order' | 'quote';
+export type LinkedEntityType = 'delivery' | 'order' | 'customer' | 'job' | 'purchase_order' | 'quote' | 'invoice' | 'product';
 
 export interface TeamNote {
   id: string;

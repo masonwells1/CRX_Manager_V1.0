@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-04 — F14 + E3: Alert→Task + Batch Reject Blend Tickets
+
+### F14: Alert → Task Conversion
+- One-click "Create Task" button on every Action Queue item
+- Opens QuickTaskModal pre-filled with alert context (entity type, ID, title)
+- Auto-assigns to current user, priority set to 'high' for overdue/cancelled items
+- Added 'invoice' and 'product' to LinkedEntityType union
+
+### E3: Batch Reject Blend Tickets
+- New "Batch Reject" button in BlendTickets bulk action bar (next to existing Batch Approve)
+- New RPC: `batch_reject_blend_tickets()` mirrors approve pattern with idempotency
+- ConfirmModal confirmation before rejecting
+- Activity logging for batch rejections
+
+---
+
 ## 2026-04-04 — Tier 1: Office Speed + Money Visibility
 
 ### Feature 1: Global Command Palette

@@ -49,8 +49,11 @@ export function BlendTickets() {
   const [exporting, setExporting] = useState(false);
   const [batchApproveModalOpen, setBatchApproveModalOpen] = useState(false);
   const [batchApproving, setBatchApproving] = useState(false);
+  const [batchRejectModalOpen, setBatchRejectModalOpen] = useState(false);
+  const [batchRejecting, setBatchRejecting] = useState(false);
 
   const batchApproveIdem = useIdempotencyKey('batch_approve_blend_tickets', profile?.id || '');
+  const batchRejectIdem = useIdempotencyKey('batch_reject_blend_tickets', profile?.id || '');
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
   const { isProcessing, processedCount } = useOCRProcessor(true);
@@ -224,15 +227,55 @@ export function BlendTickets() {
     setBatchApproveModalOpen(false);
   };
 
+  const handleBatchReject = async () => {
+    if (!profile?.id || approvableIds.length === 0) return;
+    setBatchRejecting(true);
+    try {
+      const key = batchRejectIdem.getKey();
+      const result = await supabase.rpc('batch_reject_blend_tickets', {
+        p_ticket_ids: approvableIds,
+        p_rejected_by: profile.id,
+        p_idempotency_key: key,
+      });
+      assertRpcResult(result, 'Batch reject blend tickets');
+      const rejectedCount = result.data?.rejected_count ?? approvableIds.length;
+      batchRejectIdem.resetKey();
+      toast('success', `Rejected ${rejectedCount} blend ticket(s)`);
+      await logActivity({
+        event: 'blend_ticket_batch_rejected',
+        description: `Batch rejected ${rejectedCount} blend tickets`,
+        performedBy: profile.id,
+        entityType: 'blend_ticket',
+      });
+      clearSelection();
+      loadData();
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'action', action: 'batch_reject_blend_tickets' } });
+      toast('error', sanitizeError(err));
+    }
+    setBatchRejecting(false);
+    setBatchRejectModalOpen(false);
+  };
+
   const bulkActions = [
     ...(approvableIds.length > 0
-      ? [{
-          key: 'batch-approve',
-          label: `Batch Approve (${approvableIds.length})`,
-          icon: <CheckCircle className="w-4 h-4" />,
-          onClick: () => setBatchApproveModalOpen(true),
-          loading: batchApproving,
-        }]
+      ? [
+          {
+            key: 'batch-approve',
+            label: `Batch Approve (${approvableIds.length})`,
+            icon: <CheckCircle className="w-4 h-4" />,
+            onClick: () => setBatchApproveModalOpen(true),
+            loading: batchApproving,
+          },
+          {
+            key: 'batch-reject',
+            label: `Batch Reject (${approvableIds.length})`,
+            icon: <XCircle className="w-4 h-4" />,
+            onClick: () => setBatchRejectModalOpen(true),
+            loading: batchRejecting,
+            variant: 'danger' as const,
+          },
+        ]
       : []),
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
@@ -589,6 +632,18 @@ export function BlendTickets() {
         variant="info"
         icon={CheckCircle}
         loading={batchApproving}
+      />
+
+      <ConfirmModal
+        open={batchRejectModalOpen}
+        onClose={() => setBatchRejectModalOpen(false)}
+        onConfirm={handleBatchReject}
+        title="Batch Reject Blend Tickets"
+        message={`Are you sure you want to reject ${approvableIds.length} blend ticket(s)? This cannot be undone.`}
+        confirmLabel="Reject"
+        variant="danger"
+        icon={XCircle}
+        loading={batchRejecting}
       />
     </div>
   );

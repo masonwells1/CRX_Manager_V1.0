@@ -79,6 +79,7 @@
 
 ## Blend Ticket Phase 1
 - `batch_approve_blend_tickets(p_ticket_ids, p_approved_by, p_idempotency_key)` — bulk approve completed+unreviewed tickets
+- `batch_reject_blend_tickets(p_ticket_ids, p_rejected_by, p_idempotency_key)` → jsonb — bulk reject completed+unreviewed tickets, returns `rejected_count`
 - `save_blend_ticket_fields(p_blend_ticket_id, p_fields, p_performed_by, p_idempotency_key)` — save per-field application assignments (delete+reinsert)
 - `check_duplicate_blend_ticket(p_ticket_number, p_ticket_date)` — check for duplicate ticket by number+date
 

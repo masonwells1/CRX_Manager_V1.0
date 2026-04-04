@@ -240,3 +240,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 234 | 20260404040200 | **Add get_customer_summary() RPC** — `get_customer_summary(p_customer_id)` for Customer 360 KPI bar |
 | 235 | 20260404040300 | **Add get_dashboard_action_items() RPC** — Returns specific actionable items per category for Dashboard Action Queue |
 | 236 | 20260404080000 | **Fix global_search ILIKE escape** — Escape `%`, `_`, `\` metacharacters in user input to prevent wildcard injection |
+| 237 | 20260404174600 | **Add batch_reject_blend_tickets() RPC** — Batch reject blend tickets, mirrors batch_approve pattern |
