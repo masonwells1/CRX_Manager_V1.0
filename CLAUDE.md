@@ -33,6 +33,31 @@
 
 ---
 
+## Auto-Triggered Skills & Commands (MANDATORY)
+
+Claude MUST automatically invoke the matching skill/command when the task matches — do NOT wait for the user to type the slash command. These exist in `.claude/skills/` and `.claude/commands/` and travel with the repo.
+
+### Skills (multi-step guided workflows)
+| When the task involves... | Auto-invoke |
+|---------------------------|-------------|
+| Adding a new page/screen to the app | `/new-page` |
+| Creating a new RPC / database function / stored procedure | `/new-rpc` |
+| Creating a new migration / table / column / index / RLS policy | `/create-migration` |
+| Running a full health check, audit, or "is everything okay?" | `/audit` |
+| Deploying, or "is this ready to ship?" | `/deploy-check` |
+| Checking docs for drift or staleness | `/update-docs` |
+
+### Commands (quick one-shot checks)
+| When the user says... | Auto-invoke |
+|-----------------------|-------------|
+| "commit this", "ready to commit", or before any git commit | `/preflight` |
+| "what's the status", "where are we", "show me the state" | `/status` |
+| "something's broken", "check for errors", "what's wrong" | `/quick-fix` |
+
+**Rule:** If the user's request matches ANY row above, invoke the skill/command FIRST, then follow its steps. Do not freelance the workflow — the skill exists to prevent mistakes. Skills only guide the process — they still require user approval before any destructive or irreversible action (deploys, migrations, commits).
+
+---
+
 ## Hard Red Lines — NEVER Break
 
 ### Data Safety
