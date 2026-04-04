@@ -122,7 +122,7 @@ export default function ActionQueue() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const { data: result, error } = await supabase.rpc('get_dashboard_action_items', { p_limit: 5 });
+      const { data: result, error } = await supabase.rpc('get_dashboard_action_items', { p_limit: 10 });
       if (error) throw error;
       const parsed = assertRpcResult<Record<string, ActionQueueItem[]>>(result, 'get_dashboard_action_items');
       setData(parsed);

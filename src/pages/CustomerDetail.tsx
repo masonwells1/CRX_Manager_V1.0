@@ -270,14 +270,18 @@ export default function CustomerDetail() {
       setFinancialsLoading(false);
     } else if (selectedTab === 'timeline') {
       setTimelineLoading(true);
-      const { data: tlData } = await supabase
-        .from('activity_feed')
-        .select('*, performer:profiles!activity_feed_performed_by_fkey(id, full_name, role)')
-        .eq('customer_id', id)
-        .order('created_at', { ascending: false })
-        .limit(50);
-      setTimeline((tlData || []) as ActivityFeedItem[]);
-      setTimelineLoading(false);
+      try {
+        const { data: tlData, error: tlError } = await supabase
+          .from('activity_feed')
+          .select('*, performer:profiles!activity_feed_performed_by_fkey(id, full_name, role)')
+          .eq('customer_id', id)
+          .order('created_at', { ascending: false })
+          .limit(50);
+        if (tlError) toast('error', 'Failed to load timeline');
+        setTimeline((tlData || []) as ActivityFeedItem[]);
+      } finally {
+        setTimelineLoading(false);
+      }
     } else if (selectedTab === 'history') {
       // GAP FIX #15: Fetch purchase history — all products this customer has ordered
       const { data: orderIds, error: orderIdsError } = await supabase

@@ -14,6 +14,7 @@ export interface TransactionThreadProps {
   quoteNumber?: string;
   orderId?: string;
   orderNumber?: string;
+  orders?: ThreadEntity[];  // For quotes with multiple orders
   deliveries?: ThreadEntity[];
   invoices?: ThreadEntity[];
   currentEntity: 'quote' | 'order' | 'delivery' | 'invoice';
@@ -91,13 +92,14 @@ export default function TransactionThread({
   quoteNumber,
   orderId,
   orderNumber,
+  orders = [],
   deliveries = [],
   invoices = [],
   currentEntity,
   currentEntityId,
 }: TransactionThreadProps) {
   const hasQuote = !!quoteId;
-  const hasOrder = !!orderId;
+  const hasOrder = !!orderId || orders.length > 0;
   const hasDeliveries = deliveries.length > 0;
   const hasInvoices = invoices.length > 0;
 
@@ -134,16 +136,26 @@ export default function TransactionThread({
 
       <StepArrow />
 
-      {/* Order step */}
-      {hasOrder ? (
+      {/* Order step — supports both single order (orderId) and multi-order (orders[]) */}
+      {orders.length > 1 ? (
+        <MultiDropdown
+          icon={<ClipboardList className="w-4 h-4" />}
+          label={`${orders.length} Orders`}
+          items={orders}
+          basePath="/orders"
+          isActive={(id) => isActive('order', id)}
+          activeClass={activeClass}
+          inactiveClass={inactiveClass}
+        />
+      ) : hasOrder ? (
         <Link
-          to={`/orders/${orderId}`}
+          to={`/orders/${orders[0]?.id || orderId}`}
           className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-sm font-medium transition-colors ${
-            isActive('order') ? activeClass : inactiveClass
+            isActive('order', orders[0]?.id || orderId) ? activeClass : inactiveClass
           }`}
         >
           <ClipboardList className="w-4 h-4" />
-          {orderNumber || 'Order'}
+          {orders[0]?.number || orderNumber || 'Order'}
         </Link>
       ) : (
         <span className={`inline-flex items-center gap-1.5 px-2 py-1 text-sm ${missingClass}`}>

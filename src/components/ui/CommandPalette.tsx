@@ -37,15 +37,10 @@ import {
   ArrowLeftRight,
 } from 'lucide-react';
 import { supabase, assertRpcResult } from '../../lib/db';
+import { getRecentItems } from '../../lib/recentPages';
 import type { GlobalSearchResult, SearchEntityType } from '../../types';
 
 // ── Types ──────────────────────────────────────────────────────────
-
-interface RecentItem {
-  path: string;
-  title: string;
-  timestamp: number;
-}
 
 interface SearchResult {
   id: string;
@@ -62,8 +57,6 @@ interface CommandPaletteProps {
 
 // ── Constants ──────────────────────────────────────────────────────
 
-const RECENT_KEY = 'crx-recent-pages';
-const MAX_RECENT = 20;
 const DEBOUNCE_MS = 300;
 
 const ENTITY_ICONS: Record<SearchEntityType, React.ReactNode> = {
@@ -181,25 +174,6 @@ const ALL_PAGES: { path: string; label: string }[] = [
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function getRecentItems(): RecentItem[] {
-  try {
-    const raw = localStorage.getItem(RECENT_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-export function recordPageVisit(path: string, title: string) {
-  try {
-    const items = getRecentItems().filter((r) => r.path !== path);
-    items.unshift({ path, title, timestamp: Date.now() });
-    localStorage.setItem(RECENT_KEY, JSON.stringify(items.slice(0, MAX_RECENT)));
-  } catch {
-    // ignore storage errors
-  }
-}
-
 function fuzzyMatch(query: string, text: string): boolean {
   const q = query.toLowerCase();
   const t = text.toLowerCase();
@@ -252,9 +226,10 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
     return () => { document.body.style.overflow = ''; };
   }, [open]);
 
-  // Debounced entity search
+  // Debounced entity search with stale-response guard
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    let cancelled = false;
 
     if (query.trim().length < 2) {
       setEntityResults([]);
@@ -269,17 +244,19 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
           p_query: query.trim(),
           p_limit: 5,
         });
+        if (cancelled) return; // query changed while in-flight
         if (error) throw error;
         const results = assertRpcResult<GlobalSearchResult[]>(data, 'global_search');
         setEntityResults(results);
       } catch {
-        setEntityResults([]);
+        if (!cancelled) setEntityResults([]);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }, DEBOUNCE_MS);
 
     return () => {
+      cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [query]);

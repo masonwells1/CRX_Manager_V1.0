@@ -239,3 +239,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 233 | 20260404040100 | **Add global_search() RPC** — `global_search(p_query, p_limit)` for Command Palette entity search across customers, orders, invoices, deliveries, products with ILIKE |
 | 234 | 20260404040200 | **Add get_customer_summary() RPC** — `get_customer_summary(p_customer_id)` for Customer 360 KPI bar |
 | 235 | 20260404040300 | **Add get_dashboard_action_items() RPC** — Returns specific actionable items per category for Dashboard Action Queue |
+| 236 | 20260404080000 | **Fix global_search ILIKE escape** — Escape `%`, `_`, `\` metacharacters in user input to prevent wildcard injection |

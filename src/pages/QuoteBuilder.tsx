@@ -1322,8 +1322,7 @@ export default function QuoteBuilder() {
         <TransactionThread
           quoteId={quoteId || undefined}
           quoteNumber={quoteNumber || undefined}
-          orderId={threadOrders[0]?.id}
-          orderNumber={threadOrders[0]?.order_number}
+          orders={threadOrders.map(o => ({ id: o.id, number: o.order_number }))}
           deliveries={threadOrders.flatMap(o => o.deliveries.map(d => ({ id: d.id, number: d.delivery_number })))}
           invoices={threadOrders.flatMap(o => o.invoices.map(i => ({ id: i.id, number: i.invoice_number })))}
           currentEntity="quote"

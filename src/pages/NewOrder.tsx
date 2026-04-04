@@ -416,12 +416,13 @@ export default function NewOrder() {
             <p className="text-sm text-secondary">Create a direct order</p>
           </div>
         </div>
-        <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
         <Button onClick={handleSave} disabled={saving}>
           <Save className="w-4 h-4" />
           {saving ? 'Creating...' : 'Create Order'}
         </Button>
       </div>
+
+      <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
 
       <Card>
         <CardHeader title="Order Information" />

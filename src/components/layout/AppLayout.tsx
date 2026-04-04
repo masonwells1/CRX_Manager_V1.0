@@ -4,7 +4,7 @@ import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import OfflineBanner from '../ui/OfflineBanner';
 import CommandPalette from '../ui/CommandPalette';
-import { recordPageVisit } from '../ui/CommandPalette';
+import { recordPageVisit } from '../../lib/recentPages';
 import { usePageMeta } from '../../hooks/usePageMeta';
 
 export default function AppLayout() {
@@ -13,12 +13,12 @@ export default function AppLayout() {
   const { title, accent } = usePageMeta();
   const location = useLocation();
 
-  // Record page visits for command palette recent items
+  // Record page visits for command palette recent items (full title)
   useEffect(() => {
     if (title) {
-      recordPageVisit(location.pathname, title);
+      recordPageVisit(location.pathname, title + (accent ? ' ' + accent : ''));
     }
-  }, [location.pathname, title]);
+  }, [location.pathname, title, accent]);
 
   // Global Ctrl+K / Cmd+K shortcut
   useEffect(() => {

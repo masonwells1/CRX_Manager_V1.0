@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import CommandPalette, { recordPageVisit } from './CommandPalette';
+import CommandPalette from './CommandPalette';
+import { recordPageVisit } from '../../lib/recentPages';
 
 const mockNavigate = vi.fn();
 
