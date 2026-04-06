@@ -318,6 +318,7 @@ export default function Dashboard() {
         periodStatus: d.period_status || 'open',
         periodDaysRemaining: Number(d.period_days_remaining) || 0,
         recentActivity: d.recent_activity || [],
+        programCompletionPct: null,
       });
       // Fetch expiring planned holds count
       const { data: holdsData } = await supabase.rpc('get_expiring_planned_holds', { p_days_ahead: 7 });

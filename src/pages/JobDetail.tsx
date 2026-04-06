@@ -66,6 +66,10 @@ interface JobDbRow {
     actual_gallons_applied?: number | null;
     notes?: string | null;
   } | null;
+  quote_id?: string | null;
+  quote_section_id?: string | null;
+  quote?: { quote_number: string } | null;
+  quote_section?: { section_name: string } | null;
 }
 
 interface SaveJobResult { job_id: string }
@@ -231,11 +235,11 @@ export default function JobDetail() {
     setRecipeId(j.recipe_id || '');
     setNotes(j.notes || '');
     setBatchId(j.batch_id || '');
-    const jAny = j as Record<string, unknown>;
-    if (jAny.quote_id) {
-      const q = jAny.quote as { quote_number: string } | null;
-      const qs = jAny.quote_section as { section_name: string } | null;
-      setQuoteLinkage({ quote_id: jAny.quote_id as string, quote_number: q?.quote_number || '', section_name: qs?.section_name || '' });
+    // Quote traceability (typed via JobDbRow)
+    if (j.quote_id) {
+      
+      
+      setQuoteLinkage({ quote_id: j.quote_id, quote_number: j.quote?.quote_number || '', section_name: j.quote_section?.section_name || '' });
     }
 
     setFieldRows(

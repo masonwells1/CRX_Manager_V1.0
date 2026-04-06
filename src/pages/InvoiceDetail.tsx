@@ -43,6 +43,8 @@ interface LineItem {
   sort_order: number;
   notes: string | null;
   tote_number: string | null;
+  price_source: 'quoted' | 'tier' | 'manual' | null;
+  quoted_price_cents: number | null;
 }
 
 const fmt = (cents: number) =>
@@ -257,6 +259,8 @@ export default function InvoiceDetail() {
           sort_order: it.sort_order,
           notes: it.notes as string | null,
           tote_number: (it.tote_number as string) ?? null,
+          price_source: (it.price_source as LineItem['price_source']) ?? null,
+          quoted_price_cents: it.quoted_price_cents != null ? Number(it.quoted_price_cents) : null,
         })) as LineItem[]
       );
     }
@@ -334,6 +338,8 @@ export default function InvoiceDetail() {
         sort_order: prev.length,
         notes: null,
         tote_number: null,
+        price_source: null,
+        quoted_price_cents: null,
       },
     ]);
     setShowProductModal(false);
@@ -1025,9 +1031,9 @@ export default function InvoiceDetail() {
                       ) : (
                         <span className="flex items-center gap-1">
                           {fmt(item.unit_price_cents)}
-                          {(item as Record<string, unknown>).price_source === 'quoted' && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-700">Quoted</span>}
-                          {(item as Record<string, unknown>).price_source === 'tier' && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-600">Tier</span>}
-                          {(item as Record<string, unknown>).price_source === 'manual' && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-100 text-blue-700">Manual</span>}
+                          {item.price_source === 'quoted' && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-700">Quoted</span>}
+                          {item.price_source === 'tier' && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-600">Tier</span>}
+                          {item.price_source === 'manual' && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-100 text-blue-700">Manual</span>}
                         </span>
                       )}
                     </td>
