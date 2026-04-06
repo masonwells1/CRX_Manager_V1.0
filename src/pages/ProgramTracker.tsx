@@ -73,7 +73,7 @@ export default function ProgramTracker() {
     .sort((a, b) => a[1].localeCompare(b[1]));
 
   const total = filtered.length;
-  const avgPct = total > 0 ? Math.round(filtered.reduce((s, p) => s + p.completion_pct, 0) / total) : 0;
+  const avgPct = total > 0 ? Math.round(filtered.reduce((s, p) => s + Math.min(p.completion_pct, 100), 0) / total) : 0;
   const inProgress = filtered.filter((p) => p.status === 'in_progress').length;
   const notStarted = filtered.filter((p) => p.status === 'not_started').length;
 
@@ -148,6 +148,7 @@ export default function ProgramTracker() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {filtered.map((p) => (
+                  <>
                   <tr key={p.section_id} className="hover:bg-gray-50 cursor-pointer" onClick={() => toggleRow(p.section_id)}>
                     <td className="py-2.5 pr-3">{expandedRows.has(p.section_id) ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}</td>
                     <td className="py-2.5 pr-3 font-medium text-nav-dark">{p.customer_name}</td>
@@ -162,13 +163,26 @@ export default function ProgramTracker() {
                         <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
                           <div className={`h-full rounded-full transition-all ${p.completion_pct >= 100 ? 'bg-crx-green' : p.completion_pct > 0 ? 'bg-amber-400' : 'bg-gray-300'}`} style={{ width: `${Math.min(p.completion_pct, 100)}%` }} />
                         </div>
-                        <span className="text-xs font-medium w-10 text-right">{p.completion_pct}%</span>
+                        <span className="text-xs font-medium w-10 text-right">{Math.min(p.completion_pct, 100)}%</span>
                       </div>
                     </td>
                     <td className="py-2.5 pr-3 text-center">{p.job_count}</td>
                     <td className="py-2.5 pr-3 text-right font-mono">{p.invoiced_amount_cents > 0 ? fmtDollars(p.invoiced_amount_cents) : '-'}</td>
                     <td className="py-2.5"><Badge variant={statusBadge[p.status]}>{statusLabel[p.status]}</Badge></td>
                   </tr>
+                  {expandedRows.has(p.section_id) && (
+                    <tr key={`${p.section_id}-detail`} className="bg-gray-50">
+                      <td colSpan={9} className="px-8 py-3">
+                        <div className="flex gap-6 text-xs text-secondary">
+                          <span>Quote: <button onClick={() => navigate(`/quotes/${p.quote_id}`)} className="text-crx-green hover:underline">{p.quote_number}</button></span>
+                          <span>Jobs: {p.job_count}</span>
+                          <span>Blend Tickets: {p.blend_ticket_count}</span>
+                          {p.completion_pct > 100 && <span className="text-amber-600 font-medium">Over-applied: {p.completion_pct}% of planned acres</span>}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </>
                 ))}
               </tbody>
             </table>

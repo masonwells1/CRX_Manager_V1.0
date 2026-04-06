@@ -50,8 +50,8 @@ test.describe('Operational Dashboard', { tag: '@smoke' }, () => {
     await expect(page.getByText('Quote Pipeline')).toBeVisible();
   });
 
-  test('should show operational alerts section', async ({ page }) => {
-    await expect(page.getByText('Operational Alerts')).toBeVisible({ timeout: 5000 });
+  test('should show action queue section', async ({ page }) => {
+    await expect(page.getByText('Action Queue')).toBeVisible({ timeout: 5000 });
   });
 
   test('should show monthly activity chart', async ({ page }) => {

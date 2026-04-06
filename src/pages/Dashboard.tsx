@@ -334,7 +334,7 @@ export default function Dashboard() {
           const totalPct = progResult.reduce((s, p) => s + (p.completion_pct || 0), 0);
           setData(prev => ({ ...prev, programCompletionPct: Math.round(totalPct / progResult.length) }));
         } else { setData(prev => ({ ...prev, programCompletionPct: 0 })); }
-      } catch { /* non-critical */ }
+      } catch (progErr) { Sentry.captureException(progErr, { tags: { source: 'fetch', action: 'program_completion' } }); }
     } catch (err) {
       Sentry.captureException(err, { tags: { source: 'fetch', page: 'dashboard' } });
       toast('error', 'Failed to load dashboard data. Please refresh.');
