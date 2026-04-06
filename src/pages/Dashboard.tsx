@@ -22,6 +22,7 @@ import {
   Shield,
   Timer,
   Calendar,
+  CheckSquare,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -120,6 +121,7 @@ interface OperationalData {
   openQuotesSent: number;
   pendingDeliveriesCount: number;
   openPosCount: number;
+  programCompletionPct: number | null;
   teamActionItems: TeamActionItem[];
   inventoryAvailable: number;
   inventoryPrebooked: number;
@@ -214,6 +216,7 @@ const defaultData: OperationalData = {
   openQuotesSent: 0,
   pendingDeliveriesCount: 0,
   openPosCount: 0,
+  programCompletionPct: null,
   teamActionItems: [],
   inventoryAvailable: 0,
   inventoryPrebooked: 0,
@@ -322,6 +325,15 @@ export default function Dashboard() {
         const parsed = typeof holdsData === 'string' ? JSON.parse(holdsData) : holdsData;
         setExpiringPlannedHoldsCount(Array.isArray(parsed) ? parsed.length : 0);
       }
+      // Fetch program completion for dashboard card
+      try {
+        const { data: progData } = await supabase.rpc('get_program_completion');
+        const progResult = assertRpcResult<Array<{ completion_pct: number }>>(progData, 'get_program_completion');
+        if (Array.isArray(progResult) && progResult.length > 0) {
+          const totalPct = progResult.reduce((s, p) => s + (p.completion_pct || 0), 0);
+          setData(prev => ({ ...prev, programCompletionPct: Math.round(totalPct / progResult.length) }));
+        } else { setData(prev => ({ ...prev, programCompletionPct: 0 })); }
+      } catch { /* non-critical */ }
     } catch (err) {
       Sentry.captureException(err, { tags: { source: 'fetch', page: 'dashboard' } });
       toast('error', 'Failed to load dashboard data. Please refresh.');
@@ -633,6 +645,20 @@ export default function Dashboard() {
             <p className="text-2xl font-semibold font-heading text-nav-dark">{data.openPosCount}</p>
             <p className="text-xs text-secondary mt-1 flex items-center gap-1">
               Submitted & partially received <ChevronRight className="w-3 h-3" />
+            </p>
+          </Card>
+
+          {/* Program Progress */}
+          <Card hover className="cursor-pointer" onClick={() => navigate('/program-tracker')}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center">
+                <CheckSquare className="w-5 h-5 text-emerald-600" />
+              </div>
+              <span className="text-sm text-secondary">Program Progress</span>
+            </div>
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{data.programCompletionPct ?? '-'}%</p>
+            <p className="text-xs text-secondary mt-1 flex items-center gap-1">
+              Season application programs <ChevronRight className="w-3 h-3" />
             </p>
           </Card>
         </div>

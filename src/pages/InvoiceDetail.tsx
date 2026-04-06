@@ -1023,7 +1023,12 @@ export default function InvoiceDetail() {
                           className="w-28 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                         />
                       ) : (
-                        fmt(item.unit_price_cents)
+                        <span className="flex items-center gap-1">
+                          {fmt(item.unit_price_cents)}
+                          {(item as Record<string, unknown>).price_source === 'quoted' && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-green-100 text-green-700">Quoted</span>}
+                          {(item as Record<string, unknown>).price_source === 'tier' && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-600">Tier</span>}
+                          {(item as Record<string, unknown>).price_source === 'manual' && <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-100 text-blue-700">Manual</span>}
+                        </span>
                       )}
                     </td>
                     <td className="py-2 pr-4 font-medium">{fmt(item.extended_cents)}</td>

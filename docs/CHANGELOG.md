@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-05 — Custom Application Workflow (4 Phases)
+
+Phase 1: Application Services Setup — new tables (application_services, customer_application_rates), new pages, bug fix (vehicle name NULL on job invoices). Phase 2: Quote-to-Job Connection — jobs.quote_id/quote_section_id, create_job_from_quote_section RPC, Schedule Job button on QuoteBuilder. Phase 3: Smart Pricing — invoice_items.quoted_price_cents/price_source, enhanced create_invoice_from_blend_ticket with quoted pricing auto-pull + application fee auto-add. Phase 4: Program Tracker — get_program_completion RPC, ProgramTracker page, Dashboard widget.
+
+---
+
 ## 2026-04-04 — Blend Ticket Enhancement Suite (E1–E10)
 
 ### E1+E10: Per-Product Confidence Display + Low-Confidence Highlight

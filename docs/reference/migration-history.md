@@ -241,3 +241,7 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 235 | 20260404040300 | **Add get_dashboard_action_items() RPC** — Returns specific actionable items per category for Dashboard Action Queue |
 | 236 | 20260404080000 | **Fix global_search ILIKE escape** — Escape `%`, `_`, `\` metacharacters in user input to prevent wildcard injection |
 | 237 | 20260404174600 | **Add batch_reject_blend_tickets() RPC** — Batch reject blend tickets, mirrors batch_approve pattern |
+| 238 | 20260405000000 | **Application services setup + bug fix** |
+| 239 | 20260405100000 | **Quote-to-job connection** |
+| 240 | 20260405200000 | **Smart pricing flow** |
+| 241 | 20260405300000 | **Program completion RPC** |

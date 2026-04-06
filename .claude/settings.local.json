@@ -16,7 +16,14 @@
       "Bash(git pull:*)",
       "Bash(git stash:*)",
       "Bash(git commit:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(node -e \"const fs = require\\(''fs''\\); const data = JSON.parse\\(fs.readFileSync\\(''.claude/settings.json'', ''utf8''\\)\\); console.log\\(''Valid JSON''\\); console.log\\(''Hook events:'', Object.keys\\(data.hooks\\)\\); Object.entries\\(data.hooks\\).forEach\\(\\([event, hooks]\\) => { console.log\\(event + '':'', hooks.length, ''hook group\\(s\\)''\\); hooks.forEach\\(\\(h, i\\) => { const matcher = h.matcher || ''\\(no matcher\\)''; const count = h.hooks ? h.hooks.length : 0; console.log\\(''  ['' + i + ''] matcher='' + matcher + '', hooks='' + count\\); }\\); }\\);\")",
+      "Bash(npm run:*)",
+      "Bash(ls -la /c/Users/mason/CRX_Manager_V1.0/*.md)",
+      "Bash(ls -lh /c/Users/mason/CRX_Manager_V1.0/docs/plans/2026-03-31*.md)",
+      "mcp__c1fc4002-5f49-5f9d-a4e5-93c4ef5d6a75__google_drive_search",
+      "Bash(find C:/Users/mason/CRX_Manager_V1.0/supabase -name *.sql -type f)"
     ]
   }
 }

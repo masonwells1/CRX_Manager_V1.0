@@ -37,6 +37,8 @@ import {
   ChevronRight,
   PackageCheck,
   BookOpen,
+  Wrench,
+  CheckSquare,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
@@ -149,8 +151,10 @@ const navigation: NavEntry[] = [
         { path: '/deliveries', label: 'Deliveries', icon: <Truck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'driver'] },
         { path: '/delivery-remainders', label: 'Remainders', icon: <Package className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/vehicles', label: 'Vehicles', icon: <Plane className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/application-services', label: 'App Services', icon: <Wrench className="w-4 h-4" />, roles: ['admin'] },
         { path: '/blend-tickets', label: 'Blend Tickets', icon: <Image className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/application-records', label: 'App Records', icon: <ClipboardCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep', 'applicator'] },
+        { path: '/program-tracker', label: 'Program Tracker', icon: <CheckSquare className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },
   },

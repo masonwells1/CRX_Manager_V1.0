@@ -18,6 +18,7 @@ import {
   EyeOff,
   CheckCircle,
   Copy,
+  CalendarClock,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -155,6 +156,7 @@ export default function QuoteBuilder() {
   const rolloverIdem = useIdempotencyKey('rollover_quote_to_season', profile?.id || '');
   const createVersionIdem = useIdempotencyKey('create_quote_version', profile?.id || '');
   const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
+  const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
   const { warning: staleWarning, check: checkStaleQuote, dismiss: dismissStaleWarning } = useStaleQuoteCheck();
   const isEditing = Boolean(id);
 
@@ -1167,6 +1169,32 @@ export default function QuoteBuilder() {
     // Reload quote data
     window.location.reload();
   };
+  const [schedulingJobSectionKey, setSchedulingJobSectionKey] = useState<string | null>(null);
+
+  const handleScheduleJob = async (sectionKey: string) => {
+    const sec = sections.find((s) => s._key === sectionKey);
+    if (!sec?.id || !quoteId || !profile) return;
+    setSchedulingJobSectionKey(sectionKey);
+    try {
+      const idemKey = scheduleJobIdem.getKey();
+      const { data, error } = await supabase.rpc('create_job_from_quote_section', {
+        p_quote_id: quoteId,
+        p_section_id: sec.id,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      const result = assertRpcResult<{ job_id: string }>(data, 'create_job_from_quote_section');
+      scheduleJobIdem.resetKey();
+      toast('success', `Job scheduled from "${sec.section_name}"`);
+      navigate(`/jobs/${result.job_id}`);
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'schedule_job_from_quote' } });
+      toast('error', err instanceof Error ? err.message : 'Failed to schedule job');
+    }
+    setSchedulingJobSectionKey(null);
+  };
+
 
   const handleConvertToOrder = async () => {
     // Guardrail: check for stale quote before converting
@@ -1896,6 +1924,11 @@ export default function QuoteBuilder() {
                   >
                     Add Item
                   </Button>
+                  {isPlanned && quoteId && sec.id && sec.items.length > 0 && (
+                    <Button variant="ghost" size="sm" icon={<CalendarClock className="w-3 h-3" />} showChevron={false} onClick={() => handleScheduleJob(sec._key)} loading={schedulingJobSectionKey === sec._key}>
+                      Schedule Job
+                    </Button>
+                  )}
                   {sections.length > 1 && (
                     <button
                       onClick={() => removeSection(sec._key)}

@@ -784,6 +784,7 @@ export interface BlendTicket {
   order_link_status: BlendTicketOrderLinkStatus;
   payment_status: BlendTicketPaymentStatus;
   job_id: string | null;
+  application_service_id: string | null;
   created_at: string;
   updated_at: string;
   uploader?: Profile;
@@ -794,6 +795,7 @@ export interface BlendTicket {
   salesman?: Profile;
   applicator?: Profile;
   vehicle?: Vehicle;
+  application_service?: ApplicationService;
   images?: BlendTicketImage[];
   products?: BlendTicketProduct[];
   blend_ticket_fields?: BlendTicketField[];
@@ -1000,6 +1002,8 @@ export interface InvoiceItem {
   epa_registration: string | null;
   product_form: string | null;
   is_application_fee: boolean;
+  quoted_price_cents: number | null;
+  price_source: 'quoted' | 'tier' | 'manual' | null;
   tote_number: string | null;
   notes: string | null;
   created_at: string;
@@ -1563,6 +1567,35 @@ export interface Vehicle {
   updated_at: string;
 }
 
+// Application Services (custom application pricing per vehicle/service)
+
+export interface ApplicationService {
+  id: string;
+  name: string;
+  vehicle_id: string | null;
+  default_rate_per_acre_cents: number;
+  cost_per_acre_cents: number;
+  is_active: boolean;
+  sort_order: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  vehicle?: Vehicle;
+}
+
+export interface CustomerApplicationRate {
+  id: string;
+  customer_id: string;
+  application_service_id: string;
+  rate_per_acre_cents: number;
+  season: number;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  customer?: Customer;
+  application_service?: ApplicationService;
+}
+
 // Sprint 7: Application Records
 
 export interface ApplicationProduct {
@@ -1636,6 +1669,8 @@ export interface Job {
   priority: 'low' | 'normal' | 'high' | 'urgent';
   estimated_hours: number | null;
   invoice_id: string | null;
+  quote_id: string | null;
+  quote_section_id: string | null;
   created_by: string | null;
   deleted_at: string | null;
   created_at: string;

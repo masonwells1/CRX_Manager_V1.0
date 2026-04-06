@@ -62,3 +62,6 @@
 | `/settings` | SettingsPage | Admin only: company settings, user management |
 | `/dispatch` | DispatchBoard | Map-based dispatch view for job scheduling with applicator assignment |
 | `/fields/:id/dashboard` | FieldDashboard | Read-only field profile: overview (season stats, activity), applications (history table with weather), billing (splits visualization), details (FSA, legal desc, notes) |
+| `/application-services` | ApplicationServices | Admin: CRUD for application service pricing (vehicle-linked fees like Hagie Y-Drop, Rogator, etc.) |
+| `/application-services/:id` | ApplicationServiceDetail | Admin: Create/edit service with customer rate overrides |
+| `/program-tracker` | ProgramTracker | Program completion dashboard: planned vs actual acres per customer per season with progress bars |

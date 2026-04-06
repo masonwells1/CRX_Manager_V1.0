@@ -140,6 +140,7 @@ export default function JobDetail() {
   const [recipeId, setRecipeId] = useState('');
   const [notes, setNotes] = useState('');
   const [batchId, setBatchId] = useState('');
+  const [quoteLinkage, setQuoteLinkage] = useState<{ quote_id: string; quote_number: string; section_name: string } | null>(null);
 
   // Sub-collections
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
@@ -203,6 +204,8 @@ export default function JobDetail() {
         customer:customers(farm_name),
         applicator:profiles!jobs_applicator_id_fkey(full_name),
         vehicle:vehicles(vehicle_name),
+        quote:quotes!jobs_quote_id_fkey(quote_number),
+        quote_section:quote_sections!jobs_quote_section_id_fkey(section_name),
         job_fields(*, field:fields(field_name)),
         job_chemicals(*, product:products(product_name)),
         applied_info:job_applied_info(*)
@@ -228,6 +231,12 @@ export default function JobDetail() {
     setRecipeId(j.recipe_id || '');
     setNotes(j.notes || '');
     setBatchId(j.batch_id || '');
+    const jAny = j as Record<string, unknown>;
+    if (jAny.quote_id) {
+      const q = jAny.quote as { quote_number: string } | null;
+      const qs = jAny.quote_section as { section_name: string } | null;
+      setQuoteLinkage({ quote_id: jAny.quote_id as string, quote_number: q?.quote_number || '', section_name: qs?.section_name || '' });
+    }
 
     setFieldRows(
       (j.job_fields || []).map((f) => ({
@@ -528,6 +537,15 @@ export default function JobDetail() {
         { label: 'Jobs', href: '/jobs' },
         { label: isNew ? 'New Job' : (jobNumber || 'Job') },
       ]} />
+      {quoteLinkage && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 border border-blue-200 rounded-lg text-sm">
+          <FileText className="w-4 h-4 text-blue-500 shrink-0" />
+          <span className="text-blue-800">Created from Quote{' '}
+            <button onClick={() => navigate(`/quotes/${quoteLinkage.quote_id}`)} className="font-semibold underline hover:text-blue-600">{quoteLinkage.quote_number}</button>
+            {quoteLinkage.section_name && <> &mdash; {quoteLinkage.section_name}</>}
+          </span>
+        </div>
+      )}
       <div className="flex items-center gap-4">
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-nav-dark">

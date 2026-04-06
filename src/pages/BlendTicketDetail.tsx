@@ -55,6 +55,7 @@ export function BlendTicketDetail() {
   // Jobs for job linking (B6)
   const [availableJobs, setAvailableJobs] = useState<Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string>('');
+  const [appServices, setAppServices] = useState<{id: string; name: string; vehicle_id: string | null}[]>([]);
 
   // Phase 3: Order linkage state
   const [availableFields, setAvailableFields] = useState<Field[]>([]);
@@ -95,6 +96,7 @@ export function BlendTicketDetail() {
     mixer_name: '',
     tank_number: '',
     vehicle_info: '',
+    application_service_id: '',
     field_names: '',
     total_acres: '',
     application_rate: '',
@@ -181,6 +183,9 @@ export function BlendTicketDetail() {
       setLinkedOrders(linkedResult.data || []);
       setAvailableJobs((jobsResult.data || []) as Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]);
       setSelectedJobId(ticketResult.data.job_id || '');
+      // Fetch application services for dropdown
+      const { data: svcData } = await supabase.from('application_services').select('id, name, vehicle_id').eq('is_active', true).order('sort_order');
+      setAppServices(svcData || []);
 
       // Load existing blend_ticket_fields
       const { data: btfData } = await supabase
@@ -206,6 +211,7 @@ export function BlendTicketDetail() {
         mixer_name: ticketResult.data.mixer_name || '',
         tank_number: ticketResult.data.tank_number || '',
         vehicle_info: ticketResult.data.vehicle_info || '',
+        application_service_id: ticketResult.data.application_service_id || '',
         field_names: ticketResult.data.field_names || '',
         total_acres: ticketResult.data.total_acres?.toString() || '',
         application_rate: ticketResult.data.application_rate || '',
@@ -308,6 +314,7 @@ export function BlendTicketDetail() {
           mixer_name: formData.mixer_name || null,
           tank_number: formData.tank_number || null,
           vehicle_info: formData.vehicle_info || null,
+          application_service_id: formData.application_service_id || null,
           field_names: formData.field_names || null,
           total_acres: formData.total_acres ? parseFloat(formData.total_acres) : null,
           application_rate: formData.application_rate || null,
@@ -935,6 +942,13 @@ export function BlendTicketDetail() {
                 onChange={(e) => setFormData({ ...formData, vehicle_info: e.target.value })}
                 placeholder="Vehicle / rig description"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Application Service</label>
+              <select value={formData.application_service_id} onChange={(e) => setFormData({ ...formData, application_service_id: e.target.value })} className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+                <option value="">None (no application fee)</option>
+                {appServices.map((svc) => (<option key={svc.id} value={svc.id}>{svc.name}</option>))}
+              </select>
             </div>
 
             <div>
