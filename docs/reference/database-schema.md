@@ -9,6 +9,8 @@
 - `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, Mapbox polygon geometry)
 - `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
 - `vehicles` - Ground/air application equipment (type, capacity, registration, FAA N-number or DOT#, status)
+- `application_services` - Named application services with per-acre pricing (name, vehicle_id, default_rate_per_acre_cents, cost_per_acre_cents, is_active). Services like "Hagie Y-Drop Nitrogen" or "Rogator Application"
+- `customer_application_rates` - Per-customer rate overrides for application services (~5% of customers). UNIQUE(customer_id, application_service_id, season)
 
 ## Quotes & Orders
 - `quotes` - Quote headers (quote_number, customer_id, status, tier, totals, is_planned, expires_at)
@@ -42,7 +44,7 @@
 - `receiving_photos` - Photos attached to receiving events (receiving_record_id, storage_path, image_url)
 
 ## Job Scheduling
-- `jobs` - Job headers (status: scheduled/in_progress/completed/cancelled/invoiced, customer, applicator, vehicle, recipe, priority, estimated_hours)
+- `jobs` - Job headers (status: scheduled/in_progress/completed/cancelled/invoiced, customer, applicator, vehicle, recipe, priority, estimated_hours, quote_id, quote_section_id)
 - `job_fields` - Fields assigned to a job (many-to-many with sort order)
 - `job_chemicals` - Chemicals/products for a job with rates and pricing
 - `job_applied_info` - Recorded data when completed: actual times, weather, gallons applied
@@ -51,7 +53,7 @@
 - `application_records` - Single source of truth for "what was applied, where, when, by whom." Fed from completed jobs AND approved blend tickets. JSONB for products and weather.
 
 ## OCR / Blend Tickets
-- `blend_tickets` - OCR ticket records (ticket_number, status, review_status, ocr_confidence_score, raw_ocr_text, job_id)
+- `blend_tickets` - OCR ticket records (ticket_number, status, review_status, ocr_confidence_score, raw_ocr_text, job_id, application_service_id)
 - `blend_ticket_products` - Extracted products (product_name, quantity, confidence_score, manually_corrected, unit_cost_cents, unit_price_cents)
 - `blend_ticket_images` - Uploaded images (storage_path, image_url, file_size)
 - `blend_ticket_fields` - Per-field application tracking (field_id, customer_id, planned_acres, actual_acres, applied_at)
@@ -69,7 +71,7 @@
 
 ## Billing / Invoices
 - `invoices` - Invoice headers (invoice_number, order_id, customer_id, status: draft/posted/void, balance_cents bigint, due_date, invoice_group_id)
-- `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, line_total_cents)
+- `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, line_total_cents, quoted_price_cents, price_source)
 - `allocation_sets` - Payment-to-invoice allocation groups (payment_id, allocated_at, customer_id, total_payment_cents, total_allocated_cents, payment_method, reference_number, check_number, payment_date, season)
 - `order_line_allocations` - Payment portions applied to order items
 - `invoice_line_allocations` - Payment portions applied to invoice items

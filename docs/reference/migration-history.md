@@ -245,3 +245,5 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 239 | 20260405100000 | **Quote-to-job connection** |
 | 240 | 20260405200000 | **Smart pricing flow** |
 | 241 | 20260405300000 | **Program completion RPC** |
+| 242 | 20260405400000 | **Code review fixes** -- SELECT RLS policy, index optimization |
+| 243 | 20260406000000 | **Code review RPC hardening** -- quote status validation, duplicate job guard, bigint casts |
