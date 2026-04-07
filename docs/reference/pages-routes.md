@@ -65,3 +65,5 @@
 | `/application-services` | ApplicationServices | Admin: CRUD for application service pricing (vehicle-linked fees like Hagie Y-Drop, Rogator, etc.) |
 | `/application-services/:id` | ApplicationServiceDetail | Admin: Create/edit service with customer rate overrides |
 | `/program-tracker` | ProgramTracker | Program completion dashboard: planned vs actual acres per customer per season with progress bars |
+| `/invoices/field-app/new` | FieldApplicationInvoice | New field application invoice with multi-location select, auto-figuring chemicals and customer shares |
+| `/invoices/field-app/:id` | FieldApplicationInvoice | Edit existing field application invoice |

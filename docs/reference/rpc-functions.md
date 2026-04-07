@@ -268,3 +268,7 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 ### Custom Application Workflow
 - `create_job_from_quote_section(p_quote_id, p_section_id, p_performed_by, p_idempotency_key)` -> jsonb {job_id} -- Creates scheduled job from planned quote section with pre-filled chemicals and fields
 - `get_program_completion(p_season)` -> jsonb array -- Returns planned vs actual acres per program section for the Program Tracker dashboard
+
+### Field Application Workflow V2
+- `derive_customer_shares_from_fields(p_field_ids uuid[], p_applied_acres_map jsonb DEFAULT NULL)` -> jsonb -- Aggregates field_billing_defaults across fields to produce combined customer split percentages and acres
+- `save_field_app_invoice(p_invoice_id, p_invoice, p_locations, p_chemicals, p_performed_by, p_idempotency_key)` -> jsonb -- Creates/updates field application invoice with locations, chemicals, and auto-derived customer shares

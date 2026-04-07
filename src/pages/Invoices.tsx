@@ -580,6 +580,9 @@ export default function Invoices() {
           >
             Download PDF
           </Button>
+          <Button variant="secondary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/field-app/new')}>
+            New Field Application
+          </Button>
           <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/new')}>
             New Invoice
           </Button>

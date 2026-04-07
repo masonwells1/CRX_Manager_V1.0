@@ -214,3 +214,10 @@
 | team_note_tags | All authenticated | All authenticated | - | All authenticated |
 | note_activity_log | All authenticated | All authenticated | - | - |
 | field_crop_history | All authenticated | All authenticated | All authenticated | - |
+
+| field_app_locations | All authenticated | All authenticated | All authenticated | All authenticated |
+| field_app_location_shares | All authenticated | All authenticated | All authenticated | All authenticated |
+
+## Field Application Workflow V2
+- `field_app_locations` - Links fields to invoices or jobs (id uuid PK, invoice_id, job_id, field_id, map_number, total_acres, planted_acres, applied_acres, crop_type, wind_direction, sort_order). CHECK: invoice_id or job_id must be non-null. RLS: all ops for authenticated.
+- `field_app_location_shares` - Per-location customer billing splits (id uuid PK, location_id FK, customer_id FK, split_pct numeric, acres numeric, amount_cents bigint). RLS: all ops for authenticated.

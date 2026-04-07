@@ -247,3 +247,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 241 | 20260405300000 | **Program completion RPC** |
 | 242 | 20260405400000 | **Code review fixes** -- SELECT RLS policy, index optimization |
 | 243 | 20260406000000 | **Code review RPC hardening** -- quote status validation, duplicate job guard, bigint casts |
+| 244 | 20260406100000 | **Field App Workflow V2** -- field_app_locations + field_app_location_shares tables, derive_customer_shares_from_fields + save_field_app_invoice RPCs, jobs.customer_id DROP NOT NULL |

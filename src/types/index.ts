@@ -2303,6 +2303,53 @@ export interface ActionQueueItem {
   scheduled_date?: string;
 }
 
+// Field Application Workflow V2
+
+export interface FieldAppLocation {
+  id: string;
+  invoice_id: string | null;
+  job_id: string | null;
+  field_id: string;
+  map_number: number | null;
+  total_acres: number | null;
+  planted_acres: number | null;
+  applied_acres: number | null;
+  crop_type: string | null;
+  wind_direction: string | null;
+  sort_order: number;
+  created_at: string;
+  // Joined
+  field?: Field;
+}
+
+export interface FieldAppLocationShare {
+  id: string;
+  location_id: string;
+  customer_id: string;
+  split_pct: number;
+  acres: number | null;
+  amount_cents: number;
+  created_at: string;
+  // Joined
+  customer?: Customer;
+}
+
+export interface FieldAppInvoicePayload {
+  invoice_number?: string;
+  customer_id?: string;
+  transaction_date?: string;
+  salesman_id?: string;
+  notes?: string;
+}
+
+export interface CustomerShareResult {
+  customer_id: string;
+  customer_name: string;
+  is_primary: boolean;
+  total_acres: number;
+  split_pct: number;
+}
+
 export type SearchEntityType = 'customer' | 'order' | 'invoice' | 'delivery' | 'product';
 
 export interface GlobalSearchResult {
