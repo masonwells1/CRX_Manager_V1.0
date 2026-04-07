@@ -328,7 +328,7 @@ export default function FieldApplicationInvoice() {
     <div className="space-y-6">
       <Breadcrumbs
         items={[
-          { label: 'Invoices', path: '/invoices' },
+          { label: 'Invoices', href: '/invoices' },
           { label: isNew ? 'New Field Application' : `Invoice ${invoiceNumber || id?.slice(0, 8)}` },
         ]}
       />
@@ -566,7 +566,7 @@ export default function FieldApplicationInvoice() {
       />
 
       <ConfirmModal
-        isOpen={showDeleteConfirm}
+        open={showDeleteConfirm}
         onClose={() => setShowDeleteConfirm(false)}
         onConfirm={handleDelete}
         title="Delete Invoice"
