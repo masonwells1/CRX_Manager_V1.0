@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-07 -- Field App V2 Schema Fix and Migration Applied
+
+Applied migration to Supabase. Fixed 8 column name mismatches before deployment: invoices.transaction_date to invoice_date, invoices.notes to header_notes, invoice_items.product_name to description, invoice_items.unit to unit_size, invoice_items.unit_cost_cents to cost_cents, activity_log to activity_feed, fields.planted_acres removed, customers.tier to assigned_tier. Fixed corresponding frontend references in FieldApplicationInvoice.tsx.
+
+---
+
 ## 2026-04-06 -- Field Application Workflow V2
 
 Multi-customer field application invoicing foundation. New tables: field_app_locations, field_app_location_shares. New RPCs: derive_customer_shares_from_fields, save_field_app_invoice. New page: FieldApplicationInvoice (4-tab: Locations, Chemicals, Customers, Applied Info). Components: SelectLocationsModal, FieldAppChemicalEntry, CustomerSharesTable. jobs.customer_id nullable. New Field Application button on Invoices.

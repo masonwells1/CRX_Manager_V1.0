@@ -21,7 +21,6 @@ CREATE TABLE field_app_locations (
   created_at      timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT fal_requires_parent CHECK (invoice_id IS NOT NULL OR job_id IS NOT NULL)
 );
-
 CREATE INDEX idx_field_app_locations_invoice ON field_app_locations(invoice_id);
 CREATE INDEX idx_field_app_locations_job     ON field_app_locations(job_id);
 CREATE INDEX idx_field_app_locations_field   ON field_app_locations(field_id);
@@ -50,7 +49,6 @@ CREATE TABLE field_app_location_shares (
   amount_cents    bigint NOT NULL DEFAULT 0,
   created_at      timestamptz NOT NULL DEFAULT now()
 );
-
 CREATE INDEX idx_field_app_location_shares_loc  ON field_app_location_shares(location_id);
 CREATE INDEX idx_field_app_location_shares_cust ON field_app_location_shares(customer_id);
 
@@ -67,7 +65,6 @@ CREATE POLICY "field_app_location_shares_update" ON field_app_location_shares
 
 CREATE POLICY "field_app_location_shares_delete" ON field_app_location_shares
   FOR DELETE TO authenticated USING (true);
-
 -- 4. derive_customer_shares_from_fields
 -- Aggregates field_billing_defaults across multiple fields to produce a
 -- combined customer split summary.
@@ -88,20 +85,18 @@ BEGIN
       f.id AS field_id,
       f.field_name,
       f.total_acres,
-      f.planted_acres,
       f.crop_type,
       COALESCE(
         (p_applied_acres_map ->> f.id::text)::numeric,
-        f.planted_acres,
         f.total_acres
       ) AS applied_acres
     FROM fields f
     WHERE f.id = ANY(p_field_ids)
-  ),
-  billing AS (
+  ),  billing AS (
     SELECT
       fbd.customer_id,
       c.farm_name AS customer_name,
+      c.assigned_tier AS tier,
       fbd.split_pct,
       fbd.is_primary,
       fd.field_id,
@@ -126,8 +121,7 @@ BEGIN
       END AS split_pct
     FROM billing b
     GROUP BY b.customer_id, b.customer_name
-  )
-  SELECT jsonb_build_object(
+  )  SELECT jsonb_build_object(
     'shares', COALESCE(jsonb_agg(
       jsonb_build_object(
         'customer_id', a.customer_id,
@@ -146,10 +140,14 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION derive_customer_shares_from_fields(uuid[], jsonb) TO authenticated;
-
 -- 5. save_field_app_invoice
 -- Creates or updates a field-application invoice, saving locations, chemicals,
 -- and auto-deriving customer shares from field_billing_defaults.
+--
+-- Verified column references (2026-04-07):
+--   invoices table:    invoice_date (NOT transaction_date), header_notes (NOT notes)
+--   invoice_items:     description (NOT product_name), unit_size (NOT unit), cost_cents (NOT unit_cost_cents)
+--   activity_feed:     event_type, description, performed_by, related_entity_type, related_entity_id
 CREATE OR REPLACE FUNCTION save_field_app_invoice(
   p_invoice_id uuid,
   p_invoice jsonb,
@@ -169,8 +167,7 @@ DECLARE
   v_is_new boolean := false;
   v_loc jsonb;
   v_loc_id uuid;
-  v_chem jsonb;
-  v_field_ids uuid[];
+  v_chem jsonb;  v_field_ids uuid[];
   v_applied_acres_map jsonb := '{}'::jsonb;
   v_shares jsonb;
   v_share jsonb;
@@ -191,16 +188,15 @@ BEGIN
     v_is_new := true;
     INSERT INTO invoices (
       invoice_number, customer_id, invoice_type, status,
-      transaction_date, salesman_id, notes, created_by,
+      invoice_date, salesman_id, header_notes, created_by,
       total_amount_cents, total_cost_cents
     ) VALUES (
       p_invoice->>'invoice_number',
       (p_invoice->>'customer_id')::uuid,
       'field_application',
-      'draft',
-      COALESCE((p_invoice->>'transaction_date')::date, CURRENT_DATE),
+      'draft',      COALESCE((p_invoice->>'invoice_date')::date, CURRENT_DATE),
       (p_invoice->>'salesman_id')::uuid,
-      p_invoice->>'notes',
+      p_invoice->>'header_notes',
       p_performed_by,
       0, 0
     ) RETURNING id INTO v_invoice_id;
@@ -208,9 +204,9 @@ BEGIN
     v_invoice_id := p_invoice_id;
 
     UPDATE invoices SET
-      transaction_date = COALESCE((p_invoice->>'transaction_date')::date, transaction_date),
+      invoice_date = COALESCE((p_invoice->>'invoice_date')::date, invoice_date),
       salesman_id = COALESCE((p_invoice->>'salesman_id')::uuid, salesman_id),
-      notes = COALESCE(p_invoice->>'notes', notes),
+      header_notes = COALESCE(p_invoice->>'header_notes', header_notes),
       updated_at = now()
     WHERE id = v_invoice_id;
 
@@ -219,7 +215,6 @@ BEGIN
     DELETE FROM invoice_items WHERE invoice_id = v_invoice_id;
     DELETE FROM invoice_shares WHERE invoice_id = v_invoice_id;
   END IF;
-
   -- Save locations
   FOR v_loc IN SELECT * FROM jsonb_array_elements(p_locations)
   LOOP
@@ -245,23 +240,22 @@ BEGIN
       v_loc->>'field_id', v_loc->>'applied_acres'
     );
   END LOOP;
-
   -- Save chemicals as invoice_items
   FOR v_chem IN SELECT * FROM jsonb_array_elements(p_chemicals)
   LOOP
     INSERT INTO invoice_items (
-      invoice_id, product_id, product_name,
-      quantity, unit, unit_price_cents, extended_cents,
-      unit_cost_cents, sort_order, rate_per_acre, rate_unit
+      invoice_id, product_id, description,
+      quantity, unit_size, unit_price_cents, extended_cents,
+      cost_cents, sort_order, rate_per_acre, rate_unit
     ) VALUES (
       v_invoice_id,
       (v_chem->>'product_id')::uuid,
-      v_chem->>'product_name',
+      v_chem->>'description',
       COALESCE((v_chem->>'quantity')::numeric, 0),
-      v_chem->>'unit',
+      v_chem->>'unit_size',
       COALESCE((v_chem->>'unit_price_cents')::bigint, 0),
       COALESCE((v_chem->>'extended_cents')::bigint, 0),
-      COALESCE((v_chem->>'unit_cost_cents')::bigint, 0),
+      COALESCE((v_chem->>'cost_cents')::bigint, 0),
       COALESCE((v_chem->>'sort_order')::integer, 0),
       (v_chem->>'rate_per_acre')::numeric,
       v_chem->>'rate_unit'
@@ -269,10 +263,9 @@ BEGIN
 
     v_invoice_total_cents := v_invoice_total_cents + COALESCE((v_chem->>'extended_cents')::bigint, 0);
     v_total_cost_cents := v_total_cost_cents + (
-      COALESCE((v_chem->>'unit_cost_cents')::bigint, 0) * COALESCE((v_chem->>'quantity')::numeric, 0)
+      COALESCE((v_chem->>'cost_cents')::bigint, 0) * COALESCE((v_chem->>'quantity')::numeric, 0)
     )::bigint;
   END LOOP;
-
   -- Update invoice totals
   UPDATE invoices SET
     total_amount_cents = v_invoice_total_cents,
@@ -301,7 +294,6 @@ BEGIN
         0
       );
     END LOOP;
-
     -- Set invoice customer to primary share customer
     UPDATE invoices SET
       customer_id = COALESCE(
@@ -315,7 +307,7 @@ BEGIN
   END IF;
 
   -- Log activity
-  INSERT INTO activity_log (event, description, performed_by, entity_type, entity_id)
+  INSERT INTO activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
   VALUES (
     CASE WHEN v_is_new THEN 'field_app_invoice_created' ELSE 'field_app_invoice_updated' END,
     CASE WHEN v_is_new THEN 'Created field application invoice' ELSE 'Updated field application invoice' END,
@@ -323,7 +315,6 @@ BEGIN
     'invoice',
     v_invoice_id
   );
-
   -- Record idempotency
   IF p_idempotency_key IS NOT NULL THEN
     INSERT INTO idempotency_keys (idempotency_key, operation, result)

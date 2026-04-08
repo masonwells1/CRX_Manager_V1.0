@@ -101,8 +101,8 @@ export default function FieldApplicationInvoice() {
 
     const invoice = inv as Record<string, unknown>;
     setInvoiceNumber((invoice.invoice_number as string) || '');
-    setTransactionDate((invoice.transaction_date as string) || '');
-    setNotes((invoice.notes as string) || '');
+    setTransactionDate((invoice.invoice_date as string) || '');
+    setNotes((invoice.header_notes as string) || '');
     setStatus((invoice.status as InvoiceStatus) || 'draft');
 
     const { data: locs } = await supabase
@@ -142,15 +142,15 @@ export default function FieldApplicationInvoice() {
         (items as Array<Record<string, unknown>>).map((it, idx) => ({
           id: (it.id as string) || `chem_${idx}`,
           product_id: it.product_id as string | null,
-          product_name: (it.product_name as string) || '',
+          product_name: (it.description as string) || '',
           rate_per_acre: it.rate_per_acre as number | null,
           rate_unit: (it.rate_unit as string) || 'oz',
           quantity: (it.quantity as number) || 0,
-          unit: (it.unit as string) || 'oz',
+          unit: (it.unit_size as string) || 'oz',
           unit_price_cents: (it.unit_price_cents as number) || 0,
-          price_unit: (it.unit as string) || 'oz',
+          price_unit: (it.unit_size as string) || 'oz',
           extended_cents: (it.extended_cents as number) || 0,
-          unit_cost_cents: (it.unit_cost_cents as number) || 0,
+          unit_cost_cents: (it.cost_cents as number) || 0,
           sort_order: (it.sort_order as number) || idx,
         }))
       );
@@ -249,9 +249,9 @@ export default function FieldApplicationInvoice() {
         p_invoice_id: id || null,
         p_invoice: {
           invoice_number: invoiceNumber || null,
-          transaction_date: transactionDate,
+          invoice_date: transactionDate,
           salesman_id: profile.id,
-          notes: notes || null,
+          header_notes: notes || null,
         },
         p_locations: locations.map((l, idx) => ({
           field_id: l.field_id,
@@ -265,12 +265,12 @@ export default function FieldApplicationInvoice() {
         })),
         p_chemicals: chemicals.map((c, idx) => ({
           product_id: c.product_id,
-          product_name: c.product_name,
+          description: c.product_name,
           quantity: c.quantity,
-          unit: c.unit,
+          unit_size: c.unit,
           unit_price_cents: c.unit_price_cents,
           extended_cents: c.extended_cents,
-          unit_cost_cents: c.unit_cost_cents,
+          cost_cents: c.unit_cost_cents,
           sort_order: idx,
           rate_per_acre: c.rate_per_acre,
           rate_unit: c.rate_unit,
