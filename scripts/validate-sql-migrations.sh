@@ -120,8 +120,10 @@ for file in $ALL_SQL; do
       VIOLATIONS=$((VIOLATIONS + 1))
     fi
 
-    # 4: entity_type, entity_id
-    if echo "$CODE_ONLY" | grep -qiE 'entity_type\s*,\s*entity_id'; then
+    # 4: entity_type, entity_id IN idempotency_keys context
+    #    (Exclude lines referencing activity_log, financial_audit_log, activity_feed,
+    #     notifications — those tables legitimately use entity_type/entity_id columns)
+    if echo "$CODE_ONLY" | grep -viE '(activity_log|financial_audit_log|activity_feed|notifications|operation_type)' | grep -qiE 'entity_type\s*,\s*entity_id'; then
       echo "VIOLATION: $file"
       echo "  Uses 'entity_type, entity_id' columns"
       echo "  CORRECT: operation, result"

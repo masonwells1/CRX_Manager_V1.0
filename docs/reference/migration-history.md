@@ -1,4 +1,4 @@
-# Migration History (234 migrations)
+# Migration History (246 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -248,3 +248,4 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 | 242 | 20260405400000 | **Code review fixes** -- SELECT RLS policy, index optimization |
 | 243 | 20260406000000 | **Code review RPC hardening** -- quote status validation, duplicate job guard, bigint casts |
 | 244 | 20260406100000 | **Field App Workflow V2** -- field_app_locations + field_app_location_shares tables, derive_customer_shares_from_fields + save_field_app_invoice RPCs, jobs.customer_id DROP NOT NULL |
+| 245 | 20260416100000 | **Fix search_path on 4 trigger functions** — ALTER FUNCTION to add `pg_temp` to `guard_audit_log_immutable`, `_fill_audit_actor`, `_enforce_quote_status_transition`, `_enforce_return_status_transition` |

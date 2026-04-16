@@ -4,6 +4,13 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-16 — Audit Fixes: Validator False Positives + Function search_path
+
+1. **Fixed SQL validator false positives** — `validate-sql-migrations.sh` check #4 was flagging `entity_type, entity_id` in `activity_log`/`financial_audit_log`/`activity_feed` INSERTs as idempotency_keys violations. Added per-line exclusion filter for legitimate tables.
+2. **Fixed 4 trigger functions missing `pg_temp`** — New migration `20260416100000` adds `SET search_path TO 'public', 'pg_temp'` to `guard_audit_log_immutable`, `_fill_audit_actor`, `_enforce_quote_status_transition`, `_enforce_return_status_transition`. Resolves Supabase security linter warnings.
+
+---
+
 ## 2026-04-16 — Delivery Inventory Audit Fix
 
 Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
