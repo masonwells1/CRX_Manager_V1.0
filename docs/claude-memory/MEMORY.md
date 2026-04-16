@@ -1,10 +1,10 @@
 # CRX Manager V1.0 — Agent Memory
 
-> **Last updated:** 2026-03-10
+> **Last updated:** 2026-04-09
 
 ## Project
 
-- **Repo:** `C:\Users\pc\CRX_Manager_V1.0` | GitHub: `masonwells1/CRX_Manager_V1.0`
+- **Repo:** `C:\CRX_Manager_V1.0` | GitHub: `masonwells1/CRX_Manager_V1.0`
 - **Production:** https://croprxsolutions.app (Vercel)
 - **Supabase:** `rhyzpcqhnizqbxphqdkr`
 - **Owner:** Mason Wells (`masonwells1`) — beginner, explain simply
@@ -20,24 +20,37 @@
 
 See `.env.example` in repo root for required variable names. Never commit actual values.
 
-## Current State
+## Current State (as of 2026-04-09)
 
 - **Branch:** `main`
-- **Pages:** 56 | **Migrations:** 134 | **Edge Functions:** 5
-- **Unit tests:** 1,444 passing (93 files) | **E2E specs:** 102 files (626 tests, all passing)
+- **Pages:** 63 | **Migrations:** 245 | **Edge Functions:** 7
+- **Unit tests:** 1,772 passing (119 files) | **E2E specs:** 92 spec files
 - **Build:** clean | **CI:** green | **Pre-commit:** lint + build + vitest
 - **Season:** October 1 to September 30
 
-## What's Next
+## Recent Major Features (2026-03-17 → 2026-04-09)
 
-1. User acceptance testing with real data
-2. Verify Edge Function secrets in production
-3. Review Top 10 UX improvements roadmap (deferred)
+- **CommandPalette** — Cmd+K global search/navigation
+- **ActionQueue** — Dashboard action items via `get_dashboard_action_items` RPC
+- **Field Management V3** — FieldDashboard, FieldSetup with Mapbox polygon drawing
+- **Application Services** — ApplicationServices + ApplicationServiceDetail pages
+- **FieldApplicationInvoice** — Invoice generation from field applications
+- **ProgramTracker** — Seasonal crop program completion tracking
+- **DispatchBoard** — Driver/delivery dispatch management
+- **GettingStarted** — Onboarding checklist page for new users
+- **Password Reset** — ForgotPasswordPage + ResetPasswordPage + `reset-user-password` Edge Function
+- **Field App Workflow V2** — FieldAppChemicalEntry, SelectLocationsModal, CustomerSharesTable
+- **GuardrailBanner + useGuardrails** — Business rule enforcement UI layer
+- **TransactionThread** — Unified transaction history component
+- **HelpTip** — Contextual help tooltips
+- **OCRThresholdSettings** — Tunable OCR confidence settings
+- **Custom ESLint rules** — `require-assert-rpc-result`, `no-direct-sentry-import`
+- **Workflow gaps remediation** — Quote→Job, smart pricing, field billing splits, dispatch columns
+- **Mega audit phase 1** — 40+ RPC fixes (search_path, idempotency, status enums)
 
 ## Where to Find Things
 
 All architecture, patterns, red lines, and business logic are in **CLAUDE.md** (loaded automatically).
-Detailed reference docs are in the repo — read on demand:
 
 | Need | Read |
 |------|------|
@@ -49,4 +62,6 @@ Detailed reference docs are in the repo — read on demand:
 | QA/testing | `docs/reference/qa-testing.md` |
 | Sprint history | `docs/CHANGELOG.md` |
 | Workflow guides | `docs/workflows/SAFE_DEVELOPMENT_RULES.md` (read every session) |
-| Future plans | `docs/plans/` (price list versioning, top 10 UX improvements) |
+| Plans & designs | `docs/plans/` |
+| Gotchas & lessons | `docs/claude-memory/lessons.md` |
+| Full project details | `docs/claude-memory/project-details.md` |

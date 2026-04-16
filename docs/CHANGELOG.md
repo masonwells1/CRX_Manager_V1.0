@@ -4,9 +4,25 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-04-07 -- Field App V2 Schema Fix and Migration Applied
 
 Applied migration to Supabase. Fixed 8 column name mismatches before deployment: invoices.transaction_date to invoice_date, invoices.notes to header_notes, invoice_items.product_name to description, invoice_items.unit to unit_size, invoice_items.unit_cost_cents to cost_cents, activity_log to activity_feed, fields.planted_acres removed, customers.tier to assigned_tier. Fixed corresponding frontend references in FieldApplicationInvoice.tsx.
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -16,11 +32,27 @@ Multi-customer field application invoicing foundation. New tables: field_app_loc
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-04-05 — Custom Application Workflow (4 Phases)
 
 Phase 1: Application Services Setup — new tables (application_services, customer_application_rates), new pages, bug fix (vehicle name NULL on job invoices). Phase 2: Quote-to-Job Connection — jobs.quote_id/quote_section_id, create_job_from_quote_section RPC, Schedule Job button on QuoteBuilder. Phase 3: Smart Pricing — invoice_items.quoted_price_cents/price_source, enhanced create_invoice_from_blend_ticket with quoted pricing auto-pull + application fee auto-add. Phase 4: Program Tracker — get_program_completion RPC, ProgramTracker page, Dashboard widget.
 
 Code review fixes (3-agent swarm): Missing SELECT RLS on customer_application_rates (critical), idempotency jsonb type mismatch (critical), ConfirmModal on override delete, quote status validation + duplicate job guard in create_job_from_quote_section, explicit bigint casts, ProgramTracker expanded rows, Dashboard Sentry capture, E2E test fix (Operational Alerts -> Action Queue), price source tooltips, logActivity entityType/entityId. Deleted 3 stale GitHub branches.
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -54,6 +86,14 @@ Code review fixes (3-agent swarm): Missing SELECT RLS on customer_application_ra
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-04-04 — F14 + E3: Alert→Task + Batch Reject Blend Tickets
 
 ### F14: Alert → Task Conversion
@@ -67,6 +107,14 @@ Code review fixes (3-agent swarm): Missing SELECT RLS on customer_application_ra
 - New RPC: `batch_reject_blend_tickets()` mirrors approve pattern with idempotency
 - ConfirmModal confirmation before rejecting
 - Activity logging for batch rejections
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -107,6 +155,14 @@ Code review fixes (3-agent swarm): Missing SELECT RLS on customer_application_ra
 - Collapsible categories: Overdue Invoices, Cancelled+Posted, Overdue Deliveries, Low Stock, Expiring Quotes, Unassigned Deliveries
 - "Dismiss for today" per item (sessionStorage, resets on reload)
 - New RPC: `get_dashboard_action_items()` returns specific entity details per category
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -156,6 +212,14 @@ Five-phase migration session fixing workflow gaps across blend tickets, invoicin
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-30 — Field Management V2: Dashboard + Map Layer System
 
 ### Summary
@@ -195,6 +259,14 @@ Major field management upgrade implementing Approach 2 from the brainstorm: reus
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-29 — Blend Ticket Phase 1: OCR Bridge
 
 ### Summary
@@ -228,6 +300,14 @@ Phase 1 implementation for the blend ticket system — aligning the existing sch
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-26 — Full Documentation Sweep
 
 ### Summary
@@ -244,6 +324,14 @@ Systematic audit and fix of all project documentation. Compared every doc file a
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-26 — Fix TypeScript/DB Type Mismatches (A16)
 
 ### Summary
@@ -252,6 +340,14 @@ Removed deprecated `balance_due` and `total_paid` fields from the `Order` TypeSc
 ### Changes
 - `src/types/index.ts` — Removed `balance_due: number` and `total_paid: number` from `Order` interface
 - `docs/ROADMAP.md` — Marked A16 and A17 as Done
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -279,6 +375,14 @@ Added the ability to edit delivery items (add, remove, adjust quantities) while 
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-21 — Order Print Feature: Order Summary + Pick List PDFs
 
 ### Summary
@@ -300,6 +404,14 @@ Added print functionality for orders — both a customer-facing Order Summary an
 ### Stats
 - 1,713 unit tests (110 files), all passing
 - 0 lint errors, build clean
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -340,6 +452,14 @@ Comprehensive logic audit found 105+ issues across 8 domains. Phase 1 (Critical)
 ### Audit Reference
 - Full audit: `docs/audits/2026-03-20-mega-logic-audit.md` (105+ issues found)
 - Phase 3 (Medium) fixes applied in same session (see below)
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -387,6 +507,14 @@ Added audit logging to 6 critical financial operations that were missing it:
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-19 — Transaction Ledger Fix + Outstanding PO Tab + HelpTip Expansion (Night Session)
 
 ### Changes
@@ -399,6 +527,14 @@ Added audit logging to 6 critical financial operations that were missing it:
 ### Stats
 - 0 new migrations, 0 new RPCs, 0 new tables
 - 12 files modified, 1653 unit tests passing, build clean
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -419,6 +555,14 @@ Added audit logging to 6 critical financial operations that were missing it:
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-19 — Pre-Production Audit Fixes (7 Issues)
 
 ### Changes
@@ -436,6 +580,14 @@ Added audit logging to 6 critical financial operations that were missing it:
 - `src/components/blendtickets/ManualTicketCreate.tsx` — customer validation
 - `src/components/products/BulkProductImport.tsx` — margin fix + tier warnings
 - `supabase/migrations/20260333600000_quick_delivery_optional_invoice.sql` — new migration
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -461,6 +613,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-18 — Full Sales Cycle Live UI Test + Bug Fixes
 
 ### Live Browser Test (Playwright)
@@ -479,6 +639,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 - Fixed `v_server_totals` field aliases (`.sum`→`.total_price`)
 - Fixed `activity_feed` column names (`action`→`event_type`, `entity_type`→`related_entity_type`, `entity_id`→`related_entity_id`)
 - Added `pg_temp` to search_path
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -517,6 +685,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-17 — Code Audit Phase 2: assertRpcResult + Sentry + Safety Fixes (7 files)
 
 ### assertRpcResult Coverage (Phase 2 — 7 more files, ~20 RPC calls)
@@ -528,6 +704,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 - **Reports.tsx** — 8 RPCs: `get_bottom_line_pnl`, `get_gross_sales_report`, `get_customer_balance_listing`, `get_commission_balance_report`, `get_chemical_history`, `get_inventory_cost_report`, `get_batch_year_end_summaries`, `get_customer_year_end_summary`
 - **QuoteBuilder.tsx** — `save_quote` + `create_quote_version` (×2 locations)
 - **MonthEndClose.tsx** — `get_monthly_summary` + `get_batch_year_end_summaries`
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -566,6 +750,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-16 — Code Quality Session: Sentry Migration, A11y, Safety-Net Tests
 
 ### Error Reporting
@@ -582,6 +774,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ### Commission Audit Trail
 - **Reports.tsx** — Replaced direct `.update()` commission mark-paid with `create_commission_payment` RPC for proper audit trail (creates payment record, payment items, updates status, logs to `financial_audit_log`)
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -610,6 +810,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-16 — Team Board V2 Phase 2 (Escalation, Context, Workload)
 
 - **F5: Escalation Engine** — `StaleTasksAlert` component surfaces overdue tasks with 3 visual tiers: amber (1-3d), red (3-7d), critical (7d+ with pulse animation). Collapsible summary with counts. Sorted most overdue first
@@ -623,6 +831,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-16 — Infrastructure Hardening (Quick Wins)
 
 - **A1: Unhandled rejection safety net** — `window.addEventListener('unhandledrejection', ...)` in `main.tsx` catches async errors that bypass React ErrorBoundary, reports to Sentry
@@ -630,6 +846,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 - **A3: Sentry sourcemap uploads** — installed `@sentry/vite-plugin`, `sourcemap: 'hidden'` generates maps without exposing to users. Plugin uploads to Sentry then deletes from `dist/`. Only active when `SENTRY_AUTH_TOKEN` env var is set (Vercel CI)
 - **A5: Per-route error boundaries** — enhanced `ErrorBoundary` with `inline` prop for compact in-page error UI. Added `RouteShell` wrapper in `App.tsx` so page crashes don't take down sidebar navigation. 2 new unit tests
 - Design doc: `docs/plans/2026-03-16-infrastructure-hardening-design.md`
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -645,6 +869,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-16 — Quote Builder V2 E2E Test Suite
 
 - **New E2E spec** `tests/e2e/quote-builder-v2.spec.ts` — 20 serial steps covering all 12 V2 sprints
@@ -652,6 +884,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 - Uses `safeRpc()`/`safeRest()` wrappers for resilience against unapplied V2 migrations
 - Full cleanup in Step 20 — deletes all created quotes, orders, and templates
 - All 20/20 tests passing, 2.5 min runtime
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -665,6 +905,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-16 — Quote Builder V2 (Sprint 1: Product Internal Notes)
 
 - **New `internal_notes` column** on `products` table — internal-only notes, never shown to growers
@@ -673,6 +921,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 - Existing `notes` data auto-copied to `internal_notes` during migration — zero breaking changes
 - 3 new unit tests for the internal notes field
 - Migration: `20260316100000_product_internal_notes.sql`
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -689,6 +945,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-16 — Quote Builder Editable Price/Unit with Auto Margin Recalc
 
 - **Editable price/unit** in Quote Builder — price input is now a number field instead of static text
@@ -698,6 +962,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 - **Override sticks** through rate/acres changes but resets on product swap or customer tier change
 - **Existing quote detection** — loading a saved quote detects overridden prices by comparing saved price vs tier price
 - No DB migration needed — `quote_items.price_per_unit` already stores the effective price
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -717,9 +989,25 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-16 — Fix Commission Payment RPCs (migration `20260332600000`)
 
 - Fixed `create_commission_payment` and `void_commission_payment` RPCs crashing due to non-existent `updated_at` column on `commissions` table (found by deep audit). Added SQL validation pre-commit hook and Claude Code PreToolUse hook to prevent similar bugs.
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -737,6 +1025,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 ### financial_audit_log — missing entity_type value
 - `blend_ticket` was absent from the entity_type CHECK constraint
 - Fix: added `blend_ticket` to entity_type CHECK constraint
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -763,6 +1059,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-16 — void_delivery Fix & Fake Data Cleanup
 
 ### void_delivery RPC — 4 bugs fixed (migration `20260332300000`)
@@ -775,6 +1079,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 ### Fake Data Cleanup
 - Removed "A9 Test Farm CSV" customer and all child records (2 orders, 2 deliveries, 18 jobs, 6 applicator licenses, 8 rebate claims, 5 application records)
 - Inventory corrected: Start Right 2.0 Tote (+265 available released), Start Right 2.0 2.5G (+10 available released)
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -810,6 +1122,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-15 — UX Polish, ConfirmModal, Parallelized Queries, Coverage Reporting
 
 ### Replace window.confirm() with ConfirmModal (PRs merged)
@@ -833,6 +1153,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 ### E2E Test Suite Hardening
 - Eliminated all remaining E2E test skips and fixed 12 failing tests
 - Fixed `useToast()` destructuring in team board components
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -870,6 +1198,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-09 — Fix: Tab-Switch No Longer Resets Page Data
 
 ### AuthContext (`src/contexts/AuthContext.tsx`)
@@ -884,6 +1220,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 - The old code set `loading: true` on every auth event, which caused `ProtectedRoute` to unmount the entire page tree
 - This destroyed all unsaved form data, scroll position, and local component state
 - Now only actual sign-in/sign-out events cause a full reload — token refreshes are invisible to the user
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -908,6 +1252,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-09 — Product Setup UX Improvements
 
 ### New: Combobox Component (`src/components/ui/Combobox.tsx`)
@@ -920,6 +1272,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 - **Removed `unit_size`** from form — legacy field replaced by `container_size` + `container_unit` (data preserved in DB)
 - **Grouped sections** with dividers and helper text: Product Form → Container (size+unit+type in one row) → Inventory Unit → Application Rates
 - No SQL migration needed (UI-only changes)
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -953,6 +1313,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-08 — Track A: Complete Email Integration
 
 ### Email Infrastructure (built earlier same day)
@@ -976,6 +1344,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-07 — Sales & Chemical History Reporting
 
 ### New: Sales Reports Page (`/sales-reports`)
@@ -990,6 +1366,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 - Migration: `20260307200000_sales_reports.sql`
 - Route: `/sales-reports`, roles: admin + sales_rep
 - Sidebar: under Finance category between Reports and Compliance
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -1014,6 +1398,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ### E2E Tests
 - `tests/e2e/accounts-payable.spec.ts` — 8 tests covering AP dashboard, bill lifecycle, void workflow, KPI cards, RUP compliance tab
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -1045,6 +1437,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 ### Role Visibility
 - Admin + Sales: all 10 sections
 - Drivers: Team Board, Deliveries, Alerts, Activity only
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -1090,6 +1490,14 @@ Five RPCs were created AFTER the idempotency injection (20260306200000) and cons
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-04 — Math Test Suite: All 22 Tests Passing (PR #31)
 
 ### Problem
@@ -1123,6 +1531,14 @@ All 22 math tests pass: 12 invoice verification (IV1–IV12) + 10 quote pricing 
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-03 — E2E Suite Expansion + DB Schema Fixes
 
 ### New E2E Spec Files (37 tests)
@@ -1139,6 +1555,14 @@ All 22 math tests pass: 12 invoice verification (IV1–IV12) + 10 quote pricing 
 ### Full Suite Result
 - 999 passed, 30 pre-existing failures (unrelated to DB changes), 21 skipped
 - 1,443 unit tests (93 files) + 626 E2E tests (102 spec files)
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -1165,6 +1589,14 @@ All 22 math tests pass: 12 invoice verification (IV1–IV12) + 10 quote pricing 
 - `20260302100000` — `quote_items.calc_mode` + `quote_items.price_unit` columns
 - `20260302110000` — `orders.order_name` column + updated `create_direct_order()` RPC
 - `20260302120000` — updated `save_quote()` RPC with bidirectional calc_mode support
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -1208,6 +1640,14 @@ All 22 math tests pass: 12 invoice verification (IV1–IV12) + 10 quote pricing 
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-03-01 — E2E Coverage Sprint (branch `claude/add-playwright-tests-DjMo6`)
 
 - Added 23 new Playwright E2E spec files with 165 test cases, all passing
@@ -1221,6 +1661,14 @@ All 22 math tests pass: 12 invoice verification (IV1–IV12) + 10 quote pricing 
   - ar-aging, application-records, commission-payments-crud, crop-programs, cycle-counts, delivery-remainders, quick-receive, returns-crud, rebates-page, new-delivery-page, new-order-page, new-purchase-order, purchase-order-detail, invoice-list-page, field-detail, job-detail, vehicle-detail, inventory-page
 - Net result: 84 E2E spec files, 589 total E2E tests, 1,380 unit tests (88 files at that time)
 - Commits: `88b6086` (tests), `99c4d2d` (audit prompt), `61f38df` (test plan)
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 
@@ -1253,6 +1701,14 @@ All 22 math tests pass: 12 invoice verification (IV1–IV12) + 10 quote pricing 
 
 ---
 
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
+
+---
+
 ## 2026-02-28 — Go-Live Hardening (5 sprints, branch `feature/go-live-hardening`)
 
 ### Sprint 1: Foundation Hardening
@@ -1282,6 +1738,14 @@ All 22 math tests pass: 12 invoice verification (IV1–IV12) + 10 quote pricing 
 - **5b:** Cross-entity reconciliation checks via `src/lib/reconciliation.ts` — 5 pure check functions (order totals, inventory ledger, invoice payments, invoice balance formula, commission splits) + DB wrapper `runReconciliationChecks()`
 - Net result: 1,374 unit tests (87 files), all passing. Build clean.
 - Commits: `7e33267`, `91314c4`
+
+---
+
+## 2026-04-16 — Delivery Inventory Audit Fix
+
+Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
+1. Removed hardcoded Main Warehouse filter — inventory warnings now aggregate across all locations.
+2. Changed inventory warning to use net-available (available minus prebooked) instead of just available, matching existing patterns in NewOrder and OrderDetail.
 
 ---
 

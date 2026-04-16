@@ -230,23 +230,26 @@ export default function NewDelivery() {
       const { data: invData, error: invErr } = await supabase
         .from('inventory')
         .select('product_id, quantity_available, quantity_prebooked')
-        .in('product_id', productIds)
-        .eq('location', 'Main Warehouse');
+        .in('product_id', productIds);
 
       if (cancelled || invErr) return;
 
-      const invMap: Record<string, number> = {};
+      const invMap: Record<string, { available: number; prebooked: number }> = {};
       for (const row of (invData || []) as Array<{ product_id: string; quantity_available: number; quantity_prebooked: number }>) {
-        invMap[row.product_id] = (invMap[row.product_id] || 0) + Number(row.quantity_available);
+        const pid = row.product_id;
+        if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0 };
+        invMap[pid].available += Number(row.quantity_available);
+        invMap[pid].prebooked += Number(row.quantity_prebooked);
       }
 
       const warnings: string[] = [];
       for (const item of deliveryItems) {
         if (item.quantity <= 0) continue;
-        const available = invMap[item.product_id] ?? 0;
-        if (available < item.quantity) {
+        const inv = invMap[item.product_id];
+        const netAvailable = inv ? inv.available - inv.prebooked : 0;
+        if (netAvailable < item.quantity) {
           warnings.push(
-            `${item.product_name}: need ${item.quantity}, only ${available} on hand`
+            `${item.product_name}: need ${item.quantity}, only ${netAvailable} net available`
           );
         }
       }
