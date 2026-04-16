@@ -217,7 +217,7 @@ export default function NewDelivery() {
       const driver = drivers.find(d => d.id === selectedDriverId);
       checkDriverLoad({ driverId: selectedDriverId, scheduledDate, driverName: driver?.full_name });
     }
-  }, [selectedDriverId, scheduledDate, drivers, checkDriverLoad]);
+  }, [selectedDriverId, scheduledDate, checkDriverLoad]);
 
   // Inventory availability check — warn (don't block) if stock is low
   useEffect(() => {
