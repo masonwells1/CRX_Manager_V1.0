@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  Save, Send, Trash2, Printer, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft,
+  Save, Send, Trash2, Printer, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -18,7 +18,24 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
 import FieldAppChemicalEntry, { type ChemicalLine } from '../components/field-app/FieldAppChemicalEntry';
 import CustomerSharesTable from '../components/field-app/CustomerSharesTable';
-import type { Field, CustomerShareResult, InvoiceStatus } from '../types';
+import ApplicationServicePicker from '../components/field-app/ApplicationServicePicker';
+import type {
+  Field,
+  CustomerShareResult,
+  InvoiceStatus,
+  DeriveCustomerSharesResult,
+  FieldAppInvoiceResult,
+  PreviewFieldAppSplitResult,
+} from '../types';
+
+interface SiblingInvoice {
+  id: string;
+  invoice_number: string;
+  customer_id: string;
+  customer_name: string;
+  total_amount_cents: number;
+  status: InvoiceStatus;
+}
 
 interface FieldLocation {
   field_id: string;
@@ -51,9 +68,11 @@ export default function FieldApplicationInvoice() {
   const { profile } = useAuth();
   const { toast } = useToast();
   const saveIdem = useIdempotencyKey('save_field_app_invoice', profile?.id || '');
+  const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
 
   const [activeTab, setActiveTab] = useState<TabKey>('locations');
   const [saving, setSaving] = useState(false);
+  const [posting, setPosting] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [showLocationsModal, setShowLocationsModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -70,6 +89,14 @@ export default function FieldApplicationInvoice() {
   const [windDirection, setWindDirection] = useState('');
   const [temperature, setTemperature] = useState('');
   const [applicator, setApplicator] = useState('');
+
+  // Phase 1 (2026-04-29) state
+  const [appServiceId, setAppServiceId] = useState<string | null>(null);
+  const [invoiceGroupId, setInvoiceGroupId] = useState<string | null>(null);
+  const [siblings, setSiblings] = useState<SiblingInvoice[]>([]);
+  const [primaryCustomerTier, setPrimaryCustomerTier] = useState<number>(1);
+  const [previewData, setPreviewData] = useState<PreviewFieldAppSplitResult | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   useUnsavedChanges(dirty);
 
@@ -104,12 +131,43 @@ export default function FieldApplicationInvoice() {
     setTransactionDate((invoice.invoice_date as string) || '');
     setNotes((invoice.header_notes as string) || '');
     setStatus((invoice.status as InvoiceStatus) || 'draft');
+    setAppServiceId((invoice.application_service_id as string | null) || null);
 
-    const { data: locs } = await supabase
+    const groupId = (invoice.invoice_group_id as string | null) || null;
+    setInvoiceGroupId(groupId);
+
+    // If grouped, load sibling invoices for the banner
+    if (groupId) {
+      const { data: sibs } = await supabase
+        .from('invoices')
+        .select('id, invoice_number, customer_id, total_amount_cents, status, customer:customers!invoices_customer_id_fkey(farm_name)')
+        .eq('invoice_group_id', groupId)
+        .order('invoice_number');
+      if (sibs) {
+        setSiblings(
+          (sibs as Array<Record<string, unknown>>).map((s) => ({
+            id: s.id as string,
+            invoice_number: (s.invoice_number as string) || '',
+            customer_id: s.customer_id as string,
+            customer_name: ((s.customer as { farm_name?: string } | null)?.farm_name) || '',
+            total_amount_cents: (s.total_amount_cents as number) || 0,
+            status: (s.status as InvoiceStatus) || 'draft',
+          }))
+        );
+      }
+    } else {
+      setSiblings([]);
+    }
+
+    // Locations: when grouped, locations are keyed by invoice_group_id;
+    // otherwise by invoice_id.
+    const locQuery = supabase
       .from('field_app_locations')
       .select('*, field:fields!field_app_locations_field_id_fkey(field_name, crop_type, total_acres, customer:customers!fields_customer_id_fkey(farm_name))')
-      .eq('invoice_id', id)
       .order('sort_order');
+    const { data: locs } = groupId
+      ? await locQuery.eq('invoice_group_id', groupId)
+      : await locQuery.eq('invoice_id', id);
 
     if (locs) {
       setLocations(
@@ -182,6 +240,7 @@ export default function FieldApplicationInvoice() {
   const deriveShares = useCallback(async (fieldIds: string[], appliedAcresMap: Record<string, number>) => {
     if (fieldIds.length === 0) {
       setShares([]);
+      setPrimaryCustomerTier(1);
       return;
     }
     try {
@@ -190,8 +249,21 @@ export default function FieldApplicationInvoice() {
         p_applied_acres_map: appliedAcresMap,
       });
       if (error) throw error;
-      const result = assertRpcResult<{ shares: CustomerShareResult[] }>(data, 'derive_customer_shares_from_fields');
-      setShares(result.shares || []);
+      // Phase 1: new shape returns { rows, customers, ... }. Map customers to legacy
+      // CustomerShareResult for the table; use primary's tier for chemical preview.
+      const result = assertRpcResult<DeriveCustomerSharesResult>(data, 'derive_customer_shares_from_fields');
+      const legacyShares: CustomerShareResult[] = (result.customers || []).map((c) => ({
+        customer_id: c.customer_id,
+        customer_name: c.customer_name,
+        is_primary: c.is_primary,
+        total_acres: c.total_share_acres,
+        split_pct: c.overall_split_pct,
+      }));
+      setShares(legacyShares);
+      const primary = (result.customers || []).find((c) => c.is_primary) || result.customers?.[0];
+      setPrimaryCustomerTier(primary?.tier ?? 1);
+      // Reset preview whenever shares change — it's stale until user re-clicks Preview
+      setPreviewData(null);
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'derive_customer_shares_from_fields' } });
       toast('error', 'Failed to derive customer shares');
@@ -238,6 +310,51 @@ export default function FieldApplicationInvoice() {
   const handleChemicalsChange = (updated: ChemicalLine[]) => {
     setChemicals(updated);
     setDirty(true);
+    setPreviewData(null);
+  };
+
+  const handlePreview = async () => {
+    if (locations.length === 0) {
+      toast('error', 'Select at least one location first');
+      return;
+    }
+    setPreviewing(true);
+    try {
+      const { data, error } = await supabase.rpc('preview_field_app_invoice_split', {
+        p_locations: locations.map((l, idx) => ({
+          field_id: l.field_id,
+          map_number: l.map_number || idx + 1,
+          total_acres: l.total_acres,
+          planted_acres: l.planted_acres,
+          applied_acres: l.applied_acres || l.total_acres,
+          crop_type: l.crop_type,
+          wind_direction: l.wind_direction || windDirection || null,
+          sort_order: idx,
+        })),
+        p_chemicals: chemicals.map((c, idx) => ({
+          product_id: c.product_id,
+          description: c.product_name,
+          quantity: c.quantity,
+          unit_size: c.unit,
+          unit_price_cents: c.unit_price_cents,
+          cost_cents: c.unit_cost_cents,
+          sort_order: idx,
+          rate_per_acre: c.rate_per_acre,
+          rate_unit: c.rate_unit,
+          manual_override: c.manual_override === true,
+        })),
+        p_application_service_id: appServiceId,
+      });
+      if (error) throw error;
+      const result = assertRpcResult<PreviewFieldAppSplitResult>(data, 'preview_field_app_invoice_split');
+      setPreviewData(result);
+      setActiveTab('customers');
+    } catch (err) {
+      Sentry.captureException(err, { tags: { rpc: 'preview_field_app_invoice_split' } });
+      toast('error', `Preview failed: ${sanitizeError(err)}`);
+    } finally {
+      setPreviewing(false);
+    }
   };
 
   const handleSave = async () => {
@@ -263,30 +380,35 @@ export default function FieldApplicationInvoice() {
           wind_direction: l.wind_direction || windDirection || null,
           sort_order: idx,
         })),
+        // Phase 1: Drop client-computed extended_cents — server is source of truth.
+        // Pass manual_override flag so server records price_source correctly.
         p_chemicals: chemicals.map((c, idx) => ({
           product_id: c.product_id,
           description: c.product_name,
           quantity: c.quantity,
           unit_size: c.unit,
           unit_price_cents: c.unit_price_cents,
-          extended_cents: c.extended_cents,
           cost_cents: c.unit_cost_cents,
           sort_order: idx,
           rate_per_acre: c.rate_per_acre,
           rate_unit: c.rate_unit,
+          manual_override: c.manual_override === true,
         })),
         p_performed_by: profile.id,
+        p_application_service_id: appServiceId,
         p_idempotency_key: key,
       });
 
       if (error) throw error;
-      const result = assertRpcResult<{ invoice_id: string }>(data, 'save_field_app_invoice');
+      const result = assertRpcResult<FieldAppInvoiceResult>(data, 'save_field_app_invoice');
       saveIdem.resetKey();
       setDirty(false);
-      toast('success', isNew ? 'Invoice created' : 'Invoice saved');
+      const ids = result.invoice_ids || [];
+      const groupNote = result.invoice_group_id ? ` (group of ${ids.length})` : '';
+      toast('success', isNew ? `Invoice created${groupNote}` : `Invoice saved${groupNote}`);
 
-      if (isNew) {
-        navigate(`/invoices/field-app/${result.invoice_id}`, { replace: true });
+      if (isNew && ids[0]) {
+        navigate(`/invoices/field-app/${ids[0]}`, { replace: true });
       } else {
         fetchInvoice();
       }
@@ -298,8 +420,50 @@ export default function FieldApplicationInvoice() {
     }
   };
 
+  const handlePost = async () => {
+    if (!profile || !id) return;
+    setPosting(true);
+    try {
+      const key = postIdem.getKey();
+      // Group-aware: route through post_invoice_group when a group exists, otherwise post_invoice.
+      if (invoiceGroupId) {
+        const { error } = await supabase.rpc('post_invoice_group', {
+          p_invoice_group_id: invoiceGroupId,
+          p_performed_by: profile.id,
+          p_idempotency_key: key,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.rpc('post_invoice', {
+          p_invoice_id: id,
+          p_idempotency_key: key,
+        });
+        if (error) throw error;
+      }
+      postIdem.resetKey();
+      toast('success', invoiceGroupId ? 'Invoice group posted' : 'Invoice posted');
+      fetchInvoice();
+    } catch (err) {
+      Sentry.captureException(err, { tags: { rpc: invoiceGroupId ? 'post_invoice_group' : 'post_invoice' } });
+      toast('error', `Post failed: ${sanitizeError(err)}`);
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  // Phase 1: edit lock covers the whole group — any sibling not in draft/unposted blocks edits.
+  const canEdit = isNew || (
+    ['draft', 'unposted'].includes(status) &&
+    (siblings.length === 0 || siblings.every((s) => ['draft', 'unposted'].includes(s.status)))
+  );
+  const canPost = !isNew && canEdit;
+
   const handleDelete = async () => {
     if (!id || !profile) return;
+    if (!canEdit) {
+      toast('error', 'Cannot delete a posted/voided invoice');
+      return;
+    }
     try {
       const deleteResult = await supabase
         .from('invoices')
@@ -349,7 +513,7 @@ export default function FieldApplicationInvoice() {
           {!isNew && <Badge variant={status === 'draft' ? 'default' : status === 'posted' ? 'success' : 'warning'}>{status}</Badge>}
         </div>
         <div className="flex gap-2">
-          {!isNew && (
+          {!isNew && canEdit && (
             <Button variant="danger" size="sm" icon={<Trash2 className="w-4 h-4" />} onClick={() => setShowDeleteConfirm(true)}>
               Delete
             </Button>
@@ -359,19 +523,49 @@ export default function FieldApplicationInvoice() {
               Print
             </Button>
           )}
-          {!isNew && status === 'draft' && (
-            <Button variant="secondary" size="sm" icon={<Send className="w-4 h-4" />} onClick={() => { /* TODO: post */ }}>
-              Post
+          {!isNew && canPost && (
+            <Button variant="secondary" size="sm" icon={<Send className="w-4 h-4" />} onClick={handlePost} loading={posting} disabled={posting}>
+              {invoiceGroupId ? `Post Group (${siblings.length || 1})` : 'Post'}
             </Button>
           )}
-          <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving} disabled={saving}>
-            Save
-          </Button>
+          {locations.length > 0 && (
+            <Button variant="secondary" size="sm" icon={<Eye className="w-4 h-4" />} onClick={handlePreview} loading={previewing} disabled={previewing || !canEdit}>
+              Preview
+            </Button>
+          )}
+          {canEdit && (
+            <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving} disabled={saving}>
+              Save
+            </Button>
+          )}
         </div>
       </div>
 
+      {/* Phase 1: sibling banner for grouped split invoices */}
+      {invoiceGroupId && siblings.length > 1 && (
+        <Card>
+          <div className="px-4 py-3 bg-blue-50 border-l-4 border-blue-400 rounded">
+            <div className="text-sm font-medium text-blue-900 mb-1">
+              This invoice is part of a {siblings.length}-customer split.
+            </div>
+            <div className="text-xs text-blue-700 flex flex-wrap gap-x-4 gap-y-1">
+              {siblings.map((s) => (
+                <Link
+                  key={s.id}
+                  to={`/invoices/field-app/${s.id}`}
+                  className={`underline hover:no-underline ${s.id === id ? 'font-semibold text-blue-900' : ''}`}
+                >
+                  {s.invoice_number} &middot; {s.customer_name} &middot; {fmt(s.total_amount_cents)}
+                  {s.id === id && ' (this)'}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </Card>
+      )}
+
       <Card>
-        <div className="grid grid-cols-3 gap-4 p-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 p-4">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Invoice #</label>
             <input
@@ -379,7 +573,8 @@ export default function FieldApplicationInvoice() {
               value={invoiceNumber}
               onChange={(e) => { setInvoiceNumber(e.target.value); setDirty(true); }}
               placeholder="Auto-generated"
-              className="w-full px-3 py-2 border rounded-lg text-sm"
+              disabled={!canEdit}
+              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
             />
           </div>
           <div>
@@ -388,7 +583,16 @@ export default function FieldApplicationInvoice() {
               type="date"
               value={transactionDate}
               onChange={(e) => { setTransactionDate(e.target.value); setDirty(true); }}
-              className="w-full px-3 py-2 border rounded-lg text-sm"
+              disabled={!canEdit}
+              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Application Service</label>
+            <ApplicationServicePicker
+              value={appServiceId}
+              onChange={(v) => { setAppServiceId(v); setDirty(true); setPreviewData(null); }}
+              disabled={!canEdit}
             />
           </div>
           <div>
@@ -398,7 +602,8 @@ export default function FieldApplicationInvoice() {
               value={notes}
               onChange={(e) => { setNotes(e.target.value); setDirty(true); }}
               placeholder="Optional notes"
-              className="w-full px-3 py-2 border rounded-lg text-sm"
+              disabled={!canEdit}
+              className="w-full px-3 py-2 border rounded-lg text-sm disabled:bg-gray-50"
             />
           </div>
         </div>
@@ -506,15 +711,22 @@ export default function FieldApplicationInvoice() {
               chemicals={chemicals}
               onChemicalsChange={handleChemicalsChange}
               totalAppliedAcres={totalAppliedAcres}
+              primaryCustomerTier={primaryCustomerTier}
             />
           </div>
         )}
 
         {activeTab === 'customers' && (
           <div className="p-4">
+            {!previewData && shares.length > 0 && (
+              <div className="mb-4 px-3 py-2 bg-amber-50 border-l-4 border-amber-300 text-xs text-amber-800 rounded">
+                Click <strong>Preview</strong> to see exact per-customer amounts (server-computed with tier, grower-share overrides, and service fees applied).
+              </div>
+            )}
             <CustomerSharesTable
               shares={shares}
               invoiceTotalCents={invoiceTotalCents}
+              preview={previewData}
             />
           </div>
         )}

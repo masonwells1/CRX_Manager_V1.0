@@ -967,6 +967,7 @@ export interface Invoice {
   is_quick_delivery?: boolean;
   write_off_cents: number;
   invoice_group_id: string | null;
+  application_service_id: string | null;
 
   deleted_at: string | null;
   created_at: string;
@@ -2309,6 +2310,7 @@ export interface FieldAppLocation {
   id: string;
   invoice_id: string | null;
   job_id: string | null;
+  invoice_group_id: string | null;
   field_id: string;
   map_number: number | null;
   total_acres: number | null;
@@ -2348,6 +2350,84 @@ export interface CustomerShareResult {
   is_primary: boolean;
   total_acres: number;
   split_pct: number;
+}
+
+// ── Phase 1 (2026-04-29): per-field per-customer detail returned by
+//    derive_customer_shares_from_fields(uuid[], jsonb)
+//    See: supabase/migrations/20260429140635_field_app_workflow_phase1.sql
+
+export interface DeriveCustomerSharesRow {
+  field_id: string;
+  field_name: string;
+  customer_id: string;
+  customer_name: string;
+  is_primary: boolean;
+  split_pct: number;
+  share_acres: number;
+  price_override_cents: number | null;
+  pricing_note: string | null;
+  tier: number | null;
+  field_total_acres: number | null;
+  field_applied_acres: number;
+  used_fallback: boolean;
+}
+
+export interface DeriveCustomerSharesCustomer {
+  customer_id: string;
+  customer_name: string;
+  is_primary: boolean;
+  total_share_acres: number;
+  overall_split_pct: number;
+  tier: number | null;
+  has_override: boolean;
+}
+
+export interface DeriveCustomerSharesResult {
+  rows: DeriveCustomerSharesRow[];
+  customers: DeriveCustomerSharesCustomer[];
+  total_applied_acres: number;
+  field_count: number;
+  fallback_used_field_ids: string[];
+}
+
+// ── Phase 1: save_field_app_invoice and create_invoice_from_blend_ticket
+//    return shape standardized to { invoice_ids, invoice_group_id }.
+export interface FieldAppInvoiceResult {
+  invoice_ids: string[];
+  invoice_group_id: string | null;
+}
+
+// ── Phase 1: post_invoice_group return shape
+export interface PostInvoiceGroupResult {
+  posted_invoice_ids: string[];
+  invoice_group_id: string;
+  total_posted_cents: number;
+  member_count: number;
+}
+
+// ── Phase 1: preview_field_app_invoice_split return shape
+export interface PreviewFieldAppSplitLine {
+  kind: 'grower_share' | 'chemical' | 'service_fee';
+  description: string;
+  quantity: number;
+  unit_price_cents: number;
+  extended_cents: number;
+}
+
+export interface PreviewFieldAppSplitCustomer {
+  customer_id: string;
+  customer_name: string;
+  is_primary: boolean;
+  tier: number;
+  total_cents: number;
+  lines: PreviewFieldAppSplitLine[];
+}
+
+export interface PreviewFieldAppSplitResult {
+  per_customer: PreviewFieldAppSplitCustomer[];
+  grand_total_cents: number;
+  customer_count: number;
+  shares_detail: DeriveCustomerSharesResult;
 }
 
 export type SearchEntityType = 'customer' | 'order' | 'invoice' | 'delivery' | 'product';

@@ -251,3 +251,74 @@ If you change one stage, check everything downstream:
 - [ ] Verify inventory levels after delivery completion
 - [ ] Verify order status updates after delivery completion
 - [ ] Check that delivery remainders are created for partial deliveries
+
+---
+
+## Field Application Workflow (Phase 1, 2026-04-29)
+
+Field application invoices are a parallel branch — they don't go through the quote → order → delivery pipeline. There are two entry points:
+
+1. **Direct field app invoice** — `/invoices/field-app/new` calls `save_field_app_invoice()`
+2. **Blend ticket** — once approved, `create_invoice_from_blend_ticket()` produces invoice(s)
+
+### Multi-customer fields → grouped split invoices
+
+When the selected fields have `field_billing_defaults` rows for multiple customers, both entry-point RPCs produce **one invoice per customer**, all sharing an `invoice_group_id`:
+
+```
+2 customers × shared field
+  → derive_customer_shares_from_fields() returns per-(field × customer) detail
+  → save_field_app_invoice() inserts:
+      • invoices.id × N (one per customer, shared invoice_group_id)
+      • field_app_locations × M (keyed at group level when N > 1)
+      • field_app_location_shares × (M × N) — TRUE per-customer split
+      • invoice_shares × N (one 100% row per child invoice — PDF compat)
+  → returns { invoice_ids: [...], invoice_group_id }
+```
+
+AR is keyed off `invoices.customer_id` directly. Each child invoice has its own `balance_cents`, statement, finance charges, etc. — no AR consumer changes were needed.
+
+### Pricing modes (Mode A vs Mode B)
+
+For each (customer × field) pair, the RPC chooses ONE of:
+
+- **Mode A — Grower share** (when `field_billing_defaults.price_override_cents IS NOT NULL`):
+  - One $/ac line per overridden field (`price × share_acres`)
+  - Per-product chemical lines at $0 (informational, scaled to that customer's share of acres)
+  - **No** application service fee — override is all-inclusive
+  - `invoice_items.price_source = 'manual'`
+
+- **Mode B — Line-item billing** (no override):
+  - Per-product chemical lines priced at: `manual_override > quoted (quote_sections.field_id linkage) > customer.assigned_tier × product.tierN_price`
+  - Application service fee from `customer_application_rates` override → `application_services.default_rate_per_acre_cents`
+  - `invoice_items.price_source` ∈ `{'manual', 'quoted', 'tier'}`
+
+A single customer can be in BOTH modes simultaneously if some of their fields have overrides and others don't — the chemical-quantity loop tracks `qty_a` (override fields) and `qty_b` (non-override fields) separately.
+
+### Posted edit/post lock
+
+`save_field_app_invoice` raises if **any** member of the invoice group is not in `draft`/`unposted`. Edits are wipe-and-rebuild for safety. Frontend mirrors this with `canEdit` covering siblings.
+
+### Atomic group posting
+
+`post_invoice_group(p_invoice_group_id, p_performed_by, p_idempotency_key)` posts every invoice in a group in one transaction. Pre-flight checks period-open and status for all siblings; any failure rolls back the whole group. The frontend `InvoiceDetail` Post button auto-routes through this RPC when `invoice.invoice_group_id` is set.
+
+### Pricing preview
+
+`preview_field_app_invoice_split(p_locations, p_chemicals, p_application_service_id)` returns the same per-customer breakdown without writing. Backs the "Preview" button on the field app invoice page so the user can verify amounts before saving.
+
+### Source files
+- `src/pages/FieldApplicationInvoice.tsx` — multi-tab editor, sibling banner, Preview/Post buttons
+- `src/pages/BlendTicketDetail.tsx` — Create Invoice button, accepts `{invoice_ids, invoice_group_id}` shape
+- `src/components/field-app/CustomerSharesTable.tsx` — preview-aware customer breakdown
+- `src/components/field-app/FieldAppChemicalEntry.tsx` — tier-aware preview pricing, manual override toggle
+- `src/components/field-app/ApplicationServicePicker.tsx` — service dropdown driving fee calculation
+- `src/pages/InvoiceDetail.tsx` — group-aware Post button (routes through `post_invoice_group` for grouped invoices)
+
+### Safety checklist for field-app changes
+- [ ] `derive_customer_shares_from_fields` falls back to `fields.customer_id` at 100% when no `field_billing_defaults` rows exist
+- [ ] Both RPCs return `{ invoice_ids: string[]; invoice_group_id: string | null }` shape
+- [ ] `field_app_location_shares` carries the TRUE per-customer split (not 100% to invoice's own customer)
+- [ ] `invoice_shares` populated for every invoice (one 100% row per child) — PDF/statement compat
+- [ ] Posted-status check covers the whole group, not just the invoice being edited
+- [ ] All RPCs verified to have exactly one overload via `DO $$` block at end of migration

@@ -19,6 +19,13 @@ export interface ChemicalLine {
   unit_cost_cents: number;
   sort_order: number;
   epa_registration?: string;
+  /**
+   * Phase 1 (2026-04-29): when true, the unit_price_cents on this line is a
+   * deliberate manual override. The server records price_source = 'manual'.
+   * When false, the server uses tier/quoted pricing per customer; the price
+   * shown here is just a display preview based on the primary customer's tier.
+   */
+  manual_override?: boolean;
 }
 
 interface Recipe {
@@ -38,6 +45,14 @@ interface FieldAppChemicalEntryProps {
   onChemicalsChange: (chemicals: ChemicalLine[]) => void;
   totalAppliedAcres: number;
   recipes?: Recipe[];
+  /**
+   * Phase 1: tier of the primary customer derived from billing splits.
+   * Used as the *display* price when a product is selected (so the user
+   * sees something reasonable). Final per-customer pricing is computed
+   * server-side; this is just a preview hint.
+   * Defaults to 1 when no fields/customers are selected yet.
+   */
+  primaryCustomerTier?: number;
 }
 
 const fmt = (cents: number) =>
@@ -48,10 +63,18 @@ function genId() {
   return `chem_${Date.now()}_${nextLineId++}`;
 }
 
+function tierPrice(product: Product, tier: number): number {
+  // Returns dollars (number); caller converts to cents.
+  if (tier === 2) return product.tier2_price ?? product.tier1_price ?? 0;
+  if (tier === 3) return product.tier3_price ?? product.tier1_price ?? 0;
+  return product.tier1_price ?? 0;
+}
+
 export default function FieldAppChemicalEntry({
   chemicals,
   onChemicalsChange,
   totalAppliedAcres,
+  primaryCustomerTier = 1,
 }: FieldAppChemicalEntryProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Product[]>([]);
@@ -134,16 +157,19 @@ export default function FieldAppChemicalEntry({
   };
 
   const selectProduct = (product: Product, lineId: string) => {
+    // Phase 1: use primary customer's tier as the display price hint.
+    // Server still computes per-customer pricing on save.
     updateLine(lineId, {
       product_id: product.id,
       product_name: product.product_name,
       rate_per_acre: product.rate_per_acre || null,
       rate_unit: product.rate_unit || product.inventory_unit || 'oz',
       unit: product.inventory_unit || 'oz',
-      unit_price_cents: Math.round((product.tier1_price || 0) * 100),
+      unit_price_cents: Math.round(tierPrice(product, primaryCustomerTier) * 100),
       price_unit: product.inventory_unit || 'oz',
       unit_cost_cents: Math.round((product.current_cost || 0) * 100),
       epa_registration: product.epa_registration || undefined,
+      manual_override: false,
     });
     setShowSearch(false);
     setSearchQuery('');
@@ -226,13 +252,21 @@ export default function FieldAppChemicalEntry({
                 <td className="px-3 py-2 text-center text-gray-600">{line.rate_unit}</td>
                 <td className="px-3 py-2 text-right tabular-nums">{line.quantity.toFixed(2)}</td>
                 <td className="px-3 py-2">
-                  <input
-                    type="number"
-                    step="1"
-                    value={line.unit_price_cents}
-                    onChange={(e) => updateLine(line.id, { unit_price_cents: Number(e.target.value) || 0 })}
-                    className="w-full px-2 py-1 border rounded text-right text-sm tabular-nums"
-                  />
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="number"
+                      step="1"
+                      value={line.unit_price_cents}
+                      onChange={(e) => updateLine(line.id, { unit_price_cents: Number(e.target.value) || 0, manual_override: true })}
+                      className="w-full px-2 py-1 border rounded text-right text-sm tabular-nums"
+                      title={line.manual_override ? 'Manual override' : 'Tier preview — final price computed per customer on save'}
+                    />
+                    {line.manual_override && (
+                      <span className="text-[10px] px-1 rounded bg-amber-50 text-amber-700" title="Manual price override — server records as price_source=manual">
+                        M
+                      </span>
+                    )}
+                  </div>
                 </td>
                 <td className="px-3 py-2 text-center text-gray-600">{line.price_unit}</td>
                 <td className="px-3 py-2 text-right font-medium tabular-nums">{fmt(line.extended_cents)}</td>
@@ -265,13 +299,18 @@ export default function FieldAppChemicalEntry({
         </div>
       </div>
 
-      {/* Summary */}
-      <div className="flex justify-end gap-6 text-sm pt-2 border-t">
-        <div className="text-gray-600">
-          Price/Acre: <span className="font-semibold text-gray-900">{fmt(Math.round(pricePerAcre))}</span>
+      {/* Summary — preview only, final amounts computed server-side per customer */}
+      <div className="flex items-center justify-between gap-6 text-sm pt-2 border-t">
+        <div className="text-xs text-gray-400 italic">
+          Preview using tier {primaryCustomerTier} pricing &middot; server computes per-customer totals on save
         </div>
-        <div className="text-gray-600">
-          Invoice Total: <span className="font-semibold text-gray-900 text-base">{fmt(invoiceTotal)}</span>
+        <div className="flex gap-6">
+          <div className="text-gray-600">
+            Price/Acre: <span className="font-semibold text-gray-900">{fmt(Math.round(pricePerAcre))}</span>
+          </div>
+          <div className="text-gray-600">
+            Preview Total: <span className="font-semibold text-gray-900 text-base">{fmt(invoiceTotal)}</span>
+          </div>
         </div>
       </div>
     </div>

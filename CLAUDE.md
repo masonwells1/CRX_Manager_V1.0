@@ -7,9 +7,9 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-04-06)
-- 63 pages, 96+ tables, ~163 RPCs, 246 migrations, 7 Edge Functions
-- 1,772 unit tests (119 files) + 92 E2E spec files, all passing
+## Current State (2026-04-29)
+- 63 pages, 96+ tables, ~165 RPCs, 247 migrations, 7 Edge Functions
+- 1,775 unit tests (120 files) + 92 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 - All RPC data usage wrapped with `assertRpcResult()` — enforced by ESLint + safety-net test
@@ -230,10 +230,10 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 
 | Doc | Contents |
 |-----|----------|
-| `docs/reference/database-schema.md` | 83+ tables + RLS matrix |
-| `docs/reference/rpc-functions.md` | ~138 RPCs + triggers |
-| `docs/reference/migration-history.md` | 196 migration entries |
-| `docs/reference/pages-routes.md` | 56 pages with routes |
+| `docs/reference/database-schema.md` | 96+ tables + RLS matrix |
+| `docs/reference/rpc-functions.md` | ~165 RPCs + triggers |
+| `docs/reference/migration-history.md` | 246 migration entries |
+| `docs/reference/pages-routes.md` | 63 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
 | `docs/CHANGELOG.md` | Sprint-by-sprint history |

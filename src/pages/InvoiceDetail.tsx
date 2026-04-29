@@ -432,13 +432,27 @@ export default function InvoiceDetail() {
     setPosting(true);
     try {
       const idemKey = postIdem.getKey();
-      const { error } = await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey });
-      if (error) throw error;
+      // Phase 1 (2026-04-29): when the invoice belongs to a split group, route
+      // through post_invoice_group so all siblings post atomically. Posting just
+      // one member of a group would leave the group in a half-posted state.
+      if (invoice.invoice_group_id) {
+        const { error } = await supabase.rpc('post_invoice_group', {
+          p_invoice_group_id: invoice.invoice_group_id,
+          p_performed_by: profile?.id ?? null,
+          p_idempotency_key: idemKey,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey });
+        if (error) throw error;
+      }
       postIdem.resetKey();
-      toast('success', 'Invoice posted');
+      toast('success', invoice.invoice_group_id ? 'Invoice group posted' : 'Invoice posted');
       fetchInvoice(id!);
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'post_invoice' } });
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), {
+        extra: { context: invoice.invoice_group_id ? 'post_invoice_group' : 'post_invoice' },
+      });
       toast('error', sanitizeError(err));
     }
     setPosting(false);
@@ -1167,6 +1181,7 @@ export default function InvoiceDetail() {
               placeholder="Search products by name or SKU..."
               value={productSearch}
               onChange={(e) => setProductSearch(e.target.value)}
+              // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
               autoFocus
               className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />

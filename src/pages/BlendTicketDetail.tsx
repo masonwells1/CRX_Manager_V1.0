@@ -591,9 +591,23 @@ export function BlendTicketDetail() {
           p_idempotency_key: key,
         });
         if (error) throw error;
-        const invoiceId = assertRpcResult<string>(data, 'create_invoice_from_blend_ticket');
-        if (profile) logActivity({ event: 'invoice_created_from_blend_ticket', description: `Invoice created from blend ticket ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'invoice', entityId: invoiceId });
-        navigate(`/invoices/${invoiceId}`);
+        // Phase 1 (2026-04-29): RPC return shape changed from uuid to
+        // { invoice_ids: string[], invoice_group_id: string | null }.
+        // Multi-customer fields produce grouped split invoices; single-customer
+        // fields produce a single invoice (array length 1).
+        const result = assertRpcResult<{ invoice_ids: string[]; invoice_group_id: string | null }>(
+          data, 'create_invoice_from_blend_ticket'
+        );
+        const firstInvoiceId = result.invoice_ids?.[0];
+        if (!firstInvoiceId) throw new Error('No invoice id returned from RPC');
+        if (profile) logActivity({
+          event: 'invoice_created_from_blend_ticket',
+          description: `Invoice${result.invoice_ids.length > 1 ? `s (${result.invoice_ids.length})` : ''} created from blend ticket ${ticket.ticket_number}${result.invoice_group_id ? ` (group)` : ''}`,
+          performedBy: profile.id,
+          entityType: 'invoice',
+          entityId: firstInvoiceId,
+        });
+        navigate(`/invoices/${firstInvoiceId}`);
       },
       toast,
       setLoading: setCreatingInvoice,

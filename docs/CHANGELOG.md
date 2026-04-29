@@ -4,6 +4,85 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-29 — Field Application Workflow Phase 1: Grouped Split Invoices + Grower-Share Mode
+
+Comprehensive rewrite of the multi-customer field application billing flow, prompted by the codex audit at `docs/audits/2026-04-28-field-application-workflow-review.md`. Bundles fixes for audit items #1, #2, #3, #9, #11, #13, M1, M2, M3.
+
+### Migration `20260429140635_field_app_workflow_phase1.sql` (~1,000 lines)
+
+1. **Schema additions**
+   - `field_app_locations.invoice_group_id uuid` — locations live at group level for multi-customer invoices
+   - `invoices.application_service_id uuid` — persists service selection so fee is reloadable/auditable
+   - `field_app_locations` CHECK relaxed to allow `invoice_id OR job_id OR invoice_group_id`
+
+2. **Helper rewrite: `derive_customer_shares_from_fields`**
+   - Returns per-(field × customer) detail (`rows`) AND per-customer aggregate (`customers`)
+   - Falls back to `fields.customer_id` at 100% when a field has no `field_billing_defaults` rows
+   - Tracks `fallback_used_field_ids` for diagnostics
+
+3. **Major rewrite: `save_field_app_invoice`**
+   - Creates one invoice per customer (single or grouped via `invoice_group_id`)
+   - **Mode A (grower-share)**: when customer has `price_override_cents` on a field, bills $/ac × share_acres + chemical $0 informational lines, no service fee
+   - **Mode B (line-item)**: tier-aware (`manual > quoted > customer.assigned_tier`) + application service fee
+   - A customer can be in BOTH modes simultaneously across different fields
+   - Posted-status guard covers whole group; wipe-and-rebuild on edit
+   - `field_app_location_shares` populated with TRUE per-customer split (NOT 100% rows)
+   - `invoice_shares` continues to be populated (one 100% row per child invoice) for PDF/statement compat
+   - Returns `{ invoice_ids: string[], invoice_group_id: string | null }`
+
+4. **Major rewrite: `create_invoice_from_blend_ticket`**
+   - Same grouped-split + Mode A/B logic
+   - Acres from `blend_ticket_fields.actual_acres → planned_acres → fields.total_acres → 0`
+   - Deterministic quoted-price lookup (`ORDER BY qi.id LIMIT 1`)
+   - **Breaking**: return type changed from `uuid` to `jsonb` (matches `save_field_app_invoice` shape)
+
+5. **New RPC: `post_invoice_group(p_invoice_group_id, p_performed_by, p_idempotency_key)`**
+   - Atomically posts every invoice in a group in one transaction
+   - Pre-flight checks period-open and status for all siblings; rollback on any failure
+
+6. **New RPC: `preview_field_app_invoice_split(p_locations, p_chemicals, p_application_service_id)`**
+   - Read-only preview returning the same per-customer breakdown that `save_field_app_invoice` would produce
+   - Backs the "Preview" button on the field app invoice page
+
+7. **Verification block** at end of migration asserts exactly 1 overload of all 5 RPCs (per CLAUDE.md migration safety rules).
+
+### Frontend changes
+
+- **NEW** `src/components/field-app/ApplicationServicePicker.tsx` — service dropdown
+- `src/components/field-app/CustomerSharesTable.tsx` — accepts new `preview` prop with per-customer cards (grower / chemical / service-fee tagged); legacy fallback shows "Click Preview for amounts"
+- `src/components/field-app/FieldAppChemicalEntry.tsx` — `primaryCustomerTier` prop drives tier-aware preview pricing; per-line `manual_override` flag with "M" badge
+- `src/pages/FieldApplicationInvoice.tsx` — App Service picker, group sibling banner, group-aware edit lock, Preview button, group-aware Post button via `post_invoice_group`, sibling fetch, new RPC return shape handling
+- `src/pages/BlendTicketDetail.tsx` — accepts new `{invoice_ids, invoice_group_id}` return shape
+- `src/pages/InvoiceDetail.tsx` — `handlePost` routes through `post_invoice_group` when `invoice.invoice_group_id` is set
+
+### Type additions in `src/types/index.ts`
+
+- `Invoice.application_service_id` (string | null)
+- `FieldAppLocation.invoice_group_id` (string | null)
+- `DeriveCustomerSharesRow`, `DeriveCustomerSharesCustomer`, `DeriveCustomerSharesResult`
+- `FieldAppInvoiceResult`, `PostInvoiceGroupResult`
+- `PreviewFieldAppSplitLine`, `PreviewFieldAppSplitCustomer`, `PreviewFieldAppSplitResult`
+
+### Verification (this commit)
+
+- `npm run typecheck` — clean
+- `npm run lint` — 0 errors, 2 pre-existing a11y warnings (unrelated)
+- `npm run build` — clean (40.54s, PWA generated)
+- `npm run test` — 120 files / 1,775 tests passed, 0 failed (161s)
+
+### Out of scope (deferred to later phases)
+
+- Multi-field application records (audit #6) → Phase 2
+- `start_job()` and job lifecycle repair (#4) → Phase 2
+- `jobs.customer_id` revert to NOT NULL (#5) → Phase 2
+- Inventory completion behavior (#7) → Phase 3
+- Application services on `jobs` (the field-app and blend-ticket parts ARE in Phase 1; jobs part is Phase 2)
+- RLS hardening (#10 of original audit) → Phase 5
+- Field picker map UX (#12 of original audit) → Phase 6
+- New tests (Step 4 of Phase 1 plan) — to be tackled in next session
+
+---
+
 ## 2026-04-16 — Audit Fixes: Validator False Positives + Function search_path
 
 1. **Fixed SQL validator false positives** — `validate-sql-migrations.sh` check #4 was flagging `entity_type, entity_id` in `activity_log`/`financial_audit_log`/`activity_feed` INSERTs as idempotency_keys violations. Added per-line exclusion filter for legitimate tables.
