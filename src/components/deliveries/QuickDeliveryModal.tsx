@@ -527,6 +527,7 @@ export default function QuickDeliveryModal({
               onChange={(e) => setProductSearch(e.target.value)}
               placeholder="Search products..."
               className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened modal; user expects to type immediately
               autoFocus
             />
           </div>

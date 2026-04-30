@@ -45,6 +45,7 @@ export default function UnsavedChangesModal({ open, onStay, onLeave }: UnsavedCh
             <Button variant="secondary" onClick={onLeave}>
               Leave
             </Button>
+            {/* eslint-disable-next-line jsx-a11y/no-autofocus -- safe default: keep user on page if they hit Enter */}
             <Button onClick={onStay} autoFocus>
               Stay
             </Button>

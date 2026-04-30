@@ -2348,6 +2348,7 @@ export default function QuoteBuilder() {
               onChange={(e) => setProductQuery(e.target.value)}
               className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
               placeholder="Search by name, SKU, category, or vendor..."
+              // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
               autoFocus
             />
           </div>

@@ -94,6 +94,7 @@ export default function CommissionSplitEditor({
                     placeholder="Enter recipient name"
                     aria-label={`Recipient name for split ${i + 1}`}
                     className={inputClass}
+                    // eslint-disable-next-line jsx-a11y/no-autofocus -- newly-revealed input; user just clicked to add a split
                     autoFocus
                   />
                   <button

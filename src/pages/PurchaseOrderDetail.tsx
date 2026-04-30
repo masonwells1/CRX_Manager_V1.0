@@ -966,6 +966,7 @@ export default function PurchaseOrderDetail() {
                           value={editProductQuery}
                           onChange={(e) => setEditProductQuery(e.target.value)}
                           placeholder="Search products..."
+                          // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in inline editor; user just clicked to edit a row
                           autoFocus
                         />
                         {editProductResults.length > 0 && (

@@ -442,6 +442,7 @@ export default function NewPurchaseOrder() {
                 onChange={(e) => setProductQuery(e.target.value)}
                 className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green mb-3"
                 placeholder="Search by name, SKU, or vendor..."
+                // eslint-disable-next-line jsx-a11y/no-autofocus -- search input in just-opened picker; user expects to type immediately
                 autoFocus
               />
               <div className="max-h-64 overflow-y-auto divide-y divide-gray-50">
