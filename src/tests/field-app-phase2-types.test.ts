@@ -70,15 +70,16 @@ describe('Field App Phase 2 — type contract', () => {
     expect(replay.already_started).toBe(true);
   });
 
-  it('CompleteJobResult includes field_count (Phase 2 addition for multi-field jobs)', () => {
+  it('CompleteJobResult includes field_count and short_stock_count', () => {
     const sample: CompleteJobResult = {
       success: true,
       job_id: 'job-1',
       application_record_id: 'rec-1',
       record_number: 'AR-0042',
       field_count: 3,
+      short_stock_count: 0,
     };
     expect(sample.field_count).toBe(3);
-    expect(sample.success).toBe(true);
+    expect(sample.short_stock_count).toBe(0);
   });
 });

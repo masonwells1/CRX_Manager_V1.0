@@ -1671,13 +1671,17 @@ export interface StartJobResult {
   already_started: boolean;
 }
 
-// Phase 2 (2026-04-30): complete_job RPC return shape (extended with field_count).
+// Phase 2/3 (2026-04-30): complete_job RPC return shape.
+//   - Phase 2 added field_count (per-field application_record_fields rows)
+//   - Phase 3 added short_stock_count (chemicals where inventory went negative
+//     and the inventory_transactions row was tagged requires_review = true)
 export interface CompleteJobResult {
   success: boolean;
   job_id: string;
   application_record_id: string;
   record_number: string;
   field_count: number;
+  short_stock_count: number;
 }
 
 // Sprint 8: Job Scheduling

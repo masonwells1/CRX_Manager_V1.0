@@ -4,6 +4,29 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field Application Workflow Phase 3: Inventory Completion Behavior
+
+Addresses codex audit item #7. Migration `20260430160000_field_app_workflow_phase3.sql`.
+
+### Schema
+- **`inventory_transactions.requires_review boolean NOT NULL DEFAULT false`** — flag for short-stock applications. Surfaces in dashboard alerts so an admin can investigate (PO not received, miscount, etc.) without blocking field work.
+- **`inventory_transactions.job_id uuid REFERENCES jobs(id)`** — explicit FK so the audit trail joins back to the source job. Indexed.
+- Indexes: `idx_inv_tx_job_id` (partial, where job_id IS NOT NULL), `idx_inv_tx_requires_review` (partial, where requires_review = true) — both targeted at the dashboard "needs review" query.
+
+### `complete_job` rewrite
+- **Removed pre-flight inventory exception.** Field work happened; the DB has to record reality. Insufficient stock now flows through and is tagged on the transaction row instead of blocking completion.
+- **Linked-prebook decrement.** `quantity_prebooked` only drops when the job's `quote_section_id` matches an `inventory_holds.source_id`. Fixes the leak where Customer B's job silently halved Customer A's unrelated prebook. Hold quantity itself is decremented in lockstep so net-free math doesn't double-count.
+- **Negative-aware writes.** `quantity_available` can go negative; the existing `chk_inventory_qty_prebooked >= 0` constraint still protects against negative prebook. New rows are inserted (going negative) when no inventory row exists for the product.
+- **Result shape extended** with `short_stock_count` (number of chemicals where stock went negative).
+
+### Frontend
+- `src/types/index.ts` — `CompleteJobResult.short_stock_count` added.
+
+### Tests
+- Updated `src/tests/field-app-phase2-types.test.ts` to reflect the new field. 127 files / 1,836 tests still passing.
+
+---
+
 ## 2026-04-30 — Field Application Workflow Phase 2: Job Lifecycle Repair
 
 Addresses codex audit items #4 (no `start_job`), #5 (multi-customer jobs half-built), #6 (application records lose multi-field detail). Migration `20260430150000_field_app_workflow_phase2.sql`.
