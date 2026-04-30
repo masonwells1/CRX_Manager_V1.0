@@ -1710,6 +1710,8 @@ export interface Job {
   invoice_id: string | null;
   quote_id: string | null;
   quote_section_id: string | null;
+  /** Phase 4 (2026-04-30): drives per-acre service fee on transfer_job_to_invoice. */
+  application_service_id: string | null;
   created_by: string | null;
   deleted_at: string | null;
   created_at: string;
@@ -1722,6 +1724,17 @@ export interface Job {
   job_fields?: JobField[];
   job_chemicals?: JobChemical[];
   applied_info?: JobAppliedInfo;
+}
+
+// Phase 4 (2026-04-30): compute_application_service_fee RPC result.
+// Single source of truth for fee math: customer override → service default → 0.
+export interface ComputeApplicationServiceFeeResult {
+  rate_per_acre_cents: number;
+  total_fee_cents: number;
+  cost_per_acre_cents: number;
+  total_cost_cents: number;
+  source: 'customer_override' | 'service_default' | 'inactive' | 'none';
+  service_name: string | null;
 }
 
 export interface JobField {

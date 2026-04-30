@@ -4,6 +4,30 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field Application Workflow Phase 4: Application Service Fees
+
+Addresses codex audit item #8. Migration `20260430170000_field_app_workflow_phase4.sql`.
+
+### Schema
+- **`jobs.application_service_id uuid REFERENCES application_services(id)`** — brings jobs to parity with `blend_tickets.application_service_id` (smart-pricing era) and `invoices.application_service_id` (Phase 1). Indexed.
+
+### New helper RPC
+- **`compute_application_service_fee(p_service_id, p_customer_id, p_acres, p_season)`** — single source of truth for fee math. Priority:
+  1. `customer_application_rates` override (per customer × service × season)
+  2. `application_services.default_rate_per_acre_cents`
+  3. 0 (no service / inactive / no rate)
+- Returns `{ rate_per_acre_cents, total_fee_cents, cost_per_acre_cents, total_cost_cents, source, service_name }` so callers can both display the math and persist line items.
+- The existing inline fee blocks in `save_field_app_invoice` and `create_invoice_from_blend_ticket` continue to work as before; future cleanup can refactor them onto the helper without changing observable behavior.
+
+### Frontend
+- `src/types/index.ts` — `Job.application_service_id` added; new `ComputeApplicationServiceFeeResult` interface with the four-state `source` union.
+
+### Tests
+- `src/tests/field-app-phase4-types.test.ts` — 5 type-contract assertions.
+- Test count: 1,836 → 1,841 (+5), 127 → 128 files, 0 failures, build clean.
+
+---
+
 ## 2026-04-30 — Field Application Workflow Phase 3: Inventory Completion Behavior
 
 Addresses codex audit item #7. Migration `20260430160000_field_app_workflow_phase3.sql`.
