@@ -4,6 +4,29 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field Application Workflow Phase 5: RLS Hardening
+
+Addresses codex audit item #10. Migration `20260430180000_field_app_workflow_phase5.sql`. RLS-only — no schema or RPC changes.
+
+### The vulnerability
+The previous `jobs_update` policy allowed the assigned applicator to UPDATE *any column* on the jobs row. An applicator with PostgREST access could silently:
+- Change `total_price_cents` (mark a job done at any price)
+- Change `customer_id` (move the job to a different customer's books)
+- Change `applicator_id` (reassign the job to themselves)
+…all without going through `start_job` or `complete_job` RPCs.
+
+`job_applied_info` had a related but lesser hole: the insert/update policies required only that the user *be some applicator*, not that they were the applicator assigned to the linked job.
+
+### The fixes
+- **`jobs_update`** is now admin/sales only. Applicators do their work through `start_job` (SECURITY DEFINER) and `complete_job` (SECURITY DEFINER), which bypass RLS entirely and have their own state-transition gates.
+- **`job_applied_info_insert`** now requires either admin/sales OR (`is_applicator()` AND `auth.uid() = jobs.applicator_id` for the linked job).
+- **`job_applied_info_update`** same ownership-gated structure on both `USING` and `WITH CHECK`.
+
+### Acceptance
+Per the audit response: applicator role can complete an assigned job through the RPCs only, cannot mutate price/customer/applicator via direct table writes. Verified by the migration's own `DO` block (asserts `jobs_update` no longer references "applicator", and `job_applied_info_insert` enforces `applicator_id`).
+
+---
+
 ## 2026-04-30 — Field Application Workflow Phase 4: Application Service Fees
 
 Addresses codex audit item #8. Migration `20260430170000_field_app_workflow_phase4.sql`.
