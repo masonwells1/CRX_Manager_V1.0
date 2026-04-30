@@ -4,6 +4,29 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field Application Workflow Phases 7 + 8: Codex Re-Review Hot Fixes
+
+Two migrations addressing the four findings codex raised on its independent re-review of Phases 1–6 (`docs/audits/2026-04-30-field-app-phase1-6-codex-rereview-findings.md`).
+
+### Phase 7 (`20260430190000_field_app_workflow_phase7.sql`) — Job RPC fixes
+
+- **Finding #1 (P1) — auth gates on `start_job` + `complete_job`.** Both RPCs are `SECURITY DEFINER` (which bypasses RLS), and both granted to authenticated. They previously took `p_performed_by` from the client without validating it, and never checked role/ownership. Now: validate `auth.uid() = p_performed_by`, then enforce `is_admin() OR is_sales_rep() OR (is_applicator() AND v_job.applicator_id = auth.uid())`. Pattern matches `save_quote`. Phase 5's RLS could not protect this path because SECURITY DEFINER bypasses RLS entirely.
+- **Finding #2 (P1) — quote_id, not quote_section_id.** Phase 3's linked-prebook lookup matched `inventory_holds.source_id` to `jobs.quote_section_id`, but planned-program holds are created with `source_id = quote_id` (verified against migration `20260317100000_fix_idempotency_and_searchpath_final.sql:384, 397`). The previous lookup never matched, so Phase 3's leak fix was functionally inert for every quote-linked job. Net-free inventory math drifted as a result.
+- **Finding #3 (P2) — multi-hold release loop.** Phase 3 summed all matching holds into `v_decrement_pb` but updated only the FIRST hold by created_at, which would over-decrement that row and trip the `chk_inventory_holds_quantity_check >= 0` constraint when multiple holds existed for the same quote+product. Replaced with an oldest-first loop that takes `LEAST(remaining, hold.quantity)` per row.
+
+### Phase 8 (`20260430200000_field_app_workflow_phase8.sql`) — Orphan invoice handling
+
+- **Finding #4 (P2) — orphan child invoices cancelled and detached.** When an admin edits a draft grouped field-app invoice and the new derived customer list drops a previously-billed customer (e.g., billing default flipped), the existing wipe deleted items/shares/locations but left the parent invoice row with stale `total_amount_cents` and lingering `invoice_group_id` — surfacing as a ghost AR row.
+
+  Per Mason's call (Option B from the implementation plan): orphans are marked `status = 'cancelled'`, detached (`invoice_group_id = NULL`), totals zeroed (consistent with the items/shares already wiped), and an `invoice_orphan_cancelled` activity_feed row records the audit trail. The invoice number is preserved (versus hard-delete) so prior references stay resolvable.
+
+  Posted/voided members are still protected by the existing edit lock.
+
+### Tests
+1,841 still passing, 128 files, build clean. No new tests this round — these are SQL-body changes inside RPCs that are already covered by the type-contract net + future E2E.
+
+---
+
 ## 2026-04-30 — Field Application Workflow Phase 6: Field Picker UX Cleanup
 
 Addresses codex audit item #12 (field picker map misleading + double-toggle on row+checkbox click). No migration; frontend-only fixes.
