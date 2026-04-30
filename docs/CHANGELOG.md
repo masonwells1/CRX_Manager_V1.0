@@ -4,6 +4,19 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field App Phase 11: Sprint C — Field-app RLS Lockdown
+
+Migration `20260430230000_field_app_workflow_phase11.sql`. RLS-only, no schema or RPC changes.
+
+### What changed
+- **`field_app_locations`** and **`field_app_location_shares`** had `USING (true) / WITH CHECK (true)` on every operation, meaning any authenticated user could `INSERT/UPDATE/DELETE` rows directly via PostgREST and bypass `save_field_app_invoice` entirely. Tightened all writes to admin/sales only. SELECT stays broad since parent invoice/job RLS already protects who sees what.
+- **`application_records.app_records_select`** previously allowed `is_admin() OR is_sales_rep() OR is_applicator()` — meaning *any* applicator could read *any* application record. Now scoped: applicators see only records where `applicator_id = auth.uid()`.
+
+### Why this isn't redundant with Phase 5 (jobs RLS hardening)
+Phase 5 fixed the `jobs` and `job_applied_info` RLS holes. Phase 11 closes the same class of bug on three more tables that the codex audit flagged separately. Same pattern, different tables.
+
+---
+
 ## 2026-04-30 — Field App Phase 10: Sprint A2 + B (invoice auth + integrity)
 
 Migration `20260430220000_field_app_workflow_phase10.sql` plus `src/pages/Invoices.tsx` UI cleanup.
