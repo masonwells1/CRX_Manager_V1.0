@@ -113,6 +113,7 @@ export default function JobDetail() {
   const { role, profile } = useAuth();
   const saveJobIdem = useIdempotencyKey('save_job', profile?.id || '');
   const completeJobIdem = useIdempotencyKey('complete_job', profile?.id || '');
+  const startJobIdem = useIdempotencyKey('start_job', profile?.id || '');
   const transferJobIdem = useIdempotencyKey('transfer_job_to_invoice', profile?.id || '');
   const loadRecipeIdem = useIdempotencyKey('load_recipe_into_job', profile?.id || '');
   const isNew = id === 'new';
@@ -153,6 +154,7 @@ export default function JobDetail() {
   // Applied info (completion)
   const [showCompleteModal, setShowCompleteModal] = useState(false);
   const [completing, setCompleting] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [appliedInfo, setAppliedInfo] = useState({
     wind_speed: '',
@@ -378,6 +380,28 @@ export default function JobDetail() {
     setSaving(false);
   };
 
+  const handleStart = async () => {
+    if (!profile || !id) return;
+    setStarting(true);
+    try {
+      const idemKey = startJobIdem.getKey();
+      const { error } = await supabase.rpc('start_job', {
+        p_job_id: id,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      startJobIdem.resetKey();
+      logActivity({ event: 'job_started', description: `Job ${jobNumber} started`, performedBy: profile.id });
+      toast('success', 'Job started');
+      await fetchJob();
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'start_job' } });
+      toast('error', err instanceof Error ? err.message : 'Failed to start job');
+    }
+    setStarting(false);
+  };
+
   const handleComplete = async () => {
     setCompleting(true);
     try {
@@ -567,6 +591,12 @@ export default function JobDetail() {
             <Button variant="danger" onClick={() => setShowCancelConfirm(true)} loading={cancelling}>
               <Ban className="w-4 h-4" />
               Cancel Job
+            </Button>
+          )}
+          {!isNew && status === 'scheduled' && isEditable && (
+            <Button variant="secondary" onClick={handleStart} loading={starting} disabled={starting}>
+              <Check className="w-4 h-4" />
+              Start Job
             </Button>
           )}
           {canComplete && (

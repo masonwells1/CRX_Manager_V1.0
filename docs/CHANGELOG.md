@@ -4,6 +4,29 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field Application Workflow Phase 2: Job Lifecycle Repair
+
+Addresses codex audit items #4 (no `start_job`), #5 (multi-customer jobs half-built), #6 (application records lose multi-field detail). Migration `20260430150000_field_app_workflow_phase2.sql`.
+
+### Schema
+- **`application_record_fields`** — new join table; per-field detail for multi-field jobs (FK to `application_records` with `ON DELETE CASCADE`, FK to `fields`, unique on `(application_record_id, field_id)`, RLS mirrors `application_records`)
+- **`application_records.field_id`** — now nullable, kept as legacy single-field anchor (first field of the job)
+- **`jobs.customer_id`** — restored to `NOT NULL` (Option A from the audit response: jobs are single-customer; multi-customer billing happens at invoice time via `field_billing_defaults`)
+
+### RPCs
+- **NEW `start_job(p_job_id, p_performed_by, p_idempotency_key)`** — transitions `scheduled → in_progress`, stamps `job_applied_info.actual_start_time` (preserves any existing value via COALESCE), idempotent on second call when status is already `in_progress`, activity-feed entry
+- **REWRITE `complete_job`** — now writes ONE `application_records` row + N `application_record_fields` rows (one per `job_fields` entry) instead of dropping all but the first field. Acres fall back from `job_fields.acres_to_treat → fields.total_acres → 0`. Result shape extended with `field_count`. `application_records.field_id` is set to the first job field for back-compat readers.
+
+### Frontend
+- `src/pages/JobDetail.tsx` — added **Start Job** button visible when `status === 'scheduled'` and the user has admin/sales privileges. Wired through `start_job` RPC with idempotency key.
+- `src/types/index.ts` — added `ApplicationRecordField`, `StartJobResult`, `CompleteJobResult` interfaces; deprecated `field_id` on `ApplicationRecord`; added `application_record_fields[]` to `ApplicationRecord` for joined queries.
+
+### Tests
+- `src/tests/field-app-phase2-types.test.ts` — 6 type-contract assertions on the new shapes
+- Test count: 1,830 → 1,836 (+6), 126 → 127 files, 0 failures, build clean
+
+---
+
 ## 2026-04-29 — Field Application Workflow Phase 1: Grouped Split Invoices + Grower-Share Mode
 
 Comprehensive rewrite of the multi-customer field application billing flow, prompted by the codex audit at `docs/audits/2026-04-28-field-application-workflow-review.md`. Bundles fixes for audit items #1, #2, #3, #9, #11, #13, M1, M2, M3.

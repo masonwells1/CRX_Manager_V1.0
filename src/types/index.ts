@@ -1624,6 +1624,7 @@ export interface ApplicationRecord {
   source_id: string;
   customer_id: string;
   applicator_id: string | null;
+  /** DEPRECATED — single-field anchor. Phase 2 (2026-04-30): multi-field detail lives in application_record_fields. */
   field_id: string | null;
   application_date: string;
   application_time: string | null;
@@ -1644,6 +1645,39 @@ export interface ApplicationRecord {
   applicator?: Profile;
   field?: Field;
   vehicle?: Vehicle;
+  /** Phase 2 (2026-04-30) — per-field rows for multi-field jobs. */
+  application_record_fields?: ApplicationRecordField[];
+}
+
+// Phase 2 (2026-04-30): per-field rows for multi-field application records.
+// One application_records row + N application_record_fields rows; field_id on
+// the parent is the legacy single-field anchor (first field of the job).
+export interface ApplicationRecordField {
+  id: string;
+  application_record_id: string;
+  field_id: string;
+  acres: number;
+  sort_order: number;
+  created_at: string;
+  // Joined
+  field?: Field;
+}
+
+// Phase 2 (2026-04-30): start_job RPC return shape.
+export interface StartJobResult {
+  job_id: string;
+  status: 'in_progress';
+  started_at: string | null;
+  already_started: boolean;
+}
+
+// Phase 2 (2026-04-30): complete_job RPC return shape (extended with field_count).
+export interface CompleteJobResult {
+  success: boolean;
+  job_id: string;
+  application_record_id: string;
+  record_number: string;
+  field_count: number;
 }
 
 // Sprint 8: Job Scheduling
