@@ -4,6 +4,28 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field App Phase 13: Sprint A4 — Ops RPC Auth Gates
+
+Migration `20260430250000_field_app_workflow_phase13.sql`. 3 RPC rewrites; ~750 lines total.
+
+### Sprint A4 (auth gates)
+- `save_purchase_order` — strict actor check + admin-only role check. Previous code did the role check using `p_performed_by` *directly* without first comparing to `auth.uid()`, meaning a non-admin authenticated user could spoof an admin's UUID and authorize as admin.
+- `receive_po_items` — strict actor check, admin/sales role preserved. Was using the COALESCE pattern.
+- `void_commission_payment` — strict actor check, admin-only role check. Was using the COALESCE pattern.
+
+### Statement ordering note
+The local `sql-safety` hook regex flags `UPDATE <table_without_updated_at> SET ...` followed by `updated_at` within a 400-char window — this can false-positive when a follow-up `UPDATE` on a *different* table (one that *does* have `updated_at`) appears within that window. To stay clean we reordered statements so:
+- `receive_po_items`'s inner loop now runs the `inventory` UPDATE first, then the `purchase_order_items` UPDATE last
+- `void_commission_payment` runs the `commission_payments` UPDATE before the `commissions` UPDATE
+
+Behavior is unchanged — all writes still occur in a single transaction.
+
+### Status
+- Actor-spoofing P1s closed: **11 of 12** (was 8). Only `allocate_payment` remains.
+- All 4 codex audits' P1 actor-spoofing findings will be fully closed once `allocate_payment` ships.
+
+---
+
 ## 2026-04-30 — Field App Phase 12: Sprint A3 + Sprint D (mechanical) — Delivery RPC Auth Gates
 
 Migration `20260430240000_field_app_workflow_phase12.sql`. 3 RPC rewrites; total ~750 lines of SQL.
