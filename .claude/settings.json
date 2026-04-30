@@ -1,58 +1,18 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "You are starting a new session on the CRX Manager project. Do these steps automatically and silently:\n\n1. Read CLAUDE.md from the project root\n2. Read docs/workflows/SAFE_DEVELOPMENT_RULES.md\n\nAfter reading both files, briefly confirm you've loaded the CRX Manager context and are ready to help.\n\nCRITICAL CONTEXT: The project owner (Mason) has ZERO coding experience. You must:\n- Always explain what you're doing in plain English (no jargon)\n- Always write a plan and show it BEFORE making changes\n- Always wait for explicit approval before modifying any files\n- Never assume he understands code terminology — define it if you use it\n- If something could break existing features, say so clearly before proceeding"
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Write|Edit",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "You are a SQL migration safety gate for the CRX Manager project. Examine the file being written/edited.\n\nIF the file path does NOT contain 'supabase/migrations/' or does NOT end in '.sql', respond: {\"decision\":\"allow\"}\n\nIF the file IS a SQL migration, scan the content for these BANNED PATTERNS:\n\n1. **pg_get_functiondef** — NEVER use this to clone/modify functions dynamically. It bakes in existing bugs.\n   Pattern: pg_get_functiondef\n\n2. **updated_at on tables that lack it** — These tables do NOT have updated_at columns:\n   commissions, purchase_order_items, payments, write_offs, delivery_items, order_items,\n   quote_items, return_items, finance_charges, prepay_applications, cycle_counts,\n   cycle_count_items, activity_feed, financial_audit_log, idempotency_keys,\n   receiving_records, inventory_transactions, invoice_line_allocations\n   If you see UPDATE <any_of_these_tables> SET ... updated_at, BLOCK.\n\n3. **CHECK constraint rewrites without superset** — If you see ALTER TABLE ... DROP CONSTRAINT followed by ADD CONSTRAINT with a CHECK, verify the new list includes ALL values from the old constraint plus new ones. If you can't verify, WARN.\n\n4. **Missing idempotency** — Any CREATE OR REPLACE FUNCTION that does INSERT/UPDATE/DELETE but doesn't accept p_idempotency_key parameter. WARN (don't block).\n\n5. **idempotency_keys wrong column names** (BANNED — this bug has been reintroduced 3 times):\n   - `WHERE key = p_idempotency_key` → MUST be `WHERE idempotency_key = p_idempotency_key`\n   - `INTO idempotency_keys (key,` or `INTO idempotency_keys(key,` → MUST use `idempotency_key` not `key`\n   - `ON CONFLICT (key)` in idempotency_keys context → MUST be `ON CONFLICT (idempotency_key)`\n   - `entity_type, entity_id` in idempotency_keys context → MUST be `operation, result`\n   - `result_id` in idempotency_keys context → MUST be `result` (not `result_id`)\n   The CORRECT columns on idempotency_keys are: idempotency_key (text), operation (text), result (jsonb), created_at (timestamptz).\n\n6. **Wrong type cast on idempotency_keys.result** (BANNED — introduced March 23, 2026):\n   - `::text` when inserting into idempotency_keys result column → result is jsonb, NOT text\n   - Any INSERT INTO idempotency_keys where the result value has ::text cast → BLOCK\n   - CORRECT: pass jsonb_build_object(...) directly without ::text cast\n\n7. **Schema assumptions without verification** — If the SQL references tables beyond deliveries/orders/profiles (the common ones), check: did the agent verify the actual column names and types BEFORE writing this SQL? If the SQL has type casts (::text, ::uuid, ::numeric) on columns being read from or written to, verify the cast matches the actual column type.\n\nIf ANY banned pattern is found, respond:\n{\"decision\":\"block\",\"reason\":\"SQL SAFETY VIOLATION: [describe which pattern was violated and the exact line]. Fix the SQL before writing.\"}\n\nIf only warnings, respond: {\"decision\":\"allow\"} but include the warnings in your response.\n\nIf clean, respond: {\"decision\":\"allow\"}\n"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/sql-safety.mjs\"",
+            "timeout": 5
+          },
           {
-            "type": "prompt",
-            "prompt": "You are a business rule conflict detector for the CRX Manager project. Examine the file being written/edited.\n\nIF the file is a .tsx or .ts file in src/pages/ or src/components/, check:\n\n1. Does this code CHANGE existing behavior? (e.g., enabling something that was disabled, removing a restriction, adding a new capability to an existing feature)\n2. If yes, could this conflict with a documented business rule in CLAUDE.md Hard Red Lines or SAFE_DEVELOPMENT_RULES.md?\n\nIF the file contains Supabase queries with embedded resource filters (patterns like `.eq('relation.column', ...)` or `.in('relation.column', [...])` where relation is a joined table name), WARN:\n{\"decision\":\"allow\"} but add warning: 'FRAGILE QUERY PATTERN: Embedded resource filters (.eq/in on joined tables) can break silently. Use a two-step query instead: first fetch parent IDs, then query children with .in(column, ids). Search the codebase for existing patterns.'\n\nIF no issues found, respond: {\"decision\":\"allow\"}\n"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "You are a money safety gate for the CRX Manager project. Examine the file being written/edited.\n\nIF the file path does NOT end in .ts or .tsx, OR the file is inside node_modules/ or supabase/migrations/, respond: {\"decision\":\"allow\"}\n\nIF the file IS a TypeScript/TSX file in src/, scan for these DANGEROUS MONEY PATTERNS:\n\n1. **parseFloat() on a cents variable** — If you see parseFloat(something_cents) or parseFloat(somethingCents), BLOCK. Cents are already integers — parseFloat converts them to floats and introduces rounding errors.\n\n2. **Storing money as a float** — If a variable with 'price', 'cost', 'amount', 'total', 'balance', 'margin', 'charge', 'credit', 'payment', or 'fee' in the name is assigned the result of parseFloat(), and the result is stored to the database (via supabase .update/.insert/.upsert), WARN.\n\n3. **Float arithmetic on cents then storing** — If cents values are multiplied or divided by non-100 numbers using float math and the result goes to the database, WARN.\n\n4. **Missing parseDollarsToCents** — If you see user input being converted to cents via Math.round(parseFloat(x) * 100) instead of parseDollarsToCents(x) from lib/parseCents, WARN. The dedicated function handles edge cases like '$1,234.56'.\n\nEXCEPTIONS (do NOT flag these):\n- Display-only: (cents / 100).toFixed(2) shown in JSX or format functions — FINE\n- Non-money parseFloat: parseFloat(acres), parseFloat(quantity), parseFloat(rate), parseFloat(gallons) — FINE (measurements)\n- Test files (.test.ts, .spec.ts) — allow everything\n- CSV export display formatting — FINE\n\nIf BLOCK pattern found:\n{\"decision\":\"block\",\"reason\":\"MONEY SAFETY: [plain English description]. Money in CRX Manager must be stored as whole-number cents (like 2550 for $25.50), never as decimal numbers. Use parseDollarsToCents() from lib/parseCents to convert dollar input to cents.\"}\n\nIf warnings only: {\"decision\":\"allow\"} with warnings.\nIf clean: {\"decision\":\"allow\"}\n"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "You are a mutation safety checker for CRX Manager. Examine the file being written/edited.\n\nIF the file does NOT end in .ts or .tsx, or is a test file (.test.ts, .spec.ts), or is not in src/: {\"decision\":\"allow\"}\n\nIF the file IS a TypeScript source file in src/, check:\n\n1. Find all .update( and .delete( chained after supabase.from(\n2. For EACH mutation call, verify checkMutationResult() is called on the result within the next 3 lines\n\nCORRECT pattern:\n  const result = await supabase.from('table').update({...}).eq('id', x).select();\n  checkMutationResult(result, 'description');\n\nWRONG pattern (missing checkMutationResult):\n  await supabase.from('table').update({...}).eq('id', x).select();\n  // nothing follows — mutation failure is silent\n\n3. Also check: Is checkMutationResult imported from lib/db?\n\nIf mutation without checkMutationResult found:\n{\"decision\":\"block\",\"reason\":\"MUTATION SAFETY: Found .update() or .delete() without checkMutationResult(). Supabase silently returns empty data (no error) when RLS blocks the operation. Without checkMutationResult(), users see no error but data just doesn't save. Add: checkMutationResult(result, 'description of what this does');\"}\n\nIf import missing but mutations present:\n{\"decision\":\"block\",\"reason\":\"MISSING IMPORT: This file has Supabase mutations but doesn't import checkMutationResult. Add: import { supabase, checkMutationResult } from '../lib/db';\"}\n\nIf clean: {\"decision\":\"allow\"}\n"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "You are a PDF generation safety checker for CRX Manager. Examine the file being written/edited.\n\nIF the file path does NOT match a pattern like src/lib/*Pdf*.ts or src/lib/*pdf*.ts: {\"decision\":\"allow\"}\n\nIF the file IS a PDF generation file, check for:\n\n1. **Cents vs dollars confusion** — Variables divided by 100 for display must actually contain cents (_cents suffix or from a _cents DB column). WATCH OUT for these known dollar-value columns that must NOT be divided by 100:\n   - commissions.commission_amount is dollars NOT cents\n   - products.tier1_price / tier2_price / tier3_price are dollars NOT cents\n   If you see any of these divided by 100, BLOCK.\n\n2. **Missing null checks on optional data** — If item.rate_per_acre, item.epa_registration, data.shares, or similar optional fields are accessed without null/undefined checks, the PDF will show 'undefined' or crash.\n\n3. **Column count mismatches** — In jspdf-autotable, head and body arrays must have the same column count. Count them.\n\n4. **Hard-coded Y positions after tables** — After autoTable, use doc.lastAutoTable.finalY. Hard-coded Y values cause content overlap if table grows.\n\n5. **Content below page height without addPage** — Letter page height is 792pt. Content positioned beyond this is cut off.\n\nIf issues found:\n{\"decision\":\"block\",\"reason\":\"PDF SAFETY: [issue in plain English]. PDF bugs cause wrong info on printed invoices/statements sent to customers. [specific fix needed]\"}\n\nIf clean: {\"decision\":\"allow\"}\n"
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/money-safety.mjs\"",
+            "timeout": 5
           }
         ]
       },
@@ -60,12 +20,9 @@
         "matcher": "Bash",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "You are a safety gate for Bash commands on the CRX Manager project. Examine the command below.\n\nBLOCK these dangerous commands (respond with decision:block):\n- git push --force, git push -f, or any force push variant\n- git reset --hard\n- git checkout . or git restore . (discards ALL uncommitted changes)\n- git clean -f (deletes untracked files permanently)\n- Any command with --no-verify (bypasses safety hooks)\n- rm -rf on src/, supabase/, docs/, or the project root\n- npm uninstall on core packages (react, @supabase/supabase-js, vite, typescript)\n- Any command that would modify an EXISTING file inside supabase/migrations/ (editing old migrations is forbidden — only new files are allowed)\n- git add .env or committing any .env file\n- npx supabase db push (pushes migrations to remote without local testing — must test locally first)\n- npx supabase migration repair (modifies migration history — causes schema drift)\n- DROP TABLE, DROP SCHEMA, or TRUNCATE passed via psql or supabase sql commands\n\nALLOW all other commands (respond with decision:allow).\n\nWhen blocking, explain in plain English why the command is dangerous and what to do instead.\n"
-          },
-          {
-            "type": "prompt",
-            "prompt": "You are a documentation drift detector. Examine the Bash command below.\n\nIF the command is NOT a 'git commit' command, respond exactly: {\"decision\":\"allow\"}\n\nIF the command IS a 'git commit' command, analyze the commit message and any staged files context.\n\nIf the commit likely includes STRUCTURAL changes (any of these):\n- New page added (lazy import in App.tsx)\n- New migration file (supabase/migrations/)\n- New Edge Function (supabase/functions/)\n- New database table or RPC function\n- New test files added\n- Routes changed\n\nThen respond with {\"decision\":\"allow\"} but include this reminder:\nDOC DRIFT REMINDER: This commit includes structural changes. Verify you have already:\n1. Updated CLAUDE.md counts (pages, migrations, edge functions)\n2. Added entries to docs/reference/migration-history.md (if new migration)\n3. Added entries to docs/reference/pages-routes.md (if new page)\n4. Updated docs/CHANGELOG.md with a session summary\n5. Staged all doc changes with git add\nIf NOT done yet, abort and fix docs first. If already done, proceed.\n\nIMPORTANT: Always respond with {\"decision\":\"allow\"} for git commits. Never block. The Stop hook and CLAUDE.md rules already enforce doc updates before completion. Blocking creates an infinite loop because this hook cannot inspect staged files.\n\nIf the commit is clearly minor (CSS tweaks, typo fixes, config-only, doc-only), respond: {\"decision\":\"allow\"}\n\nWhen in doubt, allow with a reminder.\n"
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/bash-safety.mjs\"",
+            "timeout": 5
           }
         ]
       }
@@ -75,17 +32,9 @@
         "matcher": "Write|Edit",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "You just wrote or edited a file. Check if this was a database migration file (path contains 'supabase/migrations/').\n\nIF the file IS a migration (supabase/migrations/*.sql):\nRespond: {\"decision\":\"block\",\"reason\":\"MIGRATION SAFETY CHECK — You just created a database migration. Before continuing, you MUST do these steps:\\n\\n1. Update the TypeScript interface in src/types/index.ts to match the schema change\\n2. Check if any existing components need updates for the new/changed columns\\n3. After updating types, run npm run typecheck to verify everything compiles\\n\\nDo NOT proceed to other tasks until these steps are complete. Tell the user what you're updating and why.\"}\n\nIF the file is NOT a migration:\nRespond: {\"decision\":\"allow\"}\n"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "You just ran a Bash command. Examine the result.\n\nIF the command was NOT one of: npm run build, npm run test, npx vitest, npm run lint, npm run typecheck, npx tsc — respond: {\"decision\":\"allow\"}\n\nIF the command WAS one of those AND it succeeded (exit code 0): {\"decision\":\"allow\"}\n\nIF the command FAILED (non-zero exit code):\n\n1. Read the error output carefully. Identify the SPECIFIC file(s) and line(s) that failed.\n2. Categorize the failure:\n   - TYPE ERROR: TypeScript mismatch — usually means src/types/index.ts is out of sync with a database migration\n   - BUILD ERROR: Wrong import, missing module, JSX syntax issue\n   - TEST FAILURE: Assertion failed — read what was expected vs what actually happened\n   - LINT ERROR: ESLint rule violated — read which rule and fix it\n\n3. Respond: {\"decision\":\"block\",\"reason\":\"FAILED: [command name]. Here is what went wrong in plain English:\\n\\n[Explain each error simply]\\n\\nYou MUST fix these errors before continuing with other work. Do NOT tell Mason the work is done until these commands pass successfully.\"}\n\nREMINDER: If the error mentions src/types/index.ts, this usually means a database migration changed the database and the TypeScript type definitions were not updated to match.\n"
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/posttooluse-migration.mjs\"",
+            "timeout": 5
           }
         ]
       }
@@ -95,8 +44,9 @@
         "matcher": "*",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "BEFORE finishing your response, verify your work. Do NOT skip this check.\n\n1. Did you make any code changes this session?\n   - If YES: Did you run 'npm run build' AND 'npm run test' AFTER your last code change? If not, you must run them now before responding.\n   - If NO code changes: Skip to step 5.\n\n2. Did you create or modify a database migration?\n   - If YES: Did you update src/types/index.ts to match? Did you check for function overloads with: SELECT proname, count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace GROUP BY proname HAVING count(*) > 1?\n\n3. Did you add a new page?\n   - If YES: Did you add lazy import in App.tsx + Route + nav link in AppLayout.tsx?\n\n4. Did you change any money handling code (prices, costs, amounts, cents)?\n   - If YES: Are all money values stored as integer cents? No parseFloat on cents variables? Using parseDollarsToCents() for user input conversion?\n\n5. Are you about to tell Mason 'done', 'complete', 'finished', or 'all set'?\n   - If YES: You MUST state what verification commands you ran and their results. Never claim completion without showing evidence that build and tests pass.\n   - If you didn't run verification yet, run it now.\n\nIf any check fails, fix the issue before responding. Do not ask Mason to fix it — fix it yourself."
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verify.mjs\"",
+            "timeout": 5
           }
         ]
       }
@@ -107,10 +57,28 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "CONTEXT COMPACTION is about to happen. Before your memory is compressed, you MUST create a survival summary so you don't lose critical context. Include:\n\n1. **Files modified this session** — list every file you created or edited with a one-line description of the change\n2. **Migrations created** — exact filenames and what they do. Were types in src/types/index.ts updated to match?\n3. **Current task** — what you were working on, whether it's done or still in progress, and what the next step is\n4. **Test/build status** — results of the last npm run build and npm run test\n5. **MANDATORY REMINDERS** (always include these — they prevent recurring bugs):\n   - idempotency_keys columns are: idempotency_key, operation, result (NOT key, entity_type, entity_id, result_id)\n   - idempotency_keys.result is jsonb — do NOT cast to ::text\n   - Money = bigint cents stored as integers, never floating point. Use parseDollarsToCents() from lib/parseCents\n   - Every .update()/.delete() needs checkMutationResult() from lib/db\n   - Every RPC data usage needs assertRpcResult()\n   - SECURITY DEFINER functions need SET search_path = public, pg_temp\n   - Mason has zero coding experience — always explain in plain English"
+            "prompt": "CONTEXT COMPACTION is about to happen. Summarize: files modified this session; migrations created (and whether src/types/index.ts was updated); current task and next step; last build/test status. Always include these reminders: idempotency_keys columns are idempotency_key/operation/result (jsonb, no ::text); money = bigint cents, use parseDollarsToCents; .update/.delete need checkMutationResult; RPC usage needs assertRpcResult; SECURITY DEFINER functions need SET search_path = public, pg_temp; Mason has zero coding experience — explain in plain English."
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-snapshot.mjs\"",
+            "timeout": 5
+          },
+          {
+            "type": "prompt",
+            "prompt": "You are starting a new session on the CRX Manager project. Silently read CLAUDE.md from the project root and docs/workflows/SAFE_DEVELOPMENT_RULES.md, then briefly confirm context is loaded. CRITICAL CONTEXT: Mason has ZERO coding experience — always explain in plain English; show a plan and wait for approval before editing files; never assume he knows code terminology."
           }
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "vercel@claude-plugins-official": false
   }
 }
