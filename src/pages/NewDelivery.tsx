@@ -211,7 +211,10 @@ export default function NewDelivery() {
     return () => { cancelled = true; };
   }, [customer, deliveryItems, profile?.id]);
 
-  // Guardrail: check if driver is overloaded when driver or date changes
+  // Guardrail: check if driver is overloaded when driver or date changes.
+  // `drivers` MUST stay in the deps array — if it's dropped, the guardrail
+  // can run with `driverName: undefined` when the drivers list hasn't resolved
+  // yet. See NewDelivery.driver-guardrail.test.tsx and the 2026-04-10 audit.
   useEffect(() => {
     if (selectedDriverId && scheduledDate) {
       const driver = drivers.find(d => d.id === selectedDriverId);
@@ -229,27 +232,35 @@ export default function NewDelivery() {
     (async () => {
       const { data: invData, error: invErr } = await supabase
         .from('inventory')
-        .select('product_id, quantity_available, quantity_prebooked')
+        .select('product_id, location, quantity_available, quantity_prebooked')
         .in('product_id', productIds);
 
       if (cancelled || invErr) return;
 
-      const invMap: Record<string, { available: number; prebooked: number }> = {};
-      for (const row of (invData || []) as Array<{ product_id: string; quantity_available: number; quantity_prebooked: number }>) {
+      // Group by product, then by location, so warnings can show where stock physically sits.
+      // This is informational only — the operator decides if stock at another warehouse is usable.
+      const invMap: Record<string, Record<string, { available: number; prebooked: number }>> = {};
+      for (const row of (invData || []) as Array<{ product_id: string; location: string | null; quantity_available: number; quantity_prebooked: number }>) {
         const pid = row.product_id;
-        if (!invMap[pid]) invMap[pid] = { available: 0, prebooked: 0 };
-        invMap[pid].available += Number(row.quantity_available);
-        invMap[pid].prebooked += Number(row.quantity_prebooked);
+        const loc = row.location || 'Unknown';
+        if (!invMap[pid]) invMap[pid] = {};
+        if (!invMap[pid][loc]) invMap[pid][loc] = { available: 0, prebooked: 0 };
+        invMap[pid][loc].available += Number(row.quantity_available);
+        invMap[pid][loc].prebooked += Number(row.quantity_prebooked);
       }
 
       const warnings: string[] = [];
       for (const item of deliveryItems) {
         if (item.quantity <= 0) continue;
-        const inv = invMap[item.product_id];
-        const netAvailable = inv ? inv.available - inv.prebooked : 0;
-        if (netAvailable < item.quantity) {
+        const byLocation = invMap[item.product_id] || {};
+        const locations = Object.entries(byLocation);
+        const totalNet = locations.reduce((sum, [, v]) => sum + (v.available - v.prebooked), 0);
+        if (totalNet < item.quantity) {
+          const breakdown = locations.length
+            ? locations.map(([loc, v]) => `${loc}: ${v.available - v.prebooked}`).join(', ')
+            : 'no inventory records';
           warnings.push(
-            `${item.product_name}: need ${item.quantity}, only ${netAvailable} net available`
+            `${item.product_name}: need ${item.quantity}, only ${totalNet} net available (${breakdown})`
           );
         }
       }
