@@ -4,6 +4,32 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field App Phase 10: Sprint A2 + B (invoice auth + integrity)
+
+Migration `20260430220000_field_app_workflow_phase10.sql` plus `src/pages/Invoices.tsx` UI cleanup.
+
+### `save_invoice`
+- Admin/sales role gate (was: any authenticated user could call)
+- **Rejects standalone-create attempts** — now reads `order_id`/`blend_ticket_id` from the `p_invoice` payload and refuses to create a new invoice that links to neither. Enforces CLAUDE.md hard rule. Existing invoices that already lack the link continue to update fine (no retroactive break).
+- Note: `save_invoice` has no `p_performed_by` parameter (uses `auth.uid()` inline), so actor-mismatch check was N/A.
+
+### `create_invoice_from_order`
+- Admin/sales role gate
+- **Rejects duplicate active invoices** for the same order — any existing invoice in a status other than `voided` or `cancelled` blocks the create. Prevents the click-Create-Invoice-twice overbilling bug.
+
+### Frontend cleanup (`src/pages/Invoices.tsx`)
+- Removed the "New Invoice" button (top action bar) and the empty-state "New Invoice" CTA — both navigated to a path that would now fail the standalone-rejection rule. Empty-state CTA now points to /orders.
+- "New Field Application" button stays (separate, valid path).
+
+### Why a frontend change in a security migration commit
+The two pieces (SQL rejection + UI button removal) had to ship together. Without the rejection, the rule isn't enforced; without removing the button, the UI presents an action that always fails. Single commit keeps the system self-consistent.
+
+### Verification
+- 0 invoices in production (verified pre-flight) — no risk of retroactively breaking existing data
+- typecheck clean, build clean, 1,841 tests still passing
+
+---
+
 ## 2026-04-30 — Field App Phase 9: Sprint A1 Auth Gates (3 of 12 SECURITY DEFINER RPCs)
 
 First migration of a multi-sprint hot-fix series addressing P1 findings from the money-inventory and security-permissions audits (`docs/audits/2026-04-30-money-inventory-audit-findings.md`, `docs/audits/2026-04-30-security-permissions-audit-findings.md`).

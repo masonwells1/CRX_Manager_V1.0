@@ -583,9 +583,10 @@ export default function Invoices() {
           <Button variant="secondary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/field-app/new')}>
             New Field Application
           </Button>
-          <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/new')}>
-            New Invoice
-          </Button>
+          {/* "New Invoice" standalone-create path removed 2026-04-30 (Phase 10).
+              Invoices must come from an order or blend ticket per CLAUDE.md hard
+              rule. Use the "Create Invoice" button on Order Detail or Blend
+              Ticket Detail instead. */}
         </div>
       </div>
 
@@ -636,10 +637,10 @@ export default function Invoices() {
             searchKeys={['invoice_number', 'customer_name', 'salesman_name']}
             onRowClick={(row) => navigate(`/invoices/${row.id}`)}
             emptyTitle="No invoices yet"
-            emptyDescription="Create your first invoice to start billing"
+            emptyDescription="Invoices are created from orders or blend tickets — open one to bill."
             emptyAction={
-              <Button icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/new')}>
-                New Invoice
+              <Button variant="secondary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/orders')}>
+                Go to Orders
               </Button>
             }
             loading={loading}
