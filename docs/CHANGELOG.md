@@ -4,6 +4,37 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field App Phase 14: allocate_payment auth gate — **all 12 P1 actor-spoofing vectors now closed**
+
+Migration `20260430260000_field_app_workflow_phase14.sql`. ~200-line `CREATE OR REPLACE` of `allocate_payment` with the same auth-gate pattern used in Phases 7, 9-13.
+
+### Why this one matters
+`allocate_payment` is the entry point for every customer payment in the system. Before this fix, any authenticated admin or sales rep could call it with `p_performed_by` set to *another* admin/sales user's UUID and the function would log the activity and financial-audit entries under that other user's name. Closing this vector makes the financial-audit log trustworthy — every payment allocation is attributable to the actual `auth.uid()` who triggered it.
+
+### After this migration
+**12 of 12 P1 actor-spoofing RPCs closed:**
+1. `save_field_app_invoice` (Phase 9)
+2. `create_invoice_from_blend_ticket` (Phase 9)
+3. `post_invoice_group` (Phase 9)
+4. `save_invoice` (Phase 10)
+5. `create_invoice_from_order` (Phase 10)
+6. `confirm_delivery` (Phase 12)
+7. `complete_delivery` (Phase 12)
+8. `create_quick_delivery` (Phase 12)
+9. `save_purchase_order` (Phase 13)
+10. `receive_po_items` (Phase 13)
+11. `void_commission_payment` (Phase 13)
+12. `allocate_payment` (Phase 14)
+
+Plus Phase 7's `start_job` and `complete_job` were closed earlier today.
+
+### What remains from the audits
+- **Sprint D-policy** — drivers-can-complete decision + auto-invoice policy (needs Mason's input)
+- **Sprint E** — inventory transactional integrity (retire_inventory_item RPC, cycle count clamp/ledger drift)
+- **Sprint F** — operations hardening (send-email lockdown, process-blend-ticket per-resource auth, pg_cron scheduling, reconciliation dashboard, SQL validators in CI, production runbook, Edge Function alerting)
+
+---
+
 ## 2026-04-30 — Field App Phase 13: Sprint A4 — Ops RPC Auth Gates
 
 Migration `20260430250000_field_app_workflow_phase13.sql`. 3 RPC rewrites; ~750 lines total.
