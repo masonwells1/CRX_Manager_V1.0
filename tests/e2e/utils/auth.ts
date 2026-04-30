@@ -1,8 +1,10 @@
 import { Page } from '@playwright/test';
 
+// Fallback credentials match the setup-fixtures.ts pattern so login works
+// even when E2E_TEST_PASSWORD isn't set in the env (e.g. local dev runs).
 export const TEST_USER = {
   email: process.env.E2E_TEST_EMAIL || 'mason@croprxsolutions.com',
-  password: process.env.E2E_TEST_PASSWORD || '',
+  password: process.env.E2E_TEST_PASSWORD || 'Mwells0413',
 };
 
 export async function login(page: Page, email = TEST_USER.email, password = TEST_USER.password) {

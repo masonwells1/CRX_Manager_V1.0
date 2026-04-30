@@ -374,3 +374,36 @@ These RPCs are defined in migrations but have NO frontend callers (test stubs on
 - `reverse_blend_ticket_approval`
 - `revert_quote_status`
 - `unapply_credit_memo`
+
+---
+
+## Field Application Phase 1 — Test Stack (added 2026-04-30)
+
+The Phase 1 RPCs (`save_field_app_invoice`, `create_invoice_from_blend_ticket`, `post_invoice_group`, `preview_field_app_invoice_split`, `derive_customer_shares_from_fields`) are tested in three tiers:
+
+1. **Type-contract safety net** — `src/tests/field-app-phase1-types.test.ts`
+   - Compile-time `Pick<>` assertions that catch field deletion / rename drift
+   - Mirrors the `workflow-gaps-safety.test.ts` pattern
+
+2. **Frontend mock tests** — call-shape verification with `vi.mock('../../lib/db', ...)`
+   - `src/components/field-app/CustomerSharesTable.test.tsx` — preview vs legacy table branching
+   - `src/components/field-app/ApplicationServicePicker.test.tsx` — supabase chain + onChange contract
+   - `src/components/field-app/FieldAppChemicalEntry.test.tsx` — `manual_override` flag flip on price edit
+   - `src/pages/FieldApplicationInvoice.test.tsx` — Save 7-arg shape, Post-vs-Post-Group routing, sibling banner, group-aware edit lock
+   - `src/pages/BlendTicketDetail.test.tsx` — page mounts, `application_services` queried
+   - `src/pages/InvoiceDetail.test.tsx` — Phase 1 Post routing additions
+
+3. **E2E real-RPC behavior** — `tests/e2e/workflow-field-app-multi-customer.spec.ts`
+   - REST-driven setup of `[E2E]`-prefixed split field + application service
+   - `derive_customer_shares_from_fields` returns true 60/40 split with both customers
+   - `save_field_app_invoice` creates 2 invoices with shared `invoice_group_id`; locations live at group level
+   - Idempotency replay returns identical `{ invoice_ids, invoice_group_id }`
+   - `post_invoice_group` posts every member atomically
+   - Edit attempt on posted-group member is rejected
+   - UI smoke for `/invoices/field-app/new` Phase 1 wiring
+
+### Mocking pattern: pages with `Promise.all` loaders
+For pages like `BlendTicketDetail` and `InvoiceDetail` that fan out to 8+ supabase queries on mount, the `buildChain` helper (in `InvoiceDetail.test.tsx` and `BlendTicketDetail.test.tsx`) makes every supabase method return `self` and resolves to a configurable `{ data, error }` payload. Cleaner than per-method mock chains for big pages.
+
+### Mocking gotcha: `useUnsavedChanges`
+The hook returns `{ state, reset, proceed }`. Pages render an `<UnsavedChangesModal>` whose props call `blocker.reset?.()` / `blocker.proceed?.()` — mocking the hook to return `null` lets the component render but throws when the modal handlers fire. Mock as `() => ({ state: 'unblocked', reset: vi.fn(), proceed: vi.fn() })`.
