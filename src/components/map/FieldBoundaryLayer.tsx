@@ -10,12 +10,15 @@ interface FieldBoundaryLayerProps {
   fields: FieldWithCustomer[];
   showLabels?: boolean;
   onFieldClick?: (fieldId: string) => void;
+  /** Phase 6 (2026-04-30): when set, fields with id in this set render highlighted. Lets the map double as a selection picker. */
+  selectedIds?: Set<string>;
 }
 
 export default function FieldBoundaryLayer({
   fields,
   showLabels = true,
   onFieldClick,
+  selectedIds,
 }: FieldBoundaryLayerProps) {
   const geojson = useMemo(() => {
     const features = fields
@@ -35,6 +38,9 @@ export default function FieldBoundaryLayer({
               crop_type: f.crop_type,
               customer_name:
                 f.customer_name || f.customer?.farm_name || '',
+              // Phase 6: stamp selection state into the feature so paint
+              // expressions can pick it up. Re-derived whenever selectedIds changes.
+              selected: selectedIds ? selectedIds.has(f.id) : false,
             },
             geometry,
           };
@@ -45,7 +51,7 @@ export default function FieldBoundaryLayer({
       .filter((f): f is NonNullable<typeof f> => f !== null);
 
     return { type: 'FeatureCollection' as const, features };
-  }, [fields]);
+  }, [fields, selectedIds]);
 
   // Click handler for boundary polygons
   const { current: map } = useMap();
@@ -86,15 +92,17 @@ export default function FieldBoundaryLayer({
         type="fill"
         paint={{
           'fill-color': '#28A26A',
-          'fill-opacity': 0.2,
+          // Phase 6: selected fields render at higher opacity so the user can see
+          // which ones are picked at a glance — without losing the unselected ones.
+          'fill-opacity': ['case', ['get', 'selected'], 0.55, 0.18],
         }}
       />
       <Layer
         id="field-boundaries-outline"
         type="line"
         paint={{
-          'line-color': '#28A26A',
-          'line-width': 2,
+          'line-color': ['case', ['get', 'selected'], '#0f5132', '#28A26A'],
+          'line-width': ['case', ['get', 'selected'], 3, 2],
         }}
       />
       {showLabels && (

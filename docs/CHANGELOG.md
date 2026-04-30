@@ -4,6 +4,29 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field Application Workflow Phase 6: Field Picker UX Cleanup
+
+Addresses codex audit item #12 (field picker map misleading + double-toggle on row+checkbox click). No migration; frontend-only fixes.
+
+### Fixes
+- **`src/components/field-app/SelectLocationsModal.tsx`**
+  - Map now renders **ALL filtered fields**, with selected ones highlighted, instead of starting empty until something is selected. Map became a real picker, not a confirmation view.
+  - Added `onFieldClick={toggleField}` so clicking a polygon on the map is a second selection path (alongside the checkbox).
+  - Fixed the double-toggle bug — clicking the checkbox previously fired both the checkbox `onChange` and the row's `onClick`, which canceled each other out. The checkbox cell now stops propagation.
+- **`src/components/map/FieldBoundaryLayer.tsx`**
+  - New optional `selectedIds: Set<string>` prop. When set, the polygon paint expressions read a `selected` feature property to render selected fields at higher opacity (0.55 vs 0.18) and with a darker, thicker outline. Unselected fields still render so the picker shows all available choices.
+
+### Items #11 and #13 (also Phase 6 territory)
+Already addressed by **Phase 1** — `derive_customer_shares_from_fields` falls back to `fields.customer_id` at 100% when a field has no `field_billing_defaults` rows (#11), and `field_app_location_shares` is now populated by `save_field_app_invoice` with the TRUE per-customer split (#13).
+
+### Item #14
+Job lifecycle E2E that skipped on completion failures is downstream of `start_job` (Phase 2). Now that the RPC exists, removing the skip is mechanical; deferred to a follow-up that touches `tests/e2e/golive/`.
+
+### Tests
+1,841 tests still passing, 128 files, build clean. No new tests — these are presentational fixes with limited isolation.
+
+---
+
 ## 2026-04-30 — Field Application Workflow Phase 5: RLS Hardening
 
 Addresses codex audit item #10. Migration `20260430180000_field_app_workflow_phase5.sql`. RLS-only — no schema or RPC changes.

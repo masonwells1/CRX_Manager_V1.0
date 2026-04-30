@@ -142,8 +142,13 @@ export default function SelectLocationsModal({
             showLayerToggle
             showLocateMe
           >
+            {/* Phase 6 (2026-04-30): show ALL filtered fields with selected ones
+                highlighted, so the map is a usable picker even before any
+                selection. Click on the map to toggle. */}
             <FieldBoundaryLayer
-              fields={selectedFields}
+              fields={filtered}
+              selectedIds={selectedIds}
+              onFieldClick={toggleField}
               showLabels
             />
           </CRXMap>
@@ -227,7 +232,10 @@ export default function SelectLocationsModal({
                       className={`hover:bg-gray-50 cursor-pointer ${selectedIds.has(f.id) ? 'bg-crx-green/5' : ''}`}
                       onClick={() => toggleField(f.id)}
                     >
-                      <td className="px-3 py-2">
+                      {/* Phase 6 (2026-04-30): stop event propagation here so
+                          clicking the checkbox doesn't ALSO fire the row's
+                          onClick (was double-toggling, leaving state unchanged). */}
+                      <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={selectedIds.has(f.id)}
