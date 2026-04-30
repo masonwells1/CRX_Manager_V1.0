@@ -4,6 +4,26 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field App Phase 12: Sprint A3 + Sprint D (mechanical) — Delivery RPC Auth Gates
+
+Migration `20260430240000_field_app_workflow_phase12.sql`. 3 RPC rewrites; total ~750 lines of SQL.
+
+### Sprint A3 (auth gates)
+Replaced `v_actor := COALESCE(p_performed_by, auth.uid())` anti-pattern with strict actor validation in:
+- `confirm_delivery`
+- `complete_delivery`
+- `create_quick_delivery`
+
+Each function's existing role check is preserved (admin/sales/assigned-driver for confirm; admin/sales for complete; admin/sales/driver for quick).
+
+### Sprint D (mechanical part folded)
+`complete_delivery` previously rejected only `completed` and `cancelled` statuses, allowing a delivery to be completed directly from `scheduled` and skipping the start/confirm step. Now requires `status='in_progress'` per the documented two-step delivery lifecycle. The drivers-can-complete and auto-invoice business decisions remain deferred to Sprint D-policy.
+
+### Status across all 4 audits
+- Actor-spoofing P1s closed: **8 of 12** (was 7 of 12 after Phase 11). Remaining: `allocate_payment`, `save_purchase_order`, `receive_po_items`, `void_commission_payment`.
+
+---
+
 ## 2026-04-30 — Field App Phase 11: Sprint C — Field-app RLS Lockdown
 
 Migration `20260430230000_field_app_workflow_phase11.sql`. RLS-only, no schema or RPC changes.
