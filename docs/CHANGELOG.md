@@ -4,6 +4,45 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-04-30 — Field App Phase 9: Sprint A1 Auth Gates (3 of 12 SECURITY DEFINER RPCs)
+
+First migration of a multi-sprint hot-fix series addressing P1 findings from the money-inventory and security-permissions audits (`docs/audits/2026-04-30-money-inventory-audit-findings.md`, `docs/audits/2026-04-30-security-permissions-audit-findings.md`).
+
+### Pattern (mirrors save_quote / Phase 7 start_job)
+
+```sql
+v_actor uuid := auth.uid();
+IF v_actor IS NULL THEN RAISE 'Not authenticated'; END IF;
+IF p_performed_by IS DISTINCT FROM v_actor THEN
+  RAISE 'p_performed_by does not match authenticated user';
+END IF;
+IF NOT (is_admin() OR is_sales_rep()) THEN
+  RAISE 'Not authorized: admin or sales role required';
+END IF;
+```
+
+### Migration `20260430210000_field_app_workflow_phase9.sql`
+
+Auth gates added to:
+- `save_field_app_invoice` — was vulnerable to spoofed `p_performed_by` (any authenticated user could create field-app invoices as someone else)
+- `create_invoice_from_blend_ticket` — was vulnerable to spoofed `p_created_by` (any authenticated user could mark blend tickets billed and create AR rows as someone else)
+- `post_invoice_group` — was vulnerable to spoofed `p_performed_by` on the group activity log (`post_invoice` itself has its own auth, but the wrapper didn't)
+
+### Why this matters
+
+`SECURITY DEFINER` bypasses RLS — internal auth checks are the only protection. The 12 affected RPCs were granted to `authenticated` role, meaning any logged-in user (driver, applicator) could call them via PostgREST with a spoofed admin UUID and authorize as admin. Phase 9 closes the first 3.
+
+### Tests
+1,841 still passing (mock tests don't actually invoke the RPC, so auth-gate is transparent to them).
+
+### Remaining work (queued)
+- Sprint A2: `allocate_payment`, `save_invoice` (+ Sprint B standalone-invoice rule), `create_invoice_from_order` (+ Sprint B duplicate-invoice rule)
+- Sprint A3: `confirm_delivery`, `complete_delivery`, `create_quick_delivery`
+- Sprint A4: `save_purchase_order`, `receive_po_items`, `void_commission_payment`
+- Sprints C–F: RLS lockdown, delivery workflow gaps, inventory integrity, ops hardening
+
+---
+
 ## 2026-04-30 — Field Application Workflow Phases 7 + 8: Codex Re-Review Hot Fixes
 
 Two migrations addressing the four findings codex raised on its independent re-review of Phases 1–6 (`docs/audits/2026-04-30-field-app-phase1-6-codex-rereview-findings.md`).
