@@ -4,6 +4,46 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-01 — Field App Phase 19: Sprint F #3 — pg_cron for Dashboard-triggered jobs
+
+Migration `20260501140000_field_app_workflow_phase19.sql`. Closes the audit's complaint that two batch jobs only ran when someone happened to open the Dashboard.
+
+### What ran on Dashboard load before
+
+`Dashboard.tsx:348-367` calls these on every dashboard render:
+- `check_remainder_reminders()` — surfaces partial deliveries that need a follow-up shipment
+- `release_expired_quote_holds()` — frees inventory from quotes whose hold window passed
+
+If nobody opened the Dashboard for a day (weekends, vacations), partial-delivery reminders piled up and quote holds kept blocking inventory needlessly.
+
+### What changed
+
+Two new pg_cron schedules, alongside the existing `mark-overdue-invoices`:
+
+```
+mark-overdue-invoices       0 6 * * *   (6:00 AM UTC, ~12:00 AM CT)
+release-expired-quote-holds 15 6 * * *  (6:15 AM UTC)
+check-remainder-reminders   30 6 * * *  (6:30 AM UTC)
+```
+
+Verified live: `SELECT jobid, jobname FROM cron.job` returns all three.
+
+### Why I didn't remove the Dashboard.tsx trigger
+
+Belt-and-suspenders. Both RPCs are idempotent — running twice in the same day costs nothing (their internal logic skips already-processed entities). If pg_cron is ever disabled (Supabase paused project, extension wedged), the Dashboard load still catches up the work. Cost: a few cheap RPC calls per dashboard view.
+
+### Sprint F status
+
+- F #1 ✅ send-email lockdown
+- F #2 ✅ process-blend-ticket per-resource auth
+- F #3 ✅ pg_cron schedules (this phase)
+- F #4 ⏳ reconciliation report → admin dashboard (next)
+- F #5 ✅ SQL validators in CI
+- F #6 ✅ production runbook
+- F #7 ✅ Edge Function Sentry alerting
+
+---
+
 ## 2026-05-01 — Field App Phase 18: Sprint E #3 — cycle count item edit gating
 
 Migration `20260501130000_field_app_workflow_phase18.sql` + edits to `src/pages/CycleCounts.tsx`. **Closes Sprint E entirely.**
