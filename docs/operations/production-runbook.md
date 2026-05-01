@@ -83,6 +83,9 @@ After deploy, smoke-test by triggering the function from the live app (or via `c
 - `RESEND_API_KEY` — `send-email` only
 - `GOOGLE_VISION_API_KEY` — `process-blend-ticket` only
 - `SUPABASE_SERVICE_ROLE_KEY` — present automatically; never expose to frontend
+- `SENTRY_DSN` — required to enable Edge Function error alerting (Sprint F #7).
+  When unset, captureEdgeException is a no-op. Set via:
+  `npx supabase secrets set SENTRY_DSN=https://... --project-ref rhyzpcqhnizqbxphqdkr`
 
 ---
 
@@ -197,7 +200,7 @@ If Vercel is fine but the app errors:
 
 ### 6.2 "Emails aren't going out"
 
-1. Open Sentry → search `tag:edge-function = send-email`. (Once Sprint F #7 ships, alerts auto-fire.)
+1. Open Sentry → filter `edge_function:send-email` (alerts auto-fire on Resend send failures since Sprint F #7).
 2. Check Resend dashboard → look for failed sends.
 3. Verify `RESEND_API_KEY` in Supabase Edge Function secrets (rotated keys are the most common cause).
 4. Manually call `send-email` from the live app with a test recipient; the response includes any error body.

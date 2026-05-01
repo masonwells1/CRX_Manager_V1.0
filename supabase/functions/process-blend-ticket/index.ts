@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
@@ -810,6 +811,37 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "blend_ticket_id is required" }, 400);
   }
 
+  // Sprint F #2 — per-resource auth.
+  // Previously, any authenticated admin/sales/applicator could OCR any
+  // blend ticket. Now: applicators can only process tickets they uploaded;
+  // admin/sales remain unrestricted. Lookup happens before any service-role
+  // mutation so we never queue or processing-flag a ticket the caller has
+  // no business touching.
+  const { data: ticketAuth, error: ticketAuthErr } = await adminClient
+    .from("blend_tickets")
+    .select("id, uploaded_by, status")
+    .eq("id", blendTicketId)
+    .maybeSingle();
+
+  if (ticketAuthErr) {
+    return jsonResponse({ error: "Ticket lookup failed" }, 500);
+  }
+  if (!ticketAuth) {
+    return jsonResponse({ error: "Blend ticket not found" }, 404);
+  }
+  if (
+    callerProfile.role === "applicator" &&
+    ticketAuth.uploaded_by !== caller.id
+  ) {
+    return jsonResponse(
+      {
+        error:
+          "Applicators may only process blend tickets they uploaded",
+      },
+      403,
+    );
+  }
+
   // Find or create queue entry
   const { data: existingQueue } = await adminClient
     .from("ocr_processing_queue")
@@ -1014,6 +1046,16 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     console.warn("OCR processing error:", err);
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
+
+    // Sprint F #7 — alert on OCR processing failures (high-impact: blend
+    // ticket stuck in pending/needs_review state until someone notices).
+    await captureEdgeException(err, {
+      function: "process-blend-ticket",
+      level: "error",
+      tags: { blend_ticket_id: blendTicketId },
+      extra: { queueId, retry_count: existingQueue?.retry_count ?? 0 },
+      user: { id: caller.id },
+    });
 
     // Handle retry logic
     if (queueId && existingQueue) {

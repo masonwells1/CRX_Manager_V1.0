@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 
@@ -877,6 +878,12 @@ Deno.serve(async (req: Request) => {
     });
   } catch (e) {
     console.warn("Document processing error:", e);
+    // Sprint F #7 — alert on document parse failures.
+    await captureEdgeException(e, {
+      function: "process-document",
+      level: "error",
+      extra: { processing_time_ms: Date.now() - startTime },
+    });
     return jsonResponse({
       success: false,
       error: (e as Error).message,

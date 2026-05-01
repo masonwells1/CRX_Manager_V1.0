@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
 
 // =============================================================================
 // CRX send-email — Sprint F #1 lockdown
@@ -326,6 +327,15 @@ Deno.serve(async (req: Request) => {
     }
 
     if (!success) {
+      // Sprint F #7 — alert on Resend send failures (high-impact: customer
+      // didn't get the email they expected).
+      await captureEdgeException(new Error(errorMessage || "Resend send failed"), {
+        function: "send-email",
+        level: "error",
+        tags: { email_type, status_code: String(resendResp.status) },
+        extra: { customer_id, email_log_id: logRow?.id, resend_message_id: resendMessageId },
+        user: { id: caller.id },
+      });
       return jsonResponse({
         success: false,
         error: errorMessage,
@@ -339,6 +349,10 @@ Deno.serve(async (req: Request) => {
       resend_message_id: resendMessageId,
     });
   } catch (err) {
+    await captureEdgeException(err, {
+      function: "send-email",
+      level: "fatal",
+    });
     return jsonResponse(
       { error: err instanceof Error ? err.message : "Unknown error" },
       500,
