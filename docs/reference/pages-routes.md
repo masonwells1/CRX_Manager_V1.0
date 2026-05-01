@@ -1,4 +1,4 @@
-# Pages & Routes Reference (59 total)
+# Pages & Routes Reference (65 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -67,3 +67,5 @@
 | `/program-tracker` | ProgramTracker | Program completion dashboard: planned vs actual acres per customer per season with progress bars |
 | `/invoices/field-app/new` | FieldApplicationInvoice | New field application invoice with multi-location select, auto-figuring chemicals and customer shares |
 | `/invoices/field-app/:id` | FieldApplicationInvoice | Edit existing field application invoice |
+| `/integrity-report` | IntegrityReport | Admin-only. Read-only data integrity dashboard. Runs `runReconciliationChecks()` from `src/lib/reconciliation.ts` and shows pass/fail per check (order totals, inventory ledger, invoice payments via invoice_line_allocations, balance formula, commission splits, quote hold parity, delivery-invoice parity, prebooked inventory, return credit linkage, customer AR consistency). Discrepancy table per failed check with re-run button. Sprint F #4. |
+| `/integrity-cleanup` | IntegrityCleanup | Admin-only. Action-driven cleanup tooling for the three production-data issue classes flagged by the deep audit: (1) negative inventory rows — per-row reset form calling `reconcile_negative_inventory` RPC with mandatory reason; (2) over-received PO items — read-only listing for review; (3) completed deliveries without invoices — per-row "Create draft invoice" button calling `create_invoice_for_unbilled_delivery` RPC. Sprint G3 + G4 (Phase 22). |

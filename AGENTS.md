@@ -9,7 +9,7 @@ This file is for Codex and other coding agents working in this repo. It condense
 - Production: https://croprxsolutions.app
 - Supabase project: `rhyzpcqhnizqbxphqdkr`
 - Owner: Mason Wells. Mason has 0 coding experience and may not know technical terms. Lead the process, explain in plain language, define any necessary jargon, and give clear next steps instead of assuming he knows what to do.
-- Verified locally on 2026-04-28: 63 lazy-loaded pages, 246 migrations, 7 Edge Functions, 119 unit test files, 92 E2E spec files.
+- Verified locally on 2026-05-01: 65 lazy-loaded pages, 266 migrations, 7 Edge Functions, 128 unit test files, 93 E2E spec files. (Counts can drift — recompute from the repo before citing.)
 
 Some older docs contain stale counts. When counts matter, recompute from the repo instead of trusting old README-style numbers.
 
