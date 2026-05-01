@@ -4,6 +4,47 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-01 — Field App Phase 17: Sprint E #2 — cycle count clamp/ledger drift (E2a)
+
+Migration `20260501120000_field_app_workflow_phase17.sql`. Closes audit finding P1-4 from `docs/audits/2026-04-30-data-integrity-workflow-locks-audit-findings.md`.
+
+### The drift this closes
+
+Previously, `complete_cycle_count` and `reverse_completed_cycle_count` did this in one breath:
+
+```sql
+v_new_qty := GREATEST(0, v_item.quantity_available + v_item.variance);
+...
+INSERT INTO inventory_transactions (..., quantity, ...) VALUES (..., v_item.variance, ...);  -- FULL variance
+```
+
+When math would drive on-hand negative (e.g. `quantity_available = 5`, `variance = -10`), inventory was clamped to 0 but the ledger recorded `-10`. The books and the shelf disagreed permanently. A `RAISE WARNING` fired but warnings are swallowed by PostgREST/Supabase — neither the React app nor the activity feed surfaced them. The "fix" was effectively a silent lie. Reversing such a count compounded the drift.
+
+### The fix Mason chose: E2a — block
+
+Replace `GREATEST(0, ...)` clamp + `RAISE WARNING` with `RAISE EXCEPTION`. When math would drive on-hand below zero, the whole transaction rolls back, the cycle count stays `in_progress`, and the manager sees an actionable error:
+
+> Cycle count adjustment for product `<id>` would set on-hand to `-5` (currently `5`, variance `-10`). Resolve upstream discrepancy (missing delivery, unlogged return, prior reconciliation gap) before completing this count.
+
+Reversal mirror: if reversing would drive on-hand negative (because inventory has moved since the count completed), block with the same pattern. Cycle counts `0 in production`, so this strict mode has zero retroactive cost.
+
+### Auth-gate hardening (folded in)
+
+Both RPCs now use the strict pattern from Phase 16 `retire_inventory_item`:
+1. `auth.uid()` must be set (not service-role / not anon)
+2. `p_completed_by`/`p_reversed_by` must match `auth.uid()` if supplied (no actor spoofing)
+3. `is_admin()` required (matches `retire_inventory_item` — both are destructive inventory operations)
+
+### Bonus: idempotency key wired up
+
+`complete_cycle_count` previously had signature `(uuid, uuid)` but the frontend at `src/pages/CycleCounts.tsx:300` was passing `p_idempotency_key: key`. PostgREST silently dropped the extra param — meaning a double-click could double-apply variances. Phase 17's signature is `(uuid, uuid, text)` with proper `check_idempotency` / `save_idempotency` hooks.
+
+### Sprint E remaining
+
+- E #3: cycle count item edits in locked RPC — `cycle_count_items` are still editable from React (`CycleCounts.tsx:229-252`) without checking parent `cycle_counts.status`. Needs `update_cycle_count_item()` RPC + `cancel_cycle_count()` RPC + RLS WITH CHECK guard.
+
+---
+
 ## 2026-05-01 — Field App Phase 16: Sprint E #1 — `retire_inventory_item` RPC
 
 Migration `20260501110000_field_app_workflow_phase16.sql` + `src/pages/InventoryPage.tsx` rewrite of `handleDelete`/`executeDelete`.
