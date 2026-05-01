@@ -4,6 +4,38 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-01 — Field App Phase 16: Sprint E #1 — `retire_inventory_item` RPC
+
+Migration `20260501110000_field_app_workflow_phase16.sql` + `src/pages/InventoryPage.tsx` rewrite of `handleDelete`/`executeDelete`.
+
+### The race condition this closes
+The previous flow on `InventoryPage.tsx`:
+1. React queries `inventory_holds` to check active holds
+2. React reads `target.quantity_prebooked` from already-fetched state
+3. React queries `delivery_items` for pending deliveries
+4. User clicks confirm modal (window of opportunity opens)
+5. React inserts `inventory_transactions` audit row
+6. React calls `inventory.delete()`
+
+Between steps 3 and 6, another user could create an inventory hold, place an order that prebooks the product, or schedule a delivery — and the validation results would be stale by the time the delete fires. Worse, if step 5 succeeded but step 6 failed (network blip), the ledger would say "stock removed" while the inventory row remained.
+
+### The fix
+`retire_inventory_item(p_inventory_id, p_performed_by, p_idempotency_key)` does it all in one transaction with `FOR UPDATE` on the inventory row:
+1. Authentication + actor-mismatch check + admin role check
+2. `SELECT ... FOR UPDATE` on the inventory row (concurrent writes serialize behind us)
+3. Re-check active holds, prebooked quantity, and pending deliveries — all post-lock so the validation is fresh
+4. Insert `inventory_transactions` audit row
+5. Delete the inventory row
+6. Return `{ success, inventory_id, product_id, retired_quantity }`
+
+Frontend now calls `supabase.rpc('retire_inventory_item', ...)` and skips the manual validation steps entirely. Admin-only role gate.
+
+### Sprint E remaining
+- E #2: cycle count clamp/ledger drift fix (`complete_cycle_count` and `reverse_completed_cycle_count` clamp at zero but record full variance)
+- E #3: cycle count item edits in locked RPC (currently editable from React without parent-status check)
+
+---
+
 ## 2026-05-01 — Field App Phase 15: Sprint D-policy (A1 + B1)
 
 Migration `20260501100000_field_app_workflow_phase15.sql`. Two business-decision fixes folded into a single `complete_delivery` rewrite.

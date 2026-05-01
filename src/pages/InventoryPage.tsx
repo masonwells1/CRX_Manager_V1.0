@@ -50,6 +50,7 @@ export default function InventoryPage() {
   const { role, profile } = useAuth();
   const receivePoIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
   const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
+  const retireIdem = useIdempotencyKey('retire_inventory_item', profile?.id || '');
   const { toast } = useToast();
   const [inventory, setInventory] = useState<InventoryRow[]>([]);
   const [holds, setHolds] = useState<HoldWithRelations[]>([]);
@@ -641,77 +642,32 @@ export default function InventoryPage() {
     });
   };
 
-  const handleDelete = async (inventoryId: string) => {
-    const target = inventory.find((i) => i.id === inventoryId);
-    if (!target) return;
-
-    const { data: activeHolds } = await supabase
-      .from('inventory_holds')
-      .select('id')
-      .eq('product_id', target.product_id)
-      .eq('is_active', true)
-      .limit(1);
-
-    if (activeHolds && activeHolds.length > 0) {
-      toast('error', 'Cannot delete: this product has active inventory holds. Release holds first.');
-      return;
-    }
-
-    if (target.quantity_prebooked > 0) {
-      toast('error', 'Cannot delete: this product has committed (prebooked) inventory from orders.');
-      return;
-    }
-
-    const { data: pendingDeliveries } = await supabase
-      .from('delivery_items')
-      .select('id, delivery:deliveries!inner(status)')
-      .eq('product_id', target.product_id)
-      .in('delivery.status', ['scheduled', 'in_progress'])
-      .limit(1);
-
-    if (pendingDeliveries && pendingDeliveries.length > 0) {
-      toast('error', 'Cannot delete: this product has pending deliveries.');
-      return;
-    }
-
-    // Passed all safety checks — show confirm modal
+  // Phase 16 (2026-05-01): the previous version did 3 separate validation
+  // queries from the browser, then a separate ledger insert, then a separate
+  // delete — race-condition window where another user could create a hold/
+  // order/delivery between validation and delete. retire_inventory_item RPC
+  // does it all in one transaction with FOR UPDATE on the inventory row.
+  const handleDelete = (inventoryId: string) => {
     setDeleteConfirmId(inventoryId);
   };
 
   const executeDelete = async () => {
-    if (!deleteConfirmId) return;
-    const target = inventory.find((i) => i.id === deleteConfirmId);
-    if (!target) return;
-
-    // Audit trail: log the deletion before removing the row
-    if (profile) {
-      const { error: auditErr } = await supabase.from('inventory_transactions').insert({
-        product_id: target.product_id,
-        transaction_type: 'adjusted',
-        quantity: -(target.quantity_available || 0),
-        to_location: target.location || 'Main Warehouse',
-        performed_by: profile.id,
-        notes: `Inventory record deleted (had ${target.quantity_available} available)`,
-      });
-      if (auditErr) {
-        toast('error', 'Failed to create audit trail — delete aborted');
-        setDeleteConfirmId(null);
-        return;
-      }
-    }
+    if (!deleteConfirmId || !profile) return;
 
     await runCriticalAction({
       action: async () => {
-        const deleteResult = await supabase
-          .from('inventory')
-          .delete()
-          .eq('id', deleteConfirmId)
-          .select();
-        checkMutationResult(deleteResult, 'Delete inventory item');
+        const idemKey = retireIdem.getKey();
+        const { error } = await supabase.rpc('retire_inventory_item', {
+          p_inventory_id: deleteConfirmId,
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        });
+        if (error) throw error;
+        retireIdem.resetKey();
       },
       toast,
       successMessage: 'Inventory item deleted',
-      sentryTag: 'delete_inventory',
+      sentryTag: 'retire_inventory_item',
       onSuccess: () => {
         fetchInventory();
         setDeleteConfirmId(null);
