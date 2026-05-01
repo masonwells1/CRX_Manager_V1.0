@@ -51,6 +51,46 @@ Routes: `/integrity-report` (admin only). Sidebar entry under Finance group.
 
 ---
 
+## 2026-05-01 — Cleanup Sprint G3 + G4 (Phase 22): Cleanup Tooling
+
+Migration `20260501160000_field_app_workflow_phase22.sql` + new admin page `src/pages/IntegrityCleanup.tsx`. Closes the three live-data findings from the deep-audit rebuttal.
+
+### Two new RPCs
+
+**`reconcile_negative_inventory(p_inventory_id, p_new_quantity, p_reason, p_performed_by, p_idempotency_key)`**
+- Admin-only. Locks the inventory row, computes the delta (new − old), updates `quantity_available`, and inserts a paired `inventory_transactions` row of type `adjusted` with the reason captured in notes. Format: `RECONCILIATION (was X, now Y): <reason>`.
+- Closes the immediate path for resolving the 17 production rows currently with `quantity_available < 0` (or `_prebooked`/`_on_order` < 0).
+- Refuses if `p_new_quantity < 0` — the fix is to bring buckets to zero or positive, not deeper negative.
+
+**`create_invoice_for_unbilled_delivery(p_delivery_id, p_performed_by, p_idempotency_key)`**
+- Admin-only. Same auto-invoice logic Phase 15 added inside `complete_delivery`, factored into a manual-trigger RPC for the 60 historical completed deliveries that pre-date Phase 15.
+- Refuses if delivery is not `completed` or has no `order_id`.
+- Refuses if order already has an active (non-voided/cancelled) invoice — same guard as Phase 15. Prevents double-billing.
+- Logs to `activity_feed` as `invoice_backfilled_for_delivery`.
+
+### New admin page: `/integrity-cleanup`
+
+Three sections, all admin-only:
+
+1. **Negative inventory** — per-row form with new-quantity input + reason + Reconcile button.
+2. **Over-received PO items** — read-only listing. The 15 historical rows are inert (inventory was already received); going-forward over-receives are blocked by Phase 21's default change.
+3. **Unbilled completed deliveries** — per-row "Create draft invoice" button.
+
+Each action posts to its respective RPC with a fresh idempotency key. Page is wired into Sidebar under Finance and routes via `App.tsx`.
+
+### Live data targets
+
+At sprint kickoff: 17 negative inventory rows, 15 over-received PO items, 60 unbilled deliveries. After Mason works through the cleanup page, those numbers should drop to 0 / 0 / 0. Once the negative inventory section is empty, a follow-up migration can safely add `CHECK (quantity_available >= 0 …)` constraints — that's deliberately deferred to Phase 23 (separate sprint after Mason confirms the cleanup is done).
+
+### Sprint G summary
+
+- G1 ✅ Commission lifecycle fix (Phase 20, `503ae1d`)
+- G2 ✅ PO over-receive default → false (Phase 21, `6a61723`)
+- G3 + G4 ✅ Cleanup tooling RPCs + admin page (this commit)
+- G5 ⏸ Inventory CHECK constraints — deferred until cleanup is done
+
+---
+
 ## 2026-05-01 — Cleanup Sprint G1 (Phase 20): Commission Lifecycle Fix
 
 Migration `20260501150000_field_app_workflow_phase20.sql`. Closes the audit finding flagged in `2026-04-30-six-phase-deep-audit-findings.md` Phase 1 P1 / Phase 2 P1.

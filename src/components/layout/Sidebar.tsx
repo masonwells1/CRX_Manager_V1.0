@@ -175,6 +175,7 @@ const navigation: NavEntry[] = [
         { path: '/customer-transactions', label: 'Transactions', icon: <CreditCard className="w-4 h-4" />, roles: ['admin'] },
         { path: '/month-end', label: 'Month-End', icon: <CalendarCheck className="w-4 h-4" />, roles: ['admin'] },
         { path: '/integrity-report', label: 'Integrity Report', icon: <ShieldAlert className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/integrity-cleanup', label: 'Integrity Cleanup', icon: <Wrench className="w-4 h-4" />, roles: ['admin'] },
         { path: '/rebates', label: 'Rebates', icon: <BadgeDollarSign className="w-4 h-4" />, roles: ['admin'] },
         { path: '/reports', label: 'Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/sales-reports', label: 'Sales Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },

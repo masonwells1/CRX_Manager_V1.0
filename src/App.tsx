@@ -37,6 +37,7 @@ const TeamBoard = lazy(() => import('./pages/TeamBoard'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const IntegrityReport = lazy(() => import('./pages/IntegrityReport'));
+const IntegrityCleanup = lazy(() => import('./pages/IntegrityCleanup'));
 // Payments.tsx removed — PaymentAllocation is now the sole payment page at /payments
 const Fields = lazy(() => import('./pages/Fields'));
 const FieldSetup = lazy(() => import('./pages/FieldSetup'));
@@ -221,6 +222,7 @@ const router = createBrowserRouter([
           { path: 'financial-dashboard', element: <ProtectedRoute allowedRoles={['admin']}><FinancialDashboard /></ProtectedRoute> },
           { path: 'month-end', element: <ProtectedRoute allowedRoles={['admin']}><MonthEndClose /></ProtectedRoute> },
           { path: 'integrity-report', element: <ProtectedRoute allowedRoles={['admin']}><IntegrityReport /></ProtectedRoute> },
+          { path: 'integrity-cleanup', element: <ProtectedRoute allowedRoles={['admin']}><IntegrityCleanup /></ProtectedRoute> },
           { path: 'commission-payments', element: <ProtectedRoute allowedRoles={['admin']}><CommissionPayments /></ProtectedRoute> },
           { path: 'customer-transactions', element: <ProtectedRoute allowedRoles={['admin']}><CustomerTransactionReview /></ProtectedRoute> },
           { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><PrepaymentManager /></ProtectedRoute> },
