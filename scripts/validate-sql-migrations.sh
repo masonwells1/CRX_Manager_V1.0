@@ -18,10 +18,24 @@ set -euo pipefail
 VIOLATIONS=0
 WARNINGS=0
 IDEMPOTENCY_ONLY=false
+MAX_VIOLATIONS=""
 
-if [ "${1:-}" = "--idempotency-only" ]; then
-  IDEMPOTENCY_ONLY=true
-fi
+# Argument parsing
+for arg in "$@"; do
+  case "$arg" in
+    --idempotency-only) IDEMPOTENCY_ONLY=true ;;
+    --max-violations=*) MAX_VIOLATIONS="${arg#--max-violations=}" ;;
+    --help|-h)
+      echo "Usage: $0 [--idempotency-only] [--max-violations=N]"
+      echo ""
+      echo "  --idempotency-only   Only check idempotency_keys column-name bugs"
+      echo "  --max-violations=N   Exit 0 if violations <= N (baseline ratchet for CI)."
+      echo "                       Exit 1 if violations > N. Recommend updating the"
+      echo "                       baseline downward when violations decrease."
+      exit 0
+      ;;
+  esac
+done
 
 # Tables that do NOT have an updated_at column
 TABLES_WITHOUT_UPDATED_AT=(
@@ -194,11 +208,31 @@ echo "  Violations:    $VIOLATIONS"
 echo "  Warnings:      $WARNINGS"
 echo "============================================"
 
+if [ -n "$MAX_VIOLATIONS" ]; then
+  # Baseline ratchet mode — used by CI. Exits 0 when violations <= baseline so
+  # legacy migration bugs (already superseded by later fixes) don't break the
+  # build, but any NEW violation pushes the count over the threshold and fails.
+  if [ "$VIOLATIONS" -gt "$MAX_VIOLATIONS" ]; then
+    echo ""
+    echo "FAILED: Violation count ($VIOLATIONS) exceeds baseline ($MAX_VIOLATIONS)."
+    echo "A new migration introduced an SQL safety violation. Fix it, or if the"
+    echo "violation is intentional (rare), bump the --max-violations baseline."
+    exit 1
+  fi
+  if [ "$VIOLATIONS" -lt "$MAX_VIOLATIONS" ]; then
+    echo ""
+    echo "GOOD: Violation count ($VIOLATIONS) is BELOW baseline ($MAX_VIOLATIONS)."
+    echo "Lower the --max-violations baseline in .github/workflows/ci.yml to lock"
+    echo "in the improvement."
+  fi
+  exit 0
+fi
+
 if [ $VIOLATIONS -gt 0 ]; then
   echo ""
   echo "NOTE: Violations in OLD migrations are expected (they were the bugs that"
   echo "got fixed by later migrations). Only violations in RECENT migrations"
-  echo "indicate a regression."
+  echo "indicate a regression. Use --max-violations=N for CI ratcheting."
   exit 1
 fi
 

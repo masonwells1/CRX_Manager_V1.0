@@ -10,9 +10,33 @@ on:
     branches: [main]
 
 jobs:
+  sql-validation:
+    name: SQL Migration Validation
+    runs-on: ubuntu-latest
+    # Fast (no node_modules); runs on every push and PR. Catches commits that
+    # bypassed husky locally (e.g. via --no-verify or a non-husky environment)
+    # by re-running the full migration audit at the PR/push gate.
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Make scripts executable
+        run: chmod +x scripts/validate-sql.sh scripts/validate-sql-migrations.sh
+
+      - name: Validate every migration (full audit, baseline-ratcheted)
+        # Scans all supabase/migrations/*.sql for known anti-patterns:
+        # pg_get_functiondef, updated_at on tables without that column,
+        # SECURITY DEFINER without search_path, idempotency_keys column
+        # name mistakes. Legacy migrations contain bugs that were superseded
+        # by later fixes — the baseline lets CI accept those while still
+        # failing on any NEW violation. Lower the baseline when violations
+        # decrease to lock in the improvement.
+        run: bash scripts/validate-sql-migrations.sh --max-violations=20
+
   lint-typecheck-test:
     name: Lint, Type Check, Test, Build
     runs-on: ubuntu-latest
+    needs: sql-validation
 
     steps:
       - name: Checkout code
