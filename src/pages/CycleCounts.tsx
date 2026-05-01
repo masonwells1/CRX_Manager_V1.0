@@ -9,7 +9,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -226,32 +226,25 @@ export default function CycleCounts() {
     setLoadingItems(false);
   };
 
-  // Update a single item's counted quantity
+  // Update a single item's counted quantity (via RPC — server validates parent.status='in_progress')
   const updateCountedQty = async (itemId: string, countedQty: number | null) => {
     const item = countItems.find((i) => i.id === itemId);
     if (!item || !profile) return;
 
     const variance = countedQty !== null ? countedQty - item.expected_qty : null;
     const variancePct = countedQty !== null && item.expected_qty !== 0
-      ? ((variance || 0) / item.expected_qty) * 100
+      ? Math.round(((variance || 0) / item.expected_qty) * 100 * 100) / 100
       : null;
 
-    try {
-      const result = await supabase
-        .from('cycle_count_items')
-        .update({
-          counted_qty: countedQty,
-          variance: variance,
-          variance_pct: variancePct !== null ? Math.round(variancePct * 100) / 100 : null,
-          is_counted: countedQty !== null,
-          counted_by: profile.id,
-          counted_at: new Date().toISOString(),
-        })
-        .eq('id', itemId)
-        .select();
-      checkMutationResult(result, 'Update count item');
-    } catch {
-      toast('error', 'Failed to update count');
+    const { error } = await supabase.rpc('update_cycle_count_item', {
+      p_item_id: itemId,
+      p_counted_qty: countedQty,
+      p_performed_by: profile.id,
+    });
+
+    if (error) {
+      Sentry.captureException(error);
+      toast('error', error.message || 'Failed to update count');
       return;
     }
 
@@ -330,12 +323,11 @@ export default function CycleCounts() {
 
     await runCriticalAction({
       action: async () => {
-        const result = await supabase
-          .from('cycle_counts')
-          .update({ status: 'cancelled' })
-          .eq('id', activeCount.id)
-          .select();
-        checkMutationResult(result, 'Cancel cycle count');
+        const { error } = await supabase.rpc('cancel_cycle_count', {
+          p_cycle_count_id: activeCount.id,
+          p_performed_by: profile.id,
+        });
+        if (error) throw error;
       },
       toast,
       successMessage: 'Cycle count cancelled',

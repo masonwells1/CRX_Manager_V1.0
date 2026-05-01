@@ -4,6 +4,56 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-01 — Field App Phase 18: Sprint E #3 — cycle count item edit gating
+
+Migration `20260501130000_field_app_workflow_phase18.sql` + edits to `src/pages/CycleCounts.tsx`. **Closes Sprint E entirely.**
+
+### The gap this closes
+
+`cycle_count_items` rows were directly editable from React via PostgREST `.update()` without any check on parent `cycle_counts.status`. After a count completed (which writes `inventory_transactions` rows referencing the item evidence), an admin could still mutate `counted_qty` / `variance` — leaving the audit trail pointing at numbers that no longer matched the row.
+
+### Two new RPCs
+
+- **`update_cycle_count_item(p_item_id, p_counted_qty, p_notes, p_performed_by, p_idempotency_key)`** — locks the parent `cycle_counts` row with `FOR UPDATE OF cc`, validates `status='in_progress'`, computes `variance` and `variance_pct` server-side (single source of truth — frontend was computing it but the server should authorize), and applies the update.
+- **`cancel_cycle_count(p_cycle_count_id, p_performed_by, p_idempotency_key)`** — replaces the bare `.update({ status: 'cancelled' })` in `CycleCounts.tsx`. Validates `status='in_progress'` before flipping. Returns `{ cycle_count_id, status }` jsonb.
+
+Both auth-gated admin-only with the strict pattern: `auth.uid()` not null + `p_performed_by` mismatch reject + `is_admin()` role check (matches Phases 16 + 17).
+
+### RLS WITH CHECK guards — defense in depth
+
+Even if a future code path bypassed the RPC, direct PostgREST `.update()` / `.insert()` / `.delete()` on `cycle_count_items` are now blocked when parent is not `in_progress`:
+
+```sql
+CREATE POLICY cycle_count_items_update ON cycle_count_items
+  FOR UPDATE
+  USING (is_admin() AND EXISTS (
+    SELECT 1 FROM cycle_counts cc
+    WHERE cc.id = cycle_count_id AND cc.status = 'in_progress'
+  ))
+  WITH CHECK (...same...);
+```
+
+The RPC and the RLS now enforce the same invariant from two layers — if one regresses, the other still holds.
+
+### Bonus: RPC contract registry housekeeping
+
+`src/lib/rpcContracts.test.ts` now lists `cancel_cycle_count`, `update_cycle_count_item`, `retire_inventory_item` (Phase 16 was missed), and `reverse_completed_cycle_count` (existed but wasn't tracked) in `MUTATING_RPCS_WITH_IDEMPOTENCY`. Coverage threshold bumps from 72 implicitly.
+
+### Sprint E status: COMPLETE
+
+- E #1 ✅ `retire_inventory_item` (Phase 16)
+- E #2 ✅ cycle count clamp → block (Phase 17)
+- E #3 ✅ cycle count item gating (this phase)
+
+### Audit closure status
+
+- Sprint A1-A4, B, C: ✅ closed (Phases 9-14)
+- Sprint D-policy: ✅ closed (Phase 15)
+- Sprint E: ✅ closed (Phases 16-18)
+- Sprint F: in progress
+
+---
+
 ## 2026-05-01 — Field App Phase 17: Sprint E #2 — cycle count clamp/ledger drift (E2a)
 
 Migration `20260501120000_field_app_workflow_phase17.sql`. Closes audit finding P1-4 from `docs/audits/2026-04-30-data-integrity-workflow-locks-audit-findings.md`.
