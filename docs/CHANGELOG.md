@@ -4,6 +4,30 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-01 — Field App Phase 15: Sprint D-policy (A1 + B1)
+
+Migration `20260501100000_field_app_workflow_phase15.sql`. Two business-decision fixes folded into a single `complete_delivery` rewrite.
+
+### A1 — drivers can complete their assigned deliveries
+
+`complete_delivery`'s role check mirrors `confirm_delivery`'s pattern: admin/sales OR (driver AND `v_actor = v_delivery.assigned_driver`). Closes the UX mismatch where the completion section was visible to drivers but the RPC threw "Only admin or sales_rep can complete deliveries."
+
+### B1 — auto-invoice restoration
+
+The pre-Phase-1-rewrite version of `complete_delivery` auto-created a draft invoice from the delivered quantities. The rewrite dropped that, leaving the UI promise stranded ("draft invoice auto-created" in DeliveryDetail.tsx:1342-1345 + Getting Started doc:368-370). Direct revenue leakage risk.
+
+The auto-create now:
+- Runs only when `v_delivery.order_id IS NOT NULL` AND no non-voided/non-cancelled invoice already exists for the order (covers `create_invoice_from_order`, `create_quick_delivery`, manual saves)
+- Bills `quantity_delivered` (not `quantity_ordered`) so partial deliveries don't overbill
+- Returns `auto_invoice: { invoice_id, invoice_number, total_cents }` in the result jsonb — frontend already reads this
+
+### What's left from the audits
+
+- **Sprint E** — inventory transactional integrity (`retire_inventory_item` RPC, cycle count clamp/ledger drift, cycle count item edits)
+- **Sprint F** — operations hardening (Edge Function lockdown, pg_cron, reconciliation dashboard, SQL validators in CI, production runbook, Edge Function alerting)
+
+---
+
 ## 2026-04-30 — Field App Phase 14: allocate_payment auth gate — **all 12 P1 actor-spoofing vectors now closed**
 
 Migration `20260430260000_field_app_workflow_phase14.sql`. ~200-line `CREATE OR REPLACE` of `allocate_payment` with the same auth-gate pattern used in Phases 7, 9-13.
