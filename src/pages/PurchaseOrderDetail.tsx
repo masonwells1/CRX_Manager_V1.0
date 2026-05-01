@@ -59,6 +59,11 @@ export default function PurchaseOrderDetail() {
   const [receiveItems, setReceiveItems] = useState<Record<string, ReceiveItemState>>({});
   const [storageLocation, setStorageLocation] = useState('Main Warehouse');
   const [receiveStep, setReceiveStep] = useState<'fill' | 'review'>('fill');
+  // Phase 21 — Cleanup G2: over-receive is now opt-in (admin-only) with a required reason.
+  // The previous default `p_allow_over_receive: true` produced 15 actual over-receive
+  // events in production by accepting whatever quantity was entered without a check.
+  const [allowOverReceive, setAllowOverReceive] = useState(false);
+  const [overReceiveReason, setOverReceiveReason] = useState('');
 
   /* Edit modal state */
   const [editOpen, setEditOpen] = useState(false);
@@ -157,6 +162,8 @@ export default function PurchaseOrderDetail() {
     setReceiveItems(initial);
     setStorageLocation('Main Warehouse');
     setReceiveStep('fill');
+    setAllowOverReceive(false);
+    setOverReceiveReason('');
     setReceiveOpen(true);
   };
 
@@ -190,14 +197,45 @@ export default function PurchaseOrderDetail() {
       return;
     }
 
+    // Compute whether any line would over-receive based on remaining-to-receive
+    const wouldOverReceive = itemsPayload.some((ip) => {
+      const poItem = items.find((i) => i.id === ip.po_item_id);
+      if (!poItem) return false;
+      const remaining = (poItem.quantity_ordered || 0) - (poItem.quantity_received || 0);
+      return ip.quantity > remaining;
+    });
+
+    if (wouldOverReceive) {
+      if (role !== 'admin') {
+        toast('error', 'Over-receive requires admin role. Reduce the quantity to remaining-to-receive or fewer.');
+        return;
+      }
+      if (!allowOverReceive) {
+        toast('error', 'Quantity exceeds remaining-to-receive. Check the over-receive override and provide a reason.');
+        return;
+      }
+      if (!overReceiveReason.trim()) {
+        toast('error', 'Reason is required when over-receiving.');
+        return;
+      }
+    }
+
+    // Append over-receive reason to per-item notes for the audit trail.
+    const finalPayload = wouldOverReceive
+      ? itemsPayload.map((ip) => ({
+          ...ip,
+          notes: [ip.notes, `OVER-RECEIVE: ${overReceiveReason.trim()}`].filter(Boolean).join(' | '),
+        }))
+      : itemsPayload;
+
     await runCriticalAction({
       action: async () => {
         const idemKey = receiveIdem.getKey();
         const { data, error } = await supabase.rpc('receive_po_items', {
-          p_items: itemsPayload,
+          p_items: finalPayload,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
-          p_allow_over_receive: true,
+          p_allow_over_receive: wouldOverReceive && allowOverReceive,
         });
         if (error) throw error;
         assertRpcResult(data, 'receive_po_items');
@@ -892,6 +930,49 @@ export default function PurchaseOrderDetail() {
                 </tbody>
               </table>
             </div>
+
+            {/* Phase 21 — Over-receive override (admin-only). Surface only when
+                at least one line exceeds the remaining-to-receive amount. */}
+            {(() => {
+              const wouldOver = reviewItems.some((item) => {
+                const qty = parseFloat(receiveItems[item.id]?.qty || '0');
+                const remaining = (item.quantity_ordered || 0) - (item.quantity_received || 0);
+                return qty > remaining;
+              });
+              if (!wouldOver) return null;
+              if (role !== 'admin') {
+                return (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                    One or more lines exceed the remaining-to-receive quantity. Only admins can record an over-receive. Reduce the quantity to continue, or ask an admin to record this.
+                  </div>
+                );
+              }
+              return (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 space-y-2">
+                  <label className="flex items-center gap-2 text-sm font-medium text-amber-900">
+                    <input
+                      type="checkbox"
+                      checked={allowOverReceive}
+                      onChange={(e) => setAllowOverReceive(e.target.checked)}
+                      className="rounded border-amber-400"
+                    />
+                    Confirm over-receive (admin override)
+                  </label>
+                  <p className="text-xs text-amber-800 ml-6">
+                    One or more lines have a received quantity greater than the remaining ordered quantity. This will record the actual amount delivered and exceed the PO total. A reason is required.
+                  </p>
+                  {allowOverReceive && (
+                    <textarea
+                      value={overReceiveReason}
+                      onChange={(e) => setOverReceiveReason(e.target.value)}
+                      placeholder="Reason (e.g. vendor over-shipped and we are keeping the extra)"
+                      rows={2}
+                      className="ml-6 w-[calc(100%-1.5rem)] rounded border border-amber-400 px-2 py-1 text-sm"
+                    />
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setReceiveStep('fill')}>

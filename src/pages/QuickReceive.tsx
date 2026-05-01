@@ -280,11 +280,14 @@ export default function QuickReceive() {
 
     try {
       const key = receiveIdem.getKey();
+      // Phase 21 — Cleanup G2: over-receive is no longer the default. If a
+      // QuickReceive batch needs to record a vendor over-shipment, use the
+      // per-PO detail page where an admin can set the override with a reason.
       const { data, error } = await supabase.rpc('receive_po_items', {
         p_items: itemsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: key,
-        p_allow_over_receive: true,
+        p_allow_over_receive: false,
       });
       if (error) throw error;
       assertRpcResult(data, 'receive_po_items');
