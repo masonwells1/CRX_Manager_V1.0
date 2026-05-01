@@ -51,6 +51,34 @@ Routes: `/integrity-report` (admin only). Sidebar entry under Finance group.
 
 ---
 
+## 2026-05-01 — Cleanup Sprint G1 (Phase 20): Commission Lifecycle Fix
+
+Migration `20260501150000_field_app_workflow_phase20.sql`. Closes the audit finding flagged in `2026-04-30-six-phase-deep-audit-findings.md` Phase 1 P1 / Phase 2 P1.
+
+### The bug
+
+`create_commission_payment` inserts the commission_payments row with `status='unposted'`, but immediately flips the included commissions to `status='paid'`. Result: commissions appear paid before the payment is actually committed. Month-end "unpaid commission liability" reports understate. Voiding an unposted payment (currently disallowed but defensive code reset commissions to pending anyway) was the only thing keeping the books from drifting.
+
+### Fix
+
+- `create_commission_payment` no longer changes `commissions.status`. Commissions stay `pending` while the payment is `unposted`.
+- New double-pay guard: rejects commissions that are already in any non-voided `commission_payment_items` row. This replaces the old `WHERE c.status != 'paid'` filter, which only worked because of the bug we just removed.
+- `post_commission_payment` now flips the included commissions to `status='paid'` and stamps `paid_date = payment_date`. This is where the "paid" transition belongs.
+- `void_commission_payment` unchanged — its existing reset-to-pending logic still works correctly under the new lifecycle (no-op when commissions are already pending; correct flip-back when they're paid).
+
+### Bonus fixes folded in
+
+- Both RPCs now use the strict auth-gate pattern from Phase 13 (auth.uid() not null + p_performed_by mismatch reject + admin role check). `create_commission_payment` previously checked role against `profiles` directly without comparing to `auth.uid()`.
+- `post_commission_payment` accepts `p_idempotency_key` for the first time. The frontend at `CommissionPayments.tsx:223` was already passing it; PostgREST was silently dropping it. Same latent bug pattern as Phases 17 and 20's `complete_cycle_count`.
+- `post_commission_payment` returns `jsonb { success, payment_id, payment_number, commissions_paid }` instead of `void`, matching the modern RPC contract.
+
+### What this unblocks
+
+- Live data check at sprint kickoff showed 0 currently-bad commissions, but the path was producing the wrong state on every `create_commission_payment`. Going forward, only `post_commission_payment` can mark a commission `paid`.
+- Reports that aggregate commission liability by status now match accounting reality.
+
+---
+
 ## 2026-05-01 — Field App Phase 19: Sprint F #3 — pg_cron for Dashboard-triggered jobs
 
 Migration `20260501140000_field_app_workflow_phase19.sql`. Closes the audit's complaint that two batch jobs only ran when someone happened to open the Dashboard.
