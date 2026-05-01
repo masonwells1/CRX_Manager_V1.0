@@ -17,7 +17,14 @@ export interface SendEmailParams {
   subject: string;
   html: string;
   email_type: EmailType;
-  customer_id?: string;
+  customer_id: string;
+  /**
+   * Optional resource the email is about. REQUIRED for drivers (only allowed
+   * email_type='delivery_completed' with resource_type='delivery'). Admins
+   * and sales reps may omit; populated for completeness in the audit log.
+   */
+  resource_type?: 'delivery' | 'invoice' | 'order' | 'quote' | 'customer';
+  resource_id?: string;
   idempotency_key?: string;
   attachments?: Array<{ filename: string; content: string }>; // base64
 }

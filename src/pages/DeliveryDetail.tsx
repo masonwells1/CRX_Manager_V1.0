@@ -924,6 +924,8 @@ export default function DeliveryDetail() {
             html,
             email_type: 'delivery_completed',
             customer_id: delivery.customer_id,
+            resource_type: 'delivery',
+            resource_id: delivery.id,
             idempotency_key: `delivery-completed-${delivery.id}-${Date.now()}`,
           });
         } catch (emailErr) {
@@ -1006,6 +1008,8 @@ export default function DeliveryDetail() {
         html,
         email_type: 'delivery_completed',
         customer_id: delivery.customer_id,
+        resource_type: 'delivery',
+        resource_id: delivery.id,
         idempotency_key: `delivery-resend-${delivery.id}-${Date.now()}`,
       });
       toast('success', `Confirmation email sent to ${customer.email}`);

@@ -652,7 +652,9 @@ export default function InvoiceDetail() {
           subject: `Invoice ${invoice.invoice_number || ''} from Crop RX Solutions`,
           html,
           email_type: 'invoice',
-          customer_id: invoice.customer_id,
+          customer_id: invoice.customer_id!,
+          resource_type: 'invoice',
+          resource_id: id,
           idempotency_key: `invoice-email-${id}-${Date.now()}`,
           attachments: [{
             filename: `Invoice-${invoice.invoice_number || 'DRAFT'}.pdf`,
