@@ -238,47 +238,42 @@ export interface InvoiceRow {
   balance_cents: number;
 }
 
-// Payments are order-level (no invoice_id); amount is stored as numeric dollars
-export interface PaymentAllocationRow {
-  order_id: string;
-  amount: number;
+/**
+ * Source of truth for "how much has been paid against an invoice" is
+ * `invoice_line_allocations.amount_cents` (written by allocate_payment in
+ * Phase 14). The legacy `payments.amount` is kept for historical and
+ * order-level reporting but is not always in sync per-invoice when an
+ * order has multiple invoices or grower-share splits.
+ */
+export interface InvoiceLineAllocationRow {
+  invoice_id: string;
+  amount_cents: number;
 }
 
 export function checkInvoicePayments(
   invoices: InvoiceRow[],
-  payments: PaymentAllocationRow[],
+  allocations: InvoiceLineAllocationRow[],
 ): Discrepancy[] {
-  // Sum payment dollars → cents per order_id
-  const payByOrder = new Map<string, number>();
-  for (const p of payments) {
-    const current = payByOrder.get(p.order_id) ?? 0;
-    payByOrder.set(p.order_id, current + Math.round(p.amount * 100));
-  }
-
-  // Sum invoice paid_amount_cents per order_id
-  const paidByOrder = new Map<string, number>();
-  const invoiceNumberByOrder = new Map<string, string>();
-  for (const inv of invoices) {
-    const current = paidByOrder.get(inv.order_id) ?? 0;
-    paidByOrder.set(inv.order_id, current + inv.paid_amount_cents);
-    if (!invoiceNumberByOrder.has(inv.order_id)) {
-      invoiceNumberByOrder.set(inv.order_id, inv.invoice_number);
-    }
+  // Sum allocation cents per invoice_id (source of truth from allocate_payment)
+  const allocatedByInvoice = new Map<string, number>();
+  for (const a of allocations) {
+    const current = allocatedByInvoice.get(a.invoice_id) ?? 0;
+    allocatedByInvoice.set(a.invoice_id, current + a.amount_cents);
   }
 
   const issues: Discrepancy[] = [];
 
-  // For each order that has posted invoices, verify payment totals match
-  for (const [orderId, invoicePaidTotal] of paidByOrder) {
-    const paymentTotal = payByOrder.get(orderId) ?? 0;
-    if (Math.abs(invoicePaidTotal - paymentTotal) > TOLERANCE_CENTS) {
+  // For each posted invoice, sum of allocations should equal paid_amount_cents
+  for (const inv of invoices) {
+    const allocatedTotal = allocatedByInvoice.get(inv.id) ?? 0;
+    if (Math.abs(inv.paid_amount_cents - allocatedTotal) > TOLERANCE_CENTS) {
       issues.push({
         check: 'invoice_payments',
-        entity: invoiceNumberByOrder.get(orderId) ?? orderId,
-        entityId: orderId,
-        expected: paymentTotal,
-        actual: invoicePaidTotal,
-        delta: Math.abs(invoicePaidTotal - paymentTotal),
+        entity: inv.invoice_number,
+        entityId: inv.id,
+        expected: allocatedTotal,
+        actual: inv.paid_amount_cents,
+        delta: Math.abs(inv.paid_amount_cents - allocatedTotal),
       });
     }
   }
@@ -698,19 +693,19 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
         .eq('status', 'posted')
         .is('deleted_at', null),
       supabase
-        .from('payments')
-        .select('order_id, amount'),
+        .from('invoice_line_allocations')
+        .select('invoice_id, amount_cents'),
     ]);
 
     if (invoiceRes.error) throw new Error(`Invoices query failed: ${invoiceRes.error.message}`);
-    if (allocRes.error) throw new Error(`Payments query failed: ${allocRes.error.message}`);
+    if (allocRes.error) throw new Error(`Allocations query failed: ${allocRes.error.message}`);
     const invoices = (invoiceRes.data ?? []) as InvoiceRow[];
-    const payments = (allocRes.data ?? []) as PaymentAllocationRow[];
+    const allocations = (allocRes.data ?? []) as InvoiceLineAllocationRow[];
 
-    const payDisc = checkInvoicePayments(invoices, payments);
+    const payDisc = checkInvoicePayments(invoices, allocations);
     checks.push({
       name: 'Invoice Payments',
-      description: 'Invoice paid_amount_cents matches SUM of payments per order',
+      description: 'Invoice paid_amount_cents matches SUM of invoice_line_allocations.amount_cents (source of truth from allocate_payment)',
       passed: payDisc.length === 0,
       discrepancies: payDisc,
       entitiesChecked: invoices.length,

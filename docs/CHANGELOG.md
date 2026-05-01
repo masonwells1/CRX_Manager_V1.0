@@ -4,6 +4,53 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-01 — Sprint F #4: reconciliation report wired to admin dashboard — **Sprint F COMPLETE**
+
+New page `src/pages/IntegrityReport.tsx` at `/integrity-report` (admin-only). Calls the existing `runReconciliationChecks()` and renders pass/fail per check with a discrepancies table when any check finds drift.
+
+### What changed in `reconciliation.ts`
+
+The audit's specific complaint: the invoice-payments check was reading `payments.amount` (legacy order-level numeric dollars) when the actual source of truth — written by `allocate_payment` (Phase 14) — is `invoice_line_allocations.amount_cents` per invoice.
+
+Replaced:
+- `PaymentAllocationRow` (`{ order_id, amount }` dollars) → `InvoiceLineAllocationRow` (`{ invoice_id, amount_cents }`)
+- Query `.from('payments').select('order_id, amount')` → `.from('invoice_line_allocations').select('invoice_id, amount_cents')`
+- Aggregation: per-order sum → per-invoice sum
+- Compare to: `invoice.paid_amount_cents` directly (no order-level rollup)
+
+`reconciliation.test.ts` updated with the new shape; existing 5 test cases reframed to per-invoice allocations. All pass.
+
+### What's on the new page
+
+- Pass/fail badge per check, with description
+- Discrepancy table (entity, expected, actual, delta) when checks fail
+- Re-run button
+- Timestamp showing when the report was last computed
+- Link guidance pointing at the production runbook for cadence
+
+Routes: `/integrity-report` (admin only). Sidebar entry under Finance group.
+
+### Sprint F status: ALL CLOSED
+
+- F #1 ✅ send-email lockdown
+- F #2 ✅ process-blend-ticket per-resource auth
+- F #3 ✅ pg_cron schedules
+- F #4 ✅ reconciliation report (this commit)
+- F #5 ✅ SQL validators in CI
+- F #6 ✅ production runbook
+- F #7 ✅ Edge Function Sentry alerting
+
+### All 4 audits — closure status
+
+- Money/inventory audit (`2026-04-30-money-inventory-audit-findings.md`) ✅
+- Security/permissions audit (`2026-04-30-security-permissions-audit-findings.md`) ✅
+- Data integrity / workflow locks audit (`2026-04-30-data-integrity-workflow-locks-audit-findings.md`) ✅
+- Production operations audit (`2026-04-30-production-operations-audit-findings.md`) ✅
+
+19 phases shipped, ~30 findings closed, 264 migrations applied, 7 Edge Functions hardened, all on main.
+
+---
+
 ## 2026-05-01 — Field App Phase 19: Sprint F #3 — pg_cron for Dashboard-triggered jobs
 
 Migration `20260501140000_field_app_workflow_phase19.sql`. Closes the audit's complaint that two batch jobs only ran when someone happened to open the Dashboard.

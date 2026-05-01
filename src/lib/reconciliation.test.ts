@@ -15,7 +15,7 @@ import {
   type InventoryRow,
   type InventoryTransactionRow,
   type InvoiceRow,
-  type PaymentAllocationRow,
+  type InvoiceLineAllocationRow,
   type CommissionRow,
   type QuoteHoldRow,
   type HoldRow,
@@ -295,16 +295,17 @@ describe('checkInventoryLedger', () => {
 // ── Check 3: Invoice Payments ───────────────────────────────────
 
 describe('checkInvoicePayments', () => {
-  // NOTE: payments table is order-level (no invoice_id).
-  // InvoiceRow now requires order_id; PaymentAllocationRow uses { order_id, amount } in dollars.
+  // Source of truth is invoice_line_allocations.amount_cents per invoice
+  // (written by allocate_payment in Phase 14). The check sums those per
+  // invoice_id and compares to invoice.paid_amount_cents.
 
   it('returns empty when paid amounts match allocations', () => {
     const invoices: InvoiceRow[] = [
       { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 5000, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 5000 },
     ];
-    const allocations: PaymentAllocationRow[] = [
-      { order_id: 'ord1', amount: 30 }, // $30 = 3000 cents
-      { order_id: 'ord1', amount: 20 }, // $20 = 2000 cents
+    const allocations: InvoiceLineAllocationRow[] = [
+      { invoice_id: 'i1', amount_cents: 3000 },
+      { invoice_id: 'i1', amount_cents: 2000 },
     ];
 
     expect(checkInvoicePayments(invoices, allocations)).toEqual([]);
@@ -314,13 +315,13 @@ describe('checkInvoicePayments', () => {
     const invoices: InvoiceRow[] = [
       { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 8000, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 2000 },
     ];
-    const allocations: PaymentAllocationRow[] = [
-      { order_id: 'ord1', amount: 50 }, // $50 = 5000 cents
+    const allocations: InvoiceLineAllocationRow[] = [
+      { invoice_id: 'i1', amount_cents: 5000 },
     ];
 
     const result = checkInvoicePayments(invoices, allocations);
     expect(result).toHaveLength(1);
-    expect(result[0].expected).toBe(5000); // payment total in cents
+    expect(result[0].expected).toBe(5000); // sum of allocations
     expect(result[0].actual).toBe(8000);   // invoice paid_amount_cents
   });
 
@@ -328,17 +329,16 @@ describe('checkInvoicePayments', () => {
     const invoices: InvoiceRow[] = [
       { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 0, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 10000 },
     ];
-    const allocations: PaymentAllocationRow[] = [];
+    const allocations: InvoiceLineAllocationRow[] = [];
 
-    // paid = 0, payments = 0 → match
     expect(checkInvoicePayments(invoices, allocations)).toEqual([]);
   });
 
-  it('handles invoice with paid amount but no payments on that order', () => {
+  it('handles invoice with paid amount but no allocations', () => {
     const invoices: InvoiceRow[] = [
       { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 3000, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 7000 },
     ];
-    const allocations: PaymentAllocationRow[] = [];
+    const allocations: InvoiceLineAllocationRow[] = [];
 
     const result = checkInvoicePayments(invoices, allocations);
     expect(result).toHaveLength(1);
@@ -349,11 +349,10 @@ describe('checkInvoicePayments', () => {
     const invoices: InvoiceRow[] = [
       { id: 'i1', invoice_number: 'INV-001', order_id: 'ord1', paid_amount_cents: 5001, prepay_applied_cents: 0, total_amount_cents: 10000, balance_cents: 4999 },
     ];
-    const allocations: PaymentAllocationRow[] = [
-      { order_id: 'ord1', amount: 50 }, // $50 = 5000 cents, delta = 1 cent → within tolerance
+    const allocations: InvoiceLineAllocationRow[] = [
+      { invoice_id: 'i1', amount_cents: 5000 },
     ];
 
-    // Delta = 1 cent → within tolerance
     expect(checkInvoicePayments(invoices, allocations)).toEqual([]);
   });
 });
