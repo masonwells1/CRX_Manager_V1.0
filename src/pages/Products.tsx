@@ -43,18 +43,27 @@ export default function Products() {
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
   const fetchProducts = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .order('product_name')
-      .limit(500);
-    if (error) {
-      Sentry.captureException(error);
-      toast('error', 'Failed to load products. Please try again.');
-      setLoading(false);
-      return;
+    // Paginate so the master catalog never silently truncates as the catalog grows.
+    // PostgREST caps a single response (default 1000), so we page through with .range().
+    const PAGE_SIZE = 1000;
+    const all: Product[] = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*')
+        .order('product_name')
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) {
+        Sentry.captureException(error);
+        toast('error', 'Failed to load products. Please try again.');
+        setLoading(false);
+        return;
+      }
+      const batch = (data || []) as Product[];
+      all.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
     }
-    const prods = (data || []) as Product[];
+    const prods = all;
     setProducts(prods);
 
     const cats = [...new Set(prods.map((p) => p.category).filter(Boolean))] as string[];
