@@ -757,6 +757,17 @@ export default function OrderDetail() {
   const totalPaid = totalPaidCents / 100;
   const balanceDue = balanceCents / 100;
 
+  // Bill split is locked once an invoice on this order is posted/paid/overdue —
+  // editing the order_shares row would drift from the invoice's historical
+  // invoice_shares snapshot. Enforced at DB level by the
+  // prevent_order_shares_edit_after_post() trigger; this is just the UI half.
+  const sharesLocked = invoices.some((inv) =>
+    ['posted', 'paid', 'overdue'].includes(inv.status)
+  );
+  const lockingInvoice = sharesLocked
+    ? invoices.find((inv) => ['posted', 'paid', 'overdue'].includes(inv.status))
+    : null;
+
   return (
     <div className="space-y-4">
       <Breadcrumbs items={[
@@ -1278,12 +1289,22 @@ export default function OrderDetail() {
                 <span className="text-xs text-secondary">({shares.length} customer{shares.length !== 1 ? 's' : ''})</span>
               )}
             </div>
-            {canEdit && !showShareEditor && (
+            {canEdit && !showShareEditor && !sharesLocked && (
               <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} showChevron={false} onClick={openShareEditor}>
                 Add Split
               </Button>
             )}
           </div>
+
+          {sharesLocked && (
+            <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <span>
+                Bill split is locked because invoice <strong>{lockingInvoice?.invoice_number}</strong> is already posted.
+                Void the invoice first to change the split.
+              </span>
+            </div>
+          )}
 
           {shares.length === 0 && !showShareEditor && (
             <p className="text-sm text-secondary text-center py-4">No bill splits — 100% billed to primary customer</p>
@@ -1304,7 +1325,7 @@ export default function OrderDetail() {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="text-sm font-semibold text-blue-600">{share.split_percentage}%</span>
-                    {canEdit && (
+                    {canEdit && !sharesLocked && (
                       <button onClick={() => handleRemoveShare(share.id)} className="text-red-400 hover:text-red-600 transition-colors">
                         <Trash2 className="w-4 h-4" />
                       </button>

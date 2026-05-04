@@ -216,6 +216,7 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 - `_guard_invoice_delete()` — prevents deletion of non-draft invoices
 - `_guard_order_delete()` — prevents deletion of non-draft orders
 - `_guard_po_delete()` — prevents deletion of non-draft POs
+- `prevent_order_shares_edit_after_post()` — blocks `order_shares` INSERT/UPDATE/DELETE when any invoice on the order is `posted`/`paid`/`overdue`. Wired by `trg_order_shares_lock_when_posted` (added 2026-05-04, OPEN_ITEMS #1)
 
 ### Auth & Security
 - `_is_admin_override()` — internal admin check for RLS policies

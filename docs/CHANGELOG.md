@@ -4,6 +4,36 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-04 — OPEN_ITEMS cleanup: lock order_shares after invoice post + a11y fix
+
+Closes both deferred items from `docs/OPEN_ITEMS.md`.
+
+### Item #1 — Order share edits no longer drift from posted invoices
+
+**Problem.** `order_shares` could be inserted/updated/deleted at any time, even after one of the order's invoices was already posted. Because the invoice carries its own denormalized `invoice_shares` snapshot (taken at post time), changing the parent split after-the-fact silently created drift between what the customer was billed on and what the order claims the split should be.
+
+**Fix.** Defense-in-depth: DB trigger + UI lock.
+
+- **DB layer** — migration `20260504100000_lock_order_shares_when_invoice_posted.sql` adds trigger function `prevent_order_shares_edit_after_post()` (SECURITY DEFINER, search_path = public, pg_temp). A `BEFORE INSERT OR UPDATE OR DELETE` trigger on `order_shares` raises `check_violation` with a user-friendly message naming the locking invoice number when any non-soft-deleted invoice on the order has status in (`posted`, `paid`, `overdue`). Drafts/unposted/voided/cancelled invoices stay editable — those are still in flight.
+- **UI layer** — `OrderDetail.tsx` derives `sharesLocked` from the loaded `invoices[]` and:
+  - Hides the "Add Split" button.
+  - Hides the per-row trash icons next to each existing share.
+  - Shows an amber notice naming the locking invoice number, pointing the user at "void the invoice first to change the split".
+
+The trigger is the hard guard (catches admin scripts and any direct PostgREST writes); the UI lock is the soft guard (better UX, no misleading buttons).
+
+### Item #2 — Accessibility warnings in FieldAppChemicalEntry
+
+`src/components/field-app/FieldAppChemicalEntry.tsx:204` and `:230` had clickable `<div>`/`<span>` elements that triggered the lint warning `jsx-a11y/click-events-have-key-events`. Both rewritten as `<button type="button">` with `w-full text-left` to preserve layout. Inner `<div>` children inside the search-result button became `<span className="block ...">` because `<button>` only accepts phrasing content. Behaviorally identical, now keyboard-accessible.
+
+### Result
+
+- `docs/OPEN_ITEMS.md` updated — both deferred items cleared.
+- `CLAUDE.md` Current State refreshed (267 migrations).
+- `docs/reference/migration-history.md` and `docs/reference/rpc-functions.md` updated with the new trigger and migration entry.
+
+---
+
 ## 2026-05-01 — Sprint F #4: reconciliation report wired to admin dashboard — **Sprint F COMPLETE**
 
 New page `src/pages/IntegrityReport.tsx` at `/integrity-report` (admin-only). Calls the existing `runReconciliationChecks()` and renders pass/fail per check with a discrepancies table when any check finds drift.

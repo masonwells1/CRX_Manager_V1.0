@@ -3,14 +3,12 @@
   "configurations": [
     {
       "name": "dev",
-      "cwd": "C:\\Users\\mason\\CRX_Manager_V1.0",
       "runtimeExecutable": "cmd",
       "runtimeArgs": ["/c", "npm", "run", "dev"],
       "port": 5173
     },
     {
       "name": "preview",
-      "cwd": "C:\\Users\\mason\\CRX_Manager_V1.0",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "preview"],
       "port": 4173

@@ -201,8 +201,9 @@ export default function FieldAppChemicalEntry({
                 <td className="px-3 py-2">
                   <div className="relative" ref={activeLineId === line.id ? searchRef : undefined}>
                     {line.product_name ? (
-                      <div
-                        className="font-medium cursor-pointer hover:text-crx-green"
+                      <button
+                        type="button"
+                        className="w-full text-left font-medium hover:text-crx-green"
                         onClick={() => {
                           setActiveLineId(line.id);
                           setShowSearch(true);
@@ -213,7 +214,7 @@ export default function FieldAppChemicalEntry({
                         {line.epa_registration && (
                           <span className="text-xs text-gray-400 ml-1">EPA: {line.epa_registration}</span>
                         )}
-                      </div>
+                      </button>
                     ) : (
                       <input
                         type="text"
@@ -227,14 +228,15 @@ export default function FieldAppChemicalEntry({
                     {showSearch && activeLineId === line.id && searchResults.length > 0 && (
                       <div className="absolute z-20 top-full left-0 w-80 mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-auto">
                         {searchResults.map((p) => (
-                          <div
+                          <button
+                            type="button"
                             key={p.id}
-                            className="px-3 py-2 hover:bg-gray-50 cursor-pointer text-sm"
+                            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm"
                             onClick={() => selectProduct(p, line.id)}
                           >
-                            <div className="font-medium">{p.product_name}</div>
-                            {p.epa_registration && <div className="text-xs text-gray-400">EPA: {p.epa_registration}</div>}
-                          </div>
+                            <span className="block font-medium">{p.product_name}</span>
+                            {p.epa_registration && <span className="block text-xs text-gray-400">EPA: {p.epa_registration}</span>}
+                          </button>
                         ))}
                       </div>
                     )}
