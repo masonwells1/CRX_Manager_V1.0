@@ -23,6 +23,7 @@ import { useFormDraft } from '../hooks/useFormDraft';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
 import { localToday, localDatePlusDays } from '../lib/dateUtils';
 import type { Product, Customer } from '../types';
@@ -368,6 +369,11 @@ export default function NewOrder() {
             // Non-blocking — credit limit check failure should not prevent navigation
           }
         }
+
+        // Wave A.2 / P1-7: send the customer "Order Confirmed" email at the
+        // creation site (orders are born at status='confirmed' — there is no
+        // transition to gate on). Fire-and-forget; helper swallows its own errors.
+        sendOrderConfirmedEmail(orderId);
 
         navigate(`/orders/${orderId}`);
       },

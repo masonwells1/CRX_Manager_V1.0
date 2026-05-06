@@ -36,6 +36,7 @@ import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
 import { localDatePlusDays } from '../lib/dateUtils';
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
@@ -1264,6 +1265,10 @@ export default function QuoteBuilder() {
         data: { orderId: result.order_id ?? '', orderNumber: result.order_number ?? '', quoteId: savedId },
       });
       notifyLargeOrder(result.order_id!, result.order_number || '', selectedCustomer?.farm_name || 'customer', totals.totalPrice);
+      // Wave A.2 / P1-7: send the customer "Order Confirmed" email at the
+      // creation site (orders are born at status='confirmed' — there is no
+      // transition to gate on). Fire-and-forget; helper swallows its own errors.
+      sendOrderConfirmedEmail(result.order_id!);
 
       // Phase 3.3: Credit limit check — warn (not block) if exceeded
       if (customerId) {
