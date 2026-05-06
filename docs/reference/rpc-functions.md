@@ -124,6 +124,7 @@
 - `close_accounting_period()`, `check_period_open()`, `get_monthly_summary()`
 - `create_commission_payment()`, `post_commission_payment()`
 - `apply_write_off(invoice_id, amount_cents, reason, performed_by, idempotency_key?)` — writes off balance with idempotency guard, creates write-off record and audit log entry. Auto-sets status='paid' when write-off brings balance to 0. Accepts 'posted' or 'overdue' invoices.
+- `reverse_write_off(write_off_id, reason, performed_by?, idempotency_key?)` — admin-only. Marks write-off `reversed_at`/`reversed_by`/`reversed_reason`, decrements `invoices.write_off_cents` (balance_cents is GENERATED — never written directly), and re-derives status from 'paid' to 'posted' when reversal lifts balance > 0. Returns `{ success, write_off_id, amount_cents, invoice_id, new_balance_cents, status_changed }`. Idempotent: replays return the previously stored result. Wave A.1 / migration 20260506170000.
 - `generate_finance_charges(performed_by, ...)` — admin-only (role check enforced in RPC body), generates finance charge invoices excluding prior charges
 - `get_customer_transaction_review()`, `apply_remaining_prepayments()`
 - `apply_prepay_to_invoice(credit_id, invoice_id, amount_cents, performed_by)` — atomic single allocation with `FOR UPDATE` locks, creates `prepay_applications` record, deducts from both balances, writes `financial_audit_log` entry

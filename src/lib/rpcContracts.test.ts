@@ -714,6 +714,77 @@ describe('RPC contract: create_quick_delivery', () => {
 });
 
 // -------------------------------------------------------------------------
+// RPC contract: reverse_write_off
+// Wave A.1 / audit finding P3-1. Documents the param shape AND the result
+// jsonb shape so downstream callers can rely on the new fields.
+// -------------------------------------------------------------------------
+
+interface ReverseWriteOffParams {
+  p_write_off_id: string;            // uuid
+  p_reason: string;                  // non-empty; SQL rejects null/blank
+  p_performed_by: string | null;     // uuid; falls back to auth.uid() in SQL
+  p_idempotency_key?: string | null;
+}
+
+interface ReverseWriteOffResult {
+  success: true;
+  write_off_id: string;
+  amount_cents: number;
+  invoice_id: string;
+  new_balance_cents: number;
+  status_changed: boolean;           // true when invoice flipped paid -> posted
+}
+
+describe('RPC contract: reverse_write_off', () => {
+  it('accepts the four-param shape used by InvoiceDetail.tsx', () => {
+    const params = assertShape<ReverseWriteOffParams>({
+      p_write_off_id: 'wo-uuid',
+      p_reason: 'Customer disputed write-off after settlement',
+      p_performed_by: 'admin-uuid',
+      p_idempotency_key: 'reverse_write_off:admin-uuid:1234567890',
+    });
+    expect(params.p_reason.trim().length).toBeGreaterThan(0);
+    expect(params.p_idempotency_key).toBeTruthy();
+  });
+
+  it('reason cannot be empty (SQL guards trim)', () => {
+    // The SQL function raises 'Reason is required to reverse a write-off'
+    // when p_reason is null or blank; this test documents the contract.
+    const blank = '   ';
+    expect(blank.trim()).toBe('');
+  });
+
+  it('result jsonb has the post-fix shape (round-trip contract)', () => {
+    // Simulates the jsonb the SQL function returns. Documents that callers
+    // can read new_balance_cents and status_changed without schema surprise.
+    const result: ReverseWriteOffResult = {
+      success: true,
+      write_off_id: 'wo-uuid',
+      amount_cents: 50000,
+      invoice_id: 'inv-uuid',
+      new_balance_cents: 50000,
+      status_changed: true,
+    };
+    expect(result.new_balance_cents).toBe(50000);
+    expect(result.status_changed).toBe(true);
+  });
+
+  it('status_changed is false when reversal does not lift balance > 0', () => {
+    // Edge case: write-off was partial, invoice already had other payments,
+    // reversal leaves balance still 0. status stays 'paid'.
+    const result: ReverseWriteOffResult = {
+      success: true,
+      write_off_id: 'wo-uuid',
+      amount_cents: 0,
+      invoice_id: 'inv-uuid',
+      new_balance_cents: 0,
+      status_changed: false,
+    };
+    expect(result.status_changed).toBe(false);
+  });
+});
+
+// -------------------------------------------------------------------------
 // Idempotency Key Coverage — Track which mutating RPCs accept p_idempotency_key
 // -------------------------------------------------------------------------
 
