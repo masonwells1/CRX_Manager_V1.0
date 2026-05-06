@@ -92,6 +92,7 @@ export default function OrderDetail() {
 
   // Create invoice
   const [creatingInvoice, setCreatingInvoice] = useState(false);
+  const [invoiceWarnOpen, setInvoiceWarnOpen] = useState(false);
 
   // Status change
   const [statusModalOpen, setStatusModalOpen] = useState(false);
@@ -639,6 +640,7 @@ export default function OrderDetail() {
 
   const handleCreateInvoice = async () => {
     if (!profile || !id) return;
+    setInvoiceWarnOpen(false);
     await runCriticalAction({
       action: async () => {
         const invoiceKey = createInvoiceIdem.getKey();
@@ -657,6 +659,27 @@ export default function OrderDetail() {
       setLoading: setCreatingInvoice,
       sentryTag: 'create_invoice_from_order',
     });
+  };
+
+  // Wave A.3 / audit finding P1-1: gate Create Invoice when a delivery is
+  // already scheduled or in flight. Creating an invoice from the order at
+  // that point uses the originally-ordered quantities, but a partial delivery
+  // would only patch an invoice it created itself (auto-invoice path matches
+  // on invoices.delivery_id). The result is a manual draft frozen at the
+  // ordered quantities while the customer was billed for less.
+  const hasActiveInvoice = invoices.some(
+    (inv) => !['voided', 'cancelled'].includes(inv.status)
+  );
+  const hasPendingDelivery = deliveries.some(
+    (d) => d.status === 'scheduled' || d.status === 'in_progress'
+  );
+
+  const onCreateInvoiceClick = () => {
+    if (hasPendingDelivery) {
+      setInvoiceWarnOpen(true);
+      return;
+    }
+    handleCreateInvoice();
   };
 
   const fmt = (n: number) =>
@@ -744,17 +767,22 @@ export default function OrderDetail() {
                   Edit Order
                 </Button>
               )}
-              {order.status !== 'cancelled' && order.status !== 'fulfilled' && (<>
+              {order.status !== 'cancelled' && order.status !== 'fulfilled' && !hasActiveInvoice && (<>
                 <Button
                   variant="secondary"
                   icon={<FileText className="w-4 h-4" />}
                   showChevron={false}
-                  onClick={handleCreateInvoice}
+                  onClick={onCreateInvoiceClick}
                   loading={creatingInvoice}
                 >
                   Create Invoice
                 </Button>
-                <HelpTip text="Generates a draft invoice from the order. It stays in draft until you review and post it — nothing is sent to the customer yet." className="ml-1" />
+                <HelpTip
+                  text={hasPendingDelivery
+                    ? "A delivery is already scheduled. The recommended path is to wait for the driver to complete the delivery — an invoice will be created automatically with the actual delivered quantities. Clicking this opens a warning."
+                    : "Generates a draft invoice from the order. It stays in draft until you review and post it — nothing is sent to the customer yet."}
+                  className="ml-1"
+                />
               </>)}
               {order.status !== 'cancelled' && order.status !== 'fulfilled' && (<>
                 <Button
@@ -1510,6 +1538,23 @@ export default function OrderDetail() {
         variant="warning"
         confirmLabel="Change Status"
         loading={changingStatus}
+      />
+
+      <ConfirmModal
+        open={invoiceWarnOpen}
+        onClose={() => setInvoiceWarnOpen(false)}
+        onConfirm={handleCreateInvoice}
+        title="Create invoice before delivery completes?"
+        message={
+          'A delivery is already scheduled or in progress for this order. ' +
+          'Creating an invoice now will lock in the originally-ordered quantities. ' +
+          'If the driver delivers a partial load, this manual invoice will NOT auto-update — ' +
+          'the customer would be over-billed for the difference. ' +
+          'Recommended: wait for the delivery to complete and the invoice will be created automatically with the actual delivered quantities.'
+        }
+        variant="warning"
+        confirmLabel="Create Anyway"
+        loading={creatingInvoice}
       />
 
       <QuickTaskModal
