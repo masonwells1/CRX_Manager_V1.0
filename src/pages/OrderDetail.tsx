@@ -204,7 +204,7 @@ export default function OrderDetail() {
   // Fetch products + inventory when entering edit mode (lazy load — only when needed)
   const fetchProducts = useCallback(async () => {
     const [productsRes, inventoryRes, poRes] = await Promise.all([
-      supabase.from('products').select('*').order('product_name'),
+      supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked'),
       supabase
         .from('purchase_order_items')

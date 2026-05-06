@@ -116,7 +116,7 @@ export default function NewOrder() {
   const fetchData = useCallback(async () => {
     const [customersRes, productsRes, inventoryRes, poRes] = await Promise.all([
       supabase.from('customers').select('*').order('farm_name'),
-      supabase.from('products').select('*').order('product_name'),
+      supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('inventory').select('product_id, quantity_available, quantity_prebooked'),
       supabase
         .from('purchase_order_items')
