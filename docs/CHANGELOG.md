@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-06 — Hotfix: complete_delivery production failure (missing invoices.delivery_id column)
+
+**Problem.** Mason hit "An internal error occurred. Please try again." trying to complete delivery DEL-00074 (ORD-2026-0186, Capreno - 1 Gal × 6). After receiving inventory and retrying, the same generic error reappeared.
+
+**Diagnosis path.**
+
+1. Sentry event `93cb924e…` revealed the masked Postgres error: `P0001: Insufficient inventory for Capreno - 1 Gal: need 6 units, only 0 on-hand` — the first attempt fired before the receiving step had been recorded (16:05:23 attempt vs 16:06:46 PO receive). After receiving, inventory showed 27 available.
+2. The retry failed identically. Sentry deduped the second event (same fingerprint), but `inventory.quantity_available = 27` made the inventory pre-check impossible. Suspected a different RPC failure path being sanitized by [src/lib/errorSanitizer.ts](src/lib/errorSanitizer.ts) catch-all (the regex `/relation "|column "|constraint "|table "/i` masks any error mentioning schema identifiers).
+3. Schema query revealed: `invoices.delivery_id` does **not exist** on the table. But the deployed Phase 15 `complete_delivery` (migration `20260501100000`) references it twice — once in the partial-delivery linked-invoice loop, once in the auto-invoice INSERT. PL/pgSQL only resolves column names at execution time, so the broken function lived in `pg_proc` until the auto-invoice block fired (first delivery completion for an order with no existing invoice).
+
+**Fix.** Migration `20260506160000_add_delivery_id_to_invoices.sql` — adds nullable `delivery_id uuid REFERENCES deliveries(id)` to `invoices`, plus partial index `idx_invoices_delivery_id` (only indexed where NOT NULL — most invoices come from orders/blend tickets, not deliveries). `Invoice` interface in `src/types/index.ts` updated. Existing invoices keep `delivery_id = NULL` (correct).
+
+**Lesson.** The Phase 15 verification block at the end of the migration (`SELECT count(*) ... HAVING count(*) > 1`) only checked overload count, not whether the function body would actually execute. CLAUDE.md's "Migration Safety Rules" already says to "read existing values BEFORE rewriting" — but a function body that references a non-existent column passes `CREATE OR REPLACE FUNCTION` validation in Postgres. Future RPCs that touch new columns should either be paired with the column-add in the same migration, or include a runtime smoke-call (e.g., `SELECT complete_delivery(non_existent_uuid)` in a `BEGIN/EXCEPTION` block) to force column resolution before commit.
+
+---
+
 ## 2026-05-04 — OPEN_ITEMS cleanup: lock order_shares after invoice post + a11y fix
 
 Closes both deferred items from `docs/OPEN_ITEMS.md`.

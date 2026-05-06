@@ -968,6 +968,7 @@ export interface Invoice {
   write_off_cents: number;
   invoice_group_id: string | null;
   application_service_id: string | null;
+  delivery_id: string | null;
 
   deleted_at: string | null;
   created_at: string;

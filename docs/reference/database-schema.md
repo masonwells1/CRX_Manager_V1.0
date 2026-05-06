@@ -70,7 +70,7 @@
 - `notifications` - Per-user notifications (user_id, title, message, notification_type, is_read)
 
 ## Billing / Invoices
-- `invoices` - Invoice headers (invoice_number, order_id, customer_id, status: draft/posted/void, balance_cents bigint, due_date, invoice_group_id, application_service_id [Phase 1: persists service for fee calculation])
+- `invoices` - Invoice headers (invoice_number, order_id, customer_id, delivery_id [auto-set by complete_delivery, NULL for non-delivery invoices], status: draft/posted/void, balance_cents bigint, due_date, invoice_group_id, application_service_id [Phase 1: persists service for fee calculation])
 - `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, line_total_cents, quoted_price_cents, price_source)
 - `allocation_sets` - Payment-to-invoice allocation groups (payment_id, allocated_at, customer_id, total_payment_cents, total_allocated_cents, payment_method, reference_number, check_number, payment_date, season)
 - `order_line_allocations` - Payment portions applied to order items
