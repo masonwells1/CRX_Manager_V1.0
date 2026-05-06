@@ -581,7 +581,7 @@ export function checkCustomerARConsistency(
 
   for (const inv of invoices) {
     // Skip voided invoices
-    if (inv.status === 'void') continue;
+    if (inv.status === 'voided') continue;
 
     if (inv.balance_cents === null || inv.balance_cents === undefined) {
       issues.push({
@@ -923,7 +923,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
       description: 'Non-voided invoices have non-null balance_cents',
       passed: disc.length === 0,
       discrepancies: disc,
-      entitiesChecked: arInvoices.filter((i) => i.status !== 'void').length,
+      entitiesChecked: arInvoices.filter((i) => i.status !== 'voided').length,
     });
   } catch (err) {
     checks.push({

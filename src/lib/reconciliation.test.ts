@@ -778,9 +778,21 @@ describe('checkCustomerARConsistency', () => {
 
   it('ignores voided invoices with null balance', () => {
     const invoices: CustomerARInvoiceRow[] = [
-      { id: 'i1', invoice_number: 'INV-001', customer_id: 'c1', balance_cents: null, status: 'void' },
+      { id: 'i1', invoice_number: 'INV-001', customer_id: 'c1', balance_cents: null, status: 'voided' },
     ];
     expect(checkCustomerARConsistency(invoices)).toEqual([]);
+  });
+
+  it('does NOT skip rows with the legacy "void" string (status enum is "voided")', () => {
+    // Regression for audit P3-5 / Wave A.5: previously both impl and test
+    // used 'void', which masked the bug. After fixing impl to 'voided',
+    // a row with the wrong literal should NOT be skipped — it should be
+    // checked like any other non-voided row.
+    const invoices: CustomerARInvoiceRow[] = [
+      { id: 'i1', invoice_number: 'INV-001', customer_id: 'c1', balance_cents: null, status: 'void' as unknown as CustomerARInvoiceRow['status'] },
+    ];
+    const result = checkCustomerARConsistency(invoices);
+    expect(result).toHaveLength(1);
   });
 
   it('handles draft invoices with null balance', () => {
