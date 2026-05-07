@@ -74,6 +74,7 @@ Claude MUST automatically invoke the matching skill/command when the task matche
 - NEVER create invoices without an order OR blend ticket — must have order_id or blend_ticket_id
 - NEVER bypass `check_period_open()` — closed periods block backdated transactions
 - NEVER allow non-admin access to month-end, commissions, or settings
+- `/payments` (PaymentAllocation) is **sales+admin** — both roles can record check entries and allocate to invoices. Confirmed at `App.tsx:198`: `allowedRoles={['admin', 'sales_rep']}`. Do NOT lock this page to admin-only without a deliberate policy change. (Audit Q6, 2026-05-06.)
 - Season = October 1 to September 30
 
 ### Code Quality
