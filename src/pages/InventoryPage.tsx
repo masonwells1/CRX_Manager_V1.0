@@ -9,6 +9,7 @@ import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
+import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
@@ -32,7 +33,10 @@ interface InventoryRow extends Inventory {
   current_cost: number | null;
   total_on_floor: number;
   holds_qty: number;
-  planned_qty: number;
+  // total_planned_qty = holds_qty + RPC planned_qty (planned-quote demand).
+  // Renamed away from `planned_qty` to avoid confusion with the RPC field of
+  // the same name, which represents only the planned-quote-demand subset.
+  total_planned_qty: number;
   net_position: number;
   delivered_ytd: number;
   reorder_point: number;
@@ -121,7 +125,7 @@ export default function InventoryPage() {
       { key: 'quantity_on_order', header: 'On Order' },
       { key: 'total_on_floor', header: 'Total on Floor' },
       { key: 'net_position', header: 'Net Position' },
-      { key: 'planned_qty', header: 'Planned' },
+      { key: 'total_planned_qty', header: 'Planned' },
       { key: 'quantity_prebooked', header: 'Committed' },
       { key: 'delivered_ytd', header: 'Delivered YTD' },
       { key: 'location', header: 'Location' },
@@ -167,13 +171,14 @@ export default function InventoryPage() {
     }
 
     const positions = assertRpcResult<InventoryPositionRow[]>(data, 'get_inventory_position');
+    validateInventoryPositionShape(positions);
 
     const rows: InventoryRow[] = positions.map((p) => ({
       id: p.inventory_id ?? `virtual-${p.product_id}`,
       product_id: p.product_id,
-      quantity_available: Number(p.quantity_available),
-      quantity_prebooked: Number(p.quantity_prebooked),
-      quantity_on_order: Number(p.quantity_on_order),
+      quantity_available: p.quantity_available,
+      quantity_prebooked: p.quantity_prebooked,
+      quantity_on_order: p.quantity_on_order,
       location: p.location ?? '',
       unit_size: p.unit_size,
       last_counted_at: null,
@@ -184,11 +189,11 @@ export default function InventoryPage() {
       container_type: p.container_type,
       vendor: p.vendor,
       current_cost: p.current_cost,
-      total_on_floor: Number(p.quantity_available),
-      holds_qty: Number(p.holds_qty),
-      planned_qty: Number(p.holds_qty) + Number(p.planned_qty),
-      net_position: Number(p.net_position),
-      delivered_ytd: Number(p.delivered_ytd),
+      total_on_floor: p.quantity_available,
+      holds_qty: p.holds_qty,
+      total_planned_qty: p.holds_qty + p.planned_qty,
+      net_position: p.net_position,
+      delivered_ytd: p.delivered_ytd,
       reorder_point: p.reorder_point,
       min_stock_level: p.min_stock_level,
       is_low_stock: p.is_low_stock,
@@ -574,7 +579,7 @@ export default function InventoryPage() {
   const totalOnOrder = inventory.reduce((s, i) => s + i.quantity_on_order, 0);
   const totalOnFloor = inventory.reduce((s, i) => s + i.total_on_floor, 0);
   const totalNetPosition = inventory.reduce((s, i) => s + i.net_position, 0);
-  const totalPlanned = inventory.reduce((s, i) => s + i.planned_qty, 0);
+  const totalPlanned = inventory.reduce((s, i) => s + i.total_planned_qty, 0);
   const totalCommitted = inventory.reduce((s, i) => s + i.quantity_prebooked, 0);
   const totalDeliveredYTD = inventory.reduce((s, i) => s + i.delivered_ytd, 0);
   const totalValuation = inventory.reduce((sum, r) => sum + (r.quantity_available * (r.current_cost || 0)), 0);
@@ -681,11 +686,11 @@ export default function InventoryPage() {
       ),
     },
     {
-      key: 'planned_qty',
+      key: 'total_planned_qty',
       header: 'Planned',
       sortable: true,
       render: (row) => (
-        <span className="text-amber-600 font-medium">{row.planned_qty.toFixed(1)}</span>
+        <span className="text-amber-600 font-medium">{row.total_planned_qty.toFixed(1)}</span>
       ),
     },
     {
@@ -1121,9 +1126,15 @@ export default function InventoryPage() {
                         <th className="px-4 py-3 text-left font-medium text-secondary">Product</th>
                         <th className="px-4 py-3 text-left font-medium text-secondary">Needed</th>
                         <th className="px-4 py-3 text-right font-medium text-secondary">Planned Demand</th>
-                        <th className="px-4 py-3 text-right font-medium text-secondary">Available</th>
+                        <th className="px-4 py-3 text-right font-medium text-secondary">
+                          Available
+                          <HelpTip text="Physical stock right now (raw quantity_available). The Inventory tab shows 'Net Position' = Available − Prebooked + On Order; this column shows just the Available component so you can see all three numbers (Available, On Order, Gap) separately." className="ml-1" />
+                        </th>
                         <th className="px-4 py-3 text-right font-medium text-secondary">On Order</th>
-                        <th className="px-4 py-3 text-right font-medium text-secondary">Gap</th>
+                        <th className="px-4 py-3 text-right font-medium text-secondary">
+                          Gap
+                          <HelpTip text="Planned Demand − (Available + On Order − Prebooked). Negative or zero = supply meets demand. Positive (shown in red) = shortfall to plan around." className="ml-1" />
+                        </th>
                         <th className="px-4 py-3 text-right font-medium text-secondary">Quotes</th>
                         <th className="px-4 py-3 text-right font-medium text-secondary">Customers</th>
                       </tr>
