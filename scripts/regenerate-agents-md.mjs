@@ -1,0 +1,130 @@
+#!/usr/bin/env node
+// Regenerate AGENTS.md from CLAUDE.md + live counts.
+// Source of truth: CLAUDE.md. AGENTS.md is a derived, codex-friendly summary.
+
+import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, "..");
+
+function countMigrations() {
+  try {
+    return readdirSync(path.join(repoRoot, "supabase", "migrations"))
+      .filter(f => f.endsWith(".sql")).length;
+  } catch { return null; }
+}
+
+function countLazyPages() {
+  try {
+    const app = readFileSync(path.join(repoRoot, "src", "App.tsx"), "utf8");
+    return (app.match(/\blazy\s*\(/g) || []).length;
+  } catch { return null; }
+}
+
+function countEdgeFns() {
+  try {
+    return readdirSync(path.join(repoRoot, "supabase", "functions"), { withFileTypes: true })
+      .filter(d => d.isDirectory()).length;
+  } catch { return null; }
+}
+
+const today = new Date().toISOString().slice(0, 10);
+const migrations = countMigrations();
+const pages = countLazyPages();
+const edgeFns = countEdgeFns();
+
+const out = `# CRX Manager Codex Guide
+
+> **Auto-generated from CLAUDE.md by \`scripts/regenerate-agents-md.mjs\`. Do not edit by hand.**
+> Source of truth: \`CLAUDE.md\`. To update this file, edit CLAUDE.md and re-run the script.
+
+This file is for Codex and other coding agents working in this repo. \`CLAUDE.md\` is the primary source of truth; this is a condensed pointer.
+
+## Project Snapshot
+
+- App: CRX Manager V1.0 for Crop RX Solutions, an agricultural chemical distributor.
+- Stack: React 18, TypeScript, Vite, Tailwind CSS, Supabase, Vercel.
+- Production: https://croprxsolutions.app
+- Supabase project: \`rhyzpcqhnizqbxphqdkr\`
+- Owner: Mason Wells. Mason has 0 coding experience. Lead the process, explain in plain English, define jargon, give clear next steps.
+- Live counts (regenerated ${today}): ${pages ?? "?"} lazy-loaded pages, ${migrations ?? "?"} migrations, ${edgeFns ?? "?"} Edge Functions.
+
+## Read First
+
+At the start of a work session, read:
+
+1. \`CLAUDE.md\` (source of truth)
+2. \`docs/workflows/SAFE_DEVELOPMENT_RULES.md\`
+3. \`docs/reference/gotchas.md\` (project-specific quirks)
+4. The relevant workflow doc for the area being changed (\`docs/workflows/\`).
+
+Reference docs in \`docs/reference/\`:
+- \`database-schema.md\`, \`rpc-functions.md\`, \`migration-history.md\`, \`pages-routes.md\`, \`code-patterns.md\`, \`qa-testing.md\`, \`gotchas.md\`.
+
+## Hard Rules (mirror of CLAUDE.md)
+
+- Database changes only through new files in \`supabase/migrations/\`. Never edit old migrations.
+- Every new table must \`ENABLE ROW LEVEL SECURITY\` and have at least one \`CREATE POLICY\` in the same migration (enforced by \`.claude/hooks/rls-on-new-tables.mjs\`).
+- Every mutating RPC accepts \`p_idempotency_key text DEFAULT NULL\` AND uses it in the body (enforced by \`.claude/hooks/idempotency-body-check.mjs\`).
+- Every \`SECURITY DEFINER\` function includes \`SET search_path = public, pg_temp\`.
+- Status string values must match the DB CHECK constraints in \`.claude/schema-registry.json\` (enforced by \`.claude/hooks/status-enum-check.mjs\`).
+- Never UPDATE GENERATED columns (e.g. \`invoices.balance_cents\`) — enforced by \`.claude/hooks/generated-column-check.mjs\`.
+- Use \`src/lib/db.ts\` as the only Supabase client.
+- Use \`assertRpcResult()\` after RPC calls and \`checkMutationResult()\` after \`.update()\`/\`.delete()\`.
+- Use \`ConfirmModal\`, not \`confirm()\`/\`window.confirm()\`. Use toasts, not \`alert()\`.
+- Import Sentry only through \`src/lib/sentry\`.
+- Money is bigint cents — never floating point.
+- Lucide React icons + Tailwind CSS only.
+- Shared types in \`src/types/index.ts\`.
+- Never commit \`.env\` or expose service-role keys.
+
+## Business Rules (mirror of CLAUDE.md)
+
+- Season: October 1 through September 30.
+- Delivery: \`scheduled -> in_progress -> completed\` (with cancel/void).
+- Delivery items editable only while status = \`scheduled\`.
+- Invoices link to an order or blend ticket.
+- \`post_invoice()\` respects \`check_period_open()\`.
+- Inventory math runs in PostgreSQL (RPCs/triggers), not React.
+- AR source of truth: \`invoices.balance_cents\`.
+
+## Common Entry Points
+
+- App routes: \`src/App.tsx\`
+- Auth: \`src/contexts/AuthContext.tsx\`
+- Supabase client: \`src/lib/db.ts\`
+- Activity logging: \`src/lib/activityLogger.ts\`
+- Idempotency: \`src/lib/idempotency.ts\`, \`src/hooks/useIdempotencyKey.ts\`
+- Shared types: \`src/types/index.ts\`
+- Pages: \`src/pages/\`, Domain components: \`src/components/{domain}/\`
+- Migrations: \`supabase/migrations/\`, Edge Functions: \`supabase/functions/\`
+- E2E fixtures: \`tests/e2e/fixtures/e2e-constants.ts\`
+
+## Useful Commands
+
+\`\`\`bash
+npm run dev            # local dev server
+npm run typecheck      # TS strict check
+npm run lint           # ESLint (with local rules)
+npm run build          # production build
+npm run test           # vitest unit tests
+npm run test:e2e       # playwright E2E
+\`\`\`
+
+## After Making Changes
+
+1. Run the narrowest useful checks first.
+2. For frontend changes: \`npm run typecheck\` and usually \`npm run build\`.
+3. For DB or business logic changes: also run relevant tests.
+4. Update docs when behavior, schema, routes, RPCs, or migration counts change.
+5. If the schema changed, regenerate the schema registry (ask Claude or run \`node scripts/regenerate-schema-registry.mjs\`).
+
+---
+
+*Regenerated by \`scripts/regenerate-agents-md.mjs\` on ${today}. To rebuild: \`node scripts/regenerate-agents-md.mjs\`.*
+`;
+
+writeFileSync(path.join(repoRoot, "AGENTS.md"), out);
+console.log(`Wrote AGENTS.md (pages=${pages}, migrations=${migrations}, edgeFns=${edgeFns}).`);

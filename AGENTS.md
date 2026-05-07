@@ -1,6 +1,9 @@
 # CRX Manager Codex Guide
 
-This file is for Codex and other coding agents working in this repo. It condenses the project rules from `CLAUDE.md` and the Markdown docs, but `CLAUDE.md` remains the main source of truth.
+> **Auto-generated from CLAUDE.md by `scripts/regenerate-agents-md.mjs`. Do not edit by hand.**
+> Source of truth: `CLAUDE.md`. To update this file, edit CLAUDE.md and re-run the script.
+
+This file is for Codex and other coding agents working in this repo. `CLAUDE.md` is the primary source of truth; this is a condensed pointer.
 
 ## Project Snapshot
 
@@ -8,122 +11,79 @@ This file is for Codex and other coding agents working in this repo. It condense
 - Stack: React 18, TypeScript, Vite, Tailwind CSS, Supabase, Vercel.
 - Production: https://croprxsolutions.app
 - Supabase project: `rhyzpcqhnizqbxphqdkr`
-- Owner: Mason Wells. Mason has 0 coding experience and may not know technical terms. Lead the process, explain in plain language, define any necessary jargon, and give clear next steps instead of assuming he knows what to do.
-- Verified locally on 2026-05-01: 65 lazy-loaded pages, 266 migrations, 7 Edge Functions, 128 unit test files, 93 E2E spec files. (Counts can drift — recompute from the repo before citing.)
-
-Some older docs contain stale counts. When counts matter, recompute from the repo instead of trusting old README-style numbers.
+- Owner: Mason Wells. Mason has 0 coding experience. Lead the process, explain in plain English, define jargon, give clear next steps.
+- Live counts (regenerated 2026-05-07): 65 lazy-loaded pages, 278 migrations, 8 Edge Functions.
 
 ## Read First
 
 At the start of a work session, read:
 
-1. `CLAUDE.md`
+1. `CLAUDE.md` (source of truth)
 2. `docs/workflows/SAFE_DEVELOPMENT_RULES.md`
-3. The relevant workflow doc for the area being changed:
-   - Database: `docs/workflows/DATABASE_CHANGE_CHECKLIST.md`
-   - Quote/order/delivery/invoice pipeline: `docs/workflows/QUOTE_TO_DELIVERY.md`
-   - Inventory: `docs/workflows/INVENTORY_RULES.md`
-   - RLS/security: `docs/workflows/RLS_SECURITY_GUIDE.md`
-   - UI: `docs/workflows/UI_PATTERNS.md`
+3. `docs/reference/gotchas.md` (project-specific quirks)
+4. The relevant workflow doc for the area being changed (`docs/workflows/`).
 
-Reference docs:
+Reference docs in `docs/reference/`:
+- `database-schema.md`, `rpc-functions.md`, `migration-history.md`, `pages-routes.md`, `code-patterns.md`, `qa-testing.md`, `gotchas.md`.
 
-- Tables and RLS: `docs/reference/database-schema.md`
-- RPCs: `docs/reference/rpc-functions.md`
-- Migrations: `docs/reference/migration-history.md`
-- Routes: `docs/reference/pages-routes.md`
-- Code patterns: `docs/reference/code-patterns.md`
-- QA/testing: `docs/reference/qa-testing.md`
-- History: `docs/CHANGELOG.md`
-- Agent memory: `docs/claude-memory/`
-
-The `.claude/skills/` files are useful workflow checklists. Follow the matching skill when adding pages, migrations, RPCs, audits, deployment checks, or doc updates.
-
-## Hard Rules
+## Hard Rules (mirror of CLAUDE.md)
 
 - Database changes only through new files in `supabase/migrations/`. Never edit old migrations.
-- New tables must have RLS policies.
-- Every mutating RPC should accept `p_idempotency_key text DEFAULT NULL`.
-- Every `SECURITY DEFINER` function must include `SET search_path = public, pg_temp`.
-- Check function overloads and existing CHECK constraints before writing SQL migrations.
+- Every new table must `ENABLE ROW LEVEL SECURITY` and have at least one `CREATE POLICY` in the same migration (enforced by `.claude/hooks/rls-on-new-tables.mjs`).
+- Every mutating RPC accepts `p_idempotency_key text DEFAULT NULL` AND uses it in the body (enforced by `.claude/hooks/idempotency-body-check.mjs`).
+- Every `SECURITY DEFINER` function includes `SET search_path = public, pg_temp`.
+- Status string values must match the DB CHECK constraints in `.claude/schema-registry.json` (enforced by `.claude/hooks/status-enum-check.mjs`).
+- Never UPDATE GENERATED columns (e.g. `invoices.balance_cents`) — enforced by `.claude/hooks/generated-column-check.mjs`.
 - Use `src/lib/db.ts` as the only Supabase client.
-- Use `assertRpcResult()` after RPC calls.
-- Use `checkMutationResult()` after every Supabase `.update()` or `.delete()`.
-- Use `ConfirmModal`, not `confirm()` or `window.confirm()`.
-- Use toast UI, not `alert()` or `window.alert()`.
+- Use `assertRpcResult()` after RPC calls and `checkMutationResult()` after `.update()`/`.delete()`.
+- Use `ConfirmModal`, not `confirm()`/`window.confirm()`. Use toasts, not `alert()`.
 - Import Sentry only through `src/lib/sentry`.
-- Store money as bigint cents. Do not use floating point for persisted money.
-- Use Lucide React icons and Tailwind CSS only.
-- Shared types belong in `src/types/index.ts`.
-- Never commit `.env` files or expose service-role keys in frontend code.
+- Money is bigint cents — never floating point.
+- Lucide React icons + Tailwind CSS only.
+- Shared types in `src/types/index.ts`.
+- Never commit `.env` or expose service-role keys.
 
-## Business Rules To Preserve
+## Business Rules (mirror of CLAUDE.md)
 
-- Season is October 1 through September 30.
-- Delivery lifecycle is `scheduled -> in_progress -> completed`, with cancel/void paths.
-- Delivery items are editable only while delivery status is `scheduled`.
-- Invoices must link to an order or blend ticket.
-- `post_invoice()` must respect `check_period_open()`.
-- Admin-only areas include month-end, commissions, settings, and most financial controls.
-- Inventory math belongs in PostgreSQL RPCs/triggers, not React.
-- Net Free inventory is `quantity_available - planned holds - quantity_prebooked`.
-- AR source of truth is invoice balances, especially `invoices.balance_cents`.
+- Season: October 1 through September 30.
+- Delivery: `scheduled -> in_progress -> completed` (with cancel/void).
+- Delivery items editable only while status = `scheduled`.
+- Invoices link to an order or blend ticket.
+- `post_invoice()` respects `check_period_open()`.
+- Inventory math runs in PostgreSQL (RPCs/triggers), not React.
+- AR source of truth: `invoices.balance_cents`.
 
 ## Common Entry Points
 
-- App routes/providers: `src/App.tsx`
+- App routes: `src/App.tsx`
 - Auth: `src/contexts/AuthContext.tsx`
-- Supabase helpers: `src/lib/db.ts`
+- Supabase client: `src/lib/db.ts`
 - Activity logging: `src/lib/activityLogger.ts`
-- Idempotency: `src/lib/idempotency.ts` and `src/hooks/useIdempotencyKey.ts`
+- Idempotency: `src/lib/idempotency.ts`, `src/hooks/useIdempotencyKey.ts`
 - Shared types: `src/types/index.ts`
-- Layout/sidebar: `src/components/layout/`
-- Pages: `src/pages/`
-- Domain components: `src/components/{domain}/`
-- Edge Functions: `supabase/functions/`
-- Migrations: `supabase/migrations/`
+- Pages: `src/pages/`, Domain components: `src/components/{domain}/`
+- Migrations: `supabase/migrations/`, Edge Functions: `supabase/functions/`
 - E2E fixtures: `tests/e2e/fixtures/e2e-constants.ts`
 
-## Change Workflow
-
-Before editing:
-
-1. Check `git status` and preserve unrelated user changes.
-2. Read the files and docs for the specific area.
-3. Search for existing patterns before adding new ones.
-4. For database work, inspect actual schema/function constraints before writing SQL.
-
-After editing:
-
-1. Run the narrowest useful checks first.
-2. For frontend changes, run `npm run typecheck` and usually `npm run build`.
-3. For database or business logic changes, also run relevant tests.
-4. Update docs when behavior, schema, routes, RPCs, or migration counts change.
-
-Useful commands:
+## Useful Commands
 
 ```bash
-npm run dev
-npm run typecheck
-npm run lint
-npm run build
-npm run test
-npm run test:e2e
+npm run dev            # local dev server
+npm run typecheck      # TS strict check
+npm run lint           # ESLint (with local rules)
+npm run build          # production build
+npm run test           # vitest unit tests
+npm run test:e2e       # playwright E2E
 ```
 
-## Testing Notes
+## After Making Changes
 
-- Unit tests live mostly beside source files as `*.test.ts` / `*.test.tsx`.
-- E2E specs live in `tests/e2e/`.
-- E2E-created data must use the `[E2E]` prefix and shared fixtures from `tests/e2e/fixtures/e2e-constants.ts`.
-- Use `page.once('dialog')` in serial Playwright suites.
-- Prefer waiting for meaningful UI/network states over fixed sleeps.
+1. Run the narrowest useful checks first.
+2. For frontend changes: `npm run typecheck` and usually `npm run build`.
+3. For DB or business logic changes: also run relevant tests.
+4. Update docs when behavior, schema, routes, RPCs, or migration counts change.
+5. If the schema changed, regenerate the schema registry (ask Claude or run `node scripts/regenerate-schema-registry.mjs`).
 
-## Documentation Notes
+---
 
-- `CLAUDE.md` is dense but important. Keep it aligned after meaningful code changes.
-- Update `docs/reference/migration-history.md` for new migrations.
-- Update `docs/reference/pages-routes.md` for new routes/pages.
-- Update `docs/reference/rpc-functions.md` for new or changed RPCs.
-- Update `docs/reference/database-schema.md` for schema changes.
-- Update `docs/CHANGELOG.md` after completed work sessions that change behavior.
+*Regenerated by `scripts/regenerate-agents-md.mjs` on 2026-05-07. To rebuild: `node scripts/regenerate-agents-md.mjs`.*
