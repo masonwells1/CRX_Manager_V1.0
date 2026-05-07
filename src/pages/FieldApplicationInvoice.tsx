@@ -134,8 +134,10 @@ export default function FieldApplicationInvoice() {
     setAppServiceId((invoice.application_service_id as string | null) || null);
     // Wave B.1 / P2-1: load Applied Info from the invoice row. These are
     // free-form text columns added so the values persist round-trip.
+    // temperature_text was renamed from "temperature" in B audit B-3 to
+    // disambiguate from sibling numeric temperature columns elsewhere.
     setWindDirection((invoice.wind_direction as string | null) || '');
-    setTemperature((invoice.temperature as string | null) || '');
+    setTemperature((invoice.temperature_text as string | null) || '');
     setApplicator((invoice.applicator_name as string | null) || '');
 
     const groupId = (invoice.invoice_group_id as string | null) || null;
@@ -420,9 +422,9 @@ export default function FieldApplicationInvoice() {
         const appliedResult = await supabase
           .from('invoices')
           .update({
-            wind_direction:  windDirection || null,
-            temperature:     temperature   || null,
-            applicator_name: applicator    || null,
+            wind_direction:   windDirection || null,
+            temperature_text: temperature   || null,
+            applicator_name:  applicator    || null,
           })
           .in('id', ids)
           .select('id');

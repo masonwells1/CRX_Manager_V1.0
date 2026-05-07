@@ -961,8 +961,11 @@ export interface Invoice {
   applicator_name: string | null;
   // Wave B.1 / P2-1: invoice-level "Applied Info" fields. Free-form text;
   // nullable per Mason's Q9 answer (business-internal, not legally required).
+  // temperature_text is named explicitly to disambiguate from the numeric
+  // temperature fields on BlendTicket / FieldAppLocation / JobAppliedInfo
+  // (Wave B audit B-3 / migration 20260507120000).
   wind_direction: string | null;
-  temperature: string | null;
+  temperature_text: string | null;
   vehicle_name: string | null;
   application_date: string | null;
   job_id: string | null;
