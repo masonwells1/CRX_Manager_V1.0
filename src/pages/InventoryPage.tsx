@@ -19,6 +19,7 @@ import { logActivity } from '../lib/activityLogger';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import ReasonModal from '../components/ui/ReasonModal';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
@@ -55,6 +56,7 @@ export default function InventoryPage() {
   const receivePoIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
   const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
   const retireIdem = useIdempotencyKey('retire_inventory_item', profile?.id || '');
+  const createHoldIdem = useIdempotencyKey('create_inventory_hold', profile?.id || '');
   const { toast } = useToast();
   const [inventory, setInventory] = useState<InventoryRow[]>([]);
   const [holds, setHolds] = useState<HoldWithRelations[]>([]);
@@ -307,6 +309,31 @@ export default function InventoryPage() {
 
   const [creatingHold, setCreatingHold] = useState(false);
   const [releasingHoldId, setReleasingHoldId] = useState<string | null>(null);
+  // Admin-override flow when the server rejects with INSUFFICIENT_HOLD_INVENTORY
+  // (P4-3 — create_inventory_hold RPC blocks negative-going holds by default;
+  //  admin can force-create with a reason).
+  const [forceHoldOpen, setForceHoldOpen] = useState(false);
+  const [forceHoldServerMessage, setForceHoldServerMessage] = useState('');
+
+  const callCreateHoldRpc = async (force: boolean, forceReason: string | null) => {
+    if (!profile) return;
+    const qty = parseFloat(holdQty);
+    const idemKey = createHoldIdem.getKey();
+    const { error } = await supabase.rpc('create_inventory_hold', {
+      p_product_id: holdProductId,
+      p_customer_id: holdCustomerId || null,
+      p_quantity: qty,
+      p_hold_type: 'manual',
+      p_expires_at: holdExpires || null,
+      p_notes: holdNotes || null,
+      p_performed_by: profile.id,
+      p_force: force,
+      p_force_reason: forceReason,
+      p_idempotency_key: idemKey,
+    });
+    if (error) throw error;
+    createHoldIdem.resetKey();
+  };
 
   const handleCreateHold = async () => {
     if (creatingHold) return;
@@ -321,9 +348,10 @@ export default function InventoryPage() {
     }
     if (!profile) return;
 
+    // UX preview only — the actual block is server-side. Even if the user
+    // bypasses this warning by clicking Create Hold a second time, the RPC's
+    // FOR UPDATE recompute will catch a true negative.
     const invItem = inventory.find(i => i.product_id === holdProductId);
-    // Hold warning uses today's free stock (available - prebooked - existing holds), NOT Net Position.
-    // Net Position adds on_order which doesn't help a hold that competes against today's physical stock.
     if (invItem) {
       const todaysFree = invItem.quantity_available - invItem.quantity_prebooked - invItem.holds_qty;
       if (todaysFree - qty < 0) {
@@ -335,26 +363,45 @@ export default function InventoryPage() {
     }
 
     setCreatingHold(true);
-    const holdResult = await supabase.from('inventory_holds').insert({
-      product_id: holdProductId,
-      customer_id: holdCustomerId || null,
-      quantity: qty,
-      hold_type: 'manual',
-      notes: holdNotes || null,
-      created_by: profile.id,
-      expires_at: holdExpires || null,
-    }).select();
-
-    if (holdResult.error) {
-      toast('error', sanitizeError(holdResult.error));
-    } else {
-      checkMutationResult(holdResult, 'Insert inventory hold');
+    try {
+      await callCreateHoldRpc(false, null);
       toast('success', 'Hold created successfully');
       setHoldOpen(false);
       fetchInventory();
       fetchHolds();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('INSUFFICIENT_HOLD_INVENTORY')) {
+        if (isAdmin) {
+          // Pop the ReasonModal so admin can force-create with a documented reason.
+          setForceHoldServerMessage(message);
+          setForceHoldOpen(true);
+        } else {
+          // Sales rep — surface the server's reason; no override path.
+          toast('error', sanitizeError(err));
+        }
+      } else {
+        toast('error', sanitizeError(err));
+      }
+    } finally {
+      setCreatingHold(false);
     }
-    setCreatingHold(false);
+  };
+
+  const handleForceCreateHold = async (reason: string) => {
+    setCreatingHold(true);
+    try {
+      await callCreateHoldRpc(true, reason);
+      toast('success', 'Hold created with admin override');
+      setForceHoldOpen(false);
+      setHoldOpen(false);
+      fetchInventory();
+      fetchHolds();
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    } finally {
+      setCreatingHold(false);
+    }
   };
 
   const handleReleaseHold = async (holdId: string) => {
@@ -1462,6 +1509,19 @@ export default function InventoryPage() {
         confirmLabel="Delete Item"
         variant="danger"
         icon={Trash2}
+      />
+
+      <ReasonModal
+        open={forceHoldOpen}
+        onClose={() => setForceHoldOpen(false)}
+        onConfirm={handleForceCreateHold}
+        title="Force-create hold (admin override)"
+        message={`The server blocked this hold: ${forceHoldServerMessage.replace(/^.*INSUFFICIENT_HOLD_INVENTORY:\s*/, '').replace(/\.$/, '')}. Provide a reason to override and create the hold anyway.`}
+        confirmLabel="Force-create hold"
+        variant="warning"
+        loading={creatingHold}
+        placeholder="e.g. customer prepaid in cash, physical stock confirmed in back room"
+        minLength={5}
       />
     </div>
   );

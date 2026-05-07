@@ -115,10 +115,21 @@ Holds reserve inventory for planned quotes without actually deducting stock.
 4. When quote is accepted and converted to order, holds are released
 5. Expired holds (past `expires_at`) are no longer counted
 
+### Manual holds — server-side validated (P4-3, 2026-05-07)
+The `/inventory` page's "Create Hold" flow goes through the `create_inventory_hold()` RPC, NOT a bare table insert. The RPC takes a `FOR UPDATE` lock on the Main Warehouse inventory row and recomputes today's free inside the transaction:
+
+```
+Today's free = quantity_available − quantity_prebooked − SUM(active hold quantities)
+```
+
+If `today's free − requested qty < 0`, the RPC `RAISE EXCEPTION 'INSUFFICIENT_HOLD_INVENTORY'` and the hold is NOT created. Admins can override by passing `p_force=true` with a non-blank `p_force_reason` — the override is recorded in `activity_feed` with a `WARNING:` description prefix. Sales reps cannot force.
+
+This closes the concurrency window where two admins clicking "Create Hold" simultaneously could each pass the client-side warning and both succeed, leaving total holds in excess of available inventory.
+
 ### Important
-- Holds do NOT deduct from `quantity_available` — they only affect Net Free calculations
+- Holds do NOT deduct from `quantity_available` — they only affect Net Free / today's free calculations
 - Multiple holds can exist for the same product
-- Concurrent hold creation can exceed available inventory — this is a known edge case to test
+- The browser-side warning at hold-creation is now a UX preview only; the server is the authoritative gate
 
 ---
 

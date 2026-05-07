@@ -60,6 +60,7 @@
 - `receive_po_items()` — per-item condition/lot/notes/storage, creates receiving_records
 - `release_inventory_hold()` — release a specific inventory hold
 - `create_planned_holds()` — Creates inventory holds for planned quote sections
+- `create_inventory_hold(p_product_id, p_customer_id, p_quantity, p_hold_type, p_expires_at, p_notes, p_performed_by, p_force, p_force_reason, p_idempotency_key)` — server-side manual hold creation with FOR UPDATE lock + atomic check against today's free stock (`available − prebooked − active holds`). Blocks negative-going holds by default; admin can pass `p_force=true` with a non-blank `p_force_reason` to override (mirrors PO over-receive admin-override). SECURITY DEFINER, search_path = public, pg_temp. Phase 4 P4-3 (2026-05-07). Replaces the bare `inventory_holds` insert from `InventoryPage.tsx`.
 - `complete_cycle_count()` — finalize cycle count, create adjustment transactions
 - `get_receiving_log()` — paginated, filterable receiving history
 - `get_receiving_summary()` — dashboard stats (expected_today, pending_receipt, received_this_week, items_ytd, damaged_this_week)
