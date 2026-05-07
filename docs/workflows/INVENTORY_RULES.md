@@ -30,16 +30,19 @@ Example: "Delivered YTD" means total delivered since October 1 of the current se
 
 ## Inventory Calculation Formulas
 
-### Net Free (what's actually available to sell)
-```
-Net Free = quantity_available - planned holds - quantity_prebooked
-```
-
-### Net Position (used for inventory warnings on order creation)
+### Net Position — the canonical "where do we stand?" number
 ```
 Net Position = quantity_available - quantity_prebooked + on_order
 ```
-`create_direct_order` and `convert_quote_to_order` use net position to warn (not block) when inventory is low.
+**This is the only formula used for the user-visible "Net Position" number.** The InventoryPage column, the dashboard summary, the order-creation warnings (`create_direct_order`, `convert_quote_to_order`), and the field-app preview all read this same number from the same RPC: `get_inventory_position()` (Wave B.3, migration 20260507150000).
+
+Holds and planned-quote demand are **not** subtracted from Net Position. They are reported in their own "Planned" column. Mixing them in confused users in the past (audit findings P4-1 + P4-2) — three different formulas on the same page meant a sales rep could read "12 free" from one column and be warned "would go negative" from another. One formula now, period.
+
+### Today's free stock (used internally by the manual-hold warning)
+```
+Today's Free = quantity_available - quantity_prebooked - active holds
+```
+The manual-hold creation modal warns when `Today's Free - new hold qty < 0`. Net Position is the wrong number to use here because it adds `on_order` — but a hold competes against today's physical stock, not future PO arrivals. This formula is computed client-side in `InventoryPage.tsx` from fields that the RPC returns (`quantity_available`, `quantity_prebooked`, `holds_qty`).
 
 ### On Order (incoming from suppliers)
 ```
@@ -88,6 +91,10 @@ Every inventory change creates an `inventory_transactions` record. Here are all 
 ### Critical rule: All inventory math happens in the database, NOT in React.
 
 Inventory calculations are done in PostgreSQL RPCs and triggers. The React frontend only displays results — it never calculates stock levels itself.
+
+The single source of truth for inventory math is the `get_inventory_position()` RPC (added in Wave B.3, migration 20260507150000). It returns one row per (product, location) for active products with `quantity_available`, `quantity_prebooked`, `quantity_on_order`, `holds_qty`, `planned_qty`, `delivered_ytd` (season-to-date), and the computed `net_position`. **Don't add a parallel inventory aggregation in another file; if you need numbers, call this RPC.**
+
+Note: `get_inventory_forecast()` (Forecast tab) computes the same supply numbers (`current_available`, `prebooked`, `on_order`) using the same column definitions, so the two views are already consistent. A future cleanup could DRY the supply math by having `get_inventory_forecast` call `get_inventory_position` internally; today both functions just read the same source columns identically.
 
 ---
 

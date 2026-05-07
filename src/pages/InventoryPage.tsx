@@ -15,14 +15,13 @@ import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
-import { computeSeason } from '../utils/season';
 import TransactionLedgerModal from '../components/inventory/TransactionLedgerModal';
 import BatchAdjustModal from '../components/inventory/BatchAdjustModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
-import type { Inventory, Product, InventoryHold, Customer } from '../types';
+import type { Inventory, InventoryPositionRow, Product, InventoryHold, Customer } from '../types';
 
 interface InventoryRow extends Inventory {
   product_name: string;
@@ -32,8 +31,9 @@ interface InventoryRow extends Inventory {
   vendor: string | null;
   current_cost: number | null;
   total_on_floor: number;
+  holds_qty: number;
   planned_qty: number;
-  free_qty: number;
+  net_position: number;
   delivered_ytd: number;
   reorder_point: number;
   min_stock_level: number;
@@ -120,7 +120,7 @@ export default function InventoryPage() {
       { key: 'inventory_unit', header: 'Unit' },
       { key: 'quantity_on_order', header: 'On Order' },
       { key: 'total_on_floor', header: 'Total on Floor' },
-      { key: 'free_qty', header: 'Net Position' },
+      { key: 'net_position', header: 'Net Position' },
       { key: 'planned_qty', header: 'Planned' },
       { key: 'quantity_prebooked', header: 'Committed' },
       { key: 'delivered_ytd', header: 'Delivered YTD' },
@@ -140,7 +140,7 @@ export default function InventoryPage() {
           { header: 'Unit', key: 'inventory_unit', format: (v) => v ? String(v) : '-' },
           { header: 'On Order', key: 'quantity_on_order', align: 'right' },
           { header: 'On Floor', key: 'total_on_floor', align: 'right' },
-          { header: 'Net', key: 'free_qty', align: 'right', format: (v) => v != null ? Number(v).toFixed(1) : '-' },
+          { header: 'Net', key: 'net_position', align: 'right', format: (v) => v != null ? Number(v).toFixed(1) : '-' },
           { header: 'Committed', key: 'quantity_prebooked', align: 'right' },
         ],
         data: filtered as unknown as Record<string, unknown>[],
@@ -154,10 +154,10 @@ export default function InventoryPage() {
   };
 
   const fetchInventory = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('inventory')
-      .select('*, product:products!inner(product_name, inventory_unit, container_size, container_type, vendor, current_cost, is_active)')
-      .order('product_id');
+    // Wave B.3 — single read-only RPC replaces 4 separate fetches + JS reduce.
+    // RPC computes net_position = available - prebooked + on_order server-side
+    // and returns holds_qty / planned_qty / delivered_ytd alongside.
+    const { data, error } = await supabase.rpc('get_inventory_position');
 
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'inventory' } });
@@ -166,158 +166,33 @@ export default function InventoryPage() {
       return;
     }
 
-    // H9: !inner join already excludes inventory rows with no matching product;
-    // also filter out soft-deactivated products (is_active = false).
-    const allRows = (data || []) as Array<Inventory & { product: { product_name: string; inventory_unit: string | null; container_size: number | null; container_type: string | null; vendor: string | null; current_cost: number | null; is_active: boolean } | null; reorder_point: number; min_stock_level: number }>;
-    const rawRows = allRows.filter((r) => r.product?.is_active !== false);
+    const positions = assertRpcResult<InventoryPositionRow[]>(data, 'get_inventory_position');
 
-    const holdsFetch = supabase
-      .from('inventory_holds')
-      .select('product_id, quantity')
-      .eq('is_active', true)
-      .or(`expires_at.is.null,expires_at.gte.${localToday()}`);
-
-    const poFetch = supabase
-      .from('purchase_order_items')
-      .select('product_id, quantity_ordered, quantity_received, purchase_orders!inner(status)')
-      .in('purchase_orders.status', ['submitted', 'partially_received']);
-
-    const quoteFetch = supabase
-      .from('quote_items')
-      .select('product_id, total_units_needed, quote:quotes!inner(is_planned, status)')
-      .eq('quote.is_planned', true)
-      .in('quote.status', ['draft', 'sent', 'revised']);
-
-    const now = new Date();
-    const season = computeSeason(now);
-    const seasonStart = new Date(season - 1, 9, 1); // Oct 1
-
-    const deliveredFetch = supabase
-      .from('inventory_transactions')
-      .select('product_id, quantity')
-      .eq('transaction_type', 'delivered')
-      .gte('created_at', seasonStart.toISOString());
-
-    const [holdsRes, poRes, quoteRes, deliveredRes] = await Promise.all([
-      holdsFetch, poFetch, quoteFetch, deliveredFetch,
-    ]);
-
-    const holdsByProduct = (holdsRes.data || []).reduce((acc, h) => {
-      acc[h.product_id] = (acc[h.product_id] || 0) + Number(h.quantity);
-      return acc;
-    }, {} as Record<string, number>);
-
-    const onOrderByProduct = (poRes.data || []).reduce((acc, poi: { product_id: string; quantity_ordered: number; quantity_received: number }) => {
-      const remaining = Number(poi.quantity_ordered) - Number(poi.quantity_received);
-      acc[poi.product_id] = (acc[poi.product_id] || 0) + remaining;
-      return acc;
-    }, {} as Record<string, number>);
-
-    const plannedByProduct = (quoteRes.data || []).reduce((acc, qi) => {
-      acc[qi.product_id] = (acc[qi.product_id] || 0) + Number(qi.total_units_needed || 0);
-      return acc;
-    }, {} as Record<string, number>);
-
-    const deliveredByProduct = (deliveredRes.data || []).reduce((acc, t) => {
-      acc[t.product_id] = (acc[t.product_id] || 0) + Number(t.quantity);
-      return acc;
-    }, {} as Record<string, number>);
-
-    const inventoryProductIds = new Set(rawRows.map((r) => r.product_id));
-
-    const missingProductIds = Object.keys(onOrderByProduct).filter(
-      (pid) => !inventoryProductIds.has(pid)
-    );
-
-    let missingProducts: Array<{ id: string; product_name: string }> = [];
-    if (missingProductIds.length > 0) {
-      const { data: mpData } = await supabase
-        .from('products')
-        .select('id, product_name')
-        .in('id', missingProductIds);
-      missingProducts = (mpData || []) as Array<{ id: string; product_name: string }>;
-    }
-
-    const buildRow = (
-      item: { id: string; product_id: string; quantity_available: number; quantity_prebooked: number; location: string; unit_size: string | null; product_name: string; inventory_unit?: string | null; container_size?: number | null; container_type?: string | null; vendor?: string | null; current_cost?: number | null; reorder_point: number; min_stock_level: number },
-    ): InventoryRow => {
-      const onOrderQty = onOrderByProduct[item.product_id] || 0;
-      const totalOnFloor = item.quantity_available; // physical stock only; prebooked is a sub-count within available, not separate
-      const plannedQty = (holdsByProduct[item.product_id] || 0) + (plannedByProduct[item.product_id] || 0);
-      // Net Position = (supply) - (demand)
-      // Supply  = on_order (coming in) + quantity_available (physical stock on floor)
-      // Demand  = planned (holds + planned quotes) + committed (prebooked orders)
-      const freeQty = onOrderQty + item.quantity_available - item.quantity_prebooked - plannedQty;
-      const deliveredYtd = deliveredByProduct[item.product_id] || 0;
-      const reorderPt = item.reorder_point || 0;
-      const minStock = item.min_stock_level || 0;
-
-      return {
-        id: item.id,
-        product_id: item.product_id,
-        quantity_available: item.quantity_available,
-        quantity_prebooked: item.quantity_prebooked,
-        quantity_on_order: onOrderQty,
-        location: item.location,
-        unit_size: item.unit_size,
-        last_counted_at: null,
-        updated_at: '',
-        product_name: item.product_name,
-        inventory_unit: item.inventory_unit || null,
-        container_size: item.container_size || null,
-        container_type: item.container_type || null,
-        vendor: item.vendor || null,
-        current_cost: item.current_cost || null,
-        total_on_floor: totalOnFloor,
-        planned_qty: plannedQty,
-        free_qty: freeQty,
-        delivered_ytd: deliveredYtd,
-        reorder_point: reorderPt,
-        min_stock_level: minStock,
-        is_low_stock: reorderPt > 0 && item.quantity_available <= reorderPt,
-      } as InventoryRow;
-    };
-
-    const existingRows = rawRows.map((item) =>
-      buildRow(
-        {
-          id: item.id,
-          product_id: item.product_id,
-          quantity_available: item.quantity_available,
-          quantity_prebooked: item.quantity_prebooked,
-          location: item.location,
-          unit_size: item.unit_size,
-          product_name: item.product?.product_name || 'Unknown',
-          inventory_unit: item.product?.inventory_unit || null,
-          container_size: item.product?.container_size || null,
-          container_type: item.product?.container_type || null,
-          vendor: item.product?.vendor || null,
-          current_cost: item.product?.current_cost || null,
-          reorder_point: item.reorder_point || 0,
-          min_stock_level: item.min_stock_level || 0,
-        },
-      )
-    );
-
-    const virtualRows = missingProducts.map((mp) =>
-      buildRow(
-        {
-          id: `virtual-${mp.id}`,
-          product_id: mp.id,
-          quantity_available: 0,
-          quantity_prebooked: 0,
-          location: '',
-          unit_size: null,
-          product_name: mp.product_name,
-          vendor: null,
-          current_cost: null,
-          reorder_point: 0,
-          min_stock_level: 0,
-        },
-      )
-    );
-
-    const rows = [...existingRows, ...virtualRows];
+    const rows: InventoryRow[] = positions.map((p) => ({
+      id: p.inventory_id ?? `virtual-${p.product_id}`,
+      product_id: p.product_id,
+      quantity_available: Number(p.quantity_available),
+      quantity_prebooked: Number(p.quantity_prebooked),
+      quantity_on_order: Number(p.quantity_on_order),
+      location: p.location ?? '',
+      unit_size: p.unit_size,
+      last_counted_at: null,
+      updated_at: '',
+      product_name: p.product_name,
+      inventory_unit: p.inventory_unit,
+      container_size: p.container_size,
+      container_type: p.container_type,
+      vendor: p.vendor,
+      current_cost: p.current_cost,
+      total_on_floor: Number(p.quantity_available),
+      holds_qty: Number(p.holds_qty),
+      planned_qty: Number(p.holds_qty) + Number(p.planned_qty),
+      net_position: Number(p.net_position),
+      delivered_ytd: Number(p.delivered_ytd),
+      reorder_point: p.reorder_point,
+      min_stock_level: p.min_stock_level,
+      is_low_stock: p.is_low_stock,
+    }));
 
     const locs = [...new Set(rows.map((r) => r.location).filter(Boolean))];
     setLocations(locs.sort());
@@ -442,11 +317,15 @@ export default function InventoryPage() {
     if (!profile) return;
 
     const invItem = inventory.find(i => i.product_id === holdProductId);
-    if (invItem && invItem.free_qty < qty) {
-      const newFree = invItem.free_qty - qty;
-      if (!holdWarning) {
-        setHoldWarning(`Warning: This hold will make Free inventory negative (${newFree.toFixed(1)}). Only ${invItem.free_qty.toFixed(1)} units currently available. Click Create Hold again to proceed anyway.`);
-        return;
+    // Hold warning uses today's free stock (available - prebooked - existing holds), NOT Net Position.
+    // Net Position adds on_order which doesn't help a hold that competes against today's physical stock.
+    if (invItem) {
+      const todaysFree = invItem.quantity_available - invItem.quantity_prebooked - invItem.holds_qty;
+      if (todaysFree - qty < 0) {
+        if (!holdWarning) {
+          setHoldWarning(`Warning: this hold would exceed today's free stock. Only ${todaysFree.toFixed(1)} units are uncommitted right now (Available ${invItem.quantity_available} − Prebooked ${invItem.quantity_prebooked} − Existing Holds ${invItem.holds_qty.toFixed(1)}). On-order quantities don't count toward holds. Click Create Hold again to proceed anyway.`);
+          return;
+        }
       }
     }
 
@@ -694,7 +573,7 @@ export default function InventoryPage() {
 
   const totalOnOrder = inventory.reduce((s, i) => s + i.quantity_on_order, 0);
   const totalOnFloor = inventory.reduce((s, i) => s + i.total_on_floor, 0);
-  const totalFree = inventory.reduce((s, i) => s + i.free_qty, 0);
+  const totalNetPosition = inventory.reduce((s, i) => s + i.net_position, 0);
   const totalPlanned = inventory.reduce((s, i) => s + i.planned_qty, 0);
   const totalCommitted = inventory.reduce((s, i) => s + i.quantity_prebooked, 0);
   const totalDeliveredYTD = inventory.reduce((s, i) => s + i.delivered_ytd, 0);
@@ -792,12 +671,12 @@ export default function InventoryPage() {
     },
     { key: 'total_on_floor', header: 'Total on Floor', sortable: true },
     {
-      key: 'free_qty',
+      key: 'net_position',
       header: 'Net Position',
       sortable: true,
       render: (row) => (
-        <span className={`font-semibold ${netPositionColor(row.free_qty)}`}>
-          {row.free_qty.toFixed(1)}
+        <span className={`font-semibold ${netPositionColor(row.net_position)}`}>
+          {row.net_position.toFixed(1)}
         </span>
       ),
     },
@@ -924,7 +803,7 @@ export default function InventoryPage() {
   const summaryCards: Array<{ label: string; value: number; color: string; icon: typeof Package; format?: 'currency' }> = [
     { label: 'On Order', value: totalOnOrder, color: 'bg-teal-50 text-teal-600', icon: Package },
     { label: 'Total on Floor', value: totalOnFloor, color: 'bg-blue-50 text-blue-600', icon: Package },
-    { label: 'Net Position', value: totalFree, color: totalFree >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600', icon: Package },
+    { label: 'Net Position', value: totalNetPosition, color: totalNetPosition >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600', icon: Package },
     { label: 'Planned', value: totalPlanned, color: 'bg-amber-50 text-amber-600', icon: Package },
     { label: 'Committed', value: totalCommitted, color: 'bg-orange-50 text-orange-600', icon: Package },
     { label: 'Delivered YTD', value: totalDeliveredYTD, color: 'bg-gray-50 text-gray-600', icon: Package },
@@ -959,7 +838,7 @@ export default function InventoryPage() {
         >
           <Package className="w-4 h-4 inline mr-1.5" />
           Inventory
-          <HelpTip text="Track on-hand quantities, prebooked amounts, and net free inventory. Click the ledger icon on any row to see the full transaction history. 'Net Free' = Available − Prebooked − Planned Holds." className="ml-1" />
+          <HelpTip text="Track on-hand quantities and net inventory position. 'Net Position' = Available − Prebooked + On Order (the canonical formula used everywhere — order creation warnings, dashboard widgets, this column). Holds and planned-quote demand are shown separately in the 'Planned' column, not subtracted from Net Position. Click the ledger icon on any row to see the full transaction history." className="ml-1" />
         </button>
         <button
           onClick={() => setActiveTab('forecast')}

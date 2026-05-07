@@ -4,6 +4,26 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-07 — Wave B.3: Move inventory math from React to one server-side RPC (audit P4-1 + P4-2)
+
+**Problem.** The InventoryPage's "Net Position" column was computed in JavaScript by combining four separately-fetched queries (`inventory`, `inventory_holds`, open `purchase_order_items`, `quote_items`, plus `inventory_transactions` for delivered-YTD). The column header said "Net Position" but the formula was a hybrid that subtracted holds AND planned demand. The manual-hold-creation modal on the same page used a *different* formula (`available − prebooked − holds`). The HelpTip claimed yet a third formula. Three different "free" answers on the same screen for the same product. INVENTORY_RULES.md `:88` literally said "All inventory math happens in the database, NOT in React" — the page violated that rule.
+
+**Decision.** Mason picked **Option B**: canonical Net Position = `quantity_available − quantity_prebooked + quantity_on_order`. Holds and planned-quote demand stay visible in the existing "Planned" column but are **not** subtracted from Net Position. This matches the formula already used by `create_direct_order` and `convert_quote_to_order` for inventory warnings, so the entire app now agrees on what "Net Position" means.
+
+**Implementation (3 commits, all atomic + revertible).**
+
+1. **B.3.a — `get_inventory_position()` RPC** (commit `46604b0`, migration `20260507150000`). New read-only `SECURITY DEFINER` function returns one row per (product, location) for active products: `quantity_available`, `quantity_prebooked`, `quantity_on_order`, `holds_qty`, `planned_qty`, `delivered_ytd` (season-to-date), `net_position`, `reorder_point`, `min_stock_level`, `is_low_stock`, plus product metadata. Aggregates each input source once via CTEs, then `LEFT JOIN`s by product_id (avoids N+1 sub-selects on a 1000-row catalog). Read-only → no idempotency key, follows `get_inventory_forecast` precedent. `InventoryPositionRow` interface added to `src/types/index.ts`. Sanity-tested live on 5 production products — math matched expected on every row.
+
+2. **B.3.b + B.3.c — `InventoryPage` consumes the RPC**. `fetchInventory` collapses from 171 lines (4 fetches + JS reduces + virtual-row synthesis) to ~40 lines (one RPC call + simple map). `InventoryRow.free_qty` renamed `→ net_position` across all 11 reference sites (type, CSV export, PDF export, column key/render, totals row, hold-warning, etc.). The hold-creation warning now uses `today's free = available − prebooked − active holds` (computed locally from RPC fields, not from `net_position` — Net Position adds on_order which doesn't help against today's physical-stock pressure). HelpTip rewritten to declare the canonical formula and explain why Holds/Planned-quote demand live in their own column.
+
+3. **B.3.e — `INVENTORY_RULES.md` consolidates the formulas**. Removes the "Net Free vs Net Position" two-headed documentation that was the audit's root-cause for the in-code drift. New text: "**Net Position is the only formula used for the user-visible Net Position number**. The InventoryPage column, dashboard summary, order-creation warnings, and field-app preview all read this same number from the same RPC." Documents `today's free` as a deliberately-different internal formula for the manual-hold warning, with the reasoning. Notes that `get_inventory_forecast` uses the same source-column definitions as `get_inventory_position`, so the Forecast tab is already consistent — a future cleanup could DRY the supply math by having forecast call position internally, but no user-visible drift today.
+
+**Live state.** Migration applied; commit `46604b0` (B.3.a) pushed; commit for B.3.b+c+e built and pushed. 278 migrations, ~173 RPCs, 1,864 tests passing. UI not browser-verified this session (login wall blocks automated testing) — coverage relies on the unit suite + the existing E2E specs `inventory-page.spec.ts` and `math-inventory-flow.spec.ts` which run in CI on push.
+
+**Lesson.** Drift between three formulas in one file is invisible until someone reads all three side-by-side. The audit caught it once; a server-side RPC keeps it from regrowing — a single function is harder to drift against itself than three locations to drift against each other.
+
+---
+
 ## 2026-05-06 — Hotfix: complete_delivery production failure (missing invoices.delivery_id column)
 
 **Problem.** Mason hit "An internal error occurred. Please try again." trying to complete delivery DEL-00074 (ORD-2026-0186, Capreno - 1 Gal × 6). After receiving inventory and retrying, the same generic error reappeared.
