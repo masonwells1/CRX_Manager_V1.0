@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
-import { ShieldAlert, RefreshCw, AlertTriangle, FileText, Wrench } from 'lucide-react';
+import { ShieldAlert, RefreshCw, AlertTriangle, FileText, Wrench, PackageCheck } from 'lucide-react';
 import { supabase } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../components/ui/Toast';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import Button from '../components/ui/Button';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { Sentry } from '../lib/sentry';
 
 interface NegativeInvRow {
@@ -35,26 +36,39 @@ interface UnbilledDeliveryRow {
   item_count: number;
 }
 
+interface ManufacturedRow {
+  id: string;
+  product_id: string;
+  product_name: string;
+  location: string | null;
+  quantity_available: number;
+  updated_at: string;
+}
+
 export default function IntegrityCleanup() {
   const { profile } = useAuth();
   const { toast } = useToast();
   const reconcileIdem = useIdempotencyKey('reconcile_negative_inventory', profile?.id || '');
   const backfillIdem = useIdempotencyKey('create_invoice_for_unbilled_delivery', profile?.id || '');
+  const verifyIdem = useIdempotencyKey('mark_inventory_row_verified', profile?.id || '');
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [negatives, setNegatives] = useState<NegativeInvRow[]>([]);
   const [overReceived, setOverReceived] = useState<OverReceivedRow[]>([]);
   const [unbilled, setUnbilled] = useState<UnbilledDeliveryRow[]>([]);
+  const [manufactured, setManufactured] = useState<ManufacturedRow[]>([]);
 
   // Per-row reconcile inputs
   const [reconcileInputs, setReconcileInputs] = useState<Record<string, { qty: string; reason: string; busy: boolean }>>({});
   const [backfillBusy, setBackfillBusy] = useState<Record<string, boolean>>({});
+  const [verifyBusy, setVerifyBusy] = useState<Record<string, boolean>>({});
+  const [verifyConfirmId, setVerifyConfirmId] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [negRes, overRes, unbilledRes] = await Promise.all([
+      const [negRes, overRes, unbilledRes, manufacturedRes] = await Promise.all([
         supabase
           .from('inventory')
           .select('id, product_id, location, quantity_available, quantity_prebooked, quantity_on_order, product:products(product_name)')
@@ -69,6 +83,11 @@ export default function IntegrityCleanup() {
           .eq('status', 'completed')
           .not('order_id', 'is', null)
           .order('completed_at', { ascending: false }),
+        supabase
+          .from('inventory')
+          .select('id, product_id, location, quantity_available, updated_at, product:products(product_name)')
+          .eq('manufactured_at_delivery', true)
+          .order('updated_at', { ascending: false }),
       ]);
 
       if (negRes.data) {
@@ -115,6 +134,30 @@ export default function IntegrityCleanup() {
               quantity_ordered: r.quantity_ordered,
               quantity_received: r.quantity_received,
               over_amount: r.quantity_received - r.quantity_ordered,
+            };
+          }),
+        );
+      }
+
+      if (manufacturedRes.data) {
+        const rows = manufacturedRes.data as unknown as Array<{
+          id: string;
+          product_id: string;
+          location: string | null;
+          quantity_available: number;
+          updated_at: string;
+          product?: { product_name: string } | { product_name: string }[] | null;
+        }>;
+        setManufactured(
+          rows.map((r) => {
+            const p = Array.isArray(r.product) ? r.product[0] : r.product;
+            return {
+              id: r.id,
+              product_id: r.product_id,
+              location: r.location,
+              quantity_available: r.quantity_available,
+              updated_at: r.updated_at,
+              product_name: p?.product_name || 'Unknown',
             };
           }),
         );
@@ -199,6 +242,29 @@ export default function IntegrityCleanup() {
       toast('error', err instanceof Error ? err.message : 'Reconcile failed');
     } finally {
       setReconcileInputs((prev) => ({ ...prev, [row.id]: { ...prev[row.id], busy: false } }));
+    }
+  };
+
+  const handleVerifyManufactured = async (rowId: string) => {
+    if (!profile) return;
+    setVerifyBusy((prev) => ({ ...prev, [rowId]: true }));
+    try {
+      const key = verifyIdem.getKey();
+      const { error } = await supabase.rpc('mark_inventory_row_verified', {
+        p_inventory_id: rowId,
+        p_performed_by: profile.id,
+        p_idempotency_key: key,
+      });
+      if (error) throw error;
+      verifyIdem.resetKey();
+      toast('success', 'Inventory row verified — flag cleared');
+      await fetchAll();
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
+      toast('error', err instanceof Error ? err.message : 'Verification failed');
+    } finally {
+      setVerifyBusy((prev) => ({ ...prev, [rowId]: false }));
+      setVerifyConfirmId(null);
     }
   };
 
@@ -423,6 +489,72 @@ export default function IntegrityCleanup() {
           </div>
         )}
       </section>
+
+      {/* Section 4: Phantom inventory rows (manufactured at delivery) */}
+      <section className="space-y-3">
+        <header className="flex items-center gap-2">
+          <PackageCheck className="w-5 h-5 text-purple-600" />
+          <h2 className="text-lg font-semibold text-gray-900">Phantom inventory rows</h2>
+          <span className="text-sm text-gray-500">({manufactured.length} rows)</span>
+        </header>
+        <p className="text-xs text-gray-500 ml-7 max-w-3xl">
+          Rows where <code>manufactured_at_delivery = true</code> — created when a
+          delivery completed for a product that had no prior inventory record (P4-7).
+          Each one needs an admin to confirm physical stock exists, then click
+          "Mark Verified" to clear the flag. The current Phase&nbsp;15 <code>complete_delivery</code>
+          body raises rather than auto-creates, so this list should normally stay empty;
+          rows here usually mean a regression or an older code path manufactured them.
+        </p>
+        {manufactured.length === 0 ? (
+          <p className="text-sm text-gray-500 ml-7">No phantom rows. Inventory rows have a verified origin.</p>
+        ) : (
+          <div className="rounded-lg border border-purple-200 bg-purple-50 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-purple-100 text-left text-purple-900">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Product</th>
+                  <th className="px-3 py-2 font-medium">Location</th>
+                  <th className="px-3 py-2 font-medium text-right">On hand</th>
+                  <th className="px-3 py-2 font-medium">Last updated</th>
+                  <th className="px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {manufactured.map((row) => (
+                  <tr key={row.id} className="border-t border-purple-200">
+                    <td className="px-3 py-2">{row.product_name}</td>
+                    <td className="px-3 py-2 text-gray-700">{row.location || '-'}</td>
+                    <td className={`px-3 py-2 text-right font-mono ${row.quantity_available < 0 ? 'text-red-700' : 'text-gray-700'}`}>
+                      {row.quantity_available}
+                    </td>
+                    <td className="px-3 py-2 text-gray-700">
+                      {new Date(row.updated_at).toLocaleString()}
+                    </td>
+                    <td className="px-3 py-2">
+                      <Button
+                        onClick={() => setVerifyConfirmId(row.id)}
+                        loading={verifyBusy[row.id]}
+                      >
+                        Mark Verified
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <ConfirmModal
+        open={verifyConfirmId !== null}
+        onClose={() => setVerifyConfirmId(null)}
+        onConfirm={() => verifyConfirmId && handleVerifyManufactured(verifyConfirmId)}
+        title="Mark inventory row verified"
+        message="Confirm that you have physically verified stock for this product. The manufactured-at-delivery flag will be cleared and an entry will be written to the activity feed."
+        confirmLabel="Mark Verified"
+        variant="info"
+      />
     </div>
   );
 }

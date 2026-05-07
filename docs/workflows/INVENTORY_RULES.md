@@ -8,7 +8,7 @@ Complete reference for inventory management, calculations, and transaction handl
 
 | Table | Purpose |
 |-------|---------|
-| `inventory` | Stock per product per location (quantity_available, quantity_prebooked, quantity_on_order, reorder_point, min_stock_level) |
+| `inventory` | Stock per product per location (quantity_available, quantity_prebooked, quantity_on_order, reorder_point, min_stock_level, manufactured_at_delivery) |
 | `inventory_transactions` | Audit trail of every stock change (transaction_type, quantity, reference) |
 | `inventory_holds` | Reserved inventory (quantity, hold_type, expires_at, is_active) |
 | `purchase_orders` | Supplier POs (po_number, vendor, status, total_cost) |
@@ -130,6 +130,17 @@ This closes the concurrency window where two admins clicking "Create Hold" simul
 - Holds do NOT deduct from `quantity_available` — they only affect Net Free / today's free calculations
 - Multiple holds can exist for the same product
 - The browser-side warning at hold-creation is now a UX preview only; the server is the authoritative gate
+
+---
+
+## Phantom inventory rows (P4-7, 2026-05-07)
+
+`inventory.manufactured_at_delivery boolean NOT NULL DEFAULT false` flags rows that were created during a delivery completion when the product had no prior inventory record. The current Phase 15 `complete_delivery` body (migration `20260501100000`) `RAISE EXCEPTION 'Insufficient inventory'` on the NOT FOUND branch rather than auto-creating a row, so the flag should stay at `false` in normal operation. It exists as defensive infrastructure for:
+
+1. A future driver-app or field-app path that legitimately needs to manufacture rows.
+2. Detecting regressions to an older `complete_delivery` body that had an auto-create branch (the March 19 body in `20260319200000` used to do this).
+
+When the flag is true, the row surfaces on `/integrity-cleanup` under the "Phantom inventory rows" section. The admin RPC `mark_inventory_row_verified(p_inventory_id, p_performed_by, p_idempotency_key)` clears the flag after physical-stock confirmation, logging to `activity_feed`.
 
 ---
 

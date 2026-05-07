@@ -362,6 +362,10 @@ export interface Inventory {
   reorder_point: number;
   min_stock_level: number;
   last_counted_at: string | null;
+  // P4-7: true when this inventory row was created by a delivery completion
+  // that found no prior record for the product. Cleared by the
+  // mark_inventory_row_verified RPC after admin physical-stock confirmation.
+  manufactured_at_delivery: boolean;
   updated_at: string;
   product?: Product;
 }

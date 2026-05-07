@@ -184,6 +184,10 @@ export default function InventoryPage() {
       location: p.location ?? '',
       unit_size: p.unit_size,
       last_counted_at: null,
+      // get_inventory_position doesn't return manufactured_at_delivery — it's
+      // only surfaced on the IntegrityCleanup page, which queries inventory
+      // directly. Default false here is correct for the main grid.
+      manufactured_at_delivery: false,
       updated_at: '',
       product_name: p.product_name,
       inventory_unit: p.inventory_unit,
