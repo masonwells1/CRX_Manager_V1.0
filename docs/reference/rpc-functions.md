@@ -29,7 +29,7 @@
 - `cancel_order()` — cancels order, releases prebooked inventory
 - `update_order_items()` — update items on an existing order
 - `confirm_delivery()` — scheduled -> in_progress transition
-- `complete_delivery()` — requires in_progress, creates remainder rows for partial deliveries, copies `tote_number` from delivery items
+- `complete_delivery()` — requires in_progress, creates remainder rows for partial deliveries, copies `tote_number` from delivery items. **P4-10 (2026-05-07):** completing a delivery whose `delivery_date` falls in a CLOSED accounting period emits a non-blocking `activity_feed` warning (`event_type='backdated_delivery_in_closed_period'`) + per-admin `notifications` row, then proceeds.
 - `edit_delivery()` — logistics always editable; items (add/remove/adjust) editable only when status = 'scheduled'. Validates quantities against order_items.quantity_remaining minus other active deliveries.
 - `cancel_delivery()` — cancels delivery, releases prebooked inventory
 - `batch_cancel_deliveries()` — batch cancel multiple deliveries
@@ -39,7 +39,7 @@
 - `get_customer_delivery_remainders()` — get undelivered remainder items for a customer
 - `create_quick_delivery()` — atomic order + delivery + draft invoice in one transaction; includes inventory pre-check with `FOR UPDATE` locks to prevent overselling
 - `check_duplicate_delivery()` — check if a duplicate delivery exists for an order
-- `void_delivery()` — void a completed delivery, reversing inventory transactions
+- `void_delivery()` — void a completed delivery, reversing inventory transactions. **P4-10 (2026-05-07):** same WARN-only backdated check as `complete_delivery` — voiding for a date in a closed period emits a non-blocking warning and proceeds.
 
 ## Invoice & Payments
 - `create_invoice_from_order()` — create invoice from order items
