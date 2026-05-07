@@ -705,7 +705,7 @@ export default function PurchaseOrderDetail() {
                     <th className="px-4 py-3 text-left font-medium text-secondary">By</th>
                     <th className="px-4 py-3 text-left font-medium text-secondary">Notes</th>
                     <th className="px-4 py-3 w-10"></th>
-                    {isAdmin && <th className="px-4 py-3 w-20"></th>}
+                    <th className="px-4 py-3 w-20"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -742,8 +742,8 @@ export default function PurchaseOrderDetail() {
                           <Download className="w-4 h-4" />
                         </button>
                       </td>
-                      {isAdmin && (
-                        <td className="px-4 py-3">
+                      <td className="px-4 py-3">
+                        {isAdmin ? (
                           <button
                             onClick={() => openReverseModal(rec)}
                             className="text-red-400 hover:text-red-600 transition-colors"
@@ -751,8 +751,17 @@ export default function PurchaseOrderDetail() {
                           >
                             <RotateCcw className="w-4 h-4" />
                           </button>
-                        </td>
-                      )}
+                        ) : (
+                          <button
+                            disabled
+                            className="text-gray-300 cursor-not-allowed"
+                            title="Ask an admin to reverse this receive."
+                            aria-label="Ask an admin to reverse this receive"
+                          >
+                            <RotateCcw className="w-4 h-4" />
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
