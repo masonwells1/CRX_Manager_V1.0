@@ -9,6 +9,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
+import ReasonModal from '../components/ui/ReasonModal';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -94,7 +95,9 @@ export default function Returns() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<{ type: 'approve' | 'reject' | 'cancel'; title: string; message: string } | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ type: 'approve' | 'reject'; title: string; message: string } | null>(null);
+  const [cancelModalOpen, setCancelModalOpen] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const fetchReturns = useCallback(async () => {
     setLoading(true);
@@ -323,7 +326,7 @@ export default function Returns() {
     });
   };
 
-  const handleCancel = async () => {
+  const handleCancel = async (reason: string) => {
     if (!activeReturn || !profile) return;
     // Only requested/approved/received returns can be cancelled (not credited or rejected)
     const cancellableStatuses = ['requested', 'approved', 'received'];
@@ -331,17 +334,12 @@ export default function Returns() {
       toast('error', `Cannot cancel a return in '${activeReturn.status}' status`);
       return;
     }
-    const reason = window.prompt('Reason for cancellation (required):');
-    if (!reason || !reason.trim()) {
-      toast('warning', 'Cancellation cancelled — reason is required.');
-      return;
-    }
     await runCriticalAction({
       action: async () => {
         const cancelKey = cancelIdem.getKey();
         const { data, error } = await supabase.rpc('cancel_return', {
           p_return_id: activeReturn.id,
-          p_reason: reason.trim(),
+          p_reason: reason,
           p_performed_by: profile.id,
           p_idempotency_key: cancelKey,
         });
@@ -356,12 +354,14 @@ export default function Returns() {
           // admin knows to reconcile manually.
           toast('warning', `${result.skipped_count} item(s) had a missing inventory row at cancel time — restock could not be reversed automatically. Reconcile manually.`);
         }
-        await logActivity({ event: 'return_cancelled', description: `Return ${activeReturn.return_number} cancelled: ${reason.trim()}`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
+        await logActivity({ event: 'return_cancelled', description: `Return ${activeReturn.return_number} cancelled: ${reason}`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },
       toast,
       successMessage: 'Return cancelled',
+      setLoading: setCancelling,
       sentryTag: 'cancel_return',
       onSuccess: () => {
+        setCancelModalOpen(false);
         setShowDetail(false);
         fetchReturns();
       },
@@ -783,19 +783,34 @@ export default function Returns() {
       />
 
       <ConfirmModal
-        open={!!confirmAction}
+        open={!!confirmAction && (confirmAction.type === 'approve' || confirmAction.type === 'reject')}
         onClose={() => setConfirmAction(null)}
         onConfirm={async () => {
           if (!confirmAction) return;
           setConfirmAction(null);
           if (confirmAction.type === 'approve') await handleApprove();
           else if (confirmAction.type === 'reject') await handleReject();
-          else if (confirmAction.type === 'cancel') await handleCancel();
         }}
         title={confirmAction?.title || ''}
         message={confirmAction?.message || ''}
-        confirmLabel={confirmAction?.type === 'approve' ? 'Approve' : confirmAction?.type === 'reject' ? 'Reject' : 'Cancel Return'}
+        confirmLabel={confirmAction?.type === 'approve' ? 'Approve' : 'Reject'}
         variant={confirmAction?.type === 'approve' ? 'info' : 'danger'}
+      />
+
+      <ReasonModal
+        open={cancelModalOpen}
+        onClose={() => setCancelModalOpen(false)}
+        onConfirm={(reason) => handleCancel(reason)}
+        title="Cancel Return"
+        message={
+          activeReturn?.status === 'received'
+            ? 'This return has already been received and inventory was restocked. Cancelling will REVERSE the restock (decrement inventory back).'
+            : 'This will cancel the return. This cannot be undone.'
+        }
+        confirmLabel="Cancel Return"
+        variant="danger"
+        loading={cancelling}
+        placeholder="Why is this return being cancelled?"
       />
 
       {/* Return Detail Modal */}
@@ -899,7 +914,7 @@ export default function Returns() {
                     </Button>
                   )}
                   {(activeReturn.status === 'requested' || activeReturn.status === 'approved' || activeReturn.status === 'received') && (
-                    <Button variant="danger" onClick={() => setConfirmAction({ type: 'cancel', title: 'Cancel Return', message: activeReturn.status === 'received' ? 'This return has already been received and inventory was restocked. Cancelling will REVERSE the restock (decrement inventory back). Are you sure?' : 'Are you sure you want to cancel this return? This cannot be undone.' })} icon={<Ban className="w-4 h-4" />}>
+                    <Button variant="danger" onClick={() => setCancelModalOpen(true)} icon={<Ban className="w-4 h-4" />}>
                       Cancel
                     </Button>
                   )}

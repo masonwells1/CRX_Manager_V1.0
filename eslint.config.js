@@ -53,6 +53,13 @@ export default tseslint.config(
       }, {
         name: 'alert',
         message: 'Use toast() instead of alert(). See CLAUDE.md.',
+      }, {
+        // Wave B audit B-6: window.prompt blocks silently on iOS Safari and
+        // PWA-installed Chrome (returns null when the page isn't the active
+        // top-level frame), making cancellations silently abort. Use
+        // ReasonModal for any flow that needs a free-form reason.
+        name: 'prompt',
+        message: 'Use ReasonModal instead of prompt(). See CLAUDE.md and src/components/ui/ReasonModal.tsx.',
       }],
       'no-restricted-properties': ['error', {
         object: 'window',
@@ -62,6 +69,10 @@ export default tseslint.config(
         object: 'window',
         property: 'alert',
         message: 'Use toast() instead of window.alert(). See CLAUDE.md.',
+      }, {
+        object: 'window',
+        property: 'prompt',
+        message: 'Use ReasonModal instead of window.prompt(). See CLAUDE.md and src/components/ui/ReasonModal.tsx.',
       }],
       'no-restricted-imports': ['error', {
         paths: [{
