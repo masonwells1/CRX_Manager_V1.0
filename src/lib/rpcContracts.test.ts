@@ -732,7 +732,8 @@ interface ReverseWriteOffResult {
   amount_cents: number;
   invoice_id: string;
   new_balance_cents: number;
-  status_changed: boolean;           // true when invoice flipped paid -> posted
+  status_changed: boolean;           // true when invoice flipped from 'paid'
+  new_status?: 'posted' | 'overdue' | 'paid'; // added in 20260506200000 follow-up
 }
 
 describe('RPC contract: reverse_write_off', () => {
