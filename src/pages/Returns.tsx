@@ -347,9 +347,14 @@ export default function Returns() {
         });
         if (error) throw error;
         cancelIdem.resetKey();
-        const result = assertRpcResult<{ was_received: boolean; reversed_count: number }>(data, 'cancel_return');
+        const result = assertRpcResult<{ was_received: boolean; reversed_count: number; skipped_count: number }>(data, 'cancel_return');
         if (result.was_received && result.reversed_count > 0) {
           toast('info', `Inventory restock reversed for ${result.reversed_count} item(s).`);
+        }
+        if (result.was_received && result.skipped_count > 0) {
+          // Wave B audit B-2: surface the skipped-reversal case so the
+          // admin knows to reconcile manually.
+          toast('warning', `${result.skipped_count} item(s) had a missing inventory row at cancel time — restock could not be reversed automatically. Reconcile manually.`);
         }
         await logActivity({ event: 'return_cancelled', description: `Return ${activeReturn.return_number} cancelled: ${reason.trim()}`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },
