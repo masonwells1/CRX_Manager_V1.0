@@ -66,7 +66,7 @@ Invoices, InvoiceDetail, Payments, PaymentAllocation, PaymentHistory, ARaging, M
 AccountsPayable (AP Dashboard), VendorBills, NewVendorBill, VendorBillDetail
 
 ### Fields & Compliance
-Fields, FieldDetail, Compliance, Rebates
+Fields, Compliance, Rebates
 
 ### Other
 BrandVsGeneric, CropPrograms, Vehicles, VehicleDetail, Returns, Reports, TeamBoard, Notifications, SettingsPage
