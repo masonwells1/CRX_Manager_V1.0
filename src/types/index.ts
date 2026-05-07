@@ -386,6 +386,32 @@ export interface InventoryHold {
   creator?: Profile;
 }
 
+// Wave B.3 — return shape of the get_inventory_position() RPC.
+// One row per (product, location). net_position = quantity_available - quantity_prebooked + quantity_on_order.
+// holds_qty and planned_qty are reported separately; they are NOT subtracted from net_position.
+export interface InventoryPositionRow {
+  inventory_id: string | null;
+  product_id: string;
+  product_name: string;
+  inventory_unit: string | null;
+  container_size: number | null;
+  container_type: string | null;
+  vendor: string | null;
+  current_cost: number | null;
+  location: string | null;
+  unit_size: string | null;
+  quantity_available: number;
+  quantity_prebooked: number;
+  quantity_on_order: number;
+  holds_qty: number;
+  planned_qty: number;
+  delivered_ytd: number;
+  net_position: number;
+  reorder_point: number;
+  min_stock_level: number;
+  is_low_stock: boolean;
+}
+
 export type DeliveryStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled' | 'voided';
 export type DeliveryPriority = 'low' | 'normal' | 'high' | 'urgent';
 export type DeliveryIssueType = 'none' | 'customer_not_home' | 'gate_locked' | 'road_blocked' | 'wrong_address' | 'refused' | 'weather' | 'other';

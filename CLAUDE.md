@@ -7,14 +7,15 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-05-06)
-- 65 pages, 97+ tables, ~172 RPCs, 277 migrations, 7 Edge Functions
+## Current State (2026-05-07)
+- 65 pages, 92 tables, ~173 RPCs, 278 migrations, 8 Edge Functions
 - 1,864 unit tests (129 files) + 93 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 - All RPC data usage wrapped with `assertRpcResult()` — enforced by ESLint + safety-net test
 - All destructive actions use `ConfirmModal` (no bare `confirm()` calls)
 - 15+ RPC calls wired with `useIdempotencyKey` for double-submit prevention
+- Schema-aware PreToolUse hooks block status-enum mismatches, GENERATED-column writes, missing RLS on new tables, and idempotency-key declarations that never get used
 
 ---
 
@@ -362,7 +363,25 @@ The pre-commit hook runs these checks automatically — code that violates them 
 3. **ESLint rules** — `no-restricted-globals` blocks `confirm()` and `alert()`, `no-restricted-properties` blocks `window.confirm()` and `window.alert()`, `no-restricted-imports` blocks `@sentry/react`
 4. **Build + test** — TypeScript check, production build, all unit tests
 
+### Schema-Aware PreToolUse Hooks (`.claude/hooks/`)
+These run when Claude Code tries to Write or Edit a file — they refuse the write if it violates a known bug pattern. They read `.claude/schema-registry.json` (regenerate via `node scripts/regenerate-schema-registry.mjs`).
+
+| Hook | What it blocks | Bug it prevents |
+|------|----------------|-----------------|
+| `sql-safety.mjs` | `pg_get_functiondef`, wrong idempotency columns, `updated_at` on tables that lack it | March 2026 40-bug incident |
+| `money-safety.mjs` | `parseFloat()` on `*_cents` variables | Float rounding in money math |
+| `idempotency-body-check.mjs` | RPC declares `p_idempotency_key` but body doesn't read/write `idempotency_keys` | `9b36cd2` — `issue_return_credit` regression |
+| `rls-on-new-tables.mjs` | New table without `ENABLE ROW LEVEL SECURITY` + `CREATE POLICY` | Prevents future RLS regressions |
+| `status-enum-check.mjs` | Writing a status string that isn't in the DB CHECK constraint | `4a25aea` — `'void'` vs `'voided'` |
+| `generated-column-check.mjs` | UPDATE on a GENERATED column (e.g. `invoices.balance_cents`) | `a419da8` — `reverse_write_off` |
+
+To exempt a specific file from a hook, add the marker comment named in the hook's error message.
+
 **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
+
+**Refresh schema registry after schema changes:** `node scripts/regenerate-schema-registry.mjs` (or ask Claude Code to do it via Supabase MCP).
+
+**Refresh AGENTS.md after CLAUDE.md changes:** `node scripts/regenerate-agents-md.mjs`.
 
 ### Before Every Commit
 1. `npm run lint` — 0 errors (ESLint now blocks confirm/alert/wrong-imports)

@@ -1,4 +1,4 @@
-# RPC Functions Reference (~172 unique functions)
+# RPC Functions Reference (~173 unique functions)
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -177,6 +177,7 @@
 
 ## Inventory Forecasting
 - `get_inventory_forecast(p_months_ahead integer DEFAULT 6)` → Returns jsonb array of planned demand vs supply by product and month. SECURITY DEFINER, search_path = public, pg_temp
+- `get_inventory_position()` → Returns jsonb array, one row per (product, location) for active products. Fields: `inventory_id`, `product_id`, `product_name`, `inventory_unit`, `container_size`, `container_type`, `vendor`, `current_cost`, `location`, `unit_size`, `quantity_available`, `quantity_prebooked`, `quantity_on_order`, `holds_qty`, `planned_qty`, `delivered_ytd` (season-to-date), `net_position` (= available − prebooked + on_order), `reorder_point`, `min_stock_level`, `is_low_stock`. Read-only; replaces 4 separate fetches in InventoryPage. Holds and planned-quote demand are RETURNED separately, not subtracted from `net_position`. SECURITY DEFINER, search_path = public, pg_temp
 
 ## Seasonal Rollover
 - `rollover_quote_to_season(p_quote_id uuid, p_new_season integer, p_performed_by uuid, p_idempotency_key text DEFAULT NULL)` → Returns jsonb with new quote_id, quote_number, season. Creates duplicate quote with updated pricing for the new season. SECURITY DEFINER, search_path = public, pg_temp
