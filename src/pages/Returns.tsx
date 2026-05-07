@@ -893,8 +893,8 @@ export default function Returns() {
                       Reject
                     </Button>
                   )}
-                  {(activeReturn.status === 'requested' || activeReturn.status === 'approved') && (
-                    <Button variant="danger" onClick={() => setConfirmAction({ type: 'cancel', title: 'Cancel Return', message: 'Are you sure you want to cancel this return? This cannot be undone.' })} icon={<Ban className="w-4 h-4" />}>
+                  {(activeReturn.status === 'requested' || activeReturn.status === 'approved' || activeReturn.status === 'received') && (
+                    <Button variant="danger" onClick={() => setConfirmAction({ type: 'cancel', title: 'Cancel Return', message: activeReturn.status === 'received' ? 'This return has already been received and inventory was restocked. Cancelling will REVERSE the restock (decrement inventory back). Are you sure?' : 'Are you sure you want to cancel this return? This cannot be undone.' })} icon={<Ban className="w-4 h-4" />}>
                       Cancel
                     </Button>
                   )}
