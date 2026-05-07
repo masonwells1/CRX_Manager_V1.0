@@ -9,7 +9,7 @@
 
 ## Current State (2026-05-07)
 - 65 pages, 92 tables, ~175 RPCs, 282 migrations, 8 Edge Functions
-- 1,864 unit tests (129 files) + 94 E2E spec files, all passing
+- 1,872 unit tests (130 files) + 94 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 - All RPC data usage wrapped with `assertRpcResult()` — enforced by ESLint + safety-net test
