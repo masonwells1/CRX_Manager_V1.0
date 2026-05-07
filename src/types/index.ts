@@ -1421,6 +1421,10 @@ export interface Return {
   approved_at: string | null;
   received_at: string | null;
   credited_at: string | null;
+  // Wave B.2 / P4-4: cancellation triplet, mirrors approved/received/credited.
+  cancelled_at: string | null;
+  cancelled_by: string | null;
+  cancellation_reason: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;

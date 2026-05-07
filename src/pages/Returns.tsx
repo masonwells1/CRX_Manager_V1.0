@@ -62,6 +62,7 @@ export default function Returns() {
   const approveIdem = useIdempotencyKey('approve_return', profile?.id || '');
   const receiveIdem = useIdempotencyKey('receive_return', profile?.id || '');
   const creditIdem = useIdempotencyKey('issue_return_credit', profile?.id || '');
+  const cancelIdem = useIdempotencyKey('cancel_return', profile?.id || '');
   const { toast } = useToast();
   const [returns, setReturns] = useState<ReturnRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -324,21 +325,33 @@ export default function Returns() {
 
   const handleCancel = async () => {
     if (!activeReturn || !profile) return;
-    // Only approved or received returns can be cancelled (not requested, credited, or rejected)
+    // Only requested/approved/received returns can be cancelled (not credited or rejected)
     const cancellableStatuses = ['requested', 'approved', 'received'];
     if (!cancellableStatuses.includes(activeReturn.status)) {
       toast('error', `Cannot cancel a return in '${activeReturn.status}' status`);
       return;
     }
+    const reason = window.prompt('Reason for cancellation (required):');
+    if (!reason || !reason.trim()) {
+      toast('warning', 'Cancellation cancelled — reason is required.');
+      return;
+    }
     await runCriticalAction({
       action: async () => {
-        const result = await supabase
-          .from('returns')
-          .update({ status: 'cancelled' })
-          .eq('id', activeReturn.id)
-          .select();
-        checkMutationResult(result, 'Cancel return');
-        await logActivity({ event: 'return_cancelled', description: `Return ${activeReturn.return_number} cancelled`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
+        const cancelKey = cancelIdem.getKey();
+        const { data, error } = await supabase.rpc('cancel_return', {
+          p_return_id: activeReturn.id,
+          p_reason: reason.trim(),
+          p_performed_by: profile.id,
+          p_idempotency_key: cancelKey,
+        });
+        if (error) throw error;
+        cancelIdem.resetKey();
+        const result = assertRpcResult<{ was_received: boolean; reversed_count: number }>(data, 'cancel_return');
+        if (result.was_received && result.reversed_count > 0) {
+          toast('info', `Inventory restock reversed for ${result.reversed_count} item(s).`);
+        }
+        await logActivity({ event: 'return_cancelled', description: `Return ${activeReturn.return_number} cancelled: ${reason.trim()}`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
       },
       toast,
       successMessage: 'Return cancelled',
