@@ -786,6 +786,219 @@ describe('RPC contract: reverse_write_off', () => {
 });
 
 // -------------------------------------------------------------------------
+// RPC contracts: returns lifecycle (Wave B.2 + audit B-7 / B-9)
+//
+// All four return-lifecycle RPCs were rebuilt in Wave B.2 with proper
+// idempotency wrappers and structured jsonb returns. These contracts
+// document the param shapes AND the result jsonb shapes so downstream
+// callers (Returns.tsx today, future audit/dashboard tools tomorrow) can
+// rely on the new fields without re-reading the migration.
+// -------------------------------------------------------------------------
+
+interface ApproveReturnParams {
+  p_return_id: string;
+  p_approved_by: string;
+  p_idempotency_key?: string | null;
+}
+interface ApproveReturnResult {
+  success: true;
+  return_id: string;
+  return_number: string;
+  status: 'approved';
+}
+
+interface ReceiveReturnParams {
+  p_return_id: string;
+  p_received_by: string;
+  p_idempotency_key?: string | null;
+}
+interface ReceiveReturnResult {
+  success: true;
+  return_id: string;
+  return_number: string;
+  status: 'received';
+  restocked_count: number;
+  restocked_quantity: number;
+  skipped_count: number; // items skipped because no inventory row exists
+}
+
+interface CancelReturnParams {
+  p_return_id: string;
+  p_reason: string;             // non-empty; SQL rejects null/blank
+  p_performed_by: string;
+  p_idempotency_key?: string | null;
+}
+interface CancelReturnResult {
+  success: true;
+  return_id: string;
+  return_number: string;
+  status: 'cancelled';
+  was_received: boolean;
+  reversed_count: number;
+  reversed_quantity: number;
+  skipped_count: number;        // items where inventory row was missing at cancel time
+}
+
+interface IssueReturnCreditParams {
+  p_return_id: string;
+  p_actor_id: string;
+  p_idempotency_key?: string | null;
+}
+interface IssueReturnCreditResult {
+  success: true;
+  return_id: string;
+  return_number: string;
+  credit_invoice_id: string;
+  credit_invoice_number: string;
+  credit_amount_cents: number;
+  customer_id: string;
+  credited_at: string;          // ISO timestamp
+}
+
+describe('RPC contract: approve_return', () => {
+  it('accepts the three-param shape used by Returns.tsx', () => {
+    const params = assertShape<ApproveReturnParams>({
+      p_return_id: 'return-uuid',
+      p_approved_by: 'admin-uuid',
+      p_idempotency_key: 'approve_return:admin-uuid:1234567890',
+    });
+    expect(params.p_return_id).toBeTruthy();
+  });
+
+  it('result jsonb has the post-rewrite shape', () => {
+    const result: ApproveReturnResult = {
+      success: true,
+      return_id: 'r-uuid',
+      return_number: 'RET-001',
+      status: 'approved',
+    };
+    expect(result.status).toBe('approved');
+  });
+});
+
+describe('RPC contract: receive_return', () => {
+  it('accepts the three-param shape used by Returns.tsx', () => {
+    const params = assertShape<ReceiveReturnParams>({
+      p_return_id: 'return-uuid',
+      p_received_by: 'admin-uuid',
+      p_idempotency_key: 'receive_return:admin-uuid:1234567890',
+    });
+    expect(params.p_return_id).toBeTruthy();
+  });
+
+  it('result jsonb includes the skipped_count surfaced after Wave B.2', () => {
+    // skipped_count was the audit B-2 fix that ensures the admin sees
+    // when a product had no inventory row at receive time. Mirrors the
+    // same field added to cancel_return.
+    const result: ReceiveReturnResult = {
+      success: true,
+      return_id: 'r-uuid',
+      return_number: 'RET-002',
+      status: 'received',
+      restocked_count: 3,
+      restocked_quantity: 30,
+      skipped_count: 1,
+    };
+    expect(result.skipped_count).toBeGreaterThanOrEqual(0);
+    expect(result.restocked_count + result.skipped_count).toBeGreaterThan(0);
+  });
+});
+
+describe('RPC contract: cancel_return', () => {
+  it('accepts the four-param shape used by Returns.tsx via ReasonModal', () => {
+    const params = assertShape<CancelReturnParams>({
+      p_return_id: 'return-uuid',
+      p_reason: 'Customer changed mind after delivery',
+      p_performed_by: 'admin-uuid',
+      p_idempotency_key: 'cancel_return:admin-uuid:1234567890',
+    });
+    expect(params.p_reason.trim().length).toBeGreaterThan(0);
+  });
+
+  it('was_received=true + reversed_count > 0 means inventory was decremented', () => {
+    // When the return was already 'received', cancel_return reverses the
+    // restock by inserting negative-qty inventory_transactions rows.
+    const result: CancelReturnResult = {
+      success: true,
+      return_id: 'r-uuid',
+      return_number: 'RET-003',
+      status: 'cancelled',
+      was_received: true,
+      reversed_count: 2,
+      reversed_quantity: 20,
+      skipped_count: 0,
+    };
+    expect(result.was_received).toBe(true);
+    expect(result.reversed_count).toBeGreaterThan(0);
+  });
+
+  it('skipped_count > 0 signals the admin must reconcile manually', () => {
+    // Wave B audit B-2: when the inventory row no longer exists at cancel
+    // time (product retired between receive and cancel), the function
+    // can't decrement; it surfaces skipped_count so the admin knows.
+    const result: CancelReturnResult = {
+      success: true,
+      return_id: 'r-uuid',
+      return_number: 'RET-004',
+      status: 'cancelled',
+      was_received: true,
+      reversed_count: 1,
+      reversed_quantity: 10,
+      skipped_count: 1,
+    };
+    expect(result.skipped_count).toBeGreaterThan(0);
+  });
+
+  it('was_received=false skips the inventory loop entirely', () => {
+    // Cancelling a return that was only 'requested' or 'approved' —
+    // nothing was restocked yet, so reversed_count and skipped_count
+    // are both zero and was_received is false.
+    const result: CancelReturnResult = {
+      success: true,
+      return_id: 'r-uuid',
+      return_number: 'RET-005',
+      status: 'cancelled',
+      was_received: false,
+      reversed_count: 0,
+      reversed_quantity: 0,
+      skipped_count: 0,
+    };
+    expect(result.was_received).toBe(false);
+    expect(result.reversed_count).toBe(0);
+  });
+});
+
+describe('RPC contract: issue_return_credit', () => {
+  it('accepts the three-param shape used by Returns.tsx', () => {
+    const params = assertShape<IssueReturnCreditParams>({
+      p_return_id: 'return-uuid',
+      p_actor_id: 'admin-uuid',
+      p_idempotency_key: 'issue_return_credit:admin-uuid:1234567890',
+    });
+    expect(params.p_return_id).toBeTruthy();
+  });
+
+  it('result jsonb includes the credit memo invoice id + amount', () => {
+    // Wave B.2 restored RETURNS jsonb on this RPC after a prior dynamic
+    // consolidation had silently regressed it to RETURNS void. The result
+    // shape lets a future audit/dashboard caller link the return to its
+    // credit memo without re-querying.
+    const result: IssueReturnCreditResult = {
+      success: true,
+      return_id: 'r-uuid',
+      return_number: 'RET-006',
+      credit_invoice_id: 'inv-uuid',
+      credit_invoice_number: 'CM-2026-0001',
+      credit_amount_cents: 25000,
+      customer_id: 'cust-uuid',
+      credited_at: '2026-05-07T01:00:00Z',
+    };
+    expect(result.credit_amount_cents).toBeGreaterThan(0);
+    expect(result.credit_invoice_number).toMatch(/^CM-/);
+  });
+});
+
+// -------------------------------------------------------------------------
 // Idempotency Key Coverage — Track which mutating RPCs accept p_idempotency_key
 // -------------------------------------------------------------------------
 
@@ -809,6 +1022,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'cancel_delivery',
   'cancel_order',
   'cancel_purchase_order',
+  'cancel_return',
   'close_accounting_period',
   'complete_cycle_count',
   'complete_delivery',
@@ -886,8 +1100,8 @@ const MUTATING_RPCS_MISSING_IDEMPOTENCY: string[] = [
 ];
 
 describe('Idempotency Key Coverage', () => {
-  it('covers at least 72 mutating RPCs with p_idempotency_key', () => {
-    expect(MUTATING_RPCS_WITH_IDEMPOTENCY.length).toBeGreaterThanOrEqual(72);
+  it('covers at least 73 mutating RPCs with p_idempotency_key', () => {
+    expect(MUTATING_RPCS_WITH_IDEMPOTENCY.length).toBeGreaterThanOrEqual(73);
   });
 
   it('has no duplicates in the covered list', () => {
