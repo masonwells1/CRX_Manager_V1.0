@@ -959,6 +959,10 @@ export interface Invoice {
   field_names: string[] | null;
   total_acres: number | null;
   applicator_name: string | null;
+  // Wave B.1 / P2-1: invoice-level "Applied Info" fields. Free-form text;
+  // nullable per Mason's Q9 answer (business-internal, not legally required).
+  wind_direction: string | null;
+  temperature: string | null;
   vehicle_name: string | null;
   application_date: string | null;
   job_id: string | null;

@@ -132,6 +132,11 @@ export default function FieldApplicationInvoice() {
     setNotes((invoice.header_notes as string) || '');
     setStatus((invoice.status as InvoiceStatus) || 'draft');
     setAppServiceId((invoice.application_service_id as string | null) || null);
+    // Wave B.1 / P2-1: load Applied Info from the invoice row. These are
+    // free-form text columns added so the values persist round-trip.
+    setWindDirection((invoice.wind_direction as string | null) || '');
+    setTemperature((invoice.temperature as string | null) || '');
+    setApplicator((invoice.applicator_name as string | null) || '');
 
     const groupId = (invoice.invoice_group_id as string | null) || null;
     setInvoiceGroupId(groupId);
@@ -405,6 +410,31 @@ export default function FieldApplicationInvoice() {
       setDirty(false);
       const ids = result.invoice_ids || [];
       const groupNote = result.invoice_group_id ? ` (group of ${ids.length})` : '';
+
+      // Wave B.1 / P2-1: persist Applied Info on every invoice in the group.
+      // The bulk RPC (save_field_app_invoice) ignores these three free-form
+      // text columns, so we set them in a separate UPDATE. Failure here is
+      // logged but does not roll back the save — the financial side already
+      // succeeded and the user can re-enter these on the next save.
+      if (ids.length > 0 && (windDirection || temperature || applicator)) {
+        const appliedResult = await supabase
+          .from('invoices')
+          .update({
+            wind_direction:  windDirection || null,
+            temperature:     temperature   || null,
+            applicator_name: applicator    || null,
+          })
+          .in('id', ids)
+          .select('id');
+        if (appliedResult.error) {
+          Sentry.captureException(appliedResult.error, {
+            level: 'warning',
+            extra: { context: 'field_app_applied_info_persist', invoice_ids: ids },
+          });
+          toast('warning', 'Saved, but Applied Info did not persist — try again or refresh.');
+        }
+      }
+
       toast('success', isNew ? `Invoice created${groupNote}` : `Invoice saved${groupNote}`);
 
       if (isNew && ids[0]) {
