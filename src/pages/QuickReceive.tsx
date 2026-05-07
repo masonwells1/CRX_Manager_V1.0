@@ -211,6 +211,19 @@ export default function QuickReceive() {
   ═══════════════════════════════════════════════════════════════════ */
   const handleConfirmReceive = async () => {
     if (!profile || !matchResults) return;
+
+    // Defense in depth: refuse to submit if any price-variance product is missing an explicit PO choice.
+    // The radio picker rendered for has_multiple_costs products has no default selection, so without this
+    // guard the loop below would fall through to auto-allocation (oldest PO first per match_quick_receive_items)
+    // and silently lock the cost to whichever PO came first.
+    const unresolvedVariance = matchResults.find(
+      (m) => m.has_multiple_costs && m.allocations.length > 0 && !overrides[m.product_id],
+    );
+    if (unresolvedVariance) {
+      toast('error', `Choose which PO to receive ${unresolvedVariance.product_name} against — multiple POs at different prices.`);
+      return;
+    }
+
     setSaving(true);
 
     const itemsPayload: Array<{
@@ -694,6 +707,11 @@ export default function QuickReceive() {
                         <p className="text-xs font-medium text-amber-700 mb-2">
                           ⚠ Same product on multiple POs at different prices. Pick the correct PO:
                         </p>
+                        {!overrides[match.product_id] && (
+                          <p className="text-xs font-medium text-red-600 mb-1">
+                            Required — pick one to enable Confirm.
+                          </p>
+                        )}
                         {match.allocations.map((alloc) => {
                           const isNoReturn = alloc.unit_cost < maxCost;
                           return (
@@ -806,21 +824,29 @@ export default function QuickReceive() {
           </Card>
 
           {/* Action buttons */}
-          <div className="flex justify-between">
-            <Button
-              variant="secondary"
-              onClick={() => setStep('add_items')}
-            >
-              ← Back to Edit
-            </Button>
-            <Button
-              onClick={handleConfirmReceive}
-              disabled={saving}
-              icon={<PackageCheck className="w-4 h-4" />}
-            >
-              {saving ? 'Receiving...' : 'Confirm & Receive'}
-            </Button>
-          </div>
+          {(() => {
+            const hasUnresolvedVariance = matchResults.some(
+              (m) => m.has_multiple_costs && m.allocations.length > 0 && !overrides[m.product_id],
+            );
+            return (
+              <div className="flex justify-between">
+                <Button
+                  variant="secondary"
+                  onClick={() => setStep('add_items')}
+                >
+                  ← Back to Edit
+                </Button>
+                <Button
+                  onClick={handleConfirmReceive}
+                  disabled={saving || hasUnresolvedVariance}
+                  icon={<PackageCheck className="w-4 h-4" />}
+                  title={hasUnresolvedVariance ? 'Pick a PO for each price-variance product before continuing.' : undefined}
+                >
+                  {saving ? 'Receiving...' : 'Confirm & Receive'}
+                </Button>
+              </div>
+            );
+          })()}
         </>
       )}
 
