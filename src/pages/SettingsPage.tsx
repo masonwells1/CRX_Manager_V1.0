@@ -17,7 +17,6 @@ import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '.
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getPagesForRole, getCategories } from '../lib/pagePermissions';
 import { Sentry } from '../lib/sentry';
-import { OCRThresholdSettings } from '../components/settings/OCRThresholdSettings';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 // --- Permissions Panel ---
@@ -584,8 +583,6 @@ export default function SettingsPage() {
           </div>
         </div>
       </Card>
-
-      <OCRThresholdSettings />
 
       <Modal open={userModalOpen} onClose={() => setUserModalOpen(false)} title="Add" accent="User">
         <div className="space-y-4">
