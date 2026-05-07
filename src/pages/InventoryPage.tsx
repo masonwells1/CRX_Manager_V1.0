@@ -1385,25 +1385,49 @@ export default function InventoryPage() {
 
       {/* Adjust Modal */}
       <Modal open={adjustOpen} onClose={() => setAdjustOpen(false)} title="Manual" accent="Adjustment">
-        <div className="space-y-4">
-          <Input
-            label="Adjustment Quantity (+ or -)"
-            type="number"
-            step="any"
-            value={adjustQty}
-            onChange={(e) => setAdjustQty(e.target.value)}
-          />
-          <Input
-            label="Note"
-            value={adjustNote}
-            onChange={(e) => setAdjustNote(e.target.value)}
-            placeholder="Reason for adjustment"
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setAdjustOpen(false)}>Cancel</Button>
-            <Button onClick={handleAdjust}>Apply Adjustment</Button>
-          </div>
-        </div>
+        {(() => {
+          const selectedRow = inventory.find((r) => r.id === selectedId);
+          const parsedDelta = parseFloat(adjustQty);
+          const hasDelta = adjustQty !== '' && Number.isFinite(parsedDelta);
+          const projectedQty = selectedRow && hasDelta ? selectedRow.quantity_available + parsedDelta : null;
+          const wouldGoNegative = projectedQty !== null && projectedQty < 0;
+          return (
+            <div className="space-y-4">
+              {selectedRow && (
+                <p className="text-sm text-secondary">
+                  Current on hand: <strong className="text-nav-dark">{selectedRow.quantity_available}</strong> units
+                </p>
+              )}
+              <Input
+                label="Adjustment Quantity (+ or -)"
+                type="number"
+                step="any"
+                value={adjustQty}
+                onChange={(e) => setAdjustQty(e.target.value)}
+              />
+              {selectedRow && hasDelta && projectedQty !== null && (
+                <p className={`text-sm ${wouldGoNegative ? 'text-red-600' : 'text-secondary'}`}>
+                  After this adjustment: <strong>{projectedQty}</strong> units
+                </p>
+              )}
+              {wouldGoNegative && (
+                <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900">
+                  <strong>Warning:</strong> this adjustment will drive inventory below zero ({projectedQty}). Verify with a physical count before proceeding.
+                </div>
+              )}
+              <Input
+                label="Note"
+                value={adjustNote}
+                onChange={(e) => setAdjustNote(e.target.value)}
+                placeholder="Reason for adjustment"
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="secondary" onClick={() => setAdjustOpen(false)}>Cancel</Button>
+                <Button onClick={handleAdjust}>Apply Adjustment</Button>
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
 
       <TransactionLedgerModal

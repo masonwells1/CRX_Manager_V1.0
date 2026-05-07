@@ -59,6 +59,8 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
   const [batchKeys, setBatchKeys] = useState<string[]>([]);
 
   const delta = Number(uniformDelta) || 0;
+  const hasDelta = uniformDelta !== '' && Number.isFinite(Number(uniformDelta));
+  const negativeCount = hasDelta ? items.filter((it) => it.quantity_available + delta < 0).length : 0;
 
   const handleSubmit = async () => {
     if (!reason.trim()) {
@@ -123,15 +125,25 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
 
         {/* Preview list */}
         <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-lg divide-y">
-          {items.map((it) => (
-            <div key={it.id} className="flex items-center justify-between px-3 py-2 text-sm">
-              <span className="truncate">{it.product_name}</span>
-              <span className="text-secondary whitespace-nowrap ml-2">
-                {it.quantity_available} → {it.quantity_available + delta}
-              </span>
-            </div>
-          ))}
+          {items.map((it) => {
+            const projected = it.quantity_available + delta;
+            const willGoNegative = hasDelta && projected < 0;
+            return (
+              <div key={it.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                <span className="truncate">{it.product_name}</span>
+                <span className={`whitespace-nowrap ml-2 ${willGoNegative ? 'text-red-600 font-medium' : 'text-secondary'}`}>
+                  {it.quantity_available} → {projected}
+                </span>
+              </div>
+            );
+          })}
         </div>
+
+        {negativeCount > 0 && (
+          <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900">
+            <strong>Warning:</strong> this adjustment will drive {negativeCount} product{negativeCount !== 1 ? 's' : ''} below zero. Verify with a physical count before proceeding.
+          </div>
+        )}
 
         <Input
           label="Adjustment Quantity (+ or -)"
