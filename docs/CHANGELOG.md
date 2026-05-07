@@ -4,6 +4,23 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-07 — Verified Customer 360 hero number = total balance due (audit Q5)
+
+Wave 1, item 2 of the Phase 4 closure autonomous run. Audit Q5 asked whether the hero number on the customer detail page should be "total balance due" or some other metric (last payment, MTD revenue, etc.). Mason's answer was A: total balance due. Verifying that the current code already does this — recording here so a future audit doesn't have to re-derive the same conclusion.
+
+The leftmost card in `CustomerSummaryBar` (rendered above all tabs on `/customers/:id`) shows `summary.ar_balance_cents` from the `get_customer_summary` RPC. Migration `20260404040200_get_customer_summary_rpc.sql` computes:
+
+```sql
+SELECT COALESCE(sum(balance_cents), 0)
+FROM invoices
+WHERE customer_id = p_customer_id
+  AND status IN ('posted', 'overdue');
+```
+
+This *is* `SUM(invoices.balance_cents)` per Mason's audit answer A — the `status` filter is the correct refinement, not a deviation. Drafts/unposted invoices aren't real AR yet, paid invoices already carry `balance_cents = 0` (GENERATED column = invoiced − paid), and voided/cancelled invoices shouldn't show as money owed. Filtering to `posted`/`overdue` captures exactly the receivables that are actually outstanding. No code change needed.
+
+---
+
 ## 2026-05-07 — Wave B.3: Move inventory math from React to one server-side RPC (audit P4-1 + P4-2)
 
 **Problem.** The InventoryPage's "Net Position" column was computed in JavaScript by combining four separately-fetched queries (`inventory`, `inventory_holds`, open `purchase_order_items`, `quote_items`, plus `inventory_transactions` for delivered-YTD). The column header said "Net Position" but the formula was a hybrid that subtracted holds AND planned demand. The manual-hold-creation modal on the same page used a *different* formula (`available − prebooked − holds`). The HelpTip claimed yet a third formula. Three different "free" answers on the same screen for the same product. INVENTORY_RULES.md `:88` literally said "All inventory math happens in the database, NOT in React" — the page violated that rule.
