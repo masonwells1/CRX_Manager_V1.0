@@ -409,16 +409,18 @@ export default function FieldApplicationInvoice() {
       if (error) throw error;
       const result = assertRpcResult<FieldAppInvoiceResult>(data, 'save_field_app_invoice');
       saveIdem.resetKey();
-      setDirty(false);
       const ids = result.invoice_ids || [];
       const groupNote = result.invoice_group_id ? ` (group of ${ids.length})` : '';
 
-      // Wave B.1 / P2-1: persist Applied Info on every invoice in the group.
-      // The bulk RPC (save_field_app_invoice) ignores these three free-form
-      // text columns, so we set them in a separate UPDATE. Failure here is
-      // logged but does not roll back the save — the financial side already
-      // succeeded and the user can re-enter these on the next save.
-      if (ids.length > 0 && (windDirection || temperature || applicator)) {
+      // Wave B.1 / P2-1 (audit B-4 + B-5 + B-8): persist Applied Info on
+      // every invoice in the group. Always runs when there is at least one
+      // invoice id — including when ALL three fields are blank, so the user
+      // can intentionally clear stale Applied Info. Failure here is treated
+      // as data loss: setDirty(false) is held until success, the Sentry
+      // level is "error" not "warning", and a single combined toast tells
+      // the user the financial save succeeded but Applied Info did not.
+      let appliedInfoOk = true;
+      if (ids.length > 0) {
         const appliedResult = await supabase
           .from('invoices')
           .update({
@@ -429,15 +431,31 @@ export default function FieldApplicationInvoice() {
           .in('id', ids)
           .select('id');
         if (appliedResult.error) {
+          appliedInfoOk = false;
           Sentry.captureException(appliedResult.error, {
-            level: 'warning',
+            level: 'error',
             extra: { context: 'field_app_applied_info_persist', invoice_ids: ids },
           });
-          toast('warning', 'Saved, but Applied Info did not persist — try again or refresh.');
+        } else {
+          checkMutationResult(appliedResult, 'Persist field-app applied info');
         }
       }
 
-      toast('success', isNew ? `Invoice created${groupNote}` : `Invoice saved${groupNote}`);
+      // Only consider the form clean when BOTH writes succeeded. If Applied
+      // Info failed, leave dirty=true so the leave-page warning still fires
+      // and the user can retry without re-entering the rest of the form.
+      if (appliedInfoOk) {
+        setDirty(false);
+      }
+
+      if (appliedInfoOk) {
+        toast('success', isNew ? `Invoice created${groupNote}` : `Invoice saved${groupNote}`);
+      } else {
+        toast('error',
+          (isNew ? 'Invoice created' : 'Invoice saved') + groupNote +
+          ', but Applied Info (wind/temp/applicator) did NOT persist. Re-enter and save again.'
+        );
+      }
 
       if (isNew && ids[0]) {
         navigate(`/invoices/field-app/${ids[0]}`, { replace: true });
