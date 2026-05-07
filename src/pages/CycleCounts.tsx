@@ -54,6 +54,7 @@ export default function CycleCounts() {
   const { toast } = useToast();
   const completeCycleCountIdem = useIdempotencyKey('complete_cycle_count', profile?.id || '');
   const reverseCycleCountIdem = useIdempotencyKey('reverse_cycle_count', profile?.id || '');
+  const cancelCycleCountIdem = useIdempotencyKey('cancel_cycle_count', profile?.id || '');
   const [counts, setCounts] = useState<CountRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -323,11 +324,14 @@ export default function CycleCounts() {
 
     await runCriticalAction({
       action: async () => {
+        const key = cancelCycleCountIdem.getKey();
         const { error } = await supabase.rpc('cancel_cycle_count', {
           p_cycle_count_id: activeCount.id,
           p_performed_by: profile.id,
+          p_idempotency_key: key,
         });
         if (error) throw error;
+        cancelCycleCountIdem.resetKey();
       },
       toast,
       successMessage: 'Cycle count cancelled',

@@ -4,6 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-07 — Wired front-end idempotency key into cancel_cycle_count call (audit P4-12)
+
+Phase 4 audit P4-12 flagged that `CycleCounts.tsx:326-329` called `cancel_cycle_count` with only two arguments — `p_cycle_count_id` and `p_performed_by` — even though the SQL RPC accepts a third optional `p_idempotency_key`. The RPC body is fully idempotent (verified in migration `20260501130000_field_app_workflow_phase18.sql:174-177` for `check_idempotency` and `:200-202` for `save_idempotency`), so the database enforcement was already correct. The front-end was not exercising it; a double-click on Cancel could in principle insert two `cycle_count_cancelled` activity rows even though the second `UPDATE` would no-op once the status was already 'cancelled'.
+
+Fix: added `cancelCycleCountIdem = useIdempotencyKey('cancel_cycle_count', profile?.id)` alongside the existing `complete` and `reverse` hooks, and wired its `getKey()` / `resetKey()` into `executeCancelCount`. No SQL change needed. Mirrors the pattern already used by `complete_cycle_count` (line 289-297) and `reverse_completed_cycle_count` (line 354-362) in the same file.
+
+---
+
 ## 2026-05-07 — Verified Customer 360 hero number = total balance due (audit Q5)
 
 Wave 1, item 2 of the Phase 4 closure autonomous run. Audit Q5 asked whether the hero number on the customer detail page should be "total balance due" or some other metric (last payment, MTD revenue, etc.). Mason's answer was A: total balance due. Verifying that the current code already does this — recording here so a future audit doesn't have to re-derive the same conclusion.
