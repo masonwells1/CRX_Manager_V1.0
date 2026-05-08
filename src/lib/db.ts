@@ -71,3 +71,50 @@ export function checkMutationResult(
     throw new Error(`${operation} failed: no rows were affected. You may not have permission.`);
   }
 }
+
+/**
+ * Canonical machine-readable error tokens raised by SECURITY DEFINER RPCs.
+ *
+ * Convention: SQL raises `'<TOKEN>'` or `'<TOKEN>: <human readable suffix>'`.
+ * TS callers detect the token with `hasRpcCode(err, RpcErrorCodes.X)` rather
+ * than substring matching the human suffix (which is fragile if the SQL
+ * message text ever changes).
+ *
+ * Add new tokens here when you create a new RPC that uses this pattern. The
+ * `as const` + indexed access type below makes the union exhaustive — a typo
+ * at any callsite (`hasRpcCode(err, 'INSUFFICIENT_HOLD_INVENORY')`) becomes a
+ * compile error.
+ */
+export const RpcErrorCodes = {
+  AUTH_REQUIRED: 'AUTH_REQUIRED',
+  ACTOR_MISMATCH: 'ACTOR_MISMATCH',
+  INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE',
+  INVALID_HOLD_TYPE: 'INVALID_HOLD_TYPE',
+  INVALID_QUANTITY: 'INVALID_QUANTITY',
+  FORCE_REQUIRES_ADMIN: 'FORCE_REQUIRES_ADMIN',
+  FORCE_REQUIRES_REASON: 'FORCE_REQUIRES_REASON',
+  INSUFFICIENT_HOLD_INVENTORY: 'INSUFFICIENT_HOLD_INVENTORY',
+  INVENTORY_NOT_FOUND: 'INVENTORY_NOT_FOUND',
+} as const;
+
+export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];
+
+/**
+ * Returns true if the error message matches the given RPC error token.
+ *
+ * SQL raises `'TOKEN'` or `'TOKEN: human suffix'` — both shapes match. The
+ * token must be at the START of the message (post any trailing punctuation
+ * the database adds), so we look for `'TOKEN'` as either the whole message,
+ * a prefix followed by `:`, or a prefix followed by whitespace.
+ *
+ * Prefer this over `message.includes(token)` because the latter false-
+ * positives if the token appears inside a user-supplied note or another
+ * error's text.
+ */
+export function hasRpcCode(err: unknown, code: RpcErrorCode): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  // Match: exact "TOKEN", "TOKEN:rest", or "TOKEN rest"
+  return message === code
+    || message.startsWith(`${code}:`)
+    || message.startsWith(`${code} `);
+}

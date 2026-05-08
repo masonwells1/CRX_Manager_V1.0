@@ -8,7 +8,7 @@ import Input from '../components/ui/Input';
 import Select from '../components/ui/Select';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { validateInventoryPositionShape } from '../lib/inventoryPositionValidator';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
@@ -374,10 +374,13 @@ export default function InventoryPage() {
       fetchInventory();
       fetchHolds();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('INSUFFICIENT_HOLD_INVENTORY')) {
+      // Use the typed `hasRpcCode` helper instead of substring-matching the
+      // raw message — substring matching false-positives if the token text
+      // ever appears inside a user-supplied note or sub-error.
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_HOLD_INVENTORY)) {
         if (isAdmin) {
           // Pop the ReasonModal so admin can force-create with a documented reason.
+          const message = err instanceof Error ? err.message : String(err);
           setForceHoldServerMessage(message);
           setForceHoldOpen(true);
         } else {
