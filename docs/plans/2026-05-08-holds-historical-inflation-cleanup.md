@@ -183,6 +183,48 @@ Once these are green, a follow-up Claude Code session can write `20260508100000_
 ## References
 
 - Trigger function: `release_holds_on_quote_status_change` defined in `supabase/migrations/20260316100001_inventory_hold_restoration.sql` (now fixed in `20260507210000_fix_holds_no_phantom_restoration.sql`).
-- E2E test that catches this bug: `tests/e2e/holds-cleanup-paths.spec.ts` Path B asserts `endQty === startQty`. Will fail until cleanup is applied (the code fix alone doesn't unwind existing inflation).
+- E2E test that catches this bug: `tests/e2e/holds-cleanup-paths.spec.ts` Path B asserts `endQty === startQty`. **Update 2026-05-08:** Path B passes on production code with only the code fix applied — see resolution footer below.
 - Final-wave-review finding F7 in [docs/audits/2026-05-07-final-wave-review-prompt.md](../audits/2026-05-07-final-wave-review-prompt.md).
 - Wave 3 anomaly that first surfaced this: `SESSION_FINAL_WAVE_3.md` § Anomalies.
+
+---
+
+## RESOLVED — 2026-05-08 — no production inflation found, cleanup migration NOT needed
+
+**Status:** Closed without cleanup migration. The bug existed in code from 2026-03-16 to 2026-05-07 (~7 weeks) but the conditions to trigger it never occurred in production data.
+
+### Diagnostic results (run against project `rhyzpcqhnizqbxphqdkr`)
+
+| Check | Result |
+|---|---|
+| Q1 — declined/expired planned-quote holds (per-product) | **0 rows** |
+| Q2 — cancelled-order holds (per-product) | **0 rows** |
+| Q3 — double-counted holds (both paths) | **0 rows** |
+| Holds with `hold_type IN ('planned', 'planned_quote', 'quote')` (all-time) | **0** |
+| Quotes ever having `is_planned = true` | **1** (currently still `draft`, never terminated) |
+| Quotes that ever reached `declined` or `expired` status | **0** |
+
+### Why the bug never fired
+
+The buggy code paths (`release_holds_on_quote_status_change`, `auto_expire_quotes`, `cancel_order`) all required:
+1. A hold linked to a quote via `inventory_holds.source_id`
+2. That quote (or its child order) reaching a terminal status (`declined`, `expired`, or order `cancelled`)
+3. The hold being `is_active = true` at the moment of the status transition
+
+The 29 holds in production are:
+- 20 inactive `manual` holds with `source_id = NULL`, all deactivated 2026-03-14 → 03-15 (BEFORE the bug landed). Manual holds aren't linked to quotes — the trigger's `WHERE source_id = NEW.id` clause skipped them.
+- 9 active `crop_program` holds from 2026-04-28, linked to the single planned draft quote which hasn't been terminated.
+
+The 2 cancelled orders both bypassed `cancel_order`'s buggy branch — ORD-2026-0329 had `quote_id = NULL`, ORD-2026-0330's source quote had `is_planned = false`.
+
+### E2E verification
+
+`tests/e2e/holds-cleanup-paths.spec.ts` Path B passes on production code (Chromium, 4.6s) with only the code-fix migration `20260507210000` applied. The test is self-contained — it sets up a planned quote, declines it, and asserts `endQty === startQty`. It was actually exercising the code fix all along, not historical state.
+
+### Decision
+
+- **No cleanup migration written.** The `20260508100000_drain_phantom_holds_inflation.sql` placeholder filename is retired.
+- **No physical warehouse audit performed for this finding.** Out of scope for F7. Cycle counts run on their own cadence.
+- **CLAUDE.md migration count stays at 285** (no new migration added).
+
+Closed by Claude Code session on 2026-05-08, decision approved by Mason.
