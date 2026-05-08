@@ -1,9 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { ShieldAlert, RefreshCw, AlertTriangle, FileText, Wrench, PackageCheck } from 'lucide-react';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../components/ui/Toast';
-import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import Button from '../components/ui/Button';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { Sentry } from '../lib/sentry';
@@ -48,9 +47,11 @@ interface ManufacturedRow {
 export default function IntegrityCleanup() {
   const { profile } = useAuth();
   const { toast } = useToast();
-  const reconcileIdem = useIdempotencyKey('reconcile_negative_inventory', profile?.id || '');
-  const backfillIdem = useIdempotencyKey('create_invoice_for_unbilled_delivery', profile?.id || '');
-  const verifyIdem = useIdempotencyKey('mark_inventory_row_verified', profile?.id || '');
+  // F2 fix: idempotency keys are generated per-click (not via useIdempotencyKey)
+  // because the hook caches one key per mount, so rapid clicks across DIFFERENT
+  // rows would all reuse the first row's key — server returns the cached
+  // result for the wrong row and the UI shows a misleading success toast.
+  // Each handler below calls crypto.randomUUID() inline.
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -68,7 +69,11 @@ export default function IntegrityCleanup() {
   const fetchAll = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [negRes, overRes, unbilledRes, manufacturedRes] = await Promise.all([
+      // F3 fix: Promise.allSettled instead of Promise.all so a single query
+      // failure (e.g. the manufactured_at_delivery query erroring during the
+      // window between code deploy and migration apply) doesn't drop the
+      // three other sections' data.
+      const [negSettled, overSettled, unbilledSettled, manufacturedSettled] = await Promise.allSettled([
         supabase
           .from('inventory')
           .select('id, product_id, location, quantity_available, quantity_prebooked, quantity_on_order, product:products(product_name)')
@@ -89,6 +94,27 @@ export default function IntegrityCleanup() {
           .eq('manufactured_at_delivery', true)
           .order('updated_at', { ascending: false }),
       ]);
+
+      const negRes = negSettled.status === 'fulfilled' ? negSettled.value : { data: null, error: negSettled.reason };
+      const overRes = overSettled.status === 'fulfilled' ? overSettled.value : { data: null, error: overSettled.reason };
+      const unbilledRes = unbilledSettled.status === 'fulfilled' ? unbilledSettled.value : { data: null, error: unbilledSettled.reason };
+      const manufacturedRes = manufacturedSettled.status === 'fulfilled' ? manufacturedSettled.value : { data: null, error: manufacturedSettled.reason };
+
+      // Report any individual-section failures to Sentry so we can detect
+      // deploy-ordering issues, but don't block the other sections from rendering.
+      [
+        ['negative inventory', negSettled],
+        ['over-received POs', overSettled],
+        ['unbilled deliveries', unbilledSettled],
+        ['manufactured-at-delivery rows', manufacturedSettled],
+      ].forEach(([label, settled]) => {
+        if ((settled as PromiseSettledResult<unknown>).status === 'rejected') {
+          const reason = (settled as PromiseRejectedResult).reason;
+          Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)), {
+            tags: { source: 'integrity_cleanup_query', section: label as string },
+          });
+        }
+      });
 
       if (negRes.data) {
         const rows = negRes.data as unknown as Array<{
@@ -225,16 +251,16 @@ export default function IntegrityCleanup() {
     }
     setReconcileInputs((prev) => ({ ...prev, [row.id]: { ...prev[row.id], busy: true } }));
     try {
-      const key = reconcileIdem.getKey();
+      // F2 fix: per-click UUID, not a hook-cached key (which would collide across rows)
+      const idemKey = crypto.randomUUID();
       const { error } = await supabase.rpc('reconcile_negative_inventory', {
         p_inventory_id: row.id,
         p_new_quantity: parseFloat(input.qty),
         p_reason: input.reason.trim(),
         p_performed_by: profile.id,
-        p_idempotency_key: key,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      reconcileIdem.resetKey();
       toast('success', `${row.product_name} reconciled to ${input.qty}`);
       await fetchAll();
     } catch (err) {
@@ -249,15 +275,27 @@ export default function IntegrityCleanup() {
     if (!profile) return;
     setVerifyBusy((prev) => ({ ...prev, [rowId]: true }));
     try {
-      const key = verifyIdem.getKey();
-      const { error } = await supabase.rpc('mark_inventory_row_verified', {
+      // F2 fix: per-click UUID, not a hook-cached key (which would collide across rows)
+      const idemKey = crypto.randomUUID();
+      const { data, error } = await supabase.rpc('mark_inventory_row_verified', {
         p_inventory_id: rowId,
         p_performed_by: profile.id,
-        p_idempotency_key: key,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      verifyIdem.resetKey();
-      toast('success', 'Inventory row verified — flag cleared');
+      // F4 fix: the RPC returns { cleared: false, reason: 'already_verified' }
+      // when another admin already cleared the flag. The previous handler ignored
+      // `data` and showed a green success toast unconditionally, misleading the
+      // user into thinking their click had effect.
+      const result = assertRpcResult<{ cleared: boolean; reason: string }>(
+        data,
+        'mark_inventory_row_verified',
+      );
+      if (result.cleared) {
+        toast('success', 'Inventory row verified — flag cleared');
+      } else {
+        toast('info', `Already cleared (${result.reason})`);
+      }
       await fetchAll();
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)));
@@ -272,14 +310,14 @@ export default function IntegrityCleanup() {
     if (!profile) return;
     setBackfillBusy((prev) => ({ ...prev, [row.id]: true }));
     try {
-      const key = backfillIdem.getKey();
+      // F2 fix: per-click UUID, not a hook-cached key (which would collide across rows)
+      const idemKey = crypto.randomUUID();
       const { error } = await supabase.rpc('create_invoice_for_unbilled_delivery', {
         p_delivery_id: row.id,
         p_performed_by: profile.id,
-        p_idempotency_key: key,
+        p_idempotency_key: idemKey,
       });
       if (error) throw error;
-      backfillIdem.resetKey();
       toast('success', `Draft invoice created for ${row.delivery_number}`);
       await fetchAll();
     } catch (err) {

@@ -224,6 +224,23 @@ export default function QuickReceive() {
       return;
     }
 
+    // F6 fix: symmetric guard for partially-unmatched products. When a product has BOTH
+    // allocations (some units matched a PO) AND quantity_unmatched > 0 (extras with no PO),
+    // the user must pick over_receive or skip from the unmatched-action radio. Without
+    // this guard, the per-product loop below pushes the matched portion to itemsPayload,
+    // skips the unmatched chunk silently, and the success toast falsely claims the full
+    // shipment was received.
+    const unresolvedUnmatched = matchResults.find(
+      (m) => m.allocations.length > 0 && m.quantity_unmatched > 0 && !unmatchedActions[m.product_id],
+    );
+    if (unresolvedUnmatched) {
+      toast(
+        'error',
+        `Choose what to do with the ${unresolvedUnmatched.quantity_unmatched} extra ${unresolvedUnmatched.product_name} unit(s) — over-receive or skip.`,
+      );
+      return;
+    }
+
     setSaving(true);
 
     const itemsPayload: Array<{
@@ -828,6 +845,16 @@ export default function QuickReceive() {
             const hasUnresolvedVariance = matchResults.some(
               (m) => m.has_multiple_costs && m.allocations.length > 0 && !overrides[m.product_id],
             );
+            // F6 fix: symmetric guard for partially-unmatched products
+            const hasUnresolvedUnmatched = matchResults.some(
+              (m) => m.allocations.length > 0 && m.quantity_unmatched > 0 && !unmatchedActions[m.product_id],
+            );
+            const blocked = hasUnresolvedVariance || hasUnresolvedUnmatched;
+            const blockReason = hasUnresolvedVariance
+              ? 'Pick a PO for each price-variance product before continuing.'
+              : hasUnresolvedUnmatched
+                ? 'Choose over-receive or skip for each product with extra units before continuing.'
+                : undefined;
             return (
               <div className="flex justify-between">
                 <Button
@@ -838,9 +865,9 @@ export default function QuickReceive() {
                 </Button>
                 <Button
                   onClick={handleConfirmReceive}
-                  disabled={saving || hasUnresolvedVariance}
+                  disabled={saving || blocked}
                   icon={<PackageCheck className="w-4 h-4" />}
-                  title={hasUnresolvedVariance ? 'Pick a PO for each price-variance product before continuing.' : undefined}
+                  title={blockReason}
                 >
                   {saving ? 'Receiving...' : 'Confirm & Receive'}
                 </Button>
