@@ -35,3 +35,11 @@ coverage/
 # Generated files
 INV-*.pdf
 *.generated.pdf
+
+# Database backups (contain full production data - never commit)
+backups/
+*.dump
+
+# Claude Code runtime state (regenerated per machine)
+.claude/scheduled_tasks.lock
+
