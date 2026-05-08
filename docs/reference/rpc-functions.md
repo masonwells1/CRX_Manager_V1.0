@@ -26,10 +26,10 @@
 - `convert_quote_to_order()` — also releases inventory holds linked to the quote. Copies `qi.notes` to `order_items.notes` and aggregates section_header_notes into `orders.program_notes`
 - `create_direct_order()` — create order without a quote; warns (not blocks) on low inventory using net position
 - `create_order_from_blend_ticket()` — create order from linked blend ticket
-- `cancel_order()` — cancels order, releases prebooked inventory
+- `cancel_order()` — cancels order, releases prebooked inventory. **F7 (2026-05-07):** no longer adds `v_hold.quantity` to `inventory.quantity_available` when deactivating planned-quote holds — holds are soft reservations that never debited it.
 - `update_order_items()` — update items on an existing order
 - `confirm_delivery()` — scheduled -> in_progress transition
-- `complete_delivery()` — requires in_progress, creates remainder rows for partial deliveries, copies `tote_number` from delivery items. **P4-10 (2026-05-07):** completing a delivery whose `delivery_date` falls in a CLOSED accounting period emits a non-blocking `activity_feed` warning (`event_type='backdated_delivery_in_closed_period'`) + per-admin `notifications` row, then proceeds.
+- `complete_delivery()` — requires in_progress, creates remainder rows for partial deliveries, copies `tote_number` from delivery items. **P4-10 (2026-05-07):** completing a delivery whose `delivery_date` falls in a CLOSED accounting period emits a non-blocking `activity_feed` warning (`event_type='backdated_delivery_in_closed_period'`) + per-admin `notifications` row, then proceeds. **F8 (2026-05-07):** restored the post-loop `tote_number` copy step that Phase 15 dropped — load sheets now correctly carry tote numbers again.
 - `edit_delivery()` — logistics always editable; items (add/remove/adjust) editable only when status = 'scheduled'. Validates quantities against order_items.quantity_remaining minus other active deliveries.
 - `cancel_delivery()` — cancels delivery, releases prebooked inventory
 - `batch_cancel_deliveries()` — batch cancel multiple deliveries
@@ -60,7 +60,7 @@
 - `receive_po_items()` — per-item condition/lot/notes/storage, creates receiving_records
 - `release_inventory_hold()` — release a specific inventory hold
 - `create_planned_holds()` — Creates inventory holds for planned quote sections
-- `create_inventory_hold(p_product_id, p_customer_id, p_quantity, p_hold_type, p_expires_at, p_notes, p_performed_by, p_force, p_force_reason, p_idempotency_key)` — server-side manual hold creation with FOR UPDATE lock + atomic check against today's free stock (`available − prebooked − active holds`). Blocks negative-going holds by default; admin can pass `p_force=true` with a non-blank `p_force_reason` to override (mirrors PO over-receive admin-override). SECURITY DEFINER, search_path = public, pg_temp. Phase 4 P4-3 (2026-05-07). Replaces the bare `inventory_holds` insert from `InventoryPage.tsx`.
+- `create_inventory_hold(p_product_id, p_customer_id, p_quantity, p_hold_type, p_expires_at, p_notes, p_performed_by, p_force, p_force_reason, p_idempotency_key)` — server-side manual hold creation with FOR UPDATE lock + atomic check against today's free stock (`available − prebooked − active holds`). Blocks negative-going holds by default; admin can pass `p_force=true` with a non-blank `p_force_reason` to override (mirrors PO over-receive admin-override). SECURITY DEFINER, search_path = public, pg_temp. Phase 4 P4-3 (2026-05-07). Replaces the bare `inventory_holds` insert from `InventoryPage.tsx`. **F1 (2026-05-07):** `FORCE_REQUIRES_REASON` / `FORCE_REQUIRES_ADMIN` checks hoisted above the inventory threshold so they fire unconditionally when `p_force=true`, fixing a NULL-concat crash on the sufficient-inventory force path.
 - `mark_inventory_row_verified(p_inventory_id, p_performed_by, p_idempotency_key)` — admin-only RPC that clears the `inventory.manufactured_at_delivery` flag on a row after physical-stock confirmation. Used by `/integrity-cleanup`'s "Phantom inventory rows" section. SECURITY DEFINER, search_path = public, pg_temp. Idempotent. Phase 4 P4-7 (2026-05-07).
 - `complete_cycle_count()` — finalize cycle count, create adjustment transactions
 - `get_receiving_log()` — paginated, filterable receiving history
@@ -189,7 +189,7 @@
 - `get_field_billing_splits_for_blend_ticket(p_blend_ticket_id)` → table — returns billing splits for all fields associated with a blend ticket
 
 ## Automation
-- `auto_expire_quotes()` — cron-callable: expires quotes past their expiration date, releases inventory holds
+- `auto_expire_quotes()` — cron-callable: expires quotes past their expiration date, deactivates inventory holds. **F7 (2026-05-07):** belt-and-suspenders restoration UPDATE removed; deactivation only — holds are soft reservations that never debited `quantity_available`.
 - `check_remainder_reminders()` — cron-callable: checks for delivery remainders needing follow-up reminders
 
 ## Helper Functions (SQL)
@@ -238,7 +238,7 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 - `trg_payment_update_order()` — fires on payment changes to update order totals
 - `trg_po_status_change()` — fires on PO status change
 - `trg_recalc_order_totals()` — recalculates order totals when items change
-- `release_holds_on_quote_status_change()` — deactivates inventory holds when quote is declined/expired/accepted
+- `release_holds_on_quote_status_change()` — deactivates inventory holds when quote is declined/expired/accepted. **F7 (2026-05-07):** restoration UPDATE removed from declined/expired branch; deactivation only — fixes phantom inventory accrual that had been live since 2026-03-16.
 - `release_expired_quote_holds()` — releases holds from expired quotes
 
 ### Inventory Helpers
