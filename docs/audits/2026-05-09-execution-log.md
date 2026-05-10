@@ -331,7 +331,7 @@ Completed: 2026-05-10 01:00
 Elapsed: ~6 min
 Risk: Low
 Files changed: 1 (new migration; not applied)
-Commit: pending
+Commit: 25a6511
 Findings closed: P2 (team_note_tags USING(true))
 Notes:
 - Live inspection: only the SELECT policy was over-permissive (`USING (true)`). The INSERT and DELETE policies were already gated by note creator OR is_admin().
@@ -345,4 +345,28 @@ Decision made autonomously (not in original plan):
 
 Test outcomes:
 - npm run typecheck: pass
+- npm run lint + build + test: deferred to pre-commit hook
+
+---
+
+## PR-18 — validate-frontend.sh --all mode
+Status: completed
+Started: 2026-05-10 01:00
+Completed: 2026-05-10 01:04
+Elapsed: ~4 min
+Risk: Low
+Files changed: 1 (scripts/validate-frontend.sh)
+Commit: pending
+Findings closed: P2 (validate-frontend.sh staged-only)
+Notes:
+- Added `--all` flag handling. When set, scans every `src/**/*.{ts,tsx}` via `find` instead of using `git diff --cached`. When omitted, behavior is unchanged (pre-commit hook mode).
+- Added `--help` flag too.
+- Final summary line in --all mode shows aggregate counts: "Frontend audit complete: N warning(s), M violation(s)."
+- Tested both modes: default mode exits 0 on empty stage; --all scans 200+ files and reports 27 warnings, 0 violations (the warnings are pre-existing and don't fail the audit since they're WARNING-level not VIOLATION-level).
+- This makes Phase 4 audits possible — `bash scripts/validate-frontend.sh --all` now gives a complete picture instead of just the staged files.
+
+Test outcomes:
+- Manual: `bash scripts/validate-frontend.sh --all` → 27 warnings, 0 violations, exit 0
+- Manual: `bash scripts/validate-frontend.sh` (no args) → exits 0 with no staged files
+- npm run typecheck: pass (no TS changes)
 - npm run lint + build + test: deferred to pre-commit hook
