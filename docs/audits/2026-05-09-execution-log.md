@@ -79,7 +79,7 @@ Completed: 2026-05-09 22:58
 Elapsed: ~8 min
 Risk: Low
 Files changed: 1 (supabase/functions/send-email/index.ts)
-Commit: pending
+Commit: 31c3db1
 Findings closed: P1 #8 (send-email customers.name)
 Notes:
 - Changed selector at line 156 from `id, email, name` → `id, email, farm_name`. The `customers` table has no `name` column — the column is `farm_name`. PostgREST returns 42703 on the missing column, but the Edge Function silently swallowed it via `if (!customerRow) → 404` so callers got a misleading "customer_id not found" error instead of the real cause.
@@ -93,3 +93,32 @@ Test outcomes:
 - npm run typecheck: pass
 - npm run build: pass
 - npm run test: deferred to pre-commit hook (Edge Function not exercised by unit tests anyway)
+
+---
+
+## PR-05 — E2E hardening Phase 1 (env var guards)
+Status: completed
+Started: 2026-05-09 22:58
+Completed: 2026-05-09 23:15
+Elapsed: ~17 min
+Risk: Low
+Files changed: 6
+Commit: pending
+Findings closed: P0 #1 cleanup, Q10 Phase 1 hardening
+Notes:
+- Removed hardcoded credential fallback (`'mason@croprxsolutions.com'` / `'Mwells0413'`) from THREE files — they were copy-pasted into auth.ts, setup-fixtures.ts, and teardown-fixtures.ts. Now all three throw a clear error if `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` aren't set.
+- The actual password rotation was confirmed by Mason as already done in this session ("it is same password we will change it when done in this session"). This PR removes the literal string from the codebase so the next rotation doesn't have to remember to scrub it again.
+- Added `tests/e2e/utils/safety-guards.ts` with `assertNotProductionWithoutOverride()` that refuses to run if `VITE_SUPABASE_URL` is set to the production project ref without `E2E_ALLOW_PROD=true`.
+- Wired the guard into setup-fixtures.ts default export (which IS the playwright globalSetup target).
+- Note: SUPABASE_URL is STILL hardcoded to production in setup-fixtures.ts and teardown-fixtures.ts. The guard's first job today is for the future case where the URL becomes env-driven (PR-23 staging Supabase work). The IMMEDIATE hardening is the credential removal — fail-closed if env vars missing.
+- Created docs/CONTRIBUTING.md with E2E env var requirements, the safety guard, the [E2E] prefix convention, and pre-commit hook overview.
+- Skipped the plan's "[E2E] prefix smoke test in global setup" — the plan describes it but doesn't give code, and the right semantics weren't obvious (does it check for orphans? Verify fixtures exist? Either is non-trivial). The teardown step's prefix-based DELETE plus the human convention should suffice for now.
+
+Decision made autonomously (not in original plan):
+- Updated teardown-fixtures.ts in addition to setup-fixtures.ts. The plan's Files list mentioned teardown but the body text only described setup. Consistency required updating both.
+
+Test outcomes:
+- npm run lint: pass (0 errors, 270 warnings)
+- npm run typecheck: pass
+- npm run build: deferred to pre-commit hook
+- npm run test: deferred to pre-commit hook (E2E files not exercised by vitest)

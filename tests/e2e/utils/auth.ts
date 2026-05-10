@@ -1,10 +1,24 @@
 import { Page } from '@playwright/test';
 
-// Fallback credentials match the setup-fixtures.ts pattern so login works
-// even when E2E_TEST_PASSWORD isn't set in the env (e.g. local dev runs).
+/**
+ * Throw if a required env var is missing. Fail-closed pattern — replaces the
+ * old hardcoded credential fallback. PR-05.
+ */
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `E2E env var ${name} is required.\n` +
+        `Set E2E_TEST_EMAIL and E2E_TEST_PASSWORD before running Playwright.\n` +
+        `See docs/CONTRIBUTING.md (E2E section) for setup instructions.`,
+    );
+  }
+  return value;
+}
+
 export const TEST_USER = {
-  email: process.env.E2E_TEST_EMAIL || 'mason@croprxsolutions.com',
-  password: process.env.E2E_TEST_PASSWORD || 'Mwells0413',
+  email: requireEnv('E2E_TEST_EMAIL'),
+  password: requireEnv('E2E_TEST_PASSWORD'),
 };
 
 export async function login(page: Page, email = TEST_USER.email, password = TEST_USER.password) {
