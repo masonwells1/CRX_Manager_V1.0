@@ -128,7 +128,10 @@ CREATE POLICY vendors_select ON public.vendors
   FOR SELECT
   USING (
     deleted_at IS NULL
-    AND (SELECT role FROM public.profiles WHERE id = auth.uid())
+    -- (codex audit F6, 2026-05-10): use (SELECT auth.uid()) so the function
+    -- is evaluated once per query rather than per row. Project convention
+    -- per RLS_SECURITY_GUIDE.md.
+    AND (SELECT role FROM public.profiles WHERE id = (SELECT auth.uid()))
         IN ('admin', 'sales_rep')
   );
 
@@ -220,6 +223,15 @@ BEGIN
   END IF;
 
   v_total := p_subtotal_cents + COALESCE(p_adjustment_cents, 0);
+
+  -- (codex audit F4, 2026-05-10): reject zero-or-negative computed totals.
+  -- After PR-15's parseDollarsToCents fix preserves negatives, a UI input
+  -- of subtotal $100 + adjustment -$200 now produces a real -$100 total,
+  -- which would create a stuck/misleading AP record. The subtotal>0 check
+  -- above isn't sufficient on its own — adjustments can flip the sign.
+  IF v_total <= 0 THEN
+    RAISE EXCEPTION 'INVALID_AMOUNT: bill total must be positive (got %)', v_total;
+  END IF;
 
   -- Insert bill (balance_cents now GENERATED — do NOT include in column list)
   INSERT INTO vendor_bills (
@@ -459,7 +471,12 @@ BEGIN
    WHERE vendor_bill_id = p_vendor_bill_id
      AND voided_at IS NULL;
 
-  IF v_active_payments > 0 AND v_bill.status = 'paid' THEN
+  -- (codex audit F3, 2026-05-10): block voiding ANY bill with active
+  -- payments, not just `status = 'paid'`. The previous predicate let
+  -- partially_paid bills slip through with active payments still attached,
+  -- producing a voided bill with live payment rows — an inconsistent AP
+  -- audit trail.
+  IF v_active_payments > 0 THEN
     RAISE EXCEPTION
       'BILL_HAS_ACTIVE_PAYMENTS: bill has % active payment(s); void each payment first',
       v_active_payments;
