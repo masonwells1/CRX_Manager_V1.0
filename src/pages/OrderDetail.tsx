@@ -407,7 +407,7 @@ export default function OrderDetail() {
         const itemsPayload = [...existingPayload, ...newPayload];
 
         const idemKey = updateOrderIdem.getKey();
-        const { error } = await supabase.rpc('update_order_items', {
+        const { data, error } = await supabase.rpc('update_order_items', {
           p_order_id: id!,
           p_items: itemsPayload,
           p_performed_by: profile.id,
@@ -415,6 +415,7 @@ export default function OrderDetail() {
         });
 
         if (error) throw error;
+        assertRpcResult(data, 'update_order_items');
 
         updateOrderIdem.resetKey();
         const addedCount = newPayload.length;

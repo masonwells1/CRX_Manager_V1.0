@@ -22,7 +22,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import HelpTip from '../components/ui/HelpTip';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
@@ -410,7 +410,7 @@ export default function PurchaseOrders() {
     let cancelledCount = 0;
     for (const po of selectedRows) {
       if (po.status !== 'cancelled') {
-        const { error } = await supabase.rpc('cancel_purchase_order', {
+        const { data, error } = await supabase.rpc('cancel_purchase_order', {
           p_po_id: po.id,
           p_performed_by: profile?.id,
           p_idempotency_key: crypto.randomUUID(),
@@ -418,6 +418,7 @@ export default function PurchaseOrders() {
         if (error) {
           toast('error', `Failed to cancel PO ${po.po_number}: ${error.message}`);
         } else {
+          assertRpcResult(data, 'cancel_purchase_order');
           cancelledCount++;
         }
       }

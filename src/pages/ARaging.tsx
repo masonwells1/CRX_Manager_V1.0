@@ -467,14 +467,16 @@ export default function ARaging() {
         const { data, error } = await supabase.rpc('get_ar_reminder_candidates');
         if (error) throw error;
 
-        const candidates = assertRpcResult<Array<{
+        type ARReminderInvoice = { invoice_number: string; balance_cents: number; days_past_due: number };
+        type ARReminderCandidate = {
           customer_id: string;
           farm_name: string;
           email: string;
           total_balance_cents: number;
           max_days_past_due: number;
-          invoices: Array<{ invoice_number: string; balance_cents: number; days_past_due: number }>;
-        }>>(data, 'get_ar_reminder_candidates');
+          invoices: ARReminderInvoice[];
+        };
+        const candidates = assertRpcResult<ARReminderCandidate[]>(data, 'get_ar_reminder_candidates');
 
         if (candidates.length === 0) {
           toast('info', 'No customers with 30+ day overdue invoices');

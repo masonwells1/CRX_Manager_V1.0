@@ -9,13 +9,22 @@ import WriteOffModal from './WriteOffModal';
 // ── Mocks ────────────────────────────────────────────────────────────────
 
 const { mockRpc, mockToast } = vi.hoisted(() => {
-  const mockRpc = vi.fn().mockResolvedValue({ data: null, error: null });
+  // apply_write_off returns the write-off uuid — non-null per its RPC contract,
+  // so the default mock matches the real shape (and satisfies assertRpcResult).
+  const mockRpc = vi.fn().mockResolvedValue({ data: 'wo-uuid-stub', error: null });
   const mockToast = vi.fn();
   return { mockRpc, mockToast };
 });
 
 vi.mock('../../lib/db', () => ({
   supabase: { rpc: mockRpc },
+  // Real shape: throws on null/undefined, returns the value otherwise.
+  assertRpcResult: (data: unknown, rpcName: string) => {
+    if (data === null || data === undefined) {
+      throw new Error(`${rpcName} returned no data — operation may have been denied`);
+    }
+    return data;
+  },
 }));
 
 vi.mock('../../hooks/useIdempotencyKey', () => ({
@@ -44,7 +53,7 @@ describe('WriteOffModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRpc.mockResolvedValue({ data: null, error: null });
+    mockRpc.mockResolvedValue({ data: 'wo-uuid-stub', error: null });
   });
 
   it('renders when open=true', () => {

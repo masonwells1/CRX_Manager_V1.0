@@ -17,9 +17,9 @@ import { generateIdempotencyKey } from '../lib/idempotency';
  *
  * async function handleComplete() {
  *   const key = getKey();
- *   const { error } = await supabase.rpc('complete_delivery', { p_idempotency_key: key, ... });
- *   if (!error) resetKey(); // success — next click is a new action
- *   // on error, key stays the same for retry
+ *   await supabase.rpc('complete_delivery', { p_idempotency_key: key, ... });
+ *   resetKey(); // call on success — next click is a new action
+ *   // on error (caught upstream), key stays the same for retry
  * }
  */
 export function useIdempotencyKey(operation: string, userId: string) {

@@ -30,23 +30,21 @@ export default function AccountsPayable() {
 
   const fetchDashboard = useCallback(async () => {
     setLoading(true);
-    const [summaryRes, agingRes] = await Promise.all([
-      supabase.rpc('get_ap_dashboard_summary'),
-      supabase.rpc('get_ap_aging', { p_as_of_date: asOfDate }),
-    ]);
+    const { data: summaryData, error: summaryError } = await supabase.rpc('get_ap_dashboard_summary');
+    const { data: agingData, error: agingError } = await supabase.rpc('get_ap_aging', { p_as_of_date: asOfDate });
 
-    if (summaryRes.error) {
-      Sentry.captureException(summaryRes.error);
+    if (summaryError) {
+      Sentry.captureException(summaryError);
       toast('error', 'Failed to load AP summary');
     } else {
-      setSummary(assertRpcResult<APDashboardSummary>(summaryRes.data as unknown, 'get_ap_dashboard_summary'));
+      setSummary(assertRpcResult<APDashboardSummary>(summaryData, 'get_ap_dashboard_summary'));
     }
 
-    if (agingRes.error) {
-      Sentry.captureException(agingRes.error);
+    if (agingError) {
+      Sentry.captureException(agingError);
       toast('error', 'Failed to load AP aging data');
     } else {
-      setAgingData(assertRpcResult<APAgingRow[]>(agingRes.data, 'get_ap_aging'));
+      setAgingData(assertRpcResult<APAgingRow[]>(agingData, 'get_ap_aging'));
     }
     setLoading(false);
   }, [asOfDate, toast]);

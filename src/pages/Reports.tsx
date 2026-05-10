@@ -440,7 +440,7 @@ export default function Reports() {
 
       let totalPaid = 0;
       for (const [, ids] of byRecipient) {
-        const { error } = await supabase.rpc('create_commission_payment', {
+        const { data, error } = await supabase.rpc('create_commission_payment', {
           p_commission_ids: ids,
           p_payment_method: 'other',
           p_reference: null,
@@ -450,6 +450,7 @@ export default function Reports() {
           p_idempotency_key: `reports-commission-pay-${ids.join('-')}-${Date.now()}`,
         });
         if (error) throw new Error(error.message);
+        assertRpcResult<string>(data, 'create_commission_payment');
         totalPaid += ids.length;
       }
 

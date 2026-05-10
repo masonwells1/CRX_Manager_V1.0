@@ -184,12 +184,13 @@ export default function ReceivingLog() {
         // Direct .delete() bypasses the inventory rollback and leaves phantom stock.
         for (const id of ids) {
           const idemKey = reverseRecIdem.getKey();
-          const { error } = await supabase.rpc('reverse_receiving_record', {
+          const { data, error } = await supabase.rpc('reverse_receiving_record', {
             p_record_id: id,
             p_reason: 'Bulk deleted from receiving log',
             p_idempotency_key: idemKey,
           });
           if (error) throw new Error(`Failed to reverse record ${id}: ${error.message}`);
+          assertRpcResult(data, 'reverse_receiving_record');
           reverseRecIdem.resetKey();
         }
       },

@@ -385,12 +385,13 @@ export default function JobDetail() {
     setStarting(true);
     try {
       const idemKey = startJobIdem.getKey();
-      const { error } = await supabase.rpc('start_job', {
+      const { data, error } = await supabase.rpc('start_job', {
         p_job_id: id,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'start_job');
       startJobIdem.resetKey();
       logActivity({ event: 'job_started', description: `Job ${jobNumber} started`, performedBy: profile.id });
       toast('success', 'Job started');

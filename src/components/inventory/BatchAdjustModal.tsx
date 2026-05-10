@@ -2,7 +2,7 @@ import { useState } from 'react';
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
 import { useToast } from '../ui/Toast';
 
@@ -89,11 +89,12 @@ export default function BatchAdjustModal({ open, onClose, items, userId, onSucce
     let errorCount = 0;
 
     for (const call of calls) {
-      const { error } = await supabase.rpc('adjust_inventory', call);
+      const { data, error } = await supabase.rpc('adjust_inventory', call);
       if (error) {
         Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { extra: { context: 'Batch adjust error' } });
         errorCount++;
       } else {
+        assertRpcResult(data, 'adjust_inventory');
         successCount++;
       }
     }
