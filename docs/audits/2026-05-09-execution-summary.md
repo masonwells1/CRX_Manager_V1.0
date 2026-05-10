@@ -1,5 +1,124 @@
 # CRX Audit Fix Sprint — Execution Summary
 
+## ✅ Task 1 COMPLETE — 2026-05-11 (evening session)
+
+**The profiles RLS PII leak is closed.** PR-07 part 2 (`20260510999999_profiles_select_tighten.sql`) applied to live Supabase. Live policy verified:
+
+```
+qual = (is_admin() OR (id = (SELECT auth.uid() AS uid)))
+```
+
+(was `true` before — open PII leak).
+
+Branch is now 53 commits ahead of main. All 1888 unit tests pass.
+
+### Commits this session (batches 3 through 9b + PR-07 part 2)
+
+| Commit | Batch | Scope |
+|---|---|---|
+| `367fd5b` | 3 — Deliveries/drivers | 6 callsites in 5 files |
+| `184f03d` | 4 — Sales reps/commissions | 4 callsites in 3 files |
+| `e476693` | 5 — Applicators/jobs | 3 callsites in 3 files |
+| `e89a2e9` | 6 — Team-board + blend tickets | 7 callsites in 4 files |
+| `d26c62f` | 7 — Misc embeds | 6 callsites in 6 files |
+| `d3b8026` | 8 — Direct select(*) reads | 6 callsites in 6 files |
+| `19a8551` | 9 — Internal helpers | 4 callsites in 2 files |
+| `9585752` | 9b — Missed callsites | 3 callsites in 2 files |
+| — | Live apply | `profiles_select_tighten` migration via Supabase MCP |
+
+**Total: ~39 callsites migrated across ~25 files**, plus the live policy change.
+
+### Canonical pattern proven across all batches
+
+```ts
+// Drop FK embed from SELECT
+const { data: rows } = await supabase.from('table').select('*');  // no profiles!fk
+
+// Collect unique IDs from rows
+const ids = [...new Set(rows.map(r => r.user_fk_id).filter(Boolean))];
+
+// Fetch the names via profile_public_view (bypasses table RLS)
+const map: Record<string, string> = {};
+if (ids.length > 0) {
+  const { data: profs } = await supabase
+    .from('profile_public_view')
+    .select('id, full_name')
+    .in('id', ids);
+  (profs || []).forEach(p => { map[p.id] = p.full_name; });
+}
+
+// Derive display field from the map
+const enriched = rows.map(r => ({ ...r, user_name: r.user_fk_id ? map[r.user_fk_id] || 'Unknown' : 'Unknown' }));
+```
+
+UI consumers (`{type}_name` derived fields, `.{type}?.full_name`) keep working unchanged. The pattern is mechanical and repeatable.
+
+### Direct reads pattern (simpler — table name swap)
+
+```ts
+// For dropdowns/pickers that only need id/full_name/role:
+const { data } = await supabase
+  .from('profile_public_view')      // was: 'profiles'
+  .select('id, full_name, role, is_active')  // was: select('*')
+  .in('role', [...])
+  .eq('is_active', true);
+```
+
+### Internal helpers fix (security-critical)
+
+`activityLogger.ts :: notifyAdmins` and 3 callsites in `notificationTriggers.ts` previously read `from('profiles')` to look up admin IDs or another user's role. Under admin-or-self RLS, non-admin callers would silently get zero rows back — notifications would never fire. Migrated to `profile_public_view` (which bypasses table RLS via `security_invoker=off`) so internal fan-out logic keeps working regardless of caller role.
+
+### Test-mock pattern that emerged
+
+Several test mocks needed updates when components started issuing TWO `from()` calls (entity table + `profile_public_view`):
+
+```ts
+// New per-table response pattern:
+vi.mock('../../lib/db', () => ({
+  supabase: {
+    from: vi.fn((table: string) => {
+      if (table === 'profiles' || table === 'profile_public_view') {
+        return makeBuilder(() => ({ data: profilesData, error: null }));
+      }
+      return makeBuilder(() => ({ data: entityData, error: null }));
+    }),
+  },
+}));
+```
+
+Test fixtures moved the profile data out of the entity-row shape (where the FK embed had been attaching it) and into a separate `profilesData` array.
+
+### Reads intentionally kept on `from('profiles')`
+
+- **AuthContext.tsx** — self-read (own profile). admin-or-self RLS covers this.
+- **SettingsPage.tsx** — admin-only user-management page. Admins have full access via admin-or-self.
+- **schemaIntegrity.test.ts** — tests FK existence in the DB, not page code text. FKs still exist on the `profiles` table (only the SELECT policy tightened).
+
+### Live verification queries
+
+```sql
+-- 1. Confirm policy is tightened
+SELECT qual FROM pg_policies
+WHERE tablename='profiles' AND policyname='profiles_select';
+-- Expected: '(is_admin() OR (id = ( SELECT auth.uid() AS uid)))'
+
+-- 2. Sanity check: profile_public_view exists and is readable
+SELECT count(*) FROM profile_public_view;
+-- Expected: >0 (matches active profile count)
+```
+
+Schema registry regenerated (`scripts/regenerate-schema-registry.mjs`) after live apply.
+
+### What remains in the broader Task list
+
+- **Task 3 baseline** — assertRpcCoverage at 18 entries (was 32). 3 void-RPC files need a different pattern (`.throwOnError()`); the rest are multi-RPC pages and regex-orphans.
+- **Task 4** — E2E staging Supabase still blocked on Mason creating `crx-manager-staging`.
+- **Spawned task** — investigate dead `create_prepay_check_splits` call in `PrepaymentManager.tsx:297`.
+
+The audit-fix sprint's HIGH-severity findings are now all closed.
+
+---
+
 ## Post-audit follow-up — 2026-05-11 (afternoon session)
 
 Continued Tasks 1 + 3. Branch now 44 commits ahead of main.
