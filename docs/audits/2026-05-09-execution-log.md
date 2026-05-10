@@ -132,7 +132,7 @@ Completed: 2026-05-09 23:50
 Elapsed: ~35 min
 Risk: HIGH
 Files changed: 2 (1 new migration, 1 type-definitions update)
-Commit: pending
+Commit: 1a3b39d
 Findings closed: P0 #5, P1 (closed-period AP), P1 (financial_audit_log AP), P1 (vendors_select RLS), P1 (vendor_bills.balance_cents not GENERATED), P1 (vendor_bills no UNIQUE on bill_number), P1 (void_vendor_bill allows paid bills), P2 (vendor not soft-deleted check). search_path was already correct on all 3 — that finding was stale.
 
 ⚠️ NOT APPLIED TO LIVE SUPABASE. Mason must review and apply manually via Supabase MCP `apply_migration` after walking through the migration's 6 blocks.
@@ -168,3 +168,26 @@ Test outcomes (autonomous run only — no live DB application):
 - npm run test: deferred to pre-commit hook
 - validate-sql-migrations: deferred to pre-commit hook
 - Live application: NOT EXECUTED. Mason must apply manually.
+
+---
+
+## PR-09 — Integrity report write_off formula
+Status: completed
+Started: 2026-05-09 23:50
+Completed: 2026-05-09 23:58
+Elapsed: ~8 min
+Risk: Low
+Files changed: 2 (src/lib/reconciliation.ts + test)
+Commit: pending
+Findings closed: P2 #10 (integrity write_off)
+Notes:
+- Updated `checkInvoiceBalances` formula at line 297 to subtract `write_off_cents`. Before the fix, every written-off invoice was flagged as a "balance discrepancy" because the frontend formula was missing that term while the DB-generated `balance_cents` already included it.
+- Added `write_off_cents` to the InvoiceRow interface and the SELECT query at line 692 so the data flows through to the check.
+- Updated 11 test fixtures across reconciliation.test.ts to include `write_off_cents: 0` (the new required field).
+- Added a new test `'handles invoices with write-offs (PR-09 fix)'` that exercises both a fully-resolved invoice (paid + prepay + write-off = total) and a partially-paid invoice with a write-off — both should pass the balance check after the fix. This is the regression test the plan asked for.
+- Total test count went from 67 → 68 in the reconciliation suite. Full repo: 1872 → 1873 (assuming same elsewhere).
+Test outcomes:
+- npm run lint: pass (0 errors, 270 warnings)
+- npm run typecheck: pass
+- npm run build: deferred to pre-commit hook
+- reconciliation tests: 68 passed
