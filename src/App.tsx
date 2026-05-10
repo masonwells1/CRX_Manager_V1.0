@@ -76,6 +76,7 @@ const AccountsPayable = lazy(() => import('./pages/AccountsPayable'));
 const VendorBills = lazy(() => import('./pages/VendorBills'));
 const NewVendorBill = lazy(() => import('./pages/NewVendorBill'));
 const VendorBillDetail = lazy(() => import('./pages/VendorBillDetail'));
+const Vendors = lazy(() => import('./pages/Vendors'));
 const SalesReports = lazy(() => import('./pages/SalesReports'));
 const GettingStarted = lazy(() => import('./pages/GettingStarted'));
 const FieldApplicationInvoice = lazy(() => import('./pages/FieldApplicationInvoice'));
@@ -231,6 +232,7 @@ const router = createBrowserRouter([
           { path: 'accounts-payable/bills', element: <ProtectedRoute allowedRoles={['admin']}><VendorBills /></ProtectedRoute> },
           { path: 'accounts-payable/bills/new', element: <ProtectedRoute allowedRoles={['admin']}><NewVendorBill /></ProtectedRoute> },
           { path: 'accounts-payable/bills/:id', element: <ProtectedRoute allowedRoles={['admin']}><VendorBillDetail /></ProtectedRoute> },
+          { path: 'vendors', element: <ProtectedRoute allowedRoles={['admin']}><Vendors /></ProtectedRoute> },
           { path: 'settings', element: <ProtectedRoute allowedRoles={['admin']}><SettingsPage /></ProtectedRoute> },
 
           // payment-allocation route removed — now served at /payments

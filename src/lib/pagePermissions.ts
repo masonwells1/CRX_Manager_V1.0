@@ -58,6 +58,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   // Finance
   { key: 'ar-aging', label: 'AR Aging', category: 'Finance', roles: ['admin'] },
   { key: 'accounts-payable', label: 'Accounts Payable', category: 'Finance', roles: ['admin'] },
+  { key: 'vendors', label: 'Vendors', category: 'Finance', roles: ['admin'] },
   { key: 'prepayments', label: 'Prepayments', category: 'Finance', roles: ['admin'] },
   { key: 'prepay-workspace', label: 'Prepay Workspace', category: 'Finance', roles: ['admin'] },
   { key: 'commission-payments', label: 'Commission Pay', category: 'Finance', roles: ['admin'] },

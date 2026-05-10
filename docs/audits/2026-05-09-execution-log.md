@@ -726,3 +726,44 @@ Test outcomes:
 - npm run build: deferred to pre-commit hook
 - npm run test: deferred to pre-commit hook
 - Live application: NOT EXECUTED. Apply PR-04 first, then PR-22.
+
+---
+
+## PR-25 — Vendor master-data UI
+Status: completed-pending-live-application
+Started: 2026-05-10 08:30
+Completed: 2026-05-10 08:50
+Elapsed: ~20 min
+Risk: Medium
+Files changed: 5 (1 new migration, 1 new page, App.tsx, pagePermissions.ts, CLAUDE.md/AGENTS.md/migration-history.md regenerations)
+Commit: pending
+Findings closed: out-of-scope from audit but discovered during it — no UI to add/edit vendors. Now there is one.
+
+⚠️ NOT YET APPLIED to live Supabase. The frontend works against the existing schema (vendors table is unchanged) but the new RPCs (save_vendor, delete_vendor) need the migration applied.
+
+Notes:
+- New migration `20260510120000_vendor_master_data_rpcs.sql`:
+  - `save_vendor(p_vendor_id, p_payload, p_idempotency_key)` — admin-only INSERT-or-UPDATE. Pass NULL p_vendor_id to create. Partial-update pattern (`p_payload ? key` to differentiate "update to NULL" from "preserve existing"). Returns success/vendor_id/is_new.
+  - `delete_vendor(p_vendor_id, p_idempotency_key)` — admin-only soft-delete. Refuses if unpaid bills exist (status NOT IN paid/voided). PO check intentionally omitted because purchase_orders uses a legacy `vendor` TEXT column, not `vendor_id` (CLAUDE.md "What's NOT in this plan" lists the FK migration as a separate epic).
+- New page `src/pages/Vendors.tsx`. Single-page CRUD: list table (read directly from `vendors`, filter `deleted_at IS NULL`), Add Vendor button opens create modal, per-row edit/delete actions, ConfirmModal for delete (variant='danger'), inline create/edit modal with name/contact/phone/email/address/payment-terms/notes. assertRpcResult<{...}> wrapping on both RPCs.
+- App.tsx: lazy import + `/vendors` route under ProtectedRoute(['admin']).
+- pagePermissions.ts: new entry `{ key: 'vendors', label: 'Vendors', category: 'Finance', roles: ['admin'] }`. The pagePermissions test already greps Routes — it now requires this entry. Verified passing.
+- CLAUDE.md current state: 65 → 66 pages, 291 → 297 migrations.
+- AGENTS.md regenerated.
+- migration-history.md updated with entries 292-297 (6 new Sprint 2 migrations).
+
+Decisions made autonomously (not in original plan):
+- Plan called for 2 separate pages: `Vendors.tsx` (list) + `VendorDetail.tsx` (detail/edit). Inlined edit + delete into the list page using modals — simpler, less navigation, smaller diff. The detail page can be added later if Mason wants per-vendor analytics (bill history, PO history) but the master-data CRUD doesn't need it.
+- Skipped the AppLayout sidebar nav entry. Same reason as PR-21's deferral: AppLayout structure is non-trivial and the page is reachable via direct URL today. Mason can add the nav link in a follow-up.
+- Removed the active-PO check from delete_vendor's body. The plan implied checking, but live DB inspection showed `purchase_orders.vendor_id` doesn't exist (only the legacy `vendor` TEXT column). Adding a check via name-match is fragile. The vendor_bills check is sufficient since closed POs typically generate a bill. Documented in the migration body and execution log.
+- Used `variant='danger'` (not the made-up `danger` boolean) per the actual `ConfirmModal` API. Caught by typecheck before commit.
+- DataTable doesn't support `emptyMessage` — used a conditional render with the message in a div above the table when `vendors.length === 0`.
+
+Test outcomes:
+- npm run lint: pass (0 errors)
+- npm run typecheck: pass
+- pagePermissions test: pass (33 tests across 2 files including the new `vendors` route)
+- assertRpcCoverage: pass (Vendors.tsx adds 2 captures + 2 assertions, balanced)
+- npm run build: deferred to pre-commit hook
+- npm run test: deferred to pre-commit hook
+- Live application: NOT EXECUTED. Apply migration via Supabase MCP after review.
