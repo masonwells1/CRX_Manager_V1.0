@@ -201,7 +201,7 @@ Completed: 2026-05-10 00:18
 Elapsed: ~13 min
 Risk: Low
 Files changed: 1 (new migration; schema-registry no-op since not applied)
-Commit: pending
+Commit: 63ad461
 Findings closed: P1 #6 (quick delivery credit limit)
 Notes:
 - Replaced the hard-blocking RAISE EXCEPTION in create_quick_delivery's credit-limit check with admin notification + activity_feed entry. Per Mason's Q4 decision (Option C — soft warn).
@@ -219,3 +219,30 @@ Test outcomes:
 - npm run build: deferred to pre-commit hook
 - npm run test: deferred to pre-commit hook
 - schema-registry: regenerated (no-op — migration not applied)
+
+---
+
+## PR-11 — PAGE_PERMISSIONS holes + fail-closed test
+Status: completed
+Started: 2026-05-10 00:18
+Completed: 2026-05-10 00:30
+Elapsed: ~12 min
+Risk: Low
+Files changed: 3 (pagePermissions.ts, ProtectedRoute.tsx, pagePermissions.test.ts)
+Commit: pending
+Findings closed: P2 #13 (PAGE_PERMISSIONS)
+Notes:
+- Audited App.tsx routes. The 5 missing entries the plan called out are real:
+  `dispatch`, `program-tracker`, `application-services`, `prepay-workspace`, `getting-started`. Without entries, the deny-list (profile.denied_pages) silently does nothing for these routes.
+- Added all 5 to PAGE_PERMISSIONS with role assignments matching the App.tsx allowedRoles: getting-started (all 4 roles, new "Onboarding" category), application-services (admin), program-tracker (admin/sales_rep), dispatch (admin/sales_rep/applicator), prepay-workspace (admin).
+- Updated ProtectedRoute.tsx to fail-closed when getPageKeyFromPath returns null AND the path is not on an explicit exempt list. Previously: silent passthrough. Now: console.warn + redirect to dashboard. Settings, login, team-board, etc. are exempt and still work.
+- Refactored: exported `EXEMPT_ROUTE_SEGMENTS` and a new `isExemptRoute()` helper from pagePermissions.ts so ProtectedRoute and the test share one source of truth.
+- Added the fail-closed test `pagePermissions.test.ts` — it greps App.tsx for every `path: '...'`, takes the first segment, and asserts each is in PAGE_PERMISSIONS or EXEMPT_ROUTE_SEGMENTS. The regex requires `[a-z][a-z0-9-]*` to skip wildcards (`*`) and route params (`:id`).
+- Updated the existing "preserves insertion order" test (was checking categories[0] === 'Sales' — now 'Onboarding' since I prepended that category).
+- Test count: was 24 in the suite, now 30. Includes 3 new tests: coverage, PR-11 routes sanity check, isExemptRoute behavior.
+
+Test outcomes:
+- npm run lint: pass (0 errors, 270 warnings)
+- npm run typecheck: pass
+- npm run build: deferred to pre-commit hook
+- pagePermissions tests: 30 passed

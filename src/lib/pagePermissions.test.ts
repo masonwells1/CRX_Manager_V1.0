@@ -2,12 +2,16 @@
  * pagePermissions.test.ts — Tests for page access control system
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
 import {
   PAGE_PERMISSIONS,
+  EXEMPT_ROUTE_SEGMENTS,
   getPageKeyFromPath,
   hasPageAccess,
   getPagesForRole,
   getCategories,
+  isExemptRoute,
 } from './pagePermissions';
 
 // ── getPageKeyFromPath ──────────────────────────────────────────────────
@@ -153,8 +157,61 @@ describe('getCategories', () => {
 
   it('preserves insertion order', () => {
     const categories = getCategories(PAGE_PERMISSIONS);
-    // First entry in PAGE_PERMISSIONS is Sales
-    expect(categories[0]).toBe('Sales');
+    // First entry in PAGE_PERMISSIONS is Onboarding (PR-11 added getting-started)
+    expect(categories[0]).toBe('Onboarding');
+  });
+});
+
+// ── PR-11: Fail-closed coverage of every protected route ──────────────────
+
+function extractRouteFirstSegmentsFromAppTsx(): Set<string> {
+  const appTsxPath = resolve(__dirname, '../App.tsx');
+  const source = readFileSync(appTsxPath, 'utf-8');
+
+  const segments = new Set<string>();
+  // Match `path: 'foo'` or `path: 'foo/bar'` — captures the first segment.
+  // Restricted to lowercase alphanumeric + dash so wildcard ('*') and
+  // route params (':id') don't get captured as page keys.
+  const matches = source.matchAll(/path:\s*['"]([a-z][a-z0-9-]*)/g);
+  for (const m of matches) {
+    const seg = m[1].trim();
+    if (seg) segments.add(seg);
+  }
+  return segments;
+}
+
+describe('PAGE_PERMISSIONS coverage (PR-11 fail-closed)', () => {
+  it('every protected route in App.tsx has a PAGE_PERMISSIONS entry or is exempt', () => {
+    const routeSegments = extractRouteFirstSegmentsFromAppTsx();
+    const knownKeys = new Set(PAGE_PERMISSIONS.map((p) => p.key));
+
+    const missing: string[] = [];
+    for (const seg of routeSegments) {
+      if (EXEMPT_ROUTE_SEGMENTS.has(seg)) continue;
+      if (!knownKeys.has(seg)) missing.push(seg);
+    }
+
+    // Surface the diff explicitly so a failing test names the missing route(s).
+    expect(missing, `Routes in App.tsx missing from PAGE_PERMISSIONS: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  it('finds the routes Mason added in PR-11', () => {
+    // Sanity check on the route extractor itself — confirm it picks up the
+    // five routes that PR-11 specifically patched.
+    const segments = extractRouteFirstSegmentsFromAppTsx();
+    for (const expected of ['dispatch', 'program-tracker', 'application-services', 'prepay-workspace', 'getting-started']) {
+      expect(segments, `extractor should find /${expected}`).toContain(expected);
+    }
+  });
+
+  it('isExemptRoute returns true for known exempt segments and false otherwise', () => {
+    for (const seg of EXEMPT_ROUTE_SEGMENTS) {
+      expect(isExemptRoute(`/${seg}`)).toBe(true);
+      expect(isExemptRoute(`/${seg}/something`)).toBe(true);
+    }
+    expect(isExemptRoute('/quotes')).toBe(false);
+    expect(isExemptRoute('/dispatch')).toBe(false);
+    expect(isExemptRoute('/made-up-page')).toBe(false);
   });
 });
 
