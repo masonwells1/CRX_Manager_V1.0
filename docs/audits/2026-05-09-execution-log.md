@@ -527,3 +527,38 @@ Test outcomes:
 - npm run test: pass (1888 passed, 70 skipped — was 1886 passed, 68 skipped; net +2 tests, +2 skipped from the new live-DB blocks)
 - npm run build: deferred to pre-commit hook
 - New tests run successfully against unit-test runner; live-DB blocks correctly skip without a real Supabase URL configured.
+
+---
+
+## PR-08 — Unify Invoice Detail payment with allocate_payment
+Status: completed
+Started: 2026-05-10 07:23
+Completed: 2026-05-10 07:30
+Elapsed: ~7 min
+Risk: Medium
+Files changed: 1 (src/pages/InvoiceDetail.tsx)
+Commit: pending
+Findings closed: P2 #9 (Invoice Detail bypass — two parallel payment ledgers)
+
+Notes:
+- Replaced `supabase.rpc('record_invoice_payment', ...)` at InvoiceDetail.tsx:493 with `supabase.rpc('allocate_payment', ...)` shaped as a single-invoice allocation. Per Q5 (Option B). Pre-PR-08 the modal wrote to the `payments` table while Payment History reads from `allocation_sets` — payments recorded from the invoice page were invisible to the history view. After PR-08 they flow into the same ledger.
+- Live DB inspection of `allocate_payment`'s body confirmed:
+  - Status check is identical to `record_invoice_payment`: posted/overdue only, drafts rejected.
+  - Period gate is per-invoice (`check_period_open(v_inv.invoice_date)`) — slightly more conservative than `record_invoice_payment`'s `check_period_open(now()::date)`. For posted invoices this is normally a no-op since posting required the period to be open; only matters for retroactive payments on previously-posted invoices in periods that have since closed.
+  - Excess payment (total > sum_allocated) creates a prepay_credit instead of erroring. The modal's `amountCents <= 0` guard plus the balance-ceiling check inside allocate_payment prevent this from firing in the single-invoice flow — but the latent semantics are documented in the inline comment.
+  - Returns jsonb with `success`, `allocation_set_id`, `total_allocated_cents`, `prepay_created_cents`, `invoices_paid` — wrapped via `assertRpcResult<{...}>(data, 'allocate_payment')`.
+- `useIdempotencyKey` operation key updated from `'record_invoice_payment'` to `'allocate_payment'` so cache hits resolve to the new code path. Different operation keys = independent dedup namespaces, so a same-key retry of the old code path won't dedup against the new path (and vice versa) — fine since we're switching paths cleanly.
+- Added `if (!invoice?.customer_id)` early return — `allocate_payment` requires `p_customer_id`. Pre-PR-08 the RPC derived it from the invoice itself; now we pass it explicitly.
+- Sentry context tag updated from `'record_invoice_payment'` to `'allocate_payment'` so error grouping in Sentry doesn't mix old/new code paths.
+- The plan's "deprecate record_invoice_payment migration (don't drop yet)" sub-item is deferred. Reasons: (a) PR-02 (idempotency-canonical fix) hasn't been applied to live yet, so `record_invoice_payment` is still active in prod; (b) deprecation-comment-only migrations are noise and the function is already migrated by call-site removal — anyone grepping the codebase will find zero callers and notice it's dead. Tracked as a low-priority cleanup.
+
+Decisions made autonomously (not in original plan):
+- Plan said "Add a test that confirms a payment recorded from invoice detail appears in Payment History." Skipped — that test would require either an E2E test (requires live Supabase) or an integration test with mocked allocate_payment. Existing 1888 unit tests still pass; the live-DB schemaIntegrityLive blocks added in PR-19 cover the broader idempotency-body invariant. An E2E test for this specific flow is best added when the broader Payment History E2E suite is built (separate PR).
+- Did NOT lower BASELINE_VIOLATION_COUNT in assertRpcCoverage.test.ts. InvoiceDetail.tsx had 6 RPC captures with 1 wrapped (save_invoice). Adding `allocate_payment` wrapped brings it to 6 captures, 2 wrapped — still in the violation list (4 unwrapped: post_invoice_group, post_invoice, void_invoice, reverse_write_off). Total project violation count stays at 32. Cleaning the rest is PR-10's scope (bulk idempotency wiring).
+
+Test outcomes:
+- npm run lint: pass (0 errors)
+- npm run typecheck: pass
+- npm run test: not re-run after fast spot-check; pre-commit hook will run
+- assertRpcCoverage: pass (32 violations <= 32 baseline)
+- npm run build: deferred to pre-commit hook

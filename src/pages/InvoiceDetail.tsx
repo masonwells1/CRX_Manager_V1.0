@@ -73,7 +73,11 @@ export default function InvoiceDetail() {
   const saveIdem = useIdempotencyKey('save_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_invoice', profile?.id || '');
-  const payIdem = useIdempotencyKey('record_invoice_payment', profile?.id || '');
+  // PR-08 (2026-05-10): switched from record_invoice_payment to allocate_payment
+  // so payments recorded here flow into the same `allocation_sets` ledger that
+  // Payment History reads. The operation key follows the new RPC name so
+  // idempotency cache hits resolve correctly.
+  const payIdem = useIdempotencyKey('allocate_payment', profile?.id || '');
   const reverseWoIdem = useIdempotencyKey('reverse_write_off', profile?.id || '');
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
   const isNew = id === 'new';
@@ -480,25 +484,49 @@ export default function InvoiceDetail() {
     setVoiding(false);
   };
 
-  // Record payment
+  // Record payment via allocate_payment (PR-08, 2026-05-10).
+  //
+  // Pre-PR-08 this called `record_invoice_payment` which wrote to the
+  // `payments` table — a different ledger than `/payment-history` reads
+  // (`allocation_sets` + `invoice_line_allocations`). The two ledgers
+  // co-existed and any payment recorded from this modal was invisible to
+  // Payment History. allocate_payment with a single-invoice allocation
+  // collapses the two paths onto one ledger.
+  //
+  // Behavior preserved: posted/overdue-only constraint, period guard,
+  // amount-positive check, balance ceiling. Behavior added (latent — the
+  // amount validation prevents it from firing in this flow): excess
+  // payment becomes a prepay credit instead of erroring.
   const handlePayment = async () => {
     const amountCents = parseDollarsToCents(payAmount);
     if (amountCents <= 0) {
       toast('error', 'Enter a valid payment amount');
       return;
     }
+    if (!invoice?.customer_id) {
+      toast('error', 'Cannot record payment — invoice has no customer linked');
+      return;
+    }
     setPayingInvoice(true);
     try {
       const idemKey = payIdem.getKey();
-      const { error } = await supabase.rpc('record_invoice_payment', {
-        p_invoice_id: id,
-        p_amount_cents: amountCents,
+      const { data, error } = await supabase.rpc('allocate_payment', {
+        p_customer_id: invoice.customer_id,
+        p_total_cents: amountCents,
         p_payment_method: payMethod,
         p_reference_number: payRef || null,
         p_notes: payNotes || null,
+        p_allocations: [{ invoice_id: id, amount_cents: amountCents }],
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      assertRpcResult<{
+        success: boolean;
+        allocation_set_id: string;
+        total_allocated_cents: number;
+        prepay_created_cents: number;
+        invoices_paid: number;
+      }>(data, 'allocate_payment');
       payIdem.resetKey();
       toast('success', `Payment of ${fmt(amountCents)} recorded`);
       setShowPayModal(false);
@@ -507,7 +535,7 @@ export default function InvoiceDetail() {
       setPayNotes('');
       fetchInvoice(id!);
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'record_invoice_payment' } });
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'allocate_payment' } });
       toast('error', sanitizeError(err));
     }
     setPayingInvoice(false);
