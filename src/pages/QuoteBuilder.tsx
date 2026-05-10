@@ -248,8 +248,11 @@ export default function QuoteBuilder() {
     checkRUPCompliance(customerId, productIds).then((res) => {
       if (!cancelled) {
         setRupWarnings(res.warnings);
-        if (res.warnings.length > 0) {
-          logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on quote for customer without valid license`, performedBy: profile?.id ?? '', entityType: 'customer', entityId: customerId, customerId });
+        // PR-20: skip logging if profile hasn't loaded — this useEffect fires
+        // on every customer/section change and the warning surfaces in the UI
+        // anyway (setRupWarnings above). No need to bail out the whole effect.
+        if (res.warnings.length > 0 && profile?.id) {
+          logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on quote for customer without valid license`, performedBy: profile.id, entityType: 'customer', entityId: customerId, customerId });
         }
       }
     });

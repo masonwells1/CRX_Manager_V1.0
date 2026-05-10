@@ -414,6 +414,10 @@ export default function Deliveries() {
   };
 
   const handleBatchCancel = async (reason: string) => {
+    if (!profile) {
+      toast('error', 'Cannot cancel deliveries — profile not loaded. Please refresh.');
+      return;
+    }
     const ids = selectedCancellable.map((d) => d.id);
     if (ids.length === 0) {
       toast('error', 'No cancellable deliveries selected');
@@ -425,12 +429,12 @@ export default function Deliveries() {
         const { data, error } = await supabase.rpc('batch_cancel_deliveries', {
           p_delivery_ids: ids,
           p_cancel_reason: reason,
-          p_performed_by: profile?.id,
+          p_performed_by: profile.id,
           p_idempotency_key: cancelKey,
         });
         if (error) throw error;
         batchCancelIdem.resetKey();
-        logActivity({ event: 'batch_cancel_deliveries', description: `Batch cancelled ${ids.length} delivery(ies). Reason: ${reason}`, performedBy: profile?.id || '' });
+        logActivity({ event: 'batch_cancel_deliveries', description: `Batch cancelled ${ids.length} delivery(ies). Reason: ${reason}`, performedBy: profile.id });
         return assertRpcResult(data, 'batch_cancel_deliveries');
       },
       toast,
@@ -567,6 +571,10 @@ export default function Deliveries() {
       toast('error', 'Please select a new date');
       return;
     }
+    if (!profile) {
+      toast('error', 'Cannot reschedule deliveries — profile not loaded. Please refresh.');
+      return;
+    }
     const ids = selectedCancellable.map((d) => d.id);
     await runCriticalAction({
       action: async () => {
@@ -574,12 +582,12 @@ export default function Deliveries() {
         const { error } = await supabase.rpc('batch_reschedule_deliveries', {
           p_delivery_ids: ids,
           p_new_date: rescheduleDate,
-          p_performed_by: profile?.id,
+          p_performed_by: profile.id,
           p_idempotency_key: rescheduleKey,
         });
         if (error) throw error;
         batchRescheduleIdem.resetKey();
-        logActivity({ event: 'batch_reschedule_deliveries', description: `Rescheduled ${ids.length} delivery(ies) to ${rescheduleDate}`, performedBy: profile?.id || '' });
+        logActivity({ event: 'batch_reschedule_deliveries', description: `Rescheduled ${ids.length} delivery(ies) to ${rescheduleDate}`, performedBy: profile.id });
       },
       toast,
       successMessage: `Rescheduled ${ids.length} delivery(ies) to ${parseLocalDate(rescheduleDate).toLocaleDateString()}`,
@@ -646,18 +654,22 @@ export default function Deliveries() {
     const myCompleted = deliveries.filter((d) => d.status === 'completed').slice(0, 10);
 
     const handleTakeDelivery = async (deliveryId: string) => {
+      if (!profile) {
+        toast('error', 'Cannot take delivery — profile not loaded. Please refresh.');
+        return;
+      }
       await runCriticalAction({
         action: async () => {
           const reassignKey = reassignIdem.getKey();
           const { error } = await supabase.rpc('reassign_delivery', {
             p_delivery_id: deliveryId,
-            p_new_driver: profile?.id,
-            p_performed_by: profile?.id,
+            p_new_driver: profile.id,
+            p_performed_by: profile.id,
             p_idempotency_key: reassignKey,
           });
           if (error) throw error;
           reassignIdem.resetKey();
-          logActivity({ event: 'reassign_delivery', description: `Took delivery ${deliveryId}`, performedBy: profile?.id || '', entityType: 'delivery', entityId: deliveryId });
+          logActivity({ event: 'reassign_delivery', description: `Took delivery ${deliveryId}`, performedBy: profile.id, entityType: 'delivery', entityId: deliveryId });
         },
         toast,
         successMessage: 'Delivery assigned to you',

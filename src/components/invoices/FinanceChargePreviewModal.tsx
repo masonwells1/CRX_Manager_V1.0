@@ -97,12 +97,16 @@ export default function FinanceChargePreviewModal({
     .reduce((sum, p) => sum + p.charge_amount_cents, 0);
 
   const handleGenerate = async (customerIds?: string[]) => {
+    if (!profile) {
+      toast('error', 'Cannot generate finance charges — profile not loaded. Please refresh.');
+      return;
+    }
     setGenerating(true);
     try {
       const idemKey = financeChargeIdem.getKey();
       const params: Record<string, unknown> = {
         p_as_of_date: asOfDate,
-        p_performed_by: profile?.id,
+        p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       };
       if (customerIds) {
@@ -115,7 +119,7 @@ export default function FinanceChargePreviewModal({
       if (result.charges_generated === 0) {
         toast('info', 'No finance charges were generated');
       } else {
-        logActivity({ event: 'generate_finance_charges', description: `Generated ${result.charges_generated} finance charge invoice(s) as of ${asOfDate}`, performedBy: profile?.id || '' });
+        logActivity({ event: 'generate_finance_charges', description: `Generated ${result.charges_generated} finance charge invoice(s) as of ${asOfDate}`, performedBy: profile.id });
         toast('success', `Generated ${result.charges_generated} finance charge invoice(s)`);
       }
       onClose();

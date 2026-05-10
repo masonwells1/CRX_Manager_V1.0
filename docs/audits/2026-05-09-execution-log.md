@@ -356,7 +356,7 @@ Completed: 2026-05-10 01:04
 Elapsed: ~4 min
 Risk: Low
 Files changed: 1 (scripts/validate-frontend.sh)
-Commit: pending
+Commit: 05de4d3
 Findings closed: P2 (validate-frontend.sh staged-only)
 Notes:
 - Added `--all` flag handling. When set, scans every `src/**/*.{ts,tsx}` via `find` instead of using `git diff --cached`. When omitted, behavior is unchanged (pre-commit hook mode).
@@ -370,3 +370,25 @@ Test outcomes:
 - Manual: `bash scripts/validate-frontend.sh` (no args) → exits 0 with no staged files
 - npm run typecheck: pass (no TS changes)
 - npm run lint + build + test: deferred to pre-commit hook
+
+---
+
+## PR-20 — logActivity empty-string fallback cleanup
+Status: completed
+Started: 2026-05-10 01:04
+Completed: 2026-05-10 01:14
+Elapsed: ~10 min
+Risk: Low
+Files changed: 5 (WriteOffModal, FinanceChargePreviewModal, MonthEndClose, Deliveries, QuoteBuilder, InvoiceDetail)
+Commit: pending
+Findings closed: P3 (logActivity empty-string fallback)
+Notes:
+- For each handler that called `logActivity({..., performedBy: profile?.id || ''})`, added an early `if (!profile)` guard at handler start that toasts an error and returns. Then changed `profile?.id || ''` to `profile.id` (no fallback needed since the early-return narrows the type).
+- 8 handlers patched: WriteOffModal.handleSubmit, FinanceChargePreviewModal.handleGenerate, MonthEndClose.handleClose + handleReopen, Deliveries.handleBatchCancel + handleBatchReschedule + handleTakeDelivery, InvoiceDetail.handleReverseWriteOff + handleEmailInvoice.
+- Special case: QuoteBuilder line 252 is in a useEffect (RUP compliance check), not a handler. Adding an early-return there would suppress the warning UI on every customer/section change. Instead, gated only the logActivity call: `if (warnings.length > 0 && profile?.id) logActivity(...)`. The warning still surfaces in the UI via setRupWarnings.
+- The plan also listed `useIdempotencyKey('rpc_name', profile?.id || '')` callsites (~80 of them throughout the codebase). Those are for namespacing the local idempotency cache and are not user-visible if profile is briefly null — they don't need the same defensive treatment. Out of scope for this PR.
+
+Test outcomes:
+- npm run typecheck: pass
+- npm run lint: pass (0 errors, 270 warnings)
+- npm run build + test: deferred to pre-commit hook

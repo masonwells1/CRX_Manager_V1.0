@@ -515,18 +515,22 @@ export default function InvoiceDetail() {
 
   const handleReverseWriteOff = async () => {
     if (!reverseWoTarget) return;
+    if (!profile) {
+      toast('error', 'Cannot reverse write-off — profile not loaded. Please refresh.');
+      return;
+    }
     setReversingWo(true);
     try {
       const key = reverseWoIdem.getKey();
       const { error } = await supabase.rpc('reverse_write_off', {
         p_write_off_id: reverseWoTarget.id,
         p_reason: reverseWoReason,
-        p_performed_by: profile?.id,
+        p_performed_by: profile.id,
         p_idempotency_key: key,
       });
       if (error) throw error;
       reverseWoIdem.resetKey();
-      await logActivity({ event: 'write_off_reversed', description: `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, performedBy: profile?.id ?? '', entityType: 'invoice', entityId: id });
+      await logActivity({ event: 'write_off_reversed', description: `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, performedBy: profile.id, entityType: 'invoice', entityId: id });
       toast('success', 'Write-off reversed and balance restored');
       setShowReverseWoModal(false);
       setReverseWoReason('');
@@ -626,6 +630,10 @@ export default function InvoiceDetail() {
 
   // Email invoice with PDF attachment
   const handleEmailInvoice = async () => {
+    if (!profile) {
+      toast('error', 'Cannot email invoice — profile not loaded. Please refresh.');
+      return;
+    }
     const cust = customers.find(c => c.id === invoice.customer_id);
     if (!cust?.email) {
       toast('error', 'Customer does not have an email address on file');
@@ -663,7 +671,7 @@ export default function InvoiceDetail() {
         });
 
         if (result.success) {
-          logActivity({ event: 'invoice_emailed', description: `Invoice ${invoice.invoice_number} emailed to ${cust.email}`, performedBy: profile?.id || '', entityType: 'invoice', entityId: id, customerId: invoice.customer_id });
+          logActivity({ event: 'invoice_emailed', description: `Invoice ${invoice.invoice_number} emailed to ${cust.email}`, performedBy: profile.id, entityType: 'invoice', entityId: id, customerId: invoice.customer_id });
         } else {
           throw new Error(result.error || 'Failed to send email');
         }

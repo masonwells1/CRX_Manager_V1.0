@@ -43,6 +43,10 @@ export default function WriteOffModal({
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
+    if (!profile) {
+      toast('error', 'Cannot apply write-off — profile not loaded. Please refresh.');
+      return;
+    }
     const amountCents = parseDollarsToCents(amount);
     if (amountCents <= 0) {
       toast('error', 'Enter a valid write-off amount');
@@ -69,7 +73,7 @@ export default function WriteOffModal({
       });
       if (error) throw error;
       writeOffIdem.resetKey();
-      logActivity({ event: 'apply_write_off', description: `Write-off of ${fmt(amountCents)} applied to invoice ${invoiceNumber}. Reason: ${reason.trim()}`, performedBy: profile?.id || '', entityType: 'invoice', entityId: invoiceId });
+      logActivity({ event: 'apply_write_off', description: `Write-off of ${fmt(amountCents)} applied to invoice ${invoiceNumber}. Reason: ${reason.trim()}`, performedBy: profile.id, entityType: 'invoice', entityId: invoiceId });
       toast('success', `Write-off of ${fmt(amountCents)} applied to ${invoiceNumber}`);
       setAmount('');
       setReason('');
