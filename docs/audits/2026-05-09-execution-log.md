@@ -427,8 +427,8 @@ Started: 2026-05-10 06:50
 Completed: 2026-05-10 06:55
 Elapsed: ~5 min
 Risk: Low
-Files changed: 6 (CLAUDE.md, AGENTS.md, docs/CHANGELOG.md, docs/reference/gotchas.md, docs/reference/migration-history.md, scripts/regenerate-agents-md.mjs)
-Commit: pending
+Files changed: 7 (CLAUDE.md, AGENTS.md, docs/CHANGELOG.md, docs/reference/gotchas.md, docs/reference/migration-history.md, scripts/regenerate-agents-md.mjs, docs/audits/2026-05-09-execution-log.md)
+Commit: d242aa0
 Findings closed: docs-drift consolidation across all 15 Sprint 1 PRs
 
 Notes:
@@ -457,3 +457,38 @@ Test outcomes:
 - npm run build: pass (built in 14.90s)
 - npm run test: pass (1886 passed, 68 skipped, 0 failures, 130 files)
 - validate-sql-migrations: not applicable (no SQL changes)
+
+---
+
+## PR-07 — Customer + profile RLS tightening
+Status: completed-pending-live-application
+Started: 2026-05-10 06:58
+Completed: 2026-05-10 07:08
+Elapsed: ~10 min
+Risk: Medium
+Files changed: 2 (1 new migration, 1 type addition)
+Commit: pending
+Findings closed: P1 #7 (customers RLS — applicator gap + driver time window), P1 (profiles RLS — USING true)
+
+⚠️ NOT APPLIED TO LIVE SUPABASE. Migration is generated and committed; Mason must review and apply via Supabase MCP `apply_migration`. See migration header for the staged deployment order (view first, frontend dropdown migration, then policy tightening).
+
+Notes:
+- Live DB inspection corrected the plan's assumed state on 2 points:
+  1. `customers_select` already scopes sales_reps to `assigned_sales_rep = auth.uid()` (plan assumed they saw all). And drivers were already scoped to their assigned deliveries — but with NO time window. So PR-07 ADDS the time window for drivers (plan's "1-day window") and ADDS applicator scoping (plan's "7-day window") — applicators currently have NO customer access at all.
+  2. `jobs.scheduled_date` does NOT exist — the column is `job_date`. Plan referenced `scheduled_date`; live inspection corrected.
+- profiles_select was confirmed `USING (true)` — completely open. Tightened to admin-or-self.
+- Decision: Option A (profile_public_view + tightened policy) over Option B (just tighten). Reason: many existing UIs join on `profiles` to display user names; tightening alone would break those joins for non-admins ("Unknown User" everywhere). The view exposes only id, full_name, role, is_active and uses `security_invoker = off` so authenticated users can read all rows but only the safe columns. Frontend dropdown migration to use the view is a separate PR (not included here per autonomous rules — SQL only for PR-07).
+- View definition uses PG 17's `security_invoker = off` clause explicitly. Defaulting on this (PG 15+ behavior) would have worked too but the explicit clause documents intent in the SQL itself.
+- Verification block at end asserts: customers_select includes `is_applicator()` + `CURRENT_DATE`, profiles_select gates by `is_admin` + self, profile_public_view exists with SELECT GRANT to authenticated.
+- src/types/index.ts: added `ProfilePublic` interface mirroring the view shape (id, full_name, role, is_active).
+
+Decisions made autonomously (not in original plan):
+- Plan suggested gating direct `profiles` SELECT to either Option A (view) or Option B (raw tightening). Chose A. The view is created with `security_invoker = off` to BYPASS RLS for the safe-column read path — without that, the view would inherit the tightened policy and non-admins would only see their own row even via the view, defeating the purpose. Documented explicitly in migration comments.
+- Did NOT migrate any frontend code to use the view. The autonomous prompt limits PR-07 to SQL generation. The migration header documents the recommended deployment order: apply the view + GRANT first (additive, safe), then migrate frontend dropdowns/joins in a follow-up PR, then apply the SELECT policy tightening last.
+
+Test outcomes:
+- npm run lint: pass (0 errors)
+- npm run typecheck: pass
+- npm run build: not re-run (pure additive type, no runtime code changed)
+- npm run test: deferred to pre-commit hook
+- validate-sql-migrations: pass — 292 files scanned, 61 pre-existing violations (unchanged from baseline), 51 warnings — my new migration introduces 0 new violations.

@@ -17,6 +17,17 @@ export interface Profile {
   updated_at: string;
 }
 
+// Non-PII shape from `public.profile_public_view` (PR-07, 2026-05-10).
+// Use for assignment dropdowns, joined display names, and any read that
+// doesn't need email/phone/license/certificate. The view bypasses RLS via
+// `security_invoker = off`; underlying `profiles` table SELECT is admin/self.
+export interface ProfilePublic {
+  id: string;
+  full_name: string;
+  role: UserRole;
+  is_active: boolean;
+}
+
 export interface Product {
   id: string;
   product_name: string;
