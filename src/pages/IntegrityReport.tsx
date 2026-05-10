@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ShieldAlert, ShieldCheck, RefreshCw, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { runReconciliationChecks, type ReconciliationReport } from '../lib/reconciliation';
 import { useToast } from '../components/ui/Toast';
@@ -9,7 +9,7 @@ export default function IntegrityReport() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const fetchReport = async () => {
+  const fetchReport = useCallback(async () => {
     setRefreshing(true);
     try {
       const result = await runReconciliationChecks();
@@ -20,11 +20,11 @@ export default function IntegrityReport() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [toast]);
 
   useEffect(() => {
     fetchReport();
-  }, []);
+  }, [fetchReport]);
 
   if (loading) {
     return (
