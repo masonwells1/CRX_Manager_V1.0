@@ -1,5 +1,105 @@
 # CRX Audit Fix Sprint — Execution Summary
 
+## ✅ Task 3 + Spawned task COMPLETE — 2026-05-11 (late evening session)
+
+assertRpcCoverage baseline reduced 18 → 0. The dead `create_prepay_check_splits` RPC restored as a live migration.
+
+Branch is now 56 commits ahead of main. All 1888 unit tests pass.
+
+### Commits this session
+
+| Commit | Scope |
+|---|---|
+| `48f336c` | 15 files of unwrapped captures wrapped. Baseline 18 → 3. |
+| `9ae8d65` | Spawned task (restore `create_prepay_check_splits` as live migration + UI assertRpcResult wrap) + last 2 regex orphans refactored + baseline 3 → 0. |
+
+### Spawned task — `create_prepay_check_splits` restored (live)
+
+`PrepaymentManager.tsx:297` has been calling an RPC that never existed in production — the "Split a check into multiple buckets" flow has been broken for users. The 2026-03-27 wave 4 migration that defined it was never applied (verified: no row in `pg_proc`, no row in `supabase_migrations.schema_migrations`).
+
+Restored as `supabase/migrations/20260511020000_create_prepay_check_splits.sql`. Applied live via Supabase MCP.
+
+Improvements vs the original definition (which would have failed to apply even if attempted):
+- **Canonical idempotency** — original used the broken `(v_existing->>'status')='completed'` pattern PR-02 fixed elsewhere.
+- **Strict actor pattern** — `v_actor := auth.uid()` + `ACTOR_MISMATCH` reject (matches codex F1/F2).
+- **operation_type fix** — original used `'prepay_check_splits_created'` which is NOT in `financial_audit_log_operation_type_check`'s allowed list; the INSERT would have failed. Switched to `'prepay_credit_created'` (allowed).
+- **Dedicated bucket_label column** — the `prepay_credits` table has a `bucket_label` column now; original stuffed the bucket name into `notes`.
+- **search_path = public, pg_temp** per CLAUDE.md.
+
+Frontend (`PrepaymentManager.tsx`): added `assertRpcResult<{success, credit_ids, total_cents, split_count}>` wrap on the new return shape.
+
+### Task 3 — what was fixed
+
+**Files migrated in commit 48f336c (15 files, 26 captures total):**
+
+Non-void RPCs (wrapped with `assertRpcResult`):
+- Dashboard.tsx — check_remainder_reminders, release_expired_quote_holds
+- MonthEndClose.tsx — close_accounting_period, reopen_accounting_period
+- FieldApplicationInvoice.tsx — post_invoice_group
+- CycleCounts.tsx — update_cycle_count_item, cancel_cycle_count
+- DeliveryDetail.tsx — edit_delivery, reassign_delivery, confirm_delivery
+- Returns.tsx — approve_return, receive_return, issue_return_credit
+- PurchaseOrderDetail.tsx — reverse_receiving_record, save_purchase_order, cancel_purchase_order
+- InvoiceDetail.tsx — post_invoice_group, reverse_write_off
+- InventoryPage.tsx — create_inventory_hold, release_inventory_hold, manual_inventory_add, receive_po_items, adjust_inventory, retire_inventory_item
+- QuoteBuilder.tsx — create_planned_holds, save_quote_template, restore_quote_version
+
+RETURNS void RPCs (new `.throwOnError()` pattern):
+- notificationTriggers.ts — notify_damaged_receiving
+- BulkFieldImport.tsx — save_field_geometry
+- Fields.tsx — link_fields_to_parent
+- VendorBillDetail.tsx — void_vendor_bill
+- FieldApplicationInvoice.tsx — post_invoice
+- FieldSetup.tsx — save_field_polygons, save_field_geometry
+- CycleCounts.tsx — complete_cycle_count, reverse_completed_cycle_count
+- InvoiceDetail.tsx — post_invoice, void_invoice
+
+**Orphans closed in commit 9ae8d65 (regex-friendly refactors):**
+- `LogbookReport.tsx` — dynamic `supabase.rpc(rpcName, ...)` replaced with a 3-branch if/else using literal RPC names per branch. Each branch has its own assertRpcResult.
+- `CustomerContextCard.tsx` — `supabase.rpc('get_ar_aging', ...)` pulled out of Promise.all into its own `= await` statement.
+
+### Conventions established (documented in test header)
+
+The `assertRpcCoverage.test.ts` header now documents the patterns that keep the baseline at 0:
+
+```ts
+// For data-returning RPCs:
+const { data, error } = await supabase.rpc('name', ...);
+if (error) throw error;
+assertRpcResult<T>(data, 'name');
+
+// For RETURNS void RPCs (new convention, first introduced 2026-05-11):
+await supabase.rpc('name', ...).throwOnError();
+
+// Avoid: supabase.rpc(rpcName, ...) — regex only matches literals
+// Avoid: supabase.rpc(...) inside Promise.all — regex requires `=` before await
+```
+
+### Task 3 trajectory
+
+| Date | Baseline | Action |
+|---|---|---|
+| 2026-05-10 | 32 | PR-19 surfaced existing debt with the tightened test |
+| 2026-05-11 morning | 21 | First post-audit batch (11 files) |
+| 2026-05-11 afternoon | 18 | Second batch (3 files) |
+| 2026-05-11 late | 3 | Big sweep (15 files) — commit 48f336c |
+| 2026-05-11 evening | **0** | Spawned task + orphans — commit 9ae8d65 |
+
+The audit-fix sprint's coverage tightening from PR-19 is now fully discharged.
+
+### Live state
+
+- `create_prepay_check_splits` exists in pg_proc — verified single overload, returns jsonb.
+- Supabase migrations now total 16 May-10/11 entries applied to live.
+- Total branch state: 56 commits ahead of main.
+
+### What remains
+
+- **Task 4 (staging Supabase)** — still blocked on Mason creating `crx-manager-staging`.
+- All other audit-fix follow-ups are now closed.
+
+---
+
 ## ✅ Task 1 COMPLETE — 2026-05-11 (evening session)
 
 **The profiles RLS PII leak is closed.** PR-07 part 2 (`20260510999999_profiles_select_tighten.sql`) applied to live Supabase. Live policy verified:
