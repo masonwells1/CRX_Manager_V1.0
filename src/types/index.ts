@@ -2193,13 +2193,16 @@ export interface VendorBill {
   adjustment_cents: number;
   total_cents: number;
   paid_cents: number;
-  balance_cents: number;
+  balance_cents: number; // GENERATED ALWAYS as (total_cents - paid_cents) — read-only
   status: VendorBillStatus;
   notes: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
   // Joined
   vendor?: Vendor;
   purchase_order?: PurchaseOrder;
@@ -2215,6 +2218,9 @@ export interface VendorPayment {
   notes: string | null;
   created_by: string | null;
   created_at: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
   // Joined
   creator?: Profile;
 }

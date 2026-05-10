@@ -103,7 +103,7 @@ Completed: 2026-05-09 23:15
 Elapsed: ~17 min
 Risk: Low
 Files changed: 6
-Commit: pending
+Commit: ac4e1a4
 Findings closed: P0 #1 cleanup, Q10 Phase 1 hardening
 Notes:
 - Removed hardcoded credential fallback (`'mason@croprxsolutions.com'` / `'Mwells0413'`) from THREE files — they were copy-pasted into auth.ts, setup-fixtures.ts, and teardown-fixtures.ts. Now all three throw a clear error if `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` aren't set.
@@ -122,3 +122,49 @@ Test outcomes:
 - npm run typecheck: pass
 - npm run build: deferred to pre-commit hook
 - npm run test: deferred to pre-commit hook (E2E files not exercised by vitest)
+
+---
+
+## PR-04 — AP RPC trio + structural fixes (HIGH RISK — generate SQL only)
+Status: completed-pending-live-application
+Started: 2026-05-09 23:15
+Completed: 2026-05-09 23:50
+Elapsed: ~35 min
+Risk: HIGH
+Files changed: 2 (1 new migration, 1 type-definitions update)
+Commit: pending
+Findings closed: P0 #5, P1 (closed-period AP), P1 (financial_audit_log AP), P1 (vendors_select RLS), P1 (vendor_bills.balance_cents not GENERATED), P1 (vendor_bills no UNIQUE on bill_number), P1 (void_vendor_bill allows paid bills), P2 (vendor not soft-deleted check). search_path was already correct on all 3 — that finding was stale.
+
+⚠️ NOT APPLIED TO LIVE SUPABASE. Mason must review and apply manually via Supabase MCP `apply_migration` after walking through the migration's 6 blocks.
+
+Notes:
+- Live DB inspection adjusted plan scope:
+  - vendor_bills, vendor_payments — confirmed `voided_at`/`voided_by`/`void_reason` columns DO NOT exist; migration adds them.
+  - vendor_bills.balance_cents — confirmed `is_generated = NEVER` (plain bigint); migration converts to GENERATED ALWAYS.
+  - financial_audit_log entity_type CHECK — confirmed `vendor_bill`, `vendor_payment`, `purchase_order` not in current allowed list; migration extends.
+  - financial_audit_log operation_type CHECK — confirmed vendor-related ops not in current allowed list; migration extends.
+  - vendors_select policy — confirmed USING (deleted_at IS NULL) with NO role check (the audit was right). Migration tightens.
+  - All 3 RPCs (create_vendor_bill, record_vendor_payment, void_vendor_bill) — confirmed already SECURITY DEFINER with `search_path = public, pg_temp`. The plan's "P2 search_path on AP RPCs" finding appears stale (or was about something else); the rewrite preserves the existing search_path setting either way.
+  - get_ap_aging is the only other function referencing vendor_bills.balance_cents (a SELECT — won't break under GENERATED conversion). No indexes on balance_cents (just pkey + 4 B-trees on other columns).
+
+Key implementation choices:
+- balance_cents conversion uses `DROP COLUMN` + `ADD COLUMN ... GENERATED ALWAYS AS (total_cents - COALESCE(paid_cents, 0)) STORED`. Existing data is recomputed identically on the ADD.
+- record_vendor_payment no longer writes balance_cents (it's GENERATED — write would fail). Only paid_cents and status are updated.
+- void_vendor_bill no longer stuffs the void reason into notes; populates the new void_reason column.
+- void_vendor_bill paid-bill guard: hard-block if `status = 'paid' AND active payments exist`. Per Q11.
+- All 3 RPCs use machine-readable error codes (`AUTH_REQUIRED`, `NOT_AUTHORIZED`, `BILL_NOT_FOUND`, `BILL_VOIDED`, `INVALID_AMOUNT`, `OVER_PAYMENT`, `BILL_ALREADY_VOIDED`, `BILL_HAS_ACTIVE_PAYMENTS`, `VENDOR_NOT_FOUND`, `REASON_REQUIRED`) per the canonical pattern (CLAUDE.md). When PR-13/PR-14 land, they'll register these in `RpcErrorCodes`.
+- updated src/types/index.ts: VendorBill and VendorPayment gain voided_at/voided_by/void_reason; balance_cents now annotated as GENERATED read-only.
+- DID NOT regenerate schema-registry. The registry is built from live DB queries, so re-running it before the migration is applied would just produce the same output (no changes to capture). Mason should regenerate AFTER applying the migration.
+
+Risk mitigation for Mason's review:
+1. RLS change. Old: any authenticated user could SELECT vendors. New: admin/sales_rep only. If any UI expects driver/applicator vendor reads, it'll silently return empty. Recommend testing with each role on a preview branch before applying to prod.
+2. balance_cents type change. The DROP+ADD dance is in one migration (atomic per Supabase migration runner). If the migration fails partway, the column is gone — restore via re-running the migration (which adds it back with GENERATED).
+3. CHECK expansion is additive only — old values still allowed. Safe.
+
+Test outcomes (autonomous run only — no live DB application):
+- npm run lint: pass (0 errors, 270 warnings)
+- npm run typecheck: pass (after VendorBill/VendorPayment type updates)
+- npm run build: pass
+- npm run test: deferred to pre-commit hook
+- validate-sql-migrations: deferred to pre-commit hook
+- Live application: NOT EXECUTED. Mason must apply manually.
