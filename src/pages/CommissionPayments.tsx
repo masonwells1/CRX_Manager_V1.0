@@ -83,9 +83,10 @@ export default function CommissionPayments() {
 
   const fetchPayments = useCallback(async () => {
     setLoading(true);
+    // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('commission_payments')
-      .select('*, recipient:profiles!commission_payments_recipient_id_fkey(full_name)')
+      .select('*')
       .order('created_at', { ascending: false })
       .limit(200);
 
@@ -95,9 +96,23 @@ export default function CommissionPayments() {
       return;
     }
 
+    const recipientIds = [...new Set(
+      ((data || []) as Array<{ recipient_id?: string | null }>)
+        .map((p) => p.recipient_id)
+        .filter(Boolean) as string[]
+    )];
+    const recipientMap: Record<string, string> = {};
+    if (recipientIds.length > 0) {
+      const { data: recipients } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', recipientIds);
+      (recipients || []).forEach((r: { id: string; full_name: string }) => { recipientMap[r.id] = r.full_name; });
+    }
+
     // Get item counts
     const rows: CommissionPaymentRow[] = [];
-    for (const p of (data || []) as Array<Record<string, unknown> & { recipient?: { full_name?: string } }>) {
+    for (const p of (data || []) as Array<Record<string, unknown> & { recipient_id?: string | null }>) {
       const { count } = await supabase
         .from('commission_payment_items')
         .select('*', { count: 'exact', head: true })
@@ -105,7 +120,7 @@ export default function CommissionPayments() {
 
       rows.push({
         ...p,
-        recipient_name: p.recipient?.full_name || 'Unknown',
+        recipient_name: p.recipient_id ? recipientMap[p.recipient_id] || 'Unknown' : 'Unknown',
         item_count: count || 0,
       } as CommissionPaymentRow);
     }
@@ -119,12 +134,12 @@ export default function CommissionPayments() {
   }, [fetchPayments]);
 
   const fetchUnpaid = async () => {
+    // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('commissions')
       .select(`
         id, order_number, customer_name, order_date, commission_amount,
-        recipient_user_id,
-        recipient:profiles!commissions_recipient_user_id_fkey(full_name)
+        recipient_user_id
       `)
       .neq('status', 'paid')
       .order('order_date', { ascending: false })
@@ -135,10 +150,24 @@ export default function CommissionPayments() {
       return;
     }
 
+    const recipientUserIds = [...new Set(
+      ((data || []) as Array<{ recipient_user_id?: string | null }>)
+        .map((c) => c.recipient_user_id)
+        .filter(Boolean) as string[]
+    )];
+    const recipientMap: Record<string, string> = {};
+    if (recipientUserIds.length > 0) {
+      const { data: recipients } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', recipientUserIds);
+      (recipients || []).forEach((r: { id: string; full_name: string }) => { recipientMap[r.id] = r.full_name; });
+    }
+
     setUnpaidCommissions(
-      ((data || []) as Array<Record<string, unknown> & { recipient?: { full_name?: string } }>).map((c) => ({
+      ((data || []) as Array<Record<string, unknown> & { recipient_user_id?: string | null }>).map((c) => ({
         ...c,
-        recipient_name: c.recipient?.full_name || 'Unknown',
+        recipient_name: c.recipient_user_id ? recipientMap[c.recipient_user_id] || 'Unknown' : 'Unknown',
       })) as unknown as UnpaidCommission[],
     );
   };

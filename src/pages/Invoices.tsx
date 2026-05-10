@@ -92,9 +92,10 @@ export default function Invoices() {
     setLoading(true);
     const { start: seasonStart, end: seasonEnd } = getSeasonDates();
     const QUERY_LIMIT = 2000;
+    // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('invoices')
-      .select('*, customer:customers!invoices_customer_id_fkey(farm_name), salesman:profiles!invoices_salesman_id_fkey(full_name)')
+      .select('*, customer:customers!invoices_customer_id_fkey(farm_name)')
       .is('deleted_at', null)
       .gte('created_at', seasonStart)
       .lte('created_at', seasonEnd + 'T23:59:59')
@@ -112,10 +113,24 @@ export default function Invoices() {
       toast('error', `Showing first ${QUERY_LIMIT} invoices — some invoices may be hidden. Contact admin if you need the full list.`);
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman?: { full_name: string } }>).map((inv) => ({
+    const salesmanIds = [...new Set(
+      ((data || []) as Array<{ salesman_id?: string | null }>)
+        .map((inv) => inv.salesman_id)
+        .filter(Boolean) as string[]
+    )];
+    const salesmanMap: Record<string, string> = {};
+    if (salesmanIds.length > 0) {
+      const { data: salesmen } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', salesmanIds);
+      (salesmen || []).forEach((s: { id: string; full_name: string }) => { salesmanMap[s.id] = s.full_name; });
+    }
+
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman_id?: string | null }>).map((inv) => ({
       ...inv,
       customer_name: inv.customer?.farm_name || 'Unknown',
-      salesman_name: inv.salesman?.full_name || null,
+      salesman_name: inv.salesman_id ? salesmanMap[inv.salesman_id] || null : null,
     })) as unknown as InvoiceRow[];
     setInvoices(rows);
     setLoading(false);

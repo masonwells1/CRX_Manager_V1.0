@@ -176,9 +176,10 @@ export default function InvoiceDetail() {
 
   const fetchInvoice = useCallback(async (invoiceId: string) => {
     setLoading(true);
+    // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('invoices')
-      .select('*, customer:customers(farm_name), salesman:profiles!invoices_salesman_id_fkey(full_name)')
+      .select('*, customer:customers(farm_name)')
       .eq('id', invoiceId)
       .single();
 
@@ -187,6 +188,19 @@ export default function InvoiceDetail() {
       navigate('/invoices');
       return;
     }
+
+    let salesman: { full_name: string } | null = null;
+    const salesmanId = (data as { salesman_id?: string | null }).salesman_id;
+    if (salesmanId) {
+      const { data: smData } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .eq('id', salesmanId)
+        .maybeSingle();
+      if (smData) salesman = { full_name: smData.full_name };
+    }
+    // Attach salesman in the same shape the JSX consumes (`invoice.salesman?.full_name`).
+    (data as Record<string, unknown>).salesman = salesman;
 
     setInvoice(data as Invoice);
     setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
