@@ -121,17 +121,31 @@ export default function PurchaseOrderDetail() {
 
   const fetchReceivingHistory = useCallback(async () => {
     setHistoryLoading(true);
+    // PR-07 follow-up: dropped receiver FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('receiving_records')
-      .select('*, product:products(product_name), receiver:profiles!receiving_records_received_by_fkey(full_name)')
+      .select('*, product:products(product_name)')
       .eq('purchase_order_id', id!)
       .order('received_at', { ascending: false });
 
     if (!error && data) {
-      const rows = (data as Array<ReceivingRecord & { product?: { product_name: string }; receiver?: { full_name: string } }>).map((r) => ({
+      const receiverIds = [...new Set(
+        (data as Array<{ received_by?: string | null }>)
+          .map((r) => r.received_by)
+          .filter(Boolean) as string[]
+      )];
+      const receiverMap: Record<string, string> = {};
+      if (receiverIds.length > 0) {
+        const { data: receivers } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', receiverIds);
+        (receivers || []).forEach((p: { id: string; full_name: string }) => { receiverMap[p.id] = p.full_name; });
+      }
+      const rows = (data as Array<ReceivingRecord & { product?: { product_name: string }; received_by?: string | null }>).map((r) => ({
         ...r,
         product_name: r.product?.product_name || 'Unknown',
-        received_by_name: r.receiver?.full_name || 'Unknown',
+        received_by_name: r.received_by ? receiverMap[r.received_by] || 'Unknown' : 'Unknown',
       }));
       setReceivingHistory(rows as ReceivingRecord[]);
     }

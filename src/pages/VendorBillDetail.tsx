@@ -108,15 +108,30 @@ export default function VendorBillDetail() {
     } as VendorBill & { vendor_name: string; po_number: string | null });
 
     // Fetch payments
+    // PR-07 follow-up: dropped creator FK embed; resolved via profile_public_view.
     const { data: payData } = await supabase
       .from('vendor_payments')
-      .select('*, creator:profiles!vendor_payments_created_by_fkey(full_name)')
+      .select('*')
       .eq('vendor_bill_id', id)
       .order('payment_date', { ascending: false });
 
-    const mappedPayments = ((payData || []) as Array<Record<string, unknown>>).map((p) => ({
+    const creatorIds = [...new Set(
+      ((payData || []) as Array<{ created_by?: string | null }>)
+        .map((p) => p.created_by)
+        .filter(Boolean) as string[]
+    )];
+    const creatorMap: Record<string, string> = {};
+    if (creatorIds.length > 0) {
+      const { data: creators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', creatorIds);
+      (creators || []).forEach((c: { id: string; full_name: string }) => { creatorMap[c.id] = c.full_name; });
+    }
+
+    const mappedPayments = ((payData || []) as Array<Record<string, unknown> & { created_by?: string | null }>).map((p) => ({
       ...p,
-      creator_name: (p.creator as { full_name?: string } | null)?.full_name || 'System',
+      creator_name: p.created_by ? creatorMap[p.created_by] || 'System' : 'System',
     })) as unknown as (VendorPayment & { creator_name: string })[];
 
     setPayments(mappedPayments);

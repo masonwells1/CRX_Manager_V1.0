@@ -105,25 +105,45 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
     setLoading(true);
     setError('');
 
-    supabase
-      .from('inventory_transactions')
-      .select(`
-        *,
-        performer:profiles!inventory_transactions_performed_by_fkey(full_name),
-        order:orders!inventory_transactions_order_id_fkey(order_number, customer:customers(farm_name)),
-        purchase_order:purchase_orders!inventory_transactions_purchase_order_id_fkey(po_number),
-        delivery:deliveries!inventory_transactions_delivery_id_fkey(delivery_number)
-      `)
-      .eq('product_id', productId)
-      .order('created_at', { ascending: true })
-      .then(({ data, error: err }) => {
-        if (err) {
-          setError(sanitizeError(err));
-        } else {
-          setTransactions((data || []) as Transaction[]);
-        }
+    // PR-07 follow-up: dropped performer FK embed; resolved via profile_public_view.
+    (async () => {
+      const { data, error: err } = await supabase
+        .from('inventory_transactions')
+        .select(`
+          *,
+          order:orders!inventory_transactions_order_id_fkey(order_number, customer:customers(farm_name)),
+          purchase_order:purchase_orders!inventory_transactions_purchase_order_id_fkey(po_number),
+          delivery:deliveries!inventory_transactions_delivery_id_fkey(delivery_number)
+        `)
+        .eq('product_id', productId)
+        .order('created_at', { ascending: true });
+      if (err) {
+        setError(sanitizeError(err));
         setLoading(false);
-      });
+        return;
+      }
+      const performerIds = [...new Set(
+        ((data || []) as Array<{ performed_by?: string | null }>)
+          .map((t) => t.performed_by)
+          .filter(Boolean) as string[]
+      )];
+      const performerMap: Record<string, { full_name: string }> = {};
+      if (performerIds.length > 0) {
+        const { data: performers } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', performerIds);
+        (performers || []).forEach((p: { id: string; full_name: string }) => {
+          performerMap[p.id] = { full_name: p.full_name };
+        });
+      }
+      const enriched = ((data || []) as Array<Transaction & { performed_by?: string | null }>).map((t) => ({
+        ...t,
+        performer: t.performed_by ? performerMap[t.performed_by] || null : null,
+      }));
+      setTransactions(enriched as Transaction[]);
+      setLoading(false);
+    })();
   }, [open, productId]);
 
   const balances = computeRunningBalance(transactions);

@@ -101,13 +101,13 @@ export default function Returns() {
 
   const fetchReturns = useCallback(async () => {
     setLoading(true);
+    // PR-07 follow-up: dropped requester FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('returns')
       .select(`
         *,
         customer:customers(farm_name),
         order:orders(order_number),
-        requester:profiles!returns_requested_by_fkey(full_name),
         items:return_items(id)
       `)
       .is('deleted_at', null)
@@ -120,11 +120,25 @@ export default function Returns() {
       return;
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requester?: { full_name: string }; items?: unknown[] }>).map((r) => ({
+    const requesterIds = [...new Set(
+      ((data || []) as Array<{ requested_by?: string | null }>)
+        .map((r) => r.requested_by)
+        .filter(Boolean) as string[]
+    )];
+    const requesterMap: Record<string, string> = {};
+    if (requesterIds.length > 0) {
+      const { data: requesters } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', requesterIds);
+      (requesters || []).forEach((p: { id: string; full_name: string }) => { requesterMap[p.id] = p.full_name; });
+    }
+
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requested_by?: string | null; items?: unknown[] }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       order_number: r.order?.order_number || null,
-      requester_name: r.requester?.full_name || 'Unknown',
+      requester_name: r.requested_by ? requesterMap[r.requested_by as string] || 'Unknown' : 'Unknown',
       item_count: r.items?.length || 0,
     })) as unknown as ReturnRow[];
     setReturns(rows);

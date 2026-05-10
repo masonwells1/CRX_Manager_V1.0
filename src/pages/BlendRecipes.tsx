@@ -74,9 +74,10 @@ export default function BlendRecipes() {
 
   const fetchRecipes = useCallback(async () => {
     setLoading(true);
+    // PR-07 follow-up: dropped creator FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('blend_recipes')
-      .select('*, creator:profiles!blend_recipes_created_by_fkey(full_name), items:blend_recipe_items(count)')
+      .select('*, items:blend_recipe_items(count)')
       .is('deleted_at', null)
       .order('name');
 
@@ -87,10 +88,24 @@ export default function BlendRecipes() {
       return;
     }
 
-    const rows: RecipeRow[] = ((data || []) as RecipeDbRow[]).map((r) => ({
+    const creatorIds = [...new Set(
+      ((data || []) as Array<{ created_by?: string | null }>)
+        .map((r) => r.created_by)
+        .filter(Boolean) as string[]
+    )];
+    const creatorMap: Record<string, string> = {};
+    if (creatorIds.length > 0) {
+      const { data: creators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', creatorIds);
+      (creators || []).forEach((c: { id: string; full_name: string }) => { creatorMap[c.id] = c.full_name; });
+    }
+
+    const rows: RecipeRow[] = ((data || []) as Array<RecipeDbRow & { created_by?: string | null }>).map((r) => ({
       ...r,
       item_count: r.items?.[0]?.count || 0,
-      creator_name: r.creator?.full_name || 'Unknown',
+      creator_name: r.created_by ? creatorMap[r.created_by] || 'Unknown' : 'Unknown',
     })) as RecipeRow[];
     setRecipes(rows);
     setLoading(false);

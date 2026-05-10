@@ -82,12 +82,11 @@ export default function CycleCounts() {
 
   const fetchCounts = useCallback(async () => {
     setLoading(true);
+    // PR-07 follow-up: dropped initiator + completer FK embeds; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('cycle_counts')
       .select(`
         *,
-        initiator:profiles!cycle_counts_initiated_by_fkey(full_name),
-        completer:profiles!cycle_counts_completed_by_fkey(full_name),
         items:cycle_count_items(id, is_counted, variance)
       `)
       .order('created_at', { ascending: false });
@@ -99,10 +98,23 @@ export default function CycleCounts() {
       return;
     }
 
-    const rows: CountRow[] = ((data || []) as CycleCountDbRow[]).map((c) => ({
+    const profileIds = [...new Set([
+      ...((data || []) as Array<{ initiated_by?: string | null }>).map((c) => c.initiated_by),
+      ...((data || []) as Array<{ completed_by?: string | null }>).map((c) => c.completed_by),
+    ].filter(Boolean) as string[])];
+    const profileMap: Record<string, string> = {};
+    if (profileIds.length > 0) {
+      const { data: profs } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', profileIds);
+      (profs || []).forEach((p: { id: string; full_name: string }) => { profileMap[p.id] = p.full_name; });
+    }
+
+    const rows: CountRow[] = ((data || []) as Array<CycleCountDbRow & { initiated_by?: string | null; completed_by?: string | null }>).map((c) => ({
       ...c,
-      initiator_name: c.initiator?.full_name || 'Unknown',
-      completer_name: c.completer?.full_name || null,
+      initiator_name: c.initiated_by ? profileMap[c.initiated_by] || 'Unknown' : 'Unknown',
+      completer_name: c.completed_by ? profileMap[c.completed_by] || null : null,
       item_count: c.items?.length || 0,
       counted_count: c.items?.filter((i) => i.is_counted).length || 0,
       variance_count: c.items?.filter((i) => i.variance && i.variance !== 0).length || 0,
