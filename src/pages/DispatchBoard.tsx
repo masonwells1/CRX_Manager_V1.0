@@ -54,12 +54,14 @@ export default function DispatchBoard() {
     setLoading(true);
     try {
       const [jobsRes, applicatorsRes, fieldsRes] = await Promise.all([
+        // PR-07 follow-up: dropped applicator FK embed; resolved via the
+        // applicators list returned in the same Promise.all (already a view
+        // read) — pivot to a map after the fetch.
         supabase
           .from('jobs')
           .select(`
             *,
             customer:customers(farm_name),
-            applicator:profiles!jobs_applicator_id_fkey(full_name),
             job_fields(field_id, acres_to_treat, field:fields(id, field_name, boundary_geojson, centroid_lat, centroid_lng, total_acres, crop_type, customer_id))
           `)
           .is('deleted_at', null)
@@ -81,10 +83,17 @@ export default function DispatchBoard() {
 
       if (jobsRes.error) throw jobsRes.error;
 
+      // Build applicator name map from the parallel applicators fetch above
+      // so we don't need a second profile_public_view round-trip.
+      const applicatorNameMap: Record<string, string> = {};
+      ((applicatorsRes.data || []) as Array<{ id: string; full_name: string }>).forEach((a) => {
+        applicatorNameMap[a.id] = a.full_name;
+      });
+
       const mapped: DispatchJob[] = (jobsRes.data || []).map((j: Record<string, unknown>) => ({
         ...j,
         customer_name: (j.customer as { farm_name?: string })?.farm_name || 'Unknown',
-        applicator_name: (j.applicator as { full_name?: string })?.full_name || null,
+        applicator_name: j.applicator_id ? applicatorNameMap[j.applicator_id as string] || null : null,
         field_names: ((j.job_fields as { field?: { field_name?: string } }[]) || [])
           .map(jf => jf.field?.field_name)
           .filter(Boolean)

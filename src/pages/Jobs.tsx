@@ -88,12 +88,12 @@ export default function Jobs() {
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
+    // PR-07 follow-up: dropped applicator FK embed; resolve via profile_public_view.
     let query = supabase
       .from('jobs')
       .select(`
         *,
         customer:customers(farm_name),
-        applicator:profiles!jobs_applicator_id_fkey(full_name),
         vehicle:vehicles(vehicle_name),
         job_fields(id)
       `)
@@ -115,10 +115,24 @@ export default function Jobs() {
       return;
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; applicator?: { full_name?: string }; vehicle?: { vehicle_name?: string }; job_fields?: unknown[] }>).map((j) => ({
+    const applicatorIds = [...new Set(
+      ((data || []) as Array<{ applicator_id?: string | null }>)
+        .map((j) => j.applicator_id)
+        .filter(Boolean) as string[]
+    )];
+    const applicatorMap: Record<string, string> = {};
+    if (applicatorIds.length > 0) {
+      const { data: applicators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', applicatorIds);
+      (applicators || []).forEach((a: { id: string; full_name: string }) => { applicatorMap[a.id] = a.full_name; });
+    }
+
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; vehicle?: { vehicle_name?: string }; job_fields?: unknown[]; applicator_id?: string | null }>).map((j) => ({
       ...j,
       customer_name: j.customer?.farm_name || 'Unknown',
-      applicator_name: j.applicator?.full_name || '-',
+      applicator_name: j.applicator_id ? applicatorMap[j.applicator_id] || '-' : '-',
       vehicle_name: j.vehicle?.vehicle_name || '-',
       field_count: Array.isArray(j.job_fields) ? j.job_fields.length : 0,
     })) as unknown as JobRow[];
