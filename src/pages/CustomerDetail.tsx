@@ -279,12 +279,35 @@ export default function CustomerDetail() {
       try {
         const { data: tlData, error: tlError } = await supabase
           .from('activity_feed')
-          .select('*, performer:profiles!activity_feed_performed_by_fkey(id, full_name, role)')
+          .select('*')
           .eq('customer_id', id)
           .order('created_at', { ascending: false })
           .limit(50);
         if (tlError) toast('error', 'Failed to load timeline');
-        setTimeline((tlData || []) as ActivityFeedItem[]);
+
+        // PR-07 follow-up: resolve performer names via profile_public_view (safe
+        // columns only) so non-admin users still see actor names after
+        // profiles_select tightens to admin-or-self. The timeline UI only reads
+        // performer.full_name (CustomerDetail.tsx ~line 796), so partial Profile
+        // shape via a cast is intentional here.
+        const rows = (tlData || []) as ActivityFeedItem[];
+        const performerIds = [...new Set(rows.map((r) => r.performed_by).filter(Boolean))];
+        const performerMap: Record<string, { id: string; full_name: string; role: string }> = {};
+        if (performerIds.length > 0) {
+          const { data: perfData } = await supabase
+            .from('profile_public_view')
+            .select('id, full_name, role')
+            .in('id', performerIds);
+          (perfData || []).forEach((p: { id: string; full_name: string; role: string }) => {
+            performerMap[p.id] = p;
+          });
+        }
+        setTimeline(
+          rows.map((r) => ({
+            ...r,
+            performer: performerMap[r.performed_by] as unknown as ActivityFeedItem['performer'],
+          })),
+        );
       } finally {
         setTimelineLoading(false);
       }

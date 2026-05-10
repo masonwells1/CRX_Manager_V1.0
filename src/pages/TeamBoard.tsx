@@ -202,7 +202,7 @@ export default function TeamBoard() {
     setActivityLoading(true);
     let query = supabase
       .from('note_activity_log')
-      .select('*, user:profiles!note_activity_log_user_id_fkey(full_name)')
+      .select('*')
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -242,9 +242,25 @@ export default function TeamBoard() {
         (noteData || []).forEach((n: { id: string; title: string }) => { titleMap[n.id] = n.title; });
       }
 
-      const enriched = data.map((a: GlobalActivity & { note_id: string; changes?: Record<string, unknown> | null }) => ({
+      // PR-07 follow-up: resolve actor names via profile_public_view (safe columns
+      // only) so the global activity log keeps showing names after profiles_select
+      // tightens to admin-or-self.
+      const userIds = [...new Set(data.map((a: { user_id: string }) => a.user_id).filter(Boolean))];
+      const userMap: Record<string, { full_name: string }> = {};
+      if (userIds.length > 0) {
+        const { data: userData } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', userIds);
+        (userData || []).forEach((u: { id: string; full_name: string }) => {
+          userMap[u.id] = { full_name: u.full_name };
+        });
+      }
+
+      const enriched = data.map((a: GlobalActivity & { note_id: string; user_id: string; changes?: Record<string, unknown> | null }) => ({
         ...a,
         note_title: titleMap[a.note_id] || ((a.changes as Record<string, Record<string, unknown>> | null)?.note?.title as string) || 'Deleted note',
+        user: userMap[a.user_id],
       }));
 
       setGlobalActivities(enriched);

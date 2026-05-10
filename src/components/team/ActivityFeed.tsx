@@ -28,7 +28,7 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
   const fetchActivities = useCallback(async () => {
     let query = supabase
       .from('note_activity_log')
-      .select('*, user:profiles!note_activity_log_user_id_fkey(full_name)')
+      .select('*')
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -42,7 +42,24 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
       setLoading(false);
       return;
     }
-    setActivities((data || []) as ActivityEntry[]);
+    const rows = (data || []) as ActivityEntry[];
+
+    // PR-07 follow-up: resolve actor names via profile_public_view (safe columns
+    // only) so the activity feed keeps showing names after profiles_select
+    // tightens to admin-or-self.
+    const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
+    const userMap: Record<string, { full_name: string }> = {};
+    if (userIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', userIds);
+      (profiles || []).forEach((p: { id: string; full_name: string }) => {
+        userMap[p.id] = { full_name: p.full_name };
+      });
+    }
+
+    setActivities(rows.map((r) => ({ ...r, user: userMap[r.user_id] })));
     setLoading(false);
   }, [noteId, limit]);
 
