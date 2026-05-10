@@ -109,7 +109,8 @@ export default function SalesReports() {
       .then(({ data }) => setProductOptions((data || []).map(r => ({ id: r.id, name: r.product_name }))));
     supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(1000)
       .then(({ data }) => setCustomerOptions((data || []).map(r => ({ id: r.id, name: r.farm_name }))));
-    supabase.from('profiles').select('id, full_name').in('role', ['admin', 'sales_rep']).order('full_name')
+    // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
+    supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).order('full_name')
       .then(({ data }) => setSalesRepOptions((data || []).map(r => ({ id: r.id, name: r.full_name }))));
     supabase.from('products').select('category').eq('is_active', true).not('category', 'is', null)
       .then(({ data }) => {

@@ -60,7 +60,8 @@ export default function LogbookReport() {
         if (error) { toast('error', 'Failed to load customers'); return; }
         setEntities((rows || []).map((r) => ({ id: r.id, label: r.farm_name })));
       } else if (tab === 'applicator') {
-        const { data: rows, error } = await supabase.from('profiles').select('id, full_name, role').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name').limit(200);
+        // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
+        const { data: rows, error } = await supabase.from('profile_public_view').select('id, full_name, role').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name').limit(200);
         if (error) { toast('error', 'Failed to load applicators'); return; }
         setEntities((rows || []).map((r) => ({ id: r.id, label: r.full_name })));
       } else if (tab === 'field') {

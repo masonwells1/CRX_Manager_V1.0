@@ -174,8 +174,9 @@ export default function TeamBoard() {
       )];
       const completerMap: Record<string, { full_name: string }> = {};
       if (completerIds.length > 0) {
+        // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
         const { data: completerProfiles } = await supabase
-          .from('profiles')
+          .from('profile_public_view')
           .select('id, full_name')
           .in('id', completerIds);
         (completerProfiles || []).forEach((p: { id: string; full_name: string }) => {

@@ -66,8 +66,9 @@ export default function DispatchBoard() {
           .gte('job_date', dateFilter)
           .lte('job_date', dateFilter)
           .order('scheduled_time', { ascending: true, nullsFirst: false }),
+        // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
         supabase
-          .from('profiles')
+          .from('profile_public_view')
           .select('id, full_name, role')
           .in('role', ['applicator', 'driver', 'admin'])
           .eq('is_active', true)

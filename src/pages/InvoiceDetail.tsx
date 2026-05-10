@@ -165,7 +165,8 @@ export default function InvoiceDetail() {
     const fetchRef = async () => {
       const [custRes, salesRes] = await Promise.all([
         supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500),
-        supabase.from('profiles').select('id, full_name').in('role', ['admin', 'sales_rep']).eq('is_active', true).order('full_name'),
+        // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
+        supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       ]);
       if (custRes.data) setCustomers(custRes.data as Customer[]);
       if (salesRes.data) setSalespeople(salesRes.data);

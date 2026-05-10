@@ -56,8 +56,11 @@ export default function TeamBoardFilters({ filters, onChange }: TeamBoardFilters
 
   const fetchProfiles = async () => {
     try {
+      // PR-07 follow-up: read from profile_public_view (safe columns only — id,
+      // full_name, role, is_active) so non-admin users still see names after
+      // profiles_select tightens to admin-or-self.
       const { data, error } = await supabase
-        .from('profiles')
+        .from('profile_public_view')
         .select('id, full_name')
         .eq('is_active', true)
         .order('full_name');
