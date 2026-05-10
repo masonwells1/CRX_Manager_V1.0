@@ -1,5 +1,103 @@
 # CRX Audit Fix Sprint — Execution Summary
 
+## Post-audit follow-up — 2026-05-11
+
+Closed/advanced 3 of the 4 follow-ups flagged at the end of the May 10 wrap-up. Branch `fix/audit-2026-05-09` is now 40 commits ahead of main.
+
+**Commits this session:**
+| Commit | Task | Scope |
+|---|---|---|
+| `34dc345` | Task 2 — PR-10 actor-spoof cleanup | `reassign_delivery` + `batch_cancel_deliveries` now use strict actor pattern (mirrors codex F1/F2 in `3c04f61`). **Applied to live Supabase** via MCP. |
+| `b336753` | Task 3 — assertRpcCoverage baseline reduction | 11 files cleared. `BASELINE_VIOLATION_COUNT` decremented from 32 → 21. |
+| `9af92eb` | Task 1 batch 1 — `profile_public_view` migration | 6 direct safe-column reads migrated. ~28 callsites still pending. |
+
+### Task 2 — live state verified
+
+`reassign_delivery` and `batch_cancel_deliveries` were re-created via migration `20260511010000_actor_spoof_cleanup.sql`. Post-apply verification:
+
+```
+proname                    | spoofable_check | strict_check
+batch_cancel_deliveries    | fixed           | has strict pattern
+reassign_delivery          | fixed           | has strict pattern
+```
+
+All 3 frontend callsites (`Deliveries.tsx`, `DeliveryDetail.tsx`) pass `p_performed_by: profile.id` which equals `auth.uid()` — strict mismatch check passes cleanly. No frontend changes needed.
+
+### Task 3 — what was cleared
+
+Real coverage fixes (data captured but not wrapped):
+- `BatchAdjustModal.tsx` — adjust_inventory
+- `WriteOffModal.tsx` — apply_write_off
+- `PurchaseOrders.tsx` — cancel_purchase_order
+- `JobDetail.tsx` — start_job
+- `ReceivingLog.tsx` — reverse_receiving_record
+- `Reports.tsx` — create_commission_payment
+- `OrderDetail.tsx` — update_order_items
+
+Regex-limitation fixes (assert was there, regex missed it):
+- `useIdempotencyKey.ts` — JSDoc rewrite (docstring example was matched as a real RPC capture)
+- `ARaging.tsx` — extracted `ARReminderCandidate`/`ARReminderInvoice` type aliases (multi-level generic regex limitation)
+- `AccountsPayable.tsx` — `Promise.all([rpc, rpc])` → sequential awaits
+- `SalesReports.tsx` — `.then(...)` chain → async IIFE
+
+Skipped (RETURNS void — wrapping would throw on real data):
+- `notificationTriggers.ts` (`notify_damaged_receiving`)
+- `BulkFieldImport.tsx` (`save_field_geometry`)
+- `Fields.tsx` (`link_fields_to_parent`)
+
+These need a different pattern (e.g. `.throwOnError()`) — not introduced yet to avoid mixing the change with the cleanup commit. The baseline now sits at 21; the remaining entries are mostly the void-RPC files above plus orphans where Promise.all / dynamic-rpc-name patterns hide the capture from the regex.
+
+Also flagged via `mcp__ccd_session__spawn_task`: `PrepaymentManager.tsx:297` calls `create_prepay_check_splits` which doesn't exist in production (same finding PR-02 surfaced). Split-check flow appears broken. Out of scope here.
+
+### Task 1 — `profile_public_view` migration progress
+
+Inventory of `profiles` callsites: 36 files. Classified into:
+
+| Bucket | Action | Count (approx) |
+|---|---|---|
+| Direct safe-column reads (`select('id, full_name'...)`) | Swap table name to `profile_public_view` | 6 — **done this session** |
+| FK embeds (`profiles!fk(full_name)`) | Drop embed + post-fetch lookup by ID list | ~22 — pending |
+| Direct PII reads (`select('*')` then uses email/phone/license) | Keep `from('profiles')` — admin-or-self policy covers admins + self | ~5 — needs analysis |
+| Self-read (`AuthContext`, Settings) | Keep `from('profiles')` — admin-or-self covers self-row | 2 — keep |
+| Internal helpers (activityLogger, notificationTriggers) | Audit each call's caller-context — many read another user's role under RLS | 4 — needs careful review |
+
+**Migrated this session** (6 files, all simple table-name swaps):
+- `src/components/team/TeamBoardFilters.tsx`
+- `src/components/reports/LogbookReport.tsx`
+- `src/pages/SalesReports.tsx`
+- `src/pages/InvoiceDetail.tsx`
+- `src/pages/DispatchBoard.tsx`
+- `src/pages/TeamBoard.tsx`
+
+⚠️ **DO NOT APPLY** `20260510999999_profiles_select_tighten.sql` yet — the FK-embedded reads still need migration. Applying part 2 now would break every UI that joins `profiles!fk_name(...)` for non-admin users (activity feed names, delivery driver display, sales rep on order/quote/customer, applicators on jobs, comment authors on team-board, etc.).
+
+**Next session — what to tackle:**
+1. FK embeds, grouped by domain:
+   - **Activity feed**: `ActivityFeed.tsx`, `CustomerDetail.tsx` (performer), `TeamBoard.tsx` (note_activity_log user)
+   - **Deliveries**: `Deliveries.tsx`, `OrderDetail.tsx`, `InvoiceDetail.tsx`, `CustomerDetail.tsx`, `DeliveryDetail.tsx` (driver)
+   - **Sales reps / commissions**: `Invoices.tsx`, `InvoiceDetail.tsx`, `CommissionPayments.tsx` (recipient)
+   - **Applicators / jobs**: `Jobs.tsx`, `ApplicationRecords.tsx`, `DispatchBoard.tsx` (jobs embed)
+   - **Team-board comments**: `CommentsSection.tsx`, `ActivityFeed.tsx`, `TeamBoard.tsx`
+   - **Blend tickets**: `BlendTicketDetail.tsx`, `BlendTickets.tsx` (BlendTickets reads email — needs careful analysis; uploader/reviewer/salesman emails may be admin-only feature)
+   - **Other**: `TransactionLedgerModal.tsx`, `BlendRecipes.tsx`, `CycleCounts.tsx`, `Returns.tsx`, `PurchaseOrderDetail.tsx`, `VendorBillDetail.tsx`
+2. Direct `select('*')` reads — narrow the selects first, then migrate or keep based on actual column usage
+3. `activityLogger.ts` `notifyAdmins` reads `WHERE role='admin'` — under admin-or-self RLS, a non-admin caller sees ZERO admin rows. This breaks notification fan-out. Fix: move the `notifyAdmins` profile fetch into a SECURITY DEFINER RPC, or migrate to read from `profile_public_view`.
+4. `notificationTriggers.ts` lines 208/349/445 read another user's role — these run from server-side flows (likely callable from any role) so RLS will apply. Same fix options as above.
+5. Once all callsites migrate, apply `20260510999999_profiles_select_tighten.sql` via MCP and verify with `SELECT qual FROM pg_policies WHERE tablename='profiles' AND policyname='profiles_select';` — `qual` should change from `true` to the admin-or-self predicate.
+
+### Task 4 — staging Supabase (BLOCKED)
+
+Did not check `gh secret list` per the brief's escape clause — assumed unchanged. Mason still needs to create the `crx-manager-staging` Supabase project before PR-23 can be implemented.
+
+### Open follow-ups carried forward
+
+- ⏸ **Task 1 continuation** — ~28 callsites remain (FK embeds + direct `select('*')` reads + internal helpers). Estimated 4–6 hours of careful per-callsite work, grouped by domain. Apply PR-07 part 2 + regenerate schema-registry + verify policy as the final step.
+- ⏸ **Task 3 continuation** — 21 baseline entries remain; further reduction needs either the `.throwOnError()` pattern for void RPCs (new convention) or selective refactors for Promise.all / dynamic-rpc-name patterns.
+- ⏸ **Task 4** — staging Supabase project creation by Mason.
+- ⏸ **Spawned task** — investigate dead `create_prepay_check_splits` call in `PrepaymentManager.tsx:297` (restore vs remove vs inline).
+
+---
+
 ## Live application — 2026-05-10 (afternoon)
 
 All 12 of the queued migrations applied to live Supabase (`rhyzpcqhnizqbxphqdkr`) via Supabase MCP `apply_migration`. PR-07 split into two files first; only part 1 applied (the deferred part 2 stays queued behind frontend `profile_public_view` adoption work).
