@@ -69,6 +69,16 @@ export default function VendorBillDetail() {
   const [voidPaymentReason, setVoidPaymentReason] = useState('');
   const [voidingPayment, setVoidingPayment] = useState(false);
 
+  // Edit bill (PR-14, 2026-05-10) — only for unpaid bills with no active payments.
+  const editIdem = useIdempotencyKey('update_vendor_bill', profile?.id || '');
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editSubtotal, setEditSubtotal] = useState('');
+  const [editAdjustment, setEditAdjustment] = useState('');
+  const [editBillDate, setEditBillDate] = useState('');
+  const [editDueDate, setEditDueDate] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editing, setEditing] = useState(false);
+
   const today = localToday();
 
   const fmt = (cents: number) =>
@@ -147,6 +157,56 @@ export default function VendorBillDetail() {
       toast('error', sanitizeError(err));
     }
     setPaying(false);
+  };
+
+  const openEditModal = () => {
+    if (!bill) return;
+    setEditSubtotal((bill.subtotal_cents / 100).toFixed(2));
+    setEditAdjustment(((bill.adjustment_cents || 0) / 100).toFixed(2));
+    setEditBillDate(bill.bill_date);
+    setEditDueDate(bill.due_date);
+    setEditNotes(bill.notes || '');
+    setEditModalOpen(true);
+  };
+
+  const handleEditBill = async () => {
+    if (!bill) return;
+    const subtotalCents = parseDollarsToCents(editSubtotal);
+    if (subtotalCents <= 0) {
+      toast('error', 'Subtotal must be positive');
+      return;
+    }
+    const adjustmentCents = parseDollarsToCents(editAdjustment);
+    if (!editBillDate || !editDueDate) {
+      toast('error', 'Bill date and due date are required');
+      return;
+    }
+    if (editDueDate < editBillDate) {
+      toast('error', 'Due date cannot precede bill date');
+      return;
+    }
+    setEditing(true);
+    try {
+      const key = editIdem.getKey();
+      const { data, error } = await supabase.rpc('update_vendor_bill', {
+        p_bill_id: bill.id,
+        p_subtotal_cents: subtotalCents,
+        p_adjustment_cents: adjustmentCents,
+        p_bill_date: editBillDate,
+        p_due_date: editDueDate,
+        p_notes: editNotes || null,
+        p_idempotency_key: key,
+      });
+      if (error) throw error;
+      assertRpcResult<{ success: boolean; bill_id: string; old_total_cents: number; new_total_cents: number }>(data, 'update_vendor_bill');
+      editIdem.resetKey();
+      toast('success', 'Bill updated');
+      setEditModalOpen(false);
+      fetchBill();
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setEditing(false);
   };
 
   const handleVoidPayment = async () => {
@@ -298,6 +358,14 @@ export default function VendorBillDetail() {
           </Badge>
         </div>
         <div className="flex gap-2">
+          {/* PR-14 (2026-05-10): Edit Bill button — admin only, unpaid + no active payments */}
+          {profile?.role === 'admin' &&
+            bill.status === 'unpaid' &&
+            payments.filter((p) => !p.voided_at).length === 0 && (
+              <Button variant="ghost" onClick={openEditModal}>
+                Edit Bill
+              </Button>
+            )}
           {bill.status !== 'paid' && bill.status !== 'voided' && (
             <>
               <Button
@@ -480,6 +548,51 @@ export default function VendorBillDetail() {
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="ghost" onClick={() => setPayModalOpen(false)}>Cancel</Button>
             <Button onClick={handleRecordPayment} loading={paying}>Record Payment</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Edit Bill Modal (PR-14, 2026-05-10) */}
+      <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} title="Edit Vendor Bill">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Editing <strong>#{bill.bill_number}</strong>. Only available for unpaid bills with no active payments.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Subtotal ($)"
+              value={editSubtotal}
+              onChange={(e) => setEditSubtotal(e.target.value)}
+              placeholder="0.00"
+            />
+            <Input
+              label="Adjustment ($, can be negative)"
+              value={editAdjustment}
+              onChange={(e) => setEditAdjustment(e.target.value)}
+              placeholder="0.00"
+            />
+            <Input
+              type="date"
+              label="Bill Date"
+              value={editBillDate}
+              onChange={(e) => setEditBillDate(e.target.value)}
+            />
+            <Input
+              type="date"
+              label="Due Date"
+              value={editDueDate}
+              onChange={(e) => setEditDueDate(e.target.value)}
+            />
+          </div>
+          <Input
+            label="Notes"
+            value={editNotes}
+            onChange={(e) => setEditNotes(e.target.value)}
+            placeholder="Optional"
+          />
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setEditModalOpen(false)}>Cancel</Button>
+            <Button onClick={handleEditBill} loading={editing}>Save Changes</Button>
           </div>
         </div>
       </Modal>

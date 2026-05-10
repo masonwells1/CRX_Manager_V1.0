@@ -649,3 +649,41 @@ Test outcomes:
 - npm run build: deferred to pre-commit hook
 - npm run test: deferred to pre-commit hook
 - Live application: NOT EXECUTED. Apply PR-04 first, then PR-13.
+
+---
+
+## PR-14 — update_vendor_bill RPC + Edit button
+Status: completed-pending-live-application
+Started: 2026-05-10 08:08
+Completed: 2026-05-10 08:18
+Elapsed: ~10 min
+Risk: Low
+Files changed: 2 (1 new migration, 1 frontend component update)
+Commit: pending
+Findings closed: P2 (vendor bill not editable post-creation; typos required void+recreate)
+
+⚠️ DEPENDS ON PR-04 (20260510030000_ap_structural_fixes.sql) being applied first — same prerequisites as PR-13 (balance_cents GENERATED, vendor_bill_updated allowed in audit log CHECK, vendor_payments.voided_at column).
+
+Notes:
+- New RPC `update_vendor_bill(p_bill_id, p_subtotal_cents, p_adjustment_cents, p_bill_date, p_due_date, p_notes, p_idempotency_key)`. Returns jsonb with success/bill_id/old_total_cents/new_total_cents. Admin-only. Canonical idempotency. Strict actor pattern.
+- Guards: bill exists and not deleted, status='unpaid', no active (non-voided) payments, subtotal positive, due_date >= bill_date, period open at p_bill_date (re-checked since bill_date may change).
+- Field semantics: total_cents recomputed as `subtotal + COALESCE(adjustment, 0)`. balance_cents NOT touched (GENERATED post-PR-04). paid_cents NOT touched (only payment-recording paths modify it). bill_number NOT editable (uniqueness invariant).
+- Audit log entry uses operation_type='vendor_bill_updated' (already allowed by PR-04's CHECK expansion). Records both old_values and new_values for the 6 editable fields plus impact in cents.
+- Frontend changes in VendorBillDetail.tsx:
+  - Added `editIdem` (idempotency hook keyed to 'update_vendor_bill').
+  - Added state for edit modal: editModalOpen, editSubtotal, editAdjustment, editBillDate, editDueDate, editNotes, editing.
+  - Added `openEditModal` helper that pre-fills the form from current bill values.
+  - Added `handleEditBill` handler with client-side guards + RPC call wrapped via assertRpcResult<{...}>.
+  - Edit Bill button shown only when `profile.role === 'admin' AND bill.status === 'unpaid' AND payments.filter(p => !p.voided_at).length === 0` — same predicates the RPC enforces.
+  - Inline modal with subtotal / adjustment / bill_date / due_date / notes inputs in a 2-column grid.
+
+Decisions made autonomously (not in original plan):
+- Plan suggested a separate `src/pages/EditVendorBill.tsx` page reusing NewVendorBill component shape. Inlined the modal in VendorBillDetail.tsx instead — same reasoning as PR-13's inline modal. Smaller diff, same UX, easy to extract later.
+- Did NOT add `bill_number` to the editable fields. The uniqueness constraint in PR-04 (`UNIQUE (vendor_id, bill_number) WHERE deleted_at IS NULL AND status <> 'voided'`) means changing bill_number is a separate kind of operation (renaming + uniqueness check). If Mason needs it, a follow-up PR can add it with appropriate validation.
+
+Test outcomes:
+- npm run lint: pass (0 errors)
+- npm run typecheck: pass
+- npm run build: deferred to pre-commit hook
+- npm run test: deferred to pre-commit hook
+- Live application: NOT EXECUTED. Apply PR-04 first, then PR-13, then PR-14 (any order between 13 and 14 OK).
