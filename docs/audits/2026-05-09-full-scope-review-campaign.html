@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CRX Manager Full-Scope Review Campaign - 2026-05-09</title>
+  <style>
+    :root {
+      --ink: #16212d;
+      --muted: #5c6b7a;
+      --line: #d8e0e8;
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --p0: #9f1239;
+      --p1: #b45309;
+      --p2: #2563eb;
+      --p3: #64748b;
+      --code: #eef3f8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      line-height: 1.5;
+    }
+    header {
+      padding: 32px 40px;
+      background: #0f2f2b;
+      color: #ffffff;
+      border-bottom: 6px solid #2f8f68;
+    }
+    header h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.2;
+    }
+    header p { margin: 4px 0; color: #d7ece5; }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 28px 24px 48px;
+    }
+    section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px 24px;
+      margin-bottom: 18px;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 21px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+    }
+    h3 {
+      margin: 20px 0 8px;
+      font-size: 17px;
+    }
+    p { margin: 8px 0; }
+    ul, ol { margin: 8px 0 8px 22px; padding: 0; }
+    li { margin: 6px 0; }
+    code {
+      background: var(--code);
+      border: 1px solid #d7e1eb;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.95em;
+    }
+    .note {
+      border-left: 4px solid #2f8f68;
+      padding: 10px 14px;
+      background: #eef9f4;
+      color: #12372e;
+      margin: 12px 0;
+    }
+    .warning {
+      border-left: 4px solid var(--p0);
+      padding: 10px 14px;
+      background: #fff1f2;
+      color: #691329;
+      margin: 12px 0;
+    }
+    .finding {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px 18px;
+      margin: 14px 0;
+      background: #ffffff;
+    }
+    .finding h3 {
+      margin-top: 0;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .badge {
+      display: inline-block;
+      color: #ffffff;
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .p0 { background: var(--p0); }
+    .p1 { background: var(--p1); }
+    .p2 { background: var(--p2); }
+    .p3 { background: var(--p3); }
+    .field {
+      margin: 8px 0;
+    }
+    .label {
+      font-weight: 700;
+      color: #25384d;
+    }
+    .path {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 6px 8px;
+      border-radius: 5px;
+      margin-top: 4px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: #eef3f8; }
+    .small { color: var(--muted); font-size: 13px; }
+    @media print {
+      body { background: #ffffff; }
+      main { max-width: none; padding: 16px; }
+      section, .finding { break-inside: avoid; }
+      header { padding: 20px 24px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CRX Manager Full-Scope Review Campaign</h1>
+    <p><strong>Date:</strong> 2026-05-09</p>
+    <p><strong>Workspace:</strong> C:\Users\mason\CRX_Manager_V1.0</p>
+    <p><strong>Mode:</strong> Review-only. No source files were modified during the review.</p>
+  </header>
+
+  <main>
+    <section>
+      <h2>Executive Summary for Mason</h2>
+      <p>The app builds and the unit test suite passes, but the highest risk issues are in live database workflows and test/security setup. Several SQL functions can fail only when real users run delivery or payment workflows. The most urgent issue is a security issue: E2E test helpers contain real-looking production login fallback values. Rotate that password immediately before starting code fixes.</p>
+      <div class="warning">
+        <strong>Security note:</strong> The hard-coded password value is intentionally redacted in this handoff report. Claude can inspect the referenced local files directly after the password is rotated.
+      </div>
+      <p>Recommended first fixes: rotate credentials, repair delivery RPC column names, repair idempotency replay, then tighten quick-delivery credit checks and customer RLS.</p>
+    </section>
+
+    <section>
+      <h2>Severity Definitions</h2>
+      <ul>
+        <li><strong>P0:</strong> Data loss, financial corruption, security exposure, or app cannot deploy.</li>
+        <li><strong>P1:</strong> Serious business workflow bug or role/security bypass.</li>
+        <li><strong>P2:</strong> Real bug with workaround or limited blast radius.</li>
+        <li><strong>P3:</strong> Low-risk correctness, test, or maintainability issue.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Review Phases</h2>
+      <ol>
+        <li><strong>Phase 1: Baseline automated audit.</strong> Ran SQL validator, frontend validator, lint, typecheck, build, and unit tests.</li>
+        <li><strong>Phase 2: Architecture map.</strong> Mapped routes/pages, Supabase client usage, RPC callers, migrations/RPC definitions, Edge Functions, auth/role gates, financial workflows, inventory/delivery workflows, and test coverage.</li>
+        <li><strong>Phase 3: Deep review lanes.</strong> Reviewed database/RPC safety, financial logic, inventory/delivery logic, auth/RLS, frontend runtime risks, tests, and docs drift.</li>
+        <li><strong>Phase 4: Ranked report.</strong> Findings below are ranked by business risk before any fixes.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Architecture Map</h2>
+      <ul>
+        <li><strong>Routes/pages:</strong> 65 lazy-loaded route components in <code>src/App.tsx</code>; 75 page files under <code>src/pages</code>.</li>
+        <li><strong>Supabase client:</strong> frontend app client is centralized in <code>src/lib/db.ts</code>. Edge Functions create server-side clients as expected.</li>
+        <li><strong>RPC callers:</strong> delivery, invoice, payment, inventory, field app, reporting, returns, purchasing, and admin settings all use <code>supabase.rpc()</code>.</li>
+        <li><strong>Database:</strong> 285 SQL migrations. Recent delivery, payment, inventory, and hold-cleanup function replacements are still active risk surfaces.</li>
+        <li><strong>Edge Functions:</strong> 8 directories: <code>create-user</code>, <code>process-blend-ticket</code>, <code>process-document</code>, <code>reset-user-password</code>, <code>seed-admin</code>, <code>send-email</code>, <code>setup-blend-tickets-storage</code>, and <code>_shared</code>.</li>
+        <li><strong>Auth/role gates:</strong> <code>ProtectedRoute</code> checks login, active profile, allowed roles, and optional per-user deny-list. Backend RLS still needs to enforce sensitive data boundaries.</li>
+        <li><strong>Tests:</strong> 130 unit test files; 94 recursive Playwright E2E spec files. Default <code>npm run test</code> does not run E2E.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Top 10 Highest-Risk Findings</h2>
+      <ol>
+        <li>P0 - Production admin credentials are hard-coded in E2E tests.</li>
+        <li>P0 - Completing deliveries can crash because latest RPC uses nonexistent <code>delivery_date</code>.</li>
+        <li>P0 - Voiding deliveries can crash for the same missing <code>delivery_date</code>.</li>
+        <li>P0 - Quick delivery idempotency can create duplicate orders, deliveries, and invoices.</li>
+        <li>P0 - Invoice payment idempotency can duplicate partial payments.</li>
+        <li>P1 - Quick delivery credit-limit check ignores draft/overdue invoices and the new sale amount.</li>
+        <li>P1 - Applicators and drivers can read all customers through RLS.</li>
+        <li>P1 - <code>send-email</code> selects nonexistent <code>customers.name</code>.</li>
+        <li>P2 - Invoice Detail payment path bypasses unified Payment History.</li>
+        <li>P2 - Integrity balance check ignores write-offs.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Findings by Review Lane</h2>
+
+      <h3>A. Database/RPC/Migration Safety</h3>
+
+      <article class="finding">
+        <h3><span class="badge p0">P0</span> Completing deliveries can crash because latest RPC uses nonexistent <code>delivery_date</code></h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\supabase\migrations\20260507220000_add_tote_number_copy_to_complete_delivery.sql:99</div></div>
+        <div class="field"><span class="label">Evidence:</span> The active <code>complete_delivery</code> function references <code>v_delivery.delivery_date</code>. The deliveries table defines <code>scheduled_date</code> at <code>20260206172436_create_full_schema_v2.sql:312</code>, and <code>docs/reference/gotchas.md:28</code> says <code>deliveries.scheduled_date (NOT delivery_date)</code>.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> Drivers or admins may be unable to complete deliveries. That blocks inventory deduction, order fulfillment, and invoice creation.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Call <code>complete_delivery</code> on an <code>in_progress</code> delivery in a real database.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Add a new migration replacing every delivery-period check in the active function with <code>scheduled_date</code>.</div>
+        <div class="field"><span class="label">Suggested test:</span> Add a live RPC regression test that moves a delivery from scheduled to in_progress to completed.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p0">P0</span> Voiding deliveries can crash for the same missing <code>delivery_date</code></h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\supabase\migrations\20260507160000_warn_backdated_delivery_completion.sql:371</div></div>
+        <div class="field"><span class="label">Evidence:</span> The active <code>void_delivery</code> function references <code>v_delivery.delivery_date</code> at lines 371, 381, and 398. The schema uses <code>scheduled_date</code>.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> A completed delivery that needs correction may not be reversible, leaving inventory and invoice state stuck.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Call <code>void_delivery</code> for a completed delivery.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Add a new migration replacing <code>delivery_date</code> with <code>scheduled_date</code>.</div>
+        <div class="field"><span class="label">Suggested test:</span> Add a live test that completes then voids a delivery and verifies inventory reversal.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p0">P0</span> Quick delivery idempotency can create duplicate orders/deliveries/invoices</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\supabase\migrations\20260430240000_field_app_workflow_phase12.sql:401</div></div>
+        <div class="field"><span class="label">Evidence:</span> Replay checks <code>(v_existing-&gt;&gt;'status') = 'created'</code>, but <code>check_idempotency()</code> returns the saved result directly at <code>20260210000000_tier3_idempotency_and_triggers.sql:52</code>. The saved quick-delivery result at line 638 is not wrapped with <code>status</code>.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> A retry after a network hiccup can create another order, delivery, draft invoice, commission rows, prebooked inventory, and ledger entries.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Call <code>create_quick_delivery</code> twice with the same <code>p_idempotency_key</code> and count new rows.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Return <code>v_existing</code> whenever it is non-null, or standardize all saved idempotency payloads to a wrapper shape.</div>
+        <div class="field"><span class="label">Suggested test:</span> Same-key retry creates exactly one order, one delivery, one invoice, and one prebooked inventory transaction.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p0">P0</span> Invoice payment idempotency can duplicate partial payments</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\supabase\migrations\20260330200000_prelaunch_final_fixes.sql:50</div></div>
+        <div class="field"><span class="label">Evidence:</span> Replay expects <code>status = completed</code>, but the function saves only <code>{ payment_id }</code> at line 134. The helper returns that saved JSON directly.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> If a user retries a partial payment, the same customer payment can be recorded twice while the invoice still has enough balance.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Call <code>record_invoice_payment</code> twice with the same key and a partial amount.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Use the helper contract consistently: if <code>v_existing IS NOT NULL</code>, return the cached payment id.</div>
+        <div class="field"><span class="label">Suggested test:</span> Same-key partial payment retry leaves one payment row and increments <code>paid_amount_cents</code> once.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p2">P2</span> Recent SECURITY DEFINER functions violate search_path rule</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\supabase\migrations\20260507210000_fix_holds_no_phantom_restoration.sql:58</div></div>
+        <div class="field"><span class="label">Evidence:</span> <code>release_holds_on_quote_status_change</code> and <code>auto_expire_quotes</code> use <code>SET search_path = ''</code>. <code>record_invoice_payment</code> uses <code>SET search_path = public</code> without <code>pg_temp</code>.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> This violates the project SQL safety rule and can create future security or runtime drift.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Run the SQL validator and inspect recent SECURITY DEFINER functions.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Add a migration setting these functions to <code>SET search_path = public, pg_temp</code>.</div>
+        <div class="field"><span class="label">Suggested test:</span> Add a targeted migration lint for recent function definitions.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p2">P2</span> <code>post_invoice</code> and <code>void_invoice</code> accept idempotency keys but do not use them</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\supabase\migrations\20260330100000_prelaunch_state_machine_and_security.sql:214</div></div>
+        <div class="field"><span class="label">Evidence:</span> <code>post_invoice</code> accepts <code>p_idempotency_key</code> but never calls <code>check_idempotency</code> or <code>save_idempotency</code>. <code>void_invoice</code> has the same issue at <code>20260330000000_prelaunch_critical_fixes.sql:431</code>.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> A network retry after success can show a failure like "already posted" or "already voided" even though the first attempt worked.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Call either RPC twice with the same key after a successful first call.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Add normal idempotency check/save behavior and return cached successful results.</div>
+        <div class="field"><span class="label">Suggested test:</span> Same-key retry returns success and does not create duplicate audit entries.</div>
+      </article>
+
+      <h3>B. Financial/Accounting Logic</h3>
+
+      <article class="finding">
+        <h3><span class="badge p1">P1</span> Quick delivery credit-limit check ignores draft/overdue invoices and the new sale amount</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\supabase\migrations\20260430240000_field_app_workflow_phase12.sql:421</div></div>
+        <div class="field"><span class="label">Evidence:</span> The function sums only invoices with <code>status = 'posted'</code> and rejects only when existing AR is already over the limit. It does not include the new delivery's invoice amount.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> A customer can be pushed over their credit limit through quick delivery.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Put a customer just under their credit limit, then create a quick delivery above the remaining credit.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Include posted, overdue, and draft exposure, then add the projected quick-delivery total before checking the limit.</div>
+        <div class="field"><span class="label">Suggested test:</span> Over-limit quick delivery is rejected and under-limit quick delivery succeeds.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p2">P2</span> Invoice Detail payment path bypasses unified Payment History</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\src\pages\InvoiceDetail.tsx:493</div></div>
+        <div class="field"><span class="label">Evidence:</span> Invoice Detail calls <code>record_invoice_payment</code>, while Payment History reads <code>allocation_sets</code> at <code>src/pages/PaymentHistory.tsx:71</code>. The direct invoice path does not create allocation sets.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> A bookkeeper can record a payment from an invoice and then not see or void it from the main Payment History workflow.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Record a payment from an invoice and then check Payment History.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Route invoice payments through <code>allocate_payment</code> or navigate to the unified payment page with invoice preselected.</div>
+        <div class="field"><span class="label">Suggested test:</span> Payment from invoice appears in Payment History and can be voided.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p2">P2</span> Integrity balance check ignores write-offs</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\src\lib\reconciliation.ts:297</div></div>
+        <div class="field"><span class="label">Evidence:</span> The expected balance formula is <code>total_amount_cents - paid_amount_cents - prepay_applied_cents</code>. The DB-generated formula also subtracts <code>write_off_cents</code>. The query at line 692 does not select <code>write_off_cents</code>.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> Correctly written-off invoices can look broken in the integrity report, wasting time during month-end cleanup.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Run the integrity report with a posted invoice that has a write-off.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Select <code>write_off_cents</code> and include it in the formula.</div>
+        <div class="field"><span class="label">Suggested test:</span> Written-off invoice passes reconciliation when DB balance is correct.</div>
+      </article>
+
+      <h3>C. Inventory/Order/Delivery Logic</h3>
+      <p>The highest inventory/delivery findings are the <code>complete_delivery</code>, <code>void_delivery</code>, and <code>create_quick_delivery</code> issues listed above. Those directly affect inventory deduction, reversal, prebooking, and delivery status transitions.</p>
+
+      <h3>D. Auth/RLS/Role Access</h3>
+
+      <article class="finding">
+        <h3><span class="badge p0">P0</span> Production admin credentials are hard-coded in E2E tests</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\tests\e2e\utils\auth.ts:6</div></div>
+        <div class="field"><span class="label">Evidence:</span> E2E helpers default to Mason's admin email and a hard-coded password fallback. Other helpers also hard-code the production Supabase URL and anon key at <code>tests/e2e/fixtures/setup-fixtures.ts:19</code> and <code>tests/e2e/fixtures/teardown-fixtures.ts:16</code>. The password value is redacted here.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> Anyone with the repo can potentially log into production, and Playwright setup/teardown can mutate production data.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Search for the hard-coded fallback password and production project URL in <code>tests/e2e</code>.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Rotate the exposed password immediately, remove all password fallbacks, require <code>E2E_TEST_EMAIL</code>/<code>E2E_TEST_PASSWORD</code>, and use staging credentials by default.</div>
+        <div class="field"><span class="label">Suggested test:</span> Add a Playwright startup guard that fails if production Supabase is used without an explicit, reviewed override.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p1">P1</span> Applicators and drivers can read all customers through RLS</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\supabase\migrations\20260214210000_applicator_role_expansion.sql:59</div></div>
+        <div class="field"><span class="label">Evidence:</span> <code>customers_select</code> allows <code>is_driver()</code> and <code>is_applicator()</code> globally. This replaced an earlier driver assignment filter.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> Staff roles can query all customer records even if the frontend does not show the customer page.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Sign in as an applicator or driver and query <code>customers</code> through Supabase.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Restrict drivers to customers on assigned deliveries and applicators to customers on assigned jobs/application records.</div>
+        <div class="field"><span class="label">Suggested test:</span> RLS test where a role can read assigned customer rows but not unrelated customer rows.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p2">P2</span> Per-user page deny-list misses protected routes</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\src\lib\pagePermissions.ts:15</div></div>
+        <div class="field"><span class="label">Evidence:</span> <code>dispatch</code>, <code>program-tracker</code>, and <code>application-services</code> are protected routes in <code>src/App.tsx</code>, but are absent from <code>PAGE_PERMISSIONS</code>. <code>ProtectedRoute</code> only applies deny-list logic when <code>getPageKeyFromPath()</code> finds a known key.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> Mason may deny a page in Settings but leave a related route accessible by URL.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Compare first route segments in <code>App.tsx</code> to <code>PAGE_PERMISSIONS</code>.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Add every permissionable route key or make unknown protected routes fail closed.</div>
+        <div class="field"><span class="label">Suggested test:</span> Route-permission coverage test that fails when a protected route is missing from the permission registry.</div>
+      </article>
+
+      <h3>E. Frontend Runtime / Edge Function Bugs</h3>
+
+      <article class="finding">
+        <h3><span class="badge p1">P1</span> <code>send-email</code> selects nonexistent <code>customers.name</code></h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\supabase\functions\send-email\index.ts:156</div></div>
+        <div class="field"><span class="label">Evidence:</span> The Edge Function selects <code>id, email, name</code>. The customers table defines <code>farm_name</code>, <code>contact_name</code>, and <code>email</code>, but no <code>name</code>.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> Sending invoices, statements, or reminders can fail for valid customers because the function asks Supabase for a column that does not exist.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Invoke <code>send-email</code> with a valid <code>customer_id</code>.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Select <code>id, email, farm_name</code> and handle the query error explicitly.</div>
+        <div class="field"><span class="label">Suggested test:</span> Edge Function test with a mocked customer row using <code>farm_name</code>.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p3">P3</span> <code>IntegrityReport</code> effect has a stale dependency warning</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\src\pages\IntegrityReport.tsx:27</div></div>
+        <div class="field"><span class="label">Evidence:</span> ESLint reports <code>React Hook useEffect has a missing dependency: 'fetchReport'</code>.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> This page is simple, so impact is limited, but stale closures can cause wrong refresh behavior after future changes.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Run <code>npm run lint</code>.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Wrap <code>fetchReport</code> in <code>useCallback</code> and include it in the dependency array.</div>
+        <div class="field"><span class="label">Suggested test:</span> Component test that initial load calls reconciliation once and refresh calls it again.</div>
+      </article>
+
+      <h3>F. Tests and Docs Drift</h3>
+
+      <article class="finding">
+        <h3><span class="badge p2">P2</span> <code>validate-frontend.sh</code> does not audit the full frontend</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\scripts\validate-frontend.sh:20</div></div>
+        <div class="field"><span class="label">Evidence:</span> The script checks only staged files using <code>git diff --cached</code> and exits 0 when none are staged.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> A clean result today meant "nothing staged," not "the frontend is clean."</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Run the script with no staged TS/TSX files.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Add a full-scan mode, for example <code>--all</code>, for audits and CI.</div>
+        <div class="field"><span class="label">Suggested test:</span> Script test with staged mode and full-scan mode against fixture files.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p3">P3</span> Lint scans generated/side-worktree files</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\eslint.config.js:10</div></div>
+        <div class="field"><span class="label">Evidence:</span> <code>npm run lint</code> reported many warnings in <code>.claude/worktrees</code> and <code>coverage</code>. The config ignores only <code>dist</code> and <code>CRX_Manager_V1.0</code>.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> Mason can see noisy warnings from files that are not the app, which makes real warnings easier to miss.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Run <code>npm run lint</code>.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Ignore <code>.claude/worktrees</code>, <code>coverage</code>, Playwright artifacts, and other generated folders.</div>
+        <div class="field"><span class="label">Suggested test:</span> Lint config smoke test or CI check that generated folders are ignored.</div>
+      </article>
+
+      <article class="finding">
+        <h3><span class="badge p3">P3</span> Docs/counts are stale</h3>
+        <div class="field"><span class="label">File/line:</span><div class="path">C:\Users\mason\CRX_Manager_V1.0\docs\reference\qa-testing.md:109</div></div>
+        <div class="field"><span class="label">Evidence:</span> <code>qa-testing.md</code> says 81 E2E specs, while the repo has 94 recursive E2E specs. <code>docs/workflows/UI_PATTERNS.md:43</code> says 57 pages. Current route/page counts differ.</div>
+        <div class="field"><span class="label">Why it matters in plain English:</span> Mason and coding agents may make wrong assumptions about coverage and app size.</div>
+        <div class="field"><span class="label">How to reproduce or verify:</span> Count <code>tests/e2e/**/*.spec.ts</code> and <code>src/pages/*.tsx</code>.</div>
+        <div class="field"><span class="label">Suggested fix:</span> Update docs after functional fixes, or regenerate counts from scripts.</div>
+        <div class="field"><span class="label">Suggested test:</span> Optional docs-count checker in CI.</div>
+      </article>
+    </section>
+
+    <section>
+      <h2>Commands Run and Results</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Result</th>
+            <th>Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>bash scripts/validate-sql-migrations.sh</code></td>
+            <td>Initial PowerShell call failed because <code>bash</code> was not on PATH. Reran via Git Bash. Exit 1. Scanned 285 migration files. Reported 61 violations and 51 warnings.</td>
+            <td>SQL migration history still contains violations. Some are old baseline issues, but recent search_path and delivery-date regressions need attention.</td>
+          </tr>
+          <tr>
+            <td><code>bash scripts/validate-frontend.sh</code></td>
+            <td>Exit 0.</td>
+            <td>Misleading for full audit because script only scans staged frontend files and no staged TS/TSX files existed.</td>
+          </tr>
+          <tr>
+            <td><code>npm run lint</code></td>
+            <td>Exit 0 with 270 warnings.</td>
+            <td>Important current app warning: <code>src/pages/IntegrityReport.tsx:27</code>. Many warnings came from generated/side-worktree files.</td>
+          </tr>
+          <tr>
+            <td><code>npm run typecheck</code></td>
+            <td>Exit 0.</td>
+            <td>TypeScript strict check passed.</td>
+          </tr>
+          <tr>
+            <td><code>npm run build</code></td>
+            <td>Exit 0.</td>
+            <td>Build passed. Warnings: Vite CJS API deprecation, Sentry chunk warning, large chunks including <code>vendor-mapbox</code> and <code>index</code>.</td>
+          </tr>
+          <tr>
+            <td><code>npm run test</code></td>
+            <td>Exit 0. 130 test files passed. 1,872 tests passed. 68 skipped.</td>
+            <td>Unit tests passed, but live SQL/E2E workflows were not exercised by this command.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Test Gaps</h2>
+      <ul>
+        <li>Default unit tests do not execute live SQL paths that would catch the <code>delivery_date</code> RPC crashes.</li>
+        <li>Live schema tests are skipped unless pointed at a real Supabase instance.</li>
+        <li>E2E tests were not part of the requested baseline run.</li>
+        <li>Many E2E tests use skip guards, so passing E2E can still miss data-dependent workflow failures.</li>
+        <li>Idempotency retry behavior needs database-backed tests for each mutating RPC.</li>
+        <li>Role/RLS tests need assigned versus unassigned customer scenarios for driver and applicator roles.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Recommended Fix Order</h2>
+      <ol>
+        <li>Rotate the exposed password and remove production E2E defaults.</li>
+        <li>Fix <code>complete_delivery</code> and <code>void_delivery</code> <code>delivery_date</code> references.</li>
+        <li>Fix idempotency replay for <code>create_quick_delivery</code> and <code>record_invoice_payment</code>.</li>
+        <li>Fix quick-delivery credit-limit logic.</li>
+        <li>Tighten customer RLS for driver and applicator roles.</li>
+        <li>Fix <code>send-email</code> customer column.</li>
+        <li>Unify invoice payment entry with allocation/payment history.</li>
+        <li>Fix the integrity write-off formula.</li>
+        <li>Clean SQL search paths and validator/lint scope.</li>
+        <li>Update stale docs/counts after behavior fixes.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Questions and Assumptions</h2>
+      <ul>
+        <li>Assumption: the hard-coded E2E password is or was valid recently because it is paired with the production Supabase project URL and Mason's admin email. Treat it as exposed and rotate it.</li>
+        <li>Assumption: old SQL validator violations are not all new regressions. Recent migrations were prioritized for actionable findings.</li>
+        <li>Question: should E2E run against a separate staging Supabase project going forward?</li>
+        <li>Question: should Invoice Detail keep its inline payment modal, or should it always redirect to the unified payment allocation page?</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
