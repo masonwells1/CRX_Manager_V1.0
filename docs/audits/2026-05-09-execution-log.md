@@ -767,3 +767,43 @@ Test outcomes:
 - npm run build: deferred to pre-commit hook
 - npm run test: deferred to pre-commit hook
 - Live application: NOT EXECUTED. Apply migration via Supabase MCP after review.
+
+---
+
+## PR-22b — Deferred AP polish completion (3 of 3)
+Status: completed-pending-live-application
+Started: 2026-05-10 09:00
+Completed: 2026-05-10 09:18
+Elapsed: ~18 min
+Risk: Low
+Files changed: 3 (1 new migration, CLAUDE.md count update, AGENTS.md regenerated, migration-history.md entry)
+Commit: pending
+Findings closed: P3 items #1, #2, #3 from the original PR-22 plan — completed the 3 items deferred by Sprint 2's PR-22 partial.
+
+⚠️ NOT YET APPLIED to live Supabase. Depends on PR-04 + PR-10 being applied first (this migration is the LATEST DEFINITIVE BODY for create_vendor_bill — supersedes PR-04 — and delete_purchase_order — supersedes PR-10).
+
+Notes:
+- ✅ #1 — PO cancel/delete linked-bill check:
+  - `cancel_purchase_order` raises `PO_HAS_ACTIVE_BILLS` if any vendor_bills with status NOT IN ('voided') and deleted_at IS NULL reference the PO. Message: "void the bill(s) first".
+  - `delete_purchase_order` is stricter (raises `PO_HAS_LINKED_BILLS`): refuses if ANY vendor_bills reference the PO, regardless of status. Reason: delete is permanent — even voided bills are audit history that should keep their PO link intact. Message tells admin to "Cancel the PO instead."
+- ✅ #2 — create_vendor_bill PO-to-bill amount soft warn:
+  - When `p_purchase_order_id IS NOT NULL`, computes PO total from `SUM(purchase_order_items.quantity_ordered * unit_cost * 100)::bigint`.
+  - Compares `ABS(bill_total - po_total) / po_total > 0.05`. If yes, inserts notification rows for every active admin with notification_type='vendor_bill_drift'. Bill creation proceeds normally — never blocks.
+  - Threshold is hard-coded at 5%. Mason can tune by editing the RPC if needed.
+- ✅ #3 — create_vendor_bill PO-to-bill vendor consistency:
+  - When `p_purchase_order_id IS NOT NULL`, looks up vendors.name (via p_vendor_id) and purchase_orders.vendor (legacy TEXT column). Compares case-insensitive trim. Raises `VENDOR_PO_MISMATCH` on mismatch.
+  - The legacy TEXT column is documented as out of scope per CLAUDE.md "What's NOT in this plan" — when the FK migration eventually lands, this check should be replaced with a UUID equality.
+- All 3 RPC bodies are otherwise verbatim from their respective owners (PR-04 create_vendor_bill, PR-10 delete_purchase_order, current pg_proc cancel_purchase_order). Idempotency wrappers preserved.
+- Verification block at end checks: cancel has PO_HAS_ACTIVE_BILLS, delete has PO_HAS_LINKED_BILLS, create_vendor_bill has VENDOR_PO_MISMATCH and vendor_bill_drift.
+- migration-history.md gains entry #298. CLAUDE.md current state: 297 → 298 migrations. AGENTS.md regenerated.
+
+Decisions made autonomously (not in original plan):
+- Plan said "RAISE on mismatch" for #3 — I followed that. But noted in the migration header that the case-insensitive trim might false-positive when a vendor's display name is edited after the PO was created. The right long-term fix is the vendor_id FK migration (out of scope).
+- delete_purchase_order check is stricter than cancel: any linked bill (even voided) blocks delete. Reasoning documented inline. cancel allows deletion if bills are voided since cancel preserves history.
+
+Test outcomes:
+- npm run lint: pass (0 errors)
+- npm run typecheck: pass
+- npm run build: deferred to pre-commit hook
+- npm run test: deferred to pre-commit hook
+- Live application: NOT EXECUTED. Apply order: PR-04 → PR-10 → PR-13 → PR-14 → PR-22 → PR-22b.
