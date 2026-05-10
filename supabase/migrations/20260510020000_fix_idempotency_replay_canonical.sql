@@ -515,7 +515,17 @@ DECLARE
   v_blocking_table text;
   v_existing   jsonb;
 BEGIN
-  v_actor := COALESCE(p_performed_by, auth.uid());
+  -- Strict actor pattern (codex audit F2, 2026-05-10): derive v_actor from
+  -- the JWT and reject mismatched p_performed_by values. Without this, a
+  -- lower-privilege user could pass an admin/sales_rep UUID to satisfy the
+  -- role check and edit order items (changing totals + inventory commitments).
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN
+    RAISE EXCEPTION 'AUTH_REQUIRED';
+  END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
 
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN

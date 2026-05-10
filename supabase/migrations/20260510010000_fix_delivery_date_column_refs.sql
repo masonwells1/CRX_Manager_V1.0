@@ -374,7 +374,17 @@ DECLARE
   v_closed_period record;
   v_admin record;
 BEGIN
-  v_actor := COALESCE(p_performed_by, auth.uid());
+  -- Strict actor pattern (codex audit F1, 2026-05-10): derive v_actor from
+  -- the JWT and reject mismatched p_performed_by values. Without this, a
+  -- non-admin who knows an admin UUID could call this SECURITY DEFINER RPC
+  -- directly with that UUID and pass the role check.
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN
+    RAISE EXCEPTION 'AUTH_REQUIRED';
+  END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
 
   -- Admin-only
   IF (SELECT role FROM profiles WHERE id = v_actor) != 'admin' THEN
