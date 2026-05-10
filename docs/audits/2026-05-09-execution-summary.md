@@ -1,8 +1,10 @@
 # CRX Audit Fix Sprint — Execution Summary
 
-## Sprint 2 — completed 2026-05-10 08:55 (local)
+## Sprint 2 — completed 2026-05-10 09:22 (local)
 
-**Reason for stopping:** All 9 Sprint 2 PRs landed (PR-26, PR-07, PR-19, PR-08, PR-10, PR-13, PR-14, PR-22-partial, PR-25). Only PR-23 remains BLOCKED on Mason creating a `crx-manager-staging` Supabase project — out of scope for autonomous execution.
+**Reason for stopping:** All 26 PRs in the plan are now processed (completed, failed, skipped, or blocked). Sprint 2's 9 planned PRs landed (PR-26, PR-07, PR-19, PR-08, PR-10, PR-13, PR-14, PR-22-partial, PR-25). PR-22's 3 deferred items closed in PR-22b. The Vendors sidebar nav link added (closes PR-21's + PR-25's deferred sidebar items). PR-23 remains BLOCKED on Mason creating `crx-manager-staging` — out of scope for autonomous execution. Two follow-ups (frontend `profile_public_view` migration, assertRpcCoverage baseline reduction) flagged as scope-prohibitive for one autonomous session — see "Open follow-ups" below.
+
+**Total Sprint 2 commits: 11** (the 9 planned PRs + Sprint 2 wrap-up commit + PR-22b + Vendors sidebar link).
 
 **Branch:** `fix/audit-2026-05-09` — 26 commits ahead of main (1 baseline + 15 Sprint 1 PR commits + 1 Sprint 1 summary commit + 9 Sprint 2 PR commits).
 
@@ -18,6 +20,9 @@
 - PR-14 `4ace0f7` — fix(ap): update_vendor_bill RPC + Edit button on VendorBillDetail
 - PR-22 `be551f9` — fix(ap): polish bundle (3 of 6 items: total CHECK, payment UNIQUE, get_ap_aging cleanup, subtotal trigger)
 - PR-25 `38d8a04` — feat(vendors): vendor master-data UI + save_vendor/delete_vendor RPCs
+- (wrap) `0244ee9` — docs(audits): Sprint 2 wrap-up — SHA backfill + summary update
+- PR-22b `e91465e` — fix(ap): close 3 deferred AP polish items (PO checks + bill consistency)
+- (sidebar) `734109d` — chore(nav): add Vendors sidebar link under Finance group
 
 **Sprint 2 Migrations queued for manual apply (6 new files in `supabase/migrations/`)** — apply in order, all depend on prior Sprint 1 migrations being live first:
 
@@ -29,6 +34,7 @@
 | `20260510100000_update_vendor_bill.sql` | PR-14 | Low | **PR-04** | Edit unpaid vendor bills before any payment is recorded |
 | `20260510110000_ap_polish_partial.sql` | PR-22 | Low | **PR-04** | 3 of 6 items: total CHECK, payment UNIQUE, get_ap_aging cleanup, subtotal trigger |
 | `20260510120000_vendor_master_data_rpcs.sql` | PR-25 | Medium | None (but PR-04's vendors_select RLS makes the new page admin-only) | save_vendor + delete_vendor RPCs |
+| `20260510130000_ap_polish_completion.sql` | PR-22b | Low | **PR-04 + PR-10** — supersedes both for `create_vendor_bill` and `delete_purchase_order` | PO cancel/delete linked-bill checks + create_vendor_bill PO consistency check + soft-warn |
 
 After applying any subset, run `node scripts/regenerate-schema-registry.mjs` so the PreToolUse hooks have current schema.
 
@@ -41,13 +47,22 @@ After applying any subset, run `node scripts/regenerate-schema-registry.mjs` so 
 5. **PR-25 PO-link check omitted**: delete_vendor refuses if unpaid bills exist but doesn't check PO links. Reason: `purchase_orders.vendor_id` doesn't exist (legacy `vendor` TEXT column; FK migration is documented as out of scope in CLAUDE.md). Bill check is sufficient since closed POs typically generate a bill.
 6. **PR-25 sidebar nav skipped**: same deferral as PR-21 — AppLayout structure non-trivial. Page reachable via direct URL `/vendors`.
 
-## Sprint 2 — open follow-ups for next session
+## Sprint 2 — open follow-ups (deferred; not in the 26-PR plan)
 
-- **PR-22b** — finish the 3 deferred AP polish items (#1 PO cancel/delete linked-bill check, #2 PO-to-bill amount soft warn, #3 PO-to-bill vendor consistency) once PR-04 / PR-10 are applied to live and the live bodies can be canonical sources.
-- **Frontend dropdown migration to `profile_public_view`** — required BEFORE applying PR-07's policy DROP/CREATE. Tasks: every join on `profiles` that reads only id/full_name/role/is_active → switch to `profile_public_view`. Estimated ~10-15 callsites across activity feed, delivery driver display, sales rep on order/quote/customer, applicator on jobs, comment authors on team-board.
-- **assertRpcCoverage baseline reduction** — 32 files of debt to cleanup. Lower-priority; new code is forced clean.
-- **Vendors page sidebar nav link** — when AppLayout's nav structure is documented or refactored.
-- **PR-23** — staging Supabase project still BLOCKED on Mason creating it.
+- ✅ **PR-22b** — completed in this extended session (commit `e91465e`). Closes the 3 deferred polish items by re-creating create_vendor_bill (supersedes PR-04) and delete_purchase_order (supersedes PR-10) plus updating cancel_purchase_order. Apply order: PR-04 → PR-10 → PR-13 → PR-14 → PR-22 → PR-22b.
+- ✅ **Vendors sidebar nav link** — completed (commit `734109d`). Found Sidebar at `src/components/layout/Sidebar.tsx` and added entry under Finance group.
+- ⏸ **Frontend dropdown migration to `profile_public_view`** — flagged as scope-prohibitive for a single autonomous session. Investigation showed **34 files** use `profiles` (joins via `profiles!fk_name(...)` and direct `from('profiles')` reads). Each callsite needs case-by-case judgment about whether it reads PII (email/phone/license) → keep `profiles`, vs only safe columns (id/full_name/role/is_active) → switch to view. Additional complication: PostgREST embedded reads (`profiles!fk_name`) can't trivially switch to a view because views lack FK constraints. Likely path: for embedded display-name reads, replace with separate `profile_public_view` lookups by ID list after the main query (more round-trips but works). **Required BEFORE applying PR-07's policies_select DROP/CREATE** — apply Block 2 view + GRANT now (additive, safe), defer the policy tightening until the frontend migration ships.
+- ⏸ **assertRpcCoverage baseline reduction** — 32 files of pre-existing debt. Each fix is mechanical (wrap captured `data` with `assertRpcResult<T>(data, 'rpc_name')`) but needs the right type inferred per RPC. Lower priority since `BASELINE_VIOLATION_COUNT = 32` blocks new debt. Each PR that touches a debt file should clean it up and decrement the baseline.
+- ⏸ **PR-23** — E2E staging Supabase still BLOCKED on Mason creating a `crx-manager-staging` Supabase project. Out of scope for autonomous execution.
+
+## What's next for Mason
+
+In recommended order:
+
+1. **Walk through Sprint 1 + Sprint 2's 13 queued migrations** in the apply order documented above. Apply via Supabase MCP `apply_migration`. After each batch, run `node scripts/regenerate-schema-registry.mjs`.
+2. **Before applying PR-07's profiles_select DROP/CREATE**, ship the frontend `profile_public_view` migration (estimated ~1 day — 34 files of read-path changes; mostly mechanical replacements but needs PII-vs-safe-columns judgment per query).
+3. **PR-23** — create `crx-manager-staging` Supabase project; the existing migration in `tests/e2e/utils/safety-guards.ts` will then start gating prod E2E runs.
+4. **Optional cleanups**: lower the assertRpcCoverage baseline as PRs touch debt files; add a sidebar link for `payment-history` (PR-21's other deferred item).
 
 ## Sprint 1 — completed 2026-05-10 01:30 (local)
 
