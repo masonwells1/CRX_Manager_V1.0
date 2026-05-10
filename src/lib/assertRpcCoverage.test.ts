@@ -50,30 +50,36 @@ interface FileViolation {
 // any one of the file's RPC calls was wrapped. The tightened version below
 // counts captures and assertions per file and demands a 1:1 match.
 //
-// Tightening surfaced 32 files of pre-existing debt. Fixing all 32 in this
-// PR would balloon scope from 2h to 10h+, so we ratchet: the test fails if
-// the violation count EXCEEDS this baseline, but accepts current debt.
+// Tightening surfaced 32 files of pre-existing debt. The ratchet baseline
+// reached ZERO on 2026-05-11. Any new code that fails this test must be
+// fixed — the baseline is no longer a defense against legacy debt.
 //
-// Reducing the baseline:
-//   1. Pick a debt file from the failure output below.
-//   2. Wrap every `data` from `supabase.rpc(...)` calls in that file with
-//      `assertRpcResult<T>(data, 'rpc_name')`.
-//   3. Re-run this test. Confirm the file no longer appears in the report.
-//   4. Decrement BASELINE_VIOLATION_COUNT.
-//   5. Commit "chore(coverage): wrap N more files".
+// If you ever need to increase this baseline (you almost never should):
+//   1. Document why in this comment with the date and PR.
+//   2. Get explicit sign-off from Mason — adding new debt is a regression.
 //
-// Goal: reach 0. Each PR that touches a debt file should clean it up.
+// Conventions established during the cleanup that should keep this at 0:
 //
-// Note on "orphans" (asserts without matching captures): a few remaining
-// debt entries are regex limitations rather than real coverage gaps —
-// `supabase.rpc(...)` inside `Promise.all([...])`, inside `.then(...)`
-// chains, or with a dynamic rpc-name variable. The assert is correctly
-// placed; the regex just can't see the capture. Closing those means
-// either refactoring the callsite to a `= await supabase.rpc('literal')`
-// shape, or improving this regex (separate concern).
+// • For RPCs that return data: `const { data, error } = await supabase.rpc('name', ...);
+//   if (error) throw error; assertRpcResult<T>(data, 'name');`
 //
-// History: 32 (2026-05-10, PR-19) → 21 → 18 (2026-05-11, post-audit batches).
-const BASELINE_VIOLATION_COUNT = 18;
+// • For RPCs that RETURNS void: `await supabase.rpc('name', ...).throwOnError();`
+//   The regex skips fire-and-forget (no `=` capture), and .throwOnError()
+//   converts postgrest errors to thrown exceptions so existing try/catch
+//   blocks keep working. New convention — first introduced in the 2026-05-11
+//   void-RPC sweep.
+//
+// • Avoid `supabase.rpc(rpcName, ...)` with a dynamic variable — the regex
+//   only matches string literals. Use a switch/if with per-branch literal
+//   names instead. (See LogbookReport.tsx for the canonical example.)
+//
+// • Avoid `supabase.rpc(...)` inside Promise.all — the regex requires `=`
+//   immediately before `await`. Pull the rpc out into its own
+//   `const { data } = await supabase.rpc(...)`. (See CustomerContextCard.tsx
+//   for the canonical example.)
+//
+// History: 32 (2026-05-10, PR-19) → 21 → 18 → 3 → 0 (2026-05-11).
+const BASELINE_VIOLATION_COUNT = 0;
 
 describe('assertRpcResult coverage', () => {
   it(

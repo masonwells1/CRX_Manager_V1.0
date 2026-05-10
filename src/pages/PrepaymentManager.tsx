@@ -289,12 +289,14 @@ export default function PrepaymentManager() {
 
     await runCriticalAction({
       action: async () => {
-        // M6: Use atomic RPC — inserts all credits + updates customer balance in one transaction
+        // M6: Use atomic RPC — inserts all credits + updates customer balance in one transaction.
+        // RPC restored 2026-05-11 (was never applied originally) — see migration
+        // 20260511020000_create_prepay_check_splits.sql for history.
         const splits = validSplits.map((s, i) => ({
           label: s.label,
           amount_cents: splitAmountsCents[i],
         }));
-        const { error } = await supabase.rpc('create_prepay_check_splits', {
+        const { data, error } = await supabase.rpc('create_prepay_check_splits', {
           p_customer_id: checkForm.customer_id,
           p_reference_number: checkForm.reference_number,
           p_splits: splits,
@@ -302,6 +304,7 @@ export default function PrepaymentManager() {
           p_idempotency_key: crypto.randomUUID(),
         });
         if (error) throw new Error(error.message);
+        assertRpcResult<{ success: boolean; credit_ids: string[]; total_cents: number; split_count: number }>(data, 'create_prepay_check_splits');
       },
       toast,
       setLoading: setSavingCheck,
