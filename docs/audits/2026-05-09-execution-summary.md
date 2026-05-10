@@ -1,5 +1,20 @@
 # CRX Audit Fix Sprint — Execution Summary
 
+## Codex audit + remediation — 2026-05-10 (afternoon)
+
+After Sprint 2 wrapped, Codex (GPT-5) ran an independent audit of the May 10 migrations and found 7 issues. Mason approved an edit-in-place + doc-refresh remediation. Closed in 4 commits on top of the wrap-up:
+
+- **audit-fix-1** `3c04f61` — codex F1+F2 (HIGH): strict actor pattern in `void_delivery` (PR-01) + `update_order_items` (PR-02). Both used `COALESCE(p_performed_by, auth.uid())` which let any caller spoof an admin UUID and bypass SECURITY DEFINER role checks. Fix: `v_actor := auth.uid()` + reject mismatched `p_performed_by`. Same security class as 2 other RPCs in PR-10 (`reassign_delivery`, `batch_cancel_deliveries`) — those weren't part of Codex's flagged scope but inherit the same vulnerability from pg_proc; tracked as a future cleanup.
+- **audit-fix-2** `ab990e9` — codex F3 (HIGH) + F4 (MEDIUM) + F6 (LOW) in PR-04: `void_vendor_bill` predicate fixed from `active_payments > 0 AND status = 'paid'` to just `active_payments > 0` so partially_paid bills can no longer void with active payments leaking; `create_vendor_bill` gained a `v_total > 0` guard after total computation (PR-15's negative-preserving parseDollarsToCents made subtotal $100 + adjustment -$200 = real -$100 bills possible); `vendors_select` RLS policy switched bare `auth.uid()` to `(SELECT auth.uid())` per RLS_SECURITY_GUIDE convention.
+- **audit-fix-3** `2d2600a` — codex F4 frontend: `NewVendorBill.tsx` form mirrors the backend's `total > 0` guard so users see an inline toast instead of an opaque RPC error.
+- **audit-fix-4** `a0aa542` — codex F7: refreshed `docs/reference/rpc-functions.md` AP section to reflect post-PR-04/13/14/22/22b/25 signatures + behavior. Added entries for `update_vendor_bill`, `void_vendor_payment`, `save_vendor`, `delete_vendor`. Banner notes migrations are queued but not yet applied.
+
+**F5 explicitly skipped per Mason's call**: `reset-user-password` uses an allowlist pattern (more restrictive than env-required); `setup-blend-tickets-storage` is dead code Mason wants to delete separately.
+
+Branch is now 34 commits ahead of main. The 13 queued migrations now also reflect Codex's findings — Mason still applies them manually via Supabase MCP.
+
+---
+
 ## Sprint 2 — completed 2026-05-10 09:22 (local)
 
 **Reason for stopping:** All 26 PRs in the plan are now processed (completed, failed, skipped, or blocked). Sprint 2's 9 planned PRs landed (PR-26, PR-07, PR-19, PR-08, PR-10, PR-13, PR-14, PR-22-partial, PR-25). PR-22's 3 deferred items closed in PR-22b. The Vendors sidebar nav link added (closes PR-21's + PR-25's deferred sidebar items). PR-23 remains BLOCKED on Mason creating `crx-manager-staging` — out of scope for autonomous execution. Two follow-ups (frontend `profile_public_view` migration, assertRpcCoverage baseline reduction) flagged as scope-prohibitive for one autonomous session — see "Open follow-ups" below.
@@ -54,6 +69,7 @@ After applying any subset, run `node scripts/regenerate-schema-registry.mjs` so 
 - ⏸ **Frontend dropdown migration to `profile_public_view`** — flagged as scope-prohibitive for a single autonomous session. Investigation showed **34 files** use `profiles` (joins via `profiles!fk_name(...)` and direct `from('profiles')` reads). Each callsite needs case-by-case judgment about whether it reads PII (email/phone/license) → keep `profiles`, vs only safe columns (id/full_name/role/is_active) → switch to view. Additional complication: PostgREST embedded reads (`profiles!fk_name`) can't trivially switch to a view because views lack FK constraints. Likely path: for embedded display-name reads, replace with separate `profile_public_view` lookups by ID list after the main query (more round-trips but works). **Required BEFORE applying PR-07's policies_select DROP/CREATE** — apply Block 2 view + GRANT now (additive, safe), defer the policy tightening until the frontend migration ships.
 - ⏸ **assertRpcCoverage baseline reduction** — 32 files of pre-existing debt. Each fix is mechanical (wrap captured `data` with `assertRpcResult<T>(data, 'rpc_name')`) but needs the right type inferred per RPC. Lower priority since `BASELINE_VIOLATION_COUNT = 32` blocks new debt. Each PR that touches a debt file should clean it up and decrement the baseline.
 - ⏸ **PR-23** — E2E staging Supabase still BLOCKED on Mason creating a `crx-manager-staging` Supabase project. Out of scope for autonomous execution.
+- ⏸ **PR-10 actor-spoof cleanup** — `reassign_delivery` + `batch_cancel_deliveries` in PR-10's bulk_idempotency_wiring migration use the same `COALESCE(p_performed_by, auth.uid())` pattern that codex flagged in F1/F2. Bodies were copied verbatim from pg_proc (which still has the bug). Same security class. Tracked here so a future PR can close it; touching the PR-10 migration directly would inflate the audit-fix scope beyond what Codex flagged + Mason approved.
 
 ## What's next for Mason
 
