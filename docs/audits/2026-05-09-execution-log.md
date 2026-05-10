@@ -687,3 +687,42 @@ Test outcomes:
 - npm run build: deferred to pre-commit hook
 - npm run test: deferred to pre-commit hook
 - Live application: NOT EXECUTED. Apply PR-04 first, then PR-13, then PR-14 (any order between 13 and 14 OK).
+
+---
+
+## PR-22 — AP polish bundle (partial)
+Status: completed-partial-pending-live-application
+Started: 2026-05-10 08:18
+Completed: 2026-05-10 08:30
+Elapsed: ~12 min
+Risk: Low
+Files changed: 1 (1 new migration)
+Commit: pending
+Findings closed: 3 of 6 P3 items in the AP-polish set; 3 deferred (see Notes).
+
+⚠️ NOT YET APPLIED to live Supabase. Depends on PR-04 (UNIQUE references vendor_payments.voided_at + vendor_bills.deleted_at).
+
+Notes:
+- ✅ #4 (CHECK + UNIQUE constraints):
+  - vendor_bills_total_check: `total_cents = subtotal_cents + COALESCE(adjustment_cents, 0)`. Catches drift where a future code path forgets to recompute total_cents when editing inputs.
+  - idx_vendor_payments_unique_active_ref: partial UNIQUE on (vendor_bill_id, payment_method, reference_number) WHERE reference_number IS NOT NULL AND voided_at IS NULL. Prevents duplicate-payment race when idempotency key fails to catch (e.g., key reset between clicks).
+- ✅ #5 (drop pointless idempotency on get_ap_aging): get_ap_aging is read-only; the param was unused. Frontend (AccountsPayable.tsx) never passes it, so dropping is non-breaking. Recreated function with body verbatim minus the param.
+- ✅ #6 (positive subtotal validation): chose a BEFORE INSERT/UPDATE trigger over re-CREATE-OR-REPLACE'ing create_vendor_bill's 150-line PR-04 body inside this migration. The trigger:
+  - Survives future re-creates of create_vendor_bill (defense-in-depth)
+  - Catches direct INSERTs from non-RPC paths (admin scripts, future bulk import)
+  - Same INVALID_AMOUNT error token as the canonical RPC pattern
+- ⏸ #1 (PO cancel/delete: check linked bills): requires modifying cancel_purchase_order + delete_purchase_order. delete_purchase_order was just rewired by PR-10; modifying it again here would mean transcribing PR-10's whole body. Defer to PR-22b after PR-10 is applied so the live body is the source of truth.
+- ⏸ #2 (PO-to-bill amount soft warn): requires modifying create_vendor_bill's PR-04 body. Same defer-until-applied reasoning.
+- ⏸ #3 (PO-to-bill vendor consistency): same as #2.
+
+Decisions made autonomously (not in original plan):
+- Plan presented #6 as inline validation in create_vendor_bill. Used a trigger instead so the invariant is durable across future RPC rewrites. Trigger is SECURITY DEFINER + pg_temp.
+- Did 3 of 6 items rather than all 6. The remaining 3 all require copy-pasting PR-04/PR-10 RPC bodies into this migration, which (a) increases transcription-drift risk, (b) makes the diff hard to review, and (c) means Mason has to apply PR-04/PR-10 BEFORE this migration anyway. Better to land #1-#3 as a separate PR-22b after the dependencies are live.
+- Verification block at end asserts: total CHECK exists, UNIQUE index exists, get_ap_aging has 1 overload (without p_idempotency_key), trigger exists.
+
+Test outcomes:
+- npm run lint: pass (0 errors)
+- npm run typecheck: pass
+- npm run build: deferred to pre-commit hook
+- npm run test: deferred to pre-commit hook
+- Live application: NOT EXECUTED. Apply PR-04 first, then PR-22.
