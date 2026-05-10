@@ -212,13 +212,13 @@ export default function InventoryPage() {
   }, [toast]);
 
   const fetchHolds = useCallback(async () => {
+    // PR-07 follow-up: dropped creator FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('inventory_holds')
       .select(`
         *,
         product:products(product_name),
-        customer:customers(farm_name),
-        creator:profiles!inventory_holds_created_by_fkey(full_name)
+        customer:customers(farm_name)
       `)
       .eq('is_active', true)
       .or(`expires_at.is.null,expires_at.gte.${localToday()}`)
@@ -229,11 +229,25 @@ export default function InventoryPage() {
       return;
     }
 
-    const holdRows = (data || []).map((h: Record<string, unknown> & { product?: { product_name: string }; customer?: { farm_name: string }; creator?: { full_name: string } }) => ({
+    const creatorIds = [...new Set(
+      ((data || []) as Array<{ created_by?: string | null }>)
+        .map((h) => h.created_by)
+        .filter(Boolean) as string[]
+    )];
+    const creatorMap: Record<string, string> = {};
+    if (creatorIds.length > 0) {
+      const { data: creators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', creatorIds);
+      (creators || []).forEach((p: { id: string; full_name: string }) => { creatorMap[p.id] = p.full_name; });
+    }
+
+    const holdRows = (data || []).map((h: Record<string, unknown> & { product?: { product_name: string }; customer?: { farm_name: string }; created_by?: string | null }) => ({
       ...h,
       product_name: h.product?.product_name || 'Unknown',
       customer_name: h.customer?.farm_name || null,
-      creator_name: h.creator?.full_name || 'Unknown',
+      creator_name: h.created_by ? creatorMap[h.created_by] || 'Unknown' : 'Unknown',
     })) as HoldWithRelations[];
 
     setHolds(holdRows);

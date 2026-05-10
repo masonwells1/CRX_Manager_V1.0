@@ -191,7 +191,8 @@ export default function JobDetail() {
       supabase.from('fields').select('*').order('field_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('vehicles').select('*').eq('status', 'active').order('vehicle_name'),
-      supabase.from('profiles').select('*').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
+      // PR-07 follow-up: applicator picker only uses a.id + a.full_name + a.role; safe via view.
+      supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       supabase.from('blend_recipes').select('*').eq('is_active', true).order('name'),
     ]);
     setCustomers((custResult.data || []) as Customer[]);
@@ -204,11 +205,12 @@ export default function JobDetail() {
 
   const fetchJob = useCallback(async () => {
     const { data, error } = await supabase
+      // PR-07 follow-up: dropped applicator FK embed — full_name isn't read
+      // anywhere in this page; only applicator_id is consumed (line 235).
       .from('jobs')
       .select(`
         *,
         customer:customers(farm_name),
-        applicator:profiles!jobs_applicator_id_fkey(full_name),
         vehicle:vehicles(vehicle_name),
         quote:quotes!jobs_quote_id_fkey(quote_number),
         quote_section:quote_sections!jobs_quote_section_id_fkey(section_name),
