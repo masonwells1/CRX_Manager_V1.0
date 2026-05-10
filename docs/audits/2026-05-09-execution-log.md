@@ -229,7 +229,7 @@ Completed: 2026-05-10 00:30
 Elapsed: ~12 min
 Risk: Low
 Files changed: 3 (pagePermissions.ts, ProtectedRoute.tsx, pagePermissions.test.ts)
-Commit: pending
+Commit: 4d7bdbc
 Findings closed: P2 #13 (PAGE_PERMISSIONS)
 Notes:
 - Audited App.tsx routes. The 5 missing entries the plan called out are real:
@@ -246,3 +246,31 @@ Test outcomes:
 - npm run typecheck: pass
 - npm run build: deferred to pre-commit hook
 - pagePermissions tests: 30 passed
+
+---
+
+## PR-12 — Add pg_temp to SECURITY DEFINER violators
+Status: completed
+Started: 2026-05-10 00:30
+Completed: 2026-05-10 00:38
+Elapsed: ~8 min
+Risk: Low
+Files changed: 1 (new migration; not applied)
+Commit: pending
+Findings closed: P2 #11 (SECURITY DEFINER pg_temp)
+Notes:
+- Plan called out 4 functions; live DB inspection adjusted to 2:
+  - auto_expire_quotes — `search_path = ""` (empty) — FIXED
+  - release_holds_on_quote_status_change — `search_path = ""` — FIXED
+  - record_invoice_payment — already canonicalized in PR-02
+  - close_accounting_period — already has `public, pg_temp`
+- Both fixed functions already use schema-qualified references in their bodies (`public.quotes`, `public.inventory_holds`, `public.activity_feed`) so the search_path change is purely additive — no body logic changes.
+- Function bodies are verbatim from current pg_proc state.
+- Verification block at end of migration asserts both functions have the new search_path setting.
+- Mason will apply manually.
+
+Test outcomes:
+- npm run typecheck: pass
+- npm run lint: deferred to pre-commit hook
+- npm run build: deferred to pre-commit hook
+- npm run test: deferred to pre-commit hook
