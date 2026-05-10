@@ -108,6 +108,18 @@ export default function NewVendorBill() {
       const subtotalCents = parseDollarsToCents(subtotalDollars);
       const adjustmentCents = parseDollarsToCents(adjustmentDollars || '0');
 
+      // (codex audit F4, 2026-05-10): mirror the backend's `v_total > 0`
+      // guard at the UI so users see a clear inline message instead of an
+      // INVALID_AMOUNT exception thrown out of the RPC. After PR-15's
+      // parseDollarsToCents fix preserves negatives, an adjustment can flip
+      // the sign of the bill total even when the subtotal is positive.
+      const totalCents = subtotalCents + adjustmentCents;
+      if (totalCents <= 0) {
+        toast('error', `Bill total must be positive. Subtotal + adjustment = ${(totalCents / 100).toFixed(2)}.`);
+        setSaving(false);
+        return;
+      }
+
       const idemKey = createBillIdem.getKey();
       // Compute due_date from bill_date + paymentTermsDays
       const dueDateObj = parseLocalDate(billDate);
