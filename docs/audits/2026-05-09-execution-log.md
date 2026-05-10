@@ -256,7 +256,7 @@ Completed: 2026-05-10 00:38
 Elapsed: ~8 min
 Risk: Low
 Files changed: 1 (new migration; not applied)
-Commit: pending
+Commit: 4cbb39b
 Findings closed: P2 #11 (SECURITY DEFINER pg_temp)
 Notes:
 - Plan called out 4 functions; live DB inspection adjusted to 2:
@@ -274,3 +274,26 @@ Test outcomes:
 - npm run lint: deferred to pre-commit hook
 - npm run build: deferred to pre-commit hook
 - npm run test: deferred to pre-commit hook
+
+---
+
+## PR-15 — parseDollarsToCents preserve negative sign
+Status: completed
+Started: 2026-05-10 00:38
+Completed: 2026-05-10 00:46
+Elapsed: ~8 min
+Risk: Low
+Files changed: 2 (parseCents.ts + test)
+Commit: pending
+Findings closed: P1 (parseDollarsToCents strips negatives)
+Notes:
+- The original parser used `replace(/[^0-9.]/g, '')` which silently stripped minus signs. NewVendorBill (and any other UI that invites negative input for discount/credit fields) was getting +5000 cents back when the user typed "-50" — an ADD instead of a SUBTRACT.
+- New regex keeps minus, then `cleaned.includes('-')` captures sign. Handles "-50", "$-50", "-$50.00", "-5.50".
+- Edge cases: lone "-" or "-." returns 0.
+- Added `parseDollarsToCentsPositive(input)` helper for callers that want positive-only semantics. No callers switched in this PR — most existing callers gate negative input via UI or backend validation.
+- Test count grew from 10 to 20: 6 new for negative handling + 4 for the positive helper.
+
+Test outcomes:
+- npm run typecheck: pass
+- parseCents tests: 20 passed
+- npm run lint + build + test: deferred to pre-commit hook

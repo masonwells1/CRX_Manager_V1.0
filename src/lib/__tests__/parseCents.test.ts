@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDollarsToCents } from '../parseCents';
+import { parseDollarsToCents, parseDollarsToCentsPositive } from '../parseCents';
 
 describe('parseDollarsToCents', () => {
   it('parses whole dollars', () => expect(parseDollarsToCents('25')).toBe(2500));
@@ -12,4 +12,31 @@ describe('parseDollarsToCents', () => {
   it('truncates beyond 2 decimals', () => expect(parseDollarsToCents('1.999')).toBe(199));
   it('handles zero', () => expect(parseDollarsToCents('0')).toBe(0));
   it('handles zero cents', () => expect(parseDollarsToCents('100.00')).toBe(10000));
+
+  // PR-15: negative-sign preservation for discount/credit fields
+  describe('negative input (PR-15)', () => {
+    it('preserves leading minus on whole dollars', () =>
+      expect(parseDollarsToCents('-50')).toBe(-5000));
+    it('preserves leading minus on dollars + cents', () =>
+      expect(parseDollarsToCents('-5.50')).toBe(-550));
+    it('preserves leading minus inside currency formatting ("$-50")', () =>
+      expect(parseDollarsToCents('$-50')).toBe(-5000));
+    it('preserves leading minus before currency ("-$50")', () =>
+      expect(parseDollarsToCents('-$50.00')).toBe(-5000));
+    it('treats lone "-" as zero (no digits)', () =>
+      expect(parseDollarsToCents('-')).toBe(0));
+    it('treats lone "-." as zero', () =>
+      expect(parseDollarsToCents('-.')).toBe(0));
+  });
+});
+
+describe('parseDollarsToCentsPositive', () => {
+  it('returns positive for positive input', () =>
+    expect(parseDollarsToCentsPositive('25')).toBe(2500));
+  it('returns positive for negative input (absolute value)', () =>
+    expect(parseDollarsToCentsPositive('-25')).toBe(2500));
+  it('returns 0 for empty', () =>
+    expect(parseDollarsToCentsPositive('')).toBe(0));
+  it('returns 0 for lone minus', () =>
+    expect(parseDollarsToCentsPositive('-')).toBe(0));
 });
