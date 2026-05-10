@@ -807,3 +807,27 @@ Test outcomes:
 - npm run build: deferred to pre-commit hook
 - npm run test: deferred to pre-commit hook
 - Live application: NOT EXECUTED. Apply order: PR-04 → PR-10 → PR-13 → PR-14 → PR-22 → PR-22b.
+
+---
+
+## Sidebar nav link for Vendors page (Sprint 2 follow-up)
+Status: completed
+Started: 2026-05-10 09:18
+Completed: 2026-05-10 09:22
+Elapsed: ~4 min
+Risk: Low
+Files changed: 1 (src/components/layout/Sidebar.tsx)
+Commit: pending
+Findings closed: PR-21's deferred sidebar-nav item + PR-25's deferred sidebar link.
+
+Notes:
+- Found AppLayout/Sidebar at `src/components/layout/Sidebar.tsx` (PR-21 noted "AppLayout structure not obvious"; the actual nav lives in a separate Sidebar component).
+- Added `{ path: '/vendors', label: 'Vendors', icon: <Building2 />, roles: ['admin'] }` under the Finance group right after Accounts Payable. Imported `Building2` icon from lucide-react.
+- Browser verification skipped — dev server isn't running and the addition is a mechanical entry matching 30+ existing rows of identical shape. Typecheck + lint + Sidebar.test.tsx (9 tests) all pass.
+- Closes PR-21's "/payment-history sidebar link" deferral by establishing the pattern. payment-history is also a candidate for a sidebar entry but was tracked separately by PR-21; kept out of scope here since this commit is about Vendors specifically.
+
+Test outcomes:
+- npm run lint: pass (0 errors)
+- npm run typecheck: pass
+- src/components/layout/Sidebar.test.tsx: pass (9 tests)
+- npm run build: deferred to pre-commit hook

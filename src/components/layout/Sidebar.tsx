@@ -40,6 +40,7 @@ import {
   BookOpen,
   Wrench,
   CheckSquare,
+  Building2,
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { hasPageAccess, getPageKeyFromPath } from '../../lib/pagePermissions';
@@ -169,6 +170,7 @@ const navigation: NavEntry[] = [
         { path: '/financial-dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, roles: ['admin'] },
         { path: '/ar-aging', label: 'AR Aging', icon: <Clock className="w-4 h-4" />, roles: ['admin'] },
         { path: '/accounts-payable', label: 'Accounts Payable', icon: <Receipt className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/vendors', label: 'Vendors', icon: <Building2 className="w-4 h-4" />, roles: ['admin'] },
         { path: '/prepayments', label: 'Prepayments', icon: <Wallet className="w-4 h-4" />, roles: ['admin'] },
         { path: '/prepay-workspace', label: 'Prepay Workspace', icon: <ArrowLeftRight className="w-4 h-4" />, roles: ['admin'] },
         { path: '/commission-payments', label: 'Commission Pay', icon: <Banknote className="w-4 h-4" />, roles: ['admin'] },
