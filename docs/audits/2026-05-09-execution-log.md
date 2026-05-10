@@ -178,7 +178,7 @@ Completed: 2026-05-09 23:58
 Elapsed: ~8 min
 Risk: Low
 Files changed: 2 (src/lib/reconciliation.ts + test)
-Commit: pending
+Commit: 22e1e24
 Findings closed: P2 #10 (integrity write_off)
 Notes:
 - Updated `checkInvoiceBalances` formula at line 297 to subtract `write_off_cents`. Before the fix, every written-off invoice was flagged as a "balance discrepancy" because the frontend formula was missing that term while the DB-generated `balance_cents` already included it.
@@ -191,3 +191,31 @@ Test outcomes:
 - npm run typecheck: pass
 - npm run build: deferred to pre-commit hook
 - reconciliation tests: 68 passed
+
+---
+
+## PR-06 — Quick-delivery credit limit soft warn (Q4)
+Status: completed
+Started: 2026-05-10 00:05
+Completed: 2026-05-10 00:18
+Elapsed: ~13 min
+Risk: Low
+Files changed: 1 (new migration; schema-registry no-op since not applied)
+Commit: pending
+Findings closed: P1 #6 (quick delivery credit limit)
+Notes:
+- Replaced the hard-blocking RAISE EXCEPTION in create_quick_delivery's credit-limit check with admin notification + activity_feed entry. Per Mason's Q4 decision (Option C — soft warn).
+- Three behavior changes vs the PR-02 version:
+  1. AR balance scope: `status IN ('draft', 'posted', 'overdue')` (was: only 'posted'). Draft are already-promised dollars; overdue are unpaid past-due.
+  2. Projected exposure = current AR balance + new delivery's total. The check fires when projected_exposure >= credit_limit (post-delivery exposure, not current state).
+  3. Side effect on overage: INSERT activity_feed (event_type='credit_limit_warning') + INSERT notifications for every active admin. Delivery proceeds normally — never blocks.
+- Moved the credit check AFTER the items pre-check loop so v_total_cents is known. The pre-check loop now does double-duty: validate inventory AND accumulate projected total. The insert loop later resets v_total_cents and recomputes (since the pre-check loop doesn't touch v_total_cost_cents).
+- Return jsonb gained a `credit_warning` boolean field. Backwards compatible — frontend's assertRpcResult<T> ignores extra fields, and existing callers (QuickDeliveryModal) don't need to change.
+- Mason will apply the migration to live Supabase manually. PR-06 supersedes the create_quick_delivery body that PR-02 just rewrote — both migrations must apply (PR-02 first, PR-06 second) for both fixes to take effect.
+
+Test outcomes:
+- npm run lint: pass (0 errors, 270 warnings)
+- npm run typecheck: pass
+- npm run build: deferred to pre-commit hook
+- npm run test: deferred to pre-commit hook
+- schema-registry: regenerated (no-op — migration not applied)
