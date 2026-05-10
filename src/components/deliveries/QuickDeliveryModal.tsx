@@ -79,7 +79,8 @@ export default function QuickDeliveryModal({
       try {
         const [prodResult, driverResult] = await Promise.all([
           supabase.from('products').select('*').eq('is_active', true).order('product_name'),
-          supabase.from('profiles').select('*').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
+          // PR-07 follow-up: driver picker only uses d.id + d.full_name; safe via view.
+          supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
         ]);
         if (prodResult.error || driverResult.error) {
           toast('error', 'Failed to load products or drivers. Please close and try again.');

@@ -90,9 +90,10 @@ export default function NewDelivery() {
   }, [toast]);
 
   const fetchDrivers = useCallback(async () => {
+    // PR-07 follow-up: driver picker only uses d.id + d.full_name + d.role; safe via view.
     const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
+      .from('profile_public_view')
+      .select('id, full_name, role, is_active')
       .in('role', ['driver', 'admin', 'sales_rep'])
       .eq('is_active', true)
       .order('full_name');

@@ -64,9 +64,10 @@ export default function ReceivingLog() {
   const [vendors, setVendors] = useState<string[]>([]);
 
   const fetchStaff = useCallback(async () => {
+    // PR-07 follow-up: staff picker only uses p.id + p.full_name; safe via view.
     const { data } = await supabase
-      .from('profiles')
-      .select('*')
+      .from('profile_public_view')
+      .select('id, full_name, role, is_active')
       .in('role', ['admin', 'sales_rep'])
       .eq('is_active', true)
       .order('full_name');

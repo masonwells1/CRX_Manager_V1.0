@@ -67,12 +67,13 @@ export default function QuickTaskModal({
   useEffect(() => {
     if (!open) return;
     (async () => {
+      // PR-07 follow-up: assignee picker only uses p.id + p.full_name; safe via view.
       const { data } = await supabase
-        .from('profiles')
-        .select('*')
+        .from('profile_public_view')
+        .select('id, full_name, role, is_active')
         .eq('is_active', true)
         .order('full_name');
-      if (data) setProfiles(data);
+      if (data) setProfiles(data as unknown as Profile[]);
     })();
   }, [open]);
 

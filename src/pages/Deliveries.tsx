@@ -135,9 +135,10 @@ export default function Deliveries() {
   const isDriver = role === 'driver';
 
   const fetchDrivers = useCallback(async () => {
+    // PR-07 follow-up: driver filter dropdown only uses d.id + d.full_name; safe via view.
     const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
+      .from('profile_public_view')
+      .select('id, full_name, role, is_active')
       .eq('role', 'driver')
       .eq('is_active', true)
       .order('full_name');

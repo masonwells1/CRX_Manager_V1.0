@@ -110,7 +110,8 @@ export default function TeamBoard() {
   });
 
   const fetchProfiles = useCallback(async () => {
-    const { data, error } = await supabase.from('profiles').select('*').eq('is_active', true).order('full_name');
+    // PR-07 follow-up: team picker only uses p.id + p.full_name; safe via view.
+    const { data, error } = await supabase.from('profile_public_view').select('id, full_name, role, is_active').eq('is_active', true).order('full_name');
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_profiles' } });
       toast('error', 'Failed to load team members. Please try again.');
