@@ -3,13 +3,17 @@ import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
+// PR-16: removed the silent fallback to https://croprxsolutions.app —
+// missing env var now throws at function startup.
 function getAllowedOrigin(): string {
   const origin = Deno.env.get("ALLOWED_ORIGIN");
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  // Fallback to production domain when secret not configured
-  return "https://croprxsolutions.app";
+  throw new Error(
+    "ALLOWED_ORIGIN env var is required for production deployments. " +
+      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
+  );
 }
 
 const corsHeaders = {

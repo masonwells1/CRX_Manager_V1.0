@@ -22,12 +22,16 @@ import { captureEdgeException } from "../_shared/sentry.ts";
 // =============================================================================
 
 // CORS — mirrors create-user pattern
+// PR-16: removed silent fallback — missing env var now throws.
 function getAllowedOrigin(): string {
   const origin = Deno.env.get("ALLOWED_ORIGIN");
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  return "https://croprxsolutions.app";
+  throw new Error(
+    "ALLOWED_ORIGIN env var is required for production deployments. " +
+      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
+  );
 }
 
 const corsHeaders = {

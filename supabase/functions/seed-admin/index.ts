@@ -8,8 +8,11 @@ function getAllowedOrigin(): string {
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  // Fallback to production domain when secret not configured
-  return "https://croprxsolutions.app";
+  // PR-16: removed silent fallback — missing env var now throws.
+  throw new Error(
+    "ALLOWED_ORIGIN env var is required for production deployments. " +
+      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
+  );
 }
 
 const corsHeaders = {

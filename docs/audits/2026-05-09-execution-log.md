@@ -297,3 +297,27 @@ Test outcomes:
 - npm run typecheck: pass
 - parseCents tests: 20 passed
 - npm run lint + build + test: deferred to pre-commit hook
+
+---
+
+## PR-16 — Edge function CORS defaults (no silent prod fallback)
+Status: completed
+Started: 2026-05-10 00:46
+Completed: 2026-05-10 00:54
+Elapsed: ~8 min
+Risk: Low
+Files changed: 5 Edge Function index.ts files
+Commit: pending
+Findings closed: P2 (Edge function CORS defaults)
+Notes:
+- Replaced the silent fallback to `https://croprxsolutions.app` with a thrown Error in 5 Edge Functions: create-user, process-blend-ticket, process-document, seed-admin, send-email.
+- Function startup now fails loudly if ALLOWED_ORIGIN isn't set in Supabase Function secrets (and the URL isn't localhost). Defense-in-depth — prevents accidental prod CORS exposure if a new deployment forgets to set the secret.
+- Localhost detection still works (returns http://localhost:5173 for SUPABASE_URL containing localhost or 127.0.0.1).
+- reset-user-password uses a different pattern (hardcoded ALLOWED_ORIGINS array + Origin header matching), not in the plan's list. Left as-is.
+- setup-blend-tickets-storage is being deleted in PR-21 per the misc cleanup bundle. Skipped.
+
+Test outcomes:
+- npm run lint: pass (0 errors, 270 warnings)
+- npm run typecheck: pass (Edge Functions are Deno — not exercised by tsc.app.json anyway)
+- npm run build: deferred to pre-commit hook
+- Edge Function deploys NOT executed by this autonomous run; Mason will deploy via Supabase MCP after review
