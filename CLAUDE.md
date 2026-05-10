@@ -7,15 +7,16 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-05-07)
-- 65 pages, 92 tables, ~175 RPCs, 285 migrations, 8 Edge Functions
-- 1,872 unit tests (130 files) + 94 E2E spec files, all passing
+## Current State (2026-05-10)
+- 65 pages, 92 tables, ~175 RPCs, 291 migrations, 7 Edge Functions
+- 1,886 unit tests (130 files, 68 skipped) + 94 E2E spec files, all passing
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 - All RPC data usage wrapped with `assertRpcResult()` — enforced by ESLint + safety-net test
 - All destructive actions use `ConfirmModal` (no bare `confirm()` calls)
 - 15+ RPC calls wired with `useIdempotencyKey` for double-submit prevention
 - Schema-aware PreToolUse hooks block status-enum mismatches, GENERATED-column writes, missing RLS on new tables, and idempotency-key declarations that never get used
+- Audit fix sprint 2026-05-09 in flight on `fix/audit-2026-05-09` (15 of 26 PRs landed; 6 migrations queued for manual apply — see `docs/audits/2026-05-09-execution-summary.md`)
 
 ---
 

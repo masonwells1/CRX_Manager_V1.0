@@ -4,6 +4,51 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-09 → 2026-05-10 — Audit fix sprint (Sprint 1): 15 of 26 PRs landed
+
+Branch: `fix/audit-2026-05-09`. Closes the highest-impact findings from the 2026-05-09 combined audit (52 findings, 11 business decisions). Sprint 1 was executed autonomously by a Claude Opus 4.7 (1M context) session running through the night of 2026-05-09. Sprint 2 picks up the remaining 10 PRs (PR-23 blocked on staging Supabase creation).
+
+**The hard problem solved.** Five mutating RPCs (`record_invoice_payment`, `create_quick_delivery`, `update_order_items` + 2 already-fixed) used a broken idempotency replay check — `(v_existing->>'status') = 'completed'` against a saved jsonb that never carried a `status` field. So every same-key retry silently re-executed the mutation. The DB had the cache row; the function never read it correctly. Network retries would record duplicate payments, create duplicate deliveries, etc. The pattern was fragile because the broken check just happened to return false for any input — so testing it would've required deliberately exercising a network retry path nobody had built. Codified the canonical pattern (`IF v_existing IS NOT NULL THEN RETURN ...`) in CLAUDE.md and `gotchas.md`; the schema-aware `idempotency-body-check.mjs` PreToolUse hook already enforces the helper-function pattern going forward.
+
+**What landed (15 commits, all on `fix/audit-2026-05-09`, Co-Authored-By: Claude Opus 4.7):**
+
+| PR | Domain | Risk | Commit | Outcome |
+|---|---|---|---|---|
+| PR-01 | Deliveries | Low | b72d9c9 | `complete_delivery` + `void_delivery` referenced `v_delivery.delivery_date`; column is `scheduled_date`. Any closed-period warn path crashed 42703. SQL queued for manual apply. |
+| PR-02 | RPC | Medium | 06ec19a | 3 of 5 planned RPCs fixed (live inspection narrowed scope: `receive_po_items` already canonical, `create_prepay_check_splits` doesn't exist in prod). SQL queued. |
+| PR-03 | Edge Function | Low | 31c3db1 | `send-email` selected `customers.name` (column doesn't exist — should be `farm_name`). Edge Function silently 404'd in prod for any customer-tied email. Error logging added so future schema drifts surface. |
+| PR-04 | AP | High | 1a3b39d | 6-block migration: AP void columns, `balance_cents` GENERATED ALWAYS, UNIQUE bill_number index, `financial_audit_log` CHECK expansion, `vendors_select` RLS tightening, full rewrite of `create_vendor_bill`/`record_vendor_payment`/`void_vendor_bill` with idempotency + period guard + paid-bill hard block + audit log entries. SQL queued — 13 future PRs depend on this. |
+| PR-05 | E2E | Low | ac4e1a4 | Removed hardcoded credential fallback (`mason@…/<live>`) from auth.ts + setup-fixtures.ts + teardown-fixtures.ts. Added `assertNotProductionWithoutOverride()` safety guard. Wrote `docs/CONTRIBUTING.md`. |
+| PR-09 | Integrity | Low | 22e1e24 | IntegrityReport flagged every written-off invoice as a balance discrepancy because the formula was missing `- write_off_cents`. Added regression test. |
+| PR-06 | Quick delivery | Low | 63ad461 | Per Q4 (Option C): credit limit overage now creates the delivery + notifies admins instead of hard-blocking. AR scope expanded to draft + posted + overdue. Projected exposure includes the new delivery total. SQL queued. |
+| PR-11 | Permissions | Low | 4d7bdbc | 5 routes were not in `PAGE_PERMISSIONS` — deny-list silently no-op'd. Patched + added EXEMPT_ROUTE_SEGMENTS handling in ProtectedRoute. New fail-closed test greps App.tsx routes — adding a Route without an entry now fails CI. |
+| PR-12 | RPC | Low | 4cbb39b | Added `pg_temp` to `auto_expire_quotes` + `release_holds_on_quote_status_change`. Plan listed 4 functions; live inspection narrowed to 2. SQL queued. |
+| PR-15 | parseCents | Low | cb4351c | Parser stripped leading minus signs while UI invited negatives (discount fields). NewVendorBill discount now correctly subtracts. Added `parseDollarsToCentsPositive()` helper. |
+| PR-16 | Edge Functions | Low | b1e3680 | 5 Edge Functions now throw at startup if `ALLOWED_ORIGIN` env var is missing — replaces silent fallback to `https://croprxsolutions.app`. Defense-in-depth. |
+| PR-17 | RLS | Low | 25a6511 | `team_note_tags` SELECT was `USING (true)`. Replaced with EXISTS check on parent `team_notes`. Compromise vs the plan's stricter version since `team_notes` itself is `USING (true)` for SELECT — full tightening would break team-board for non-admin roles. SQL queued. |
+| PR-18 | Tooling | Low | 05de4d3 | `validate-frontend.sh` gained `--all` mode for periodic audits (was: staged-only). |
+| PR-20 | Activity log | Low | 6ad96af | 8 handlers + 1 useEffect-gated callsite: replaced `profile?.id || ''` empty-string fallback with early-return + toast. `activity_feed.performed_by` empty-string poisoning eliminated. |
+| PR-21 | Cleanup | Low | c09cca5 | ESLint ignores for coverage/`.claude/worktrees`/`.playwright-mcp`; IntegrityReport `useCallback` fix; doc count corrections (qa-testing 81→94, UI_PATTERNS 57→65). 3 sub-items skipped (sidebar link, Edge Function deletion, doc-count CI script). |
+
+**Migrations queued for manual apply (NOT YET APPLIED to live Supabase rhyzpcqhnizqbxphqdkr):**
+
+`20260510010000_fix_delivery_date_column_refs.sql` (PR-01), `20260510020000_fix_idempotency_replay_canonical.sql` (PR-02), `20260510030000_ap_structural_fixes.sql` (PR-04 HIGH), `20260510040000_credit_limit_soft_warn.sql` (PR-06; apply AFTER PR-02), `20260510050000_pg_temp_security_definer_fixes.sql` (PR-12), `20260510060000_team_note_tags_rls.sql` (PR-17). Run `node scripts/regenerate-schema-registry.mjs` after applying any subset.
+
+**Decisions made autonomously (worth knowing):**
+1. PR-02 scope narrowed: `receive_po_items` already had canonical pattern (skipped); `create_prepay_check_splits` doesn't exist in prod (skipped). 3 RPCs fixed vs 5 planned.
+2. PR-04 search_path finding was stale — all 3 AP RPCs already had `public, pg_temp`.
+3. PR-12 scope narrowed from 4 functions to 2; the other 2 already had pg_temp.
+4. PR-17 used a softer policy than the plan suggested (gate by parent team_note existence) because team_notes itself is `USING (true)` for SELECT and stricter gating would break team-board.
+5. PR-21 partial completion: skipped sidebar link (AppLayout structure unclear), Edge Function deletion (bash-safety hook blocks rm -rf on supabase/), and the check-doc-counts.mjs script (incremental tooling). Doc-count corrections close the immediate finding.
+
+**Sprint state.** 130 unit-test files (1886 passing, 68 skipped — Sprint 1 added new tests in PR-09/11/15). 0 ESLint errors, 0 TS errors, all builds clean. 291 migrations on disk (was 285 + 6 queued). 7 Edge Functions (was 8, count corrected — `_shared` is helper code, not a function; the regenerate-agents-md.mjs script now filters it; `setup-blend-tickets-storage` deletion deferred from PR-21). Pre-commit hook held throughout — no `--no-verify`, no hooks bypassed.
+
+**Sprint 2 (in progress).** PR-26 (this docs consolidation), PR-07 (RLS tightening), PR-19 (test infrastructure), PR-08 (invoice payment unification), PR-10 (bulk idempotency wiring), PR-13 (void_vendor_payment), PR-14 (update_vendor_bill), PR-22 (AP polish), PR-25 (vendor master-data UI). PR-23 (E2E staging Supabase) blocked on Mason creating a `crx-manager-staging` Supabase project.
+
+**Lesson.** The autonomous prompt's "live DB inspection narrowed scope" pattern fired 4 times in Sprint 1 — every time, the live database was the source of truth and the static plan was stale. The implementation plan + execution log + git commits + migration files form a recoverable chain even if a session ends mid-PR; the canonical idempotency pattern is now the project's documented norm and the schema-aware hooks enforce it for new code. Two structural classes of bug (silent idempotency replay failure, incomplete `financial_audit_log` integration) close together because finding the first one made the second one obvious.
+
+---
+
 ## 2026-05-07 — Wired front-end idempotency key into cancel_cycle_count call (audit P4-12)
 
 Phase 4 audit P4-12 flagged that `CycleCounts.tsx:326-329` called `cancel_cycle_count` with only two arguments — `p_cycle_count_id` and `p_performed_by` — even though the SQL RPC accepts a third optional `p_idempotency_key`. The RPC body is fully idempotent (verified in migration `20260501130000_field_app_workflow_phase18.sql:174-177` for `check_idempotency` and `:200-202` for `save_idempotency`), so the database enforcement was already correct. The front-end was not exercising it; a double-click on Cancel could in principle insert two `cycle_count_cancelled` activity rows even though the second `UPDATE` would no-op once the status was already 'cancelled'.

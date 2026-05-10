@@ -418,3 +418,42 @@ Test outcomes:
 - npm run lint: pass — eliminated several pre-existing warnings (was 270, now lower because of ignores + IntegrityReport fix)
 - npm run typecheck: pass
 - npm run build + test: deferred to pre-commit hook
+
+---
+
+## PR-26 — Final docs consolidation (Sprint 2 lead-off)
+Status: completed
+Started: 2026-05-10 06:50
+Completed: 2026-05-10 06:55
+Elapsed: ~5 min
+Risk: Low
+Files changed: 6 (CLAUDE.md, AGENTS.md, docs/CHANGELOG.md, docs/reference/gotchas.md, docs/reference/migration-history.md, scripts/regenerate-agents-md.mjs)
+Commit: pending
+Findings closed: docs-drift consolidation across all 15 Sprint 1 PRs
+
+Notes:
+- Renumbering note: this PR is "PR-26" per the autonomous prompt + execution summary, which renumbered the implementation-plan's PR-25 (final docs) to PR-26 to leave a slot for the BLOCKED PR-23 (staging Supabase). Treat the plan's PR-25 spec as the source for this PR's content.
+- CLAUDE.md current state line: date 2026-05-07 → 2026-05-10; migrations 285 → 291; Edge Functions 8 → 7 (corrects pre-existing inconsistency where the top-line said 8 but the lower section listed 7 — `_shared` is helper code, not an Edge Function); test count 1872 → 1886 passing (with 68 skipped). Added a sentinel line pointing to the audit fix sprint.
+- gotchas.md additions:
+  - 5 new Supabase/Postgres rows: SECURITY DEFINER `pg_temp` hard rule (PR-12), `customers.farm_name` not `name` (PR-03), `vendor_bills.balance_cents` GENERATED (PR-04), `financial_audit_log.entity_type` allowed values (PR-04); strengthened `deliveries.scheduled_date` (PR-01).
+  - New "Canonical idempotency pattern (PR-02)" section with full SQL block + key rules.
+  - New "Accounts Payable quirks (PR-04)" section — closed-period gates, idempotency, audit log, GENERATED balance, UNIQUE constraints, paid-bill guard, RLS.
+  - New "E2E test environment (PR-05)" section — env-var requirements, prod safety guard, [E2E] prefix.
+  - New "Frontend safety (PR-11/15/16/20)" section — PAGE_PERMISSIONS rule, parseDollarsToCents negatives, Edge Function ALLOWED_ORIGIN, logActivity early-return.
+  - New "Quick delivery soft-warn (PR-06)" section.
+- migration-history.md: header count 285 → 291; pre-applied warning banner for migrations 286-291; six new entries (286 PR-01, 287 PR-02, 288 PR-04, 289 PR-06, 290 PR-12, 291 PR-17) prepended in DESCENDING order to match the file's tail-of-list convention. Each entry tags "NOT YET APPLIED" so future readers know live state may differ.
+- AGENTS.md: regenerated via `node scripts/regenerate-agents-md.mjs`. Now reports pages=65, migrations=291, edgeFns=7.
+- scripts/regenerate-agents-md.mjs: tiny fix — `countEdgeFns` now filters out `_shared` directory. Pre-fix, the script counted `_shared` as an Edge Function which is why CLAUDE.md previously had top-line 8 vs lower-section 7. Now consistent.
+- docs/CHANGELOG.md: prepended a 2026-05-09 → 2026-05-10 sprint summary entry — table of 15 commits, list of queued migrations, autonomous-decisions list, Sprint 2 in-progress list, lessons.
+
+Decisions made autonomously (not in original plan):
+- The plan's PR-25 spec mentions adding "AP integration patterns" section to CLAUDE.md. Skipped that for now — the patterns ARE documented in the new gotchas.md "Accounts Payable quirks" section + CHANGELOG sprint entry, and CLAUDE.md already has a "Canonical Patterns for New RPCs" section. Adding a parallel AP section would duplicate. PR-13/14/22 will refresh CLAUDE.md if AP-specific patterns emerge that don't fit the canonical sections.
+- Did NOT add a vendor_bills lifecycle to CLAUDE.md's "Business Logic Lifecycles" section. The current AP RPC bodies are committed but NOT applied to live Supabase — adding the lifecycle now would be premature. Will fold this in after PR-04 is applied (likely after PR-13 if Mason wants the void flow documented in the same pass).
+- Fixed the regenerate-agents-md.mjs script's `_shared` mis-count as part of this PR. Outside the docs scope strictly speaking, but fixes a doc-drift root cause and is one line.
+
+Test outcomes:
+- npm run lint: pass (0 errors)
+- npm run typecheck: pass (0 errors)
+- npm run build: pass (built in 14.90s)
+- npm run test: pass (1886 passed, 68 skipped, 0 failures, 130 files)
+- validate-sql-migrations: not applicable (no SQL changes)

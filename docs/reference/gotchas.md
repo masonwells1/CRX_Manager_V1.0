@@ -23,18 +23,111 @@ Project-specific quirks that aren't obvious from reading the code, but have caus
 | Singular relationship joins return arrays | Cast with `as unknown as Type[]` rather than expecting a single object |
 | Supabase returns `null` for missing columns; React props expect `undefined` | Use `?? undefined` when passing through |
 | PostGIS RPCs need `SET search_path = public, extensions` | Without `extensions`, geometry functions are not found |
+| Every SECURITY DEFINER function MUST `SET search_path = public, pg_temp` | Hard rule — not optional. Empty `''` search_path is a 2026-05 finding pattern (PR-12). pg_temp prevents temp-table hijacking. |
 | `payments.amount` is `numeric` dollars, NOT `bigint` cents | RPCs convert: `(p_amount_cents / 100.0)::numeric(12,2)` |
 | `commissions.commission_amount` is `numeric` dollars (NOT `_cents`) | Same as payments — historical exception |
-| `deliveries.scheduled_date` (NOT `delivery_date`) | Always check `information_schema.columns` before assuming a column name |
+| `deliveries.scheduled_date` (NOT `delivery_date`) | Always check `information_schema.columns` before assuming a column name. Re-introduced in `complete_delivery` + `void_delivery` 2026-05-09 (PR-01); column refs crashed any closed-period warn path. |
+| `customers.farm_name` (NOT `name`) | The `customers` table has no `name` column. Edge Functions selecting `name` get PostgREST 42703. Always log query errors to surface schema drift (PR-03). |
 | `idempotency_keys` columns: `idempotency_key`, `operation`, `result` | NOT `key`/`entity_type`/`entity_id`/`result_id` — bug has been re-introduced 3+ times |
 | `idempotency_keys.result` is `jsonb` | Do NOT cast to `::text` when inserting — pass `jsonb_build_object(...)` directly |
 | `invoices.balance_cents` is a GENERATED column | NEVER UPDATE it directly — update the components (`subtotal_cents`, `tax_cents`, `total_paid_cents`) |
+| `vendor_bills.balance_cents` is GENERATED ALWAYS (PR-04) | Same rule — `record_vendor_payment` writes only `paid_cents`/`status`. Pre-2026-05-10 it was plain `bigint` and could drift. |
 | `orders.total_paid` / `orders.balance_due` were DROPPED | AR is derived from `invoices.balance_cents` |
 | `create_direct_order` returns `{ order_id }` (NOT `{ id }`) | Destructure correctly |
 | `complete_delivery` requires `p_signed_by text` | Always pass the signer's name |
 | `returns.requested_by` (NOT `created_by`) | And status starts at `'requested'` (NOT `'pending'`) |
 | `return_items.order_item_id` (NOT `delivery_item_id`) | Returns are linked to order lines, not delivery lines |
 | `invoice_items.extended_cents` (NOT `line_total_cents`) | Naming inconsistency from early schema |
+| `financial_audit_log.entity_type` allows: `invoice`, `payment`, `vendor_bill`, `vendor_payment`, `purchase_order`, `write_off` | The CHECK constraint was AR-only until PR-04 (2026-05-10) — adding new entity types means expanding the CHECK. Same for `operation_type`. |
+
+---
+
+## Canonical idempotency pattern (PR-02, 2026-05-09)
+
+Five mutating RPCs were silently re-executing on network retries because they used a broken replay check (`(v_existing->>'status') = 'completed'`) that never matched the saved jsonb shape. The canonical pattern below is the only correct one — substitute `'<rpc_name>'` for the function name.
+
+```sql
+DECLARE
+  v_existing jsonb;
+  v_result  jsonb;  -- or uuid, depending on return type
+BEGIN
+  IF p_idempotency_key IS NOT NULL THEN
+    v_existing := check_idempotency(p_idempotency_key, '<rpc_name>');
+    IF v_existing IS NOT NULL THEN
+      -- For RPCs returning jsonb:
+      RETURN v_existing;
+      -- For RPCs returning uuid: RETURN (v_existing->>'payment_id')::uuid;
+    END IF;
+  END IF;
+
+  -- ... actual mutation work ...
+
+  IF p_idempotency_key IS NOT NULL THEN
+    PERFORM save_idempotency(p_idempotency_key, '<rpc_name>', v_result);
+  END IF;
+
+  RETURN v_result;
+END;
+```
+
+**Key rules:**
+- `check_idempotency` returns the BARE saved `jsonb` value (NOT `{status, result}`). Test for `IS NOT NULL` only.
+- The cache key is `(idempotency_key, operation)`. Use the SAME `'<rpc_name>'` string in both `check_` and `save_`.
+- For RPCs returning `uuid`, save with `jsonb_build_object('payment_id', v_id)` and unpack on cache hit.
+- TS callers MUST wrap with `assertRpcResult<T>(data, 'rpc_name')` (`local-rules/require-assert-rpc-result` ESLint rule enforces it).
+- TS error detection: `hasRpcCode(err, RpcErrorCodes.X)` from `src/lib/db.ts` — never substring-match (a user-supplied note containing `'BILL_VOIDED'` would false-positive).
+
+The `idempotency-body-check.mjs` PreToolUse hook blocks RPCs that declare `p_idempotency_key` but don't reference `idempotency_keys` in the body. Add `-- idempotency-body-check: exempt` at file top to opt out (only when using the helper-function indirection above — never for raw inline lookups).
+
+---
+
+## Accounts Payable quirks (PR-04, 2026-05-10 — pending live apply)
+
+The AP RPC trio (`create_vendor_bill`, `record_vendor_payment`, `void_vendor_bill`) had structural gaps that AR resolved years ago. PR-04 brings AP to parity. Important notes for anyone touching AP code:
+
+| Rule | Detail |
+|------|--------|
+| Closed-period guard on bill creation | `create_vendor_bill` calls `check_period_open(p_bill_date::date)` — same gate as `post_invoice`. Bills outside the open period raise. |
+| Closed-period guard on payment recording | NO. Per Q8: payment recording is not the posting equivalent — bill creation is. Recording payment against an open bill always allowed. |
+| Idempotency on all 3 RPCs | All 3 use the canonical pattern above. Pre-PR-04 idempotency was missing entirely. |
+| Audit log integration | `financial_audit_log` CHECK now allows `vendor_bill`, `vendor_payment`, `purchase_order` entity types and `vendor_bill_created`, `vendor_bill_voided`, `vendor_payment_recorded` operations. Pre-PR-04, AP RPCs couldn't write to the audit log at all. |
+| `vendor_bills.balance_cents` GENERATED ALWAYS | `(total_cents - paid_cents)`. NEVER UPDATE — let it recompute. |
+| `vendor_bills` UNIQUE on `(vendor_id, bill_number)` WHERE `deleted_at IS NULL AND status <> 'voided'` | Prevents duplicate bills. Voided/deleted bills don't count. |
+| `vendor_bills` and `vendor_payments` have soft-delete columns | `voided_at`, `voided_by`, `void_reason` (PR-04). Pre-PR-04, `void_vendor_bill` stuffed reason into `notes`. |
+| `void_vendor_bill` paid-bill guard | Hard-blocks if `status = 'paid' AND active payments exist` (Q11). Use `void_vendor_payment` (PR-13, future) per payment first, then void the bill. |
+| `vendors_select` RLS | Admin + sales_rep only post-PR-04. Drivers/applicators get empty results — any UI relying on driver vendor reads breaks silently. |
+
+---
+
+## E2E test environment (PR-05, 2026-05-09)
+
+| Rule | Why |
+|------|-----|
+| `E2E_TEST_EMAIL` + `E2E_TEST_PASSWORD` env vars are MANDATORY | Hard-coded fallback was rotated and removed (was `mason@croprxsolutions.com` / live password). Tests now throw at startup if missing. See `docs/CONTRIBUTING.md`. |
+| Pointing E2E at production requires `E2E_ALLOW_PROD=true` | `assertNotProductionWithoutOverride()` in `tests/e2e/utils/safety-guards.ts` checks `VITE_SUPABASE_URL` for the prod project ref. Production setup is currently the default — see PR-23 (BLOCKED) for staging. |
+| All E2E-created entities MUST use `[E2E]` prefix | `globalSetup` creates shared `[E2E]` fixtures, `globalTeardown` deletes anything matching the prefix. Bare entity names leak across runs and pollute prod. Reuse fixtures from `tests/e2e/fixtures/e2e-constants.ts`. |
+
+---
+
+## Frontend safety (PR-11, PR-15, PR-16, PR-20)
+
+| Rule | Detail |
+|------|--------|
+| Every `<Route>` first segment must have a `PAGE_PERMISSIONS` entry OR be in `EXEMPT_ROUTE_SEGMENTS` | `pagePermissions.test.ts` enforces by greppping App.tsx routes. ProtectedRoute fails-closed (logs + redirect) when `getPageKeyFromPath()` returns null on a non-exempt path. Adding a Route without an entry now fails CI. |
+| `parseDollarsToCents` PRESERVES leading minus | Pre-PR-15 it stripped them, turning `-50` discount into `+5000` cent ADD. Use `parseDollarsToCentsPositive()` for fields that must reject negatives (default callers don't need to switch). |
+| Edge Functions throw at startup if `ALLOWED_ORIGIN` is unset (and not localhost) | PR-16 removed silent fallback to `https://croprxsolutions.app`. Five functions now require the secret: create-user, process-blend-ticket, process-document, seed-admin, send-email. reset-user-password uses a separate hard-coded array pattern; setup-blend-tickets-storage is dead code (delete pending). |
+| `logActivity({performedBy})` requires `profile.id` (no empty-string fallback) | PR-20 patched 8 handlers: WriteOffModal, FinanceChargePreviewModal, MonthEndClose, Deliveries, InvoiceDetail. If `profile` is null, handler returns early with toast. QuoteBuilder's compliance check is the one useEffect-gated callsite (still gates on `profile?.id`). |
+
+---
+
+## Quick delivery soft-warn (PR-06, 2026-05-09)
+
+Customers over credit limit no longer block quick deliveries. Per Q4 (Option C):
+
+- AR balance includes `'draft'`, `'posted'`, `'overdue'` invoices (was: `'posted'` only)
+- Projected exposure = current AR + new delivery's total
+- When `projected_exposure >= credit_limit`: INSERT `activity_feed` (`event_type='credit_limit_warning'`) + INSERT `notifications` row per active admin. Delivery proceeds normally.
+- Return jsonb gains `credit_warning: boolean`. `assertRpcResult<T>` ignores extra fields, so callers don't need updates.
 
 ---
 

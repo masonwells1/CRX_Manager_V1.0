@@ -26,7 +26,7 @@ function countLazyPages() {
 function countEdgeFns() {
   try {
     return readdirSync(path.join(repoRoot, "supabase", "functions"), { withFileTypes: true })
-      .filter(d => d.isDirectory()).length;
+      .filter(d => d.isDirectory() && d.name !== "_shared").length;
   } catch { return null; }
 }
 
