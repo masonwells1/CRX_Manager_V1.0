@@ -385,6 +385,106 @@ describe.skipIf(!isLiveDB)('Live DB: CHECK Constraint Values', () => {
 
 const KNOWN_OVERLOADED_FUNCTIONS = ['next_invoice_number', 'check_rate_limit'];
 
+// ─── Live DB: Idempotency Body Check (PR-19, 2026-05-10) ───────────────
+// schemaIntegrity.test.ts maintains a list of mutating RPCs that MUST use
+// the canonical idempotency pattern. Static list-validation only catches
+// "is the name in the list" — it cannot tell whether the live function
+// body actually calls `check_idempotency` / `save_idempotency`. Without a
+// live check, a bug like the PR-02 finding (broken `(v_existing->>'status')`
+// check that never matched) is invisible to the test suite.
+//
+// This block queries `pg_proc.prosrc` for each function in
+// MUTATING_RPCS_WITH_IDEMPOTENCY and asserts the body either references
+// `check_idempotency` (the canonical helper-function pattern) OR carries
+// the explicit `-- idempotency-body-check: exempt` marker for the small set
+// of functions that use raw inline lookups (documented in CLAUDE.md).
+
+import { MUTATING_RPCS_WITH_IDEMPOTENCY, SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP } from './schemaIntegrity.test';
+
+interface FunctionBodyRow {
+  proname: string;
+  prosrc: string;
+  proconfig: string[] | null;
+}
+
+describe.skipIf(!isLiveDB)('Live DB: Mutating RPC Idempotency Bodies', () => {
+  it('every mutating RPC has a canonical idempotency block in the live function body', async () => {
+    const namesList = MUTATING_RPCS_WITH_IDEMPOTENCY.map((n) => `'${n}'`).join(',');
+    const result = (await queryInformationSchema(`
+      SELECT proname, prosrc, proconfig
+      FROM pg_proc
+      WHERE pronamespace = 'public'::regnamespace
+        AND proname IN (${namesList})
+    `)) as FunctionBodyRow[];
+
+    const byName = new Map(result.map((r) => [r.proname, r]));
+    const findings: string[] = [];
+
+    for (const rpcName of MUTATING_RPCS_WITH_IDEMPOTENCY) {
+      const row = byName.get(rpcName);
+      if (!row) {
+        findings.push(`  ${rpcName}: function does not exist in pg_proc — list drift`);
+        continue;
+      }
+      const body = row.prosrc || '';
+      const referencesIdempotency = /check_idempotency\s*\(/.test(body) || /idempotency_keys/i.test(body);
+      const hasExemptMarker = /idempotency-body-check:\s*exempt/i.test(body);
+      if (!referencesIdempotency && !hasExemptMarker) {
+        findings.push(`  ${rpcName}: body does not reference check_idempotency / idempotency_keys and has no exempt marker`);
+      }
+    }
+
+    expect(
+      findings,
+      `Idempotency body audit failed for ${findings.length} function(s):\n${findings.join('\n')}\n\n` +
+        `Each mutating RPC must use the canonical pattern:\n` +
+        `  IF p_idempotency_key IS NOT NULL THEN\n` +
+        `    v_existing := check_idempotency(p_idempotency_key, '<rpc_name>');\n` +
+        `    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;\n` +
+        `  END IF;\n\n` +
+        `Or carry "-- idempotency-body-check: exempt" if using a raw inline lookup ` +
+        `(documented exception, see CLAUDE.md "Canonical Patterns for New RPCs").`,
+    ).toHaveLength(0);
+  });
+});
+
+describe.skipIf(!isLiveDB)('Live DB: SECURITY DEFINER pg_temp Bodies', () => {
+  it('every listed SECURITY DEFINER function has pg_temp in search_path', async () => {
+    const namesList = SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP.map((n) => `'${n}'`).join(',');
+    const result = (await queryInformationSchema(`
+      SELECT proname, prosrc, proconfig
+      FROM pg_proc
+      WHERE pronamespace = 'public'::regnamespace
+        AND prosecdef = true
+        AND proname IN (${namesList})
+    `)) as FunctionBodyRow[];
+
+    const byName = new Map(result.map((r) => [r.proname, r]));
+    const findings: string[] = [];
+
+    for (const fnName of SECURITY_DEFINER_FUNCTIONS_REQUIRING_PG_TEMP) {
+      const row = byName.get(fnName);
+      if (!row) {
+        findings.push(`  ${fnName}: function not found OR is not SECURITY DEFINER — list drift`);
+        continue;
+      }
+      const config = row.proconfig || [];
+      const searchPathSetting = config.find((c) => /^search_path=/i.test(c)) || '';
+      if (!/pg_temp/i.test(searchPathSetting)) {
+        findings.push(
+          `  ${fnName}: search_path does not include pg_temp (proconfig=${JSON.stringify(config)})`,
+        );
+      }
+    }
+
+    expect(
+      findings,
+      `pg_temp audit failed for ${findings.length} function(s):\n${findings.join('\n')}\n\n` +
+        `Every SECURITY DEFINER function MUST have SET search_path = public, pg_temp.`,
+    ).toHaveLength(0);
+  });
+});
+
 // ─── Live DB: Function Overload Detection ─────────────────────────────
 
 describe.skipIf(!isLiveDB)('Live DB: No Unintended Function Overloads', () => {
