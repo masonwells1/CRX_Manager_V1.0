@@ -402,7 +402,7 @@ Completed: 2026-05-10 01:25
 Elapsed: ~11 min
 Risk: Low
 Files changed: 4 (eslint.config.js, IntegrityReport.tsx, qa-testing.md, UI_PATTERNS.md)
-Commit: pending
+Commit: c09cca5
 Findings closed: P3 (lint config), P3 (IntegrityReport stale dep), P3 (doc count drift)
 Notes:
 - ESLint ignores: added `coverage`, `.claude/worktrees`, `.playwright-mcp`, `playwright-report`, `test-results` to the global ignores. This was producing noise warnings on auto-generated/non-source files.
