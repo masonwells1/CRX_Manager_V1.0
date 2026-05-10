@@ -47,8 +47,9 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const fetchProfiles = async () => {
+    // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
     const { data, error } = await supabase
-      .from('profiles')
+      .from('profile_public_view')
       .select('id, full_name')
       .eq('is_active', true);
     if (error) {
@@ -59,9 +60,10 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
   };
 
   const fetchComments = useCallback(async () => {
+    // PR-07 follow-up: dropped creator FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('team_note_comments')
-      .select('*, creator:profiles!team_note_comments_created_by_fkey(full_name)')
+      .select('*')
       .eq('note_id', noteId)
       .is('deleted_at', null)
       .order('created_at', { ascending: true });
@@ -71,7 +73,29 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
       setLoading(false);
       return;
     }
-    setComments((data || []) as Comment[]);
+
+    const creatorIds = [...new Set(
+      ((data || []) as Array<{ created_by?: string | null }>)
+        .map((c) => c.created_by)
+        .filter(Boolean) as string[]
+    )];
+    const creatorMap: Record<string, { full_name: string }> = {};
+    if (creatorIds.length > 0) {
+      const { data: creators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', creatorIds);
+      (creators || []).forEach((c: { id: string; full_name: string }) => {
+        creatorMap[c.id] = { full_name: c.full_name };
+      });
+    }
+
+    setComments(
+      ((data || []) as Comment[]).map((c) => ({
+        ...c,
+        creator: c.created_by ? creatorMap[c.created_by] : undefined,
+      })) as Comment[],
+    );
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noteId]);

@@ -16,6 +16,7 @@ function makeBuilder(resolveWith: () => { data: unknown[] | null; error: null })
   b.limit = vi.fn(() => b);
   b.eq = vi.fn(() => b);
   b.is = vi.fn(() => b);
+  b.in = vi.fn(() => b);
   b.insert = vi.fn().mockResolvedValue({ error: null });
   b.update = vi.fn(() => b);
   b.then = vi.fn((resolve: (v: unknown) => void) => {
@@ -27,7 +28,7 @@ function makeBuilder(resolveWith: () => { data: unknown[] | null; error: null })
 vi.mock('../../lib/db', () => ({
   supabase: {
     from: vi.fn((table: string) => {
-      if (table === 'profiles') {
+      if (table === 'profiles' || table === 'profile_public_view') {
         return makeBuilder(() => ({ data: profilesData, error: null }));
       }
       // team_note_comments
@@ -131,9 +132,10 @@ describe('CommentsSection', () => {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         deleted_at: null,
-        creator: { full_name: 'Jane Doe' },
       },
     ];
+    // PR-07 follow-up: creator names now resolved via profile_public_view post-fetch.
+    profilesData = [{ id: 'user-2', full_name: 'Jane Doe' }];
 
     render(<CommentsSection noteId="note-1" noteTitle="Test Note" />);
     await waitFor(() => {
@@ -154,9 +156,9 @@ describe('CommentsSection', () => {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         deleted_at: null,
-        creator: { full_name: 'Someone' },
       },
     ];
+    profilesData = [{ id: 'user-2', full_name: 'Someone' }];
 
     render(<CommentsSection noteId="note-1" noteTitle="Test Note" />);
     await waitFor(() => {
