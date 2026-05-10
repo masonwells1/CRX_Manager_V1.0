@@ -175,9 +175,11 @@ export default function Deliveries() {
   }, []);
 
   const fetchDeliveries = useCallback(async () => {
+    // PR-07 follow-up: dropped `driver:profiles!fk(full_name)` embed; driver
+    // names resolved via profile_public_view post-fetch (see below).
     let query = supabase
       .from('deliveries')
-      .select('*, customer:customers(farm_name, parent_customer_id), driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+      .select('*, customer:customers(farm_name, parent_customer_id)')
       .neq('status', 'cancelled')
       .order('scheduled_date', { ascending: false })
       .limit(500);
@@ -205,8 +207,17 @@ export default function Deliveries() {
         .filter(Boolean) as string[]
     )];
 
-    // Run both queries in parallel — they depend on delData but not on each other
-    const [itemCountsResult, parentsResult] = await Promise.all([
+    // PR-07 follow-up: resolve driver names via profile_public_view (safe
+    // columns only) so non-admin users still see driver names after
+    // profiles_select tightens to admin-or-self.
+    const driverIds = [...new Set(
+      (delData || [])
+        .map((d: Record<string, unknown>) => d.assigned_driver as string | null)
+        .filter(Boolean) as string[]
+    )];
+
+    // Run all post-fetch queries in parallel — they depend on delData but not each other
+    const [itemCountsResult, parentsResult, driversResult] = await Promise.all([
       deliveryIds.length > 0
         ? supabase
             .from('delivery_items')
@@ -218,6 +229,12 @@ export default function Deliveries() {
             .from('customers')
             .select('id, farm_name')
             .in('id', parentIds)
+        : Promise.resolve({ data: null, error: null }),
+      driverIds.length > 0
+        ? supabase
+            .from('profile_public_view')
+            .select('id, full_name')
+            .in('id', driverIds)
         : Promise.resolve({ data: null, error: null }),
     ]);
 
@@ -237,13 +254,16 @@ export default function Deliveries() {
     }
     (parents || []).forEach((p: { id: string; farm_name: string }) => { parentNameMap[p.id] = p.farm_name; });
 
+    const driverNameMap: Record<string, string> = {};
+    const { data: drivers } = driversResult;
+    (drivers || []).forEach((d: { id: string; full_name: string }) => { driverNameMap[d.id] = d.full_name; });
+
     const rows = ((delData || []) as Array<Delivery & {
       customer: { farm_name: string; parent_customer_id: string | null } | null;
-      driver: { full_name: string } | null;
     }>).map((d) => ({
       ...d,
       customer_name: d.customer?.farm_name || 'Unknown',
-      driver_name: d.driver?.full_name || 'Unassigned',
+      driver_name: d.assigned_driver ? (driverNameMap[d.assigned_driver] || 'Unknown driver') : 'Unassigned',
       item_count: countMap[d.id] || 0,
       farm_group_name: d.customer?.parent_customer_id ? parentNameMap[d.customer.parent_customer_id] || null : null,
     }));

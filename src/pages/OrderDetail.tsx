@@ -165,15 +165,29 @@ export default function OrderDetail() {
       setRelatedTickets(Array.from(uniqueTickets.values()));
 
       // Load linked deliveries
+      // PR-07 follow-up: dropped driver FK embed; resolve via profile_public_view.
       const { data: deliveryData } = await supabase
         .from('deliveries')
-        .select('*, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+        .select('*')
         .eq('order_id', id!)
         .order('scheduled_date');
+      const deliveryDriverIds = [...new Set(
+        (deliveryData || [])
+          .map((d: { assigned_driver?: string | null }) => d.assigned_driver)
+          .filter(Boolean) as string[]
+      )];
+      const deliveryDriverMap: Record<string, string> = {};
+      if (deliveryDriverIds.length > 0) {
+        const { data: driverData } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', deliveryDriverIds);
+        (driverData || []).forEach((p: { id: string; full_name: string }) => { deliveryDriverMap[p.id] = p.full_name; });
+      }
       setDeliveries(
-        (deliveryData || []).map((d: Delivery & { driver?: { full_name: string } | null }) => ({
+        (deliveryData || []).map((d: Delivery) => ({
           ...d,
-          driver_name: d.driver?.full_name || undefined,
+          driver_name: d.assigned_driver ? deliveryDriverMap[d.assigned_driver] || undefined : undefined,
         }))
       );
 

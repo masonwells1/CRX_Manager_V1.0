@@ -199,9 +199,10 @@ export default function InvoiceDetail() {
           .select('id, order_number, quote_id')
           .eq('id', data.order_id)
           .maybeSingle(),
+        // PR-07 follow-up: dropped driver FK embed; resolve via post-fetch below.
         supabase
           .from('deliveries')
-          .select('id, delivery_number, scheduled_date, status, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+          .select('id, delivery_number, scheduled_date, status, assigned_driver')
           .eq('order_id', data.order_id)
           .order('scheduled_date', { ascending: false }),
         supabase
@@ -212,13 +213,28 @@ export default function InvoiceDetail() {
           .order('invoice_number'),
       ]);
       setParentOrder(orderRes.data as { id: string; order_number: string } | null);
+
+      // PR-07 follow-up: resolve driver names via profile_public_view.
+      const delDriverIds = [...new Set(
+        ((delRes.data || []) as Array<{ assigned_driver?: string | null }>)
+          .map((d) => d.assigned_driver)
+          .filter(Boolean) as string[]
+      )];
+      const delDriverMap: Record<string, string> = {};
+      if (delDriverIds.length > 0) {
+        const { data: driverData } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', delDriverIds);
+        (driverData || []).forEach((p: { id: string; full_name: string }) => { delDriverMap[p.id] = p.full_name; });
+      }
       setRelatedDeliveries(
         (delRes.data || []).map((d: Record<string, unknown>) => ({
           id: d.id as string,
           delivery_number: d.delivery_number as string,
           scheduled_date: d.scheduled_date as string,
           status: d.status as string,
-          driver_name: (d.driver as { full_name: string } | null)?.full_name || null,
+          driver_name: d.assigned_driver ? delDriverMap[d.assigned_driver as string] || null : null,
         }))
       );
       setSiblingInvoices((invRes.data || []).map((i: Record<string, unknown>) => ({

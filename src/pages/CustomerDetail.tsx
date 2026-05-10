@@ -224,14 +224,28 @@ export default function CustomerDetail() {
         );
       }
     } else if (selectedTab === 'deliveries') {
+      // PR-07 follow-up: dropped driver FK embed; resolve via profile_public_view.
       const { data } = await supabase
         .from('deliveries')
-        .select('*, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+        .select('*')
         .eq('customer_id', id)
         .order('scheduled_date', { ascending: false });
-      const rows = ((data || []) as Array<Delivery & { driver: { full_name: string } | null }>).map((d) => ({
+      const driverIds = [...new Set(
+        ((data || []) as Delivery[])
+          .map((d) => d.assigned_driver)
+          .filter(Boolean) as string[]
+      )];
+      const driverMap: Record<string, string> = {};
+      if (driverIds.length > 0) {
+        const { data: driverData } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', driverIds);
+        (driverData || []).forEach((p: { id: string; full_name: string }) => { driverMap[p.id] = p.full_name; });
+      }
+      const rows = ((data || []) as Delivery[]).map((d) => ({
         ...d,
-        driver_name: d.driver?.full_name || 'Unassigned',
+        driver_name: d.assigned_driver ? driverMap[d.assigned_driver] || 'Unassigned' : 'Unassigned',
       }));
       setDeliveries(rows);
 
