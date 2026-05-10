@@ -467,7 +467,7 @@ Completed: 2026-05-10 07:08
 Elapsed: ~10 min
 Risk: Medium
 Files changed: 2 (1 new migration, 1 type addition)
-Commit: pending
+Commit: e5536c0
 Findings closed: P1 #7 (customers RLS — applicator gap + driver time window), P1 (profiles RLS — USING true)
 
 ⚠️ NOT APPLIED TO LIVE SUPABASE. Migration is generated and committed; Mason must review and apply via Supabase MCP `apply_migration`. See migration header for the staged deployment order (view first, frontend dropdown migration, then policy tightening).
@@ -502,7 +502,7 @@ Completed: 2026-05-10 07:21
 Elapsed: ~11 min
 Risk: Low
 Files changed: 2 (assertRpcCoverage.test.ts rewritten, schemaIntegrityLive.test.ts extended)
-Commit: pending
+Commit: 180a013
 Findings closed: P3 (assertRpcCoverage performative — file-level boolean check), P3 (schemaIntegrity list-only validation, no live-DB body checks)
 
 Notes:
@@ -537,7 +537,7 @@ Completed: 2026-05-10 07:30
 Elapsed: ~7 min
 Risk: Medium
 Files changed: 1 (src/pages/InvoiceDetail.tsx)
-Commit: pending
+Commit: 1c4aebe
 Findings closed: P2 #9 (Invoice Detail bypass — two parallel payment ledgers)
 
 Notes:
@@ -572,7 +572,7 @@ Completed: 2026-05-10 07:55
 Elapsed: ~25 min
 Risk: Medium
 Files changed: 1 (1 new migration)
-Commit: pending
+Commit: a3a58dc
 Findings closed: P2 #12 — 12 mutating RPCs declared `p_idempotency_key` but bodies never used it (silent re-execution on retry).
 
 ⚠️ NOT APPLIED TO LIVE SUPABASE. Migration is committed; Mason must review and apply via Supabase MCP `apply_migration`.
@@ -619,7 +619,7 @@ Completed: 2026-05-10 08:08
 Elapsed: ~13 min
 Risk: Medium
 Files changed: 2 (1 new migration, 1 frontend component update)
-Commit: pending
+Commit: 7d1fd1d
 Findings closed: P1 (no void_vendor_payment), P1 (vendor_payments soft-delete columns — closed by PR-04 which added them; PR-13 uses them). The paid-bill guard portion (P1 (void_vendor_bill allows paid bills)) was already completed in PR-04 — verified the migration's body has the BILL_HAS_ACTIVE_PAYMENTS guard. No additional SQL needed.
 
 ⚠️ DEPENDS ON PR-04 (20260510030000_ap_structural_fixes.sql) being applied first. PR-04 adds vendor_payments.voided_at/voided_by/void_reason columns + the GENERATED balance_cents on vendor_bills + the void_vendor_bill paid-bill guard.
@@ -659,7 +659,7 @@ Completed: 2026-05-10 08:18
 Elapsed: ~10 min
 Risk: Low
 Files changed: 2 (1 new migration, 1 frontend component update)
-Commit: pending
+Commit: 4ace0f7
 Findings closed: P2 (vendor bill not editable post-creation; typos required void+recreate)
 
 ⚠️ DEPENDS ON PR-04 (20260510030000_ap_structural_fixes.sql) being applied first — same prerequisites as PR-13 (balance_cents GENERATED, vendor_bill_updated allowed in audit log CHECK, vendor_payments.voided_at column).
@@ -697,7 +697,7 @@ Completed: 2026-05-10 08:30
 Elapsed: ~12 min
 Risk: Low
 Files changed: 1 (1 new migration)
-Commit: pending
+Commit: be551f9
 Findings closed: 3 of 6 P3 items in the AP-polish set; 3 deferred (see Notes).
 
 ⚠️ NOT YET APPLIED to live Supabase. Depends on PR-04 (UNIQUE references vendor_payments.voided_at + vendor_bills.deleted_at).
@@ -736,7 +736,7 @@ Completed: 2026-05-10 08:50
 Elapsed: ~20 min
 Risk: Medium
 Files changed: 5 (1 new migration, 1 new page, App.tsx, pagePermissions.ts, CLAUDE.md/AGENTS.md/migration-history.md regenerations)
-Commit: pending
+Commit: 38d8a04
 Findings closed: out-of-scope from audit but discovered during it — no UI to add/edit vendors. Now there is one.
 
 ⚠️ NOT YET APPLIED to live Supabase. The frontend works against the existing schema (vendors table is unchanged) but the new RPCs (save_vendor, delete_vendor) need the migration applied.
