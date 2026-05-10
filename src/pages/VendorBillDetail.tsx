@@ -21,7 +21,7 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
@@ -43,6 +43,7 @@ export default function VendorBillDetail() {
   const { profile } = useAuth();
   const paymentIdem = useIdempotencyKey('record_vendor_payment', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_vendor_bill', profile?.id || '');
+  const voidPaymentIdem = useIdempotencyKey('void_vendor_payment', profile?.id || '');
 
   const [bill, setBill] = useState<(VendorBill & { vendor_name: string; po_number: string | null }) | null>(null);
   const [payments, setPayments] = useState<(VendorPayment & { creator_name: string })[]>([]);
@@ -57,10 +58,16 @@ export default function VendorBillDetail() {
   const [payNotes, setPayNotes] = useState('');
   const [paying, setPaying] = useState(false);
 
-  // Void
+  // Void bill
   const [voidModalOpen, setVoidModalOpen] = useState(false);
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
+
+  // Void payment (PR-13, 2026-05-10) — per-row in the payments table.
+  // Allows reversing a wrong vendor payment without voiding the whole bill.
+  const [voidPaymentTarget, setVoidPaymentTarget] = useState<(VendorPayment & { creator_name: string }) | null>(null);
+  const [voidPaymentReason, setVoidPaymentReason] = useState('');
+  const [voidingPayment, setVoidingPayment] = useState(false);
 
   const today = localToday();
 
@@ -142,6 +149,40 @@ export default function VendorBillDetail() {
     setPaying(false);
   };
 
+  const handleVoidPayment = async () => {
+    if (!voidPaymentTarget) return;
+    if (!voidPaymentReason.trim()) {
+      toast('error', 'Please provide a reason for voiding this payment');
+      return;
+    }
+    setVoidingPayment(true);
+    try {
+      const key = voidPaymentIdem.getKey();
+      const { data, error } = await supabase.rpc('void_vendor_payment', {
+        p_payment_id: voidPaymentTarget.id,
+        p_reason: voidPaymentReason.trim(),
+        p_idempotency_key: key,
+      });
+      if (error) throw error;
+      assertRpcResult<{
+        success: boolean;
+        payment_id: string;
+        bill_id: string;
+        voided_amount_cents: number;
+        new_paid_cents: number;
+        new_bill_status: string;
+      }>(data, 'void_vendor_payment');
+      voidPaymentIdem.resetKey();
+      toast('success', 'Payment voided');
+      setVoidPaymentTarget(null);
+      setVoidPaymentReason('');
+      fetchBill();
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setVoidingPayment(false);
+  };
+
   const handleVoid = async () => {
     if (!id) return;
     setVoiding(true);
@@ -198,6 +239,35 @@ export default function VendorBillDetail() {
       key: 'notes',
       header: 'Notes',
       render: (r) => <span className="text-secondary text-xs">{r.notes || '-'}</span>,
+    },
+    {
+      // PR-13: per-payment void action (admin only).
+      key: 'voided_at' as keyof PaymentRow,
+      header: 'Status',
+      render: (r) => {
+        if (r.voided_at) {
+          return (
+            <span className="text-xs text-secondary italic">
+              Voided {new Date(r.voided_at).toLocaleDateString()}
+              {r.void_reason ? ` — ${r.void_reason}` : ''}
+            </span>
+          );
+        }
+        if (profile?.role !== 'admin') {
+          return <span className="text-xs text-secondary">—</span>;
+        }
+        return (
+          <button
+            onClick={() => {
+              setVoidPaymentTarget(r);
+              setVoidPaymentReason('');
+            }}
+            className="text-xs text-red-600 hover:text-red-700 underline"
+          >
+            Void
+          </button>
+        );
+      },
     },
   ];
 
@@ -414,7 +484,48 @@ export default function VendorBillDetail() {
         </div>
       </Modal>
 
-      {/* Void Modal */}
+      {/* Void Payment Modal (PR-13, 2026-05-10) */}
+      <Modal
+        open={voidPaymentTarget !== null}
+        onClose={() => { setVoidPaymentTarget(null); setVoidPaymentReason(''); }}
+        title="Void Vendor Payment"
+      >
+        <div className="space-y-4">
+          {voidPaymentTarget && (
+            <div className="text-sm space-y-1">
+              <p>
+                Voiding <strong>{fmt(voidPaymentTarget.amount_cents)}</strong>{' '}
+                {voidPaymentTarget.payment_method ? `(${voidPaymentTarget.payment_method})` : ''}{' '}
+                paid {new Date(voidPaymentTarget.payment_date + 'T00:00:00').toLocaleDateString()}.
+              </p>
+              <p className="text-secondary text-xs">
+                The bill's paid total will be reduced by this amount and its status will be
+                recalculated. The audit log will record this void.
+              </p>
+            </div>
+          )}
+          <Input
+            label="Reason (required)"
+            value={voidPaymentReason}
+            onChange={(e) => setVoidPaymentReason(e.target.value)}
+            placeholder="Why is this payment being voided?"
+          />
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => { setVoidPaymentTarget(null); setVoidPaymentReason(''); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleVoidPayment}
+              loading={voidingPayment}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              Void Payment
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Void Bill Modal */}
       <Modal open={voidModalOpen} onClose={() => setVoidModalOpen(false)} title="Void Bill">
         <div className="space-y-4">
           <p className="text-sm text-secondary">

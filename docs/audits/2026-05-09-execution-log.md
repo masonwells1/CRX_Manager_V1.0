@@ -609,3 +609,43 @@ Test outcomes:
 - npm run test: deferred to pre-commit hook
 - validate-sql-migrations: deferred to pre-commit hook
 - Live application: NOT EXECUTED. Mason must apply manually + run regenerate-schema-registry.mjs.
+
+---
+
+## PR-13 — void_vendor_payment + paid-bill guard
+Status: completed-pending-live-application
+Started: 2026-05-10 07:55
+Completed: 2026-05-10 08:08
+Elapsed: ~13 min
+Risk: Medium
+Files changed: 2 (1 new migration, 1 frontend component update)
+Commit: pending
+Findings closed: P1 (no void_vendor_payment), P1 (vendor_payments soft-delete columns — closed by PR-04 which added them; PR-13 uses them). The paid-bill guard portion (P1 (void_vendor_bill allows paid bills)) was already completed in PR-04 — verified the migration's body has the BILL_HAS_ACTIVE_PAYMENTS guard. No additional SQL needed.
+
+⚠️ DEPENDS ON PR-04 (20260510030000_ap_structural_fixes.sql) being applied first. PR-04 adds vendor_payments.voided_at/voided_by/void_reason columns + the GENERATED balance_cents on vendor_bills + the void_vendor_bill paid-bill guard.
+
+Notes:
+- New RPC `void_vendor_payment(p_payment_id uuid, p_reason text, p_idempotency_key text)`. Returns jsonb with success/payment_id/bill_id/voided_amount_cents/new_paid_cents/new_bill_status. Admin-only with role check at top. Canonical idempotency wrapper. Strict actor pattern via auth.uid(). REASON_REQUIRED token raised on blank reason.
+- Locks payment row first, then bill row (FOR UPDATE). The order is documented in the body comment: matches the order used elsewhere in this PR's edit, but differs from record_vendor_payment / void_vendor_bill which lock bill first. As long as the order is consistent within the tree of RPCs that touch a bill, deadlocks are avoided. Worth a closer look in a future audit.
+- Status recalculation: `paid_cents = 0` → 'unpaid'; `0 < paid_cents < total_cents` → 'partially_paid'; `paid_cents >= total_cents` → 'paid' (kept as a safety branch — shouldn't fire when voiding a real payment).
+- balance_cents NOT touched directly — it's GENERATED ALWAYS in PR-04. Updating only paid_cents lets the generation recompute the balance.
+- Audit log entry uses operation_type='vendor_payment_voided' and entity_type='vendor_payment' — both newly allowed by PR-04's CHECK constraint expansion.
+- Frontend changes in VendorBillDetail.tsx:
+  - Added `voidPaymentIdem` (idempotency hook keyed to 'void_vendor_payment').
+  - Added state for the per-payment void modal: voidPaymentTarget / voidPaymentReason / voidingPayment.
+  - Added `handleVoidPayment` handler that calls the new RPC, asserts the result via assertRpcResult<...>, refreshes the bill on success.
+  - Imported `assertRpcResult` from lib/db (was missing — only `supabase` was imported).
+  - Added a "Status" column to the payments DataTable. For voided rows it renders "Voided <date> — <reason>"; for active rows admin sees a "Void" link button that opens the modal; non-admins see —.
+  - Added the void-payment Modal (separate from the void-bill modal) with required-reason input and a red Void Payment button.
+- The PR-04 paid-bill guard (`BILL_HAS_ACTIVE_PAYMENTS`) means void_vendor_bill won't void a paid bill that still has active payments — Mason must void each payment via this new RPC first, then void the bill. Plan suggests adding a UI prompt to the bill-level Void button telling the admin to void payments first; deferred as polish (the SQL error already surfaces via the toast).
+
+Decisions made autonomously (not in original plan):
+- Plan suggested a separate component file `src/components/vendor/VoidPaymentModal.tsx`. Inlined the modal in VendorBillDetail.tsx instead — the modal is small (~30 lines), only used here, and matches the pattern of the existing in-file void-bill modal. If the modal grows or is reused elsewhere, extraction is trivial.
+- Plan said "if bill has active payments, show toast 'Void each payment first' with focus to the payment list" on the bill-level Void button. Deferred. The SQL error from `BILL_HAS_ACTIVE_PAYMENTS` will surface via sanitizeError — UX polish can improve later.
+
+Test outcomes:
+- npm run lint: pass (0 errors)
+- npm run typecheck: pass
+- npm run build: deferred to pre-commit hook
+- npm run test: deferred to pre-commit hook
+- Live application: NOT EXECUTED. Apply PR-04 first, then PR-13.
