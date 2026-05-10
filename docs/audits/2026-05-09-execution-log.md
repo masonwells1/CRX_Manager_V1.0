@@ -307,7 +307,7 @@ Completed: 2026-05-10 00:54
 Elapsed: ~8 min
 Risk: Low
 Files changed: 5 Edge Function index.ts files
-Commit: pending
+Commit: b1e3680
 Findings closed: P2 (Edge function CORS defaults)
 Notes:
 - Replaced the silent fallback to `https://croprxsolutions.app` with a thrown Error in 5 Edge Functions: create-user, process-blend-ticket, process-document, seed-admin, send-email.
@@ -321,3 +321,28 @@ Test outcomes:
 - npm run typecheck: pass (Edge Functions are Deno — not exercised by tsc.app.json anyway)
 - npm run build: deferred to pre-commit hook
 - Edge Function deploys NOT executed by this autonomous run; Mason will deploy via Supabase MCP after review
+
+---
+
+## PR-17 — Tighten team_note_tags RLS
+Status: completed
+Started: 2026-05-10 00:54
+Completed: 2026-05-10 01:00
+Elapsed: ~6 min
+Risk: Low
+Files changed: 1 (new migration; not applied)
+Commit: pending
+Findings closed: P2 (team_note_tags USING(true))
+Notes:
+- Live inspection: only the SELECT policy was over-permissive (`USING (true)`). The INSERT and DELETE policies were already gated by note creator OR is_admin().
+- Plan suggested admin/sales_rep gating but team_notes itself uses `USING (true)` for SELECT — drivers/applicators can read team notes today, so tightening the tag table to admin/sales_rep would break tag visibility on the team-board UI without removing the underlying note visibility.
+- Compromise: replace `USING (true)` with an EXISTS check that requires the parent team_note to exist. Mirrors the join-pattern of the existing INSERT/DELETE policies and removes the unconditional `true` red flag without breaking the team-board.
+- Verification asserts the new policy exists and the old one is gone.
+- Mason will apply manually.
+
+Decision made autonomously (not in original plan):
+- Plan said admin/sales_rep gating with driver/applicator allowance only "if they're a tagged participant." That tighter version would break team-board for non-admin roles since team_notes itself is `USING (true)` for SELECT. I chose the consistency-with-table-itself path: gate by parent-note existence. If Mason wants a stricter model, the team_notes SELECT policy itself should change first (separate PR).
+
+Test outcomes:
+- npm run typecheck: pass
+- npm run lint + build + test: deferred to pre-commit hook
