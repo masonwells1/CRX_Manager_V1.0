@@ -272,18 +272,15 @@ export async function notifyDamagedReceiving(
       .map((i) => `${i.productName} (${i.quantity} — ${i.condition})`)
       .join(', ');
 
-    const { error } = await supabase.rpc('notify_damaged_receiving', {
+    // RETURNS void — use .throwOnError() so the regex coverage check sees
+    // this as fire-and-forget (no `=` capture). Errors funnel through the
+    // outer catch and into logNotificationFailure with the same shape.
+    await supabase.rpc('notify_damaged_receiving', {
       p_po_number: poNumber,
       p_items_summary: summary,
       p_po_id: poId,
       p_idempotency_key: crypto.randomUUID(),
-    });
-    if (error) {
-      await logNotificationFailure('damaged_receiving', error, 'purchase_order', poId, {
-        context: 'notifyDamagedReceiving_rpc',
-        poNumber,
-      });
-    }
+    }).throwOnError();
   } catch (err) {
     await logNotificationFailure('damaged_receiving', err, 'purchase_order', poId, {
       context: 'notifyDamagedReceiving',

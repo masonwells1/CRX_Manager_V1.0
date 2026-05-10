@@ -345,8 +345,9 @@ export default function Dashboard() {
     runPeriodicNotificationChecks();
 
     try {
-      const { error: reminderErr } = await supabase.rpc('check_remainder_reminders');
+      const { data: reminderData, error: reminderErr } = await supabase.rpc('check_remainder_reminders');
       if (reminderErr) throw reminderErr;
+      assertRpcResult(reminderData, 'check_remainder_reminders');
     } catch (err) {
       Sentry.captureException(err, { tags: { source: 'mutation', action: 'check_remainder_reminders' } });
       supabase.rpc('log_failed_notification', {
@@ -356,8 +357,9 @@ export default function Dashboard() {
     }
 
     try {
-      const { error: holdsErr } = await supabase.rpc('release_expired_quote_holds');
+      const { data: holdsData, error: holdsErr } = await supabase.rpc('release_expired_quote_holds');
       if (holdsErr) throw holdsErr;
+      assertRpcResult(holdsData, 'release_expired_quote_holds');
     } catch (err) {
       Sentry.captureException(err, { tags: { source: 'mutation', action: 'release_expired_quote_holds' } });
       supabase.rpc('log_failed_notification', {

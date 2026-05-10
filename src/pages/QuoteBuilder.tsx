@@ -905,13 +905,17 @@ export default function QuoteBuilder() {
       // Planned program hold management
       if (isPlanned && profile) {
         const holdIdemKey = plannedHoldsIdem.getKey();
-        const { error: holdError } = await supabase.rpc('create_planned_holds', {
+        const { data: holdData, error: holdError } = await supabase.rpc('create_planned_holds', {
           p_quote_id: result,
           p_performed_by: profile.id,
           p_idempotency_key: holdIdemKey,
         });
         if (holdError) toast('error', 'Failed to create inventory holds');
-        else { plannedHoldsIdem.resetKey(); toast('success', 'Inventory holds created for planned program'); }
+        else {
+          assertRpcResult(holdData, 'create_planned_holds');
+          plannedHoldsIdem.resetKey();
+          toast('success', 'Inventory holds created for planned program');
+        }
       } else if (!isPlanned && wasPlanned) {
         // Release holds when toggled off — zero rows is valid (no holds may exist)
         const releaseResult = await supabase.from('inventory_holds')
@@ -934,7 +938,7 @@ export default function QuoteBuilder() {
   const handleSaveTemplate = async () => {
     if (!quoteId || !profile) return;
     const tmplIdemKey = saveTemplateIdem.getKey();
-    const { error } = await supabase.rpc('save_quote_template', {
+    const { data, error } = await supabase.rpc('save_quote_template', {
       p_quote_id: quoteId,
       p_template_name: templateName.trim(),
       p_description: templateDescription.trim() || null,
@@ -942,6 +946,7 @@ export default function QuoteBuilder() {
       p_idempotency_key: tmplIdemKey,
     });
     if (error) { toast('error', 'Failed to save template'); return; }
+    assertRpcResult(data, 'save_quote_template');
     saveTemplateIdem.resetKey();
     toast('success', `Template "${templateName}" saved`);
     setShowSaveTemplateModal(false);
@@ -1159,13 +1164,14 @@ export default function QuoteBuilder() {
   const handleRestoreVersion = async (versionId: string) => {
     if (!quoteId || !profile) return;
     const restoreIdemKey = restoreVersionIdem.getKey();
-    const { error } = await supabase.rpc('restore_quote_version', {
+    const { data, error } = await supabase.rpc('restore_quote_version', {
       p_quote_id: quoteId,
       p_version_id: versionId,
       p_performed_by: profile.id,
       p_idempotency_key: restoreIdemKey,
     });
     if (error) { toast('error', 'Failed to restore version'); return; }
+    assertRpcResult(data, 'restore_quote_version');
     restoreVersionIdem.resetKey();
     toast('success', `Restored from V${selectedVersion?.version_number || '?'}`);
     setConfirmRestore(null);

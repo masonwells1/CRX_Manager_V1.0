@@ -373,13 +373,14 @@ export default function PurchaseOrderDetail() {
     setReversing(true);
     try {
       const reverseKey = reverseIdem.getKey();
-      const { error } = await supabase.rpc('reverse_receiving_record', {
+      const { data, error } = await supabase.rpc('reverse_receiving_record', {
         p_record_id: reverseRecord.id,
         p_reason: reverseReason.trim(),
         p_performed_by: profile.id,
         p_idempotency_key: reverseKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'reverse_receiving_record');
       reverseIdem.resetKey();
       await logActivity({ event: 'receiving_reversed', description: `Receiving record reversed for PO ${po?.po_number}: ${reverseReason.trim()}`, performedBy: profile.id, entityType: 'purchase_order', entityId: po?.id });
       toast('success', 'Receiving record reversed and inventory adjusted');
@@ -449,7 +450,7 @@ export default function PurchaseOrderDetail() {
       }));
 
       const savePOKey = savePOIdem.getKey();
-      const { error } = await supabase.rpc('save_purchase_order', {
+      const { data, error } = await supabase.rpc('save_purchase_order', {
         p_po_id: id,
         p_po_payload: {
           vendor: editForm.vendor,
@@ -464,6 +465,7 @@ export default function PurchaseOrderDetail() {
       });
 
       if (error) throw error;
+      assertRpcResult(data, 'save_purchase_order');
       savePOIdem.resetKey();
 
       toast('success', 'Purchase order updated');
@@ -504,7 +506,7 @@ export default function PurchaseOrderDetail() {
 
     try {
       const cancelKey = cancelPOIdem.getKey();
-      const { error } = await supabase.rpc('cancel_purchase_order', {
+      const { data, error } = await supabase.rpc('cancel_purchase_order', {
         p_po_id: id,
         p_reason: cancelReason || 'Cancelled',
         p_performed_by: profile.id,
@@ -512,6 +514,7 @@ export default function PurchaseOrderDetail() {
       });
 
       if (error) throw error;
+      assertRpcResult(data, 'cancel_purchase_order');
       cancelPOIdem.resetKey();
 
       toast('success', 'Purchase order cancelled');

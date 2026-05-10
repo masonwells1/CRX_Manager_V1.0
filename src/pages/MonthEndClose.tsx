@@ -169,12 +169,13 @@ export default function MonthEndClose() {
     setClosing(true);
     try {
       const closeKey = closePeriodIdem.getKey();
-      const { error } = await supabase.rpc('close_accounting_period', {
+      const { data, error } = await supabase.rpc('close_accounting_period', {
         p_period_end: current.end,
         p_performed_by: profile.id,
         p_idempotency_key: closeKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'close_accounting_period');
       closePeriodIdem.resetKey();
       logActivity({ event: 'close_accounting_period', description: `Closed accounting period: ${current.label}`, performedBy: profile.id });
       toast('success', `Period closed: ${current.label}`);
@@ -195,13 +196,14 @@ export default function MonthEndClose() {
     setReopening(true);
     try {
       const key = reopenPeriodIdem.getKey();
-      const { error } = await supabase.rpc('reopen_accounting_period', {
+      const { data, error } = await supabase.rpc('reopen_accounting_period', {
         p_period_id: reopenTarget.id,
         p_reason: reopenReason,
         p_performed_by: profile.id,
         p_idempotency_key: key,
       });
       if (error) throw error;
+      assertRpcResult(data, 'reopen_accounting_period');
       reopenPeriodIdem.resetKey();
       logActivity({ event: 'reopen_accounting_period', description: `Reopened accounting period: ${reopenTarget.id}. Reason: ${reopenReason}`, performedBy: profile.id });
       toast('success', 'Accounting period reopened');

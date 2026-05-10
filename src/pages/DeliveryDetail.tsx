@@ -502,7 +502,7 @@ export default function DeliveryDetail() {
       : null;
 
     const idemKey = editIdem.getKey();
-    const { error } = await supabase.rpc('edit_delivery', {
+    const { data, error } = await supabase.rpc('edit_delivery', {
       p_delivery_id: id!,
       p_assigned_driver: editDriver || null,
       p_scheduled_date: editDate,
@@ -520,6 +520,7 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
+      assertRpcResult(data, 'edit_delivery');
       editIdem.resetKey();
       toast('success', isScheduled ? 'Delivery and items updated' : 'Delivery updated');
       setEditing(false);
@@ -597,7 +598,7 @@ export default function DeliveryDetail() {
     setReassignConfirmOpen(false);
     try {
       const idemKey = reassignIdem.getKey();
-      const { error } = await supabase.rpc('reassign_delivery', {
+      const { data, error } = await supabase.rpc('reassign_delivery', {
         p_delivery_id: id!,
         p_new_driver: profile.id,
         p_performed_by: profile.id,
@@ -607,6 +608,7 @@ export default function DeliveryDetail() {
       if (error) {
         toast('error', sanitizeError(error));
       } else {
+        assertRpcResult(data, 'reassign_delivery');
         reassignIdem.resetKey();
         toast('success', 'Delivery assigned to you');
         fetchDelivery();
@@ -709,11 +711,12 @@ export default function DeliveryDetail() {
     setConfirming(true);
     try {
       const idemKey = confirmIdem.getKey();
-      const { error } = await supabase.rpc('confirm_delivery', {
+      const { data, error } = await supabase.rpc('confirm_delivery', {
         p_delivery_id: id!,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'confirm_delivery');
       confirmIdem.resetKey();
       toast('success', `Delivery ${delivery.delivery_number} started`);
       setStartModalOpen(false);

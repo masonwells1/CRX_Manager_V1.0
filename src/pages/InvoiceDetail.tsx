@@ -471,15 +471,16 @@ export default function InvoiceDetail() {
       // through post_invoice_group so all siblings post atomically. Posting just
       // one member of a group would leave the group in a half-posted state.
       if (invoice.invoice_group_id) {
-        const { error } = await supabase.rpc('post_invoice_group', {
+        const { data, error } = await supabase.rpc('post_invoice_group', {
           p_invoice_group_id: invoice.invoice_group_id,
           p_performed_by: profile?.id ?? null,
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'post_invoice_group');
       } else {
-        const { error } = await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey });
-        if (error) throw error;
+        // post_invoice RETURNS void — use .throwOnError() (no `=` capture).
+        await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey }).throwOnError();
       }
       postIdem.resetKey();
       toast('success', invoice.invoice_group_id ? 'Invoice group posted' : 'Invoice posted');
@@ -498,12 +499,12 @@ export default function InvoiceDetail() {
     setVoiding(true);
     try {
       const idemKey = voidIdem.getKey();
-      const { error } = await supabase.rpc('void_invoice', {
+      // void_invoice RETURNS void — use .throwOnError() (no `=` capture).
+      await supabase.rpc('void_invoice', {
         p_invoice_id: id,
         p_void_reason: voidReason || 'Voided by admin',
         p_idempotency_key: idemKey,
-      });
-      if (error) throw error;
+      }).throwOnError();
       voidIdem.resetKey();
       toast('success', 'Invoice voided');
       setShowVoidModal(false);
@@ -581,13 +582,14 @@ export default function InvoiceDetail() {
     setReversingWo(true);
     try {
       const key = reverseWoIdem.getKey();
-      const { error } = await supabase.rpc('reverse_write_off', {
+      const { data, error } = await supabase.rpc('reverse_write_off', {
         p_write_off_id: reverseWoTarget.id,
         p_reason: reverseWoReason,
         p_performed_by: profile.id,
         p_idempotency_key: key,
       });
       if (error) throw error;
+      assertRpcResult(data, 'reverse_write_off');
       reverseWoIdem.resetKey();
       await logActivity({ event: 'write_off_reversed', description: `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, performedBy: profile.id, entityType: 'invoice', entityId: id });
       toast('success', 'Write-off reversed and balance restored');

@@ -341,17 +341,18 @@ export default function FieldSetup() {
             sort_order: i,
           }));
           const geoIdemKey = saveFieldGeoIdem.getKey();
-          const { error: geoError } = await supabase.rpc('save_field_polygons', {
-            p_field_id: savedFieldId,
-            p_polygons: polygonPayload,
-            p_performed_by: profile!.id,
-            p_idempotency_key: geoIdemKey,
-          });
-          if (geoError) {
+          // save_field_polygons RETURNS void — use .throwOnError() and catch.
+          try {
+            await supabase.rpc('save_field_polygons', {
+              p_field_id: savedFieldId,
+              p_polygons: polygonPayload,
+              p_performed_by: profile!.id,
+              p_idempotency_key: geoIdemKey,
+            }).throwOnError();
+            saveFieldGeoIdem.resetKey();
+          } catch (geoError) {
             Sentry.captureException(geoError, { tags: { source: 'critical_action', action: 'save_field_polygons' } });
             toast('error', 'Field saved but polygons could not be saved.');
-          } else {
-            saveFieldGeoIdem.resetKey();
           }
         } else if (boundaryGeoJSON && savedFieldId) {
           // Legacy single-polygon fallback
@@ -360,17 +361,18 @@ export default function FieldSetup() {
           const boundaryGeoJSONStr = JSON.stringify(boundaryGeoJSON.geometry);
 
           const geoIdemKey = saveFieldGeoIdem.getKey();
-          const { error: geoError } = await supabase.rpc('save_field_geometry', {
-            p_field_id: savedFieldId,
-            p_centroid_geojson: centroidGeoJSON,
-            p_boundary_geojson: boundaryGeoJSONStr,
-            p_idempotency_key: geoIdemKey,
-          });
-          if (geoError) {
+          // save_field_geometry RETURNS void — use .throwOnError() and catch.
+          try {
+            await supabase.rpc('save_field_geometry', {
+              p_field_id: savedFieldId,
+              p_centroid_geojson: centroidGeoJSON,
+              p_boundary_geojson: boundaryGeoJSONStr,
+              p_idempotency_key: geoIdemKey,
+            }).throwOnError();
+            saveFieldGeoIdem.resetKey();
+          } catch (geoError) {
             Sentry.captureException(geoError, { tags: { source: 'critical_action', action: 'save_field_geometry' } });
             toast('error', 'Field saved but boundary could not be saved. Please try re-drawing.');
-          } else {
-            saveFieldGeoIdem.resetKey();
           }
         }
 

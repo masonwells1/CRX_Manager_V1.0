@@ -293,12 +293,13 @@ export default function Returns() {
     await runCriticalAction({
       action: async () => {
         const approveKey = approveIdem.getKey();
-        const { error } = await supabase.rpc('approve_return', {
+        const { data, error } = await supabase.rpc('approve_return', {
           p_return_id: activeReturn.id,
           p_approved_by: profile.id,
           p_idempotency_key: approveKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'approve_return');
 
         approveIdem.resetKey();
         await logActivity({ event: 'return_approved', description: `Return ${activeReturn.return_number} approved`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
@@ -387,12 +388,13 @@ export default function Returns() {
     await runCriticalAction({
       action: async () => {
         const receiveKey = receiveIdem.getKey();
-        const { error } = await supabase.rpc('receive_return', {
+        const { data, error } = await supabase.rpc('receive_return', {
           p_return_id: activeReturn.id,
           p_received_by: profile.id,
           p_idempotency_key: receiveKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'receive_return');
 
         receiveIdem.resetKey();
         await logActivity({ event: 'return_received', description: `Return ${activeReturn.return_number} received, inventory restocked`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
@@ -412,12 +414,13 @@ export default function Returns() {
     await runCriticalAction({
       action: async () => {
         const creditKey = creditIdem.getKey();
-        const { error } = await supabase.rpc('issue_return_credit', {
+        const { data, error } = await supabase.rpc('issue_return_credit', {
           p_return_id: activeReturn.id,
           p_actor_id: profile.id,
           p_idempotency_key: creditKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'issue_return_credit');
 
         creditIdem.resetKey();
         await logActivity({ event: 'return_credited', description: `Credit issued for return ${activeReturn.return_number}`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });

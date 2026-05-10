@@ -264,12 +264,12 @@ export default function VendorBillDetail() {
     setVoiding(true);
     try {
       const voidKey = voidIdem.getKey();
-      const { error } = await supabase.rpc('void_vendor_bill', {
+      // RETURNS void — use .throwOnError() (regex coverage skips fire-and-forget).
+      await supabase.rpc('void_vendor_bill', {
         p_vendor_bill_id: id,
         p_reason: voidReason || null,
         p_idempotency_key: voidKey,
-      });
-      if (error) throw error;
+      }).throwOnError();
       voidIdem.resetKey();
 
       toast('success', 'Bill voided');

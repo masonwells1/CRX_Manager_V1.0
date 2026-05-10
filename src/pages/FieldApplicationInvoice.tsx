@@ -477,18 +477,19 @@ export default function FieldApplicationInvoice() {
       const key = postIdem.getKey();
       // Group-aware: route through post_invoice_group when a group exists, otherwise post_invoice.
       if (invoiceGroupId) {
-        const { error } = await supabase.rpc('post_invoice_group', {
+        const { data, error } = await supabase.rpc('post_invoice_group', {
           p_invoice_group_id: invoiceGroupId,
           p_performed_by: profile.id,
           p_idempotency_key: key,
         });
         if (error) throw error;
+        assertRpcResult(data, 'post_invoice_group');
       } else {
-        const { error } = await supabase.rpc('post_invoice', {
+        // post_invoice RETURNS void — use .throwOnError() (no `=` capture).
+        await supabase.rpc('post_invoice', {
           p_invoice_id: id,
           p_idempotency_key: key,
-        });
-        if (error) throw error;
+        }).throwOnError();
       }
       postIdem.resetKey();
       toast('success', invoiceGroupId ? 'Invoice group posted' : 'Invoice posted');

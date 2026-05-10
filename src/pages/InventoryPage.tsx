@@ -337,7 +337,7 @@ export default function InventoryPage() {
     if (!profile) return;
     const qty = parseFloat(holdQty);
     const idemKey = createHoldIdem.getKey();
-    const { error } = await supabase.rpc('create_inventory_hold', {
+    const { data, error } = await supabase.rpc('create_inventory_hold', {
       p_product_id: holdProductId,
       p_customer_id: holdCustomerId || null,
       p_quantity: qty,
@@ -350,6 +350,7 @@ export default function InventoryPage() {
       p_idempotency_key: idemKey,
     });
     if (error) throw error;
+    assertRpcResult(data, 'create_inventory_hold');
     createHoldIdem.resetKey();
   };
 
@@ -428,12 +429,13 @@ export default function InventoryPage() {
   const handleReleaseHold = async (holdId: string) => {
     setReleasingHoldId(holdId);
     try {
-      const { error } = await supabase.rpc('release_inventory_hold', {
+      const { data, error } = await supabase.rpc('release_inventory_hold', {
         p_hold_id: holdId,
         p_performed_by: profile?.id,
         p_idempotency_key: crypto.randomUUID(),
       });
       if (error) throw error;
+      assertRpcResult(data, 'release_inventory_hold');
 
       toast('success', 'Hold released');
       fetchInventory();
@@ -458,7 +460,7 @@ export default function InventoryPage() {
     setAdding(true);
 
     const unitCost = addUnitCost ? parseFloat(addUnitCost) : null;
-    const { error } = await supabase.rpc('manual_inventory_add', {
+    const { data: manualAddData, error } = await supabase.rpc('manual_inventory_add', {
       p_product_id: addProductId,
       p_location: addLocation || 'Main Warehouse',
       p_quantity: qty,
@@ -468,6 +470,7 @@ export default function InventoryPage() {
       p_unit_cost: unitCost && unitCost > 0 ? unitCost : null,
       p_idempotency_key: crypto.randomUUID(),
     });
+    if (!error) assertRpcResult(manualAddData, 'manual_inventory_add');
 
     if (error) {
       toast('error', sanitizeError(error));
@@ -541,12 +544,13 @@ export default function InventoryPage() {
     await runCriticalAction({
       action: async () => {
         const idemKey = receivePoIdem.getKey();
-        const { error } = await supabase.rpc('receive_po_items', {
+        const { data, error } = await supabase.rpc('receive_po_items', {
           p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'receive_po_items');
         receivePoIdem.resetKey();
       },
       toast,
@@ -572,7 +576,7 @@ export default function InventoryPage() {
     await runCriticalAction({
       action: async () => {
         const idemKey = adjustIdem.getKey();
-        const { error } = await supabase.rpc('adjust_inventory', {
+        const { data, error } = await supabase.rpc('adjust_inventory', {
           p_inventory_id: selectedId,
           p_delta: qty,
           p_reason: adjustNote || null,
@@ -580,6 +584,7 @@ export default function InventoryPage() {
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'adjust_inventory');
         adjustIdem.resetKey();
       },
       toast,
@@ -609,12 +614,13 @@ export default function InventoryPage() {
     await runCriticalAction({
       action: async () => {
         const idemKey = retireIdem.getKey();
-        const { error } = await supabase.rpc('retire_inventory_item', {
+        const { data, error } = await supabase.rpc('retire_inventory_item', {
           p_inventory_id: deleteConfirmId,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'retire_inventory_item');
         retireIdem.resetKey();
       },
       toast,

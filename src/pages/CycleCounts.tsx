@@ -249,7 +249,7 @@ export default function CycleCounts() {
       ? Math.round(((variance || 0) / item.expected_qty) * 100 * 100) / 100
       : null;
 
-    const { error } = await supabase.rpc('update_cycle_count_item', {
+    const { data, error } = await supabase.rpc('update_cycle_count_item', {
       p_item_id: itemId,
       p_counted_qty: countedQty,
       p_performed_by: profile.id,
@@ -260,6 +260,7 @@ export default function CycleCounts() {
       toast('error', error.message || 'Failed to update count');
       return;
     }
+    assertRpcResult(data, 'update_cycle_count_item');
 
     // Update local state
     setCountItems((prev) =>
@@ -300,13 +301,12 @@ export default function CycleCounts() {
     await runCriticalAction({
       action: async () => {
         const key = completeCycleCountIdem.getKey();
-        const { error } = await supabase.rpc('complete_cycle_count', {
+        // complete_cycle_count RETURNS void — .throwOnError() for fire-and-forget.
+        await supabase.rpc('complete_cycle_count', {
           p_cycle_count_id: activeCount.id,
           p_completed_by: profile.id,
           p_idempotency_key: key,
-        });
-
-        if (error) throw error;
+        }).throwOnError();
         completeCycleCountIdem.resetKey();
 
         const varianceItems = countItems.filter((i) => i.variance && i.variance !== 0);
@@ -337,12 +337,13 @@ export default function CycleCounts() {
     await runCriticalAction({
       action: async () => {
         const key = cancelCycleCountIdem.getKey();
-        const { error } = await supabase.rpc('cancel_cycle_count', {
+        const { data, error } = await supabase.rpc('cancel_cycle_count', {
           p_cycle_count_id: activeCount.id,
           p_performed_by: profile.id,
           p_idempotency_key: key,
         });
         if (error) throw error;
+        assertRpcResult(data, 'cancel_cycle_count');
         cancelCycleCountIdem.resetKey();
       },
       toast,
@@ -368,13 +369,12 @@ export default function CycleCounts() {
     setReversing(true);
     try {
       const key = reverseCycleCountIdem.getKey();
-      const { error } = await supabase.rpc('reverse_completed_cycle_count', {
+      // reverse_completed_cycle_count RETURNS void — .throwOnError() for fire-and-forget.
+      await supabase.rpc('reverse_completed_cycle_count', {
         p_cycle_count_id: activeCount.id,
         p_reversed_by: profile.id,
         p_idempotency_key: key,
-      });
-
-      if (error) throw error;
+      }).throwOnError();
       reverseCycleCountIdem.resetKey();
 
       await logActivity({ event: 'cycle_count_reversed', description: `Cycle count ${activeCount.count_number} reversed — inventory adjustments undone`, performedBy: profile.id, entityType: 'cycle_count', entityId: activeCount.id });
