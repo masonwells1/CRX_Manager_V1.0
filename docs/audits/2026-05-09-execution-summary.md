@@ -1,5 +1,71 @@
 # CRX Audit Fix Sprint — Execution Summary
 
+## Post-audit follow-up — 2026-05-11 (afternoon session)
+
+Continued Tasks 1 + 3. Branch now 44 commits ahead of main.
+
+**Commits this session:**
+| Commit | Task | Scope |
+|---|---|---|
+| `f9cc7e8` | Task 1 batch 2 — activity-feed domain | 3 FK-embedded profile reads converted to post-fetch `profile_public_view` lookups. ActivityFeed + TeamBoard global activity + CustomerDetail timeline. |
+| `7d60f86` | Task 3 batch 2 — wrap 7 more RPC captures | Baseline 21 → 18. CommissionPayments (2), Deliveries (2), IntegrityCleanup (2), VendorBillDetail (1). |
+
+### Task 1 batch 2 — pattern for FK embeds
+
+For each `profiles!fk_name(full_name)` embed in a list query, the refactor:
+1. Drop the embed from SELECT.
+2. After the main fetch, collect unique user IDs from result rows.
+3. Fetch `profile_public_view` by ID list.
+4. Build an `{ [id]: { full_name } }` map.
+5. Merge map values back onto each row's `.user` / `.performer` field before `setState`.
+
+UI consumers (`.user?.full_name`, `.performer?.full_name`) keep working unchanged.
+
+Test fix: `ActivityFeed.test.tsx` mock now tracks per-table responses (last-`from()` table wins). Old mock pre-attached `user.full_name` on each activity row; new pattern needs separate `profile_public_view` data.
+
+Test edge case worth knowing: `CustomerDetail.tsx` timeline uses the shared `ActivityFeedItem.performer?: Profile` type, but the UI only reads `.full_name` (line 796). Used `as unknown as ActivityFeedItem['performer']` cast on the merged object since `profile_public_view` returns only id/full_name/role — the cast is documented inline.
+
+### Task 3 batch 2 — what was wrapped
+
+All 7 RPCs verified non-null return types via `pg_get_function_result` before wrapping:
+
+| RPC | Returns | File |
+|---|---|---|
+| `create_commission_payment` | uuid | CommissionPayments |
+| `post_commission_payment` | jsonb | CommissionPayments |
+| `batch_reschedule_deliveries` | jsonb | Deliveries |
+| `reassign_delivery` | jsonb | Deliveries |
+| `reconcile_negative_inventory` | jsonb | IntegrityCleanup |
+| `create_invoice_for_unbilled_delivery` | jsonb | IntegrityCleanup |
+| `record_vendor_payment` | uuid | VendorBillDetail |
+
+`void_vendor_bill` (VendorBillDetail) skipped — RETURNS void. Same reason as `notify_damaged_receiving`, `save_field_geometry`, `link_fields_to_parent` (still pending in the baseline 18).
+
+### Task 1 remaining inventory
+
+Still ~25 callsites in Task 1:
+- **Deliveries / drivers** (5 files) — Deliveries, OrderDetail, InvoiceDetail, CustomerDetail (deliveries embed), DeliveryDetail
+- **Sales reps / commissions** (3 files) — Invoices, InvoiceDetail, CommissionPayments
+- **Applicators / jobs** (3 files) — Jobs, ApplicationRecords, DispatchBoard (jobs embed)
+- **Team-board comments** (2 files) — CommentsSection, TeamBoard (TeamBoard partially done — globalActivity converted, team_notes embeds remain)
+- **Blend tickets** (2 files) — BlendTicketDetail (id, full_name only — safe), BlendTickets (reads email — needs analysis)
+- **Other embeds** (6 files) — TransactionLedgerModal, BlendRecipes, CycleCounts, Returns, PurchaseOrderDetail, VendorBillDetail
+- **Direct `select('*')` reads** (~5 files)
+- **Internal helpers** (2 files) — activityLogger.ts notifyAdmins, notificationTriggers.ts role lookups
+
+DO NOT apply `20260510999999_profiles_select_tighten.sql` yet.
+
+### Task 3 baseline trajectory
+
+32 (PR-19 baseline, 2026-05-10) → 21 (batch 1, this morning) → **18** (batch 2, this afternoon).
+
+Remaining 18 entries split between:
+- 3 void RPCs that need a new pattern (`.throwOnError()` or SQL-level changes)
+- ~11 multi-RPC pages with mixed wrapped/unwrapped captures (mechanical work)
+- 4 orphans (Promise.all / dynamic-rpc-name regex limitations)
+
+---
+
 ## Post-audit follow-up — 2026-05-11
 
 Closed/advanced 3 of the 4 follow-ups flagged at the end of the May 10 wrap-up. Branch `fix/audit-2026-05-09` is now 40 commits ahead of main.
