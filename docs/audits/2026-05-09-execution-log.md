@@ -45,7 +45,7 @@ Completed: 2026-05-09 22:50
 Elapsed: ~20 min
 Risk: Medium
 Files changed: 2 (1 new migration, 1 regenerated schema-registry)
-Commit: pending
+Commit: 06ec19a
 Findings closed: P0 #4 (3 of 5 RPCs — see notes for the other 2)
 Notes:
 - The plan called for fixing 5 RPCs but reality required adjustment after live DB inspection:
@@ -69,3 +69,27 @@ Test outcomes:
 - npm run build: pass
 - npm run test: pass (1872 passed, 68 skipped, 0 failures)
 - schema-registry regenerated: yes (stamped 2026-05-10)
+
+---
+
+## PR-03 — Fix `send-email` Edge Function customers column
+Status: completed
+Started: 2026-05-09 22:50
+Completed: 2026-05-09 22:58
+Elapsed: ~8 min
+Risk: Low
+Files changed: 1 (supabase/functions/send-email/index.ts)
+Commit: pending
+Findings closed: P1 #8 (send-email customers.name)
+Notes:
+- Changed selector at line 156 from `id, email, name` → `id, email, farm_name`. The `customers` table has no `name` column — the column is `farm_name`. PostgREST returns 42703 on the missing column, but the Edge Function silently swallowed it via `if (!customerRow) → 404` so callers got a misleading "customer_id not found" error instead of the real cause.
+- Confirmed `customerRow.name` was NOT used downstream (only `customerRow.email` is used in the rest of the file) — no other code changes needed beyond the selector.
+- Added explicit error logging via `console.warn` (matching existing convention at line 340 of the same file) when the customers query returns an error. Future schema drifts will now surface in the Edge Function logs instead of being lost.
+- Used `console.warn` not `console.error` because the project ESLint rule `no-console` only allows `warn`. The semantics still convey "something went wrong."
+- Edge Function is NOT deployed by this autonomous run — Mason will deploy via Supabase MCP `deploy_edge_function` after review (same hard rule that gates production migration application).
+- Plan asked for live tests (call with real customer, call with non-existent customer). Skipped: requires live Edge Function deploy + production data; deferred to Mason's manual deploy verification.
+Test outcomes:
+- npm run lint: pass (0 errors, 270 warnings — back to baseline after switching to console.warn)
+- npm run typecheck: pass
+- npm run build: pass
+- npm run test: deferred to pre-commit hook (Edge Function not exercised by unit tests anyway)

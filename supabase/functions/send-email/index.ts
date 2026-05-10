@@ -151,11 +151,25 @@ Deno.serve(async (req: Request) => {
     }
 
     // 5. Customer email match — recipient is validated server-side from customer_id
-    const { data: customerRow } = await adminClient
+    // PR-03 fix: column is `farm_name`, not `name`. Surface the error explicitly so
+    // future schema drifts don't get silently swallowed by the `!customerRow` 404 path.
+    const { data: customerRow, error: customerErr } = await adminClient
       .from("customers")
-      .select("id, email, name")
+      .select("id, email, farm_name")
       .eq("id", customer_id)
       .maybeSingle();
+
+    if (customerErr) {
+      console.warn("send-email: customers lookup failed", {
+        customer_id,
+        code: customerErr.code,
+        message: customerErr.message,
+      });
+      return jsonResponse(
+        { error: `Customer lookup failed: ${customerErr.message}` },
+        500,
+      );
+    }
 
     if (!customerRow) {
       return jsonResponse({ error: "customer_id not found" }, 404);
