@@ -191,7 +191,7 @@ export default function CommissionPayments() {
     setCreating(true);
     try {
       const createKey = createPaymentIdem.getKey();
-      const { error } = await supabase.rpc('create_commission_payment', {
+      const { data, error } = await supabase.rpc('create_commission_payment', {
         p_commission_ids: Array.from(selectedCommissions),
         p_payment_method: payMethod,
         p_reference: payRef || null,
@@ -201,6 +201,7 @@ export default function CommissionPayments() {
         p_idempotency_key: createKey,
       });
       if (error) throw error;
+      assertRpcResult<string>(data, 'create_commission_payment');
       createPaymentIdem.resetKey();
       toast('success', `Commission payment created: ${fmt(selectedTotal)}`);
       setShowCreate(false);
@@ -217,12 +218,13 @@ export default function CommissionPayments() {
     setPosting(paymentId);
     try {
       const postKey = postPaymentIdem.getKey();
-      const { error } = await supabase.rpc('post_commission_payment', {
+      const { data, error } = await supabase.rpc('post_commission_payment', {
         p_payment_id: paymentId,
         p_performed_by: profile?.id,
         p_idempotency_key: postKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'post_commission_payment');
       postPaymentIdem.resetKey();
       toast('success', 'Commission payment posted');
       fetchPayments();

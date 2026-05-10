@@ -135,7 +135,7 @@ export default function VendorBillDetail() {
     setPaying(true);
     try {
       const payKey = paymentIdem.getKey();
-      const { error } = await supabase.rpc('record_vendor_payment', {
+      const { data, error } = await supabase.rpc('record_vendor_payment', {
         p_vendor_bill_id: id,
         p_payment_date: payDate,
         p_amount_cents: amountCents,
@@ -145,6 +145,7 @@ export default function VendorBillDetail() {
         p_idempotency_key: payKey,
       });
       if (error) throw error;
+      assertRpcResult<string>(data, 'record_vendor_payment');
       paymentIdem.resetKey();
 
       toast('success', `Payment of ${fmt(amountCents)} recorded`);

@@ -72,8 +72,8 @@ interface FileViolation {
 // either refactoring the callsite to a `= await supabase.rpc('literal')`
 // shape, or improving this regex (separate concern).
 //
-// History: 32 (2026-05-10, PR-19) → 21 (2026-05-11, post-audit batch).
-const BASELINE_VIOLATION_COUNT = 21;
+// History: 32 (2026-05-10, PR-19) → 21 → 18 (2026-05-11, post-audit batches).
+const BASELINE_VIOLATION_COUNT = 18;
 
 describe('assertRpcResult coverage', () => {
   it(

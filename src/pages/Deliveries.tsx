@@ -579,13 +579,14 @@ export default function Deliveries() {
     await runCriticalAction({
       action: async () => {
         const rescheduleKey = batchRescheduleIdem.getKey();
-        const { error } = await supabase.rpc('batch_reschedule_deliveries', {
+        const { data, error } = await supabase.rpc('batch_reschedule_deliveries', {
           p_delivery_ids: ids,
           p_new_date: rescheduleDate,
           p_performed_by: profile.id,
           p_idempotency_key: rescheduleKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'batch_reschedule_deliveries');
         batchRescheduleIdem.resetKey();
         logActivity({ event: 'batch_reschedule_deliveries', description: `Rescheduled ${ids.length} delivery(ies) to ${rescheduleDate}`, performedBy: profile.id });
       },
@@ -661,13 +662,14 @@ export default function Deliveries() {
       await runCriticalAction({
         action: async () => {
           const reassignKey = reassignIdem.getKey();
-          const { error } = await supabase.rpc('reassign_delivery', {
+          const { data, error } = await supabase.rpc('reassign_delivery', {
             p_delivery_id: deliveryId,
             p_new_driver: profile.id,
             p_performed_by: profile.id,
             p_idempotency_key: reassignKey,
           });
           if (error) throw error;
+          assertRpcResult(data, 'reassign_delivery');
           reassignIdem.resetKey();
           logActivity({ event: 'reassign_delivery', description: `Took delivery ${deliveryId}`, performedBy: profile.id, entityType: 'delivery', entityId: deliveryId });
         },
