@@ -1,5 +1,48 @@
 # CRX Audit Fix Sprint — Execution Summary
 
+## Live application — 2026-05-10 (afternoon)
+
+All 12 of the queued migrations applied to live Supabase (`rhyzpcqhnizqbxphqdkr`) via Supabase MCP `apply_migration`. PR-07 split into two files first; only part 1 applied (the deferred part 2 stays queued behind frontend `profile_public_view` adoption work).
+
+**Apply order + state:**
+
+| # | Migration | Risk | Result |
+|---|---|---|---|
+| 1 | `20260510010000_fix_delivery_date_column_refs.sql` (PR-01) | Low | ✅ applied |
+| 2 | `20260510020000_fix_idempotency_replay_canonical.sql` (PR-02) | Medium | ✅ applied |
+| 3 | E2E cleanup: 2 leftover `TEST-BILL-E2E` rows soft-deleted (vendor "Ag Bio Logic LLC") | — | ✅ done — required to satisfy PR-04's UNIQUE index. Per Mason's call (Option 1). |
+| 4 | `20260510030000_ap_structural_fixes.sql` (PR-04) | **HIGH** | ✅ applied — schema column type change (vendor_bills.balance_cents → GENERATED ALWAYS), vendors_select RLS tightening, 3 RPC rewrites, audit-log CHECK expansion |
+| 5 | `20260510040000_credit_limit_soft_warn.sql` (PR-06) | Low | ✅ applied |
+| 6 | `20260510050000_pg_temp_security_definer_fixes.sql` (PR-12) | Low | ✅ applied |
+| 7 | `20260510060000_team_note_tags_rls.sql` (PR-17) | Low | ✅ applied |
+| 8 | `20260510070000_tighten_customer_profile_rls.sql` (PR-07 **part 1 only**) | Medium | ✅ applied — customers_select tightened + profile_public_view created |
+| 9 | `20260510080000_bulk_idempotency_wiring.sql` (PR-10) | Medium | ✅ applied — 12 RPCs canonicalized |
+| 10 | `20260510090000_void_vendor_payment.sql` (PR-13) | Medium | ✅ applied |
+| 11 | `20260510100000_update_vendor_bill.sql` (PR-14) | Low | ✅ applied |
+| 12 | `20260510110000_ap_polish_partial.sql` (PR-22) | Low | ✅ applied |
+| 13 | `20260510120000_vendor_master_data_rpcs.sql` (PR-25) | Medium | ✅ applied |
+| 14 | `20260510130000_ap_polish_completion.sql` (PR-22b) | Low | ✅ applied |
+| ⏸ | `20260510999999_profiles_select_tighten.sql` (PR-07 **part 2**) | Medium | DEFERRED — apply after frontend dropdowns migrate to `profile_public_view` |
+
+**Post-apply verification (all 15 checks passed):**
+- F1 strict actor pattern in void_delivery: ✅
+- F2 strict actor pattern in update_order_items: ✅
+- F3 void_vendor_bill blocks any active payments (not just status='paid'): ✅
+- F4 create_vendor_bill rejects zero-or-negative computed totals: ✅
+- F6 vendors_select uses (SELECT auth.uid()): ✅
+- vendor_bills.balance_cents = GENERATED ALWAYS: ✅
+- vendor_bills.voided_at column exists: ✅
+- profile_public_view exists: ✅
+- profiles_select still USING(true) (PR-07 part 2 intentionally deferred): ✅
+- void_vendor_payment / update_vendor_bill / save_vendor / delete_vendor exist: ✅
+- vendor_bills_total_check constraint exists: ✅
+- cancel_purchase_order has PO_HAS_ACTIVE_BILLS guard: ✅
+- create_vendor_bill has VENDOR_PO_MISMATCH guard: ✅
+
+**Schema registry regenerated.** Frontend test suite still green (1888 passing, 70 skipped, 0 failures).
+
+---
+
 ## Codex audit + remediation — 2026-05-10 (afternoon)
 
 After Sprint 2 wrapped, Codex (GPT-5) ran an independent audit of the May 10 migrations and found 7 issues. Mason approved an edit-in-place + doc-refresh remediation. Closed in 4 commits on top of the wrap-up:
