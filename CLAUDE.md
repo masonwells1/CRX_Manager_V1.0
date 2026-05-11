@@ -8,7 +8,7 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-05-11)
-- 66 pages, 92 tables, ~175 RPCs, 306 migrations, 7 Edge Functions
+- 66 pages, 92 tables, ~175 RPCs, 308 migrations, 7 Edge Functions
 - 1,888 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
 - Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green

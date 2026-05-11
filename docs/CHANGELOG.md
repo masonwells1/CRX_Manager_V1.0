@@ -4,6 +4,101 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-11 — Phase 1.D: Harden apply_prepay_to_invoice (closes audit Critical #4)
+
+Branch: `fix/audit-2026-05-09`. Phase 0 verification confirmed Critical #4 still valid: `apply_prepay_to_invoice` is SECURITY DEFINER and writes to 5 tables (including `financial_audit_log`) but had no `p_idempotency_key` parameter, no actor check, no role gate.
+
+**The hole.** A direct PostgREST caller with any authenticated JWT could call this function and:
+- Apply a prepay credit to ANY invoice (since SECURITY DEFINER bypasses table RLS)
+- Double-apply on network retry (no idempotency check) — same allocation runs twice, drains the credit twice, overpays the invoice
+
+Today the practical attack surface is small: the function is only called from `batch_apply_prepayments`, which itself has the canonical idempotency + actor pattern (`p_performed_by` + `p_idempotency_key` already wired). But that's situational — any future direct caller (UI, retry agent, support tool) would lack protection.
+
+**Fix (migration `20260511100000_apply_prepay_to_invoice_hardening.sql`):** narrowest defense-in-depth — extend the signature with `p_performed_by uuid DEFAULT NULL` and `p_idempotency_key text DEFAULT NULL`, and add the canonical guards at the top of the body:
+
+```sql
+v_actor := auth.uid();
+IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+  RAISE EXCEPTION 'ACTOR_MISMATCH';
+END IF;
+SELECT role INTO v_actor_role FROM profiles WHERE id = v_actor AND is_active = true;
+IF v_actor_role NOT IN ('admin', 'sales_rep') THEN
+  RAISE EXCEPTION 'INSUFFICIENT_ROLE: only admins and sales reps can apply prepayments';
+END IF;
+IF p_idempotency_key IS NOT NULL THEN
+  v_existing := check_idempotency(p_idempotency_key, 'apply_prepay_to_invoice');
+  IF v_existing IS NOT NULL THEN RETURN (v_existing->>'application_id')::uuid; END IF;
+END IF;
+```
+
+Body otherwise reproduced verbatim from the prior installed version (including the existing `financial_audit_log` write).
+
+**Why RETURN type stays `uuid`.** `batch_apply_prepayments` calls this and assigns the result to a `uuid` variable. Changing to canonical `jsonb_build_object('success', true, ...)` would force a cascade rewrite through `batch_apply_prepayments` for no real benefit — this is an SQL-internal helper, not a public TS-facing RPC. The `uuid` interface is the actual contract.
+
+**Why backward-compatible.** Both new parameters are `DEFAULT NULL`, so the existing 3-arg call from `batch_apply_prepayments` (`apply_prepay_to_invoice((v_alloc->>'prepay_credit_id')::uuid, v_invoice_id, (v_alloc->>'amount_cents')::bigint)`) continues to work. No SQL cascade, no TS cascade. The new params only matter for direct callers who want to opt into actor verification or idempotency.
+
+DO-block verification asserts exactly one overload exists, the signature contains both new params, and the body contains all four error tokens (`AUTH_REQUIRED`, `ACTOR_MISMATCH`, `INSUFFICIENT_ROLE`) plus both idempotency helpers.
+
+**Status:** committed, NOT YET APPLIED to live Supabase. Mason applies via Supabase MCP `apply_migration` after review.
+
+---
+
+## 2026-05-11 — Phase 1.5: E2E credential cleanup (closes audit Critical #1)
+
+Branch: `fix/audit-2026-05-09`. Phase 0 verification flagged that PR-05's E2E credential cleanup left one residual fallback in `comprehensive-ui-workflow.spec.ts`.
+
+**What was left.** `getNodeToken()` (lines 25-26) used `process.env.E2E_TEST_EMAIL || 'mason@croprxsolutions.com'` and `process.env.E2E_TEST_PASSWORD || 'Mwells0413'` — a silent hardcoded fallback that ran any time the env vars weren't set. PR-05 removed the same pattern from `auth.ts`, `setup-fixtures.ts`, and `teardown-fixtures.ts` but didn't sweep this spec file. Phase 0 cross-grep confirmed only this one file had a real fallback (the `00-seed-test-data.spec.ts:370` hit was a code comment, not a credential; `role-applicator.spec.ts` and `role-security.spec.ts` use `|| ''` as skip-condition fallbacks, not auth).
+
+**Fix.** Import `TEST_USER` from `./utils/auth` (PR-05's canonical fail-closed entry point) and read `email`/`password` through it. Now if either env var is missing, the spec's `import` triggers `requireEnv()` and throws at module-load time — no silent default. One source of truth across `auth.ts`, fixtures, and this spec.
+
+**Why not replicate `requireEnv` inline.** Inline duplication is drift waiting to happen. `auth.ts` already owns the contract (env vars are required, with a pointer to `docs/CONTRIBUTING.md`). Reusing `TEST_USER` keeps the message and behavior consistent.
+
+**Verification.** Grep for `Mwells0413` across the repo: 0 hits in runtime code; only 3 historic-audit doc files mention it as documentation of the past state. Lint clean, build clean. Test count unchanged (Playwright specs don't run in `npm test`).
+
+Closes audit Critical #1. Combined with the production password rotation Mason completed earlier today, the door is fully closed: rotated password + no fallback path = the hardcoded value is dead.
+
+---
+
+## 2026-05-11 — Phase 1.4: Profile role-lock trigger (closes audit Critical #3)
+
+Branch: `fix/audit-2026-05-09`. After Phase 0 verification confirmed Critical #3 (self-role-escalation) was still valid on the live branch, Phase 1.4 closes it.
+
+**The hole.** `profiles_update` RLS policy is `((SELECT auth.uid()) = id) OR is_admin()` for both USING and CHECK — meaning any authenticated user can PATCH their own profile row. There was no column-level restriction, so a malicious non-admin could issue a direct PostgREST request and set their own `role = 'admin'`, flip `is_active`, or clear `denied_pages`. The first half of the chain (Critical #2 — `handle_new_user` trusting `raw_user_meta_data->>'role'`) is mitigated by Mason disabling public signup in the Supabase Auth dashboard. This second half hardens the chain so it stays closed if signup is ever re-enabled.
+
+**Fix (migration `20260511090000_profile_role_lock_trigger.sql`):** add a BEFORE UPDATE row-level trigger on `profiles`:
+
+```sql
+CREATE OR REPLACE FUNCTION public._guard_profile_role_lock()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF (OLD.role IS DISTINCT FROM NEW.role
+      OR OLD.is_active IS DISTINCT FROM NEW.is_active
+      OR OLD.denied_pages IS DISTINCT FROM NEW.denied_pages)
+     AND NOT is_admin() THEN
+    RAISE EXCEPTION 'PROFILE_ROLE_LOCK: only admins can change role, is_active, or denied_pages'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+```
+
+Columns locked: `role`, `is_active`, `denied_pages`. Columns NOT locked: `full_name`, `phone`, `email`, `applicator_license_number`, `faa_certificate_number`, `updated_at` — users can still maintain their own profile.
+
+**Why `is_admin()` works inside SECURITY DEFINER.** Even though the trigger function runs as the owner role, `auth.uid()` inside it still returns the JWT caller — not the owner — so `is_admin()` correctly evaluates against the *actual* user who issued the UPDATE. This is the same pattern used by all the existing `is_admin()` / `is_sales_rep()` callers in RLS policies.
+
+**Why no `handle_new_user` impact.** That trigger fires `AFTER INSERT ON auth.users` and does an `INSERT INTO profiles` — a BEFORE UPDATE trigger doesn't fire on inserts. The signup-time metadata trust (Critical #2) remains mitigated by signup-disabled, not by this trigger.
+
+**Frontend audit performed:** grep for `from('profiles').update(...)` and direct PATCH on `role`/`is_active`/`denied_pages` columns. Only callsite touching these columns is `SettingsPage.tsx`, which uses the `admin_update_profile` RPC (SECURITY DEFINER, admin-gated) — auth.uid() inside that RPC is the admin, so `is_admin()` returns true and the trigger correctly allows the change. No accidental breakage.
+
+DO-block verification asserts the function exists with `prosecdef=true` + `search_path` containing `pg_temp`, and that the trigger is wired to `public.profiles`.
+
+**Status:** committed, NOT YET APPLIED to live Supabase. Mason applies via Supabase MCP `apply_migration` after review.
+
+---
+
 ## 2026-05-11 — Codex review fix for PR #59: vendor bill positive-total guard
 
 Branch: `fix/audit-2026-05-09` (PR #59). Codex left two P2 findings on PR #59; both pointed at the same class of bug — a missing `v_total > 0` guard on vendor bills letting a negative `adjustment_cents` flip the computed total negative.
