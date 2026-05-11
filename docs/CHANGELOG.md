@@ -4,6 +4,26 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-11 — Codex review fix for PR #59: vendor bill positive-total guard
+
+Branch: `fix/audit-2026-05-09` (PR #59). Codex left two P2 findings on PR #59; both pointed at the same class of bug — a missing `v_total > 0` guard on vendor bills letting a negative `adjustment_cents` flip the computed total negative.
+
+**Finding 1 — `update_vendor_bill` (20260510100000):** validated `p_subtotal_cents > 0` but never re-checked `v_new_total_cents` after applying the adjustment. A $100 bill edited with a -$200 adjustment produced `total_cents = -10000`, `balance_cents = -10000` (GENERATED column = `total − paid`), `status = 'unpaid'` — broken AR aging, broken payment behavior, dirty audit log.
+
+**Finding 2 — `create_vendor_bill` rewrite in `ap_polish_completion` (20260510130000):** silent regression. The original PR-04 (`20260510030000_ap_structural_fixes.sql`) included a `v_total <= 0` guard added by codex audit F4 with the explicit comment *"reject zero-or-negative computed totals — adjustments can flip the sign."* The PR-22b polish migration that added PO-to-bill consistency checks rewrote `create_vendor_bill` and dropped the F4 guard along the way. `vendor_bills` has no table-level CHECK on `total_cents > 0`, so the DB has no backstop.
+
+**Fix (migration `20260511030000`):** `CREATE OR REPLACE` both functions with the canonical guard added immediately after `v_total := p_subtotal_cents + COALESCE(p_adjustment_cents, 0)`:
+
+```sql
+IF v_total <= 0 THEN
+  RAISE EXCEPTION 'INVALID_AMOUNT: bill total must be positive (got %)', v_total;
+END IF;
+```
+
+Bodies otherwise reproduced verbatim from the prior installed migrations. DO-block verification asserts both guards landed and that PR-22b polish features (`VENDOR_PO_MISMATCH`, `vendor_bill_drift` soft-warn) were not regressed. No frontend changes — existing handlers already surface `INVALID_AMOUNT` exceptions raised for the subtotal check.
+
+---
+
 ## 2026-05-09 → 2026-05-10 — Audit fix sprint (Sprint 1): 15 of 26 PRs landed
 
 Branch: `fix/audit-2026-05-09`. Closes the highest-impact findings from the 2026-05-09 combined audit (52 findings, 11 business decisions). Sprint 1 was executed autonomously by a Claude Opus 4.7 (1M context) session running through the night of 2026-05-09. Sprint 2 picks up the remaining 10 PRs (PR-23 blocked on staging Supabase creation).

@@ -1,4 +1,4 @@
-# Migration History (298 migrations)
+# Migration History (302 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -6,6 +6,7 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 | # | Timestamp | Description |
 |---|-----------|-------------|
+| 302 | 20260511030000 | **Codex review fix for PR #59 — restore positive-total guard on `create_vendor_bill` + add to `update_vendor_bill`** — Two P2 findings from codex review (2026-05-11). (1) `update_vendor_bill` (migration 20260510100000) validated `p_subtotal_cents > 0` but never re-checked the computed `v_new_total_cents`; a $100 bill edited with a -$200 adjustment yielded `total_cents = -10000`, `balance_cents = -10000` (GENERATED), `status = 'unpaid'` — broken aging/payment behavior. (2) `create_vendor_bill` rewrite in `ap_polish_completion` (20260510130000) silently dropped the `v_total <= 0` guard that codex audit F4 had added in PR-04 (20260510030000); negative adjustment could flip total negative. Both functions now `RAISE EXCEPTION 'INVALID_AMOUNT: bill total must be positive (got %)', v_total` after computing total = subtotal + adjustment. Bodies otherwise reproduced verbatim from the prior installed migrations (preserving PR-22b PO consistency check + drift soft-warn in `create_vendor_bill`; preserving update audit log + active-payments guard in `update_vendor_bill`). DO-block verification asserts both guards landed and that the PR-22b polish features (VENDOR_PO_MISMATCH, vendor_bill_drift) were not regressed. No frontend changes — existing handlers already display `INVALID_AMOUNT` errors raised for the subtotal check. |
 | 1 | 20260206172436 | Full schema creation (all tables, indexes, RLS) |
 | 2 | 20260206174345 | Security & performance fixes (consolidated RLS, auth.uid() optimization) |
 | 3 | 20260206174743 | Profile auto-creation trigger |
