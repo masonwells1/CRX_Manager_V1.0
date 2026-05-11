@@ -1,0 +1,262 @@
+app_settings:
+  - idx_app_settings_updated_by
+    CREATE INDEX idx_app_settings_updated_by ON public.app_settings USING btree (updated_by)
+
+application_record_fields:
+  - idx_arf_record
+    CREATE INDEX idx_arf_record ON public.application_record_fields USING btree (application_record_id)
+  - idx_arf_field
+    CREATE INDEX idx_arf_field ON public.application_record_fields USING btree (field_id)
+
+application_records:
+  - idx_app_records_customer
+    CREATE INDEX idx_app_records_customer ON public.application_records USING btree (customer_id)
+  - idx_app_records_applicator
+    CREATE INDEX idx_app_records_applicator ON public.application_records USING btree (applicator_id)
+  - idx_app_records_field
+    CREATE INDEX idx_app_records_field ON public.application_records USING btree (field_id)
+  - idx_app_records_season
+    CREATE INDEX idx_app_records_season ON public.application_records USING btree (season)
+
+application_services:
+  - idx_application_services_vehicle
+    CREATE INDEX idx_application_services_vehicle ON public.application_services USING btree (vehicle_id) WHERE (vehicle_id IS NOT NULL)
+  - idx_application_services_active_name
+    CREATE INDEX idx_application_services_active_name ON public.application_services USING btree (name) WHERE (is_active = true)
+
+applicator_licenses:
+  - idx_applicator_licenses_active
+    CREATE INDEX idx_applicator_licenses_active ON public.applicator_licenses USING btree (is_active)
+
+blend_recipes:
+  - idx_blend_recipes_recipe_type
+    CREATE INDEX idx_blend_recipes_recipe_type ON public.blend_recipes USING btree (recipe_type)
+  - idx_blend_recipes_crop_type
+    CREATE INDEX idx_blend_recipes_crop_type ON public.blend_recipes USING btree (crop_type)
+
+blend_tickets:
+  - idx_bt_applicator
+    CREATE INDEX idx_bt_applicator ON public.blend_tickets USING btree (applicator_id)
+  - idx_bt_vehicle
+    CREATE INDEX idx_bt_vehicle ON public.blend_tickets USING btree (vehicle_id)
+  - idx_bt_source
+    CREATE INDEX idx_bt_source ON public.blend_tickets USING btree (source)
+  - idx_bt_app_service
+    CREATE INDEX idx_bt_app_service ON public.blend_tickets USING btree (application_service_id) WHERE (application_service_id IS NOT NULL)
+  - idx_blend_tickets_job
+    CREATE INDEX idx_blend_tickets_job ON public.blend_tickets USING btree (job_id) WHERE (job_id IS NOT NULL)
+  - idx_blend_tickets_status
+    CREATE INDEX idx_blend_tickets_status ON public.blend_tickets USING btree (status)
+  - idx_blend_tickets_review_status
+    CREATE INDEX idx_blend_tickets_review_status ON public.blend_tickets USING btree (review_status)
+  - idx_blend_tickets_upload_date
+    CREATE INDEX idx_blend_tickets_upload_date ON public.blend_tickets USING btree (upload_date)
+  - idx_blend_tickets_order_link_status
+    CREATE INDEX idx_blend_tickets_order_link_status ON public.blend_tickets USING btree (order_link_status)
+  - idx_blend_tickets_payment_status
+    CREATE INDEX idx_blend_tickets_payment_status ON public.blend_tickets USING btree (payment_status)
+
+commission_payments:
+  - idx_commission_payments_status
+    CREATE INDEX idx_commission_payments_status ON public.commission_payments USING btree (status)
+
+customer_application_rates:
+  - idx_car_customer
+    CREATE INDEX idx_car_customer ON public.customer_application_rates USING btree (customer_id)
+
+customers:
+  - idx_customers_tier
+    CREATE INDEX idx_customers_tier ON public.customers USING btree (assigned_tier)
+
+cycle_counts:
+  - idx_cycle_counts_status
+    CREATE INDEX idx_cycle_counts_status ON public.cycle_counts USING btree (status)
+  - idx_cycle_counts_warehouse
+    CREATE INDEX idx_cycle_counts_warehouse ON public.cycle_counts USING btree (warehouse)
+  - idx_cycle_counts_initiated_by
+    CREATE INDEX idx_cycle_counts_initiated_by ON public.cycle_counts USING btree (initiated_by)
+
+deliveries:
+  - idx_deliveries_priority
+    CREATE INDEX idx_deliveries_priority ON public.deliveries USING btree (priority)
+
+document_processing_log:
+  - idx_document_processing_log_type
+    CREATE INDEX idx_document_processing_log_type ON public.document_processing_log USING btree (document_type, created_at DESC)
+
+email_log:
+  - idx_email_log_type
+    CREATE INDEX idx_email_log_type ON public.email_log USING btree (email_type)
+
+failed_notifications:
+  - idx_failed_notifications_unresolved
+    CREATE INDEX idx_failed_notifications_unresolved ON public.failed_notifications USING btree (created_at) WHERE (resolved_at IS NULL)
+  - idx_failed_notifications_entity
+    CREATE INDEX idx_failed_notifications_entity ON public.failed_notifications USING btree (entity_type, entity_id)
+
+field_app_location_shares:
+  - idx_field_app_location_shares_loc
+    CREATE INDEX idx_field_app_location_shares_loc ON public.field_app_location_shares USING btree (location_id)
+  - idx_field_app_location_shares_cust
+    CREATE INDEX idx_field_app_location_shares_cust ON public.field_app_location_shares USING btree (customer_id)
+
+field_app_locations:
+  - idx_field_app_locations_group
+    CREATE INDEX idx_field_app_locations_group ON public.field_app_locations USING btree (invoice_group_id) WHERE (invoice_group_id IS NOT NULL)
+  - idx_field_app_locations_invoice
+    CREATE INDEX idx_field_app_locations_invoice ON public.field_app_locations USING btree (invoice_id)
+  - idx_field_app_locations_job
+    CREATE INDEX idx_field_app_locations_job ON public.field_app_locations USING btree (job_id)
+  - idx_field_app_locations_field
+    CREATE INDEX idx_field_app_locations_field ON public.field_app_locations USING btree (field_id)
+
+field_crop_history:
+  - idx_field_crop_history_season
+    CREATE INDEX idx_field_crop_history_season ON public.field_crop_history USING btree (season)
+
+field_polygons:
+  - idx_field_polygons_field_id
+    CREATE INDEX idx_field_polygons_field_id ON public.field_polygons USING btree (field_id)
+
+fields:
+  - idx_fields_parent_id
+    CREATE INDEX idx_fields_parent_id ON public.fields USING btree (parent_field_id) WHERE (parent_field_id IS NOT NULL)
+  - idx_fields_county
+    CREATE INDEX idx_fields_county ON public.fields USING btree (county)
+  - idx_fields_crop
+    CREATE INDEX idx_fields_crop ON public.fields USING btree (crop_type)
+  - idx_fields_active
+    CREATE INDEX idx_fields_active ON public.fields USING btree (is_active) WHERE (is_active = true)
+
+financial_audit_log:
+  - idx_financial_audit_created
+    CREATE INDEX idx_financial_audit_created ON public.financial_audit_log USING btree (created_at)
+
+inventory_holds:
+  - idx_inventory_holds_customer
+    CREATE INDEX idx_inventory_holds_customer ON public.inventory_holds USING btree (customer_id) WHERE (is_active = true)
+
+inventory_transactions:
+  - idx_inv_tx_job_id
+    CREATE INDEX idx_inv_tx_job_id ON public.inventory_transactions USING btree (job_id) WHERE (job_id IS NOT NULL)
+  - idx_inv_tx_requires_review
+    CREATE INDEX idx_inv_tx_requires_review ON public.inventory_transactions USING btree (requires_review) WHERE (requires_review = true)
+
+invoice_line_allocations:
+  - idx_invoice_line_alloc_set
+    CREATE INDEX idx_invoice_line_alloc_set ON public.invoice_line_allocations USING btree (allocation_set_id)
+
+invoices:
+  - idx_invoices_delivery_id
+    CREATE INDEX idx_invoices_delivery_id ON public.invoices USING btree (delivery_id) WHERE (delivery_id IS NOT NULL)
+  - idx_invoices_app_service
+    CREATE INDEX idx_invoices_app_service ON public.invoices USING btree (application_service_id) WHERE (application_service_id IS NOT NULL)
+  - idx_invoices_job_id
+    CREATE INDEX idx_invoices_job_id ON public.invoices USING btree (job_id)
+  - idx_invoices_group
+    CREATE INDEX idx_invoices_group ON public.invoices USING btree (invoice_group_id) WHERE (invoice_group_id IS NOT NULL)
+  - idx_invoices_posted_at
+    CREATE INDEX idx_invoices_posted_at ON public.invoices USING btree (posted_at)
+
+jobs:
+  - idx_jobs_quote_id
+    CREATE INDEX idx_jobs_quote_id ON public.jobs USING btree (quote_id) WHERE (quote_id IS NOT NULL)
+  - idx_jobs_quote_section_id
+    CREATE INDEX idx_jobs_quote_section_id ON public.jobs USING btree (quote_section_id) WHERE (quote_section_id IS NOT NULL)
+  - idx_jobs_app_service
+    CREATE INDEX idx_jobs_app_service ON public.jobs USING btree (application_service_id) WHERE (application_service_id IS NOT NULL)
+  - idx_jobs_priority
+    CREATE INDEX idx_jobs_priority ON public.jobs USING btree (priority) WHERE (deleted_at IS NULL)
+  - idx_jobs_status_date
+    CREATE INDEX idx_jobs_status_date ON public.jobs USING btree (status, job_date) WHERE (deleted_at IS NULL)
+  - idx_jobs_applicator
+    CREATE INDEX idx_jobs_applicator ON public.jobs USING btree (applicator_id)
+  - idx_jobs_vehicle
+    CREATE INDEX idx_jobs_vehicle ON public.jobs USING btree (vehicle_id)
+  - idx_jobs_season
+    CREATE INDEX idx_jobs_season ON public.jobs USING btree (season)
+
+note_activity_log:
+  - idx_note_activity_log_action_type
+    CREATE INDEX idx_note_activity_log_action_type ON public.note_activity_log USING btree (action_type)
+
+notifications:
+  - idx_notif_read
+    CREATE INDEX idx_notif_read ON public.notifications USING btree (is_read)
+
+order_line_allocations:
+  - idx_order_line_alloc_set
+    CREATE INDEX idx_order_line_alloc_set ON public.order_line_allocations USING btree (allocation_set_id)
+
+payments:
+  - idx_payments_order_id
+    CREATE INDEX idx_payments_order_id ON public.payments USING btree (order_id)
+
+prepay_credits:
+  - idx_prepay_credits_season
+    CREATE INDEX idx_prepay_credits_season ON public.prepay_credits USING btree (season)
+
+products:
+  - idx_products_category
+    CREATE INDEX idx_products_category ON public.products USING btree (category)
+  - idx_products_vendor
+    CREATE INDEX idx_products_vendor ON public.products USING btree (vendor)
+  - idx_products_epa_registration
+    CREATE INDEX idx_products_epa_registration ON public.products USING btree (epa_registration)
+
+purchase_orders:
+  - idx_po_vendor
+    CREATE INDEX idx_po_vendor ON public.purchase_orders USING btree (vendor)
+
+quote_sections:
+  - idx_quote_sections_field
+    CREATE INDEX idx_quote_sections_field ON public.quote_sections USING btree (field_id) WHERE (field_id IS NOT NULL)
+
+rate_limits:
+  - idx_rate_limits_cleanup
+    CREATE INDEX idx_rate_limits_cleanup ON public.rate_limits USING btree (window_start)
+
+rebate_claims:
+  - idx_rebate_claims_status
+    CREATE INDEX idx_rebate_claims_status ON public.rebate_claims USING btree (status)
+
+rebate_programs:
+  - idx_rebate_programs_manufacturer
+    CREATE INDEX idx_rebate_programs_manufacturer ON public.rebate_programs USING btree (manufacturer)
+  - idx_rebate_programs_season
+    CREATE INDEX idx_rebate_programs_season ON public.rebate_programs USING btree (season)
+  - idx_rebate_programs_status
+    CREATE INDEX idx_rebate_programs_status ON public.rebate_programs USING btree (status)
+
+rup_sales_records:
+  - idx_rup_sales_status
+    CREATE INDEX idx_rup_sales_status ON public.rup_sales_records USING btree (compliance_status)
+
+team_note_comments:
+  - idx_team_note_comments_parent_id
+    CREATE INDEX idx_team_note_comments_parent_id ON public.team_note_comments USING btree (parent_id)
+
+team_note_tags:
+  - idx_team_note_tags_tag_id
+    CREATE INDEX idx_team_note_tags_tag_id ON public.team_note_tags USING btree (tag_id)
+
+team_notes:
+  - idx_tnotes_type
+    CREATE INDEX idx_tnotes_type ON public.team_notes USING btree (note_type)
+
+vehicles:
+  - idx_vehicles_type
+    CREATE INDEX idx_vehicles_type ON public.vehicles USING btree (vehicle_type)
+
+vendor_bills:
+  - idx_vendor_bills_status
+    CREATE INDEX idx_vendor_bills_status ON public.vendor_bills USING btree (status)
+  - idx_vendor_bills_due_date
+    CREATE INDEX idx_vendor_bills_due_date ON public.vendor_bills USING btree (due_date)
+  - idx_vendor_bills_po
+    CREATE INDEX idx_vendor_bills_po ON public.vendor_bills USING btree (purchase_order_id)
+
+warehouses:
+  - idx_warehouses_active
+    CREATE INDEX idx_warehouses_active ON public.warehouses USING btree (is_active)
+
