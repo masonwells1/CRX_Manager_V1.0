@@ -4,6 +4,48 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-11 — Performance sweep: 97 WARN findings → 0 (Supabase performance advisor)
+
+Branch: `perf/advisor-sweep-2026-05-11` (off `main`). Closes all WARN-level performance advisor findings against the live Supabase project (`rhyzpcqhnizqbxphqdkr`). Pulled at the start of the sweep:
+
+| Category | Level | Before | After | Migration |
+|---|---|---:|---:|---|
+| `auth_rls_initplan` | WARN | 63 | 0 | `20260511050000` + `20260511060000` |
+| `multiple_permissive_policies` | WARN | 33 | 0 | `20260511060000` |
+| `unindexed_foreign_keys` | INFO | 72 | 0 | `20260511070000` |
+| `duplicate_index` | WARN | 1 | 0 | `20260511080000` |
+| `unused_index` | INFO | 87 | 159 | (see below — expected) |
+
+**The reason for #1 (the big win).** Postgres re-evaluates `auth.uid()` once per row when it appears bare inside an RLS policy predicate. Wrapping it in a scalar subquery `(SELECT auth.uid())` tells the planner the value is stable for the query and it caches it once. On a `SELECT * FROM invoices` touching ~50k rows under the old policy, that's 50,000 function calls vs 1 — directly proportional to table size. 55 policies across 35 tables were rewritten (preserving action, roles, permissive flag, and predicate verbatim except for the wrap). 65 `auth.uid()` calls wrapped; verification block asserts zero unwrapped remain.
+
+**The careful part (Category 2).** 23 unique (table, role, action) overlap groups were consolidated into single permissive policies whose predicates OR the original predicates. Same union of access, one evaluation per row instead of N. The hard cases:
+
+- `delivery_photos`, `delivery_remainders` had 3-way overlaps (`_admin_all FOR ALL` + driver-specific + sales_rep-specific). Solution: drop `_admin_all`, replace with action-specific policies (`_insert`, `_select`, `_update`, `_delete`) where each merges admin + role predicates with OR.
+- `commissions` had two SELECT policies with different ownership predicates (`recipient_user_id = auth.uid()` vs `EXISTS (... commissions.recipient = p.full_name)`). Merged into one with `is_admin() OR (is_sales_rep() AND (recipient_user_id = auth.uid() OR full_name match))`. The "recipient_user_id IS NULL AND full_name match" sub-case from the rep_select policy was subsumed by the full_name match clause.
+- `rate_limit_log` had a permissive `qual=false` "Deny all direct access" policy that was a no-op (permissive false OR'd with permissive admin = admin; access semantics were already "admin can SELECT, nobody can write directly"). Per Mason's option B pick, replaced with a **RESTRICTIVE** `FOR ALL is_admin()` policy as defense-in-depth — a future permissive INSERT policy added by mistake would still be blocked by the restrictive.
+
+**FK indexes via CONCURRENTLY (Category 3).** 72 `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_<table>_<column>` statements applied via per-statement `execute_sql` (the `apply_migration` MCP wraps in a transaction, which forbids CONCURRENTLY). The SQL file carries the `-- supabase-no-transaction` marker so the canonical record matches the applied behavior. Non-blocking build: existing reads/writes weren't paused. Hot indexes added: `invoices.{posted_by, salesman_id, voided_by, blend_ticket_id}`, `returns.{approved_by, cancelled_by, received_by, credit_invoice_id}`, `delivery_remainders.{followup_delivery_id, order_item_id, product_id}`, `rebate_claims.*`, `write_offs.*`, `vendor_bills/payments.{created_by, voided_by}`, and ~50 others.
+
+**Why unused_index went UP (87 → 159).** Postgres marks any newly-created index as `unused` until real queries reference it. The 72 new FK indexes are immediately flagged. They'll un-flag as JOINs against those columns run. This is expected and self-resolves; no action needed.
+
+**Duplicate index drop (Category 4).** `payments` had `idx_payments_order` AND `idx_payments_order_id` — both btree on `(order_id)`. Dropped the unsuffixed one; the `_order_id` variant matches project naming convention and stays as the FK cover.
+
+**Workflow.** New branch off `main` (the audit-sprint work on `fix/audit-2026-05-09` is independent; perf sweep doesn't depend on it). Audit-sprint WIP stashed before branching. 4 SQL migration files in `supabase/migrations/`; Migrations 1, 2, 4 applied via `apply_migration` MCP; Migration 3 applied via 72 individual `execute_sql` calls (CONCURRENTLY requirement). Each migration includes a `DO $$ ... $$` verification block that `RAISE EXCEPTION`s on detected regressions. Advisor re-run between each migration confirmed the expected count drops.
+
+**Decisions made (and recorded):**
+1. Branch from `main`, not `fix/audit-2026-05-09` — perf sweep is independent; the AP sprint work is unaffected.
+2. Use `CREATE INDEX CONCURRENTLY` not plain `CREATE INDEX` — non-blocking on production; tables aren't huge today but the pattern scales.
+3. `RESTRICTIVE` policy on `rate_limit_log` — defense-in-depth on a sensitive table. Did NOT add to `failed_notifications` (no `qual=false` policy there; just a redundant overlapping admin SELECT that was dropped).
+4. `application_services_select`, `customer_application_rates_select`, `quote_pdf_templates`/`quote_templates` SELECT all keep their `qual=true` (auth-only) policies. Was already intentional — anyone authenticated can READ these tables; only admins can mutate. The advisor flag was about the FOR ALL admin_all overlapping with the SELECT, not the access model.
+
+**Lesson.** The biggest WARN-level perf advisor cost is auth.uid() per-row evaluation; everything else (FK indexes, duplicate indexes, permissive merges) is incremental. Wrapping is mechanical and safe given a verification block that asserts predicate-preserving rewrites. The careful part is the permissive-policy consolidation — every group needs human review of "is this OR a true superset/equivalent of the originals?" before merging. The 23 groups here fell into 5 patterns, all with provable union semantics.
+
+**Sweep state.** 289 migrations (was 285 — 4 new). 1,872 unit tests passing (130 files, 68 skipped). 0 ESLint errors, 0 TS errors, clean build. Migration files in `supabase/migrations/`; live DB state already matches (applied during sweep, not queued).
+
+**Deferred.** 87 original `unused_index` findings + 72 new (newly created FK indexes flagged immediately) = 159 unused_index INFO findings — Mason to review the original 87 list and decide which (if any) should be dropped. Report archived at [docs/2026-05-11-unused-index-report.txt](2026-05-11-unused-index-report.txt). Out of scope per the sweep prompt: `auth_leaked_password_protection` (Dashboard toggle), 424 `*_security_definer_function_executable` (by design — frontend calls these RPCs).
+
+---
+
 ## 2026-05-07 — Wired front-end idempotency key into cancel_cycle_count call (audit P4-12)
 
 Phase 4 audit P4-12 flagged that `CycleCounts.tsx:326-329` called `cancel_cycle_count` with only two arguments — `p_cycle_count_id` and `p_performed_by` — even though the SQL RPC accepts a third optional `p_idempotency_key`. The RPC body is fully idempotent (verified in migration `20260501130000_field_app_workflow_phase18.sql:174-177` for `check_idempotency` and `:200-202` for `save_idempotency`), so the database enforcement was already correct. The front-end was not exercising it; a double-click on Cancel could in principle insert two `cycle_count_cancelled` activity rows even though the second `UPDATE` would no-op once the status was already 'cancelled'.
