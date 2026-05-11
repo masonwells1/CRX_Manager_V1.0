@@ -43,3 +43,6 @@ backups/
 # Claude Code runtime state (regenerated per machine)
 .claude/scheduled_tasks.lock
 
+# Working data for perf sweep / one-off analyses (regenerable from advisor + DB)
+.perf-sweep-data/
+
