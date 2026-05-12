@@ -4,7 +4,7 @@
  * Track rebate programs from manufacturers, create claims against orders,
  * and reconcile payments received.
  */
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { Plus, DollarSign, TrendingUp, FileText, Trash2, Pencil } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -20,6 +20,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { parseLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { RebateProgram, RebateClaim, RebateClaimStatus } from '../types';
@@ -54,7 +55,12 @@ export default function Rebates() {
   // Per-claim idempotency keys: prevents double-submit on retry. New key per
   // distinct user intent (each claim creation, each transition).
   const createClaimKey = useIdempotencyKey('create_rebate_claim', profile?.id || 'anon');
-  const transitionClaimKey = useIdempotencyKey('transition_rebate_claim', profile?.id || 'anon');
+  // Transition keys scoped per (claimId, newStatus) so two concurrent admin
+  // clicks on different claims don't collide on a page-scoped key (codex P2,
+  // 2026-05-12) — without scoping, the second RPC's idempotency check would
+  // return the first claim's cached payload and silently no-op the second
+  // transition. Same intent retries still get the same key (retry safety).
+  const transitionKeysRef = useRef<Map<string, string>>(new Map());
   const [tab, setTab] = useState<TabKey>('programs');
   const [loading, setLoading] = useState(true);
 
@@ -314,6 +320,12 @@ export default function Rebates() {
   };
 
   const updateClaimStatus = async (claimId: string, newStatus: RebateClaimStatus) => {
+    const scope = `${claimId}:${newStatus}`;
+    let idempotencyKey = transitionKeysRef.current.get(scope);
+    if (!idempotencyKey) {
+      idempotencyKey = generateIdempotencyKey('transition_rebate_claim', profile?.id || 'anon');
+      transitionKeysRef.current.set(scope, idempotencyKey);
+    }
     await runCriticalAction({
       action: async () => {
         // Atomic state-machine transition via RPC — server validates the
@@ -322,7 +334,7 @@ export default function Rebates() {
         const { data, error } = await supabase.rpc('transition_rebate_claim', {
           p_claim_id: claimId,
           p_new_status: newStatus,
-          p_idempotency_key: transitionClaimKey.getKey(),
+          p_idempotency_key: idempotencyKey,
         });
         if (error) {
           if (hasRpcCode(error, RpcErrorCodes.INVALID_TRANSITION)) {
@@ -337,7 +349,7 @@ export default function Rebates() {
       successMessage: `Claim marked as ${newStatus}`,
       sentryTag: 'update_rebate_claim_status',
       onSuccess: () => {
-        transitionClaimKey.resetKey();
+        transitionKeysRef.current.delete(scope);
         fetchClaims();
       },
     });
