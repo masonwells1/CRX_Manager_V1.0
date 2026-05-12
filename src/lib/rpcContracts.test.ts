@@ -999,6 +999,107 @@ describe('RPC contract: issue_return_credit', () => {
 });
 
 // -------------------------------------------------------------------------
+// create_rebate_claim / transition_rebate_claim (audit #33)
+// -------------------------------------------------------------------------
+
+interface CreateRebateClaimParams {
+  p_program_id: string;          // uuid
+  p_quantity: number;            // numeric
+  p_claim_amount_cents: number;  // bigint
+  p_order_id?: string | null;
+  p_customer_id?: string | null;
+  p_product_id?: string | null;
+  p_notes?: string | null;
+  p_idempotency_key?: string | null;
+}
+
+interface CreateRebateClaimResult {
+  success: true;
+  claim_id: string;
+  claim_number: string;  // RC-YYYY-NNNN
+}
+
+interface TransitionRebateClaimParams {
+  p_claim_id: string;
+  p_new_status: 'submitted' | 'approved' | 'paid' | 'rejected';
+  p_paid_amount_cents?: number | null;
+  p_manufacturer_ref?: string | null;
+  p_idempotency_key?: string | null;
+}
+
+interface TransitionRebateClaimResult {
+  success: true;
+  claim_id: string;
+  old_status: string;
+  new_status: string;
+}
+
+describe('RPC contract: create_rebate_claim', () => {
+  it('accepts the minimal required params', () => {
+    const params = assertShape<CreateRebateClaimParams>({
+      p_program_id: 'prog-uuid',
+      p_quantity: 100,
+      p_claim_amount_cents: 50000,
+    });
+    expect(params.p_program_id).toBeTruthy();
+  });
+
+  it('accepts all optional params + idempotency key', () => {
+    const params = assertShape<CreateRebateClaimParams>({
+      p_program_id: 'prog-uuid',
+      p_quantity: 250,
+      p_claim_amount_cents: 125000,
+      p_order_id: 'ord-uuid',
+      p_customer_id: 'cust-uuid',
+      p_product_id: 'prod-uuid',
+      p_notes: 'Q3 manufacturer rebate batch',
+      p_idempotency_key: 'create_rebate_claim:user-uuid:1234567890',
+    });
+    expect(params.p_idempotency_key).toBeTruthy();
+  });
+
+  it('result includes generated claim_number in RC-YYYY-NNNN form', () => {
+    const result: CreateRebateClaimResult = {
+      success: true,
+      claim_id: 'claim-uuid',
+      claim_number: 'RC-2026-0001',
+    };
+    expect(result.claim_number).toMatch(/^RC-\d{4}-\d{4}$/);
+  });
+});
+
+describe('RPC contract: transition_rebate_claim', () => {
+  it('accepts a simple submit transition', () => {
+    const params = assertShape<TransitionRebateClaimParams>({
+      p_claim_id: 'claim-uuid',
+      p_new_status: 'submitted',
+    });
+    expect(params.p_new_status).toBe('submitted');
+  });
+
+  it('accepts a paid transition with explicit paid_amount and manufacturer_ref', () => {
+    const params = assertShape<TransitionRebateClaimParams>({
+      p_claim_id: 'claim-uuid',
+      p_new_status: 'paid',
+      p_paid_amount_cents: 49500,
+      p_manufacturer_ref: 'CHK-2026-1234',
+      p_idempotency_key: 'transition_rebate_claim:user-uuid:1234567890',
+    });
+    expect(params.p_paid_amount_cents).toBe(49500);
+  });
+
+  it('result reports old and new status for caller diffing', () => {
+    const result: TransitionRebateClaimResult = {
+      success: true,
+      claim_id: 'claim-uuid',
+      old_status: 'approved',
+      new_status: 'paid',
+    };
+    expect(result.old_status).not.toBe(result.new_status);
+  });
+});
+
+// -------------------------------------------------------------------------
 // Idempotency Key Coverage — Track which mutating RPCs accept p_idempotency_key
 // -------------------------------------------------------------------------
 
@@ -1037,6 +1138,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_invoice_from_order',
   'create_order_from_blend_ticket',
   'create_quick_delivery',
+  'create_rebate_claim',
   'create_vendor_bill',
   'delete_prepay_credit',
   'delete_purchase_order',
@@ -1076,6 +1178,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_purchase_order',
   'save_quote',
   'transfer_job_to_invoice',
+  'transition_rebate_claim',
   'unapply_credit_memo',
   'unlink_blend_ticket_from_order',
   'update_cycle_count_item',
@@ -1100,8 +1203,8 @@ const MUTATING_RPCS_MISSING_IDEMPOTENCY: string[] = [
 ];
 
 describe('Idempotency Key Coverage', () => {
-  it('covers at least 73 mutating RPCs with p_idempotency_key', () => {
-    expect(MUTATING_RPCS_WITH_IDEMPOTENCY.length).toBeGreaterThanOrEqual(73);
+  it('covers at least 75 mutating RPCs with p_idempotency_key', () => {
+    expect(MUTATING_RPCS_WITH_IDEMPOTENCY.length).toBeGreaterThanOrEqual(75);
   });
 
   it('has no duplicates in the covered list', () => {
@@ -1135,8 +1238,8 @@ describe('Idempotency Key Coverage', () => {
     expect(MUTATING_RPCS_MISSING_IDEMPOTENCY).toEqual(sortedMissing);
   });
 
-  it('total tracked RPCs (covered + missing) is at least 76', () => {
+  it('total tracked RPCs (covered + missing) is at least 78', () => {
     const total = MUTATING_RPCS_WITH_IDEMPOTENCY.length + MUTATING_RPCS_MISSING_IDEMPOTENCY.length;
-    expect(total).toBeGreaterThanOrEqual(76);
+    expect(total).toBeGreaterThanOrEqual(78);
   });
 });

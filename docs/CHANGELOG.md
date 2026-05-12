@@ -4,6 +4,20 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-13 — Audit #33 closure: rebate claim atomic RPCs
+
+Followup sprint kicked off (see `docs/audits/2026-05-12-execution-summary.md` Phase 5 list). First cluster — concurrency — closed.
+
+**Audit #33** — Migration `20260513000000_rebate_claim_atomic_rpcs.sql` (live). Three problems addressed:
+
+1. **Claim number generation race** — Frontend used `count(*) + 1` and there was no UNIQUE on `claim_number`. Two concurrent inserts could collide. Replaced with per-year counter table (`rebate_claim_counters`) updated via `INSERT ... ON CONFLICT DO UPDATE`, which holds a row-level lock for the duration of the statement — concurrent callers serialize cleanly. UNIQUE constraint added as a defense-in-depth backstop.
+2. **Status transition race** — Naked `.update()` on rebate_claims with no row lock and no state machine. Replaced with `transition_rebate_claim()` RPC that does `SELECT FOR UPDATE` on the claim row, then validates the transition (pending→submitted\|rejected, submitted→approved\|rejected, approved→paid). Raises `INVALID_TRANSITION` if the caller's view of state is stale.
+3. **`paid_amount_cents` never written** — The "Mark Paid" button only set status. Now the paid transition writes `paid_amount_cents` (defaults to `claim_amount_cents` if caller doesn't specify) and optionally `manufacturer_ref`.
+
+Frontend (`src/pages/Rebates.tsx`) rewritten to call the RPCs via `supabase.rpc()` with idempotency keys from `useIdempotencyKey`. New error codes (`PROGRAM_REQUIRED`, `QUANTITY_INVALID`, `CLAIM_AMOUNT_INVALID`, `CLAIM_ID_REQUIRED`, `STATUS_REQUIRED`, `CLAIM_NOT_FOUND`, `INVALID_TRANSITION`, `PAID_AMOUNT_INVALID`, `FORBIDDEN`) added to `RpcErrorCodes` in `src/lib/db.ts`. Frontend uses `hasRpcCode(error, RpcErrorCodes.INVALID_TRANSITION)` to detect stale-state and surface a friendlier message. Contract tests added (`create_rebate_claim`, `transition_rebate_claim`); idempotency-coverage list expanded from 73 → 75.
+
+---
+
 ## 2026-05-12 — Decision-B + Audit #5 closure (2 final migrations)
 
 After Mason approved Option C for Decision-B (#9a/#9b) and Option A for #5 (trigger-cache), two more migrations landed.
