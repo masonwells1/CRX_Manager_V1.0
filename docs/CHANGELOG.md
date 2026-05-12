@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-13 — Audits #10, #31, #34 closure: atomic multi-table write RPCs
+
+Three frontend code paths were doing multi-table writes outside any transaction wrapper. If the child insert failed, you got orphaned parents (or, for BlendRecipes, a recipe with all its items wiped and no replacement). Closed in one migration with three SECURITY DEFINER RPCs:
+
+- **#10 NewDelivery.tsx** — Replaced separate `deliveries` insert + `delivery_items` insert with `create_delivery_with_items(p_order_id, p_customer_id, p_scheduled_date, p_items jsonb, ...)`. Generates `delivery_number` via the existing `next_delivery_number()` helper inside the same transaction.
+- **#31 BulkOrderImport.tsx** — Replaced per-order separate `orders` + `order_items` inserts with `bulk_import_order(p_order_number, p_customer_id, p_status, totals..., p_items jsonb, ...)`. Frontend still does the per-row customer/product lookups (preserves the existing friendly error messages); it just ships resolved IDs to the RPC. Each order gets its own idempotency key derived from `order_number`.
+- **#34 BlendRecipes.tsx** — Replaced create-or-update + DELETE-then-INSERT-items flow with `save_blend_recipe(p_recipe_id, p_name, p_recipe_type, p_items jsonb, ...)`. For updates, the DELETE-and-reinsert is atomic — a failed insert rolls back the DELETE too, so a recipe never ends up with zero items unintentionally.
+
+All three RPCs use the canonical 2026-05 pattern: `auth.uid()` strict-actor, role gate matching the table RLS, `check_idempotency`/`save_idempotency` helpers, machine-readable error tokens (`AUTH_REQUIRED`, `FORBIDDEN`, `ITEMS_REQUIRED`, `ITEM_INVALID`, etc.). Idempotency-coverage list bumped 75 → 78. Total RPCs ~177 → ~180.
+
+---
+
 ## 2026-05-13 — Audit #33 closure: rebate claim atomic RPCs
 
 Followup sprint kicked off (see `docs/audits/2026-05-12-execution-summary.md` Phase 5 list). First cluster — concurrency — closed.

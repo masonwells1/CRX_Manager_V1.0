@@ -8,8 +8,8 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-05-13)
-- 66 pages, 93 tables, ~177 RPCs, 315 migrations, 7 Edge Functions
-- 1,900 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
+- 66 pages, 93 tables, ~180 RPCs, 316 migrations, 7 Edge Functions
+- 1,908 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
 - Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
@@ -19,7 +19,7 @@
 - Schema-aware PreToolUse hooks block status-enum mismatches, GENERATED-column writes, missing RLS on new tables, and idempotency-key declarations that never get used
 - `inventory_transactions` is fully immutable (UPDATE+DELETE blocked); `prepay_applications` blocks UPDATE only (DELETE allowed for `void_invoice` reversal). Bypass: `SET LOCAL app.bypass_ledger_immutability = 'true'`.
 - `payments.order_id` is `ON DELETE RESTRICT` — orders with payments cannot be deleted (payments must be voided first; orders are cancelled/voided via state transitions anyway, never DELETEd).
-- Audit fix sprint 2026-05-09 substantially complete on `fix/audit-2026-05-09` — Phase 1 (4/4 critical), Phase 2 (9/9 money/inventory), Phase 3 (4/4 RLS+deps), Decision-B (#9a + #9b RLS → admin/sales_rep/applicator), #5 (prepay_credits trigger-cache), and **#33 (rebate claim atomic RPCs — concurrency)** all closed. Remaining: NOT-VERIFIED findings (#6, #7, #10, #19, #28, #31, #32, #34, #35) being closed in 2026-05-13 followup sprint. See `docs/audits/2026-05-12-execution-summary.md`. Pending Mason: Phase 4 backup verification (dashboard check + future restore drill).
+- Audit fix sprint 2026-05-09 substantially complete on `fix/audit-2026-05-09` — Phase 1 (4/4 critical), Phase 2 (9/9 money/inventory), Phase 3 (4/4 RLS+deps), Decision-B (#9a + #9b RLS → admin/sales_rep/applicator), #5 (prepay_credits trigger-cache), **#33 (rebate claim atomic RPCs)**, and **#10/#31/#34 (atomic multi-table writes — `create_delivery_with_items`, `bulk_import_order`, `save_blend_recipe`)** all closed. Remaining: NOT-VERIFIED findings (#6, #7, #19, #28, #32, #35) being closed in 2026-05-13 followup sprint. See `docs/audits/2026-05-12-execution-summary.md`. Pending Mason: Phase 4 backup verification (dashboard check + future restore drill).
 
 ---
 

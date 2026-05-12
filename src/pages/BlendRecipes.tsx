@@ -9,8 +9,9 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { Sentry } from '../lib/sentry';
 import type { BlendRecipe, Product, RecipeType } from '../types';
 
@@ -50,7 +51,7 @@ interface EditItem {
 }
 
 export default function BlendRecipes() {
-  useAuth();
+  const { profile } = useAuth();
   const { toast } = useToast();
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -188,58 +189,31 @@ export default function BlendRecipes() {
 
     await runCriticalAction({
       action: async () => {
-        let recipeId = editId;
-
-        if (editId) {
-          const result = await supabase
-            .from('blend_recipes')
-            .update({
-              name: form.name.trim(),
-              description: form.description || null,
-              recipe_type: form.recipe_type,
-              crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
-              timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
-            })
-            .eq('id', editId)
-            .select();
-          checkMutationResult(result, 'Update recipe');
-        } else {
-          const { data, error } = await supabase
-            .from('blend_recipes')
-            .insert({
-              name: form.name.trim(),
-              description: form.description || null,
-              recipe_type: form.recipe_type,
-              crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
-              timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
-            })
-            .select()
-            .single();
-          if (error) throw error;
-          recipeId = data.id;
-        }
-
-        // Sync items: delete all existing, insert fresh
-        if (editId) {
-          const deleteResult = await supabase.from('blend_recipe_items').delete().eq('recipe_id', editId).select();
-          checkMutationResult(deleteResult, 'Delete recipe items');
-        }
-
-        if (recipeId && editItems.length > 0) {
-          const itemsPayload = editItems.map((item, idx) => ({
-            recipe_id: recipeId,
+        // Audit #34: atomic save — recipe + items in one transaction. Update
+        // path replaces all items in the same statement, so a failed insert
+        // can't wipe the recipe's items (the DELETE rolls back too).
+        const { data, error } = await supabase.rpc('save_blend_recipe', {
+          p_recipe_id: editId,
+          p_name: form.name.trim(),
+          p_recipe_type: form.recipe_type,
+          p_items: editItems.map((item) => ({
             product_id: item.product_id,
             product_name: item.product_name,
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
-            sort_order: idx,
             notes: item.notes || null,
-          }));
-          const recipeItemsResult = await supabase.from('blend_recipe_items').insert(itemsPayload).select();
-          if (recipeItemsResult.error) throw recipeItemsResult.error;
-          checkMutationResult(recipeItemsResult, 'Insert blend recipe items');
-        }
+          })),
+          p_description: form.description || null,
+          p_crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
+          p_timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
+          p_idempotency_key: generateIdempotencyKey(
+            editId ? `save_blend_recipe:${editId}` : 'save_blend_recipe:create',
+            profile?.id || 'anon'
+          ),
+        });
+        if (error) throw error;
+        assertRpcResult<{ recipe_id: string; created: boolean }>(data, 'save_blend_recipe');
       },
       toast,
       setLoading: setSaving,
