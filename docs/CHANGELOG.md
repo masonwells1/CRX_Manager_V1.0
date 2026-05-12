@@ -4,6 +4,60 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-12 — Decision-B + Audit #5 closure (2 final migrations)
+
+After Mason approved Option C for Decision-B (#9a/#9b) and Option A for #5 (trigger-cache), two more migrations landed.
+
+**Decision-B (#9a + #9b)** — Migration `20260512040000_tighten_field_app_locations_rls.sql` (live). `field_app_locations_select` and `field_app_location_shares_select` SELECT policies tightened from `((SELECT auth.uid()) IS NOT NULL)` to `is_admin() OR is_sales_rep() OR is_applicator()`. Drivers no longer see billing splits; applicators retained because the field-app workflow (multi-customer jobs, split-billing on iPad) needs split context for rate decisions. Matches the pattern set by `field_crop_history_select` earlier in the day.
+
+**Audit #5** — Migration `20260512050000_prepay_credits_balance_trigger_cache.sql` (live). `prepay_credits.balance_cents` is now a trigger-maintained cache instead of a hand-decremented column. `_recompute_prepay_credit_balance()` runs AFTER INSERT OR DELETE on `prepay_applications` and recomputes `balance_cents = original_amount_cents - SUM(applied_amount_cents)` from scratch (recompute-from-scratch is drift-impossible by construction). UPDATE handling not needed because `prepay_applications` is UPDATE-immutable per migration 310. Drift check on session start showed 0 mismatches in 0 rows — clean install with no baseline reconciliation surprises. The existing hand-decrement inside `apply_prepay_to_invoice` remains as belt-and-suspenders; trigger overwrites with the recomputed value (same end-state), so the hand-decrement can be dropped in a future cleanup PR once the trigger has been observed in prod.
+
+This brings the total to **15 findings closed** in this branch's audit sprint. Branch is 312 → 314 migrations.
+
+---
+
+## 2026-05-12 — Phase 2 + Phase 3 audit sprint closure (13 findings closed)
+
+Branch `fix/audit-2026-05-09`. Single-session autonomous run that closed everything in Phase 2 and Phase 3 of the Phase 0 verification execution order.
+
+**Phase 1 finalization (1 live apply).** The two May-11 migrations were already live (per `pg_proc` inspection), but the vendor-bill positive-total guard from commit `5b9b05c` had only landed on `create_vendor_bill` — `update_vendor_bill` was still missing the `v_new_total_cents <= 0` recheck. Applied `20260511030000_vendor_bill_positive_total_guard.sql` to live Supabase, closing the half-applied state.
+
+**Phase 2 — money/inventory (9 items, all closed).**
+- **#14** `src/lib/db.ts:checkMutationResult` now throws when `data === null` (silent RLS denial via `.select()` chain). Test `src/lib/db.test.ts` updated to assert the new behavior + a new test for `data: undefined`.
+- **#25** `src/hooks/useGuardrails.ts` fail-closed on Supabase errors. Both `useCreditLimitCheck` and `useOverloadedDriverCheck` now `Sentry.captureException` and return `false` (block) on caught errors instead of `setWarning(null); return true` (silent pass). Caller gets an explicit "could not verify" warning.
+- **#29** `src/lib/offlineSync.ts` wraps the per-action catch with `Sentry.captureException` (level=error on permanent fail, warning on retry). Permanent failures used to be invisible to oncall.
+- **#20** `src/lib/parseCents.ts` rejects scientific notation (`"1e5"` was parsing as $15) and multi-dot input (`"1.2.3"` was parsing as $1.20). Tests in `parseCents.test.ts` added for both edges + a positive-control for currency formatting.
+- **#8 + #15** combined migration `20260512000000_quick_delivery_server_pricing_and_audit_log.sql` — extends `financial_audit_log_operation_type_check` to allow `order_created`/`delivery_created`/`quote_converted`; rewrites `create_quick_delivery` to use server-side tier price only (drops the `COALESCE(NULLIF((v_item->>'price_cents')::bigint, 0), <tier>)` override that let drivers/sales-reps spoof a $0.01 price); both `create_quick_delivery` and `convert_quote_to_order` now write a `financial_audit_log` entry on every order/delivery/quote-conversion.
+- **#24** `20260512010000_immutability_triggers_ledger_tables.sql` — `inventory_transactions` rejects UPDATE+DELETE (zero existing callers do either, full immutability is safe); `prepay_applications` rejects UPDATE only (`void_invoice` still DELETEs rows when reversing a void, and its `financial_audit_log` write preserves the evidence trail). Bypass via `SET LOCAL app.bypass_ledger_immutability = 'true'` for rare DBA corrections.
+- **#23** `20260512020000_payments_order_fk_restrict.sql` — `payments_order_id_fkey` changed from `ON DELETE CASCADE` to `ON DELETE RESTRICT`. Verified safe: zero RPCs or frontend code do raw `DELETE FROM orders` (orders are cancelled/voided/restored via state transitions). Defense-in-depth against accidental AR-history destruction.
+
+**Phase 3 — RLS + deps (4 items, all addressed).**
+- **#9c + #9d** combined migration `20260512030000_tighten_blend_ticket_field_crop_history_rls.sql` — `blend_ticket_fields_select` SELECT now matches the INSERT/UPDATE predicate (uploader, admin, or sales_rep) instead of `USING (true)`; `field_crop_history` SELECT tightened to `is_admin() OR is_sales_rep() OR is_applicator()` (applicators retained because the field-app workflow needs crop history for rate decisions). The old `"Authenticated users can read crop history"` permissive policy was dropped.
+- **#30** PostgREST SET-LOCAL audit complete — **CLOSED, theoretical only**. Three RPCs use `SET LOCAL app.admin_override = 'true'` (`cancel_order`, `convert_quote_to_order`, `post_invoice`), all with literal `'true'` value (no user input flows in). `pgrst.db_pre_request` is not configured. No injection vector via PostgREST.
+- **#38** documented deferral in `src/lib/fieldImportParser.ts` — `shapefile@0.6.6` + `@mapbox/togeojson` are unmaintained; replacement candidates (`shpjs`, `@tmcw/togeojson`) require manual testing against real-world `.shp`/`.dbf`/`.prj`/`.kml` fixtures. Risk surface is bounded: admin-gated route, 500-feature cap, client-side only. Tracked as a future dependency-maintenance PR.
+
+**NOT-VERIFIED triage (10 findings → 8 STILL VALID + 1 PARTIAL + 1 already-closed).** Subagent investigation surfaced that all 10 originally-NOT-VERIFIED items are real bugs:
+- **#10, #31, #34** (non-atomic multi-table writes in `NewDelivery.tsx`, `BulkOrderImport.tsx`, `BlendRecipes.tsx`) — cluster needs a single fix pattern: wrap each multi-step UI insert into a SECURITY DEFINER RPC for atomicity.
+- **#33** (rebate claim race) — highest residual risk; needs SELECT FOR UPDATE locking.
+- **#6, #7, #19, #32, #35** confirmed STILL VALID, each multi-hour follow-up work.
+- **#28** PARTIAL — `send-email` does have Sentry capture; `_shared/sentry.ts` returns `false` on DSN-parse failure which suppresses alerts silently. Half-fixed.
+
+These 10 findings are queued for the next sprint with the cluster-by-fix-pattern grouping above. Verdicts captured in `docs/audits/2026-05-12-execution-summary.md`.
+
+**Live verification (all checked via Supabase MCP):**
+- `_guard_profile_role_lock`, `trg_guard_profile_role_lock` on profiles ✓
+- `apply_prepay_to_invoice` signature `(uuid, uuid, bigint, uuid, text)`, single overload ✓
+- `update_vendor_bill` has `bill total must be positive` guard ✓
+- `create_quick_delivery` no longer references `NULLIF((v_item->>'price_cents')::bigint, 0)` ✓
+- `financial_audit_log_operation_type_check` includes `order_created`, `delivery_created`, `quote_converted` ✓
+- `trg_guard_inventory_transactions_immutable` + `trg_guard_prepay_applications_immutable` active ✓
+- `payments_order_id_fkey` `ON DELETE RESTRICT` ✓
+- `blend_ticket_fields_select` no longer `USING (true)`; old `field_crop_history` permissive policy dropped ✓
+
+**Build + test outcome:** `npm run lint` 0 errors, `npm run typecheck` 0 errors, `npm run build` clean, `npm run test` 1,894 passing / 70 skipped / 0 failing. Branch is 65 commits ahead of `main`.
+
+---
+
 ## 2026-05-11 — Phase 1.D: Harden apply_prepay_to_invoice (closes audit Critical #4)
 
 Branch: `fix/audit-2026-05-09`. Phase 0 verification confirmed Critical #4 still valid: `apply_prepay_to_invoice` is SECURITY DEFINER and writes to 5 tables (including `financial_audit_log`) but had no `p_idempotency_key` parameter, no actor check, no role gate.

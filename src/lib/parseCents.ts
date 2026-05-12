@@ -11,9 +11,17 @@
  */
 export function parseDollarsToCents(input: string): number {
   if (!input || typeof input !== 'string') return 0;
+  // Audit #20: reject scientific notation ("1e5" was being silently stripped
+  // to "15" and parsed as $15). Anything containing 'e' or 'E' is not a
+  // dollar amount; treat as invalid.
+  if (/[eE]/.test(input)) return 0;
   // Keep digits, decimal point, and minus signs; drop everything else
   const cleaned = input.replace(/[^0-9.-]/g, '');
   if (!cleaned || cleaned === '-' || cleaned === '.' || cleaned === '-.') return 0;
+  // Audit #20: reject multi-dot input ("1.2.3" was parsing as $1.20 because
+  // we kept parts[0] and parts[1] and dropped the rest). A dollar amount has
+  // at most one decimal point.
+  if ((cleaned.match(/\./g) || []).length > 1) return 0;
   // A minus anywhere in the cleaned string means "negative" (handles "-$5", "$-5")
   const sign = cleaned.includes('-') ? -1 : 1;
   const absStr = cleaned.replace(/-/g, '');

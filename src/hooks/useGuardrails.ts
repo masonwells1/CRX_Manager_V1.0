@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { supabase } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -66,9 +67,20 @@ export function useCreditLimitCheck() {
 
       setWarning(null);
       return true;
-    } catch {
-      setWarning(null);
-      return true; // Don't block on errors
+    } catch (error) {
+      // Audit #25: Fail-closed on guardrail-verification errors. A silent
+      // pass-through here lets over-limit deliveries through during transient
+      // Supabase outages. Surface a warning so the user can decide whether to
+      // override; the caller treats `false` like an over-limit and asks for
+      // explicit confirmation.
+      Sentry.captureException(error, { tags: { guardrail: 'credit_limit' } });
+      setWarning({
+        id: 'credit-limit-error',
+        severity: 'warning',
+        message: 'Could not verify credit limit. Please refresh and try again before completing this transaction.',
+        dismissed: false,
+      });
+      return false;
     }
   }, []);
 
@@ -149,9 +161,16 @@ export function useOverloadedDriverCheck() {
 
       setWarning(null);
       return true;
-    } catch {
-      setWarning(null);
-      return true;
+    } catch (error) {
+      // Audit #25: Fail-closed (see credit_limit comment above).
+      Sentry.captureException(error, { tags: { guardrail: 'overloaded_driver' } });
+      setWarning({
+        id: 'overloaded-driver-error',
+        severity: 'warning',
+        message: 'Could not verify driver workload. Please refresh and try again before scheduling.',
+        dismissed: false,
+      });
+      return false;
     }
   }, []);
 

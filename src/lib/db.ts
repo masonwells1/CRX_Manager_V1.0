@@ -67,7 +67,14 @@ export function checkMutationResult(
   operation: string
 ): void {
   if (result.error) throw result.error;
-  if (result.data !== null && Array.isArray(result.data) && result.data.length === 0) {
+  // Audit #14: `data: null` is a silent RLS denial when `.select()` was used.
+  // `.select()` returns `[]` (no match) or `[...rows]`; `.select().single()`
+  // returns the row or null. In both cases, `data === null` after a mutation
+  // means the row wasn't visible to the caller — treat as denied.
+  if (result.data === null || result.data === undefined) {
+    throw new Error(`${operation} failed: no rows were affected. You may not have permission.`);
+  }
+  if (Array.isArray(result.data) && result.data.length === 0) {
     throw new Error(`${operation} failed: no rows were affected. You may not have permission.`);
   }
 }

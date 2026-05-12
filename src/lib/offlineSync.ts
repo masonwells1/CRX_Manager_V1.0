@@ -3,6 +3,7 @@
  * Maps stored operations to actual Supabase RPC calls.
  */
 import { supabase } from './db';
+import { Sentry } from './sentry';
 import {
   getPendingActions,
   removeAction,
@@ -62,6 +63,21 @@ export async function syncPendingActions(): Promise<{ synced: number; failed: nu
         ...action,
         retryCount: newRetryCount,
         lastError: errMsg,
+      });
+
+      // Audit #29: Capture offline-sync failures in Sentry so silent retries
+      // aren't invisible to oncall. Permanent failures (retryCount >= MAX)
+      // get level=error; intermediate retries get level=warning.
+      Sentry.captureException(error, {
+        level: newRetryCount >= MAX_RETRIES ? 'error' : 'warning',
+        tags: { source: 'offlineSync', operation: action.operation },
+        extra: {
+          actionId: action.id,
+          retryCount: newRetryCount,
+          maxRetries: MAX_RETRIES,
+          entityTable: action.entityTable,
+          entityId: action.entityId,
+        },
       });
 
       if (newRetryCount >= MAX_RETRIES) {

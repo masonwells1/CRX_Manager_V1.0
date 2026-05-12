@@ -1,3 +1,11 @@
+// SECURITY (audit #38, deferred): `shapefile@0.6.6` and `@mapbox/togeojson`
+// (loaded lazily below) are unmaintained. Replacement candidates: `shpjs` and
+// `@tmcw/togeojson` (the maintained fork by the original author). Deferred
+// because a swap requires testing against real-world .shp/.dbf/.prj/.kml
+// fixtures. Risk surface is bounded — these parsers only run inside the admin
+// gated `fields` route (App.tsx allowedRoles=['admin','sales_rep']), feature
+// count is capped at 500, and parsing is client-side only. Track as a future
+// dependency-maintenance PR.
 // @ts-expect-error no type declarations
 import * as shapefile from 'shapefile';
 import proj4 from 'proj4';
