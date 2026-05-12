@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type MockInstance } from 'vitest';
 import { exportToCSV, fmtCSV, fmtDateCSV } from './csvExport';
 
 describe('fmtCSV', () => {
@@ -58,9 +58,9 @@ describe('fmtDateCSV', () => {
 });
 
 describe('exportToCSV', () => {
-  let createElementSpy: ReturnType<typeof vi.spyOn>;
-  let createObjectURLSpy: ReturnType<typeof vi.spyOn>;
-  let revokeObjectURLSpy: ReturnType<typeof vi.spyOn>;
+  let createElementSpy: MockInstance<typeof document.createElement>;
+  let createObjectURLSpy: MockInstance<typeof URL.createObjectURL>;
+  let revokeObjectURLSpy: MockInstance<typeof URL.revokeObjectURL>;
   let mockLink: { href: string; download: string; click: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
