@@ -348,6 +348,13 @@ export interface OrderItem {
   product_name: string;
   price_per_unit: number;
   cost_per_unit: number;
+  /**
+   * Snapshot of `products.current_cost` (cents, rounded) at row insert time.
+   * Distinct from `cost_per_unit` (caller-supplied — may be a stale quote cost
+   * or manual override). Populated by trg_snapshot_order_item_cost trigger.
+   * See migration 20260513050000 (audit #32).
+   */
+  cost_at_time_cents: number | null;
   actual_rate: number | null;
   rate_unit: string | null;
   acres: number | null;

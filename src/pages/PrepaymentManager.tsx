@@ -20,6 +20,7 @@ import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
+import { logActivity } from '../lib/activityLogger';
 
 interface CustomerPrepay {
   [k: string]: unknown;
@@ -304,7 +305,18 @@ export default function PrepaymentManager() {
           p_idempotency_key: crypto.randomUUID(),
         });
         if (error) throw new Error(error.message);
-        assertRpcResult<{ success: boolean; credit_ids: string[]; total_cents: number; split_count: number }>(data, 'create_prepay_check_splits');
+        const result = assertRpcResult<{ success: boolean; credit_ids: string[]; total_cents: number; split_count: number }>(data, 'create_prepay_check_splits');
+        // Audit #27: surface prepay creation in activity feed.
+        if (profile) {
+          await logActivity({
+            event: 'prepay_check_created',
+            description: `Prepay check #${checkForm.reference_number} (${fmt(result.total_cents)}) split into ${result.split_count} bucket(s)`,
+            performedBy: profile.id,
+            entityType: 'customer',
+            entityId: checkForm.customer_id,
+            customerId: checkForm.customer_id,
+          });
+        }
       },
       toast,
       setLoading: setSavingCheck,
@@ -337,6 +349,17 @@ export default function PrepaymentManager() {
       if (error) throw error;
       applyPrepayIdem.resetKey();
       const result = assertRpcResult<{ applied_count: number; applied_cents: number; remaining_prepay_cents: number }>(data, 'apply_remaining_prepayments');
+      // Audit #27: surface prepay application in activity feed.
+      if (profile && result.applied_count > 0) {
+        await logActivity({
+          event: 'prepay_applied',
+          description: `Applied ${fmt(result.applied_cents)} prepay to ${result.applied_count} invoice(s) for ${confirmCustomer.farm_name}`,
+          performedBy: profile.id,
+          entityType: 'customer',
+          entityId: confirmCustomer.id,
+          customerId: confirmCustomer.id,
+        });
+      }
       toast(
         'success',
         `Applied ${fmt(result.applied_cents)} to ${result.applied_count} invoice(s). Remaining: ${fmt(result.remaining_prepay_cents)}`,
@@ -361,6 +384,14 @@ export default function PrepaymentManager() {
       if (error) throw error;
       batchApplyIdem.resetKey();
       const result = assertRpcResult<{ total_customers: number; total_applied_cents: number; details: unknown[] }>(data, 'batch_apply_all_prepayments');
+      // Audit #27: surface batch prepay run in activity feed.
+      if (profile && result.total_customers > 0) {
+        await logActivity({
+          event: 'prepay_batch_applied',
+          description: `Batch prepay run: applied ${fmt(result.total_applied_cents)} across ${result.total_customers} customer(s)`,
+          performedBy: profile.id,
+        });
+      }
       if (result.total_customers === 0) {
         toast('info', 'No prepayments could be applied (no customers with both prepay credits and unpaid invoices)');
       } else {

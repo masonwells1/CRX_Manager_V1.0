@@ -19,6 +19,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
+import { logActivity } from '../lib/activityLogger';
 
 interface CommissionPaymentRow {
   [k: string]: unknown;
@@ -230,8 +231,19 @@ export default function CommissionPayments() {
         p_idempotency_key: createKey,
       });
       if (error) throw error;
-      assertRpcResult<string>(data, 'create_commission_payment');
+      const paymentId = assertRpcResult<string>(data, 'create_commission_payment');
       createPaymentIdem.resetKey();
+      // Audit #11: surface commission events in the activity feed (DB side
+      // already writes financial_audit_log; activity_feed is the user-facing one).
+      if (profile) {
+        await logActivity({
+          event: 'commission_payment_created',
+          description: `Commission payment created for ${fmt(selectedTotal)} (${selectedCommissions.size} commission(s))`,
+          performedBy: profile.id,
+          entityType: 'commission_payment',
+          entityId: paymentId,
+        });
+      }
       toast('success', `Commission payment created: ${fmt(selectedTotal)}`);
       setShowCreate(false);
       fetchPayments();
@@ -255,6 +267,16 @@ export default function CommissionPayments() {
       if (error) throw error;
       assertRpcResult(data, 'post_commission_payment');
       postPaymentIdem.resetKey();
+      // Audit #11: surface in activity feed.
+      if (profile) {
+        await logActivity({
+          event: 'commission_payment_posted',
+          description: `Commission payment posted`,
+          performedBy: profile.id,
+          entityType: 'commission_payment',
+          entityId: paymentId,
+        });
+      }
       toast('success', 'Commission payment posted');
       fetchPayments();
     } catch (err: unknown) {
@@ -278,6 +300,14 @@ export default function CommissionPayments() {
       if (error) throw error;
       const result = assertRpcResult<{ commissions_reset: number }>(voidResult, 'void_commission_payment');
       voidPaymentIdem.resetKey();
+      // Audit #11: surface void in activity feed.
+      await logActivity({
+        event: 'commission_payment_voided',
+        description: `Commission payment ${voidTarget.payment_number} voided (${result.commissions_reset || 0} commission(s) reset to pending). Reason: ${voidReason.trim()}`,
+        performedBy: profile.id,
+        entityType: 'commission_payment',
+        entityId: voidTarget.id,
+      });
       toast('success', `Payment ${voidTarget.payment_number} voided. ${result.commissions_reset || 0} commission(s) reset to pending.`);
       setShowVoid(false);
       setVoidReason('');

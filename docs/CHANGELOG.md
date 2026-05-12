@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-13 — Audits #11 + #27 + #32 closure: activity feed + cost snapshot
+
+**Audit #11 (commission TS-side logActivity)** — `CommissionPayments.tsx` was calling `create_commission_payment`, `post_commission_payment`, `void_commission_payment` RPCs but never writing to `activity_feed`. The DB side already wrote `financial_audit_log` (DBA-only audit log) but ordinary users had no visibility into commission events from the activity feed. Added `logActivity({ event: 'commission_payment_created'|'commission_payment_posted'|'commission_payment_voided', ... })` at the success points of each handler.
+
+**Audit #27 (prepay TS-side logActivity)** — Same pattern: `PrepaymentManager.tsx` was calling `create_prepay_check_splits`, `apply_remaining_prepayments`, `batch_apply_all_prepayments` RPCs without writing to `activity_feed`. Added `logActivity({ event: 'prepay_check_created'|'prepay_applied'|'prepay_batch_applied', ... })` at success points. The batch-apply event has no entityType/entityId since it's a multi-customer operation.
+
+**Audit #32 (cost-at-time snapshot)** — Migration `20260513050000_order_items_cost_at_time_snapshot.sql` (live). `order_items.cost_per_unit` was caller-supplied (potentially a stale quote cost from weeks earlier, or a manual override) so it didn't authoritatively answer "did order X use the cost-at-the-time?" Added `cost_at_time_cents bigint` column + `_snapshot_order_item_cost()` BEFORE INSERT trigger that fills it from `products.current_cost * 100` (rounded) whenever caller leaves it NULL. Trigger handles every insert path automatically — no RPC changes needed (all 5 commission/order paths get it for free). Backfill from `cost_per_unit * 100` for existing rows. New `OrderItem.cost_at_time_cents` field on the TS interface.
+
+---
+
 ## 2026-05-13 — Audits #7 + #19 closure: `safe_cents_qty` helper + invoice balance CHECK
 
 **Audit #7** — Migration `20260513030000_safe_cents_multiply_helper.sql` (live). PostgreSQL's `numeric::bigint` cast truncates, so `(price_cents * qty)::bigint` lost up to ~0.999 cents per line item. Live grep against `pg_proc.prosrc` found 4 instances:
