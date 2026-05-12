@@ -4,6 +4,24 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-13 — Audit #6 closure: canonical commission math
+
+Three commission-creating paths used three different formulas, so the same order produced different commission totals depending on which entry-point the user took:
+
+- `convert_quote_to_order`: `profit * (pct / 100)` — no rounding, no clamp
+- `create_direct_order`: `GREATEST(profit * (pct / 100), 0)` — clamped, no rounding
+- `create_quick_delivery`: `ROUND(profit * pct / 100, 2)` — rounded, no clamp
+
+**Bonus latent bug discovered + fixed:** `create_quick_delivery`'s commission insert referenced `recipient_id` and `notes` — neither column exists on `commissions` (it's `recipient text` + `recipient_user_id uuid`, no `notes`). Any QD for a customer with a default_commission_split would have crashed on insert. Confirmed latent: `SELECT count(*) FROM commissions WHERE recipient IS NULL` = 0 (the broken code path was never successfully exercised in prod). The fix vacates the broken block as a side effect.
+
+**Fix shape:**
+- New `compute_commission_amount(numeric, numeric) -> numeric` IMMUTABLE helper that embeds the canonical formula: `GREATEST(ROUND(COALESCE(profit, 0) * COALESCE(pct, 0) / 100, 2), 0)`. Round to 2 dp because commissions are stored as numeric dollars (not bigint cents). Clamp to >= 0 because losing-trade orders shouldn't owe sales reps negative commission.
+- New `_insert_commissions_for_order(order_id, customer_id, profit, split, date)` SECURITY DEFINER wrapper that does the INSERT once, called via `PERFORM` from all three paths. Future commission-creating RPCs go through the helper too — single source of truth, no further drift possible.
+
+**Live verification:** Helper returns `500.00` for `(1000, 50)`, `0` for `(-100, 50)`, `11.11` for `(33.33, 33.33)`. All 3 caller bodies confirmed via `prosrc` to invoke the helper and have zero remaining inline `INSERT INTO commissions` blocks.
+
+---
+
 ## 2026-05-13 — Audits #10, #31, #34 closure: atomic multi-table write RPCs
 
 Three frontend code paths were doing multi-table writes outside any transaction wrapper. If the child insert failed, you got orphaned parents (or, for BlendRecipes, a recipe with all its items wiped and no replacement). Closed in one migration with three SECURITY DEFINER RPCs:
