@@ -4,6 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-13 — Audits #18 + #35 closure: UX cleanup
+
+**Audit #18** — Expanded the Inventory page's `HelpTip` to explicitly contrast `Net Position` vs `Today's Free`. Both numbers exist for sound reasons (Net Position is forward-looking and used for order-creation warnings; Today's Free is right-now physical stock and used by the manual-hold modal because a hold competes against today's stock not future PO arrivals) but users were confusing them. The HelpTip now spells out which is which and where each is used. No code logic change — just clarification text.
+
+**Audit #35** — `AccountsPayable.tsx` was running both `get_ap_dashboard_summary` and `get_ap_aging` every time `asOfDate` changed, even though the summary doesn't depend on the date. Split into two `useCallback`s + two `useEffect`s: one for summary (mount-only), one for aging (asOfDate). The Refresh button kicks off both in parallel. Mount effect uses an `isInitialDateRef` to skip the duplicate aging fetch on first render. No more wasted RPC calls when scrubbing through dates.
+
+---
+
 ## 2026-05-13 — Audits #11 + #27 + #32 closure: activity feed + cost snapshot
 
 **Audit #11 (commission TS-side logActivity)** — `CommissionPayments.tsx` was calling `create_commission_payment`, `post_commission_payment`, `void_commission_payment` RPCs but never writing to `activity_feed`. The DB side already wrote `financial_audit_log` (DBA-only audit log) but ordinary users had no visibility into commission events from the activity feed. Added `logActivity({ event: 'commission_payment_created'|'commission_payment_posted'|'commission_payment_voided', ... })` at the success points of each handler.
