@@ -259,4 +259,3 @@ vendor_bills:
 warehouses:
   - idx_warehouses_active
     CREATE INDEX idx_warehouses_active ON public.warehouses USING btree (is_active)
-
