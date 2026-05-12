@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
 
 const ALLOWED_ORIGINS = [
   "https://croprxsolutions.app",
@@ -106,6 +107,12 @@ Deno.serve(async (req: Request) => {
       }
     );
   } catch (err) {
+    // Audit #28: surface unhandled errors — admin password resets are
+    // security-relevant and need oncall visibility.
+    await captureEdgeException(err, {
+      function: "reset-user-password",
+      level: "error",
+    });
     return new Response(
       JSON.stringify({ error: err instanceof Error ? err.message : "Unknown error" }),
       {

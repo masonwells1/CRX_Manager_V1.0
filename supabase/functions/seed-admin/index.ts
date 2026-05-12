@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
@@ -101,6 +102,13 @@ Deno.serve(async (req: Request) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
+    // Audit #28: surface unhandled errors to Sentry. Even though seed-admin
+    // is dev/staging-only, a 500 here usually means a misconfigured secret
+    // or service role — worth knowing about.
+    await captureEdgeException(err, {
+      function: "seed-admin",
+      level: "error",
+    });
     return new Response(
       JSON.stringify({ error: (err as Error).message }),
       {

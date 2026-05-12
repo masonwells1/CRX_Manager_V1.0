@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
@@ -152,6 +153,13 @@ Deno.serve(async (req: Request) => {
       }
     );
   } catch (err) {
+    // Audit #28: surface unhandled errors to Sentry — admin user creation
+    // failures are security-relevant (e.g. service-role permission issues,
+    // mass-create attempts) and need oncall visibility.
+    await captureEdgeException(err, {
+      function: "create-user",
+      level: "error",
+    });
     return new Response(
       JSON.stringify({ error: err instanceof Error ? err.message : "Unknown error" }),
       {

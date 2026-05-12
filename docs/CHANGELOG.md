@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-13 — Audit #28 closure: Edge Functions Sentry hardening
+
+`supabase/functions/_shared/sentry.ts` had two fail-soft paths that suppressed Sentry alerts silently in production:
+- `SENTRY_DSN` missing → silent `return false`
+- `SENTRY_DSN` malformed → quiet `console.warn` + `return false`
+
+Per the audit, both should be loud. Changes:
+
+- **New `validateSentryDsnOrThrow()` exported helper** — fail-loud counterpart to `captureEdgeException`. Throws at module-load if DSN is missing or malformed (mirrors the PR-16 ALLOWED_ORIGIN pattern). Functions whose alerting is critical can call this at top-level. Functions where alerting is best-effort can keep using `captureEdgeException` as graceful degradation.
+- **`[SENTRY_MISCONFIG]` log sentinel** — both fail-soft paths now log with this grep-friendly prefix. Easy to find in Supabase function logs and easy to alert on at the log-pipeline layer.
+- **Sentry capture added to 4 Edge Functions that were missing it**: `create-user`, `reset-user-password`, `seed-admin`, `setup-blend-tickets-storage`. Each catch block now calls `await captureEdgeException(err, { function: '...', level: 'error' })` before returning the 500 response. The 3 functions that already had Sentry (`send-email`, `process-document`, `process-blend-ticket`) are unchanged.
+
+**Pending Mason:** deploy the 5 changed functions to Supabase via `supabase functions deploy <name>` (one each for `create-user`, `reset-user-password`, `seed-admin`, `setup-blend-tickets-storage`, plus any function that imports `_shared/sentry.ts` to pick up the helper update — i.e. all 7 since they all share the helper now). The code change is committed; deployment is intentionally a manual step.
+
+---
+
 ## 2026-05-13 — Audits #18 + #35 closure: UX cleanup
 
 **Audit #18** — Expanded the Inventory page's `HelpTip` to explicitly contrast `Net Position` vs `Today's Free`. Both numbers exist for sound reasons (Net Position is forward-looking and used for order-creation warnings; Today's Free is right-now physical stock and used by the manual-hold modal because a hold competes against today's stock not future PO arrivals) but users were confusing them. The HelpTip now spells out which is which and where each is used. No code logic change — just clarification text.

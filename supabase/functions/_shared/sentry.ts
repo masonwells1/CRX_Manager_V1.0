@@ -45,16 +45,55 @@ function parseSentryDsn(dsn: string): ParsedDsn | null {
  * or when no DSN is configured. Never throws — Sentry is observability,
  * not a user-facing dependency.
  */
+/**
+ * Validate that SENTRY_DSN is set and well-formed at boot.
+ * Throws if it's missing or malformed — for Edge Functions where missing
+ * alerting is unacceptable (e.g. financial/auth-critical functions).
+ *
+ * Audit #28: this is the fail-loud counterpart to captureEdgeException's
+ * graceful degradation. Use whichever fits the function's risk profile.
+ *
+ * Throwing at boot mirrors the PR-16 ALLOWED_ORIGIN pattern: if a critical
+ * env var is missing, fail at module load (every request 500s loudly) rather
+ * than silently swallowing the misconfiguration in production.
+ */
+export function validateSentryDsnOrThrow(): void {
+  const dsn = Deno.env.get("SENTRY_DSN");
+  if (!dsn) {
+    throw new Error(
+      "SENTRY_DSN not set — refusing to boot Edge Function. Set the secret via `supabase functions secrets set SENTRY_DSN=...` or call captureEdgeException() instead if alerting is optional for this function.",
+    );
+  }
+  if (!parseSentryDsn(dsn)) {
+    throw new Error(
+      `SENTRY_DSN is malformed (got '${dsn.slice(0, 12)}...'). Expected format: https://<publicKey>@<host>/<projectId>.`,
+    );
+  }
+}
+
 export async function captureEdgeException(
   err: unknown,
   context: CaptureContext,
 ): Promise<boolean> {
   const dsn = Deno.env.get("SENTRY_DSN");
-  if (!dsn) return false;
+  if (!dsn) {
+    // Audit #28: previously silent — now logs prominently with a SENTRY_MISCONFIG
+    // sentinel that's easy to grep in Supabase function logs. Most functions
+    // won't have DSN set in dev, so this is expected to be a no-op there.
+    // In prod with the secret correctly set this branch never fires.
+    console.warn(
+      `[SENTRY_MISCONFIG] SENTRY_DSN not configured — captured exception NOT sent (function=${context.function}). To enforce alerting, call validateSentryDsnOrThrow() at module top.`,
+    );
+    return false;
+  }
 
   const parsed = parseSentryDsn(dsn);
   if (!parsed) {
-    console.warn("Invalid SENTRY_DSN — Sentry alerting disabled");
+    // Audit #28: was a quiet warn. Same sentinel makes log-grep easy.
+    // A malformed DSN in prod is always a misconfiguration worth investigating.
+    console.warn(
+      `[SENTRY_MISCONFIG] Invalid SENTRY_DSN — alerting silently disabled (function=${context.function}). Expected https://<publicKey>@<host>/<projectId>.`,
+    );
     return false;
   }
 
