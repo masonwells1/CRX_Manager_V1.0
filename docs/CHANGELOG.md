@@ -4,6 +4,23 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-13 — Audits #7 + #19 closure: `safe_cents_qty` helper + invoice balance CHECK
+
+**Audit #7** — Migration `20260513030000_safe_cents_multiply_helper.sql` (live). PostgreSQL's `numeric::bigint` cast truncates, so `(price_cents * qty)::bigint` lost up to ~0.999 cents per line item. Live grep against `pg_proc.prosrc` found 4 instances:
+
+- `create_quick_delivery` × 3 (most-trafficked: item price × delivery qty, used by every QD invoice line)
+- `transfer_job_to_invoice` × 1 (price_override × share_acres)
+- `create_invoice_from_blend_ticket` × 1 (cost_per_acre × fee_acres)
+- `save_field_app_invoice` × 1 (cost_per_acre × fee_acres)
+
+New `safe_cents_qty(p_cents bigint, p_qty numeric) -> bigint` IMMUTABLE helper does `ROUND(p_cents * p_qty)::bigint` (to-nearest-cent rounding). `create_quick_delivery` body rewritten to use the helper for all 3 instances. The other 3 are documented as deferred (each single-instance, smaller blast radius — fee × acres patterns) for a follow-up sprint.
+
+A new `sql-safety.mjs` hook rule blocks `(<*_cents> * <qty>)::bigint` patterns in future migrations (strips SQL `--` comments first so doc text mentioning the bad pattern doesn't false-positive).
+
+**Audit #19** — Migration `20260513040000_invoices_balance_non_negative.sql` (live). `invoices.balance_cents` is GENERATED ALWAYS but had no CHECK guard against going negative. The two base columns already have non-negative CHECKs (`invoices_total_non_negative`, `invoices_paid_non_negative`) but a future mis-allocation path could over-pay an invoice and persist phantom customer credit. Live data showed 0 rows with negative balance (existing `allocate_payment` caps at outstanding), so safe to add VALIDATED in one step. Original audit said "credit memos" — there's no `credit_memos` table in this codebase; "credit memos" are `invoices` rows created by `issue_return_credit`, so the constraint covers the credit-memo case too.
+
+---
+
 ## 2026-05-13 — Audit #6 closure: canonical commission math
 
 Three commission-creating paths used three different formulas, so the same order produced different commission totals depending on which entry-point the user took:

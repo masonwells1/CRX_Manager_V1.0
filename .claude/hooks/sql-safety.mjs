@@ -75,6 +75,20 @@ if (/INSERT\s+INTO\s+idempotency_keys[\s\S]{0,400}?::text/i.test(content)) {
   violations.push("INSERT INTO idempotency_keys with ::text cast — result is jsonb. Pass jsonb_build_object(...) without ::text.");
 }
 
+// 5. Audit #7: `(<bigint_cents> * <numeric_qty>)::bigint` truncates fractional cents.
+// Use safe_cents_qty(cents, qty) instead — it ROUNDs before casting.
+// Strip SQL line-comments first so doc comments mentioning the pattern don't false-positive.
+const stripped = content.replace(/--[^\n]*/g, "");
+const reTruncatingMult = /(?<!ROUND\s*|round\s*)\(\s*[A-Za-z_."'\->]*_cents[A-Za-z_."'\->]*\s*\*[^()]*\)\s*::bigint/g;
+const truncatingMatches = stripped.match(reTruncatingMult);
+if (truncatingMatches) {
+  violations.push(
+    `(<*_cents> * <qty>)::bigint without ROUND — drops fractional cents on cast. ` +
+    `Use safe_cents_qty(p_cents, p_qty) instead. ` +
+    `Found: ${truncatingMatches.slice(0, 3).map(s => s.replace(/\s+/g, " ")).join(" / ")}`
+  );
+}
+
 if (violations.length > 0) {
   out("block", "SQL SAFETY VIOLATION: " + violations.join(" | "));
 }
