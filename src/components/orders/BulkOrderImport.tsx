@@ -33,6 +33,13 @@ interface ParsedOrder {
   status?: string;
   notes?: string;
   items: ParsedOrderItem[];
+  /**
+   * Stable idempotency key for this parsed order. Generated once at parse
+   * time so that a retry of `handleUpload` (e.g. after a network timeout)
+   * sends the same key to `bulk_import_order`, letting the DB short-circuit
+   * the duplicate via `check_idempotency`.
+   */
+  idempotency_key: string;
 }
 
 interface ValidationResult {
@@ -137,8 +144,9 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
       toast('warning', `Low OCR confidence (${result.confidence}%). Please review the parsed data carefully.`);
     }
 
+    const orderNumber = data.order_number || 'OCR-IMPORT';
     const parsedOrder: ParsedOrder = {
-      order_number: data.order_number || 'OCR-IMPORT',
+      order_number: orderNumber,
       customer_name: data.customer_name || 'Unknown Customer',
       order_date: data.order_date || localToday(),
       status: data.status || 'confirmed',
@@ -151,6 +159,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         unit_size: item.unit_size || undefined,
         notes: item.notes || undefined,
       })),
+      idempotency_key: generateIdempotencyKey(`bulk_import_order:${orderNumber}`, profile?.id || 'anon'),
     };
 
     return { valid: parsedOrder.items.length > 0 ? [parsedOrder] : [], invalid: [] };
@@ -222,6 +231,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
             status: orderFieldMap.status !== undefined ? row[orderFieldMap.status] : 'confirmed',
             notes: orderFieldMap.notes !== undefined ? row[orderFieldMap.notes] : undefined,
             items: [],
+            idempotency_key: generateIdempotencyKey(`bulk_import_order:${orderNumber}`, profile?.id || 'anon'),
           });
         }
 
@@ -360,8 +370,10 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         );
 
         // Audit #31: atomic per-order create — order + items rolled together.
-        // Idempotency key includes the order_number so a retry of the same
-        // import doesn't double-create.
+        // The idempotency key is generated once at parse time and stored on
+        // the ParsedOrder, so retrying handleUpload (e.g. after a network
+        // timeout on an earlier order in the batch) sends the SAME key and
+        // bulk_import_order's check_idempotency short-circuits the dupe.
         const { data: rpcResult, error: rpcError } = await supabase.rpc('bulk_import_order', {
           p_order_number: order.order_number,
           p_customer_id: customer.id,
@@ -373,7 +385,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
           p_order_date: order.order_date,
           p_items: itemsPayload,
           p_notes: order.notes,
-          p_idempotency_key: generateIdempotencyKey(`bulk_import_order:${order.order_number}`, profile?.id || 'anon'),
+          p_idempotency_key: order.idempotency_key,
         });
 
         if (rpcError) throw rpcError;

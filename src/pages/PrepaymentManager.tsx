@@ -58,6 +58,9 @@ export default function PrepaymentManager() {
   const navigate = useNavigate();
   const applyPrepayIdem = useIdempotencyKey('apply_remaining_prepayments', profile?.id || '');
   const batchApplyIdem = useIdempotencyKey('batch_apply_all_prepayments', profile?.id || '');
+  const splitCheckIdem = useIdempotencyKey('create_prepay_check_splits', profile?.id || '');
+  const editCreditIdem = useIdempotencyKey('edit_prepay_credit', profile?.id || '');
+  const deleteCreditIdem = useIdempotencyKey('delete_prepay_credit', profile?.id || '');
 
   const [customers, setCustomers] = useState<CustomerPrepay[]>([]);
   const [loading, setLoading] = useState(true);
@@ -183,6 +186,7 @@ export default function PrepaymentManager() {
 
     await runCriticalAction({
       action: async () => {
+        const editKey = editCreditIdem.getKey();
         const { data, error } = await supabase.rpc('edit_prepay_credit', {
           p_credit_id: editCredit.id,
           p_new_balance_cents: newBalanceCents,
@@ -190,11 +194,12 @@ export default function PrepaymentManager() {
           p_bucket_label: editForm.bucket_label || null,
           p_notes: editForm.notes || null,
           p_performed_by: profile?.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: editKey,
         });
         if (error) throw error;
         const result = assertRpcResult<{ success: boolean }>(data, 'edit_prepay_credit');
         if (!result?.success) throw new Error('Edit failed');
+        editCreditIdem.resetKey();
       },
       toast,
       setLoading: setSavingEdit,
@@ -222,15 +227,17 @@ export default function PrepaymentManager() {
 
     await runCriticalAction({
       action: async () => {
+        const deleteKey = deleteCreditIdem.getKey();
         const { data, error } = await supabase.rpc('delete_prepay_credit', {
           p_credit_id: deleteCredit.id,
           p_reason: deleteReason.trim(),
           p_performed_by: profile?.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: deleteKey,
         });
         if (error) throw error;
         const result = assertRpcResult<{ success: boolean }>(data, 'delete_prepay_credit');
         if (!result?.success) throw new Error('Delete failed');
+        deleteCreditIdem.resetKey();
       },
       toast,
       setLoading: setSavingDelete,
@@ -297,15 +304,17 @@ export default function PrepaymentManager() {
           label: s.label,
           amount_cents: splitAmountsCents[i],
         }));
+        const splitKey = splitCheckIdem.getKey();
         const { data, error } = await supabase.rpc('create_prepay_check_splits', {
           p_customer_id: checkForm.customer_id,
           p_reference_number: checkForm.reference_number,
           p_splits: splits,
           p_performed_by: (await supabase.auth.getUser()).data.user?.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: splitKey,
         });
         if (error) throw new Error(error.message);
         const result = assertRpcResult<{ success: boolean; credit_ids: string[]; total_cents: number; split_count: number }>(data, 'create_prepay_check_splits');
+        splitCheckIdem.resetKey();
         // Audit #27: surface prepay creation in activity feed.
         if (profile) {
           await logActivity({

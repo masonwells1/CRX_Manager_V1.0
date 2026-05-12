@@ -11,7 +11,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
-import { generateIdempotencyKey } from '../lib/idempotency';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import type { BlendRecipe, Product, RecipeType } from '../types';
 
@@ -53,6 +53,7 @@ interface EditItem {
 export default function BlendRecipes() {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const saveRecipeIdem = useIdempotencyKey('save_blend_recipe', profile?.id || '');
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -192,6 +193,7 @@ export default function BlendRecipes() {
         // Audit #34: atomic save — recipe + items in one transaction. Update
         // path replaces all items in the same statement, so a failed insert
         // can't wipe the recipe's items (the DELETE rolls back too).
+        const saveKey = saveRecipeIdem.getKey();
         const { data, error } = await supabase.rpc('save_blend_recipe', {
           p_recipe_id: editId,
           p_name: form.name.trim(),
@@ -207,13 +209,11 @@ export default function BlendRecipes() {
           p_description: form.description || null,
           p_crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
           p_timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
-          p_idempotency_key: generateIdempotencyKey(
-            editId ? `save_blend_recipe:${editId}` : 'save_blend_recipe:create',
-            profile?.id || 'anon'
-          ),
+          p_idempotency_key: saveKey,
         });
         if (error) throw error;
         assertRpcResult<{ recipe_id: string; created: boolean }>(data, 'save_blend_recipe');
+        saveRecipeIdem.resetKey();
       },
       toast,
       setLoading: setSaving,
