@@ -4,6 +4,20 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-13 — Audit #28 follow-up: REVOKE anon on 9 new SECURITY DEFINER functions
+
+Defense-in-depth cleanup discovered while running the security advisor post-sprint. Supabase grants EXECUTE on new public-schema functions to BOTH `anon` and `authenticated` by default — `REVOKE ALL ... FROM PUBLIC` strips the PUBLIC group's grant but leaves the role-specific anon grant intact. Each function body checks `auth.uid() IS NULL → AUTH_REQUIRED` so an anon caller can't actually do anything, but the advisor `0028_anon_security_definer_function_executable` correctly flags it (defense-in-depth means revoking the grant, not relying on the body to refuse).
+
+Migration `20260513060000` revokes:
+- `anon` EXECUTE on 7 user-facing / helper RPCs (keeps `authenticated`): `create_rebate_claim`, `transition_rebate_claim`, `create_delivery_with_items`, `bulk_import_order`, `save_blend_recipe`, `compute_commission_amount`, `safe_cents_qty`
+- `PUBLIC + anon + authenticated` EXECUTE on 2 internal helpers (`_insert_commissions_for_order`, `_snapshot_order_item_cost`) — only called from within other SECURITY DEFINER bodies, where inner-call grants are irrelevant due to function-owner permissions
+
+**Latent bug surfaced + fixed:** `_snapshot_order_item_cost()` had been created (migration 20260513050000) without `REVOKE ALL ... FROM PUBLIC`, so PUBLIC had EXECUTE — anon inherited via PUBLIC even after stripping its direct grant. The first attempt at this migration failed at the verify step ("anon still has EXECUTE on 1 of 9") and got rolled back. Diagnosed via `proacl` inspection (`{=X/postgres,...}` = PUBLIC entry); fixed by adding PUBLIC to the REVOKE for that one fn.
+
+Project-wide impact: drops the anon SECURITY DEFINER warning count from ~223 → ~214 (the other ~214 are pre-existing functions, separately tracked as a hygiene-sweep follow-up). Future migration template: include `REVOKE ALL ... FROM PUBLIC, anon` for every SECURITY DEFINER function plus a single `GRANT EXECUTE ... TO authenticated` for user-facing ones.
+
+---
+
 ## 2026-05-13 — Audit #28 closure: Edge Functions Sentry hardening
 
 `supabase/functions/_shared/sentry.ts` had two fail-soft paths that suppressed Sentry alerts silently in production:

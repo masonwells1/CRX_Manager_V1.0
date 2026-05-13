@@ -1,4 +1,4 @@
-# RPC Functions Reference (~173 unique functions)
+# RPC Functions Reference (~184 unique functions)
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -11,6 +11,7 @@
 - `save_job()` — upsert job + chemicals
 - `save_customer()` — upsert customer; validates commission splits sum to 100%
 - `save_blend_ticket()` — upsert blend ticket + items
+- `save_blend_recipe(p_recipe_id uuid, p_name text, p_recipe_type text, p_items jsonb, ...)` — atomic create-or-replace for blend recipes. For updates, DELETE + INSERT items happen in the same transaction so a failed insert rolls back the DELETE too — closes audit #34 (BlendRecipes wiped items on failed save). Migration 20260513010000.
 - `save_purchase_order()` — upsert PO + items
 - `save_invoice()` — upsert invoice + items
 - `save_field()` — upsert field record
@@ -37,7 +38,9 @@
 - `reassign_delivery()` — reassign delivery to different driver
 - `create_followup_delivery()` — create follow-up delivery for remaining items
 - `get_customer_delivery_remainders()` — get undelivered remainder items for a customer
-- `create_quick_delivery()` — atomic order + delivery + draft invoice in one transaction; includes inventory pre-check with `FOR UPDATE` locks to prevent overselling
+- `create_quick_delivery()` — atomic order + delivery + draft invoice in one transaction; includes inventory pre-check with `FOR UPDATE` locks to prevent overselling. **2026-05-13 (audit #6):** uses `_insert_commissions_for_order()` helper instead of inline INSERT — fixes a latent bug where the prior inline block referenced columns that don't exist on `commissions`. **2026-05-13 (audit #7):** uses `safe_cents_qty(price_cents, qty)` instead of the truncating `(price_cents * qty)::bigint` cast.
+- `create_delivery_with_items(p_order_id uuid, p_customer_id uuid, p_scheduled_date date, p_items jsonb, ...)` — atomic delivery + items create. Frontend (`NewDelivery.tsx`) calls this instead of two separate `.insert()`s — closes audit #10 (orphaned-delivery race). Generates `delivery_number` via `next_delivery_number()`. SECURITY DEFINER, role-gated to admin/sales_rep. Migration 20260513010000.
+- `bulk_import_order(p_order_number text, p_customer_id uuid, p_status text, totals..., p_items jsonb, ...)` — atomic per-order create for `BulkOrderImport.tsx`. Closes audit #31 (orphaned-orders during CSV import). Frontend resolves customer/product IDs first then ships per-order to this RPC. Migration 20260513010000.
 - `check_duplicate_delivery()` — check if a duplicate delivery exists for an order
 - `void_delivery()` — void a completed delivery, reversing inventory transactions. **P4-10 (2026-05-07):** same WARN-only backdated check as `complete_delivery` — voiding for a date in a closed period emits a non-blocking warning and proceeds.
 
@@ -207,7 +210,22 @@ is_sales_rep()  -- SECURITY DEFINER STABLE
 is_driver()     -- SECURITY DEFINER STABLE
 is_applicator() -- SECURITY DEFINER STABLE
 is()            -- base role-check helper
+
+-- Audit #6 (2026-05-13) — canonical commission math
+compute_commission_amount(p_profit numeric, p_percentage numeric) RETURNS numeric
+  -- IMMUTABLE; GREATEST(ROUND(profit * pct / 100, 2), 0). The ONLY place
+  -- the formula lives. Called by _insert_commissions_for_order().
+
+-- Audit #7 (2026-05-13) — to-nearest-cent multiplication
+safe_cents_qty(p_cents bigint, p_qty numeric) RETURNS bigint
+  -- IMMUTABLE; ROUND(p_cents * p_qty)::bigint. Use this instead of
+  -- (p_cents * p_qty)::bigint which truncates fractional cents. The
+  -- sql-safety.mjs hook flags the unsafe pattern in new migrations.
 ```
+
+## Rebate RPCs (audit #33, 2026-05-13)
+- `create_rebate_claim(p_program_id uuid, p_quantity numeric, p_claim_amount_cents bigint, p_order_id uuid?, p_customer_id uuid?, p_product_id uuid?, p_notes text?, p_idempotency_key text?)` — atomic claim create with auto-generated `RC-YYYY-NNNN` claim_number from per-year `rebate_claim_counters` table (atomic via `INSERT ... ON CONFLICT DO UPDATE` row-lock). Replaces the racy `count(*) + 1` pattern in `Rebates.tsx`. SECURITY DEFINER, role-gated to admin/sales_rep.
+- `transition_rebate_claim(p_claim_id uuid, p_new_status text, p_paid_amount_cents bigint?, p_manufacturer_ref text?, p_idempotency_key text?)` — state-machine transition under `SELECT FOR UPDATE` row lock. Validates pending→submitted/rejected, submitted→approved/rejected, approved→paid. Raises `INVALID_TRANSITION` token on stale-state. For `'paid'`, writes `paid_amount_cents` (defaults to `claim_amount_cents`) — closes the gap where the original UI never set this column. Admin-only.
 
 ---
 
@@ -238,6 +256,10 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 - `check_idempotency()` — check if an idempotency key has been used
 - `save_idempotency()` — persist an idempotency key result
 - `check_rate_limit()` — rate limiting check
+
+### Commission / Order Helpers (audit #6, 2026-05-13)
+- `_insert_commissions_for_order(p_order_id uuid, p_customer_id uuid, p_order_profit numeric, p_commission_split jsonb, p_order_date date)` — single source of truth for commission INSERT. Called via `PERFORM` from `convert_quote_to_order`, `create_direct_order`, and `create_quick_delivery`. Uses `compute_commission_amount()` helper for the formula. SECURITY DEFINER. EXECUTE revoked from PUBLIC/anon/authenticated — only callable from inside other SECURITY DEFINER bodies (which run as the owner).
+- `_snapshot_order_item_cost()` — BEFORE INSERT trigger function on `order_items`. Snapshots `products.current_cost * 100` into `order_items.cost_at_time_cents` if caller didn't pre-populate. SECURITY DEFINER. Migration 20260513050000 (audit #32).
 
 ### Status Change Triggers
 - `trg_delivery_status_change()` — fires on delivery status change (notifications, side effects)
