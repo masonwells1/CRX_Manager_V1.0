@@ -17,7 +17,7 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import type { Vendor, PurchaseOrder } from '../types';
 
 export default function NewVendorBill() {
@@ -106,7 +106,8 @@ export default function NewVendorBill() {
     setSaving(true);
     try {
       const subtotalCents = parseDollarsToCents(subtotalDollars);
-      const adjustmentCents = parseDollarsToCents(adjustmentDollars || '0');
+      // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
+      const adjustmentCents = parseDollarsToCentsSigned(adjustmentDollars || '0');
 
       // (codex audit F4, 2026-05-10): mirror the backend's `v_total > 0`
       // guard at the UI so users see a clear inline message instead of an
@@ -151,7 +152,7 @@ export default function NewVendorBill() {
     setSaving(false);
   };
 
-  const totalCents = parseDollarsToCents(subtotalDollars || '0') + parseDollarsToCents(adjustmentDollars || '0');
+  const totalCents = parseDollarsToCents(subtotalDollars || '0') + parseDollarsToCentsSigned(adjustmentDollars || '0');
   const fmt = (cents: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 

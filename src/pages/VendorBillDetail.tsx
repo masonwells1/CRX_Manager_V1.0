@@ -26,7 +26,7 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import type { VendorBill, VendorPayment } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -192,7 +192,8 @@ export default function VendorBillDetail() {
       toast('error', 'Subtotal must be positive');
       return;
     }
-    const adjustmentCents = parseDollarsToCents(editAdjustment);
+    // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
+    const adjustmentCents = parseDollarsToCentsSigned(editAdjustment);
     if (!editBillDate || !editDueDate) {
       toast('error', 'Bill date and due date are required');
       return;
