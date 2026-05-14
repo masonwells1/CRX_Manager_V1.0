@@ -46,3 +46,6 @@ backups/
 # Working data for perf sweep / one-off analyses (regenerable from advisor + DB)
 .perf-sweep-data/
 
+# Vercel CLI working directory
+.vercel/
+
