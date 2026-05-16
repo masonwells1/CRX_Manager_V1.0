@@ -1,8 +1,8 @@
-# CRX Manager — TODO (as of 2026-05-16)
+# CRX Manager — TODO (as of 2026-05-16, end of day)
 
 Snapshot of what's done, what's outstanding, and what's deferred after the
 2026-05-09 audit sprint + 2026-05-13 codex review of PR #59 + 2026-05-16
-verification session.
+verification session + 2026-05-16 ultra-review Phases 1/2/3 + 2026-05-16 closeout.
 
 ---
 
@@ -23,66 +23,82 @@ verification session.
 
 See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for full table.
 
-### 2026-05-16 verification session
-- **`send-email` Edge Function deployed to v10** — `farm_name` fix from PR-03 (commit `31c3db1`, dated 2026-05-09) was on the branch for ~7 days but never deployed. Live v9 was still selecting `customers.name` (column doesn't exist), silently failing for every customer-tied email. Now live at v10 with `select("id, email, farm_name")` verified in the deployed bundle.
-- **Frontend idempotency-key reuse verified clean** — all 5 callsites flagged in 2026-05-12 ultra review (`PrepaymentManager.tsx` ×3, `BulkOrderImport.tsx`, `BlendRecipes.tsx`) are already using `useIdempotencyKey()` hooks or stable per-order key generation. No fix needed.
-- **Advisory comment posted on PR #60** — flagged that the two migration files in that PR (`20260511120000_security_audit_2026_05_11.sql` drops `profile_public_view`; `20260511120100_drop_public_bucket_select_policies.sql`) conflict with live code that depends on the view. PR #60 needs to be closed or rebased — see Outstanding below.
+### 2026-05-16 verification session (morning)
+- **`send-email` Edge Function deployed to v10** — `farm_name` fix from PR-03 was sitting undeployed for ~7 days; live v9 was silently failing every customer-tied email. Verified via `get_edge_function`.
+- **Frontend idempotency-key reuse verified clean** — all 5 callsites from the 2026-05-12 ultra review already use `useIdempotencyKey()` or stable per-order keys.
+- **Migration 334** — `transfer_job_to_invoice` cents-math fix (`safe_cents_qty` + ROUND) applied live.
+- **Advisory comment posted on PR #60** (later resolved — see closeout).
+- **17 of 20 PR #59 codex threads bulk-resolved** via GraphQL.
+
+### 2026-05-16 ultra-review Phase 1 + 2 (`docs/reports/2026-05-16-ultra-code-review-findings.md`)
+- **P1 #1 closed** — Migration 335 wires canonical `check_idempotency` / `save_idempotency` into `transfer_job_to_invoice`. Removes the prior exempt marker.
+- **P1 #2 verified false positive** — All 5 cited SECURITY DEFINER functions already have `search_path=public, pg_temp` in live `pg_proc` (reviewer was looking at original source migrations; subsequent migrations had fixed them).
+- **P1 #3 closed** — `offlineSync.ts` now uses `assertRpcResult` to catch `{data:null,error:null}` silent failures. Restructured to per-branch switch with literal RPC names for assertRpcCoverage compliance. Added regression test (1913 → 1914 tests).
+- **P1 #4 closed** — Migration 336 adds `p_idempotency_key text DEFAULT NULL` + canonical wiring to `log_failed_notification` and `notify_damaged_receiving`. Frontend was passing the key but PostgREST was failing function lookup silently.
+
+### 2026-05-16 ultra-review Phase 3
+- **P2 #5 closed** — Migration 337 expands `email_log.status` CHECK to include `'pending'`. `send-email` Edge Function deployed to v11 with durable write-ahead-log pattern: insert pending row BEFORE Resend, update to sent/failed after. If pre-send insert fails, don't send.
+- **P2 #6 code closed** — `process-blend-ticket` had 10 unchecked writes; now 5 critical writes throw with descriptive messages, 1 notification capture to Sentry as warning, 4 catch-block writes capture per-write to Sentry without re-throwing. **Edge Function deploy still pending** — file is 1168 lines, impractical to inline via MCP, Supabase CLI not installed locally.
+- **P3 #7 closed** — `setup-blend-tickets-storage` CORS hardening (v14): removed silent prod-URL fallback, throws on missing `ALLOWED_ORIGIN`.
+- **P3 #8 closed** — `rpc-functions.md` corrected: `void_vendor_bill` returns `void`, not `jsonb`.
+
+### 2026-05-16 closeout (afternoon)
+- **Final 3 PR #59 threads resolved** (customer RLS upper bound, apply_prepay hand-decrement, entity commission recipients). PR #59 now shows 0 open codex conversations.
+- **PR #60 follow-up posted** — investigation showed all 3 PR #60 migrations have already been applied to live (someone applied them earlier today). Live state verified healthy: `profile_public_view` exists, the 3 affected buckets are still `public=true` so `getPublicUrl()` rendering works. The original advisory ("do not merge") is now obsolete; the PR is safe to merge.
 
 ---
 
 ## 🔴 Outstanding — Mason action required
 
-### Phase 4: Backup verification
-- Verify Supabase backups in dashboard (point-in-time recovery enabled? scheduled snapshots running?)
-- Plan + schedule a future restore drill (target: restore latest snapshot to a preview branch, verify schema + a few sample rows match)
-- No code changes; pure operational task.
+### Deploy `process-blend-ticket` Edge Function
+Code is committed (commit `7f7e891`) with 10 error-check fixes from ultra-review P2 #6. The Edge Function deploy is the one manual step:
+```bash
+# Install Supabase CLI if not already installed:
+npm install -g supabase
+supabase login
+supabase link --project-ref rhyzpcqhnizqbxphqdkr
+# Then deploy:
+supabase functions deploy process-blend-ticket --project-ref rhyzpcqhnizqbxphqdkr
+```
+File is 1,168 lines — impractical to inline via MCP. After deploy, blend ticket OCR processing will properly surface failures instead of silently leaving tickets stuck.
+
+### Phase 4: Backup verification (Supabase dashboard only — not exposed via MCP)
+- Open Supabase dashboard → Settings → Database → Backups.
+- Verify PITR (point-in-time recovery) is enabled.
+- Verify daily snapshots are running.
+- Plan + schedule a future restore drill (half-day exercise: spin up fresh project, replay migrations, restore latest backup, smoke-test, delete project).
 
 ### #38: Abandoned-package swap
-- Needs test fixtures from Mason: `.shp`, `.dbf`, `.prj`, `.kml` sample files for the field-import flow.
-- Once fixtures land, the abandoned-package can be swapped out with a maintained alternative.
+- Needs test fixtures from you: `.shp`, `.dbf`, `.prj`, `.kml` sample files for the field-import flow.
+- Once fixtures land, `shapefile` and `@mapbox/togeojson` can be swapped to `shpjs` and `@tmcw/togeojson`.
 
-### PR #60 decision (draft, advisory comment posted 2026-05-16)
-PR #60 (`claude/app-review-audit-yseuL`) is still OPEN as draft, last updated 2026-05-11 (before the ultra review existed). Body claims "no code or schema changes — findings document only" but the file list contains 2 migrations totaling ~140 lines of risky SQL. Pick one:
-- **Close it** — cherry-pick `AUDIT_REPORT_2026-05-11.md` into `docs/audits/` first if useful as historical context.
-- **Rebase + drop the two migration files** — keeps the audit doc, removes the risk.
-- **Replace the view drop with a proper migration** — migrate any remaining callers off `profile_public_view`, *then* drop. Probably the most work for the least value at this point.
+### Entity commission recipients design call
+`CMCTW LLC` and `Crop Rx Solutions` are commission recipients with no profile row, so `recipient_user_id` stays NULL and `create_commission_payment` rejects them. Pre-existing limitation. **Pick 1 of 4 options:**
+1. Create service profile rows for entity recipients (smallest change; expands profile semantics)
+2. Refactor `CommissionSplitEditor` to source from `profile_public_view` and send profile UUIDs
+3. Update `create_commission_payment` to allow grouping by `recipient` text when `recipient_user_id IS NULL`
+4. Move entity-recipient payments to a separate manual flow
 
-Advisory comment with full context: https://github.com/masonwells1/CRX_Manager_V1.0/pull/60#issuecomment-4466986788
+Once decided, implementation is ~1 hour.
 
-### GitHub PR UI cleanup
-- ~17 codex review threads on PR #59 are now addressed but still showing as "Open" because Codex doesn't auto-resolve after fix-commits.
-- Manual "Resolve conversation" click needed on each. Roughly:
-  - 9 P1 threads (all addressed)
-  - 8 P2 threads (11 closed minus the 2 deferred = some still need clicks; 3 are marked `is_outdated` and will be hidden anyway)
+### Live-fire smoke test of `send-email` v11 (recommended but not blocking)
+30-second test: trigger any customer-tied email from the app, confirm it arrives. Proves the v11 WAL-pattern code executes end-to-end (deploy proves the bundle is there; this proves the new flow works).
 
-### Codex billing (if you want more reviews on this branch)
+### Codex billing (if you want more reviews)
 - Codex usage limit hit at end of 2026-05-13. Either upgrade plan or add credits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage), or accept the current state as final.
 
 ---
 
 ## 🟡 Deferred (intentional or follow-up sprint)
 
-### `safe_cents_qty` follow-up (3 instances)
-The audit #7 helper was applied to `create_quick_delivery` (most-trafficked path). 3 single-instance call sites still need wrapping in a follow-up sprint:
-- `transfer_job_to_invoice`
-- `create_invoice_from_blend_ticket`
-- `save_field_app_invoice`
-
-Each is a single `(*_cents * qty)::bigint` pattern with smaller blast radius than `create_quick_delivery`. Schema-aware hook `sql-safety.mjs` now blocks new instances.
+### `safe_cents_qty` follow-up (CLOSED 2026-05-16)
+**Done.** Live grep against `pg_proc` on 2026-05-16 showed only `transfer_job_to_invoice` actually had unsafe `(cents * qty)::bigint` patterns; the other two RPCs (`create_invoice_from_blend_ticket`, `save_field_app_invoice`) already used `ROUND(...)::bigint` throughout. The 2026-05-13 audit overcounted. Fix landed in migration 334 + 335. Schema-aware hook continues to block new instances.
 
 ### Customer RLS upper bound (P2 #3)
-**Decision: leave as-is.** Drivers/applicators can see customers for jobs scheduled arbitrarily far in the future. Intentional — farm logistics require future visibility for route/job planning. Lower bound prevents the meaningful historical leak.
+**Decision: leave as-is.** Drivers/applicators can see customers for jobs scheduled arbitrarily far in the future. Intentional — farm logistics require future visibility for route/job planning. Lower bound prevents the meaningful historical leak. PR #59 thread resolved 2026-05-16.
 
-### Entity commission recipients (P2 — design call)
-`CMCTW LLC` and `Crop Rx Solutions` are in `CommissionSplitEditor.RECIPIENTS` but have no profile row, so `recipient_user_id` stays NULL after my full_name lookup. `create_commission_payment` rejects NULL recipients → those commissions can't be paid via the standard flow.
-
-**Options (need Mason's pick):**
-1. Create service profile rows for entity recipients (smallest change, but expands profile semantics)
-2. Refactor `CommissionSplitEditor` to source from `profile_public_view` and send profile UUIDs in the JSONB
-3. Update `create_commission_payment` to allow grouping by `recipient` text when `recipient_user_id` is NULL
-4. Move entity-recipient payments to a separate manual flow
-
-Pre-existing limitation, not a regression from this PR — affected entity-recipient commissions have always been unpayable via this path.
+### Apply prepay hand-decrement cleanup (deferred observation window)
+Per the 2026-05-12 audit, `apply_prepay_to_invoice` still hand-decrements `prepay_credits.balance_cents` in its body while the new trigger (migration 314) recomputes from `original_amount_cents - SUM(applications)`. Same end-state because the trigger fires after and overwrites. The hand-decrement can be dropped after watching the trigger in prod for a few weeks. PR #59 thread resolved 2026-05-16 (deferred is a decision).
 
 ---
 
@@ -97,14 +113,16 @@ Blocked on creating `crx-manager-staging` Supabase project + adding `STAGING_SUP
 
 | Metric | Value |
 |---|---|
-| Migrations | 333 |
+| Migrations | 337 (340 once PR #60 merges) |
 | Pages | 66 |
 | Tables | 93 |
 | RPCs | ~184 |
-| Edge Functions | 7 (all current — `send-email` v10 as of 2026-05-16) |
-| Unit tests | 1,913 passing (130 files, 70 skipped) |
+| Edge Functions | 7 — `send-email` v11, `setup-blend-tickets-storage` v14, `process-blend-ticket` v16 (deploy pending), others current |
+| Unit tests | 1,914 passing (130 files, 70 skipped) |
 | E2E spec files | 94 |
 | ESLint errors | 0 |
 | TypeScript errors | 0 |
 | Supabase perf advisor WARN | 0 (was 97) |
 | CI on `fix/audit-2026-05-09` | green |
+| PR #59 codex threads open | 0 (all 20 resolved) |
+| PR #60 status | Live state already applied; safe to merge per follow-up comment |
