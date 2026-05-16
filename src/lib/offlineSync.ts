@@ -2,7 +2,7 @@
  * Offline Sync Service — Processes the offline queue when connection returns.
  * Maps stored operations to actual Supabase RPC calls.
  */
-import { supabase } from './db';
+import { supabase, assertRpcResult } from './db';
 import { Sentry } from './sentry';
 import {
   getPendingActions,
@@ -129,24 +129,75 @@ async function executeAction(action: PendingAction): Promise<void> {
     }
   }
 
-  // All operations follow the same pattern: call supabase.rpc with params
-  const rpcOperations: Record<string, string> = {
-    complete_delivery: 'complete_delivery',
-    allocate_payment: 'allocate_payment',
-    receive_po_items: 'receive_po_items',
-    update_order_items: 'update_order_items',
-    complete_job: 'complete_job',
-    cancel_delivery: 'cancel_delivery',
-    cancel_order: 'cancel_order',
-    confirm_delivery: 'confirm_delivery',
-    match_quick_receive_items: 'match_quick_receive_items',
-  };
-
-  const rpcName = rpcOperations[operation];
-  if (!rpcName) {
-    throw new Error(`Unknown offline operation: ${operation}. Valid operations: ${Object.keys(rpcOperations).join(', ')}`);
+  // Audit 2026-05-16 P1 #3: all mapped offline RPCs return jsonb (verified
+  // via pg_proc). If supabase returns { data: null, error: null } — RLS denial
+  // on a chained SELECT, trigger fail-soft path, etc. — the action would be
+  // silently removed as synced. assertRpcResult throws on null data so the
+  // action is retained in queue for retry.
+  //
+  // Per-branch literal RPC names (not a dynamic `supabase.rpc(name, ...)`)
+  // because assertRpcCoverage.test.ts's regex only matches string-literal call
+  // sites. See LogbookReport.tsx for the canonical example of this shape.
+  switch (operation) {
+    case 'complete_delivery': {
+      const { data, error } = await supabase.rpc('complete_delivery', params);
+      if (error) throw error;
+      assertRpcResult(data, 'complete_delivery');
+      return;
+    }
+    case 'allocate_payment': {
+      const { data, error } = await supabase.rpc('allocate_payment', params);
+      if (error) throw error;
+      assertRpcResult(data, 'allocate_payment');
+      return;
+    }
+    case 'receive_po_items': {
+      const { data, error } = await supabase.rpc('receive_po_items', params);
+      if (error) throw error;
+      assertRpcResult(data, 'receive_po_items');
+      return;
+    }
+    case 'update_order_items': {
+      const { data, error } = await supabase.rpc('update_order_items', params);
+      if (error) throw error;
+      assertRpcResult(data, 'update_order_items');
+      return;
+    }
+    case 'complete_job': {
+      const { data, error } = await supabase.rpc('complete_job', params);
+      if (error) throw error;
+      assertRpcResult(data, 'complete_job');
+      return;
+    }
+    case 'cancel_delivery': {
+      const { data, error } = await supabase.rpc('cancel_delivery', params);
+      if (error) throw error;
+      assertRpcResult(data, 'cancel_delivery');
+      return;
+    }
+    case 'cancel_order': {
+      const { data, error } = await supabase.rpc('cancel_order', params);
+      if (error) throw error;
+      assertRpcResult(data, 'cancel_order');
+      return;
+    }
+    case 'confirm_delivery': {
+      const { data, error } = await supabase.rpc('confirm_delivery', params);
+      if (error) throw error;
+      assertRpcResult(data, 'confirm_delivery');
+      return;
+    }
+    case 'match_quick_receive_items': {
+      const { data, error } = await supabase.rpc('match_quick_receive_items', params);
+      if (error) throw error;
+      assertRpcResult(data, 'match_quick_receive_items');
+      return;
+    }
+    default:
+      throw new Error(
+        `Unknown offline operation: ${operation}. Valid operations: ` +
+        `complete_delivery, allocate_payment, receive_po_items, update_order_items, ` +
+        `complete_job, cancel_delivery, cancel_order, confirm_delivery, match_quick_receive_items`
+      );
   }
-
-  const { error } = await supabase.rpc(rpcName, params);
-  if (error) throw error;
 }

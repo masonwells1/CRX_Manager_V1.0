@@ -1,8 +1,12 @@
-# Migration History (334 migrations)
+# Migration History (336 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
-> ⚠️ **Doc-debt:** entries below cover #1–#321 + #334. Entries for #322–#333 (the 12 migrations applied 2026-05-13 during the codex review of PR #59) are pending backfill in a future doc-sweep. Live state is current; only this human-readable index is behind. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for the full list.
+> ⚠️ **Doc-debt:** entries below cover #1–#321 + #334–#336. Entries for #322–#333 (the 12 migrations applied 2026-05-13 during the codex review of PR #59) are pending backfill in a future doc-sweep. Live state is current; only this human-readable index is behind. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for the full list.
+
+> ✅ **Migration 336 (20260516020000) applied live 2026-05-16.** Ultra-review P1 #4 closure — added `p_idempotency_key text DEFAULT NULL` + canonical `check_idempotency`/`save_idempotency` wiring to `log_failed_notification` (returns uuid; cached as `{'id': uuid}` jsonb) and `notify_damaged_receiving` (returns void; cached as empty jsonb). Frontend was passing the key but SQL didn't accept it, so PostgREST function lookup was failing silently. DROP FUNCTION first because adding a defaulted param creates a new overload instead of replacing. Hook exempt: helper-pattern indirection.
+
+> ✅ **Migration 335 (20260516010000) applied live 2026-05-16.** Ultra-review P1 #1 closure — wired canonical idempotency into `transfer_job_to_invoice`. The prior migration (#334) had used the `idempotency-body-check: exempt` marker to preserve the function's pre-existing gap (declared `p_idempotency_key` but never honored it). The ultra reviewer correctly flagged that after a successful invoice creation, a network-dropped response causes the retry to hit "Job already invoiced" instead of replaying the success — real customer-visible bug. Migration #335 adds `check_idempotency`/`save_idempotency` calls. All other behavior (safe_cents_qty wraps from #334, FOR UPDATE lock, advisory lock) preserved verbatim.
 
 > ✅ **Migration 334 (20260516000000) applied live 2026-05-16.** Audit #7 closure — `transfer_job_to_invoice` had 2 unsafe `(cents * qty)::bigint` patterns in the v_share loop. Wrapped with `safe_cents_qty()` (price_override branch) + `ROUND()` (pct-split branch). Closes the last deferred safe-cents follow-up. Live `prosrc` verification confirmed both fixes present and old unsafe pattern absent.
 

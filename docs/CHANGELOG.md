@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-16 — Ultra-review Phase 1 + 2: idempotency, offline sync (P1 #1, #3, #4)
+
+External ultra-review (`docs/reports/2026-05-16-ultra-code-review-findings.md`) flagged 4 P1 findings on top of the morning's session work. Verification showed P1 #2 was a **false positive** — all 5 cited SECURITY DEFINER functions actually have `search_path=public, pg_temp` in live `pg_proc`; the reviewer was reading the original source migrations where they were initially created without `pg_temp`, but subsequent migrations rewrote them with the correct config. Lesson: verify against live state, not source files.
+
+The other 3 P1s were real and closed:
+
+**P1 #1 — `transfer_job_to_invoice` idempotency bypass (migration #335).** The morning's migration #334 had used the `idempotency-body-check: exempt` marker to preserve the function's pre-existing gap. The reviewer correctly noted that this creates a customer-visible bug: after a successful invoice creation, a network-dropped response causes the retry to fail with "Job already invoiced" instead of replaying the success. Wired canonical `check_idempotency`/`save_idempotency` calls. Removed the exempt marker. Function interface unchanged.
+
+**P1 #4 — Notification RPC signature mismatch (migration #336).** Frontend `src/lib/notificationTriggers.ts` was passing `p_idempotency_key: crypto.randomUUID()` to `log_failed_notification` (5-arg signature) and `notify_damaged_receiving` (3-arg signature). PostgREST function lookup was failing silently — damaged-receiving alerts were broken AND the fallback failure-queue logging was also broken (compounding the silence). Added `p_idempotency_key text DEFAULT NULL` to both signatures, wired canonical idempotency. DROP FUNCTION before CREATE because adding a defaulted param creates a new overload, not a replacement.
+
+**P1 #3 — Offline sync validation (`src/lib/offlineSync.ts`).** `executeOfflineAction()` only checked `error`, not `data`. If Supabase returned `{ data: null, error: null }` — RLS denial on a SELECT chain, trigger fail-soft path, etc. — the action was silently removed as if synced. Verified via pg_proc that all 9 mapped offline RPCs return jsonb (none are void), so a uniform null-data throw is safe. Added the check + a regression test asserting the queued action is retained for retry when null data comes back. Test count: 1,913 → 1,914.
+
+**Audit file imported:** `docs/reports/2026-05-16-ultra-code-review-findings.md` — preserved verbatim for future reference, including the false-positive finding (which has a useful "verify against live state, not source files" lesson baked in).
+
+---
+
 ## 2026-05-16 — Audit #7 closure: safe_cents_qty wrap on transfer_job_to_invoice
 
 Closes the last deferred `safe_cents_qty` follow-up from the 2026-05-13 audit sprint. The 2026-05-13 execution summary listed 3 RPCs as deferred (`transfer_job_to_invoice`, `create_invoice_from_blend_ticket`, `save_field_app_invoice`) but live `pg_proc` grep on 2026-05-16 showed only `transfer_job_to_invoice` actually had unsafe `(cents * qty)::bigint` patterns — the other 2 already used `ROUND(...)::bigint` throughout. The original audit overcounted.
