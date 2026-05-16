@@ -4,13 +4,19 @@ import { captureEdgeException } from "../_shared/sentry.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
+// 2026-05-16 (ultra-review P3 #7): removed silent prod-URL fallback. Missing
+// secret now fails loud, matching the PR-16 pattern used by every other
+// hardened Edge Function. Hides deployment misconfiguration is worse than
+// boot failure — at least boot failure is loud.
 function getAllowedOrigin(): string {
   const origin = Deno.env.get("ALLOWED_ORIGIN");
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  // Fallback to production domain when secret not configured
-  return "https://croprxsolutions.app";
+  throw new Error(
+    "ALLOWED_ORIGIN env var is required for production deployments. " +
+      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
+  );
 }
 
 const corsHeaders = {

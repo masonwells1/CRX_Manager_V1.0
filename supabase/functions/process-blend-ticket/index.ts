@@ -857,9 +857,15 @@ Deno.serve(async (req: Request) => {
   const queueId = existingQueue?.id;
 
   try {
-    // Mark as processing
+    // 2026-05-16 ultra-review P2 #6: every critical write now destructures
+    // { error } and throws on failure. Without this, silent write failures
+    // left tickets/queues in inconsistent state (queue stuck, ticket marked
+    // processing forever, missing products, etc.) and the function still
+    // reported success.
+
+    // Mark queue as processing (critical — without this the queue can't track state)
     if (queueId) {
-      await adminClient
+      const { error: qProcErr } = await adminClient
         .from("ocr_processing_queue")
         .update({
           status: "processing",
@@ -867,12 +873,15 @@ Deno.serve(async (req: Request) => {
           updated_at: new Date().toISOString(),
         })
         .eq("id", queueId);
+      if (qProcErr) throw new Error(`Failed to mark queue ${queueId} as processing: ${qProcErr.message}`);
     }
 
-    await adminClient
+    // Mark ticket as processing (critical — UI shows stale state if this fails)
+    const { error: tProcErr } = await adminClient
       .from("blend_tickets")
       .update({ status: "processing" })
       .eq("id", blendTicketId);
+    if (tProcErr) throw new Error(`Failed to mark ticket ${blendTicketId} as processing: ${tProcErr.message}`);
 
     // Fetch images
     const { data: images, error: imgErr } = await adminClient
@@ -969,12 +978,14 @@ Deno.serve(async (req: Request) => {
       ticketUpdate.customer_id = matchedCustomerId;
     }
 
-    await adminClient
+    // Update ticket with parsed data (critical — this IS the OCR result)
+    const { error: tUpdateErr } = await adminClient
       .from("blend_tickets")
       .update(ticketUpdate)
       .eq("id", blendTicketId);
+    if (tUpdateErr) throw new Error(`Failed to update ticket ${blendTicketId} with parsed data: ${tUpdateErr.message}`);
 
-    // Insert product records
+    // Insert product records (critical — each row IS extracted product data)
     for (let i = 0; i < parsedData.products.length; i++) {
       const prod = parsedData.products[i];
       let matchedProductId: string | null = null;
@@ -984,7 +995,7 @@ Deno.serve(async (req: Request) => {
         if (matched) matchedProductId = matched.id;
       }
 
-      await adminClient.from("blend_ticket_products").insert({
+      const { error: prodInsertErr } = await adminClient.from("blend_ticket_products").insert({
         blend_ticket_id: blendTicketId,
         product_id: matchedProductId,
         product_name: prod.productName,
@@ -995,11 +1006,12 @@ Deno.serve(async (req: Request) => {
         confidence_score: prod.confidenceScore,
         manually_corrected: false,
       });
+      if (prodInsertErr) throw new Error(`Failed to insert product row ${i + 1} for ticket ${blendTicketId}: ${prodInsertErr.message}`);
     }
 
-    // Mark queue complete
+    // Mark queue complete (critical — queue stays "processing" forever otherwise, blocking retry logic)
     if (queueId) {
-      await adminClient
+      const { error: qCompleteErr } = await adminClient
         .from("ocr_processing_queue")
         .update({
           status: "completed",
@@ -1007,6 +1019,7 @@ Deno.serve(async (req: Request) => {
           updated_at: new Date().toISOString(),
         })
         .eq("id", queueId);
+      if (qCompleteErr) throw new Error(`Failed to mark queue ${queueId} as completed: ${qCompleteErr.message}`);
     }
 
     // Notify uploader
@@ -1017,7 +1030,10 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (ticket?.uploaded_by) {
-      await adminClient.from("notifications").insert({
+      // Notification is non-critical (audit #28 + reviewer's recommendation):
+      // OCR processing already succeeded; missing notification doesn't roll back
+      // the work. Capture to Sentry so we know if it stops working systemically.
+      const { error: notifErr } = await adminClient.from("notifications").insert({
         user_id: ticket.uploaded_by,
         title: "Blend Ticket Processed",
         message:
@@ -1026,6 +1042,16 @@ Deno.serve(async (req: Request) => {
         related_entity_type: "blend_ticket",
         related_entity_id: blendTicketId,
       });
+      if (notifErr) {
+        console.warn("[process-blend-ticket] post-success notification insert failed:", notifErr);
+        await captureEdgeException(notifErr, {
+          function: "process-blend-ticket",
+          level: "warning",
+          tags: { phase: "post-success-notification" },
+          extra: { blend_ticket_id: blendTicketId, uploaded_by: ticket.uploaded_by },
+          user: { id: caller.id },
+        });
+      }
     }
 
     return jsonResponse({
@@ -1060,12 +1086,15 @@ Deno.serve(async (req: Request) => {
       user: { id: caller.id },
     });
 
-    // Handle retry logic
+    // Handle retry logic — these are best-effort cleanup writes inside the
+    // catch block. Don't re-throw on failure (would mask the original error
+    // captured to Sentry above). Capture each failure separately so we can
+    // diagnose if cleanup itself is broken.
     if (queueId && existingQueue) {
       const newRetryCount = (existingQueue.retry_count || 0) + 1;
 
       if (newRetryCount >= (existingQueue.max_retries || 3)) {
-        await adminClient
+        const { error: qFailErr } = await adminClient
           .from("ocr_processing_queue")
           .update({
             status: "failed",
@@ -1075,13 +1104,31 @@ Deno.serve(async (req: Request) => {
             updated_at: new Date().toISOString(),
           })
           .eq("id", queueId);
+        if (qFailErr) {
+          console.warn("[process-blend-ticket] catch-cleanup: queue->failed write failed:", qFailErr);
+          await captureEdgeException(qFailErr, {
+            function: "process-blend-ticket",
+            level: "warning",
+            tags: { phase: "catch-cleanup-queue-failed" },
+            extra: { queueId, blend_ticket_id: blendTicketId, original_error: errorMessage },
+          });
+        }
 
-        await adminClient
+        const { error: tFailErr } = await adminClient
           .from("blend_tickets")
           .update({ status: "failed" })
           .eq("id", blendTicketId);
+        if (tFailErr) {
+          console.warn("[process-blend-ticket] catch-cleanup: ticket->failed write failed:", tFailErr);
+          await captureEdgeException(tFailErr, {
+            function: "process-blend-ticket",
+            level: "warning",
+            tags: { phase: "catch-cleanup-ticket-failed" },
+            extra: { blend_ticket_id: blendTicketId, original_error: errorMessage },
+          });
+        }
       } else {
-        await adminClient
+        const { error: qPendingErr } = await adminClient
           .from("ocr_processing_queue")
           .update({
             status: "pending",
@@ -1090,11 +1137,29 @@ Deno.serve(async (req: Request) => {
             updated_at: new Date().toISOString(),
           })
           .eq("id", queueId);
+        if (qPendingErr) {
+          console.warn("[process-blend-ticket] catch-cleanup: queue->pending write failed:", qPendingErr);
+          await captureEdgeException(qPendingErr, {
+            function: "process-blend-ticket",
+            level: "warning",
+            tags: { phase: "catch-cleanup-queue-pending" },
+            extra: { queueId, blend_ticket_id: blendTicketId, original_error: errorMessage },
+          });
+        }
 
-        await adminClient
+        const { error: tPendingErr } = await adminClient
           .from("blend_tickets")
           .update({ status: "pending" })
           .eq("id", blendTicketId);
+        if (tPendingErr) {
+          console.warn("[process-blend-ticket] catch-cleanup: ticket->pending write failed:", tPendingErr);
+          await captureEdgeException(tPendingErr, {
+            function: "process-blend-ticket",
+            level: "warning",
+            tags: { phase: "catch-cleanup-ticket-pending" },
+            extra: { blend_ticket_id: blendTicketId, original_error: errorMessage },
+          });
+        }
       }
     }
 

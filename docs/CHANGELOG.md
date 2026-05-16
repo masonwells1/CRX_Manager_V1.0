@@ -4,6 +4,24 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-16 — Ultra-review Phase 3: send-email durability, error checks, CORS, docs (P2 #5, #6 + P3 #7, #8)
+
+**P2 #5 — `send-email` durable idempotency (Edge Function v11 + migration #337).**
+Prior flow: check email_log → send via Resend → INSERT email_log. If the post-send insert failed, customer got the email but no audit record and no idempotency replay marker — future retries would duplicate. New write-ahead-log flow: INSERT email_log with `status='pending'` BEFORE Resend call; if pending insert fails, DON'T send (return 500). After Resend returns, UPDATE the pending row to `'sent'` or `'failed'`. Idempotency check now only returns cached success when status is exactly `'sent'`; existing `'pending'`/`'failed'` rows are reused for retry. Required migration #337 to add `'pending'` to the `email_log.status` CHECK constraint (was `'sent', 'failed', 'bounced'`). EmailLog TS type updated accordingly.
+
+**P2 #6 — `process-blend-ticket` error checks.** 10 unchecked `await adminClient.from(...).update/insert(...)` calls were causing silent failures: tickets stuck "processing" forever, queues stuck in wrong state, missing product rows, and the function still returning success. Categorized:
+- 5 critical success-path writes (queue→processing, ticket→processing, ticket→update with parsed data, blend_ticket_products inserts, queue→complete): now destructure `{ error }` and throw with descriptive message on failure.
+- 1 non-critical notification write (uploader-completion notification): destructures error, logs warning, captures to Sentry, does NOT throw (OCR success shouldn't be rolled back by a notification glitch).
+- 4 catch-block cleanup writes (queue→failed, ticket→failed, queue→pending retry, ticket→pending retry): destructures error, captures to Sentry with `catch-cleanup-*` tags, does NOT re-throw (would mask the original error already captured at the top of the catch block).
+
+**P3 #7 — `setup-blend-tickets-storage` CORS hardening (Edge Function v14).** Removed the silent `return "https://croprxsolutions.app"` fallback when `ALLOWED_ORIGIN` is missing. Now throws at module load, matching the PR-16 pattern used by every other hardened Edge Function. Hiding deployment misconfiguration is worse than boot failure.
+
+**P3 #8 — `void_vendor_bill` docs drift.** Updated `docs/reference/rpc-functions.md:169` to say `→ void` instead of `→ jsonb` (live SQL returns void per pg_proc; frontend already uses `.throwOnError()` correctly). One-line fix.
+
+**Pending Mason:** `process-blend-ticket` source code is committed but the Edge Function needs a manual deploy (file is 1,168 lines — impractical to inline via MCP, Supabase CLI not installed locally). Run `supabase functions deploy process-blend-ticket` from a workstation with the CLI installed.
+
+---
+
 ## 2026-05-16 — Ultra-review Phase 1 + 2: idempotency, offline sync (P1 #1, #3, #4)
 
 External ultra-review (`docs/reports/2026-05-16-ultra-code-review-findings.md`) flagged 4 P1 findings on top of the morning's session work. Verification showed P1 #2 was a **false positive** — all 5 cited SECURITY DEFINER functions actually have `search_path=public, pg_temp` in live `pg_proc`; the reviewer was reading the original source migrations where they were initially created without `pg_temp`, but subsequent migrations rewrote them with the correct config. Lesson: verify against live state, not source files.

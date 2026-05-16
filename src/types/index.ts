@@ -2351,7 +2351,7 @@ export interface EmailLog {
   html_body: string | null;
   attachment_name: string | null;
   resend_message_id: string | null;
-  status: 'sent' | 'failed' | 'bounced';
+  status: 'pending' | 'sent' | 'failed' | 'bounced';
   error_message: string | null;
   idempotency_key: string | null;
   created_by: string | null;

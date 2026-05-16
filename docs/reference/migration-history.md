@@ -1,8 +1,10 @@
-# Migration History (336 migrations)
+# Migration History (337 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
-> ⚠️ **Doc-debt:** entries below cover #1–#321 + #334–#336. Entries for #322–#333 (the 12 migrations applied 2026-05-13 during the codex review of PR #59) are pending backfill in a future doc-sweep. Live state is current; only this human-readable index is behind. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for the full list.
+> ⚠️ **Doc-debt:** entries below cover #1–#321 + #334–#337. Entries for #322–#333 (the 12 migrations applied 2026-05-13 during the codex review of PR #59) are pending backfill in a future doc-sweep. Live state is current; only this human-readable index is behind. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for the full list.
+
+> ✅ **Migration 337 (20260516030000) applied live 2026-05-16.** Ultra-review P2 #5 prep — expanded `email_log.status` CHECK to allow `'pending'` (was `'sent', 'failed', 'bounced'`). Supports the durable write-ahead-log pattern in `send-email` Edge Function v11: insert pending row BEFORE Resend call, update to sent/failed after. Eliminates the "customer got email but no audit/idempotency record" failure mode when post-send INSERT fails. Existing code paths that filter by sent/failed/bounced unaffected.
 
 > ✅ **Migration 336 (20260516020000) applied live 2026-05-16.** Ultra-review P1 #4 closure — added `p_idempotency_key text DEFAULT NULL` + canonical `check_idempotency`/`save_idempotency` wiring to `log_failed_notification` (returns uuid; cached as `{'id': uuid}` jsonb) and `notify_damaged_receiving` (returns void; cached as empty jsonb). Frontend was passing the key but SQL didn't accept it, so PostgREST function lookup was failing silently. DROP FUNCTION first because adding a defaulted param creates a new overload instead of replacing. Hook exempt: helper-pattern indirection.
 

@@ -265,7 +265,10 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // 9. Idempotency replay
+    // 9. Idempotency replay — return cached success if we've already sent
+    //    successfully under this key.
+    let emailLogId: string | null = null;
+
     if (idempotency_key) {
       const { data: existing } = await adminClient
         .from("email_log")
@@ -273,22 +276,102 @@ Deno.serve(async (req: Request) => {
         .eq("idempotency_key", idempotency_key)
         .maybeSingle();
 
-      if (existing) {
+      if (existing && existing.status === "sent") {
+        // Already successfully sent — return cached success.
         return jsonResponse({
-          success: existing.status === "sent",
+          success: true,
           email_log_id: existing.id,
           resend_message_id: existing.resend_message_id,
           deduplicated: true,
         });
       }
+
+      // If existing pending/failed row: reuse its id, update to pending
+      // below, and overwrite the result after the next send attempt.
+      if (existing) emailLogId = existing.id;
     }
 
-    // 10. Resend send
+    // 10. Write-ahead log (2026-05-16 ultra-review P2 #5): insert/update the
+    //     email_log row to status='pending' BEFORE calling Resend. If this
+    //     write fails, we DON'T send — otherwise the customer could receive
+    //     an email with no audit record and no idempotency replay marker.
+    if (emailLogId) {
+      // Existing pending/failed row from a prior interrupted attempt — reset
+      // it to pending. Don't update content fields (preserve original intent).
+      const { error: updateErr } = await adminClient
+        .from("email_log")
+        .update({
+          status: "pending",
+          resend_message_id: null,
+          error_message: null,
+        })
+        .eq("id", emailLogId);
+      if (updateErr) {
+        await captureEdgeException(
+          new Error(`email_log pre-send reset failed: ${updateErr.message}`),
+          {
+            function: "send-email",
+            level: "error",
+            tags: { email_type, phase: "pre-send-log-reset" },
+            extra: { customer_id, idempotency_key, email_log_id: emailLogId },
+            user: { id: caller.id },
+          },
+        );
+        return jsonResponse(
+          { error: `Email pre-flight log reset failed: ${updateErr.message}` },
+          500,
+        );
+      }
+    } else {
+      // Fresh send — insert new pending row.
+      const { data: newRow, error: insertErr } = await adminClient
+        .from("email_log")
+        .insert({
+          customer_id: customer_id,
+          recipient_email: to,
+          email_type,
+          subject,
+          html_body: html,
+          attachment_name: attachments?.[0]?.filename || null,
+          resend_message_id: null,
+          status: "pending",
+          error_message: null,
+          idempotency_key: idempotency_key || null,
+          created_by: caller.id,
+        })
+        .select("id")
+        .single();
+      if (insertErr || !newRow) {
+        await captureEdgeException(
+          new Error(`email_log pre-send insert failed: ${insertErr?.message || 'no row returned'}`),
+          {
+            function: "send-email",
+            level: "error",
+            tags: { email_type, phase: "pre-send-log-insert" },
+            extra: { customer_id, idempotency_key },
+            user: { id: caller.id },
+          },
+        );
+        return jsonResponse(
+          { error: `Email pre-flight log insert failed: ${insertErr?.message || 'unknown'}` },
+          500,
+        );
+      }
+      emailLogId = newRow.id;
+    }
+
+    // 11. Resend send
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
     const fromEmail = Deno.env.get("FROM_EMAIL") || "noreply@croprxsolutions.app";
 
     if (!resendApiKey) {
-      return jsonResponse({ error: "RESEND_API_KEY not configured" }, 500);
+      // RESEND_API_KEY missing — mark the pending row as failed so the audit
+      // trail reflects reality.
+      await adminClient
+        .from("email_log")
+        .update({ status: "failed", error_message: "RESEND_API_KEY not configured" })
+        .eq("id", emailLogId);
+      return jsonResponse({ error: "RESEND_API_KEY not configured", email_log_id: emailLogId }, 500);
     }
 
     const resendBody: Record<string, unknown> = {
@@ -321,27 +404,27 @@ Deno.serve(async (req: Request) => {
     const resendMessageId = resendResult.id || null;
     const errorMessage = success ? null : (resendResult.message || JSON.stringify(resendResult));
 
-    // 11. email_log audit
-    const { data: logRow, error: logError } = await adminClient
+    // 12. Update the pending row to sent/failed. Even if this update fails,
+    //     the pending row exists for idempotency replay — durability is
+    //     already achieved.
+    const { error: postUpdateErr } = await adminClient
       .from("email_log")
-      .insert({
-        customer_id: customer_id,
-        recipient_email: to,
-        email_type,
-        subject,
-        html_body: html,
-        attachment_name: attachments?.[0]?.filename || null,
+      .update({
         resend_message_id: resendMessageId,
         status: success ? "sent" : "failed",
         error_message: errorMessage,
-        idempotency_key: idempotency_key || null,
-        created_by: caller.id,
       })
-      .select("id")
-      .single();
+      .eq("id", emailLogId);
 
-    if (logError) {
-      console.warn("Failed to insert email_log:", logError);
+    if (postUpdateErr) {
+      console.warn("[email_log] post-send update failed:", postUpdateErr);
+      await captureEdgeException(postUpdateErr, {
+        function: "send-email",
+        level: "warning",
+        tags: { email_type, phase: "post-send-log-update" },
+        extra: { customer_id, email_log_id: emailLogId, resend_message_id: resendMessageId, send_succeeded: success },
+        user: { id: caller.id },
+      });
     }
 
     if (!success) {
@@ -351,19 +434,19 @@ Deno.serve(async (req: Request) => {
         function: "send-email",
         level: "error",
         tags: { email_type, status_code: String(resendResp.status) },
-        extra: { customer_id, email_log_id: logRow?.id, resend_message_id: resendMessageId },
+        extra: { customer_id, email_log_id: emailLogId, resend_message_id: resendMessageId },
         user: { id: caller.id },
       });
       return jsonResponse({
         success: false,
         error: errorMessage,
-        email_log_id: logRow?.id,
+        email_log_id: emailLogId,
       }, 502);
     }
 
     return jsonResponse({
       success: true,
-      email_log_id: logRow?.id,
+      email_log_id: emailLogId,
       resend_message_id: resendMessageId,
     });
   } catch (err) {
