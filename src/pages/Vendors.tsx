@@ -70,13 +70,29 @@ export default function Vendors() {
     fetchVendors();
   }, [fetchVendors]);
 
+  // Codex P2 fix (PR #59, 2026-05-16): reset save/delete idempotency keys
+  // on every modal open. Without this, if a vendor save/delete succeeded
+  // on the server but the response was lost, opening the modal for a
+  // different vendor and submitting would reuse the same page-scoped key
+  // and replay the prior cached success — UI says success, but the new
+  // vendor was NOT mutated. Reset-on-open scopes each modal interaction
+  // to its own idempotency intent; retries of the same submission still
+  // reuse the key correctly because resetKey() is only called here and
+  // in the onSuccess paths.
   const openCreateModal = () => {
+    saveIdem.resetKey();
     setEditingId(null);
     setForm(blankPayload);
     setEditModalOpen(true);
   };
 
+  const openDeleteModal = (v: Vendor) => {
+    deleteIdem.resetKey();
+    setDeleteTarget(v);
+  };
+
   const openEditModal = (v: Vendor) => {
+    saveIdem.resetKey();
     setEditingId(v.id);
     setForm({
       name: v.name,
@@ -175,7 +191,7 @@ export default function Vendors() {
             <Pencil className="w-4 h-4" />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); setDeleteTarget(r); }}
+            onClick={(e) => { e.stopPropagation(); openDeleteModal(r); }}
             className="text-red-600 hover:text-red-700"
             title="Delete"
           >
