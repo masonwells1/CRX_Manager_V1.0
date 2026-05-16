@@ -291,6 +291,16 @@ export default function PrepaymentManager() {
   }, []);
 
   const openNewCheck = () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset the splitCheckIdem key on
+    // every modal open. Without this, if check A succeeds but the response
+    // is lost, then the admin edits the still-open form for a different
+    // customer/reference and submits check B, both calls share the same
+    // page-scoped key and the server replays A's cached success without
+    // creating check B's credits or updating B's customer balance.
+    // Reset-on-open means each modal-open starts a fresh idempotency
+    // intent. Retries of THE SAME submission still reuse the key correctly
+    // because resetKey() is only called here and in the onSuccess path.
+    splitCheckIdem.resetKey();
     setCheckForm({ customer_id: '', reference_number: '', total: '' });
     setBucketSplits([{ label: '', amount: '' }]);
     setShowNewCheck(true);

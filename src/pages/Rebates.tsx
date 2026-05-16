@@ -269,6 +269,12 @@ export default function Rebates() {
 
   // ===== Claim CRUD =====
   const openAddClaim = () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset the createClaimKey on every
+    // modal open. Without this, if claim A succeeds but the response is
+    // lost, then the admin reopens/edits the form and submits claim B,
+    // both calls share the same page-scoped key and the server replays
+    // A's cached result without inserting claim B.
+    createClaimKey.resetKey();
     setCForm({
       program_id: '',
       order_id: '',
