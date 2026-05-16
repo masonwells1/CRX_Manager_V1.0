@@ -286,8 +286,28 @@ Deno.serve(async (req: Request) => {
         });
       }
 
-      // If existing pending/failed row: reuse its id, update to pending
-      // below, and overwrite the result after the next send attempt.
+      // Codex P2 fix (PR #59, 2026-05-16 review of e5de0f2): refuse to re-send
+      // when an existing row for this idempotency_key is still 'pending'. The
+      // prior attempt may have already reached Resend and succeeded — only the
+      // post-send DB update failed. A re-send here would duplicate the
+      // customer email. Operator reconciles by inspecting Resend dashboard
+      // and updating the email_log row to 'sent' (replay deduplicates) or
+      // 'failed' (replay retries) before the same key can be reused.
+      if (existing && existing.status === "pending") {
+        return jsonResponse({
+          success: false,
+          error:
+            "Previous attempt with this idempotency_key is still pending. " +
+            "The email may already have been sent. Check Resend dashboard, " +
+            "then update email_log row to 'sent' (treat as deduplicated) or " +
+            "'failed' (allow retry) before reusing this key.",
+          email_log_id: existing.id,
+          needs_reconciliation: true,
+        }, 409);
+      }
+
+      // If existing failed row: reuse its id, update to pending below, and
+      // overwrite the result after the next send attempt.
       if (existing) emailLogId = existing.id;
     }
 
