@@ -4,6 +4,28 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-16 — Audit #7 closure: safe_cents_qty wrap on transfer_job_to_invoice
+
+Closes the last deferred `safe_cents_qty` follow-up from the 2026-05-13 audit sprint. The 2026-05-13 execution summary listed 3 RPCs as deferred (`transfer_job_to_invoice`, `create_invoice_from_blend_ticket`, `save_field_app_invoice`) but live `pg_proc` grep on 2026-05-16 showed only `transfer_job_to_invoice` actually had unsafe `(cents * qty)::bigint` patterns — the other 2 already used `ROUND(...)::bigint` throughout. The original audit overcounted.
+
+Migration `20260516000000_safe_cents_transfer_job_to_invoice.sql` rewrites the `v_share` loop with 2 surgical fixes:
+
+- **Price-override branch**: `(v_share.price_override_cents * v_share.share_acres)::bigint` → `safe_cents_qty(v_share.price_override_cents, v_share.share_acres)`. The helper does `ROUND(cents * qty)::bigint`, eliminating up to ~0.999 cents/share truncation loss.
+- **Pct-split branch**: `(COALESCE(v_job.total_price_cents, 0) * v_share.avg_split_pct / 100.0)::bigint` → `ROUND(COALESCE(...) * v_share.avg_split_pct / 100.0)::bigint`. Shape is cents × pct/100 (not cents × qty) so the `safe_cents_qty` helper doesn't fit; bare `ROUND()` is the right primitive.
+
+Net effect on multi-customer billing splits: `invoice_shares.amount_cents` sums now equal `invoices.total_amount_cents` exactly instead of drifting below by a fraction-of-a-cent per share row.
+
+Function body otherwise unchanged. Signature/return shape unchanged — no downstream impact on TypeScript types or the [JobDetail.tsx](../src/pages/JobDetail.tsx) caller. Migration has an inline `DO $verify$` block that asserts both fixes landed and aborts on failure. Applied live via Supabase MCP; `prosrc` post-apply confirmed both patterns present and old unsafe form absent.
+
+**Hook exempt rationale (top-of-file marker):** the function declares `p_idempotency_key` but its body has never honored it (no `check_idempotency` / no `save_idempotency`). Same behavior preserved verbatim — wiring canonical idempotency is a separate cleanup, low priority since `FOR UPDATE` on the job row + `pg_advisory_xact_lock` on invoice_number generation already serialize concurrent retries (the second call fails with "Job already invoiced" rather than producing duplicates).
+
+**Also closed today:**
+- `send-email` Edge Function deployed to v10 — PR-03 `farm_name` fix from 2026-05-09 had been on the branch for ~7 days but never deployed; live v9 was silently failing every customer-tied email. Verified deployed bundle via `get_edge_function`.
+- 17 of 20 PR #59 codex review threads bulk-resolved via GraphQL (the 3 left open are deferred-by-decision items: customer RLS upper bound, apply_prepay hand-decrement, entity commission recipients).
+- Advisory comment posted on PR #60 flagging that its `DROP VIEW profile_public_view` migration conflicts with current branch's view-dependent code.
+
+---
+
 ## 2026-05-13 — Audit #28 follow-up: REVOKE anon on 9 new SECURITY DEFINER functions
 
 Defense-in-depth cleanup discovered while running the security advisor post-sprint. Supabase grants EXECUTE on new public-schema functions to BOTH `anon` and `authenticated` by default — `REVOKE ALL ... FROM PUBLIC` strips the PUBLIC group's grant but leaves the role-specific anon grant intact. Each function body checks `auth.uid() IS NULL → AUTH_REQUIRED` so an anon caller can't actually do anything, but the advisor `0028_anon_security_definer_function_executable` correctly flags it (defense-in-depth means revoking the grant, not relying on the body to refuse).

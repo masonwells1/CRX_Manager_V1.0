@@ -8,7 +8,7 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-05-13, end of day)
-- 66 pages, 93 tables (incl. `rebate_claim_counters`), ~184 RPCs, **333 migrations**, 7 Edge Functions
+- 66 pages, 93 tables (incl. `rebate_claim_counters`), ~184 RPCs, **334 migrations**, 7 Edge Functions
 - 1,913 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
 - Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green
@@ -22,7 +22,8 @@
 - `parseDollarsToCents` is positive-only by default (strips sign). Use `parseDollarsToCentsSigned` for vendor-bill adjustment fields that legitimately accept negatives (3 callsites only).
 - Audit fix sprint 2026-05-09 complete on `fix/audit-2026-05-09`. All Phase 1/2/3 + Decision-B + audit items closed. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for full disposition.
 - **2026-05-13 codex review of PR #59 — all P1s closed, 11/13 P2s closed.** 10 follow-up migrations + 1 frontend refactor + 1 strict-actor hotfix landed; all applied live via Supabase MCP. The 4 changed Edge Functions (`create-user`, `reset-user-password`, `seed-admin`, `setup-blend-tickets-storage`) deployed to live via MCP with the `_shared/sentry.ts` audit #28 hardening.
-- **Pending Mason:** Phase 4 backup verification (dashboard check + future restore drill); #38 abandoned-package swap (needs `.shp`/`.dbf`/`.prj`/`.kml` test fixtures from Mason); resolve the ~17 already-fixed Codex threads in the GitHub PR UI (Codex doesn't auto-resolve).
+- **2026-05-16:** `send-email` Edge Function deployed to v10 (PR-03 `farm_name` fix had sat undeployed since 2026-05-09); frontend idempotency-key reuse verified clean across all 5 callsites flagged in the 2026-05-12 ultra review; advisory comment posted on stale PR #60.
+- **Pending Mason:** Phase 4 backup verification (dashboard check + future restore drill); #38 abandoned-package swap (needs `.shp`/`.dbf`/`.prj`/`.kml` test fixtures from Mason); resolve the ~17 already-fixed Codex threads in the GitHub PR UI (Codex doesn't auto-resolve); close/rebase PR #60.
 - **Deferred (follow-up sprint):**
   - 3 known `(*_cents * qty)::bigint` instances in `transfer_job_to_invoice`, `create_invoice_from_blend_ticket`, `save_field_app_invoice` — single-instance each, smaller blast radius — to be wrapped with `safe_cents_qty()`.
   - Customer RLS upper bound (P2 #3) — intentionally left as lower-bound-only; farm logistics require future visibility for route/job planning.

@@ -1,7 +1,8 @@
-# CRX Manager — TODO (as of 2026-05-13, end of day)
+# CRX Manager — TODO (as of 2026-05-16)
 
 Snapshot of what's done, what's outstanding, and what's deferred after the
-2026-05-09 audit sprint + 2026-05-13 codex review of PR #59.
+2026-05-09 audit sprint + 2026-05-13 codex review of PR #59 + 2026-05-16
+verification session.
 
 ---
 
@@ -22,6 +23,11 @@ Snapshot of what's done, what's outstanding, and what's deferred after the
 
 See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for full table.
 
+### 2026-05-16 verification session
+- **`send-email` Edge Function deployed to v10** — `farm_name` fix from PR-03 (commit `31c3db1`, dated 2026-05-09) was on the branch for ~7 days but never deployed. Live v9 was still selecting `customers.name` (column doesn't exist), silently failing for every customer-tied email. Now live at v10 with `select("id, email, farm_name")` verified in the deployed bundle.
+- **Frontend idempotency-key reuse verified clean** — all 5 callsites flagged in 2026-05-12 ultra review (`PrepaymentManager.tsx` ×3, `BulkOrderImport.tsx`, `BlendRecipes.tsx`) are already using `useIdempotencyKey()` hooks or stable per-order key generation. No fix needed.
+- **Advisory comment posted on PR #60** — flagged that the two migration files in that PR (`20260511120000_security_audit_2026_05_11.sql` drops `profile_public_view`; `20260511120100_drop_public_bucket_select_policies.sql`) conflict with live code that depends on the view. PR #60 needs to be closed or rebased — see Outstanding below.
+
 ---
 
 ## 🔴 Outstanding — Mason action required
@@ -34,6 +40,14 @@ See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for full table.
 ### #38: Abandoned-package swap
 - Needs test fixtures from Mason: `.shp`, `.dbf`, `.prj`, `.kml` sample files for the field-import flow.
 - Once fixtures land, the abandoned-package can be swapped out with a maintained alternative.
+
+### PR #60 decision (draft, advisory comment posted 2026-05-16)
+PR #60 (`claude/app-review-audit-yseuL`) is still OPEN as draft, last updated 2026-05-11 (before the ultra review existed). Body claims "no code or schema changes — findings document only" but the file list contains 2 migrations totaling ~140 lines of risky SQL. Pick one:
+- **Close it** — cherry-pick `AUDIT_REPORT_2026-05-11.md` into `docs/audits/` first if useful as historical context.
+- **Rebase + drop the two migration files** — keeps the audit doc, removes the risk.
+- **Replace the view drop with a proper migration** — migrate any remaining callers off `profile_public_view`, *then* drop. Probably the most work for the least value at this point.
+
+Advisory comment with full context: https://github.com/masonwells1/CRX_Manager_V1.0/pull/60#issuecomment-4466986788
 
 ### GitHub PR UI cleanup
 - ~17 codex review threads on PR #59 are now addressed but still showing as "Open" because Codex doesn't auto-resolve after fix-commits.
@@ -87,7 +101,7 @@ Blocked on creating `crx-manager-staging` Supabase project + adding `STAGING_SUP
 | Pages | 66 |
 | Tables | 93 |
 | RPCs | ~184 |
-| Edge Functions | 7 (all current) |
+| Edge Functions | 7 (all current — `send-email` v10 as of 2026-05-16) |
 | Unit tests | 1,913 passing (130 files, 70 skipped) |
 | E2E spec files | 94 |
 | ESLint errors | 0 |

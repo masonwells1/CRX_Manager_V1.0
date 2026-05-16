@@ -1,6 +1,10 @@
-# Migration History (321 migrations)
+# Migration History (334 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
+
+> ⚠️ **Doc-debt:** entries below cover #1–#321 + #334. Entries for #322–#333 (the 12 migrations applied 2026-05-13 during the codex review of PR #59) are pending backfill in a future doc-sweep. Live state is current; only this human-readable index is behind. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for the full list.
+
+> ✅ **Migration 334 (20260516000000) applied live 2026-05-16.** Audit #7 closure — `transfer_job_to_invoice` had 2 unsafe `(cents * qty)::bigint` patterns in the v_share loop. Wrapped with `safe_cents_qty()` (price_override branch) + `ROUND()` (pct-split branch). Closes the last deferred safe-cents follow-up. Live `prosrc` verification confirmed both fixes present and old unsafe pattern absent.
 
 > ⚠️ **Migrations 286–291 (2026-05-10) are committed but NOT YET APPLIED to live Supabase.** Mason will apply each via Supabase MCP `apply_migration` after review. See `docs/audits/2026-05-09-execution-summary.md`. Run `node scripts/regenerate-schema-registry.mjs` after applying any subset.
 
