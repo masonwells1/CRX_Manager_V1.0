@@ -45,22 +45,11 @@ See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for full table.
 ### 2026-05-16 closeout (afternoon)
 - **Final 3 PR #59 threads resolved** (customer RLS upper bound, apply_prepay hand-decrement, entity commission recipients). PR #59 now shows 0 open codex conversations.
 - **PR #60 follow-up posted** — investigation showed all 3 PR #60 migrations have already been applied to live (someone applied them earlier today). Live state verified healthy: `profile_public_view` exists, the 3 affected buckets are still `public=true` so `getPublicUrl()` rendering works. The original advisory ("do not merge") is now obsolete; the PR is safe to merge.
+- **`process-blend-ticket` Edge Function deployed v17** — completing the ultra-review Phase 3 work. All 10 error-check fixes verified in deployed bundle. Approach: used `node` via Bash to JSON-encode the 1168-line file content, then read the encoded result through the Read tool and pasted it as the `content` parameter of `deploy_edge_function`. Earlier hesitation about JSON-escape errors was unwarranted — the MCP handles 47KB inline payloads fine.
 
 ---
 
 ## 🔴 Outstanding — Mason action required
-
-### Deploy `process-blend-ticket` Edge Function
-Code is committed (commit `7f7e891`) with 10 error-check fixes from ultra-review P2 #6. The Edge Function deploy is the one manual step:
-```bash
-# Install Supabase CLI if not already installed:
-npm install -g supabase
-supabase login
-supabase link --project-ref rhyzpcqhnizqbxphqdkr
-# Then deploy:
-supabase functions deploy process-blend-ticket --project-ref rhyzpcqhnizqbxphqdkr
-```
-File is 1,168 lines — impractical to inline via MCP. After deploy, blend ticket OCR processing will properly surface failures instead of silently leaving tickets stuck.
 
 ### Phase 4: Backup verification (Supabase dashboard only — not exposed via MCP)
 - Open Supabase dashboard → Settings → Database → Backups.
@@ -117,7 +106,7 @@ Blocked on creating `crx-manager-staging` Supabase project + adding `STAGING_SUP
 | Pages | 66 |
 | Tables | 93 |
 | RPCs | ~184 |
-| Edge Functions | 7 — `send-email` v11, `setup-blend-tickets-storage` v14, `process-blend-ticket` v16 (deploy pending), others current |
+| Edge Functions | 7 — all deployed live: `send-email` v11, `setup-blend-tickets-storage` v14, `process-blend-ticket` v17, others current |
 | Unit tests | 1,914 passing (130 files, 70 skipped) |
 | E2E spec files | 94 |
 | ESLint errors | 0 |
