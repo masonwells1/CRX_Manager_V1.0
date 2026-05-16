@@ -441,6 +441,26 @@ Branch: `fix/audit-2026-05-09`. Closes the highest-impact findings from the 2026
 
 ---
 
+## 2026-05-16 — Hotfix: restore `profile_public_view` (partial revert of 2026-05-11 audit)
+
+PR #60 review comment from masonwells1 flagged that the view drop in `20260511120000_security_audit_2026_05_11.sql` conflicts with `fix/audit-2026-05-09`, which has been migrating 30+ callsites TO the view (PR-07 follow-up). The branch I authored from had zero callsites; the parallel branch was actively adding them. Result: the moment `fix/audit-2026-05-09` deploys, prod would break because the view was gone.
+
+Recovery:
+- `apply_migration restore_profile_public_view` run against prod within minutes of the comment — view recreated with the original shape (`id, full_name, role, is_active FROM profiles`) and owner-defined semantics.
+- New migration file `20260516140000_restore_profile_public_view.sql` added to PR #60 so fresh DB replays end up with the view in place.
+- View comment added documenting that the `security_definer_view` advisor warning is accepted-by-design and the view must not be dropped without first migrating all callsites.
+
+Cross-checked the rest of the 2026-05-11 migration against `fix/audit-2026-05-09`:
+- Function search_path fixes (4 functions) — no overlap with their `20260510050000_pg_temp_security_definer_fixes.sql` (different functions).
+- `blend_ticket_fields` / `field_crop_history` RLS — my migration tightened INSERT/UPDATE/DELETE; their `20260512030000_tighten_blend_ticket_field_crop_history_rls.sql` tightens SELECT. Complementary, not conflicting.
+- Storage `qual=true` policy drops — grep on `fix/audit-2026-05-09` showed no `.list()` / `.download()` / `.createSignedUrl()` calls on the 3 public buckets and no migration recreating the dropped policies. No conflict.
+
+Net advisor impact: `security_definer_view` ERROR returns to 1 (accepted by design). All other 2026-05-11 fixes stay in effect.
+
+Lesson recorded: future audits that drop infrastructure must grep ALL active branches (not just the working branch) for callsites before considering the object unused.
+
+---
+
 ## 2026-05-11 — Security advisor cleanup from `/audit` run
 
 Acted on every fixable finding in `AUDIT_REPORT_2026-05-11.md`. Two migrations applied to the remote database:
