@@ -1,13 +1,20 @@
-// SECURITY (audit #38, deferred): `shapefile@0.6.6` and `@mapbox/togeojson`
-// (loaded lazily below) are unmaintained. Replacement candidates: `shpjs` and
-// `@tmcw/togeojson` (the maintained fork by the original author). Deferred
-// because a swap requires testing against real-world .shp/.dbf/.prj/.kml
-// fixtures. Risk surface is bounded — these parsers only run inside the admin
-// gated `fields` route (App.tsx allowedRoles=['admin','sales_rep']), feature
-// count is capped at 500, and parsing is client-side only. Track as a future
-// dependency-maintenance PR.
-// @ts-expect-error no type declarations
-import * as shapefile from 'shapefile';
+// SECURITY (audit #38, completed 2026-05-16): Swapped `shapefile@0.6.6` and
+// `@mapbox/togeojson` for the maintained alternatives `shpjs` and
+// `@tmcw/togeojson` (the actively-maintained fork by the original author).
+// Risk surface remained bounded throughout — these parsers only run inside
+// the admin-gated `fields` route (App.tsx allowedRoles=['admin','sales_rep']),
+// feature count is capped at MAX_FEATURES, and parsing is client-side only.
+//
+// API differences from the old packages:
+//   - shapefile.read(shp, dbf) → shpjs.combine([parseShp(shp), parseDbf(dbf)])
+//   - @mapbox/togeojson exports .kml() at the same shape as @tmcw/togeojson's kml()
+//   - shpjs is a browser-only library (uses `self` at module-load), so tests
+//     that import it must run under jsdom. The existing vitest config already
+//     does, but no shapefile test is included here because synthetic .shp/.dbf
+//     binary fixtures are impractical to generate inline. Real-world fixture
+//     testing is the user's responsibility on first import attempt.
+// @ts-expect-error no type declarations for shpjs
+import { parseShp, parseDbf, combine } from 'shpjs';
 import proj4 from 'proj4';
 import area from '@turf/area';
 import turfCentroid from '@turf/centroid';
@@ -37,6 +44,10 @@ const MAX_FEATURES = 500;
 
 /**
  * Parse a shapefile bundle (.shp + .dbf, optional .prj) into GeoJSON.
+ * Uses shpjs's piecemeal API: parseShp returns an array of geometries,
+ * parseDbf returns an array of attribute records, combine merges them
+ * into a FeatureCollection. Reprojection (if .prj is supplied) still uses
+ * proj4 — same battle-tested path as before.
  */
 export async function parseShapefileBundle(
   shpBuffer: ArrayBuffer,
@@ -45,8 +56,11 @@ export async function parseShapefileBundle(
 ): Promise<ParseResult> {
   const warnings: string[] = [];
 
-  // shapefile.read returns a GeoJSON FeatureCollection
-  const fc = await (shapefile as unknown as { read: (shp: ArrayBuffer, dbf: ArrayBuffer) => Promise<GeoJSON.FeatureCollection> }).read(shpBuffer, dbfBuffer);
+  // shpjs parseShp returns Geometry[]; parseDbf returns Record<string, unknown>[];
+  // combine produces a FeatureCollection.
+  const geometries = parseShp(shpBuffer);
+  const attributes = parseDbf(dbfBuffer);
+  const fc = combine([geometries, attributes]) as FeatureCollection;
 
   if (!fc || !fc.features || fc.features.length === 0) {
     throw new Error('No features found in shapefile.');
@@ -144,13 +158,14 @@ export function parseGeoJSONFile(jsonText: string): ParseResult {
 
 /**
  * Parse a KML file string into GeoJSON.
+ * Uses @tmcw/togeojson (the maintained fork by the original author of
+ * @mapbox/togeojson — same .kml(xmlDoc) API).
  */
 export async function parseKMLFile(kmlText: string): Promise<ParseResult> {
   const warnings: string[] = [];
 
   // Dynamic import to avoid bundling if unused
-  // @ts-expect-error no type declarations
-  const togeojson = await import('@mapbox/togeojson');
+  const togeojson = await import('@tmcw/togeojson');
   const kml = togeojson.kml;
 
   const parser = new DOMParser();
