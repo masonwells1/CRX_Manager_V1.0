@@ -985,6 +985,18 @@ Deno.serve(async (req: Request) => {
       .eq("id", blendTicketId);
     if (tUpdateErr) throw new Error(`Failed to update ticket ${blendTicketId} with parsed data: ${tUpdateErr.message}`);
 
+    // Codex P2 fix (PR #59, 2026-05-16): clear any previously-inserted product
+    // rows for this ticket before the loop. Without this, a mid-loop throw on
+    // retry attempt N would leave attempt N-1's partial inserts behind, and
+    // the next retry would duplicate them (blend_ticket_products has no unique
+    // constraint on (blend_ticket_id, sequence_order)). DELETE-then-INSERT
+    // gives us idempotency without schema changes.
+    const { error: cleanupErr } = await adminClient
+      .from("blend_ticket_products")
+      .delete()
+      .eq("blend_ticket_id", blendTicketId);
+    if (cleanupErr) throw new Error(`Failed to clear existing products for ticket ${blendTicketId}: ${cleanupErr.message}`);
+
     // Insert product records (critical — each row IS extracted product data)
     for (let i = 0; i < parsedData.products.length; i++) {
       const prod = parsedData.products[i];
