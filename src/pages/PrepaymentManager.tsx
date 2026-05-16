@@ -3,7 +3,7 @@
  *
  * Sprint 11: Financial Workflows
  */
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, X, ChevronDown, ChevronUp, Pencil, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -59,8 +59,29 @@ export default function PrepaymentManager() {
   const applyPrepayIdem = useIdempotencyKey('apply_remaining_prepayments', profile?.id || '');
   const batchApplyIdem = useIdempotencyKey('batch_apply_all_prepayments', profile?.id || '');
   const splitCheckIdem = useIdempotencyKey('create_prepay_check_splits', profile?.id || '');
-  const editCreditIdem = useIdempotencyKey('edit_prepay_credit', profile?.id || '');
-  const deleteCreditIdem = useIdempotencyKey('delete_prepay_credit', profile?.id || '');
+
+  // Codex P2 fix (PR #59, 2026-05-16): scope edit/delete idempotency keys per
+  // credit_id. The page-scoped useIdempotencyKey shared a single key across
+  // all credits — if an admin edited credit A, the response was lost, then
+  // they opened credit B and edited it, both requests would carry the same
+  // key. The server's idempotency cache would replay credit A's "success"
+  // for credit B's request, returning success without mutating credit B.
+  // Map<credit_id, key> + per-credit reset closes that gap. Pattern is local
+  // to this page since other useIdempotencyKey callsites already have
+  // single-entity intents per click.
+  const editKeysRef = useRef<Map<string, string>>(new Map());
+  const deleteKeysRef = useRef<Map<string, string>>(new Map());
+  const getScopedKey = useCallback((map: Map<string, string>, operation: string, creditId: string): string => {
+    let key = map.get(creditId);
+    if (!key) {
+      key = `${operation}:${profile?.id || ''}:${creditId}:${crypto.randomUUID()}`;
+      map.set(creditId, key);
+    }
+    return key;
+  }, [profile?.id]);
+  const resetScopedKey = useCallback((map: Map<string, string>, creditId: string): void => {
+    map.delete(creditId);
+  }, []);
 
   const [customers, setCustomers] = useState<CustomerPrepay[]>([]);
   const [loading, setLoading] = useState(true);
@@ -186,7 +207,7 @@ export default function PrepaymentManager() {
 
     await runCriticalAction({
       action: async () => {
-        const editKey = editCreditIdem.getKey();
+        const editKey = getScopedKey(editKeysRef.current, 'edit_prepay_credit', editCredit.id);
         const { data, error } = await supabase.rpc('edit_prepay_credit', {
           p_credit_id: editCredit.id,
           p_new_balance_cents: newBalanceCents,
@@ -199,7 +220,7 @@ export default function PrepaymentManager() {
         if (error) throw error;
         const result = assertRpcResult<{ success: boolean }>(data, 'edit_prepay_credit');
         if (!result?.success) throw new Error('Edit failed');
-        editCreditIdem.resetKey();
+        resetScopedKey(editKeysRef.current, editCredit.id);
       },
       toast,
       setLoading: setSavingEdit,
@@ -227,7 +248,7 @@ export default function PrepaymentManager() {
 
     await runCriticalAction({
       action: async () => {
-        const deleteKey = deleteCreditIdem.getKey();
+        const deleteKey = getScopedKey(deleteKeysRef.current, 'delete_prepay_credit', deleteCredit.id);
         const { data, error } = await supabase.rpc('delete_prepay_credit', {
           p_credit_id: deleteCredit.id,
           p_reason: deleteReason.trim(),
@@ -237,7 +258,7 @@ export default function PrepaymentManager() {
         if (error) throw error;
         const result = assertRpcResult<{ success: boolean }>(data, 'delete_prepay_credit');
         if (!result?.success) throw new Error('Delete failed');
-        deleteCreditIdem.resetKey();
+        resetScopedKey(deleteKeysRef.current, deleteCredit.id);
       },
       toast,
       setLoading: setSavingDelete,
