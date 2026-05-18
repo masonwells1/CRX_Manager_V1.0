@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseGeoJSONFile, validateFeatureGeometry, calculateFieldMetrics } from './fieldImportParser';
+import { parseGeoJSONFile, parseKMLFile, validateFeatureGeometry, calculateFieldMetrics } from './fieldImportParser';
 import type { Feature, Polygon } from 'geojson';
 
 // ---- Helper: create a simple polygon feature ----
@@ -179,6 +179,61 @@ describe('validateFeatureGeometry', () => {
       geometry: { type: 'Polygon', coordinates: [edgeCoords] },
     };
     expect(validateFeatureGeometry(feature)).toHaveLength(0);
+  });
+});
+
+describe('parseKMLFile (audit #38 — @tmcw/togeojson swap, 2026-05-16)', () => {
+  // Minimal valid KML with a single polygon over our Kansas square.
+  // Note: KML uses lng,lat[,alt] in coordinates and the polygon ring is
+  // closed (first == last) as required by the spec.
+  const validKml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <name>Field A</name>
+      <description>Test field over Kansas</description>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+              -98.5,38.5 -98.499,38.5 -98.499,38.501 -98.5,38.501 -98.5,38.5
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>
+  </Document>
+</kml>`;
+
+  it('parses a valid KML polygon', async () => {
+    const result = await parseKMLFile(validKml);
+    expect(result.featureCount).toBe(1);
+    expect(result.featureCollection.features[0].geometry.type).toBe('Polygon');
+    expect(result.crsDetected).toBeNull();
+  });
+
+  it('extracts placemark name as an attribute', async () => {
+    const result = await parseKMLFile(validKml);
+    // @tmcw/togeojson populates feature.properties.name from <name>
+    expect(result.attributeKeys).toContain('name');
+  });
+
+  it('throws on KML with no polygon features', async () => {
+    const kmlPointOnly = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <Point><coordinates>-98.5,38.5,0</coordinates></Point>
+    </Placemark>
+  </Document>
+</kml>`;
+    await expect(parseKMLFile(kmlPointOnly)).rejects.toThrow('No polygon boundaries');
+  });
+
+  it('throws on completely empty KML', async () => {
+    const emptyKml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document></Document></kml>`;
+    await expect(parseKMLFile(emptyKml)).rejects.toThrow('No features found');
   });
 });
 

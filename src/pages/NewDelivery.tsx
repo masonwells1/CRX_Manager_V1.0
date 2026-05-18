@@ -14,6 +14,7 @@ import { Sentry } from '../lib/sentry';
 
 import { logActivity } from '../lib/activityLogger';
 import { useOverloadedDriverCheck } from '../hooks/useGuardrails';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { notifyDriverAssigned } from '../lib/notificationTriggers';
 import { checkRUPCompliance } from '../lib/rupCompliance';
@@ -36,8 +37,17 @@ export default function NewDelivery() {
   const [searchParams] = useSearchParams();
   const { profile } = useAuth();
   const { toast } = useToast();
-  // No idempotency hook — delivery creation uses direct .insert(), not an RPC.
-  // Double-submit is guarded by the `saving` state disabling the submit button.
+  // Idempotency key for create_delivery_with_items (audit #10): the RPC writes
+  // both the delivery and its items atomically; the key prevents double-insert
+  // on retry/double-submit.
+  const createDeliveryKey = useIdempotencyKey('create_delivery_with_items', profile?.id || 'anon');
+  // Codex P2 fix (PR #59, 2026-05-16): reset the key when form intent changes.
+  // The page stays mounted across submissions — if create A succeeded but the
+  // response was lost, the user can edit the form (different order/items/date)
+  // and resubmit, and the persisted key would replay A's cached result without
+  // creating B. Hashing the submission-affecting inputs detects intent
+  // changes; identical retries (form unchanged) still reuse the key.
+  // See useEffect below — needs to fire AFTER state declarations.
   const { warning: driverWarning, check: checkDriverLoad, dismiss: dismissDriverWarning } = useOverloadedDriverCheck();
 
   const preselectedOrderId = searchParams.get('order') || '';
@@ -55,6 +65,26 @@ export default function NewDelivery() {
   const [scheduledDate, setScheduledDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [deliveryNotes, setDeliveryNotes] = useState('');
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset the createDeliveryKey when the
+  // form intent (order/items/date/driver) changes. Stable form = same key
+  // = idempotent retry. Changed form = fresh key = new intent.
+  // Hash MUST cover EVERY submitted field — Codex 2026-05-16 follow-up flagged
+  // that omitting any field (notes, per-item unit_size/tote_number/notes) lets
+  // a same-key replay return success while silently dropping the edited data.
+  const intentHash = [
+    selectedOrderId, scheduledDate, scheduledTime, selectedDriverId,
+    selectedAddressId, deliveryNotes,
+    deliveryItems
+      .map((i) => `${i.order_item_id}:${i.product_id}:${i.quantity}:${i.unit_size || ''}:${i.tote_number || ''}:${i.notes || ''}`)
+      .sort()
+      .join(','),
+  ].join('|');
+  useEffect(() => {
+    createDeliveryKey.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intentHash]);
+
   const [saving, setSaving] = useState(false);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -90,9 +120,10 @@ export default function NewDelivery() {
   }, [toast]);
 
   const fetchDrivers = useCallback(async () => {
+    // PR-07 follow-up: driver picker only uses d.id + d.full_name + d.role; safe via view.
     const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
+      .from('profile_public_view')
+      .select('id, full_name, role, is_active')
       .in('role', ['driver', 'admin', 'sales_rep'])
       .eq('is_active', true)
       .order('full_name');
@@ -355,69 +386,50 @@ export default function NewDelivery() {
       return;
     }
 
-    const { data: rpcNumber, error: rpcError } = await supabase.rpc('next_delivery_number');
-    if (rpcError || !rpcNumber) {
-      toast('error', rpcError?.message || 'Failed to generate delivery number');
+    // Audit #10: atomic create — delivery + items in one transaction. If items
+    // fail, the delivery is rolled back too (no orphaned delivery rows).
+    const { data, error } = await supabase.rpc('create_delivery_with_items', {
+      p_order_id: selectedOrderId,
+      p_customer_id: order.customer_id,
+      p_scheduled_date: scheduledDate,
+      p_items: activeItems.map((item) => ({
+        order_item_id: item.order_item_id,
+        product_id: item.product_id,
+        quantity: item.quantity,
+        unit_size: item.unit_size || null,
+        tote_number: item.tote_number || null,
+        notes: item.notes || null,
+      })),
+      p_delivery_address_id: selectedAddressId || null,
+      p_assigned_driver: selectedDriverId || null,
+      p_scheduled_time: scheduledTime || null,
+      p_delivery_notes: deliveryNotes || null,
+      p_idempotency_key: createDeliveryKey.getKey(),
+    });
+
+    if (error) {
+      toast('error', error.message || 'Failed to create delivery');
+      Sentry.captureException(error, { extra: { context: 'create_delivery_with_items' } });
       setSaving(false);
       return;
     }
-    const deliveryNumber = assertRpcResult<string>(rpcNumber, 'next_delivery_number');
 
-    const { data: delData, error: delError } = await supabase
-      .from('deliveries')
-      .insert({
-        delivery_number: deliveryNumber,
-        order_id: selectedOrderId,
-        customer_id: order.customer_id,
-        delivery_address_id: selectedAddressId || null,
-        assigned_driver: selectedDriverId || null,
-        scheduled_date: scheduledDate,
-        scheduled_time: scheduledTime || null,
-        delivery_notes: deliveryNotes || null,
-        status: 'scheduled',
-        created_by: profile.id,
-      })
-      .select('id')
-      .maybeSingle();
-
-    if (delError || !delData) {
-      toast('error', delError?.message || 'Failed to create delivery');
-      setSaving(false);
-      return;
-    }
-
-    const itemInserts = activeItems.map((item) => ({
-      delivery_id: delData.id,
-      order_item_id: item.order_item_id,
-      product_id: item.product_id,
-      quantity: item.quantity,
-      unit_size: item.unit_size || null,
-      tote_number: item.tote_number || null,
-      notes: item.notes || null,
-    }));
-
-    const { error: itemError } = await supabase
-      .from('delivery_items')
-      .insert(itemInserts);
-
-    if (itemError) {
-      toast('error', 'Delivery created but failed to add items');
-      setSaving(false);
-      navigate(`/deliveries/${delData.id}`);
-      return;
-    }
+    const result = assertRpcResult<{ delivery_id: string; delivery_number: string }>(data, 'create_delivery_with_items');
+    const deliveryNumber = result.delivery_number;
+    const deliveryId = result.delivery_id;
 
     setIsDirty(false);
+    createDeliveryKey.resetKey();
     toast('success', `Delivery ${deliveryNumber} scheduled`);
-    logActivity({ event: 'delivery_created', description: `Delivery ${deliveryNumber} created for order ${order.order_number}`, performedBy: profile.id, entityType: 'delivery', entityId: delData.id, customerId: order.customer_id });
+    logActivity({ event: 'delivery_created', description: `Delivery ${deliveryNumber} created for order ${order.order_number}`, performedBy: profile.id, entityType: 'delivery', entityId: deliveryId, customerId: order.customer_id });
 
     // GAP FIX #17: Notify the assigned driver
     if (selectedDriverId) {
       const custName = customer?.farm_name || 'customer';
-      await notifyDriverAssigned(selectedDriverId, deliveryNumber, custName, scheduledDate, delData.id);
+      await notifyDriverAssigned(selectedDriverId, deliveryNumber, custName, scheduledDate, deliveryId);
     }
 
-    navigate(`/deliveries/${delData.id}`);
+    navigate(`/deliveries/${deliveryId}`);
   };
 
   return (

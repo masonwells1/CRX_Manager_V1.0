@@ -121,17 +121,31 @@ export default function PurchaseOrderDetail() {
 
   const fetchReceivingHistory = useCallback(async () => {
     setHistoryLoading(true);
+    // PR-07 follow-up: dropped receiver FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('receiving_records')
-      .select('*, product:products(product_name), receiver:profiles!receiving_records_received_by_fkey(full_name)')
+      .select('*, product:products(product_name)')
       .eq('purchase_order_id', id!)
       .order('received_at', { ascending: false });
 
     if (!error && data) {
-      const rows = (data as Array<ReceivingRecord & { product?: { product_name: string }; receiver?: { full_name: string } }>).map((r) => ({
+      const receiverIds = [...new Set(
+        (data as Array<{ received_by?: string | null }>)
+          .map((r) => r.received_by)
+          .filter(Boolean) as string[]
+      )];
+      const receiverMap: Record<string, string> = {};
+      if (receiverIds.length > 0) {
+        const { data: receivers } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', receiverIds);
+        (receivers || []).forEach((p: { id: string; full_name: string }) => { receiverMap[p.id] = p.full_name; });
+      }
+      const rows = (data as Array<ReceivingRecord & { product?: { product_name: string }; received_by?: string | null }>).map((r) => ({
         ...r,
         product_name: r.product?.product_name || 'Unknown',
-        received_by_name: r.receiver?.full_name || 'Unknown',
+        received_by_name: r.received_by ? receiverMap[r.received_by] || 'Unknown' : 'Unknown',
       }));
       setReceivingHistory(rows as ReceivingRecord[]);
     }
@@ -150,6 +164,8 @@ export default function PurchaseOrderDetail() {
 
   /* ─── Open receive modal ─── */
   const openReceiveModal = () => {
+    // Codex P2 fix: reset key per receive intent (variable per-item qty/notes).
+    receiveIdem.resetKey();
     const initial: Record<string, ReceiveItemState> = {};
     items.forEach((item) => {
       initial[item.id] = {
@@ -344,6 +360,8 @@ export default function PurchaseOrderDetail() {
   };
 
   const openReverseModal = (rec: ReceivingRecord) => {
+    // Codex P2 fix: reset key per receiving-record target.
+    reverseIdem.resetKey();
     setReverseRecord(rec);
     setReverseReason('');
     reverseIdem.resetKey();
@@ -359,13 +377,14 @@ export default function PurchaseOrderDetail() {
     setReversing(true);
     try {
       const reverseKey = reverseIdem.getKey();
-      const { error } = await supabase.rpc('reverse_receiving_record', {
+      const { data, error } = await supabase.rpc('reverse_receiving_record', {
         p_record_id: reverseRecord.id,
         p_reason: reverseReason.trim(),
         p_performed_by: profile.id,
         p_idempotency_key: reverseKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'reverse_receiving_record');
       reverseIdem.resetKey();
       await logActivity({ event: 'receiving_reversed', description: `Receiving record reversed for PO ${po?.po_number}: ${reverseReason.trim()}`, performedBy: profile.id, entityType: 'purchase_order', entityId: po?.id });
       toast('success', 'Receiving record reversed and inventory adjusted');
@@ -380,6 +399,8 @@ export default function PurchaseOrderDetail() {
   };
 
   const openEditModal = () => {
+    // Codex P2 fix: reset key per edit-modal open (PO payload editable).
+    savePOIdem.resetKey();
     if (!po) return;
     setEditForm({
       vendor: po.vendor,
@@ -435,7 +456,7 @@ export default function PurchaseOrderDetail() {
       }));
 
       const savePOKey = savePOIdem.getKey();
-      const { error } = await supabase.rpc('save_purchase_order', {
+      const { data, error } = await supabase.rpc('save_purchase_order', {
         p_po_id: id,
         p_po_payload: {
           vendor: editForm.vendor,
@@ -450,6 +471,7 @@ export default function PurchaseOrderDetail() {
       });
 
       if (error) throw error;
+      assertRpcResult(data, 'save_purchase_order');
       savePOIdem.resetKey();
 
       toast('success', 'Purchase order updated');
@@ -490,7 +512,7 @@ export default function PurchaseOrderDetail() {
 
     try {
       const cancelKey = cancelPOIdem.getKey();
-      const { error } = await supabase.rpc('cancel_purchase_order', {
+      const { data, error } = await supabase.rpc('cancel_purchase_order', {
         p_po_id: id,
         p_reason: cancelReason || 'Cancelled',
         p_performed_by: profile.id,
@@ -498,6 +520,7 @@ export default function PurchaseOrderDetail() {
       });
 
       if (error) throw error;
+      assertRpcResult(data, 'cancel_purchase_order');
       cancelPOIdem.resetKey();
 
       toast('success', 'Purchase order cancelled');
@@ -571,7 +594,7 @@ export default function PurchaseOrderDetail() {
                 Edit
               </Button>
               {isAdmin && (po.status === 'draft' || po.status === 'submitted') && (
-                <Button variant="danger" icon={<Ban className="w-4 h-4" />} onClick={() => setCancelOpen(true)}>
+                <Button variant="danger" icon={<Ban className="w-4 h-4" />} onClick={() => { cancelPOIdem.resetKey(); setCancelOpen(true); }}>
                   Cancel PO
                 </Button>
               )}

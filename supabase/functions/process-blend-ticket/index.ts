@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
+import { requireActiveProfile } from "../_shared/auth.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
@@ -9,8 +10,11 @@ function getAllowedOrigin(): string {
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  // Fallback to production domain when secret not configured
-  return "https://croprxsolutions.app";
+  // PR-16: removed silent fallback — missing env var now throws.
+  throw new Error(
+    "ALLOWED_ORIGIN env var is required for production deployments. " +
+      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
+  );
 }
 
 const corsHeaders = {
@@ -788,25 +792,28 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Invalid token" }, 401);
   }
 
-  // Role check — only admin, sales_rep, and applicator can process blend tickets
+  // Codex audit F1 (P1, 2026-05-16): is_active gate enforced server-side.
+  // Only admin, sales_rep, and applicator can process blend tickets.
   const adminClient = createClient(supabaseUrl, serviceRoleKey);
-  const { data: callerProfile } = await adminClient
-    .from("profiles")
-    .select("role")
-    .eq("id", caller.id)
-    .single();
-  if (
-    !callerProfile ||
-    !["admin", "sales_rep", "applicator"].includes(callerProfile.role)
-  ) {
-    return jsonResponse({ error: "Forbidden" }, 403);
+  const gate = await requireActiveProfile(adminClient, caller.id, ["admin", "sales_rep", "applicator"]);
+  if ("error" in gate) {
+    return jsonResponse({ error: gate.error }, gate.status);
   }
+  const callerProfile = gate.profile;
 
   let blendTicketId: string;
+  let isReprocess = false;
   try {
     const body = await req.json();
     blendTicketId = body.blend_ticket_id;
     if (!blendTicketId) throw new Error("missing");
+    // Codex audit F3 (P2, 2026-05-16): the frontend (BlendTicketDetail.tsx:458)
+    // sends `reprocess: true` when the user clicks "Re-process OCR", but the
+    // server was silently dropping the flag and blindly INSERTing new product
+    // rows on top of existing ones. Repeated reprocesses = duplicate rows.
+    // Now honored: when reprocess=true, non-manually-corrected product rows
+    // for this ticket are deleted before the new inserts run.
+    isReprocess = body.reprocess === true;
   } catch {
     return jsonResponse({ error: "blend_ticket_id is required" }, 400);
   }
@@ -854,9 +861,15 @@ Deno.serve(async (req: Request) => {
   const queueId = existingQueue?.id;
 
   try {
-    // Mark as processing
+    // 2026-05-16 ultra-review P2 #6: every critical write now destructures
+    // { error } and throws on failure. Without this, silent write failures
+    // left tickets/queues in inconsistent state (queue stuck, ticket marked
+    // processing forever, missing products, etc.) and the function still
+    // reported success.
+
+    // Mark queue as processing (critical — without this the queue can't track state)
     if (queueId) {
-      await adminClient
+      const { error: qProcErr } = await adminClient
         .from("ocr_processing_queue")
         .update({
           status: "processing",
@@ -864,12 +877,15 @@ Deno.serve(async (req: Request) => {
           updated_at: new Date().toISOString(),
         })
         .eq("id", queueId);
+      if (qProcErr) throw new Error(`Failed to mark queue ${queueId} as processing: ${qProcErr.message}`);
     }
 
-    await adminClient
+    // Mark ticket as processing (critical — UI shows stale state if this fails)
+    const { error: tProcErr } = await adminClient
       .from("blend_tickets")
       .update({ status: "processing" })
       .eq("id", blendTicketId);
+    if (tProcErr) throw new Error(`Failed to mark ticket ${blendTicketId} as processing: ${tProcErr.message}`);
 
     // Fetch images
     const { data: images, error: imgErr } = await adminClient
@@ -966,12 +982,53 @@ Deno.serve(async (req: Request) => {
       ticketUpdate.customer_id = matchedCustomerId;
     }
 
-    await adminClient
+    // Update ticket with parsed data (critical — this IS the OCR result)
+    const { error: tUpdateErr } = await adminClient
       .from("blend_tickets")
       .update(ticketUpdate)
       .eq("id", blendTicketId);
+    if (tUpdateErr) throw new Error(`Failed to update ticket ${blendTicketId} with parsed data: ${tUpdateErr.message}`);
 
-    // Insert product records
+    // Codex audit F3 (P2, 2026-05-16): on reprocess, wipe existing rows BEFORE
+    // re-inserting so retries/reprocesses don't append duplicates. The
+    // manually_corrected=false filter preserves any rows the user has hand-
+    // edited via BlendTicketDetail's product edit UI — those are sacred.
+    // (Supersedes the earlier remote-only commit 740e9d9 that unconditionally
+    // wiped every product row including user-corrected ones.)
+    //
+    // Even on first-time runs there's a risk: if a prior attempt failed
+    // mid-loop (after some inserts committed), the retry would also duplicate.
+    // To guard against that without nuking user edits, we also wipe on
+    // first-time runs when ANY non-manual rows already exist for this ticket
+    // (indicating a prior partial run).
+    if (isReprocess) {
+      const { error: delErr } = await adminClient
+        .from("blend_ticket_products")
+        .delete()
+        .eq("blend_ticket_id", blendTicketId)
+        .eq("manually_corrected", false);
+      if (delErr) throw new Error(`Failed to clear prior product rows for reprocess: ${delErr.message}`);
+    } else {
+      // First-time run safety net: detect prior partial-failure rows and
+      // remove them so this attempt doesn't compound the duplication.
+      const { data: priorRows, error: countErr } = await adminClient
+        .from("blend_ticket_products")
+        .select("id")
+        .eq("blend_ticket_id", blendTicketId)
+        .eq("manually_corrected", false)
+        .limit(1);
+      if (countErr) throw new Error(`Failed to check for prior product rows: ${countErr.message}`);
+      if (priorRows && priorRows.length > 0) {
+        const { error: delErr } = await adminClient
+          .from("blend_ticket_products")
+          .delete()
+          .eq("blend_ticket_id", blendTicketId)
+          .eq("manually_corrected", false);
+        if (delErr) throw new Error(`Failed to clear stale product rows from prior partial run: ${delErr.message}`);
+      }
+    }
+
+    // Insert product records (critical — each row IS extracted product data)
     for (let i = 0; i < parsedData.products.length; i++) {
       const prod = parsedData.products[i];
       let matchedProductId: string | null = null;
@@ -981,7 +1038,7 @@ Deno.serve(async (req: Request) => {
         if (matched) matchedProductId = matched.id;
       }
 
-      await adminClient.from("blend_ticket_products").insert({
+      const { error: prodInsertErr } = await adminClient.from("blend_ticket_products").insert({
         blend_ticket_id: blendTicketId,
         product_id: matchedProductId,
         product_name: prod.productName,
@@ -992,11 +1049,12 @@ Deno.serve(async (req: Request) => {
         confidence_score: prod.confidenceScore,
         manually_corrected: false,
       });
+      if (prodInsertErr) throw new Error(`Failed to insert product row ${i + 1} for ticket ${blendTicketId}: ${prodInsertErr.message}`);
     }
 
-    // Mark queue complete
+    // Mark queue complete (critical — queue stays "processing" forever otherwise, blocking retry logic)
     if (queueId) {
-      await adminClient
+      const { error: qCompleteErr } = await adminClient
         .from("ocr_processing_queue")
         .update({
           status: "completed",
@@ -1004,6 +1062,7 @@ Deno.serve(async (req: Request) => {
           updated_at: new Date().toISOString(),
         })
         .eq("id", queueId);
+      if (qCompleteErr) throw new Error(`Failed to mark queue ${queueId} as completed: ${qCompleteErr.message}`);
     }
 
     // Notify uploader
@@ -1014,7 +1073,10 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (ticket?.uploaded_by) {
-      await adminClient.from("notifications").insert({
+      // Notification is non-critical (audit #28 + reviewer's recommendation):
+      // OCR processing already succeeded; missing notification doesn't roll back
+      // the work. Capture to Sentry so we know if it stops working systemically.
+      const { error: notifErr } = await adminClient.from("notifications").insert({
         user_id: ticket.uploaded_by,
         title: "Blend Ticket Processed",
         message:
@@ -1023,6 +1085,16 @@ Deno.serve(async (req: Request) => {
         related_entity_type: "blend_ticket",
         related_entity_id: blendTicketId,
       });
+      if (notifErr) {
+        console.warn("[process-blend-ticket] post-success notification insert failed:", notifErr);
+        await captureEdgeException(notifErr, {
+          function: "process-blend-ticket",
+          level: "warning",
+          tags: { phase: "post-success-notification" },
+          extra: { blend_ticket_id: blendTicketId, uploaded_by: ticket.uploaded_by },
+          user: { id: caller.id },
+        });
+      }
     }
 
     return jsonResponse({
@@ -1057,12 +1129,15 @@ Deno.serve(async (req: Request) => {
       user: { id: caller.id },
     });
 
-    // Handle retry logic
+    // Handle retry logic — these are best-effort cleanup writes inside the
+    // catch block. Don't re-throw on failure (would mask the original error
+    // captured to Sentry above). Capture each failure separately so we can
+    // diagnose if cleanup itself is broken.
     if (queueId && existingQueue) {
       const newRetryCount = (existingQueue.retry_count || 0) + 1;
 
       if (newRetryCount >= (existingQueue.max_retries || 3)) {
-        await adminClient
+        const { error: qFailErr } = await adminClient
           .from("ocr_processing_queue")
           .update({
             status: "failed",
@@ -1072,13 +1147,31 @@ Deno.serve(async (req: Request) => {
             updated_at: new Date().toISOString(),
           })
           .eq("id", queueId);
+        if (qFailErr) {
+          console.warn("[process-blend-ticket] catch-cleanup: queue->failed write failed:", qFailErr);
+          await captureEdgeException(qFailErr, {
+            function: "process-blend-ticket",
+            level: "warning",
+            tags: { phase: "catch-cleanup-queue-failed" },
+            extra: { queueId, blend_ticket_id: blendTicketId, original_error: errorMessage },
+          });
+        }
 
-        await adminClient
+        const { error: tFailErr } = await adminClient
           .from("blend_tickets")
           .update({ status: "failed" })
           .eq("id", blendTicketId);
+        if (tFailErr) {
+          console.warn("[process-blend-ticket] catch-cleanup: ticket->failed write failed:", tFailErr);
+          await captureEdgeException(tFailErr, {
+            function: "process-blend-ticket",
+            level: "warning",
+            tags: { phase: "catch-cleanup-ticket-failed" },
+            extra: { blend_ticket_id: blendTicketId, original_error: errorMessage },
+          });
+        }
       } else {
-        await adminClient
+        const { error: qPendingErr } = await adminClient
           .from("ocr_processing_queue")
           .update({
             status: "pending",
@@ -1087,11 +1180,29 @@ Deno.serve(async (req: Request) => {
             updated_at: new Date().toISOString(),
           })
           .eq("id", queueId);
+        if (qPendingErr) {
+          console.warn("[process-blend-ticket] catch-cleanup: queue->pending write failed:", qPendingErr);
+          await captureEdgeException(qPendingErr, {
+            function: "process-blend-ticket",
+            level: "warning",
+            tags: { phase: "catch-cleanup-queue-pending" },
+            extra: { queueId, blend_ticket_id: blendTicketId, original_error: errorMessage },
+          });
+        }
 
-        await adminClient
+        const { error: tPendingErr } = await adminClient
           .from("blend_tickets")
           .update({ status: "pending" })
           .eq("id", blendTicketId);
+        if (tPendingErr) {
+          console.warn("[process-blend-ticket] catch-cleanup: ticket->pending write failed:", tPendingErr);
+          await captureEdgeException(tPendingErr, {
+            function: "process-blend-ticket",
+            level: "warning",
+            tags: { phase: "catch-cleanup-ticket-pending" },
+            extra: { blend_ticket_id: blendTicketId, original_error: errorMessage },
+          });
+        }
       }
     }
 

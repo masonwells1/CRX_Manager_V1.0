@@ -110,7 +110,10 @@ export default function TeamBoard() {
   });
 
   const fetchProfiles = useCallback(async () => {
-    const { data, error } = await supabase.from('profiles').select('*').eq('is_active', true).order('full_name');
+    // PR-07 follow-up: team picker only uses p.id + p.full_name; safe via view.
+    // Codex P2 (2026-05-16): exclude entity_recipient service profiles
+    // (CMCTW LLC, Crop Rx Solutions) — they can't log in or receive tasks.
+    const { data, error } = await supabase.from('profile_public_view').select('id, full_name, role, is_active').eq('is_active', true).neq('role', 'entity_recipient').order('full_name');
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_profiles' } });
       toast('error', 'Failed to load team members. Please try again.');
@@ -122,13 +125,11 @@ export default function TeamBoard() {
   const fetchNotes = useCallback(async () => {
     // Optimized: Fetch notes with completion info in a single query
     // Note: completed_by FK may be auto-named, so we use the column reference
+    // PR-07 follow-up: dropped creator + assignee FK embeds; resolved via
+    // profile_public_view post-fetch (see lookup below).
     const { data: notesData, error: notesError } = await supabase
       .from('team_notes')
-      .select(`
-        *,
-        creator:profiles!team_notes_created_by_fkey(full_name),
-        assignee:profiles!team_notes_assigned_to_fkey(full_name)
-      `)
+      .select('*')
       .is('deleted_at', null)
       .order('is_pinned', { ascending: false })
       .order('created_at', { ascending: false });
@@ -168,26 +169,32 @@ export default function TeamBoard() {
         countMap[c.note_id] = (countMap[c.note_id] || 0) + 1;
       });
 
-      // Resolve completer names (who completed each task)
-      const completerIds = [...new Set(
-        notesData.filter((n: { completed_by?: string | null }) => n.completed_by).map((n: { completed_by?: string | null }) => n.completed_by)
-      )];
-      const completerMap: Record<string, { full_name: string }> = {};
-      if (completerIds.length > 0) {
-        const { data: completerProfiles } = await supabase
-          .from('profiles')
+      // PR-07 follow-up: resolve creator/assignee/completer names via
+      // profile_public_view in one batched fetch (replaces the prior
+      // creator/assignee FK embeds + the existing completer post-fetch).
+      const profileIds = [...new Set([
+        ...notesData.map((n: { created_by?: string | null }) => n.created_by),
+        ...notesData.map((n: { assigned_to?: string | null }) => n.assigned_to),
+        ...notesData.map((n: { completed_by?: string | null }) => n.completed_by),
+      ].filter(Boolean) as string[])];
+      const profileMap: Record<string, { full_name: string }> = {};
+      if (profileIds.length > 0) {
+        const { data: profileRows } = await supabase
+          .from('profile_public_view')
           .select('id, full_name')
-          .in('id', completerIds);
-        (completerProfiles || []).forEach((p: { id: string; full_name: string }) => {
-          completerMap[p.id] = { full_name: p.full_name };
+          .in('id', profileIds);
+        (profileRows || []).forEach((p: { id: string; full_name: string }) => {
+          profileMap[p.id] = { full_name: p.full_name };
         });
       }
 
-      const notesWithExtras = notesData.map((note: TeamNote & { id: string; completed_by?: string | null }) => ({
+      const notesWithExtras = notesData.map((note: TeamNote & { id: string; created_by?: string | null; assigned_to?: string | null; completed_by?: string | null }) => ({
         ...note,
         tags: tagMap[note.id] || [],
         comment_count: countMap[note.id] || 0,
-        completer: note.completed_by ? (completerMap[note.completed_by] || null) : null,
+        creator: note.created_by ? (profileMap[note.created_by] || null) : null,
+        assignee: note.assigned_to ? (profileMap[note.assigned_to] || null) : null,
+        completer: note.completed_by ? (profileMap[note.completed_by] || null) : null,
       }));
 
       setNotes(notesWithExtras as ExtendedTeamNote[]);
@@ -201,7 +208,7 @@ export default function TeamBoard() {
     setActivityLoading(true);
     let query = supabase
       .from('note_activity_log')
-      .select('*, user:profiles!note_activity_log_user_id_fkey(full_name)')
+      .select('*')
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -241,9 +248,25 @@ export default function TeamBoard() {
         (noteData || []).forEach((n: { id: string; title: string }) => { titleMap[n.id] = n.title; });
       }
 
-      const enriched = data.map((a: GlobalActivity & { note_id: string; changes?: Record<string, unknown> | null }) => ({
+      // PR-07 follow-up: resolve actor names via profile_public_view (safe columns
+      // only) so the global activity log keeps showing names after profiles_select
+      // tightens to admin-or-self.
+      const userIds = [...new Set(data.map((a: { user_id: string }) => a.user_id).filter(Boolean))];
+      const userMap: Record<string, { full_name: string }> = {};
+      if (userIds.length > 0) {
+        const { data: userData } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', userIds);
+        (userData || []).forEach((u: { id: string; full_name: string }) => {
+          userMap[u.id] = { full_name: u.full_name };
+        });
+      }
+
+      const enriched = data.map((a: GlobalActivity & { note_id: string; user_id: string; changes?: Record<string, unknown> | null }) => ({
         ...a,
         note_title: titleMap[a.note_id] || ((a.changes as Record<string, Record<string, unknown>> | null)?.note?.title as string) || 'Deleted note',
+        user: userMap[a.user_id],
       }));
 
       setGlobalActivities(enriched);
@@ -258,19 +281,32 @@ export default function TeamBoard() {
 
     // If not found in local state (e.g., page just loaded), fetch it directly
     if (!note) {
+      // PR-07 follow-up: dropped creator + assignee FK embeds; resolve via
+      // profile_public_view post-fetch.
       const { data } = await supabase
         .from('team_notes')
-        .select(`
-          *,
-          creator:profiles!team_notes_created_by_fkey(full_name),
-          assignee:profiles!team_notes_assigned_to_fkey(full_name)
-        `)
+        .select('*')
         .eq('id', noteId)
         .is('deleted_at', null)
         .maybeSingle();
 
       if (data) {
-        note = data as ExtendedTeamNote;
+        const ids = [data.created_by, data.assigned_to].filter(Boolean) as string[];
+        const profMap: Record<string, { full_name: string }> = {};
+        if (ids.length > 0) {
+          const { data: profs } = await supabase
+            .from('profile_public_view')
+            .select('id, full_name')
+            .in('id', ids);
+          (profs || []).forEach((p: { id: string; full_name: string }) => {
+            profMap[p.id] = { full_name: p.full_name };
+          });
+        }
+        note = {
+          ...(data as ExtendedTeamNote),
+          creator: data.created_by ? profMap[data.created_by] || null : null,
+          assignee: data.assigned_to ? profMap[data.assigned_to] || null : null,
+        } as ExtendedTeamNote;
       }
     }
 

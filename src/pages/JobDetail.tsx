@@ -191,7 +191,8 @@ export default function JobDetail() {
       supabase.from('fields').select('*').order('field_name'),
       supabase.from('products').select('*').eq('is_active', true).order('product_name'),
       supabase.from('vehicles').select('*').eq('status', 'active').order('vehicle_name'),
-      supabase.from('profiles').select('*').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
+      // PR-07 follow-up: applicator picker only uses a.id + a.full_name + a.role; safe via view.
+      supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       supabase.from('blend_recipes').select('*').eq('is_active', true).order('name'),
     ]);
     setCustomers((custResult.data || []) as Customer[]);
@@ -204,11 +205,12 @@ export default function JobDetail() {
 
   const fetchJob = useCallback(async () => {
     const { data, error } = await supabase
+      // PR-07 follow-up: dropped applicator FK embed — full_name isn't read
+      // anywhere in this page; only applicator_id is consumed (line 235).
       .from('jobs')
       .select(`
         *,
         customer:customers(farm_name),
-        applicator:profiles!jobs_applicator_id_fkey(full_name),
         vehicle:vehicles(vehicle_name),
         quote:quotes!jobs_quote_id_fkey(quote_number),
         quote_section:quote_sections!jobs_quote_section_id_fkey(section_name),
@@ -313,6 +315,10 @@ export default function JobDetail() {
     : null;
 
   const handleSave = async () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset saveJobIdem per save attempt.
+    // The job form is always-editable (no separate edit toggle), so any
+    // change between failed submits is a new intent.
+    saveJobIdem.resetKey();
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
 
@@ -385,12 +391,13 @@ export default function JobDetail() {
     setStarting(true);
     try {
       const idemKey = startJobIdem.getKey();
-      const { error } = await supabase.rpc('start_job', {
+      const { data, error } = await supabase.rpc('start_job', {
         p_job_id: id,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'start_job');
       startJobIdem.resetKey();
       logActivity({ event: 'job_started', description: `Job ${jobNumber} started`, performedBy: profile.id });
       toast('success', 'Job started');
@@ -600,7 +607,7 @@ export default function JobDetail() {
             </Button>
           )}
           {canComplete && (
-            <Button variant="secondary" onClick={() => setShowCompleteModal(true)}>
+            <Button variant="secondary" onClick={() => { completeJobIdem.resetKey(); setShowCompleteModal(true); }}>
               <Check className="w-4 h-4" />
               Complete Job
             </Button>
@@ -765,7 +772,7 @@ export default function JobDetail() {
           <h2 className="text-lg font-semibold text-nav-dark">Chemicals ({chemRows.length})</h2>
           <div className="flex gap-2">
             {canEdit && !isNew && (
-              <Button size="sm" variant="secondary" onClick={() => { setSelectedRecipeId(''); setShowRecipeModal(true); }}>
+              <Button size="sm" variant="secondary" onClick={() => { loadRecipeIdem.resetKey(); setSelectedRecipeId(''); setShowRecipeModal(true); }}>
                 <Beaker className="w-4 h-4" /> Load Recipe
               </Button>
             )}

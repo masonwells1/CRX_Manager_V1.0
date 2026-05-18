@@ -253,7 +253,7 @@ export default function IntegrityCleanup() {
     try {
       // F2 fix: per-click UUID, not a hook-cached key (which would collide across rows)
       const idemKey = crypto.randomUUID();
-      const { error } = await supabase.rpc('reconcile_negative_inventory', {
+      const { data, error } = await supabase.rpc('reconcile_negative_inventory', {
         p_inventory_id: row.id,
         p_new_quantity: parseFloat(input.qty),
         p_reason: input.reason.trim(),
@@ -261,6 +261,7 @@ export default function IntegrityCleanup() {
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'reconcile_negative_inventory');
       toast('success', `${row.product_name} reconciled to ${input.qty}`);
       await fetchAll();
     } catch (err) {
@@ -312,12 +313,13 @@ export default function IntegrityCleanup() {
     try {
       // F2 fix: per-click UUID, not a hook-cached key (which would collide across rows)
       const idemKey = crypto.randomUUID();
-      const { error } = await supabase.rpc('create_invoice_for_unbilled_delivery', {
+      const { data, error } = await supabase.rpc('create_invoice_for_unbilled_delivery', {
         p_delivery_id: row.id,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'create_invoice_for_unbilled_delivery');
       toast('success', `Draft invoice created for ${row.delivery_number}`);
       await fetchAll();
     } catch (err) {

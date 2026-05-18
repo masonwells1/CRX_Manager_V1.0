@@ -17,6 +17,17 @@ export interface Profile {
   updated_at: string;
 }
 
+// Non-PII shape from `public.profile_public_view` (PR-07, 2026-05-10).
+// Use for assignment dropdowns, joined display names, and any read that
+// doesn't need email/phone/license/certificate. The view bypasses RLS via
+// `security_invoker = off`; underlying `profiles` table SELECT is admin/self.
+export interface ProfilePublic {
+  id: string;
+  full_name: string;
+  role: UserRole;
+  is_active: boolean;
+}
+
 export interface Product {
   id: string;
   product_name: string;
@@ -337,6 +348,13 @@ export interface OrderItem {
   product_name: string;
   price_per_unit: number;
   cost_per_unit: number;
+  /**
+   * Snapshot of `products.current_cost` (cents, rounded) at row insert time.
+   * Distinct from `cost_per_unit` (caller-supplied — may be a stale quote cost
+   * or manual override). Populated by trg_snapshot_order_item_cost trigger.
+   * See migration 20260513050000 (audit #32).
+   */
+  cost_at_time_cents: number | null;
   actual_rate: number | null;
   rate_unit: string | null;
   acres: number | null;
@@ -2193,13 +2211,16 @@ export interface VendorBill {
   adjustment_cents: number;
   total_cents: number;
   paid_cents: number;
-  balance_cents: number;
+  balance_cents: number; // GENERATED ALWAYS as (total_cents - paid_cents) — read-only
   status: VendorBillStatus;
   notes: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
   // Joined
   vendor?: Vendor;
   purchase_order?: PurchaseOrder;
@@ -2215,6 +2236,9 @@ export interface VendorPayment {
   notes: string | null;
   created_by: string | null;
   created_at: string;
+  voided_at: string | null;
+  voided_by: string | null;
+  void_reason: string | null;
   // Joined
   creator?: Profile;
 }
@@ -2327,7 +2351,7 @@ export interface EmailLog {
   html_body: string | null;
   attachment_name: string | null;
   resend_message_id: string | null;
-  status: 'sent' | 'failed' | 'bounced';
+  status: 'pending' | 'sent' | 'failed' | 'bounced';
   error_message: string | null;
   idempotency_key: string | null;
   created_by: string | null;

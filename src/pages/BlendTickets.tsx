@@ -61,15 +61,16 @@ export function BlendTickets() {
   const loadData = useCallback(async () => {
     try {
       const [ticketsResult, customersResult] = await Promise.all([
+        // PR-07 follow-up: dropped uploader/reviewer/salesman FK embeds;
+        // also dropped the email field — UI only renders uploader.full_name
+        // (line ~437) so PII is unused on this page. Resolved via
+        // profile_public_view post-fetch below.
         supabase
           .from('blend_tickets')
           .select(`
             *,
-            uploader:profiles!blend_tickets_uploaded_by_fkey(id, full_name, email),
-            reviewer:profiles!blend_tickets_reviewed_by_fkey(id, full_name, email),
             customer:customers(id, farm_name),
             field:fields(id, field_name),
-            salesman:profiles!blend_tickets_salesman_id_fkey(id, full_name),
             images:blend_ticket_images(count)
           `)
           .is('deleted_at', null)
@@ -86,7 +87,30 @@ export function BlendTickets() {
       if (ticketsResult.error) throw ticketsResult.error;
       if (customersResult.error) throw customersResult.error;
 
-      setTickets(ticketsResult.data || []);
+      const ticketRows = (ticketsResult.data || []) as Array<BlendTicket & { uploaded_by?: string | null; reviewed_by?: string | null; salesman_id?: string | null }>;
+      const profIds = [...new Set([
+        ...ticketRows.map((t) => t.uploaded_by),
+        ...ticketRows.map((t) => t.reviewed_by),
+        ...ticketRows.map((t) => t.salesman_id),
+      ].filter(Boolean) as string[])];
+      const profMap: Record<string, { id: string; full_name: string }> = {};
+      if (profIds.length > 0) {
+        const { data: profRows } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', profIds);
+        (profRows || []).forEach((p: { id: string; full_name: string }) => {
+          profMap[p.id] = p;
+        });
+      }
+      const enriched: BlendTicket[] = ticketRows.map((t) => ({
+        ...t,
+        uploader: t.uploaded_by ? profMap[t.uploaded_by] || null : null,
+        reviewer: t.reviewed_by ? profMap[t.reviewed_by] || null : null,
+        salesman: t.salesman_id ? profMap[t.salesman_id] || null : null,
+      })) as BlendTicket[];
+
+      setTickets(enriched);
       setCustomers(customersResult.data || []);
     } catch (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_blend_tickets' } });
@@ -205,6 +229,19 @@ export function BlendTickets() {
   const approvableIds = selectedRows
     .filter((t) => t.status === 'completed' && t.review_status === 'unreviewed')
     .map((t) => t.id);
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
+  // approvable selection changes. Page-scoped keys would otherwise carry over
+  // across submits — if batch-approve A succeeded but the response was lost,
+  // the next batch-approve with a different selection would replay A's
+  // cached success without approving the new tickets. Hashing the sorted
+  // IDs detects intent changes; identical retries still reuse the key.
+  const approvableKey = approvableIds.slice().sort().join(',');
+  useEffect(() => {
+    batchApproveIdem.resetKey();
+    batchRejectIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvableKey]);
 
   const handleBatchApprove = async () => {
     if (!profile?.id || approvableIds.length === 0) return;

@@ -224,14 +224,28 @@ export default function CustomerDetail() {
         );
       }
     } else if (selectedTab === 'deliveries') {
+      // PR-07 follow-up: dropped driver FK embed; resolve via profile_public_view.
       const { data } = await supabase
         .from('deliveries')
-        .select('*, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+        .select('*')
         .eq('customer_id', id)
         .order('scheduled_date', { ascending: false });
-      const rows = ((data || []) as Array<Delivery & { driver: { full_name: string } | null }>).map((d) => ({
+      const driverIds = [...new Set(
+        ((data || []) as Delivery[])
+          .map((d) => d.assigned_driver)
+          .filter(Boolean) as string[]
+      )];
+      const driverMap: Record<string, string> = {};
+      if (driverIds.length > 0) {
+        const { data: driverData } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', driverIds);
+        (driverData || []).forEach((p: { id: string; full_name: string }) => { driverMap[p.id] = p.full_name; });
+      }
+      const rows = ((data || []) as Delivery[]).map((d) => ({
         ...d,
-        driver_name: d.driver?.full_name || 'Unassigned',
+        driver_name: d.assigned_driver ? driverMap[d.assigned_driver] || 'Unassigned' : 'Unassigned',
       }));
       setDeliveries(rows);
 
@@ -279,12 +293,35 @@ export default function CustomerDetail() {
       try {
         const { data: tlData, error: tlError } = await supabase
           .from('activity_feed')
-          .select('*, performer:profiles!activity_feed_performed_by_fkey(id, full_name, role)')
+          .select('*')
           .eq('customer_id', id)
           .order('created_at', { ascending: false })
           .limit(50);
         if (tlError) toast('error', 'Failed to load timeline');
-        setTimeline((tlData || []) as ActivityFeedItem[]);
+
+        // PR-07 follow-up: resolve performer names via profile_public_view (safe
+        // columns only) so non-admin users still see actor names after
+        // profiles_select tightens to admin-or-self. The timeline UI only reads
+        // performer.full_name (CustomerDetail.tsx ~line 796), so partial Profile
+        // shape via a cast is intentional here.
+        const rows = (tlData || []) as ActivityFeedItem[];
+        const performerIds = [...new Set(rows.map((r) => r.performed_by).filter(Boolean))];
+        const performerMap: Record<string, { id: string; full_name: string; role: string }> = {};
+        if (performerIds.length > 0) {
+          const { data: perfData } = await supabase
+            .from('profile_public_view')
+            .select('id, full_name, role')
+            .in('id', performerIds);
+          (perfData || []).forEach((p: { id: string; full_name: string; role: string }) => {
+            performerMap[p.id] = p;
+          });
+        }
+        setTimeline(
+          rows.map((r) => ({
+            ...r,
+            performer: performerMap[r.performed_by] as unknown as ActivityFeedItem['performer'],
+          })),
+        );
       } finally {
         setTimelineLoading(false);
       }

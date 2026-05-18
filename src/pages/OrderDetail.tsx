@@ -165,15 +165,29 @@ export default function OrderDetail() {
       setRelatedTickets(Array.from(uniqueTickets.values()));
 
       // Load linked deliveries
+      // PR-07 follow-up: dropped driver FK embed; resolve via profile_public_view.
       const { data: deliveryData } = await supabase
         .from('deliveries')
-        .select('*, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+        .select('*')
         .eq('order_id', id!)
         .order('scheduled_date');
+      const deliveryDriverIds = [...new Set(
+        (deliveryData || [])
+          .map((d: { assigned_driver?: string | null }) => d.assigned_driver)
+          .filter(Boolean) as string[]
+      )];
+      const deliveryDriverMap: Record<string, string> = {};
+      if (deliveryDriverIds.length > 0) {
+        const { data: driverData } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', deliveryDriverIds);
+        (driverData || []).forEach((p: { id: string; full_name: string }) => { deliveryDriverMap[p.id] = p.full_name; });
+      }
       setDeliveries(
-        (deliveryData || []).map((d: Delivery & { driver?: { full_name: string } | null }) => ({
+        (deliveryData || []).map((d: Delivery) => ({
           ...d,
-          driver_name: d.driver?.full_name || undefined,
+          driver_name: d.assigned_driver ? deliveryDriverMap[d.assigned_driver] || undefined : undefined,
         }))
       );
 
@@ -407,7 +421,7 @@ export default function OrderDetail() {
         const itemsPayload = [...existingPayload, ...newPayload];
 
         const idemKey = updateOrderIdem.getKey();
-        const { error } = await supabase.rpc('update_order_items', {
+        const { data, error } = await supabase.rpc('update_order_items', {
           p_order_id: id!,
           p_items: itemsPayload,
           p_performed_by: profile.id,
@@ -415,6 +429,7 @@ export default function OrderDetail() {
         });
 
         if (error) throw error;
+        assertRpcResult(data, 'update_order_items');
 
         updateOrderIdem.resetKey();
         const addedCount = newPayload.length;
@@ -675,6 +690,8 @@ export default function OrderDetail() {
   );
 
   const onCreateInvoiceClick = () => {
+    // Codex P2 fix: reset key per invoice-creation attempt (date/notes vary).
+    createInvoiceIdem.resetKey();
     if (hasPendingDelivery) {
       setInvoiceWarnOpen(true);
       return;
@@ -762,7 +779,7 @@ export default function OrderDetail() {
                   variant="secondary"
                   icon={<Pencil className="w-4 h-4" />}
                   showChevron={false}
-                  onClick={() => setEditing(true)}
+                  onClick={() => { updateOrderIdem.resetKey(); setEditing(true); }}
                 >
                   Edit Order
                 </Button>
@@ -873,7 +890,7 @@ export default function OrderDetail() {
           <div className="flex items-center gap-3">
             {isAdmin && order.status !== 'voided' && order.status !== 'cancelled' && (
               <button
-                onClick={() => { setNewStatus(order.status); setStatusModalOpen(true); }}
+                onClick={() => { cancelOrderIdem.resetKey(); setNewStatus(order.status); setStatusModalOpen(true); }}
                 className="text-xs text-secondary hover:text-crx-green underline"
               >
                 Change Status
@@ -881,7 +898,7 @@ export default function OrderDetail() {
             )}
             {isAdmin && order.status === 'fulfilled' && (
               <button
-                onClick={() => setVoidModalOpen(true)}
+                onClick={() => { voidOrderIdem.resetKey(); setVoidModalOpen(true); }}
                 className="text-xs text-red-500 hover:text-red-700 underline font-medium"
               >
                 Void Order

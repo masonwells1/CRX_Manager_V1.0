@@ -19,6 +19,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
+import { logActivity } from '../lib/activityLogger';
 
 interface CommissionPaymentRow {
   [k: string]: unknown;
@@ -83,9 +84,10 @@ export default function CommissionPayments() {
 
   const fetchPayments = useCallback(async () => {
     setLoading(true);
+    // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('commission_payments')
-      .select('*, recipient:profiles!commission_payments_recipient_id_fkey(full_name)')
+      .select('*')
       .order('created_at', { ascending: false })
       .limit(200);
 
@@ -95,9 +97,23 @@ export default function CommissionPayments() {
       return;
     }
 
+    const recipientIds = [...new Set(
+      ((data || []) as Array<{ recipient_id?: string | null }>)
+        .map((p) => p.recipient_id)
+        .filter(Boolean) as string[]
+    )];
+    const recipientMap: Record<string, string> = {};
+    if (recipientIds.length > 0) {
+      const { data: recipients } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', recipientIds);
+      (recipients || []).forEach((r: { id: string; full_name: string }) => { recipientMap[r.id] = r.full_name; });
+    }
+
     // Get item counts
     const rows: CommissionPaymentRow[] = [];
-    for (const p of (data || []) as Array<Record<string, unknown> & { recipient?: { full_name?: string } }>) {
+    for (const p of (data || []) as Array<Record<string, unknown> & { recipient_id?: string | null }>) {
       const { count } = await supabase
         .from('commission_payment_items')
         .select('*', { count: 'exact', head: true })
@@ -105,7 +121,7 @@ export default function CommissionPayments() {
 
       rows.push({
         ...p,
-        recipient_name: p.recipient?.full_name || 'Unknown',
+        recipient_name: p.recipient_id ? recipientMap[p.recipient_id] || 'Unknown' : 'Unknown',
         item_count: count || 0,
       } as CommissionPaymentRow);
     }
@@ -119,12 +135,12 @@ export default function CommissionPayments() {
   }, [fetchPayments]);
 
   const fetchUnpaid = async () => {
+    // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('commissions')
       .select(`
         id, order_number, customer_name, order_date, commission_amount,
-        recipient_user_id,
-        recipient:profiles!commissions_recipient_user_id_fkey(full_name)
+        recipient_user_id
       `)
       .neq('status', 'paid')
       .order('order_date', { ascending: false })
@@ -135,15 +151,31 @@ export default function CommissionPayments() {
       return;
     }
 
+    const recipientUserIds = [...new Set(
+      ((data || []) as Array<{ recipient_user_id?: string | null }>)
+        .map((c) => c.recipient_user_id)
+        .filter(Boolean) as string[]
+    )];
+    const recipientMap: Record<string, string> = {};
+    if (recipientUserIds.length > 0) {
+      const { data: recipients } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', recipientUserIds);
+      (recipients || []).forEach((r: { id: string; full_name: string }) => { recipientMap[r.id] = r.full_name; });
+    }
+
     setUnpaidCommissions(
-      ((data || []) as Array<Record<string, unknown> & { recipient?: { full_name?: string } }>).map((c) => ({
+      ((data || []) as Array<Record<string, unknown> & { recipient_user_id?: string | null }>).map((c) => ({
         ...c,
-        recipient_name: c.recipient?.full_name || 'Unknown',
+        recipient_name: c.recipient_user_id ? recipientMap[c.recipient_user_id] || 'Unknown' : 'Unknown',
       })) as unknown as UnpaidCommission[],
     );
   };
 
   const openCreate = async () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset page-scoped key on each open.
+    createPaymentIdem.resetKey();
     await fetchUnpaid();
     setSelectedRecipient('');
     setSelectedCommissions(new Set());
@@ -191,7 +223,7 @@ export default function CommissionPayments() {
     setCreating(true);
     try {
       const createKey = createPaymentIdem.getKey();
-      const { error } = await supabase.rpc('create_commission_payment', {
+      const { data, error } = await supabase.rpc('create_commission_payment', {
         p_commission_ids: Array.from(selectedCommissions),
         p_payment_method: payMethod,
         p_reference: payRef || null,
@@ -201,7 +233,19 @@ export default function CommissionPayments() {
         p_idempotency_key: createKey,
       });
       if (error) throw error;
+      const paymentId = assertRpcResult<string>(data, 'create_commission_payment');
       createPaymentIdem.resetKey();
+      // Audit #11: surface commission events in the activity feed (DB side
+      // already writes financial_audit_log; activity_feed is the user-facing one).
+      if (profile) {
+        await logActivity({
+          event: 'commission_payment_created',
+          description: `Commission payment created for ${fmt(selectedTotal)} (${selectedCommissions.size} commission(s))`,
+          performedBy: profile.id,
+          entityType: 'commission_payment',
+          entityId: paymentId,
+        });
+      }
       toast('success', `Commission payment created: ${fmt(selectedTotal)}`);
       setShowCreate(false);
       fetchPayments();
@@ -217,13 +261,24 @@ export default function CommissionPayments() {
     setPosting(paymentId);
     try {
       const postKey = postPaymentIdem.getKey();
-      const { error } = await supabase.rpc('post_commission_payment', {
+      const { data, error } = await supabase.rpc('post_commission_payment', {
         p_payment_id: paymentId,
         p_performed_by: profile?.id,
         p_idempotency_key: postKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'post_commission_payment');
       postPaymentIdem.resetKey();
+      // Audit #11: surface in activity feed.
+      if (profile) {
+        await logActivity({
+          event: 'commission_payment_posted',
+          description: `Commission payment posted`,
+          performedBy: profile.id,
+          entityType: 'commission_payment',
+          entityId: paymentId,
+        });
+      }
       toast('success', 'Commission payment posted');
       fetchPayments();
     } catch (err: unknown) {
@@ -247,6 +302,14 @@ export default function CommissionPayments() {
       if (error) throw error;
       const result = assertRpcResult<{ commissions_reset: number }>(voidResult, 'void_commission_payment');
       voidPaymentIdem.resetKey();
+      // Audit #11: surface void in activity feed.
+      await logActivity({
+        event: 'commission_payment_voided',
+        description: `Commission payment ${voidTarget.payment_number} voided (${result.commissions_reset || 0} commission(s) reset to pending). Reason: ${voidReason.trim()}`,
+        performedBy: profile.id,
+        entityType: 'commission_payment',
+        entityId: voidTarget.id,
+      });
       toast('success', `Payment ${voidTarget.payment_number} voided. ${result.commissions_reset || 0} commission(s) reset to pending.`);
       setShowVoid(false);
       setVoidReason('');
@@ -316,6 +379,8 @@ export default function CommissionPayments() {
                 icon={<Send className="w-3 h-3" />}
                 onClick={(e: React.MouseEvent) => {
                   e.stopPropagation();
+                  // Codex P2 fix: reset key so different post-target uses fresh intent.
+                  postPaymentIdem.resetKey();
                   setPostTargetId(r.id);
                   setShowPostConfirm(true);
                 }}
@@ -339,6 +404,8 @@ export default function CommissionPayments() {
                   icon={<RotateCcw className="w-3 h-3" />}
                   onClick={(e: React.MouseEvent) => {
                     e.stopPropagation();
+                    // Codex P2 fix: reset key so different void target uses fresh intent.
+                    voidPaymentIdem.resetKey();
                     setVoidTarget(r);
                     setVoidReason('');
                     setShowVoid(true);

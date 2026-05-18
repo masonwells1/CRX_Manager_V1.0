@@ -4,7 +4,7 @@
  * Track rebate programs from manufacturers, create claims against orders,
  * and reconcile payments received.
  */
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useRef, useState , useCallback } from 'react';
 import { Plus, DollarSign, TrendingUp, FileText, Trash2, Pencil } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -15,13 +15,15 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
-import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { generateIdempotencyKey } from '../lib/idempotency';
+import { parseLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents } from '../lib/parseCents';
-import type { RebateProgram, RebateClaim } from '../types';
+import type { RebateProgram, RebateClaim, RebateClaimStatus } from '../types';
 
 type TabKey = 'programs' | 'claims';
 
@@ -50,6 +52,15 @@ export default function Rebates() {
   const { profile, role } = useAuth();
   const { toast } = useToast();
   const isAdmin = role === 'admin';
+  // Per-claim idempotency keys: prevents double-submit on retry. New key per
+  // distinct user intent (each claim creation, each transition).
+  const createClaimKey = useIdempotencyKey('create_rebate_claim', profile?.id || 'anon');
+  // Transition keys scoped per (claimId, newStatus) so two concurrent admin
+  // clicks on different claims don't collide on a page-scoped key (codex P2,
+  // 2026-05-12) — without scoping, the second RPC's idempotency check would
+  // return the first claim's cached payload and silently no-op the second
+  // transition. Same intent retries still get the same key (retry safety).
+  const transitionKeysRef = useRef<Map<string, string>>(new Map());
   const [tab, setTab] = useState<TabKey>('programs');
   const [loading, setLoading] = useState(true);
 
@@ -258,6 +269,12 @@ export default function Rebates() {
 
   // ===== Claim CRUD =====
   const openAddClaim = () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset the createClaimKey on every
+    // modal open. Without this, if claim A succeeds but the response is
+    // lost, then the admin reopens/edits the form and submits claim B,
+    // both calls share the same page-scoped key and the server replays
+    // A's cached result without inserting claim B.
+    createClaimKey.resetKey();
     setCForm({
       program_id: '',
       order_id: '',
@@ -276,58 +293,71 @@ export default function Rebates() {
       return;
     }
 
-    // Generate claim number before entering runCriticalAction
-    const { count, error: countError } = await supabase.from('rebate_claims').select('id', { count: 'exact', head: true });
-    if (countError) {
-      toast('error', 'Failed to generate claim number');
-      return;
-    }
-    const claimNum = `RC-${new Date().getFullYear()}-${String((count || 0) + 1).padStart(4, '0')}`;
-
-    const payload = {
-      program_id: cForm.program_id,
-      order_id: cForm.order_id || null,
-      customer_id: cForm.customer_id || null,
-      product_id: cForm.product_id || null,
-      claim_number: claimNum,
-      quantity: Number(cForm.quantity),
-      claim_amount_cents: parseDollarsToCents(String(cForm.claim_amount_cents)),
-      notes: cForm.notes || null,
-    };
-
-    await runCriticalAction({
+    await runCriticalAction<{ claim_id: string; claim_number: string }>({
       action: async () => {
-        const result = await supabase.from('rebate_claims').insert(payload).select();
-        checkMutationResult(result, 'Create rebate claim');
-        if (profile) logActivity({ event: 'rebate_claim_created', description: `Rebate claim ${claimNum} created`, performedBy: profile.id });
+        // Atomic create via RPC — generates claim_number under counter row-lock
+        // (audit #33: replaces the racy `count(*) + 1` pattern that could produce
+        // duplicate claim numbers under concurrent inserts).
+        const { data, error } = await supabase.rpc('create_rebate_claim', {
+          p_program_id: cForm.program_id,
+          p_quantity: Number(cForm.quantity),
+          p_claim_amount_cents: parseDollarsToCents(String(cForm.claim_amount_cents)),
+          p_order_id: cForm.order_id || null,
+          p_customer_id: cForm.customer_id || null,
+          p_product_id: cForm.product_id || null,
+          p_notes: cForm.notes || null,
+          p_idempotency_key: createClaimKey.getKey(),
+        });
+        if (error) throw error;
+        const result = assertRpcResult<{ claim_id: string; claim_number: string }>(data, 'create_rebate_claim');
+        if (profile) logActivity({ event: 'rebate_claim_created', description: `Rebate claim ${result.claim_number} created`, performedBy: profile.id });
+        return result;
       },
       toast,
       setLoading: setSaving,
-      successMessage: `Claim ${claimNum} created`,
       sentryTag: 'create_rebate_claim',
-      onSuccess: () => {
+      onSuccess: (result) => {
+        createClaimKey.resetKey();
         setCModalOpen(false);
         fetchClaims();
+        toast('success', `Claim ${result?.claim_number ?? ''} created`);
       },
     });
   };
 
-  const updateClaimStatus = async (claimId: string, newStatus: string) => {
-    const updatePayload: Record<string, unknown> = { status: newStatus };
-    if (newStatus === 'submitted') updatePayload.submitted_date = localToday();
-    if (newStatus === 'approved') updatePayload.approved_date = localToday();
-    if (newStatus === 'paid') updatePayload.paid_date = localToday();
-
+  const updateClaimStatus = async (claimId: string, newStatus: RebateClaimStatus) => {
+    const scope = `${claimId}:${newStatus}`;
+    let idempotencyKey = transitionKeysRef.current.get(scope);
+    if (!idempotencyKey) {
+      idempotencyKey = generateIdempotencyKey('transition_rebate_claim', profile?.id || 'anon');
+      transitionKeysRef.current.set(scope, idempotencyKey);
+    }
     await runCriticalAction({
       action: async () => {
-        const result = await supabase.from('rebate_claims').update(updatePayload).eq('id', claimId).select();
-        checkMutationResult(result, `Update claim to ${newStatus}`);
+        // Atomic state-machine transition via RPC — server validates the
+        // transition under SELECT FOR UPDATE on the claim row (audit #33:
+        // prevents lost-update from concurrent admin clicks).
+        const { data, error } = await supabase.rpc('transition_rebate_claim', {
+          p_claim_id: claimId,
+          p_new_status: newStatus,
+          p_idempotency_key: idempotencyKey,
+        });
+        if (error) {
+          if (hasRpcCode(error, RpcErrorCodes.INVALID_TRANSITION)) {
+            throw new Error('This claim is no longer in the expected state — refresh and try again.');
+          }
+          throw error;
+        }
+        assertRpcResult<{ old_status: string; new_status: string }>(data, 'transition_rebate_claim');
         if (profile) logActivity({ event: 'rebate_claim_updated', description: `Rebate claim status → ${newStatus}`, performedBy: profile.id });
       },
       toast,
       successMessage: `Claim marked as ${newStatus}`,
       sentryTag: 'update_rebate_claim_status',
-      onSuccess: () => fetchClaims(),
+      onSuccess: () => {
+        transitionKeysRef.current.delete(scope);
+        fetchClaims();
+      },
     });
   };
 

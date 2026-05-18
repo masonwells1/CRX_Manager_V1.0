@@ -63,12 +63,12 @@ export default function ApplicationRecords() {
 
   const fetchRecords = useCallback(async () => {
     setLoading(true);
+    // PR-07 follow-up: dropped applicator FK embed; resolve via profile_public_view.
     let query = supabase
       .from('application_records')
       .select(`
         *,
         customer:customers(farm_name),
-        applicator:profiles!application_records_applicator_id_fkey(full_name),
         field:fields(field_name),
         vehicle:vehicles(vehicle_name)
       `)
@@ -88,10 +88,24 @@ export default function ApplicationRecords() {
       return;
     }
 
-    const rows: AppRecordRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; applicator?: { full_name?: string }; field?: { field_name?: string }; vehicle?: { vehicle_name?: string } }>).map((r) => ({
+    const applicatorIds = [...new Set(
+      ((data || []) as Array<{ applicator_id?: string | null }>)
+        .map((r) => r.applicator_id)
+        .filter(Boolean) as string[]
+    )];
+    const applicatorMap: Record<string, string> = {};
+    if (applicatorIds.length > 0) {
+      const { data: applicators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', applicatorIds);
+      (applicators || []).forEach((a: { id: string; full_name: string }) => { applicatorMap[a.id] = a.full_name; });
+    }
+
+    const rows: AppRecordRow[] = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; field?: { field_name?: string }; vehicle?: { vehicle_name?: string }; applicator_id?: string | null }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
-      applicator_name: r.applicator?.full_name || '-',
+      applicator_name: r.applicator_id ? applicatorMap[r.applicator_id] || '-' : '-',
       field_name: r.field?.field_name || '-',
       vehicle_name: r.vehicle?.vehicle_name || '-',
       product_count: Array.isArray(r.product_data) ? r.product_data.length : 0,

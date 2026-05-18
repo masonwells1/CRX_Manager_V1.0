@@ -75,8 +75,12 @@ export async function notifyAdmins(
   relatedEntityId?: string
 ) {
   try {
+    // PR-07 follow-up: read via profile_public_view so non-admin callers
+    // can still fan out admin notifications. Under admin-or-self RLS,
+    // a non-admin caller reading `from('profiles')` here would get zero
+    // rows back and the notify_admins fan-out would silently no-op.
     const { data: admins } = await supabase
-      .from('profiles')
+      .from('profile_public_view')
       .select('id')
       .eq('role', 'admin')
       .eq('is_active', true);

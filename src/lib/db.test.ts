@@ -27,11 +27,22 @@ describe('checkMutationResult', () => {
     ).toThrow('update customer failed: no rows were affected');
   });
 
-  it('does NOT throw when data is null (no select() chained)', () => {
-    // This is normal for mutations without .select() — data is null, no error
+  // Audit #14 (2026-05-12): `data: null` is a silent RLS denial when `.select()`
+  // was chained — `.select()` returns `[]` or `[...rows]` on success, `null`
+  // means the mutation was visible to RLS but no row matched. The convention
+  // documented in CLAUDE.md is to always `.select()` after `.update()` /
+  // `.delete()` so this guard catches the silent failure. Mutations without
+  // `.select()` shouldn't go through `checkMutationResult` at all.
+  it('throws when data is null (Audit #14 — silent RLS denial)', () => {
     expect(() =>
       checkMutationResult({ error: null, data: null, count: null }, 'insert')
-    ).not.toThrow();
+    ).toThrow('insert failed: no rows were affected');
+  });
+
+  it('throws when data is undefined', () => {
+    expect(() =>
+      checkMutationResult({ error: null, data: undefined, count: null }, 'update')
+    ).toThrow('update failed: no rows were affected');
   });
 
   it('does NOT throw when data is a non-empty array', () => {

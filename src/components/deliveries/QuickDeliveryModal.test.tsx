@@ -152,6 +152,7 @@ describe('QuickDeliveryModal', () => {
   it('fetches products and drivers when opened', async () => {
     await renderModal();
     expect(mockFrom).toHaveBeenCalledWith('products');
-    expect(mockFrom).toHaveBeenCalledWith('profiles');
+    // PR-07 follow-up: drivers now read from profile_public_view.
+    expect(mockFrom).toHaveBeenCalledWith('profile_public_view');
   });
 });

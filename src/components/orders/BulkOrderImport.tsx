@@ -3,7 +3,8 @@ import { Upload, CheckCircle, AlertCircle, FileText, Sparkles } from 'lucide-rea
 import Modal from '../ui/Modal';
 import Button from '../ui/Button';
 import { useToast } from '../ui/Toast';
-import { supabase, checkMutationResult } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
+import { generateIdempotencyKey } from '../../lib/idempotency';
 import { processDocumentWithOCR, isCSVFile, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
@@ -32,6 +33,13 @@ interface ParsedOrder {
   status?: string;
   notes?: string;
   items: ParsedOrderItem[];
+  /**
+   * Stable idempotency key for this parsed order. Generated once at parse
+   * time so that a retry of `handleUpload` (e.g. after a network timeout)
+   * sends the same key to `bulk_import_order`, letting the DB short-circuit
+   * the duplicate via `check_idempotency`.
+   */
+  idempotency_key: string;
 }
 
 interface ValidationResult {
@@ -136,8 +144,9 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
       toast('warning', `Low OCR confidence (${result.confidence}%). Please review the parsed data carefully.`);
     }
 
+    const orderNumber = data.order_number || 'OCR-IMPORT';
     const parsedOrder: ParsedOrder = {
-      order_number: data.order_number || 'OCR-IMPORT',
+      order_number: orderNumber,
       customer_name: data.customer_name || 'Unknown Customer',
       order_date: data.order_date || localToday(),
       status: data.status || 'confirmed',
@@ -150,6 +159,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         unit_size: item.unit_size || undefined,
         notes: item.notes || undefined,
       })),
+      idempotency_key: generateIdempotencyKey(`bulk_import_order:${orderNumber}`, profile?.id || 'anon'),
     };
 
     return { valid: parsedOrder.items.length > 0 ? [parsedOrder] : [], invalid: [] };
@@ -221,6 +231,7 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
             status: orderFieldMap.status !== undefined ? row[orderFieldMap.status] : 'confirmed',
             notes: orderFieldMap.notes !== undefined ? row[orderFieldMap.notes] : undefined,
             items: [],
+            idempotency_key: generateIdempotencyKey(`bulk_import_order:${orderNumber}`, profile?.id || 'anon'),
           });
         }
 
@@ -331,28 +342,10 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
         const totalProfit = totalPrice - totalCost;
         const totalMarginPct = totalPrice > 0 ? (totalProfit / totalPrice) * 100 : 0;
 
-        const { data: orderData, error: orderError } = await supabase
-          .from('orders')
-          .insert({
-            order_number: order.order_number,
-            customer_id: customer.id,
-            status: (() => {
-              const validStatuses = ['confirmed', 'partially_fulfilled', 'fulfilled', 'cancelled'];
-              return validStatuses.includes(order.status || '') ? order.status : 'confirmed';
-            })(),
-            total_price: totalPrice,
-            total_cost: totalCost,
-            total_profit: totalProfit,
-            total_margin_pct: totalMarginPct,
-            order_date: order.order_date,
-            notes: order.notes,
-          })
-          .select()
-          .single();
-
-        if (orderError) throw orderError;
-
-        const orderItems = await Promise.all(
+        // Resolve product_id per item up front (preserves the friendly Sentry
+        // breadcrumb for unknown products), then ship the whole order through
+        // bulk_import_order which inserts orders + items atomically.
+        const itemsPayload = await Promise.all(
           order.items.map(async (item, idx) => {
             const { data: product, error: prodError } = await supabase
               .from('products')
@@ -364,7 +357,6 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
             }
 
             return {
-              order_id: orderData.id,
               product_id: product?.id || null,
               product_name: item.product_name,
               price_per_unit: item.price_per_unit,
@@ -373,15 +365,31 @@ export default function BulkOrderImport({ open, onClose, onSuccess }: BulkOrderI
               unit_size: item.unit_size,
               notes: item.notes,
               sort_order: idx + 1,
-              quantity_delivered: 0,
             };
           })
         );
 
-        const itemsResult = await supabase.from('order_items').insert(orderItems).select();
+        // Audit #31: atomic per-order create — order + items rolled together.
+        // The idempotency key is generated once at parse time and stored on
+        // the ParsedOrder, so retrying handleUpload (e.g. after a network
+        // timeout on an earlier order in the batch) sends the SAME key and
+        // bulk_import_order's check_idempotency short-circuits the dupe.
+        const { data: rpcResult, error: rpcError } = await supabase.rpc('bulk_import_order', {
+          p_order_number: order.order_number,
+          p_customer_id: customer.id,
+          p_status: order.status || 'confirmed',
+          p_total_price: totalPrice,
+          p_total_cost: totalCost,
+          p_total_profit: totalProfit,
+          p_total_margin_pct: totalMarginPct,
+          p_order_date: order.order_date,
+          p_items: itemsPayload,
+          p_notes: order.notes,
+          p_idempotency_key: order.idempotency_key,
+        });
 
-        if (itemsResult.error) throw itemsResult.error;
-        checkMutationResult(itemsResult, 'Insert order_items');
+        if (rpcError) throw rpcError;
+        assertRpcResult<{ order_id: string }>(rpcResult, 'bulk_import_order');
 
         successCount++;
       } catch (error) {

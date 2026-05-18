@@ -15,6 +15,7 @@ import {
   TEST_PRODUCT_GAMMA,
   TEST_VENDOR,
 } from './e2e-constants';
+import { assertNotProductionWithoutOverride } from '../utils/safety-guards';
 
 const SUPABASE_URL = 'https://rhyzpcqhnizqbxphqdkr.supabase.co';
 const ANON_KEY =
@@ -24,8 +25,15 @@ const ANON_KEY =
  * Get a JWT token by signing in with the E2E test account.
  */
 async function getAuthToken(): Promise<string> {
-  const email = process.env.E2E_TEST_EMAIL || 'mason@croprxsolutions.com';
-  const password = process.env.E2E_TEST_PASSWORD || 'Mwells0413';
+  // PR-05: fail-closed — no hardcoded credential fallback
+  const email = process.env.E2E_TEST_EMAIL;
+  const password = process.env.E2E_TEST_PASSWORD;
+  if (!email || !password) {
+    throw new Error(
+      'E2E env vars E2E_TEST_EMAIL and E2E_TEST_PASSWORD are required for fixtures setup.\n' +
+        'See docs/CONTRIBUTING.md (E2E section).',
+    );
+  }
 
   const resp = await fetch(
     `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
@@ -108,6 +116,9 @@ async function ensureFixture(
  * Main setup function — called by Playwright globalSetup.
  */
 export default async function setupFixtures(): Promise<void> {
+  // PR-05: refuse to run if pointed at prod without explicit acknowledgement
+  assertNotProductionWithoutOverride();
+
   console.log('\n🔧 E2E Setup: Creating shared test fixtures...\n');
 
   const token = await getAuthToken();

@@ -4,9 +4,359 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-17 — Codex `/audit` findings closure: is_active gate, OCR dedup, cross-delivery aggregate, doc drift (F1 P1, F2 P2, F3 P2, F4 P3)
+
+Codex ran `/audit` post-ultra-review closeout and surfaced 4 new findings none of which the prior ultra-review caught — all live at the integration boundary (Edge Function ↔ DB consistency, RPC ↔ frontend contract, cross-RPC aggregation). Independent review confirmed all 4 valid. All 4 closed in one branch.
+
+**F1 P1 — Edge Functions ignored `profiles.is_active`.** Frontend `ProtectedRoute.tsx:33-36` hard-blocks deactivated users, but all 6 JWT-gated Edge Functions only selected `role`. A user deactivated in the admin UI could continue calling `create-user`, `send-email`, `reset-user-password`, `setup-blend-tickets-storage`, `process-blend-ticket`, `process-document` until their JWT/refresh-token expired (days). New shared helper `supabase/functions/_shared/auth.ts` `requireActiveProfile(client, callerId, allowedRoles?)` centralizes the lookup. All 6 functions refactored + redeployed via MCP (versions bumped: setup-blend-tickets-storage v14→v15, send-email v11→v13, process-blend-ticket v17→v19, plus create-user, reset-user-password, process-document). Deactivated users now get 403 "Account is deactivated" from any Edge Function. Pattern: `const gate = await requireActiveProfile(adminClient, caller.id, ["admin"]); if ("error" in gate) return jsonResponse({ error: gate.error }, gate.status);`
+
+**F2 P2 — `create_delivery_with_items` allowed cross-delivery over-schedule (migration #344).** The 2026-05-16 fix added per-row `quantity_remaining` check but did NOT subtract quantities already scheduled on OTHER active deliveries. Two failure modes: (1) the same `order_item_id` listed twice in `p_items` — each row passes independently but together exceed remaining; (2) two concurrent `create_delivery_with_items` calls — Delivery A schedules 80 of 100, Delivery B also schedules 80, both complete, `complete_delivery` increments `quantity_delivered` to 160 > 100. The correct pattern existed in `edit_delivery_items_when_scheduled` (20260334200000:124-143) but was never reapplied to create. New migration: (1) `ITEM_DUPLICATE_IN_REQUEST` rejection via `jsonb_array_elements + GROUP BY HAVING COUNT(*) > 1` before any work; (2) inside the per-item loop, `SELECT COALESCE(SUM(di.quantity), 0) FROM delivery_items JOIN deliveries ... WHERE status IN ('scheduled', 'in_progress') AND d.id <> v_delivery_id` and check against `quantity_remaining - other_scheduled`; `ITEM_OVER_REMAINING_INCL_ACTIVE` on overschedule. Applied live via Supabase MCP.
+
+**F3 P2 — Blend-ticket reprocess duplicated product rows (process-blend-ticket v19).** Frontend `BlendTicketDetail.tsx:458` sends `reprocess: true` when user clicks "Re-process OCR", but the Edge Function never read the flag — it just appended new product rows on top of existing ones. Compounded by 2026-05-16 P2 #6 error-checks: previously silent failures now throw, making retries the expected path — but retries also duplicate. Fix: (1) read `body.reprocess === true` at top of handler; (2) when `reprocess=true`, `DELETE FROM blend_ticket_products WHERE blend_ticket_id = ? AND manually_corrected = false` BEFORE the insert loop (preserves any user hand-edits); (3) safety net on first-time runs — detect prior partial-failure rows (`manually_corrected=false` rows exist) and wipe them too, so a re-attempt after a mid-loop failure doesn't compound the duplication.
+
+**F4 P3 — Docs drift after closeout.** AGENTS.md said `333 migrations` (10 behind), `docs/reference/migration-history.md` said `337 migrations` (6 behind), `docs/CHANGELOG.md` line 21 said `process-blend-ticket` deploy pending while it was actually deployed v17. CLAUDE.md said `337 migrations` (already patched earlier this session to 343, now 344). All four patched in this entry.
+
+**Pre-commit checks:** `npm run lint`, `npm run typecheck`, `npm run build`, `npm run test`, and `bash scripts/validate-sql-migrations.sh` all pass with the new code. Test count unchanged: 1,914 unit tests (130 files, 70 skipped).
+
+---
+
+## 2026-05-16 — Ultra-review Phase 3: send-email durability, error checks, CORS, docs (P2 #5, #6 + P3 #7, #8)
+
+**P2 #5 — `send-email` durable idempotency (Edge Function v11 + migration #337).**
+Prior flow: check email_log → send via Resend → INSERT email_log. If the post-send insert failed, customer got the email but no audit record and no idempotency replay marker — future retries would duplicate. New write-ahead-log flow: INSERT email_log with `status='pending'` BEFORE Resend call; if pending insert fails, DON'T send (return 500). After Resend returns, UPDATE the pending row to `'sent'` or `'failed'`. Idempotency check now only returns cached success when status is exactly `'sent'`; existing `'pending'`/`'failed'` rows are reused for retry. Required migration #337 to add `'pending'` to the `email_log.status` CHECK constraint (was `'sent', 'failed', 'bounced'`). EmailLog TS type updated accordingly.
+
+**P2 #6 — `process-blend-ticket` error checks.** 10 unchecked `await adminClient.from(...).update/insert(...)` calls were causing silent failures: tickets stuck "processing" forever, queues stuck in wrong state, missing product rows, and the function still returning success. Categorized:
+- 5 critical success-path writes (queue→processing, ticket→processing, ticket→update with parsed data, blend_ticket_products inserts, queue→complete): now destructure `{ error }` and throw with descriptive message on failure.
+- 1 non-critical notification write (uploader-completion notification): destructures error, logs warning, captures to Sentry, does NOT throw (OCR success shouldn't be rolled back by a notification glitch).
+- 4 catch-block cleanup writes (queue→failed, ticket→failed, queue→pending retry, ticket→pending retry): destructures error, captures to Sentry with `catch-cleanup-*` tags, does NOT re-throw (would mask the original error already captured at the top of the catch block).
+
+**P3 #7 — `setup-blend-tickets-storage` CORS hardening (Edge Function v14).** Removed the silent `return "https://croprxsolutions.app"` fallback when `ALLOWED_ORIGIN` is missing. Now throws at module load, matching the PR-16 pattern used by every other hardened Edge Function. Hiding deployment misconfiguration is worse than boot failure.
+
+**P3 #8 — `void_vendor_bill` docs drift.** Updated `docs/reference/rpc-functions.md:169` to say `→ void` instead of `→ jsonb` (live SQL returns void per pg_proc; frontend already uses `.throwOnError()` correctly). One-line fix.
+
+**Pending Mason:** ~~`process-blend-ticket` source code is committed but the Edge Function needs a manual deploy~~. **✅ Resolved 2026-05-16 PM** — deployed live as v17 via Supabase MCP after using node-via-bash to JSON-encode the 47KB file content + reading it back through Read.
+
+---
+
+## 2026-05-16 — Ultra-review Phase 1 + 2: idempotency, offline sync (P1 #1, #3, #4)
+
+External ultra-review (`docs/reports/2026-05-16-ultra-code-review-findings.md`) flagged 4 P1 findings on top of the morning's session work. Verification showed P1 #2 was a **false positive** — all 5 cited SECURITY DEFINER functions actually have `search_path=public, pg_temp` in live `pg_proc`; the reviewer was reading the original source migrations where they were initially created without `pg_temp`, but subsequent migrations rewrote them with the correct config. Lesson: verify against live state, not source files.
+
+The other 3 P1s were real and closed:
+
+**P1 #1 — `transfer_job_to_invoice` idempotency bypass (migration #335).** The morning's migration #334 had used the `idempotency-body-check: exempt` marker to preserve the function's pre-existing gap. The reviewer correctly noted that this creates a customer-visible bug: after a successful invoice creation, a network-dropped response causes the retry to fail with "Job already invoiced" instead of replaying the success. Wired canonical `check_idempotency`/`save_idempotency` calls. Removed the exempt marker. Function interface unchanged.
+
+**P1 #4 — Notification RPC signature mismatch (migration #336).** Frontend `src/lib/notificationTriggers.ts` was passing `p_idempotency_key: crypto.randomUUID()` to `log_failed_notification` (5-arg signature) and `notify_damaged_receiving` (3-arg signature). PostgREST function lookup was failing silently — damaged-receiving alerts were broken AND the fallback failure-queue logging was also broken (compounding the silence). Added `p_idempotency_key text DEFAULT NULL` to both signatures, wired canonical idempotency. DROP FUNCTION before CREATE because adding a defaulted param creates a new overload, not a replacement.
+
+**P1 #3 — Offline sync validation (`src/lib/offlineSync.ts`).** `executeOfflineAction()` only checked `error`, not `data`. If Supabase returned `{ data: null, error: null }` — RLS denial on a SELECT chain, trigger fail-soft path, etc. — the action was silently removed as if synced. Verified via pg_proc that all 9 mapped offline RPCs return jsonb (none are void), so a uniform null-data throw is safe. Added the check + a regression test asserting the queued action is retained for retry when null data comes back. Test count: 1,913 → 1,914.
+
+**Audit file imported:** `docs/reports/2026-05-16-ultra-code-review-findings.md` — preserved verbatim for future reference, including the false-positive finding (which has a useful "verify against live state, not source files" lesson baked in).
+
+---
+
+## 2026-05-16 — Audit #7 closure: safe_cents_qty wrap on transfer_job_to_invoice
+
+Closes the last deferred `safe_cents_qty` follow-up from the 2026-05-13 audit sprint. The 2026-05-13 execution summary listed 3 RPCs as deferred (`transfer_job_to_invoice`, `create_invoice_from_blend_ticket`, `save_field_app_invoice`) but live `pg_proc` grep on 2026-05-16 showed only `transfer_job_to_invoice` actually had unsafe `(cents * qty)::bigint` patterns — the other 2 already used `ROUND(...)::bigint` throughout. The original audit overcounted.
+
+Migration `20260516000000_safe_cents_transfer_job_to_invoice.sql` rewrites the `v_share` loop with 2 surgical fixes:
+
+- **Price-override branch**: `(v_share.price_override_cents * v_share.share_acres)::bigint` → `safe_cents_qty(v_share.price_override_cents, v_share.share_acres)`. The helper does `ROUND(cents * qty)::bigint`, eliminating up to ~0.999 cents/share truncation loss.
+- **Pct-split branch**: `(COALESCE(v_job.total_price_cents, 0) * v_share.avg_split_pct / 100.0)::bigint` → `ROUND(COALESCE(...) * v_share.avg_split_pct / 100.0)::bigint`. Shape is cents × pct/100 (not cents × qty) so the `safe_cents_qty` helper doesn't fit; bare `ROUND()` is the right primitive.
+
+Net effect on multi-customer billing splits: `invoice_shares.amount_cents` sums now equal `invoices.total_amount_cents` exactly instead of drifting below by a fraction-of-a-cent per share row.
+
+Function body otherwise unchanged. Signature/return shape unchanged — no downstream impact on TypeScript types or the [JobDetail.tsx](../src/pages/JobDetail.tsx) caller. Migration has an inline `DO $verify$` block that asserts both fixes landed and aborts on failure. Applied live via Supabase MCP; `prosrc` post-apply confirmed both patterns present and old unsafe form absent.
+
+**Hook exempt rationale (top-of-file marker):** the function declares `p_idempotency_key` but its body has never honored it (no `check_idempotency` / no `save_idempotency`). Same behavior preserved verbatim — wiring canonical idempotency is a separate cleanup, low priority since `FOR UPDATE` on the job row + `pg_advisory_xact_lock` on invoice_number generation already serialize concurrent retries (the second call fails with "Job already invoiced" rather than producing duplicates).
+
+**Also closed today:**
+- `send-email` Edge Function deployed to v10 — PR-03 `farm_name` fix from 2026-05-09 had been on the branch for ~7 days but never deployed; live v9 was silently failing every customer-tied email. Verified deployed bundle via `get_edge_function`.
+- 17 of 20 PR #59 codex review threads bulk-resolved via GraphQL (the 3 left open are deferred-by-decision items: customer RLS upper bound, apply_prepay hand-decrement, entity commission recipients).
+- Advisory comment posted on PR #60 flagging that its `DROP VIEW profile_public_view` migration conflicts with current branch's view-dependent code.
+
+---
+
+## 2026-05-13 — Audit #28 follow-up: REVOKE anon on 9 new SECURITY DEFINER functions
+
+Defense-in-depth cleanup discovered while running the security advisor post-sprint. Supabase grants EXECUTE on new public-schema functions to BOTH `anon` and `authenticated` by default — `REVOKE ALL ... FROM PUBLIC` strips the PUBLIC group's grant but leaves the role-specific anon grant intact. Each function body checks `auth.uid() IS NULL → AUTH_REQUIRED` so an anon caller can't actually do anything, but the advisor `0028_anon_security_definer_function_executable` correctly flags it (defense-in-depth means revoking the grant, not relying on the body to refuse).
+
+Migration `20260513060000` revokes:
+- `anon` EXECUTE on 7 user-facing / helper RPCs (keeps `authenticated`): `create_rebate_claim`, `transition_rebate_claim`, `create_delivery_with_items`, `bulk_import_order`, `save_blend_recipe`, `compute_commission_amount`, `safe_cents_qty`
+- `PUBLIC + anon + authenticated` EXECUTE on 2 internal helpers (`_insert_commissions_for_order`, `_snapshot_order_item_cost`) — only called from within other SECURITY DEFINER bodies, where inner-call grants are irrelevant due to function-owner permissions
+
+**Latent bug surfaced + fixed:** `_snapshot_order_item_cost()` had been created (migration 20260513050000) without `REVOKE ALL ... FROM PUBLIC`, so PUBLIC had EXECUTE — anon inherited via PUBLIC even after stripping its direct grant. The first attempt at this migration failed at the verify step ("anon still has EXECUTE on 1 of 9") and got rolled back. Diagnosed via `proacl` inspection (`{=X/postgres,...}` = PUBLIC entry); fixed by adding PUBLIC to the REVOKE for that one fn.
+
+Project-wide impact: drops the anon SECURITY DEFINER warning count from ~223 → ~214 (the other ~214 are pre-existing functions, separately tracked as a hygiene-sweep follow-up). Future migration template: include `REVOKE ALL ... FROM PUBLIC, anon` for every SECURITY DEFINER function plus a single `GRANT EXECUTE ... TO authenticated` for user-facing ones.
+
+---
+
+## 2026-05-13 — Audit #28 closure: Edge Functions Sentry hardening
+
+`supabase/functions/_shared/sentry.ts` had two fail-soft paths that suppressed Sentry alerts silently in production:
+- `SENTRY_DSN` missing → silent `return false`
+- `SENTRY_DSN` malformed → quiet `console.warn` + `return false`
+
+Per the audit, both should be loud. Changes:
+
+- **New `validateSentryDsnOrThrow()` exported helper** — fail-loud counterpart to `captureEdgeException`. Throws at module-load if DSN is missing or malformed (mirrors the PR-16 ALLOWED_ORIGIN pattern). Functions whose alerting is critical can call this at top-level. Functions where alerting is best-effort can keep using `captureEdgeException` as graceful degradation.
+- **`[SENTRY_MISCONFIG]` log sentinel** — both fail-soft paths now log with this grep-friendly prefix. Easy to find in Supabase function logs and easy to alert on at the log-pipeline layer.
+- **Sentry capture added to 4 Edge Functions that were missing it**: `create-user`, `reset-user-password`, `seed-admin`, `setup-blend-tickets-storage`. Each catch block now calls `await captureEdgeException(err, { function: '...', level: 'error' })` before returning the 500 response. The 3 functions that already had Sentry (`send-email`, `process-document`, `process-blend-ticket`) are unchanged.
+
+**Pending Mason:** deploy the 5 changed functions to Supabase via `supabase functions deploy <name>` (one each for `create-user`, `reset-user-password`, `seed-admin`, `setup-blend-tickets-storage`, plus any function that imports `_shared/sentry.ts` to pick up the helper update — i.e. all 7 since they all share the helper now). The code change is committed; deployment is intentionally a manual step.
+
+---
+
+## 2026-05-13 — Audits #18 + #35 closure: UX cleanup
+
+**Audit #18** — Expanded the Inventory page's `HelpTip` to explicitly contrast `Net Position` vs `Today's Free`. Both numbers exist for sound reasons (Net Position is forward-looking and used for order-creation warnings; Today's Free is right-now physical stock and used by the manual-hold modal because a hold competes against today's stock not future PO arrivals) but users were confusing them. The HelpTip now spells out which is which and where each is used. No code logic change — just clarification text.
+
+**Audit #35** — `AccountsPayable.tsx` was running both `get_ap_dashboard_summary` and `get_ap_aging` every time `asOfDate` changed, even though the summary doesn't depend on the date. Split into two `useCallback`s + two `useEffect`s: one for summary (mount-only), one for aging (asOfDate). The Refresh button kicks off both in parallel. Mount effect uses an `isInitialDateRef` to skip the duplicate aging fetch on first render. No more wasted RPC calls when scrubbing through dates.
+
+---
+
+## 2026-05-13 — Audits #11 + #27 + #32 closure: activity feed + cost snapshot
+
+**Audit #11 (commission TS-side logActivity)** — `CommissionPayments.tsx` was calling `create_commission_payment`, `post_commission_payment`, `void_commission_payment` RPCs but never writing to `activity_feed`. The DB side already wrote `financial_audit_log` (DBA-only audit log) but ordinary users had no visibility into commission events from the activity feed. Added `logActivity({ event: 'commission_payment_created'|'commission_payment_posted'|'commission_payment_voided', ... })` at the success points of each handler.
+
+**Audit #27 (prepay TS-side logActivity)** — Same pattern: `PrepaymentManager.tsx` was calling `create_prepay_check_splits`, `apply_remaining_prepayments`, `batch_apply_all_prepayments` RPCs without writing to `activity_feed`. Added `logActivity({ event: 'prepay_check_created'|'prepay_applied'|'prepay_batch_applied', ... })` at success points. The batch-apply event has no entityType/entityId since it's a multi-customer operation.
+
+**Audit #32 (cost-at-time snapshot)** — Migration `20260513050000_order_items_cost_at_time_snapshot.sql` (live). `order_items.cost_per_unit` was caller-supplied (potentially a stale quote cost from weeks earlier, or a manual override) so it didn't authoritatively answer "did order X use the cost-at-the-time?" Added `cost_at_time_cents bigint` column + `_snapshot_order_item_cost()` BEFORE INSERT trigger that fills it from `products.current_cost * 100` (rounded) whenever caller leaves it NULL. Trigger handles every insert path automatically — no RPC changes needed (all 5 commission/order paths get it for free). Backfill from `cost_per_unit * 100` for existing rows. New `OrderItem.cost_at_time_cents` field on the TS interface.
+
+---
+
+## 2026-05-13 — Audits #7 + #19 closure: `safe_cents_qty` helper + invoice balance CHECK
+
+**Audit #7** — Migration `20260513030000_safe_cents_multiply_helper.sql` (live). PostgreSQL's `numeric::bigint` cast truncates, so `(price_cents * qty)::bigint` lost up to ~0.999 cents per line item. Live grep against `pg_proc.prosrc` found 4 instances:
+
+- `create_quick_delivery` × 3 (most-trafficked: item price × delivery qty, used by every QD invoice line)
+- `transfer_job_to_invoice` × 1 (price_override × share_acres)
+- `create_invoice_from_blend_ticket` × 1 (cost_per_acre × fee_acres)
+- `save_field_app_invoice` × 1 (cost_per_acre × fee_acres)
+
+New `safe_cents_qty(p_cents bigint, p_qty numeric) -> bigint` IMMUTABLE helper does `ROUND(p_cents * p_qty)::bigint` (to-nearest-cent rounding). `create_quick_delivery` body rewritten to use the helper for all 3 instances. The other 3 are documented as deferred (each single-instance, smaller blast radius — fee × acres patterns) for a follow-up sprint.
+
+A new `sql-safety.mjs` hook rule blocks `(<*_cents> * <qty>)::bigint` patterns in future migrations (strips SQL `--` comments first so doc text mentioning the bad pattern doesn't false-positive).
+
+**Audit #19** — Migration `20260513040000_invoices_balance_non_negative.sql` (live). `invoices.balance_cents` is GENERATED ALWAYS but had no CHECK guard against going negative. The two base columns already have non-negative CHECKs (`invoices_total_non_negative`, `invoices_paid_non_negative`) but a future mis-allocation path could over-pay an invoice and persist phantom customer credit. Live data showed 0 rows with negative balance (existing `allocate_payment` caps at outstanding), so safe to add VALIDATED in one step. Original audit said "credit memos" — there's no `credit_memos` table in this codebase; "credit memos" are `invoices` rows created by `issue_return_credit`, so the constraint covers the credit-memo case too.
+
+---
+
+## 2026-05-13 — Audit #6 closure: canonical commission math
+
+Three commission-creating paths used three different formulas, so the same order produced different commission totals depending on which entry-point the user took:
+
+- `convert_quote_to_order`: `profit * (pct / 100)` — no rounding, no clamp
+- `create_direct_order`: `GREATEST(profit * (pct / 100), 0)` — clamped, no rounding
+- `create_quick_delivery`: `ROUND(profit * pct / 100, 2)` — rounded, no clamp
+
+**Bonus latent bug discovered + fixed:** `create_quick_delivery`'s commission insert referenced `recipient_id` and `notes` — neither column exists on `commissions` (it's `recipient text` + `recipient_user_id uuid`, no `notes`). Any QD for a customer with a default_commission_split would have crashed on insert. Confirmed latent: `SELECT count(*) FROM commissions WHERE recipient IS NULL` = 0 (the broken code path was never successfully exercised in prod). The fix vacates the broken block as a side effect.
+
+**Fix shape:**
+- New `compute_commission_amount(numeric, numeric) -> numeric` IMMUTABLE helper that embeds the canonical formula: `GREATEST(ROUND(COALESCE(profit, 0) * COALESCE(pct, 0) / 100, 2), 0)`. Round to 2 dp because commissions are stored as numeric dollars (not bigint cents). Clamp to >= 0 because losing-trade orders shouldn't owe sales reps negative commission.
+- New `_insert_commissions_for_order(order_id, customer_id, profit, split, date)` SECURITY DEFINER wrapper that does the INSERT once, called via `PERFORM` from all three paths. Future commission-creating RPCs go through the helper too — single source of truth, no further drift possible.
+
+**Live verification:** Helper returns `500.00` for `(1000, 50)`, `0` for `(-100, 50)`, `11.11` for `(33.33, 33.33)`. All 3 caller bodies confirmed via `prosrc` to invoke the helper and have zero remaining inline `INSERT INTO commissions` blocks.
+
+---
+
+## 2026-05-13 — Audits #10, #31, #34 closure: atomic multi-table write RPCs
+
+Three frontend code paths were doing multi-table writes outside any transaction wrapper. If the child insert failed, you got orphaned parents (or, for BlendRecipes, a recipe with all its items wiped and no replacement). Closed in one migration with three SECURITY DEFINER RPCs:
+
+- **#10 NewDelivery.tsx** — Replaced separate `deliveries` insert + `delivery_items` insert with `create_delivery_with_items(p_order_id, p_customer_id, p_scheduled_date, p_items jsonb, ...)`. Generates `delivery_number` via the existing `next_delivery_number()` helper inside the same transaction.
+- **#31 BulkOrderImport.tsx** — Replaced per-order separate `orders` + `order_items` inserts with `bulk_import_order(p_order_number, p_customer_id, p_status, totals..., p_items jsonb, ...)`. Frontend still does the per-row customer/product lookups (preserves the existing friendly error messages); it just ships resolved IDs to the RPC. Each order gets its own idempotency key derived from `order_number`.
+- **#34 BlendRecipes.tsx** — Replaced create-or-update + DELETE-then-INSERT-items flow with `save_blend_recipe(p_recipe_id, p_name, p_recipe_type, p_items jsonb, ...)`. For updates, the DELETE-and-reinsert is atomic — a failed insert rolls back the DELETE too, so a recipe never ends up with zero items unintentionally.
+
+All three RPCs use the canonical 2026-05 pattern: `auth.uid()` strict-actor, role gate matching the table RLS, `check_idempotency`/`save_idempotency` helpers, machine-readable error tokens (`AUTH_REQUIRED`, `FORBIDDEN`, `ITEMS_REQUIRED`, `ITEM_INVALID`, etc.). Idempotency-coverage list bumped 75 → 78. Total RPCs ~177 → ~180.
+
+---
+
+## 2026-05-13 — Audit #33 closure: rebate claim atomic RPCs
+
+Followup sprint kicked off (see `docs/audits/2026-05-12-execution-summary.md` Phase 5 list). First cluster — concurrency — closed.
+
+**Audit #33** — Migration `20260513000000_rebate_claim_atomic_rpcs.sql` (live). Three problems addressed:
+
+1. **Claim number generation race** — Frontend used `count(*) + 1` and there was no UNIQUE on `claim_number`. Two concurrent inserts could collide. Replaced with per-year counter table (`rebate_claim_counters`) updated via `INSERT ... ON CONFLICT DO UPDATE`, which holds a row-level lock for the duration of the statement — concurrent callers serialize cleanly. UNIQUE constraint added as a defense-in-depth backstop.
+2. **Status transition race** — Naked `.update()` on rebate_claims with no row lock and no state machine. Replaced with `transition_rebate_claim()` RPC that does `SELECT FOR UPDATE` on the claim row, then validates the transition (pending→submitted\|rejected, submitted→approved\|rejected, approved→paid). Raises `INVALID_TRANSITION` if the caller's view of state is stale.
+3. **`paid_amount_cents` never written** — The "Mark Paid" button only set status. Now the paid transition writes `paid_amount_cents` (defaults to `claim_amount_cents` if caller doesn't specify) and optionally `manufacturer_ref`.
+
+Frontend (`src/pages/Rebates.tsx`) rewritten to call the RPCs via `supabase.rpc()` with idempotency keys from `useIdempotencyKey`. New error codes (`PROGRAM_REQUIRED`, `QUANTITY_INVALID`, `CLAIM_AMOUNT_INVALID`, `CLAIM_ID_REQUIRED`, `STATUS_REQUIRED`, `CLAIM_NOT_FOUND`, `INVALID_TRANSITION`, `PAID_AMOUNT_INVALID`, `FORBIDDEN`) added to `RpcErrorCodes` in `src/lib/db.ts`. Frontend uses `hasRpcCode(error, RpcErrorCodes.INVALID_TRANSITION)` to detect stale-state and surface a friendlier message. Contract tests added (`create_rebate_claim`, `transition_rebate_claim`); idempotency-coverage list expanded from 73 → 75.
+
+---
+
+## 2026-05-12 — Decision-B + Audit #5 closure (2 final migrations)
+
+After Mason approved Option C for Decision-B (#9a/#9b) and Option A for #5 (trigger-cache), two more migrations landed.
+
+**Decision-B (#9a + #9b)** — Migration `20260512040000_tighten_field_app_locations_rls.sql` (live). `field_app_locations_select` and `field_app_location_shares_select` SELECT policies tightened from `((SELECT auth.uid()) IS NOT NULL)` to `is_admin() OR is_sales_rep() OR is_applicator()`. Drivers no longer see billing splits; applicators retained because the field-app workflow (multi-customer jobs, split-billing on iPad) needs split context for rate decisions. Matches the pattern set by `field_crop_history_select` earlier in the day.
+
+**Audit #5** — Migration `20260512050000_prepay_credits_balance_trigger_cache.sql` (live). `prepay_credits.balance_cents` is now a trigger-maintained cache instead of a hand-decremented column. `_recompute_prepay_credit_balance()` runs AFTER INSERT OR DELETE on `prepay_applications` and recomputes `balance_cents = original_amount_cents - SUM(applied_amount_cents)` from scratch (recompute-from-scratch is drift-impossible by construction). UPDATE handling not needed because `prepay_applications` is UPDATE-immutable per migration 310. Drift check on session start showed 0 mismatches in 0 rows — clean install with no baseline reconciliation surprises. The existing hand-decrement inside `apply_prepay_to_invoice` remains as belt-and-suspenders; trigger overwrites with the recomputed value (same end-state), so the hand-decrement can be dropped in a future cleanup PR once the trigger has been observed in prod.
+
+This brings the total to **15 findings closed** in this branch's audit sprint. Branch is 312 → 314 migrations.
+
+---
+
+## 2026-05-12 — Phase 2 + Phase 3 audit sprint closure (13 findings closed)
+
+Branch `fix/audit-2026-05-09`. Single-session autonomous run that closed everything in Phase 2 and Phase 3 of the Phase 0 verification execution order.
+
+**Phase 1 finalization (1 live apply).** The two May-11 migrations were already live (per `pg_proc` inspection), but the vendor-bill positive-total guard from commit `5b9b05c` had only landed on `create_vendor_bill` — `update_vendor_bill` was still missing the `v_new_total_cents <= 0` recheck. Applied `20260511030000_vendor_bill_positive_total_guard.sql` to live Supabase, closing the half-applied state.
+
+**Phase 2 — money/inventory (9 items, all closed).**
+- **#14** `src/lib/db.ts:checkMutationResult` now throws when `data === null` (silent RLS denial via `.select()` chain). Test `src/lib/db.test.ts` updated to assert the new behavior + a new test for `data: undefined`.
+- **#25** `src/hooks/useGuardrails.ts` fail-closed on Supabase errors. Both `useCreditLimitCheck` and `useOverloadedDriverCheck` now `Sentry.captureException` and return `false` (block) on caught errors instead of `setWarning(null); return true` (silent pass). Caller gets an explicit "could not verify" warning.
+- **#29** `src/lib/offlineSync.ts` wraps the per-action catch with `Sentry.captureException` (level=error on permanent fail, warning on retry). Permanent failures used to be invisible to oncall.
+- **#20** `src/lib/parseCents.ts` rejects scientific notation (`"1e5"` was parsing as $15) and multi-dot input (`"1.2.3"` was parsing as $1.20). Tests in `parseCents.test.ts` added for both edges + a positive-control for currency formatting.
+- **#8 + #15** combined migration `20260512000000_quick_delivery_server_pricing_and_audit_log.sql` — extends `financial_audit_log_operation_type_check` to allow `order_created`/`delivery_created`/`quote_converted`; rewrites `create_quick_delivery` to use server-side tier price only (drops the `COALESCE(NULLIF((v_item->>'price_cents')::bigint, 0), <tier>)` override that let drivers/sales-reps spoof a $0.01 price); both `create_quick_delivery` and `convert_quote_to_order` now write a `financial_audit_log` entry on every order/delivery/quote-conversion.
+- **#24** `20260512010000_immutability_triggers_ledger_tables.sql` — `inventory_transactions` rejects UPDATE+DELETE (zero existing callers do either, full immutability is safe); `prepay_applications` rejects UPDATE only (`void_invoice` still DELETEs rows when reversing a void, and its `financial_audit_log` write preserves the evidence trail). Bypass via `SET LOCAL app.bypass_ledger_immutability = 'true'` for rare DBA corrections.
+- **#23** `20260512020000_payments_order_fk_restrict.sql` — `payments_order_id_fkey` changed from `ON DELETE CASCADE` to `ON DELETE RESTRICT`. Verified safe: zero RPCs or frontend code do raw `DELETE FROM orders` (orders are cancelled/voided/restored via state transitions). Defense-in-depth against accidental AR-history destruction.
+
+**Phase 3 — RLS + deps (4 items, all addressed).**
+- **#9c + #9d** combined migration `20260512030000_tighten_blend_ticket_field_crop_history_rls.sql` — `blend_ticket_fields_select` SELECT now matches the INSERT/UPDATE predicate (uploader, admin, or sales_rep) instead of `USING (true)`; `field_crop_history` SELECT tightened to `is_admin() OR is_sales_rep() OR is_applicator()` (applicators retained because the field-app workflow needs crop history for rate decisions). The old `"Authenticated users can read crop history"` permissive policy was dropped.
+- **#30** PostgREST SET-LOCAL audit complete — **CLOSED, theoretical only**. Three RPCs use `SET LOCAL app.admin_override = 'true'` (`cancel_order`, `convert_quote_to_order`, `post_invoice`), all with literal `'true'` value (no user input flows in). `pgrst.db_pre_request` is not configured. No injection vector via PostgREST.
+- **#38** documented deferral in `src/lib/fieldImportParser.ts` — `shapefile@0.6.6` + `@mapbox/togeojson` are unmaintained; replacement candidates (`shpjs`, `@tmcw/togeojson`) require manual testing against real-world `.shp`/`.dbf`/`.prj`/`.kml` fixtures. Risk surface is bounded: admin-gated route, 500-feature cap, client-side only. Tracked as a future dependency-maintenance PR.
+
+**NOT-VERIFIED triage (10 findings → 8 STILL VALID + 1 PARTIAL + 1 already-closed).** Subagent investigation surfaced that all 10 originally-NOT-VERIFIED items are real bugs:
+- **#10, #31, #34** (non-atomic multi-table writes in `NewDelivery.tsx`, `BulkOrderImport.tsx`, `BlendRecipes.tsx`) — cluster needs a single fix pattern: wrap each multi-step UI insert into a SECURITY DEFINER RPC for atomicity.
+- **#33** (rebate claim race) — highest residual risk; needs SELECT FOR UPDATE locking.
+- **#6, #7, #19, #32, #35** confirmed STILL VALID, each multi-hour follow-up work.
+- **#28** PARTIAL — `send-email` does have Sentry capture; `_shared/sentry.ts` returns `false` on DSN-parse failure which suppresses alerts silently. Half-fixed.
+
+These 10 findings are queued for the next sprint with the cluster-by-fix-pattern grouping above. Verdicts captured in `docs/audits/2026-05-12-execution-summary.md`.
+
+**Live verification (all checked via Supabase MCP):**
+- `_guard_profile_role_lock`, `trg_guard_profile_role_lock` on profiles ✓
+- `apply_prepay_to_invoice` signature `(uuid, uuid, bigint, uuid, text)`, single overload ✓
+- `update_vendor_bill` has `bill total must be positive` guard ✓
+- `create_quick_delivery` no longer references `NULLIF((v_item->>'price_cents')::bigint, 0)` ✓
+- `financial_audit_log_operation_type_check` includes `order_created`, `delivery_created`, `quote_converted` ✓
+- `trg_guard_inventory_transactions_immutable` + `trg_guard_prepay_applications_immutable` active ✓
+- `payments_order_id_fkey` `ON DELETE RESTRICT` ✓
+- `blend_ticket_fields_select` no longer `USING (true)`; old `field_crop_history` permissive policy dropped ✓
+
+**Build + test outcome:** `npm run lint` 0 errors, `npm run typecheck` 0 errors, `npm run build` clean, `npm run test` 1,894 passing / 70 skipped / 0 failing. Branch is 65 commits ahead of `main`.
+
+---
+
+## 2026-05-11 — Phase 1.D: Harden apply_prepay_to_invoice (closes audit Critical #4)
+
+Branch: `fix/audit-2026-05-09`. Phase 0 verification confirmed Critical #4 still valid: `apply_prepay_to_invoice` is SECURITY DEFINER and writes to 5 tables (including `financial_audit_log`) but had no `p_idempotency_key` parameter, no actor check, no role gate.
+
+**The hole.** A direct PostgREST caller with any authenticated JWT could call this function and:
+- Apply a prepay credit to ANY invoice (since SECURITY DEFINER bypasses table RLS)
+- Double-apply on network retry (no idempotency check) — same allocation runs twice, drains the credit twice, overpays the invoice
+
+Today the practical attack surface is small: the function is only called from `batch_apply_prepayments`, which itself has the canonical idempotency + actor pattern (`p_performed_by` + `p_idempotency_key` already wired). But that's situational — any future direct caller (UI, retry agent, support tool) would lack protection.
+
+**Fix (migration `20260511100000_apply_prepay_to_invoice_hardening.sql`):** narrowest defense-in-depth — extend the signature with `p_performed_by uuid DEFAULT NULL` and `p_idempotency_key text DEFAULT NULL`, and add the canonical guards at the top of the body:
+
+```sql
+v_actor := auth.uid();
+IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+  RAISE EXCEPTION 'ACTOR_MISMATCH';
+END IF;
+SELECT role INTO v_actor_role FROM profiles WHERE id = v_actor AND is_active = true;
+IF v_actor_role NOT IN ('admin', 'sales_rep') THEN
+  RAISE EXCEPTION 'INSUFFICIENT_ROLE: only admins and sales reps can apply prepayments';
+END IF;
+IF p_idempotency_key IS NOT NULL THEN
+  v_existing := check_idempotency(p_idempotency_key, 'apply_prepay_to_invoice');
+  IF v_existing IS NOT NULL THEN RETURN (v_existing->>'application_id')::uuid; END IF;
+END IF;
+```
+
+Body otherwise reproduced verbatim from the prior installed version (including the existing `financial_audit_log` write).
+
+**Why RETURN type stays `uuid`.** `batch_apply_prepayments` calls this and assigns the result to a `uuid` variable. Changing to canonical `jsonb_build_object('success', true, ...)` would force a cascade rewrite through `batch_apply_prepayments` for no real benefit — this is an SQL-internal helper, not a public TS-facing RPC. The `uuid` interface is the actual contract.
+
+**Why backward-compatible.** Both new parameters are `DEFAULT NULL`, so the existing 3-arg call from `batch_apply_prepayments` (`apply_prepay_to_invoice((v_alloc->>'prepay_credit_id')::uuid, v_invoice_id, (v_alloc->>'amount_cents')::bigint)`) continues to work. No SQL cascade, no TS cascade. The new params only matter for direct callers who want to opt into actor verification or idempotency.
+
+DO-block verification asserts exactly one overload exists, the signature contains both new params, and the body contains all four error tokens (`AUTH_REQUIRED`, `ACTOR_MISMATCH`, `INSUFFICIENT_ROLE`) plus both idempotency helpers.
+
+**Status:** committed, NOT YET APPLIED to live Supabase. Mason applies via Supabase MCP `apply_migration` after review.
+
+---
+
+## 2026-05-11 — Phase 1.5: E2E credential cleanup (closes audit Critical #1)
+
+Branch: `fix/audit-2026-05-09`. Phase 0 verification flagged that PR-05's E2E credential cleanup left one residual fallback in `comprehensive-ui-workflow.spec.ts`.
+
+**What was left.** `getNodeToken()` (lines 25-26) used `process.env.E2E_TEST_EMAIL || 'mason@croprxsolutions.com'` and `process.env.E2E_TEST_PASSWORD || 'Mwells0413'` — a silent hardcoded fallback that ran any time the env vars weren't set. PR-05 removed the same pattern from `auth.ts`, `setup-fixtures.ts`, and `teardown-fixtures.ts` but didn't sweep this spec file. Phase 0 cross-grep confirmed only this one file had a real fallback (the `00-seed-test-data.spec.ts:370` hit was a code comment, not a credential; `role-applicator.spec.ts` and `role-security.spec.ts` use `|| ''` as skip-condition fallbacks, not auth).
+
+**Fix.** Import `TEST_USER` from `./utils/auth` (PR-05's canonical fail-closed entry point) and read `email`/`password` through it. Now if either env var is missing, the spec's `import` triggers `requireEnv()` and throws at module-load time — no silent default. One source of truth across `auth.ts`, fixtures, and this spec.
+
+**Why not replicate `requireEnv` inline.** Inline duplication is drift waiting to happen. `auth.ts` already owns the contract (env vars are required, with a pointer to `docs/CONTRIBUTING.md`). Reusing `TEST_USER` keeps the message and behavior consistent.
+
+**Verification.** Grep for `Mwells0413` across the repo: 0 hits in runtime code; only 3 historic-audit doc files mention it as documentation of the past state. Lint clean, build clean. Test count unchanged (Playwright specs don't run in `npm test`).
+
+Closes audit Critical #1. Combined with the production password rotation Mason completed earlier today, the door is fully closed: rotated password + no fallback path = the hardcoded value is dead.
+
+---
+
+## 2026-05-11 — Phase 1.4: Profile role-lock trigger (closes audit Critical #3)
+
+Branch: `fix/audit-2026-05-09`. After Phase 0 verification confirmed Critical #3 (self-role-escalation) was still valid on the live branch, Phase 1.4 closes it.
+
+**The hole.** `profiles_update` RLS policy is `((SELECT auth.uid()) = id) OR is_admin()` for both USING and CHECK — meaning any authenticated user can PATCH their own profile row. There was no column-level restriction, so a malicious non-admin could issue a direct PostgREST request and set their own `role = 'admin'`, flip `is_active`, or clear `denied_pages`. The first half of the chain (Critical #2 — `handle_new_user` trusting `raw_user_meta_data->>'role'`) is mitigated by Mason disabling public signup in the Supabase Auth dashboard. This second half hardens the chain so it stays closed if signup is ever re-enabled.
+
+**Fix (migration `20260511090000_profile_role_lock_trigger.sql`):** add a BEFORE UPDATE row-level trigger on `profiles`:
+
+```sql
+CREATE OR REPLACE FUNCTION public._guard_profile_role_lock()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF (OLD.role IS DISTINCT FROM NEW.role
+      OR OLD.is_active IS DISTINCT FROM NEW.is_active
+      OR OLD.denied_pages IS DISTINCT FROM NEW.denied_pages)
+     AND NOT is_admin() THEN
+    RAISE EXCEPTION 'PROFILE_ROLE_LOCK: only admins can change role, is_active, or denied_pages'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+```
+
+Columns locked: `role`, `is_active`, `denied_pages`. Columns NOT locked: `full_name`, `phone`, `email`, `applicator_license_number`, `faa_certificate_number`, `updated_at` — users can still maintain their own profile.
+
+**Why `is_admin()` works inside SECURITY DEFINER.** Even though the trigger function runs as the owner role, `auth.uid()` inside it still returns the JWT caller — not the owner — so `is_admin()` correctly evaluates against the *actual* user who issued the UPDATE. This is the same pattern used by all the existing `is_admin()` / `is_sales_rep()` callers in RLS policies.
+
+**Why no `handle_new_user` impact.** That trigger fires `AFTER INSERT ON auth.users` and does an `INSERT INTO profiles` — a BEFORE UPDATE trigger doesn't fire on inserts. The signup-time metadata trust (Critical #2) remains mitigated by signup-disabled, not by this trigger.
+
+**Frontend audit performed:** grep for `from('profiles').update(...)` and direct PATCH on `role`/`is_active`/`denied_pages` columns. Only callsite touching these columns is `SettingsPage.tsx`, which uses the `admin_update_profile` RPC (SECURITY DEFINER, admin-gated) — auth.uid() inside that RPC is the admin, so `is_admin()` returns true and the trigger correctly allows the change. No accidental breakage.
+
+DO-block verification asserts the function exists with `prosecdef=true` + `search_path` containing `pg_temp`, and that the trigger is wired to `public.profiles`.
+
+**Status:** committed, NOT YET APPLIED to live Supabase. Mason applies via Supabase MCP `apply_migration` after review.
+
+---
+
+## 2026-05-11 — Codex review fix for PR #59: vendor bill positive-total guard
+
+Branch: `fix/audit-2026-05-09` (PR #59). Codex left two P2 findings on PR #59; both pointed at the same class of bug — a missing `v_total > 0` guard on vendor bills letting a negative `adjustment_cents` flip the computed total negative.
+
+**Finding 1 — `update_vendor_bill` (20260510100000):** validated `p_subtotal_cents > 0` but never re-checked `v_new_total_cents` after applying the adjustment. A $100 bill edited with a -$200 adjustment produced `total_cents = -10000`, `balance_cents = -10000` (GENERATED column = `total − paid`), `status = 'unpaid'` — broken AR aging, broken payment behavior, dirty audit log.
+
+**Finding 2 — `create_vendor_bill` rewrite in `ap_polish_completion` (20260510130000):** silent regression. The original PR-04 (`20260510030000_ap_structural_fixes.sql`) included a `v_total <= 0` guard added by codex audit F4 with the explicit comment *"reject zero-or-negative computed totals — adjustments can flip the sign."* The PR-22b polish migration that added PO-to-bill consistency checks rewrote `create_vendor_bill` and dropped the F4 guard along the way. `vendor_bills` has no table-level CHECK on `total_cents > 0`, so the DB has no backstop.
+
+**Fix (migration `20260511030000`):** `CREATE OR REPLACE` both functions with the canonical guard added immediately after `v_total := p_subtotal_cents + COALESCE(p_adjustment_cents, 0)`:
+
+```sql
+IF v_total <= 0 THEN
+  RAISE EXCEPTION 'INVALID_AMOUNT: bill total must be positive (got %)', v_total;
+END IF;
+```
+
+Bodies otherwise reproduced verbatim from the prior installed migrations. DO-block verification asserts both guards landed and that PR-22b polish features (`VENDOR_PO_MISMATCH`, `vendor_bill_drift` soft-warn) were not regressed. No frontend changes — existing handlers already surface `INVALID_AMOUNT` exceptions raised for the subtotal check.
+
+---
+
 ## 2026-05-11 — Performance sweep: 97 WARN findings → 0 (Supabase performance advisor)
 
-Branch: `perf/advisor-sweep-2026-05-11` (off `main`). Closes all WARN-level performance advisor findings against the live Supabase project (`rhyzpcqhnizqbxphqdkr`). Pulled at the start of the sweep:
+Branch: `perf/advisor-sweep-2026-05-11` (off `main`, merged via PR #61). Closes all WARN-level performance advisor findings against the live Supabase project (`rhyzpcqhnizqbxphqdkr`). Pulled at the start of the sweep:
 
 | Category | Level | Before | After | Migration |
 |---|---|---:|---:|---|
@@ -40,9 +390,54 @@ Branch: `perf/advisor-sweep-2026-05-11` (off `main`). Closes all WARN-level perf
 
 **Lesson.** The biggest WARN-level perf advisor cost is auth.uid() per-row evaluation; everything else (FK indexes, duplicate indexes, permissive merges) is incremental. Wrapping is mechanical and safe given a verification block that asserts predicate-preserving rewrites. The careful part is the permissive-policy consolidation — every group needs human review of "is this OR a true superset/equivalent of the originals?" before merging. The 23 groups here fell into 5 patterns, all with provable union semantics.
 
-**Sweep state.** 289 migrations (was 285 — 4 new). 1,872 unit tests passing (130 files, 68 skipped). 0 ESLint errors, 0 TS errors, clean build. Migration files in `supabase/migrations/`; live DB state already matches (applied during sweep, not queued).
+**Sweep state at PR #61 close.** 289 migrations (was 285 — 4 new). 1,872 unit tests passing (130 files, 68 skipped). 0 ESLint errors, 0 TS errors, clean build. Migration files in `supabase/migrations/`; live DB state already matches (applied during sweep, not queued).
 
 **Deferred.** 87 original `unused_index` findings + 72 new (newly created FK indexes flagged immediately) = 159 unused_index INFO findings — Mason to review the original 87 list and decide which (if any) should be dropped. Report archived at [docs/2026-05-11-unused-index-report.txt](2026-05-11-unused-index-report.txt). Out of scope per the sweep prompt: `auth_leaked_password_protection` (Dashboard toggle), 424 `*_security_definer_function_executable` (by design — frontend calls these RPCs).
+
+---
+
+## 2026-05-09 → 2026-05-10 — Audit fix sprint (Sprint 1): 15 of 26 PRs landed
+
+Branch: `fix/audit-2026-05-09`. Closes the highest-impact findings from the 2026-05-09 combined audit (52 findings, 11 business decisions). Sprint 1 was executed autonomously by a Claude Opus 4.7 (1M context) session running through the night of 2026-05-09. Sprint 2 picks up the remaining 10 PRs (PR-23 blocked on staging Supabase creation).
+
+**The hard problem solved.** Five mutating RPCs (`record_invoice_payment`, `create_quick_delivery`, `update_order_items` + 2 already-fixed) used a broken idempotency replay check — `(v_existing->>'status') = 'completed'` against a saved jsonb that never carried a `status` field. So every same-key retry silently re-executed the mutation. The DB had the cache row; the function never read it correctly. Network retries would record duplicate payments, create duplicate deliveries, etc. The pattern was fragile because the broken check just happened to return false for any input — so testing it would've required deliberately exercising a network retry path nobody had built. Codified the canonical pattern (`IF v_existing IS NOT NULL THEN RETURN ...`) in CLAUDE.md and `gotchas.md`; the schema-aware `idempotency-body-check.mjs` PreToolUse hook already enforces the helper-function pattern going forward.
+
+**What landed (15 commits, all on `fix/audit-2026-05-09`, Co-Authored-By: Claude Opus 4.7):**
+
+| PR | Domain | Risk | Commit | Outcome |
+|---|---|---|---|---|
+| PR-01 | Deliveries | Low | b72d9c9 | `complete_delivery` + `void_delivery` referenced `v_delivery.delivery_date`; column is `scheduled_date`. Any closed-period warn path crashed 42703. SQL queued for manual apply. |
+| PR-02 | RPC | Medium | 06ec19a | 3 of 5 planned RPCs fixed (live inspection narrowed scope: `receive_po_items` already canonical, `create_prepay_check_splits` doesn't exist in prod). SQL queued. |
+| PR-03 | Edge Function | Low | 31c3db1 | `send-email` selected `customers.name` (column doesn't exist — should be `farm_name`). Edge Function silently 404'd in prod for any customer-tied email. Error logging added so future schema drifts surface. |
+| PR-04 | AP | High | 1a3b39d | 6-block migration: AP void columns, `balance_cents` GENERATED ALWAYS, UNIQUE bill_number index, `financial_audit_log` CHECK expansion, `vendors_select` RLS tightening, full rewrite of `create_vendor_bill`/`record_vendor_payment`/`void_vendor_bill` with idempotency + period guard + paid-bill hard block + audit log entries. SQL queued — 13 future PRs depend on this. |
+| PR-05 | E2E | Low | ac4e1a4 | Removed hardcoded credential fallback (`mason@…/<live>`) from auth.ts + setup-fixtures.ts + teardown-fixtures.ts. Added `assertNotProductionWithoutOverride()` safety guard. Wrote `docs/CONTRIBUTING.md`. |
+| PR-09 | Integrity | Low | 22e1e24 | IntegrityReport flagged every written-off invoice as a balance discrepancy because the formula was missing `- write_off_cents`. Added regression test. |
+| PR-06 | Quick delivery | Low | 63ad461 | Per Q4 (Option C): credit limit overage now creates the delivery + notifies admins instead of hard-blocking. AR scope expanded to draft + posted + overdue. Projected exposure includes the new delivery total. SQL queued. |
+| PR-11 | Permissions | Low | 4d7bdbc | 5 routes were not in `PAGE_PERMISSIONS` — deny-list silently no-op'd. Patched + added EXEMPT_ROUTE_SEGMENTS handling in ProtectedRoute. New fail-closed test greps App.tsx routes — adding a Route without an entry now fails CI. |
+| PR-12 | RPC | Low | 4cbb39b | Added `pg_temp` to `auto_expire_quotes` + `release_holds_on_quote_status_change`. Plan listed 4 functions; live inspection narrowed to 2. SQL queued. |
+| PR-15 | parseCents | Low | cb4351c | Parser stripped leading minus signs while UI invited negatives (discount fields). NewVendorBill discount now correctly subtracts. Added `parseDollarsToCentsPositive()` helper. |
+| PR-16 | Edge Functions | Low | b1e3680 | 5 Edge Functions now throw at startup if `ALLOWED_ORIGIN` env var is missing — replaces silent fallback to `https://croprxsolutions.app`. Defense-in-depth. |
+| PR-17 | RLS | Low | 25a6511 | `team_note_tags` SELECT was `USING (true)`. Replaced with EXISTS check on parent `team_notes`. Compromise vs the plan's stricter version since `team_notes` itself is `USING (true)` for SELECT — full tightening would break team-board for non-admin roles. SQL queued. |
+| PR-18 | Tooling | Low | 05de4d3 | `validate-frontend.sh` gained `--all` mode for periodic audits (was: staged-only). |
+| PR-20 | Activity log | Low | 6ad96af | 8 handlers + 1 useEffect-gated callsite: replaced `profile?.id || ''` empty-string fallback with early-return + toast. `activity_feed.performed_by` empty-string poisoning eliminated. |
+| PR-21 | Cleanup | Low | c09cca5 | ESLint ignores for coverage/`.claude/worktrees`/`.playwright-mcp`; IntegrityReport `useCallback` fix; doc count corrections (qa-testing 81→94, UI_PATTERNS 57→65). 3 sub-items skipped (sidebar link, Edge Function deletion, doc-count CI script). |
+
+**Migrations queued for manual apply (NOT YET APPLIED to live Supabase rhyzpcqhnizqbxphqdkr):**
+
+`20260510010000_fix_delivery_date_column_refs.sql` (PR-01), `20260510020000_fix_idempotency_replay_canonical.sql` (PR-02), `20260510030000_ap_structural_fixes.sql` (PR-04 HIGH), `20260510040000_credit_limit_soft_warn.sql` (PR-06; apply AFTER PR-02), `20260510050000_pg_temp_security_definer_fixes.sql` (PR-12), `20260510060000_team_note_tags_rls.sql` (PR-17). Run `node scripts/regenerate-schema-registry.mjs` after applying any subset.
+
+**Decisions made autonomously (worth knowing):**
+1. PR-02 scope narrowed: `receive_po_items` already had canonical pattern (skipped); `create_prepay_check_splits` doesn't exist in prod (skipped). 3 RPCs fixed vs 5 planned.
+2. PR-04 search_path finding was stale — all 3 AP RPCs already had `public, pg_temp`.
+3. PR-12 scope narrowed from 4 functions to 2; the other 2 already had pg_temp.
+4. PR-17 used a softer policy than the plan suggested (gate by parent team_note existence) because team_notes itself is `USING (true)` for SELECT and stricter gating would break team-board.
+5. PR-21 partial completion: skipped sidebar link (AppLayout structure unclear), Edge Function deletion (bash-safety hook blocks rm -rf on supabase/), and the check-doc-counts.mjs script (incremental tooling). Doc-count corrections close the immediate finding.
+
+**Sprint state.** 130 unit-test files (1886 passing, 68 skipped — Sprint 1 added new tests in PR-09/11/15). 0 ESLint errors, 0 TS errors, all builds clean. 291 migrations on disk (was 285 + 6 queued). 7 Edge Functions (was 8, count corrected — `_shared` is helper code, not a function; the regenerate-agents-md.mjs script now filters it; `setup-blend-tickets-storage` deletion deferred from PR-21). Pre-commit hook held throughout — no `--no-verify`, no hooks bypassed.
+
+**Sprint 2 (in progress).** PR-26 (this docs consolidation), PR-07 (RLS tightening), PR-19 (test infrastructure), PR-08 (invoice payment unification), PR-10 (bulk idempotency wiring), PR-13 (void_vendor_payment), PR-14 (update_vendor_bill), PR-22 (AP polish), PR-25 (vendor master-data UI). PR-23 (E2E staging Supabase) blocked on Mason creating a `crx-manager-staging` Supabase project.
+
+**Lesson.** The autonomous prompt's "live DB inspection narrowed scope" pattern fired 4 times in Sprint 1 — every time, the live database was the source of truth and the static plan was stale. The implementation plan + execution log + git commits + migration files form a recoverable chain even if a session ends mid-PR; the canonical idempotency pattern is now the project's documented norm and the schema-aware hooks enforce it for new code. Two structural classes of bug (silent idempotency replay failure, incomplete `financial_audit_log` integration) close together because finding the first one made the second one obvious.
 
 ---
 

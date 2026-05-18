@@ -84,6 +84,25 @@ export default function NewOrder() {
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);
 
+  // Codex P2 fix (PR #59, 2026-05-16): reset createOrderIdem when form intent
+  // changes. Page stays mounted after a failed/lost-response submit; without
+  // reset, editing customer/items/date and resubmitting would replay the
+  // prior cached order_id. Stable form = idempotent retry; changed = fresh key.
+  // Hash MUST cover every submitted field (RPC sends customer/date/name/notes
+  // + items[product_id,product_name,quantity,price,cost,unit_size]). Codex
+  // 2026-05-16 follow-up: omitting any field replays prior success silently.
+  const orderIntentHash = [
+    customerId, orderDate, orderName, notes, customerPoNumber,
+    items
+      .map((i) => `${i.product_id}:${i.product_name || ''}:${i.quantity}:${i.price_per_unit}:${i.unit_cost}:${i.unit_size || ''}`)
+      .sort()
+      .join(','),
+  ].join('|');
+  useEffect(() => {
+    createOrderIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderIntentHash]);
+
   // Draft persistence: auto-saves form to sessionStorage so data survives
   // a PWA reload when the user switches away on mobile (e.g. to the calculator).
   const draftState = { customerId, orderName, orderDate, customerPoNumber, notes, items };

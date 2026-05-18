@@ -73,6 +73,8 @@ export default function Invoices() {
   const { toast } = useToast();
   const batchPostIdem = useIdempotencyKey('batch_post_invoices', profile?.id || '');
   const batchVoidIdem = useIdempotencyKey('batch_void_invoices', profile?.id || '');
+  // Reset both batch keys whenever the selected set changes (Codex P2 fix).
+  // See the `selectedKey` derivation + useEffect below.
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -80,6 +82,19 @@ export default function Invoices() {
   const [quickDeliveryOnly, setQuickDeliveryOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [posting, setPosting] = useState(false);
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
+  // user changes their selection. Otherwise the page-scoped keys would carry
+  // over — batch-post A succeeds, response lost, user picks different invoices
+  // and clicks Post → server replays A's cached success without posting B.
+  // Hashing the sorted selected IDs detects intent changes; identical retries
+  // still reuse the key for safe retry-on-network-error.
+  const selectedKey = Array.from(selected).sort().join(',');
+  useEffect(() => {
+    batchPostIdem.resetKey();
+    batchVoidIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey]);
   const [voiding, setVoiding] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [showVoidModal, setShowVoidModal] = useState(false);
@@ -92,9 +107,10 @@ export default function Invoices() {
     setLoading(true);
     const { start: seasonStart, end: seasonEnd } = getSeasonDates();
     const QUERY_LIMIT = 2000;
+    // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('invoices')
-      .select('*, customer:customers!invoices_customer_id_fkey(farm_name), salesman:profiles!invoices_salesman_id_fkey(full_name)')
+      .select('*, customer:customers!invoices_customer_id_fkey(farm_name)')
       .is('deleted_at', null)
       .gte('created_at', seasonStart)
       .lte('created_at', seasonEnd + 'T23:59:59')
@@ -112,10 +128,24 @@ export default function Invoices() {
       toast('error', `Showing first ${QUERY_LIMIT} invoices — some invoices may be hidden. Contact admin if you need the full list.`);
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman?: { full_name: string } }>).map((inv) => ({
+    const salesmanIds = [...new Set(
+      ((data || []) as Array<{ salesman_id?: string | null }>)
+        .map((inv) => inv.salesman_id)
+        .filter(Boolean) as string[]
+    )];
+    const salesmanMap: Record<string, string> = {};
+    if (salesmanIds.length > 0) {
+      const { data: salesmen } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', salesmanIds);
+      (salesmen || []).forEach((s: { id: string; full_name: string }) => { salesmanMap[s.id] = s.full_name; });
+    }
+
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman_id?: string | null }>).map((inv) => ({
       ...inv,
       customer_name: inv.customer?.farm_name || 'Unknown',
-      salesman_name: inv.salesman?.full_name || null,
+      salesman_name: inv.salesman_id ? salesmanMap[inv.salesman_id] || null : null,
     })) as unknown as InvoiceRow[];
     setInvoices(rows);
     setLoading(false);

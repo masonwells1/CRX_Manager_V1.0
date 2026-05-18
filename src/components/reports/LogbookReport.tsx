@@ -60,7 +60,8 @@ export default function LogbookReport() {
         if (error) { toast('error', 'Failed to load customers'); return; }
         setEntities((rows || []).map((r) => ({ id: r.id, label: r.farm_name })));
       } else if (tab === 'applicator') {
-        const { data: rows, error } = await supabase.from('profiles').select('id, full_name, role').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name').limit(200);
+        // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
+        const { data: rows, error } = await supabase.from('profile_public_view').select('id, full_name, role').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name').limit(200);
         if (error) { toast('error', 'Failed to load applicators'); return; }
         setEntities((rows || []).map((r) => ({ id: r.id, label: r.full_name })));
       } else if (tab === 'field') {
@@ -76,26 +77,32 @@ export default function LogbookReport() {
 
   const fetchLogbook = useCallback(async () => {
     setLoading(true);
-    const rpcName =
-      tab === 'customer' ? 'get_logbook_by_customer' :
-      tab === 'applicator' ? 'get_logbook_by_applicator' :
-      'get_logbook_by_field';
-
-    const paramKey =
-      tab === 'customer' ? 'p_customer_id' :
-      tab === 'applicator' ? 'p_applicator_id' :
-      'p_field_id';
-
-    const { data: rows, error } = await supabase.rpc(rpcName, {
-      [paramKey]: entityId,
-      p_start_date: startDate,
-      p_end_date: endDate,
-    });
-
-    if (error) {
-      toast('error', `Failed to load logbook: ${error.message}`);
+    // PR-19 follow-up: per-branch literal rpc names so the assertRpcCoverage
+    // regex can match each capture (it only counts string literals, not
+    // variable references). Was a single `supabase.rpc(rpcName, ...)` call
+    // with a computed name — assert was correctly placed but uncounted.
+    const dateParams = { p_start_date: startDate, p_end_date: endDate };
+    if (tab === 'customer') {
+      const { data: rows, error } = await supabase.rpc('get_logbook_by_customer', {
+        p_customer_id: entityId,
+        ...dateParams,
+      });
+      if (error) toast('error', `Failed to load logbook: ${error.message}`);
+      else setData(assertRpcResult<LogbookRow[]>(rows, 'get_logbook_by_customer'));
+    } else if (tab === 'applicator') {
+      const { data: rows, error } = await supabase.rpc('get_logbook_by_applicator', {
+        p_applicator_id: entityId,
+        ...dateParams,
+      });
+      if (error) toast('error', `Failed to load logbook: ${error.message}`);
+      else setData(assertRpcResult<LogbookRow[]>(rows, 'get_logbook_by_applicator'));
     } else {
-      setData(assertRpcResult<LogbookRow[]>(rows, rpcName));
+      const { data: rows, error } = await supabase.rpc('get_logbook_by_field', {
+        p_field_id: entityId,
+        ...dateParams,
+      });
+      if (error) toast('error', `Failed to load logbook: ${error.message}`);
+      else setData(assertRpcResult<LogbookRow[]>(rows, 'get_logbook_by_field'));
     }
     setLoading(false);
   }, [tab, entityId, startDate, endDate, toast]);

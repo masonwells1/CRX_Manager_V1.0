@@ -1,31 +1,53 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Frontend Code Validator — pre-commit hook helper
+# Frontend Code Validator — pre-commit hook helper (and full-repo audit)
 # ============================================================================
-# Scans staged .ts/.tsx files for known anti-patterns that have caused
-# repeat bugs in this project. Runs alongside ESLint but catches patterns
-# that ESLint cannot (multi-line patterns, Supabase conventions).
+# Scans .ts/.tsx files for known anti-patterns that have caused repeat bugs
+# in this project. Runs alongside ESLint but catches patterns that ESLint
+# cannot (multi-line patterns, Supabase conventions).
+#
+# Usage:
+#   bash scripts/validate-frontend.sh        # staged files only (pre-commit)
+#   bash scripts/validate-frontend.sh --all  # every src/**/*.{ts,tsx} (audit)
 #
 # Exit codes:
 #   0 = all clean
-#   1 = violations found (commit blocked)
+#   1 = violations found (commit blocked when used as pre-commit hook)
 # ============================================================================
 
 set -euo pipefail
 
 VIOLATIONS=0
 WARNINGS=0
+SCAN_ALL=false
 
-# Get staged frontend files (exclude tests, Edge Functions, and config)
-STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^src/.*\.(ts|tsx)$' || true)
+for arg in "$@"; do
+  case "$arg" in
+    --all) SCAN_ALL=true ;;
+    --help|-h)
+      echo "Usage: $0 [--all]"
+      echo ""
+      echo "  (no flag)  Scan only files staged via git (pre-commit mode)"
+      echo "  --all      Scan every src/**/*.{ts,tsx} (audit mode)"
+      exit 0
+      ;;
+  esac
+done
 
-if [ -z "$STAGED_TS" ]; then
-  exit 0
+if [ "$SCAN_ALL" = true ]; then
+  # Full-repo audit — every TS/TSX under src/
+  TS_FILES=$(find src -type f \( -name '*.ts' -o -name '*.tsx' \) | sort)
+  echo "Auditing all frontend files under src/..."
+else
+  # Pre-commit mode — staged files only
+  TS_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '^src/.*\.(ts|tsx)$' || true)
+  if [ -z "$TS_FILES" ]; then
+    exit 0
+  fi
+  echo "Validating staged frontend files..."
 fi
 
-echo "Validating staged frontend files..."
-
-for file in $STAGED_TS; do
+for file in $TS_FILES; do
   # Allow explicit exemptions
   if grep -q '// validate-frontend: exempt' "$file" 2>/dev/null; then
     echo "EXEMPT: $file"
@@ -80,5 +102,9 @@ if [ $WARNINGS -gt 0 ]; then
   echo "Frontend validation passed with $WARNINGS warning(s). Review them above."
 fi
 
-echo "Frontend validation passed."
+if [ "$SCAN_ALL" = true ]; then
+  echo "Frontend audit complete: $WARNINGS warning(s), $VIOLATIONS violation(s)."
+else
+  echo "Frontend validation passed."
+fi
 exit 0

@@ -203,9 +203,12 @@ export async function notifyOrderStatusChange(
     await notifyAdmins(title, message, 'order_status', 'order', orderId);
 
     // Also notify the creator if different from admins
+    // PR-07 follow-up: read role via profile_public_view so non-admin
+    // callers can still resolve another user's role (admin-or-self RLS
+    // would block this on `from('profiles')`).
     if (createdBy) {
       const { data: profile } = await supabase
-        .from('profiles')
+        .from('profile_public_view')
         .select('role')
         .eq('id', createdBy)
         .maybeSingle();
@@ -269,18 +272,15 @@ export async function notifyDamagedReceiving(
       .map((i) => `${i.productName} (${i.quantity} — ${i.condition})`)
       .join(', ');
 
-    const { error } = await supabase.rpc('notify_damaged_receiving', {
+    // RETURNS void — use .throwOnError() so the regex coverage check sees
+    // this as fire-and-forget (no `=` capture). Errors funnel through the
+    // outer catch and into logNotificationFailure with the same shape.
+    await supabase.rpc('notify_damaged_receiving', {
       p_po_number: poNumber,
       p_items_summary: summary,
       p_po_id: poId,
       p_idempotency_key: crypto.randomUUID(),
-    });
-    if (error) {
-      await logNotificationFailure('damaged_receiving', error, 'purchase_order', poId, {
-        context: 'notifyDamagedReceiving_rpc',
-        poNumber,
-      });
-    }
+    }).throwOnError();
   } catch (err) {
     await logNotificationFailure('damaged_receiving', err, 'purchase_order', poId, {
       context: 'notifyDamagedReceiving',
@@ -344,9 +344,10 @@ export async function notifyDeliveryRemainder(
     await notifyAdmins(title, message, 'delivery_remainder', 'delivery', deliveryId);
 
     // Also notify the order creator if provided and not an admin
+    // PR-07 follow-up: read role via profile_public_view (see notifyAdmins).
     if (createdBy) {
       const { data: profile } = await supabase
-        .from('profiles')
+        .from('profile_public_view')
         .select('role')
         .eq('id', createdBy)
         .maybeSingle();
@@ -441,8 +442,9 @@ export async function notifyDeliveryCompleted(
         for (const recipientId of uniqueRecipients) {
           // Skip if recipient is the driver (already notified) or an admin (already notified)
           if (recipientId === driverUserId) continue;
+          // PR-07 follow-up: read role via profile_public_view (see notifyAdmins).
           const { data: recipientProfile } = await supabase
-            .from('profiles')
+            .from('profile_public_view')
             .select('role')
             .eq('id', recipientId)
             .maybeSingle();

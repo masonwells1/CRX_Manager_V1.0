@@ -9,8 +9,9 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import type { BlendRecipe, Product, RecipeType } from '../types';
 
@@ -50,8 +51,9 @@ interface EditItem {
 }
 
 export default function BlendRecipes() {
-  useAuth();
+  const { profile } = useAuth();
   const { toast } = useToast();
+  const saveRecipeIdem = useIdempotencyKey('save_blend_recipe', profile?.id || '');
   const [recipes, setRecipes] = useState<RecipeRow[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -74,9 +76,10 @@ export default function BlendRecipes() {
 
   const fetchRecipes = useCallback(async () => {
     setLoading(true);
+    // PR-07 follow-up: dropped creator FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('blend_recipes')
-      .select('*, creator:profiles!blend_recipes_created_by_fkey(full_name), items:blend_recipe_items(count)')
+      .select('*, items:blend_recipe_items(count)')
       .is('deleted_at', null)
       .order('name');
 
@@ -87,10 +90,24 @@ export default function BlendRecipes() {
       return;
     }
 
-    const rows: RecipeRow[] = ((data || []) as RecipeDbRow[]).map((r) => ({
+    const creatorIds = [...new Set(
+      ((data || []) as Array<{ created_by?: string | null }>)
+        .map((r) => r.created_by)
+        .filter(Boolean) as string[]
+    )];
+    const creatorMap: Record<string, string> = {};
+    if (creatorIds.length > 0) {
+      const { data: creators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', creatorIds);
+      (creators || []).forEach((c: { id: string; full_name: string }) => { creatorMap[c.id] = c.full_name; });
+    }
+
+    const rows: RecipeRow[] = ((data || []) as Array<RecipeDbRow & { created_by?: string | null }>).map((r) => ({
       ...r,
       item_count: r.items?.[0]?.count || 0,
-      creator_name: r.creator?.full_name || 'Unknown',
+      creator_name: r.created_by ? creatorMap[r.created_by] || 'Unknown' : 'Unknown',
     })) as RecipeRow[];
     setRecipes(rows);
     setLoading(false);
@@ -122,6 +139,11 @@ export default function BlendRecipes() {
 
   // Open editor for new or existing recipe
   const openEditor = async (recipe?: RecipeRow) => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset saveRecipeIdem on every editor
+    // open. The page-scoped key was shared across all recipes; if save A
+    // succeeded but the response was lost, opening the editor for recipe B
+    // and submitting would replay A's cached success without mutating B.
+    saveRecipeIdem.resetKey();
     if (recipe) {
       setEditId(recipe.id);
       setForm({
@@ -173,58 +195,30 @@ export default function BlendRecipes() {
 
     await runCriticalAction({
       action: async () => {
-        let recipeId = editId;
-
-        if (editId) {
-          const result = await supabase
-            .from('blend_recipes')
-            .update({
-              name: form.name.trim(),
-              description: form.description || null,
-              recipe_type: form.recipe_type,
-              crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
-              timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
-            })
-            .eq('id', editId)
-            .select();
-          checkMutationResult(result, 'Update recipe');
-        } else {
-          const { data, error } = await supabase
-            .from('blend_recipes')
-            .insert({
-              name: form.name.trim(),
-              description: form.description || null,
-              recipe_type: form.recipe_type,
-              crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
-              timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
-            })
-            .select()
-            .single();
-          if (error) throw error;
-          recipeId = data.id;
-        }
-
-        // Sync items: delete all existing, insert fresh
-        if (editId) {
-          const deleteResult = await supabase.from('blend_recipe_items').delete().eq('recipe_id', editId).select();
-          checkMutationResult(deleteResult, 'Delete recipe items');
-        }
-
-        if (recipeId && editItems.length > 0) {
-          const itemsPayload = editItems.map((item, idx) => ({
-            recipe_id: recipeId,
+        // Audit #34: atomic save — recipe + items in one transaction. Update
+        // path replaces all items in the same statement, so a failed insert
+        // can't wipe the recipe's items (the DELETE rolls back too).
+        const saveKey = saveRecipeIdem.getKey();
+        const { data, error } = await supabase.rpc('save_blend_recipe', {
+          p_recipe_id: editId,
+          p_name: form.name.trim(),
+          p_recipe_type: form.recipe_type,
+          p_items: editItems.map((item) => ({
             product_id: item.product_id,
             product_name: item.product_name,
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
-            sort_order: idx,
             notes: item.notes || null,
-          }));
-          const recipeItemsResult = await supabase.from('blend_recipe_items').insert(itemsPayload).select();
-          if (recipeItemsResult.error) throw recipeItemsResult.error;
-          checkMutationResult(recipeItemsResult, 'Insert blend recipe items');
-        }
+          })),
+          p_description: form.description || null,
+          p_crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
+          p_timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
+          p_idempotency_key: saveKey,
+        });
+        if (error) throw error;
+        assertRpcResult<{ recipe_id: string; created: boolean }>(data, 'save_blend_recipe');
+        saveRecipeIdem.resetKey();
       },
       toast,
       setLoading: setSaving,

@@ -234,6 +234,7 @@ export interface InvoiceRow {
   order_id: string;
   paid_amount_cents: number;
   prepay_applied_cents: number;
+  write_off_cents: number;
   total_amount_cents: number;
   balance_cents: number;
 }
@@ -285,7 +286,10 @@ export function checkInvoicePayments(
  * Check 4: Generated balance column integrity
  *
  * For each invoice, balance_cents should equal:
- *   total_amount_cents - paid_amount_cents - prepay_applied_cents
+ *   total_amount_cents - paid_amount_cents - prepay_applied_cents - write_off_cents
+ *
+ * (PR-09 fix: write_off_cents was missing from the formula, causing every
+ * written-off invoice to be flagged as a balance discrepancy.)
  *
  * Since this is a GENERATED ALWAYS column in Postgres, a mismatch
  * would indicate a catastrophic DB issue. This is a sanity check.
@@ -294,7 +298,7 @@ export function checkInvoiceBalances(invoices: InvoiceRow[]): Discrepancy[] {
   const issues: Discrepancy[] = [];
 
   for (const inv of invoices) {
-    const expected = inv.total_amount_cents - inv.paid_amount_cents - inv.prepay_applied_cents;
+    const expected = inv.total_amount_cents - inv.paid_amount_cents - inv.prepay_applied_cents - inv.write_off_cents;
     if (Math.abs(inv.balance_cents - expected) > TOLERANCE_CENTS) {
       issues.push({
         check: 'invoice_balance_formula',
@@ -689,7 +693,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [invoiceRes, allocRes] = await Promise.all([
       supabase
         .from('invoices')
-        .select('id, invoice_number, order_id, paid_amount_cents, prepay_applied_cents, total_amount_cents, balance_cents')
+        .select('id, invoice_number, order_id, paid_amount_cents, prepay_applied_cents, write_off_cents, total_amount_cents, balance_cents')
         .eq('status', 'posted')
         .is('deleted_at', null),
       supabase

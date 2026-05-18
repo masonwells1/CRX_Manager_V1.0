@@ -101,13 +101,13 @@ export default function Returns() {
 
   const fetchReturns = useCallback(async () => {
     setLoading(true);
+    // PR-07 follow-up: dropped requester FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('returns')
       .select(`
         *,
         customer:customers(farm_name),
         order:orders(order_number),
-        requester:profiles!returns_requested_by_fkey(full_name),
         items:return_items(id)
       `)
       .is('deleted_at', null)
@@ -120,11 +120,25 @@ export default function Returns() {
       return;
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requester?: { full_name: string }; items?: unknown[] }>).map((r) => ({
+    const requesterIds = [...new Set(
+      ((data || []) as Array<{ requested_by?: string | null }>)
+        .map((r) => r.requested_by)
+        .filter(Boolean) as string[]
+    )];
+    const requesterMap: Record<string, string> = {};
+    if (requesterIds.length > 0) {
+      const { data: requesters } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', requesterIds);
+      (requesters || []).forEach((p: { id: string; full_name: string }) => { requesterMap[p.id] = p.full_name; });
+    }
+
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requested_by?: string | null; items?: unknown[] }>).map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       order_number: r.order?.order_number || null,
-      requester_name: r.requester?.full_name || 'Unknown',
+      requester_name: r.requested_by ? requesterMap[r.requested_by as string] || 'Unknown' : 'Unknown',
       item_count: r.items?.length || 0,
     })) as unknown as ReturnRow[];
     setReturns(rows);
@@ -279,12 +293,13 @@ export default function Returns() {
     await runCriticalAction({
       action: async () => {
         const approveKey = approveIdem.getKey();
-        const { error } = await supabase.rpc('approve_return', {
+        const { data, error } = await supabase.rpc('approve_return', {
           p_return_id: activeReturn.id,
           p_approved_by: profile.id,
           p_idempotency_key: approveKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'approve_return');
 
         approveIdem.resetKey();
         await logActivity({ event: 'return_approved', description: `Return ${activeReturn.return_number} approved`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
@@ -373,12 +388,13 @@ export default function Returns() {
     await runCriticalAction({
       action: async () => {
         const receiveKey = receiveIdem.getKey();
-        const { error } = await supabase.rpc('receive_return', {
+        const { data, error } = await supabase.rpc('receive_return', {
           p_return_id: activeReturn.id,
           p_received_by: profile.id,
           p_idempotency_key: receiveKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'receive_return');
 
         receiveIdem.resetKey();
         await logActivity({ event: 'return_received', description: `Return ${activeReturn.return_number} received, inventory restocked`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });
@@ -398,12 +414,13 @@ export default function Returns() {
     await runCriticalAction({
       action: async () => {
         const creditKey = creditIdem.getKey();
-        const { error } = await supabase.rpc('issue_return_credit', {
+        const { data, error } = await supabase.rpc('issue_return_credit', {
           p_return_id: activeReturn.id,
           p_actor_id: profile.id,
           p_idempotency_key: creditKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'issue_return_credit');
 
         creditIdem.resetKey();
         await logActivity({ event: 'return_credited', description: `Credit issued for return ${activeReturn.return_number}`, performedBy: profile.id, entityType: 'return', entityId: activeReturn.id });

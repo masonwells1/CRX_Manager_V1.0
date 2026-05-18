@@ -4,7 +4,7 @@
  * Shows summary cards (Total Owed, Due This Week, Due This Month, Overdue),
  * AP aging buckets, and a vendor breakdown. Admin-only.
  */
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DollarSign, Clock, AlertTriangle, FileText, Plus } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -28,32 +28,50 @@ export default function AccountsPayable() {
   const fmt = (cents: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
-  const fetchDashboard = useCallback(async () => {
-    setLoading(true);
-    const [summaryRes, agingRes] = await Promise.all([
-      supabase.rpc('get_ap_dashboard_summary'),
-      supabase.rpc('get_ap_aging', { p_as_of_date: asOfDate }),
-    ]);
-
-    if (summaryRes.error) {
-      Sentry.captureException(summaryRes.error);
+  // Audit #35: split the dashboard fetch into two so changing the as-of-date
+  // only re-runs the aging query (which depends on it). The summary query is
+  // current-state and only needs to fire on mount.
+  const fetchSummary = useCallback(async () => {
+    const { data, error } = await supabase.rpc('get_ap_dashboard_summary');
+    if (error) {
+      Sentry.captureException(error);
       toast('error', 'Failed to load AP summary');
-    } else {
-      setSummary(assertRpcResult<APDashboardSummary>(summaryRes.data as unknown, 'get_ap_dashboard_summary'));
+      return;
     }
+    setSummary(assertRpcResult<APDashboardSummary>(data, 'get_ap_dashboard_summary'));
+  }, [toast]);
 
-    if (agingRes.error) {
-      Sentry.captureException(agingRes.error);
+  const fetchAging = useCallback(async () => {
+    const { data, error } = await supabase.rpc('get_ap_aging', { p_as_of_date: asOfDate });
+    if (error) {
+      Sentry.captureException(error);
       toast('error', 'Failed to load AP aging data');
-    } else {
-      setAgingData(assertRpcResult<APAgingRow[]>(agingRes.data, 'get_ap_aging'));
+      return;
     }
-    setLoading(false);
+    setAgingData(assertRpcResult<APAgingRow[]>(data, 'get_ap_aging'));
   }, [asOfDate, toast]);
 
+  // Initial load: both queries fire in parallel, drop loading state when both settle.
   useEffect(() => {
-    fetchDashboard();
-  }, [fetchDashboard]);
+    let cancelled = false;
+    setLoading(true);
+    Promise.all([fetchSummary(), fetchAging()]).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // asOfDate changes only re-run the aging query (summary doesn't depend on it).
+  // Skip the initial render — the mount effect above already fetched aging.
+  const isInitialDateRef = useRef(true);
+  useEffect(() => {
+    if (isInitialDateRef.current) {
+      isInitialDateRef.current = false;
+      return;
+    }
+    fetchAging();
+  }, [asOfDate, fetchAging]);
 
   const agingTotals = agingData.reduce(
     (acc, r) => ({
@@ -201,7 +219,7 @@ export default function AccountsPayable() {
               className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
             />
           </div>
-          <Button variant="secondary" size="sm" onClick={fetchDashboard}>
+          <Button variant="secondary" size="sm" onClick={() => { setLoading(true); Promise.all([fetchSummary(), fetchAging()]).finally(() => setLoading(false)); }}>
             Refresh
           </Button>
           <div className="ml-auto">

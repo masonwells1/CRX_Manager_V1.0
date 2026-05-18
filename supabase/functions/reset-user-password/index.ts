@@ -1,5 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
+import { requireActiveProfile } from "../_shared/auth.ts";
 
 const ALLOWED_ORIGINS = [
   "https://croprxsolutions.app",
@@ -50,17 +52,12 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Verify the caller is an admin
+    // Codex audit F1 (P1, 2026-05-16): is_active gate enforced server-side.
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
-    const { data: callerProfile } = await adminClient
-      .from("profiles")
-      .select("role")
-      .eq("id", caller.id)
-      .maybeSingle();
-
-    if (!callerProfile || callerProfile.role !== "admin") {
-      return new Response(JSON.stringify({ error: "Admin access required" }), {
-        status: 403,
+    const gate = await requireActiveProfile(adminClient, caller.id, ["admin"]);
+    if ("error" in gate) {
+      return new Response(JSON.stringify({ error: gate.error }), {
+        status: gate.status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -87,6 +84,27 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Codex P2 (PR #59, 2026-05-16): block password resets for
+    // entity_recipient service profiles (CMCTW LLC, Crop Rx Solutions —
+    // migration 20260516090000). These profiles exist only to receive
+    // commission payouts; they must never gain a usable login. Defense
+    // in depth — the Settings UI also filters them out, but block here
+    // in case a future caller misses the frontend filter.
+    const { data: targetProfile } = await adminClient
+      .from("profiles")
+      .select("role")
+      .eq("id", user_id)
+      .maybeSingle();
+    if (targetProfile?.role === "entity_recipient") {
+      return new Response(
+        JSON.stringify({ error: "Cannot reset password for service profiles" }),
+        {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
     // Use admin API to set the user's password
     const { error: updateError } =
       await adminClient.auth.admin.updateUserById(user_id, { password });
@@ -106,6 +124,12 @@ Deno.serve(async (req: Request) => {
       }
     );
   } catch (err) {
+    // Audit #28: surface unhandled errors — admin password resets are
+    // security-relevant and need oncall visibility.
+    await captureEdgeException(err, {
+      function: "reset-user-password",
+      level: "error",
+    });
     return new Response(
       JSON.stringify({ error: err instanceof Error ? err.message : "Unknown error" }),
       {

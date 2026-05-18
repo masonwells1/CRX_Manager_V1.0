@@ -93,7 +93,7 @@ describe('notifyAdmins', () => {
     // First call: from('profiles').select().eq().eq() → returns admins
     // Second call: from('notifications').insert() → inserts
     mockFrom.mockImplementation((table: string) => {
-      if (table === 'profiles') {
+      if (table === 'profiles' || table === 'profile_public_view') {
         return { select: mockSelect };
       }
       // notifications table
@@ -117,7 +117,7 @@ describe('notifyAdmins', () => {
     const mockSelect = vi.fn().mockReturnValue({ eq: mockEqRole });
 
     mockFrom.mockImplementation((table: string) => {
-      if (table === 'profiles') return { select: mockSelect };
+      if (table === 'profiles' || table === 'profile_public_view') return { select: mockSelect };
       return { insert: mockInsert };
     });
 

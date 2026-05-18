@@ -2,7 +2,7 @@
  * useUnsavedChanges.test.tsx — Tests for unsaved changes navigation guard
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
 // ── Mock react-router ────────────────────────────────────────────────────
@@ -25,8 +25,8 @@ import { useUnsavedChanges } from './useUnsavedChanges';
 // ── Tests ────────────────────────────────────────────────────────────────
 
 describe('useUnsavedChanges', () => {
-  let addSpy: ReturnType<typeof vi.spyOn>;
-  let removeSpy: ReturnType<typeof vi.spyOn>;
+  let addSpy: MockInstance<typeof window.addEventListener>;
+  let removeSpy: MockInstance<typeof window.removeEventListener>;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,7 +63,7 @@ describe('useUnsavedChanges', () => {
   it('does not add beforeunload listener when isDirty=false', () => {
     renderHook(() => useUnsavedChanges(false));
     const beforeUnloadCalls = addSpy.mock.calls.filter(
-      (call: [string, ...unknown[]]) => call[0] === 'beforeunload'
+      (call) => call[0] === 'beforeunload'
     );
     expect(beforeUnloadCalls).toHaveLength(0);
   });
@@ -86,7 +86,7 @@ describe('useUnsavedChanges', () => {
   it('beforeunload handler calls preventDefault', () => {
     renderHook(() => useUnsavedChanges(true));
     const handler = addSpy.mock.calls.find(
-      (call: [string, ...unknown[]]) => call[0] === 'beforeunload'
+      (call) => call[0] === 'beforeunload'
     )?.[1] as EventListener;
     expect(handler).toBeDefined();
 

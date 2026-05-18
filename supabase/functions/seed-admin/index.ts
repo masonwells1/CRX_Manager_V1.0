@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
@@ -8,8 +9,11 @@ function getAllowedOrigin(): string {
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  // Fallback to production domain when secret not configured
-  return "https://croprxsolutions.app";
+  // PR-16: removed silent fallback — missing env var now throws.
+  throw new Error(
+    "ALLOWED_ORIGIN env var is required for production deployments. " +
+      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
+  );
 }
 
 const corsHeaders = {
@@ -98,6 +102,13 @@ Deno.serve(async (req: Request) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
+    // Audit #28: surface unhandled errors to Sentry. Even though seed-admin
+    // is dev/staging-only, a 500 here usually means a misconfigured secret
+    // or service role — worth knowing about.
+    await captureEdgeException(err, {
+      function: "seed-admin",
+      level: "error",
+    });
     return new Response(
       JSON.stringify({ error: (err as Error).message }),
       {

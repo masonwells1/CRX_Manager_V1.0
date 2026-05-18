@@ -17,7 +17,7 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import type { Vendor, PurchaseOrder } from '../types';
 
 export default function NewVendorBill() {
@@ -41,6 +41,21 @@ export default function NewVendorBill() {
   const [subtotalDollars, setSubtotalDollars] = useState('');
   const [adjustmentDollars, setAdjustmentDollars] = useState('0');
   const [notes, setNotes] = useState('');
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset createBillIdem when bill intent
+  // changes. Page stays mounted after failed/lost-response submit; without
+  // reset, editing vendor/bill#/totals and resubmitting replays cached id.
+  // Hash MUST cover every submitted field. paymentTermsDays affects due_date
+  // (computed from bill_date + days), notes is sent verbatim. Codex 2026-05-16
+  // follow-up: omitting any field replays prior success silently.
+  const billIntentHash = [
+    vendorId, purchaseOrderId, billNumber, billDate, paymentTerms,
+    String(paymentTermsDays), subtotalDollars, adjustmentDollars, notes,
+  ].join('|');
+  useEffect(() => {
+    createBillIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billIntentHash]);
 
   const fetchVendors = useCallback(async () => {
     const { data } = await supabase
@@ -106,7 +121,20 @@ export default function NewVendorBill() {
     setSaving(true);
     try {
       const subtotalCents = parseDollarsToCents(subtotalDollars);
-      const adjustmentCents = parseDollarsToCents(adjustmentDollars || '0');
+      // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
+      const adjustmentCents = parseDollarsToCentsSigned(adjustmentDollars || '0');
+
+      // (codex audit F4, 2026-05-10): mirror the backend's `v_total > 0`
+      // guard at the UI so users see a clear inline message instead of an
+      // INVALID_AMOUNT exception thrown out of the RPC. After PR-15's
+      // parseDollarsToCents fix preserves negatives, an adjustment can flip
+      // the sign of the bill total even when the subtotal is positive.
+      const totalCents = subtotalCents + adjustmentCents;
+      if (totalCents <= 0) {
+        toast('error', `Bill total must be positive. Subtotal + adjustment = ${(totalCents / 100).toFixed(2)}.`);
+        setSaving(false);
+        return;
+      }
 
       const idemKey = createBillIdem.getKey();
       // Compute due_date from bill_date + paymentTermsDays
@@ -139,7 +167,7 @@ export default function NewVendorBill() {
     setSaving(false);
   };
 
-  const totalCents = parseDollarsToCents(subtotalDollars || '0') + parseDollarsToCents(adjustmentDollars || '0');
+  const totalCents = parseDollarsToCents(subtotalDollars || '0') + parseDollarsToCentsSigned(adjustmentDollars || '0');
   const fmt = (cents: number) =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 

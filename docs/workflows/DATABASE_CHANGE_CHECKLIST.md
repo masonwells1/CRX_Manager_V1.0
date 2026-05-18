@@ -216,3 +216,67 @@ The most common database change. Here's the minimal checklist:
 4. Update interface in `src/types/index.ts`
 5. Update components that use this table
 6. Run `npm run typecheck` and `npm run build`
+
+---
+
+## Adding an Index on a Large Table (`CREATE INDEX CONCURRENTLY`)
+
+> Use this pattern when adding an index to a table that has live writes you don't want to block.
+> The canonical example is `supabase/migrations/20260511070000_perf_fk_indexes.sql` (perf sweep #3).
+
+### Why CONCURRENTLY exists
+
+`CREATE INDEX` takes an `ACCESS EXCLUSIVE` lock on the table for the entire build — every read AND write is blocked until the index finishes. On a multi-million-row table that can mean minutes of downtime.
+`CREATE INDEX CONCURRENTLY` builds the index in two passes without blocking writes. The cost: it takes ~2× longer overall and **cannot run inside a transaction block** (Postgres rejects it).
+
+### The deployment trap
+
+Every "transactional" migration runner — including `apply_migration` on the Supabase MCP — wraps each file in `BEGIN; ... COMMIT;`. Inside that wrapper, `CREATE INDEX CONCURRENTLY` fails with:
+```
+ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+```
+
+For this project there are three valid application paths, listed in order of preference:
+
+| Path | How it handles CONCURRENTLY | When to use |
+|------|-----------------------------|-------------|
+| Supabase MCP `execute_sql` per-statement | No transaction wrap — each statement runs alone | **Preferred.** Same workflow as perf sweep #3. |
+| `supabase migration up` / `supabase db push` | Honors `-- supabase-no-transaction` marker in the file | If migrating outside the MCP. The marker is a Supabase-CLI feature, not a generic SQL comment. |
+| Direct `psql -f file.sql` | No implicit transaction wrap, works directly | Local dev only. NEVER use against production. |
+
+**Blocked path:** `apply_migration` MCP — wraps in a transaction, fails immediately. The bash-safety hook (`.claude/hooks/bash-safety.mjs:42`) also blocks `npx supabase db push` to enforce manual review.
+
+### File template
+
+```sql
+-- Migration: <description>
+-- Source: Supabase performance advisor / specific reason
+-- Goal: <one-line explanation>
+--
+-- supabase-no-transaction
+--
+-- DEPLOYMENT NOTE: Contains CREATE INDEX CONCURRENTLY. MUST NOT be applied
+-- via apply_migration MCP (wraps in transaction → fails). Apply via
+-- per-statement execute_sql OR supabase migration up (CLI honors the
+-- supabase-no-transaction marker above).
+--
+-- IF NOT EXISTS makes the file replay-safe — re-running is a no-op.
+
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_<table>_<column>
+  ON public.<table> (<column>);
+
+-- ... repeat for each index ...
+
+-- Verification: run separately as a regular SELECT (not part of this file)
+-- SELECT count(*) FROM pg_indexes
+-- WHERE schemaname='public' AND indexname IN ('idx_...', 'idx_...');
+```
+
+### Quick checklist
+
+1. **Need this only on tables with significant size or write traffic.** Empty / low-traffic tables: plain `CREATE INDEX IF NOT EXISTS` is fine and runs inside a transaction.
+2. **Put the `-- supabase-no-transaction` marker on its own line near the top.** Supabase CLI looks for the literal substring.
+3. **Always pair with `IF NOT EXISTS`** so the migration is replay-safe (CONCURRENTLY can leave invalid indexes behind on failure; `IF NOT EXISTS` won't re-attempt a name that already exists, so check `pg_indexes WHERE indisvalid = false` after a failed run and DROP any invalid index manually before retry).
+4. **Verification block goes in a separate execution**, not inside the file. CONCURRENTLY can't run alongside other statements in one transaction, and a verification SELECT inside the file would force one.
+5. **Apply via per-statement `execute_sql`**, OR via `supabase migration up` / `supabase db push`. Do NOT use `apply_migration` MCP.
+6. **After apply, query `pg_indexes`** to confirm all expected `idx_*` names exist and `indisvalid = true`.

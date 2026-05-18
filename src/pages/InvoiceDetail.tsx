@@ -73,7 +73,11 @@ export default function InvoiceDetail() {
   const saveIdem = useIdempotencyKey('save_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_invoice', profile?.id || '');
-  const payIdem = useIdempotencyKey('record_invoice_payment', profile?.id || '');
+  // PR-08 (2026-05-10): switched from record_invoice_payment to allocate_payment
+  // so payments recorded here flow into the same `allocation_sets` ledger that
+  // Payment History reads. The operation key follows the new RPC name so
+  // idempotency cache hits resolve correctly.
+  const payIdem = useIdempotencyKey('allocate_payment', profile?.id || '');
   const reverseWoIdem = useIdempotencyKey('reverse_write_off', profile?.id || '');
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
   const isNew = id === 'new';
@@ -161,7 +165,8 @@ export default function InvoiceDetail() {
     const fetchRef = async () => {
       const [custRes, salesRes] = await Promise.all([
         supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(500),
-        supabase.from('profiles').select('id, full_name').in('role', ['admin', 'sales_rep']).eq('is_active', true).order('full_name'),
+        // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
+        supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       ]);
       if (custRes.data) setCustomers(custRes.data as Customer[]);
       if (salesRes.data) setSalespeople(salesRes.data);
@@ -171,9 +176,10 @@ export default function InvoiceDetail() {
 
   const fetchInvoice = useCallback(async (invoiceId: string) => {
     setLoading(true);
+    // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('invoices')
-      .select('*, customer:customers(farm_name), salesman:profiles!invoices_salesman_id_fkey(full_name)')
+      .select('*, customer:customers(farm_name)')
       .eq('id', invoiceId)
       .single();
 
@@ -182,6 +188,19 @@ export default function InvoiceDetail() {
       navigate('/invoices');
       return;
     }
+
+    let salesman: { full_name: string } | null = null;
+    const salesmanId = (data as { salesman_id?: string | null }).salesman_id;
+    if (salesmanId) {
+      const { data: smData } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .eq('id', salesmanId)
+        .maybeSingle();
+      if (smData) salesman = { full_name: smData.full_name };
+    }
+    // Attach salesman in the same shape the JSX consumes (`invoice.salesman?.full_name`).
+    (data as Record<string, unknown>).salesman = salesman;
 
     setInvoice(data as Invoice);
     setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
@@ -194,9 +213,10 @@ export default function InvoiceDetail() {
           .select('id, order_number, quote_id')
           .eq('id', data.order_id)
           .maybeSingle(),
+        // PR-07 follow-up: dropped driver FK embed; resolve via post-fetch below.
         supabase
           .from('deliveries')
-          .select('id, delivery_number, scheduled_date, status, driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+          .select('id, delivery_number, scheduled_date, status, assigned_driver')
           .eq('order_id', data.order_id)
           .order('scheduled_date', { ascending: false }),
         supabase
@@ -207,13 +227,28 @@ export default function InvoiceDetail() {
           .order('invoice_number'),
       ]);
       setParentOrder(orderRes.data as { id: string; order_number: string } | null);
+
+      // PR-07 follow-up: resolve driver names via profile_public_view.
+      const delDriverIds = [...new Set(
+        ((delRes.data || []) as Array<{ assigned_driver?: string | null }>)
+          .map((d) => d.assigned_driver)
+          .filter(Boolean) as string[]
+      )];
+      const delDriverMap: Record<string, string> = {};
+      if (delDriverIds.length > 0) {
+        const { data: driverData } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', delDriverIds);
+        (driverData || []).forEach((p: { id: string; full_name: string }) => { delDriverMap[p.id] = p.full_name; });
+      }
       setRelatedDeliveries(
         (delRes.data || []).map((d: Record<string, unknown>) => ({
           id: d.id as string,
           delivery_number: d.delivery_number as string,
           scheduled_date: d.scheduled_date as string,
           status: d.status as string,
-          driver_name: (d.driver as { full_name: string } | null)?.full_name || null,
+          driver_name: d.assigned_driver ? delDriverMap[d.assigned_driver as string] || null : null,
         }))
       );
       setSiblingInvoices((invRes.data || []).map((i: Record<string, unknown>) => ({
@@ -366,6 +401,13 @@ export default function InvoiceDetail() {
 
   // Save invoice
   const handleSave = async () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset saveIdem at the top of every
+    // save attempt. The invoice form is always-editable in-page (no separate
+    // edit toggle), so any change between failed submits constitutes a new
+    // intent. Reset-per-click means each save attempt gets a fresh key;
+    // a true network retry (without user edits) is handled by the RPC's
+    // own retry logic and not the React handler.
+    saveIdem.resetKey();
     if (!invoice.customer_id) {
       toast('error', 'Please select a customer');
       return;
@@ -436,15 +478,16 @@ export default function InvoiceDetail() {
       // through post_invoice_group so all siblings post atomically. Posting just
       // one member of a group would leave the group in a half-posted state.
       if (invoice.invoice_group_id) {
-        const { error } = await supabase.rpc('post_invoice_group', {
+        const { data, error } = await supabase.rpc('post_invoice_group', {
           p_invoice_group_id: invoice.invoice_group_id,
           p_performed_by: profile?.id ?? null,
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'post_invoice_group');
       } else {
-        const { error } = await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey });
-        if (error) throw error;
+        // post_invoice RETURNS void — use .throwOnError() (no `=` capture).
+        await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey }).throwOnError();
       }
       postIdem.resetKey();
       toast('success', invoice.invoice_group_id ? 'Invoice group posted' : 'Invoice posted');
@@ -463,12 +506,12 @@ export default function InvoiceDetail() {
     setVoiding(true);
     try {
       const idemKey = voidIdem.getKey();
-      const { error } = await supabase.rpc('void_invoice', {
+      // void_invoice RETURNS void — use .throwOnError() (no `=` capture).
+      await supabase.rpc('void_invoice', {
         p_invoice_id: id,
         p_void_reason: voidReason || 'Voided by admin',
         p_idempotency_key: idemKey,
-      });
-      if (error) throw error;
+      }).throwOnError();
       voidIdem.resetKey();
       toast('success', 'Invoice voided');
       setShowVoidModal(false);
@@ -480,25 +523,49 @@ export default function InvoiceDetail() {
     setVoiding(false);
   };
 
-  // Record payment
+  // Record payment via allocate_payment (PR-08, 2026-05-10).
+  //
+  // Pre-PR-08 this called `record_invoice_payment` which wrote to the
+  // `payments` table — a different ledger than `/payment-history` reads
+  // (`allocation_sets` + `invoice_line_allocations`). The two ledgers
+  // co-existed and any payment recorded from this modal was invisible to
+  // Payment History. allocate_payment with a single-invoice allocation
+  // collapses the two paths onto one ledger.
+  //
+  // Behavior preserved: posted/overdue-only constraint, period guard,
+  // amount-positive check, balance ceiling. Behavior added (latent — the
+  // amount validation prevents it from firing in this flow): excess
+  // payment becomes a prepay credit instead of erroring.
   const handlePayment = async () => {
     const amountCents = parseDollarsToCents(payAmount);
     if (amountCents <= 0) {
       toast('error', 'Enter a valid payment amount');
       return;
     }
+    if (!invoice?.customer_id) {
+      toast('error', 'Cannot record payment — invoice has no customer linked');
+      return;
+    }
     setPayingInvoice(true);
     try {
       const idemKey = payIdem.getKey();
-      const { error } = await supabase.rpc('record_invoice_payment', {
-        p_invoice_id: id,
-        p_amount_cents: amountCents,
+      const { data, error } = await supabase.rpc('allocate_payment', {
+        p_customer_id: invoice.customer_id,
+        p_total_cents: amountCents,
         p_payment_method: payMethod,
         p_reference_number: payRef || null,
         p_notes: payNotes || null,
+        p_allocations: [{ invoice_id: id, amount_cents: amountCents }],
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      assertRpcResult<{
+        success: boolean;
+        allocation_set_id: string;
+        total_allocated_cents: number;
+        prepay_created_cents: number;
+        invoices_paid: number;
+      }>(data, 'allocate_payment');
       payIdem.resetKey();
       toast('success', `Payment of ${fmt(amountCents)} recorded`);
       setShowPayModal(false);
@@ -507,7 +574,7 @@ export default function InvoiceDetail() {
       setPayNotes('');
       fetchInvoice(id!);
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'record_invoice_payment' } });
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'allocate_payment' } });
       toast('error', sanitizeError(err));
     }
     setPayingInvoice(false);
@@ -515,18 +582,23 @@ export default function InvoiceDetail() {
 
   const handleReverseWriteOff = async () => {
     if (!reverseWoTarget) return;
+    if (!profile) {
+      toast('error', 'Cannot reverse write-off — profile not loaded. Please refresh.');
+      return;
+    }
     setReversingWo(true);
     try {
       const key = reverseWoIdem.getKey();
-      const { error } = await supabase.rpc('reverse_write_off', {
+      const { data, error } = await supabase.rpc('reverse_write_off', {
         p_write_off_id: reverseWoTarget.id,
         p_reason: reverseWoReason,
-        p_performed_by: profile?.id,
+        p_performed_by: profile.id,
         p_idempotency_key: key,
       });
       if (error) throw error;
+      assertRpcResult(data, 'reverse_write_off');
       reverseWoIdem.resetKey();
-      await logActivity({ event: 'write_off_reversed', description: `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, performedBy: profile?.id ?? '', entityType: 'invoice', entityId: id });
+      await logActivity({ event: 'write_off_reversed', description: `Write-off of ${fmt(reverseWoTarget.amount_cents)} reversed`, performedBy: profile.id, entityType: 'invoice', entityId: id });
       toast('success', 'Write-off reversed and balance restored');
       setShowReverseWoModal(false);
       setReverseWoReason('');
@@ -626,6 +698,10 @@ export default function InvoiceDetail() {
 
   // Email invoice with PDF attachment
   const handleEmailInvoice = async () => {
+    if (!profile) {
+      toast('error', 'Cannot email invoice — profile not loaded. Please refresh.');
+      return;
+    }
     const cust = customers.find(c => c.id === invoice.customer_id);
     if (!cust?.email) {
       toast('error', 'Customer does not have an email address on file');
@@ -663,7 +739,7 @@ export default function InvoiceDetail() {
         });
 
         if (result.success) {
-          logActivity({ event: 'invoice_emailed', description: `Invoice ${invoice.invoice_number} emailed to ${cust.email}`, performedBy: profile?.id || '', entityType: 'invoice', entityId: id, customerId: invoice.customer_id });
+          logActivity({ event: 'invoice_emailed', description: `Invoice ${invoice.invoice_number} emailed to ${cust.email}`, performedBy: profile.id, entityType: 'invoice', entityId: id, customerId: invoice.customer_id });
         } else {
           throw new Error(result.error || 'Failed to send email');
         }
@@ -745,7 +821,7 @@ export default function InvoiceDetail() {
           )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
           {!isNew && editable && isAdmin && (
-            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={() => setShowPostConfirm(true)} loading={posting}>
+            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={() => { postIdem.resetKey(); setShowPostConfirm(true); }} loading={posting}>
               Post
             </Button>
           )}
@@ -776,6 +852,8 @@ export default function InvoiceDetail() {
                 variant="secondary"
                 icon={<DollarSign className="w-4 h-4" />}
                 onClick={() => {
+                  // Codex P2 fix: reset pay key per modal open (variable amount/allocation).
+                  payIdem.resetKey();
                   setPayAmount(((invoice.balance_cents || 0) / 100).toFixed(2));
                   setShowPayModal(true);
                 }}
@@ -793,7 +871,7 @@ export default function InvoiceDetail() {
             </>
           )}
           {!isNew && invoice.status === 'posted' && isAdmin && (
-              <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => setShowVoidModal(true)}>
+              <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => { voidIdem.resetKey(); setShowVoidModal(true); }}>
                 Void
               </Button>
           )}
@@ -1101,7 +1179,7 @@ export default function InvoiceDetail() {
                 ) : (
                   isAdmin && (
                     <button
-                      onClick={() => { setReverseWoTarget(wo); setShowReverseWoModal(true); }}
+                      onClick={() => { reverseWoIdem.resetKey(); setReverseWoTarget(wo); setShowReverseWoModal(true); }}
                       className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium flex-shrink-0"
                     >
                       <RotateCcw className="w-3 h-3" />

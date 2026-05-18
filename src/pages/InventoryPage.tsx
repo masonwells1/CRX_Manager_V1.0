@@ -212,13 +212,13 @@ export default function InventoryPage() {
   }, [toast]);
 
   const fetchHolds = useCallback(async () => {
+    // PR-07 follow-up: dropped creator FK embed; resolved via profile_public_view.
     const { data, error } = await supabase
       .from('inventory_holds')
       .select(`
         *,
         product:products(product_name),
-        customer:customers(farm_name),
-        creator:profiles!inventory_holds_created_by_fkey(full_name)
+        customer:customers(farm_name)
       `)
       .eq('is_active', true)
       .or(`expires_at.is.null,expires_at.gte.${localToday()}`)
@@ -229,11 +229,25 @@ export default function InventoryPage() {
       return;
     }
 
-    const holdRows = (data || []).map((h: Record<string, unknown> & { product?: { product_name: string }; customer?: { farm_name: string }; creator?: { full_name: string } }) => ({
+    const creatorIds = [...new Set(
+      ((data || []) as Array<{ created_by?: string | null }>)
+        .map((h) => h.created_by)
+        .filter(Boolean) as string[]
+    )];
+    const creatorMap: Record<string, string> = {};
+    if (creatorIds.length > 0) {
+      const { data: creators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', creatorIds);
+      (creators || []).forEach((p: { id: string; full_name: string }) => { creatorMap[p.id] = p.full_name; });
+    }
+
+    const holdRows = (data || []).map((h: Record<string, unknown> & { product?: { product_name: string }; customer?: { farm_name: string }; created_by?: string | null }) => ({
       ...h,
       product_name: h.product?.product_name || 'Unknown',
       customer_name: h.customer?.farm_name || null,
-      creator_name: h.creator?.full_name || 'Unknown',
+      creator_name: h.created_by ? creatorMap[h.created_by] || 'Unknown' : 'Unknown',
     })) as HoldWithRelations[];
 
     setHolds(holdRows);
@@ -299,6 +313,9 @@ export default function InventoryPage() {
   };
 
   const openHoldModal = () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset page-scoped key on each open
+    // so different products/customers can't share an idempotency intent.
+    createHoldIdem.resetKey();
     fetchProducts();
     fetchCustomers();
     setHoldProductId('');
@@ -323,7 +340,7 @@ export default function InventoryPage() {
     if (!profile) return;
     const qty = parseFloat(holdQty);
     const idemKey = createHoldIdem.getKey();
-    const { error } = await supabase.rpc('create_inventory_hold', {
+    const { data, error } = await supabase.rpc('create_inventory_hold', {
       p_product_id: holdProductId,
       p_customer_id: holdCustomerId || null,
       p_quantity: qty,
@@ -336,6 +353,7 @@ export default function InventoryPage() {
       p_idempotency_key: idemKey,
     });
     if (error) throw error;
+    assertRpcResult(data, 'create_inventory_hold');
     createHoldIdem.resetKey();
   };
 
@@ -414,12 +432,13 @@ export default function InventoryPage() {
   const handleReleaseHold = async (holdId: string) => {
     setReleasingHoldId(holdId);
     try {
-      const { error } = await supabase.rpc('release_inventory_hold', {
+      const { data, error } = await supabase.rpc('release_inventory_hold', {
         p_hold_id: holdId,
         p_performed_by: profile?.id,
         p_idempotency_key: crypto.randomUUID(),
       });
       if (error) throw error;
+      assertRpcResult(data, 'release_inventory_hold');
 
       toast('success', 'Hold released');
       fetchInventory();
@@ -444,7 +463,7 @@ export default function InventoryPage() {
     setAdding(true);
 
     const unitCost = addUnitCost ? parseFloat(addUnitCost) : null;
-    const { error } = await supabase.rpc('manual_inventory_add', {
+    const { data: manualAddData, error } = await supabase.rpc('manual_inventory_add', {
       p_product_id: addProductId,
       p_location: addLocation || 'Main Warehouse',
       p_quantity: qty,
@@ -454,6 +473,7 @@ export default function InventoryPage() {
       p_unit_cost: unitCost && unitCost > 0 ? unitCost : null,
       p_idempotency_key: crypto.randomUUID(),
     });
+    if (!error) assertRpcResult(manualAddData, 'manual_inventory_add');
 
     if (error) {
       toast('error', sanitizeError(error));
@@ -466,6 +486,8 @@ export default function InventoryPage() {
   };
 
   const openReceiveModal = async (inventoryId: string) => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset key per inventory target.
+    receivePoIdem.resetKey();
     const target = inventory.find((i) => i.id === inventoryId);
     if (!target) return;
 
@@ -527,12 +549,13 @@ export default function InventoryPage() {
     await runCriticalAction({
       action: async () => {
         const idemKey = receivePoIdem.getKey();
-        const { error } = await supabase.rpc('receive_po_items', {
+        const { data, error } = await supabase.rpc('receive_po_items', {
           p_items: [{ po_item_id: receivePOItemId, quantity: qty }],
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'receive_po_items');
         receivePoIdem.resetKey();
       },
       toast,
@@ -558,7 +581,7 @@ export default function InventoryPage() {
     await runCriticalAction({
       action: async () => {
         const idemKey = adjustIdem.getKey();
-        const { error } = await supabase.rpc('adjust_inventory', {
+        const { data, error } = await supabase.rpc('adjust_inventory', {
           p_inventory_id: selectedId,
           p_delta: qty,
           p_reason: adjustNote || null,
@@ -566,6 +589,7 @@ export default function InventoryPage() {
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'adjust_inventory');
         adjustIdem.resetKey();
       },
       toast,
@@ -586,6 +610,8 @@ export default function InventoryPage() {
   // order/delivery between validation and delete. retire_inventory_item RPC
   // does it all in one transaction with FOR UPDATE on the inventory row.
   const handleDelete = (inventoryId: string) => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset retire key per inventory target.
+    retireIdem.resetKey();
     setDeleteConfirmId(inventoryId);
   };
 
@@ -595,12 +621,13 @@ export default function InventoryPage() {
     await runCriticalAction({
       action: async () => {
         const idemKey = retireIdem.getKey();
-        const { error } = await supabase.rpc('retire_inventory_item', {
+        const { data, error } = await supabase.rpc('retire_inventory_item', {
           p_inventory_id: deleteConfirmId,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'retire_inventory_item');
         retireIdem.resetKey();
       },
       toast,
@@ -839,7 +866,7 @@ export default function InventoryPage() {
                   <ArrowDownToLine className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setSelectedId(row.id); setAdjustOpen(true); }}
+                  onClick={(e) => { e.stopPropagation(); adjustIdem.resetKey(); setSelectedId(row.id); setAdjustOpen(true); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Manual Adjustment"
                 >
@@ -897,7 +924,7 @@ export default function InventoryPage() {
         >
           <Package className="w-4 h-4 inline mr-1.5" />
           Inventory
-          <HelpTip text="Track on-hand quantities and net inventory position. 'Net Position' = Available − Prebooked + On Order (the canonical formula used everywhere — order creation warnings, dashboard widgets, this column). Holds and planned-quote demand are shown separately in the 'Planned' column, not subtracted from Net Position. Click the ledger icon on any row to see the full transaction history." className="ml-1" />
+          <HelpTip text="Two distinct numbers worth knowing: 'Net Position' = Available − Prebooked + On Order (forward-looking — used for order creation warnings, dashboard widgets, this column, and the field-app shortfall preview). 'Today's Free' = Available − Prebooked − active Holds (right-now physical stock — used internally by the manual-hold modal warning, since a hold competes against today's stock not future PO arrivals). Holds and planned-quote demand are shown separately in the 'Planned' column, NOT subtracted from Net Position. Click the ledger icon on any row to see the full transaction history." className="ml-1" />
         </button>
         <button
           onClick={() => setActiveTab('forecast')}

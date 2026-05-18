@@ -162,17 +162,22 @@ export default function MonthEndClose() {
   const allChecksPassed = checklist.every((c) => c.done);
 
   const handleClose = async () => {
+    if (!profile) {
+      toast('error', 'Cannot close period — profile not loaded. Please refresh.');
+      return;
+    }
     setClosing(true);
     try {
       const closeKey = closePeriodIdem.getKey();
-      const { error } = await supabase.rpc('close_accounting_period', {
+      const { data, error } = await supabase.rpc('close_accounting_period', {
         p_period_end: current.end,
-        p_performed_by: profile?.id,
+        p_performed_by: profile.id,
         p_idempotency_key: closeKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'close_accounting_period');
       closePeriodIdem.resetKey();
-      logActivity({ event: 'close_accounting_period', description: `Closed accounting period: ${current.label}`, performedBy: profile?.id || '' });
+      logActivity({ event: 'close_accounting_period', description: `Closed accounting period: ${current.label}`, performedBy: profile.id });
       toast('success', `Period closed: ${current.label}`);
       setShowCloseModal(false);
       fetchData();
@@ -184,18 +189,23 @@ export default function MonthEndClose() {
 
   const handleReopen = async () => {
     if (!reopenTarget?.id) return;
+    if (!profile) {
+      toast('error', 'Cannot reopen period — profile not loaded. Please refresh.');
+      return;
+    }
     setReopening(true);
     try {
       const key = reopenPeriodIdem.getKey();
-      const { error } = await supabase.rpc('reopen_accounting_period', {
+      const { data, error } = await supabase.rpc('reopen_accounting_period', {
         p_period_id: reopenTarget.id,
         p_reason: reopenReason,
-        p_performed_by: profile?.id,
+        p_performed_by: profile.id,
         p_idempotency_key: key,
       });
       if (error) throw error;
+      assertRpcResult(data, 'reopen_accounting_period');
       reopenPeriodIdem.resetKey();
-      logActivity({ event: 'reopen_accounting_period', description: `Reopened accounting period: ${reopenTarget.id}. Reason: ${reopenReason}`, performedBy: profile?.id || '' });
+      logActivity({ event: 'reopen_accounting_period', description: `Reopened accounting period: ${reopenTarget.id}. Reason: ${reopenReason}`, performedBy: profile.id });
       toast('success', 'Accounting period reopened');
       setShowReopenModal(false);
       setReopenReason('');

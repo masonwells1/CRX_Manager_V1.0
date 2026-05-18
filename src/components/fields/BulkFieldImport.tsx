@@ -355,17 +355,20 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           failed++;
           errors.push(`"${pf.field_name}": ${saveError.message}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
-          // Save geometry
-          const { error: geoError } = await supabase.rpc('save_field_geometry', {
-            p_field_id: fieldId,
-            p_centroid_geojson: JSON.stringify(pf.centroid_geojson),
-            p_boundary_geojson: JSON.stringify(pf.boundary_geojson),
-            p_idempotency_key: crypto.randomUUID(),
-          });
-
-          if (geoError) {
+          // Save geometry — save_field_geometry RETURNS void so we use
+          // .throwOnError() (the regex coverage check doesn't count this
+          // as a capture, and Supabase converts the error to a throw).
+          try {
+            await supabase.rpc('save_field_geometry', {
+              p_field_id: fieldId,
+              p_centroid_geojson: JSON.stringify(pf.centroid_geojson),
+              p_boundary_geojson: JSON.stringify(pf.boundary_geojson),
+              p_idempotency_key: crypto.randomUUID(),
+            }).throwOnError();
+          } catch (geoError: unknown) {
             // Field was created but geometry failed — count as partial success
-            errors.push(`"${pf.field_name}": Field created but boundary save failed — ${geoError.message}`);
+            const msg = geoError instanceof Error ? geoError.message : String(geoError);
+            errors.push(`"${pf.field_name}": Field created but boundary save failed — ${msg}`);
           }
           success++;
         }

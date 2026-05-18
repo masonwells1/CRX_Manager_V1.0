@@ -7,16 +7,28 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-05-11)
-- 65 pages, 92 tables, ~175 RPCs, 289 migrations, 8 Edge Functions
-- 1,872 unit tests (130 files, 68 skipped) + 94 E2E spec files, all passing
-- Supabase performance advisor: 0 WARN findings (was 97). 71 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
+## Current State (2026-05-17, end of day)
+- 66 pages, 93 tables (incl. `rebate_claim_counters`), ~184 RPCs, **345 migrations**, 7 Edge Functions
+- 1,914 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
+- Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
 - All RPC data usage wrapped with `assertRpcResult()` — enforced by ESLint + safety-net test
 - All destructive actions use `ConfirmModal` (no bare `confirm()` calls)
 - 15+ RPC calls wired with `useIdempotencyKey` for double-submit prevention
 - Schema-aware PreToolUse hooks block status-enum mismatches, GENERATED-column writes, missing RLS on new tables, and idempotency-key declarations that never get used
+- `inventory_transactions` is fully immutable (UPDATE+DELETE blocked); `prepay_applications` blocks UPDATE only (DELETE allowed for `void_invoice` reversal). Bypass: `SET LOCAL app.bypass_ledger_immutability = 'true'`.
+- `payments.order_id` is `ON DELETE RESTRICT` — orders with payments cannot be deleted (payments must be voided first; orders are cancelled/voided via state transitions anyway, never DELETEd).
+- `parseDollarsToCents` is positive-only by default (strips sign). Use `parseDollarsToCentsSigned` for vendor-bill adjustment fields that legitimately accept negatives (3 callsites only).
+- Audit fix sprint 2026-05-09 complete on `fix/audit-2026-05-09`. All Phase 1/2/3 + Decision-B + audit items closed. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for full disposition.
+- **2026-05-13 codex review of PR #59 — all P1s closed, 11/13 P2s closed.** 10 follow-up migrations + 1 frontend refactor + 1 strict-actor hotfix landed; all applied live via Supabase MCP. The 4 changed Edge Functions (`create-user`, `reset-user-password`, `seed-admin`, `setup-blend-tickets-storage`) deployed to live via MCP with the `_shared/sentry.ts` audit #28 hardening.
+- **2026-05-16:** `send-email` Edge Function deployed to v11 (PR-03 `farm_name` fix + WAL-pattern durable idempotency from ultra-review P2 #5); `setup-blend-tickets-storage` deployed to v14 (CORS hardening, ultra-review P3 #7). 3 new migrations: #335 (transfer_job_to_invoice canonical idempotency), #336 (notification RPCs idempotency), #337 (email_log.status += 'pending'). Ultra-review (`docs/reports/2026-05-16-ultra-code-review-findings.md`) — all 8 findings disposed: 7 fixed live, 1 (P2 #6 process-blend-ticket error checks) code committed but deploy pending. P1 #2 verified false positive. All 20 PR #59 codex threads now resolved. PR #60 advisory comment + follow-up posted: live state confirmed safe (drops were no-op or affected only Storage API list/download, not public-URL rendering).
+- **2026-05-16 (PM):** All Edge Functions now deployed live — `process-blend-ticket` v17 deployed via MCP (47KB inline worked fine after using node-via-bash to JSON-encode the file content + reading it back through Read). All 10 ultra-review P2 #6 error checks verified in deployed bundle.
+- **Pending Mason:** Phase 4 backup verification (Supabase dashboard — not exposed via MCP); Phase 4 restore drill (half-day operational exercise); #38 abandoned-package swap (needs `.shp`/`.dbf`/`.prj`/`.kml` test fixtures); entity commission recipients design call (4 options in TODO.md).
+- **Deferred (follow-up sprint):**
+  - 3 known `(*_cents * qty)::bigint` instances in `transfer_job_to_invoice`, `create_invoice_from_blend_ticket`, `save_field_app_invoice` — single-instance each, smaller blast radius — to be wrapped with `safe_cents_qty()`.
+  - Customer RLS upper bound (P2 #3) — intentionally left as lower-bound-only; farm logistics require future visibility for route/job planning.
+  - Entity commission recipients (CMCTW LLC, Crop Rx Solutions) — `recipient_user_id` stays NULL because no profile row exists. Need design call on entity-recipient payment flow.
 
 ---
 
@@ -193,6 +205,7 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 ---
 
 ## Schema Gotchas
+- `profile_public_view` uses `security_invoker = off` (SECURITY DEFINER semantics) **by design** — exposes only non-PII profile columns (id, full_name, role, is_active) so non-admin UIs can display user names without leaking email/phone. Supabase security advisor flags this as ERROR; it is an accepted finding. Do NOT switch to `security_invoker = on` without auditing every UI that reads through this view. (Migration: `20260510070000_tighten_customer_profile_rls.sql`)
 - `commissions.commission_amount` is `numeric` dollars (NOT `_cents bigint`)
 - `returns`: `requested_by` (not `created_by`), status `'requested'` (not `'pending'`)
 - `return_items`: references `order_item_id` only (not `delivery_item_id`)
@@ -235,11 +248,12 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 |-----|----------|
 | `docs/reference/database-schema.md` | 96+ tables + RLS matrix |
 | `docs/reference/rpc-functions.md` | ~165 RPCs + triggers |
-| `docs/reference/migration-history.md` | 246 migration entries |
+| `docs/reference/migration-history.md` | 333 migration entries |
 | `docs/reference/pages-routes.md` | 63 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
 | `docs/CHANGELOG.md` | Sprint-by-sprint history |
+| `TODO.md` | Current TODO/Done/Deferred status |
 
 ## Workflow Docs
 - `SAFE_DEVELOPMENT_RULES.md` — **READ EVERY SESSION** — mandatory safety rules

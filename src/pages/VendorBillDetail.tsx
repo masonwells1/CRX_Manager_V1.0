@@ -21,12 +21,12 @@ import Input from '../components/ui/Input';
 import Modal from '../components/ui/Modal';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
-import { supabase } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { parseDollarsToCents } from '../lib/parseCents';
+import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
 import type { VendorBill, VendorPayment } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -43,6 +43,7 @@ export default function VendorBillDetail() {
   const { profile } = useAuth();
   const paymentIdem = useIdempotencyKey('record_vendor_payment', profile?.id || '');
   const voidIdem = useIdempotencyKey('void_vendor_bill', profile?.id || '');
+  const voidPaymentIdem = useIdempotencyKey('void_vendor_payment', profile?.id || '');
 
   const [bill, setBill] = useState<(VendorBill & { vendor_name: string; po_number: string | null }) | null>(null);
   const [payments, setPayments] = useState<(VendorPayment & { creator_name: string })[]>([]);
@@ -57,10 +58,26 @@ export default function VendorBillDetail() {
   const [payNotes, setPayNotes] = useState('');
   const [paying, setPaying] = useState(false);
 
-  // Void
+  // Void bill
   const [voidModalOpen, setVoidModalOpen] = useState(false);
   const [voidReason, setVoidReason] = useState('');
   const [voiding, setVoiding] = useState(false);
+
+  // Void payment (PR-13, 2026-05-10) — per-row in the payments table.
+  // Allows reversing a wrong vendor payment without voiding the whole bill.
+  const [voidPaymentTarget, setVoidPaymentTarget] = useState<(VendorPayment & { creator_name: string }) | null>(null);
+  const [voidPaymentReason, setVoidPaymentReason] = useState('');
+  const [voidingPayment, setVoidingPayment] = useState(false);
+
+  // Edit bill (PR-14, 2026-05-10) — only for unpaid bills with no active payments.
+  const editIdem = useIdempotencyKey('update_vendor_bill', profile?.id || '');
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editSubtotal, setEditSubtotal] = useState('');
+  const [editAdjustment, setEditAdjustment] = useState('');
+  const [editBillDate, setEditBillDate] = useState('');
+  const [editDueDate, setEditDueDate] = useState('');
+  const [editNotes, setEditNotes] = useState('');
+  const [editing, setEditing] = useState(false);
 
   const today = localToday();
 
@@ -91,15 +108,30 @@ export default function VendorBillDetail() {
     } as VendorBill & { vendor_name: string; po_number: string | null });
 
     // Fetch payments
+    // PR-07 follow-up: dropped creator FK embed; resolved via profile_public_view.
     const { data: payData } = await supabase
       .from('vendor_payments')
-      .select('*, creator:profiles!vendor_payments_created_by_fkey(full_name)')
+      .select('*')
       .eq('vendor_bill_id', id)
       .order('payment_date', { ascending: false });
 
-    const mappedPayments = ((payData || []) as Array<Record<string, unknown>>).map((p) => ({
+    const creatorIds = [...new Set(
+      ((payData || []) as Array<{ created_by?: string | null }>)
+        .map((p) => p.created_by)
+        .filter(Boolean) as string[]
+    )];
+    const creatorMap: Record<string, string> = {};
+    if (creatorIds.length > 0) {
+      const { data: creators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', creatorIds);
+      (creators || []).forEach((c: { id: string; full_name: string }) => { creatorMap[c.id] = c.full_name; });
+    }
+
+    const mappedPayments = ((payData || []) as Array<Record<string, unknown> & { created_by?: string | null }>).map((p) => ({
       ...p,
-      creator_name: (p.creator as { full_name?: string } | null)?.full_name || 'System',
+      creator_name: p.created_by ? creatorMap[p.created_by] || 'System' : 'System',
     })) as unknown as (VendorPayment & { creator_name: string })[];
 
     setPayments(mappedPayments);
@@ -118,7 +150,7 @@ export default function VendorBillDetail() {
     setPaying(true);
     try {
       const payKey = paymentIdem.getKey();
-      const { error } = await supabase.rpc('record_vendor_payment', {
+      const { data, error } = await supabase.rpc('record_vendor_payment', {
         p_vendor_bill_id: id,
         p_payment_date: payDate,
         p_amount_cents: amountCents,
@@ -128,6 +160,7 @@ export default function VendorBillDetail() {
         p_idempotency_key: payKey,
       });
       if (error) throw error;
+      assertRpcResult<string>(data, 'record_vendor_payment');
       paymentIdem.resetKey();
 
       toast('success', `Payment of ${fmt(amountCents)} recorded`);
@@ -142,17 +175,107 @@ export default function VendorBillDetail() {
     setPaying(false);
   };
 
+  const openEditModal = () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset editIdem on every open. The
+    // bill payload (subtotal/adjustment/dates/notes) is user-editable; if
+    // update_vendor_bill succeeded but response was lost, reopening the modal
+    // and changing fields would replay prior result without applying edits.
+    editIdem.resetKey();
+    if (!bill) return;
+    setEditSubtotal((bill.subtotal_cents / 100).toFixed(2));
+    setEditAdjustment(((bill.adjustment_cents || 0) / 100).toFixed(2));
+    setEditBillDate(bill.bill_date);
+    setEditDueDate(bill.due_date);
+    setEditNotes(bill.notes || '');
+    setEditModalOpen(true);
+  };
+
+  const handleEditBill = async () => {
+    if (!bill) return;
+    const subtotalCents = parseDollarsToCents(editSubtotal);
+    if (subtotalCents <= 0) {
+      toast('error', 'Subtotal must be positive');
+      return;
+    }
+    // adjustment_cents intentionally negative-capable — user may enter "-10" to subtract
+    const adjustmentCents = parseDollarsToCentsSigned(editAdjustment);
+    if (!editBillDate || !editDueDate) {
+      toast('error', 'Bill date and due date are required');
+      return;
+    }
+    if (editDueDate < editBillDate) {
+      toast('error', 'Due date cannot precede bill date');
+      return;
+    }
+    setEditing(true);
+    try {
+      const key = editIdem.getKey();
+      const { data, error } = await supabase.rpc('update_vendor_bill', {
+        p_bill_id: bill.id,
+        p_subtotal_cents: subtotalCents,
+        p_adjustment_cents: adjustmentCents,
+        p_bill_date: editBillDate,
+        p_due_date: editDueDate,
+        p_notes: editNotes || null,
+        p_idempotency_key: key,
+      });
+      if (error) throw error;
+      assertRpcResult<{ success: boolean; bill_id: string; old_total_cents: number; new_total_cents: number }>(data, 'update_vendor_bill');
+      editIdem.resetKey();
+      toast('success', 'Bill updated');
+      setEditModalOpen(false);
+      fetchBill();
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setEditing(false);
+  };
+
+  const handleVoidPayment = async () => {
+    if (!voidPaymentTarget) return;
+    if (!voidPaymentReason.trim()) {
+      toast('error', 'Please provide a reason for voiding this payment');
+      return;
+    }
+    setVoidingPayment(true);
+    try {
+      const key = voidPaymentIdem.getKey();
+      const { data, error } = await supabase.rpc('void_vendor_payment', {
+        p_payment_id: voidPaymentTarget.id,
+        p_reason: voidPaymentReason.trim(),
+        p_idempotency_key: key,
+      });
+      if (error) throw error;
+      assertRpcResult<{
+        success: boolean;
+        payment_id: string;
+        bill_id: string;
+        voided_amount_cents: number;
+        new_paid_cents: number;
+        new_bill_status: string;
+      }>(data, 'void_vendor_payment');
+      voidPaymentIdem.resetKey();
+      toast('success', 'Payment voided');
+      setVoidPaymentTarget(null);
+      setVoidPaymentReason('');
+      fetchBill();
+    } catch (err) {
+      toast('error', sanitizeError(err));
+    }
+    setVoidingPayment(false);
+  };
+
   const handleVoid = async () => {
     if (!id) return;
     setVoiding(true);
     try {
       const voidKey = voidIdem.getKey();
-      const { error } = await supabase.rpc('void_vendor_bill', {
+      // RETURNS void — use .throwOnError() (regex coverage skips fire-and-forget).
+      await supabase.rpc('void_vendor_bill', {
         p_vendor_bill_id: id,
         p_reason: voidReason || null,
         p_idempotency_key: voidKey,
-      });
-      if (error) throw error;
+      }).throwOnError();
       voidIdem.resetKey();
 
       toast('success', 'Bill voided');
@@ -199,6 +322,37 @@ export default function VendorBillDetail() {
       header: 'Notes',
       render: (r) => <span className="text-secondary text-xs">{r.notes || '-'}</span>,
     },
+    {
+      // PR-13: per-payment void action (admin only).
+      key: 'voided_at' as keyof PaymentRow,
+      header: 'Status',
+      render: (r) => {
+        if (r.voided_at) {
+          return (
+            <span className="text-xs text-secondary italic">
+              Voided {new Date(r.voided_at).toLocaleDateString()}
+              {r.void_reason ? ` — ${r.void_reason}` : ''}
+            </span>
+          );
+        }
+        if (profile?.role !== 'admin') {
+          return <span className="text-xs text-secondary">—</span>;
+        }
+        return (
+          <button
+            onClick={() => {
+              // Codex P2 fix: reset per-payment void key when target changes.
+              voidPaymentIdem.resetKey();
+              setVoidPaymentTarget(r);
+              setVoidPaymentReason('');
+            }}
+            className="text-xs text-red-600 hover:text-red-700 underline"
+          >
+            Void
+          </button>
+        );
+      },
+    },
   ];
 
   if (loading || !bill) {
@@ -228,11 +382,21 @@ export default function VendorBillDetail() {
           </Badge>
         </div>
         <div className="flex gap-2">
+          {/* PR-14 (2026-05-10): Edit Bill button — admin only, unpaid + no active payments */}
+          {profile?.role === 'admin' &&
+            bill.status === 'unpaid' &&
+            payments.filter((p) => !p.voided_at).length === 0 && (
+              <Button variant="ghost" onClick={openEditModal}>
+                Edit Bill
+              </Button>
+            )}
           {bill.status !== 'paid' && bill.status !== 'voided' && (
             <>
               <Button
                 icon={<CreditCard className="w-4 h-4" />}
                 onClick={() => {
+                  // Codex P2 fix: reset payment key per record-payment open.
+                  paymentIdem.resetKey();
                   setPayAmount((bill.balance_cents / 100).toFixed(2));
                   setPayModalOpen(true);
                 }}
@@ -242,7 +406,7 @@ export default function VendorBillDetail() {
               <Button
                 variant="ghost"
                 icon={<XCircle className="w-4 h-4" />}
-                onClick={() => setVoidModalOpen(true)}
+                onClick={() => { voidIdem.resetKey(); setVoidModalOpen(true); }}
                 className="text-red-600 hover:text-red-700"
               >
                 Void
@@ -414,7 +578,93 @@ export default function VendorBillDetail() {
         </div>
       </Modal>
 
-      {/* Void Modal */}
+      {/* Edit Bill Modal (PR-14, 2026-05-10) */}
+      <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} title="Edit Vendor Bill">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Editing <strong>#{bill.bill_number}</strong>. Only available for unpaid bills with no active payments.
+          </p>
+          <div className="grid grid-cols-2 gap-4">
+            <Input
+              label="Subtotal ($)"
+              value={editSubtotal}
+              onChange={(e) => setEditSubtotal(e.target.value)}
+              placeholder="0.00"
+            />
+            <Input
+              label="Adjustment ($, can be negative)"
+              value={editAdjustment}
+              onChange={(e) => setEditAdjustment(e.target.value)}
+              placeholder="0.00"
+            />
+            <Input
+              type="date"
+              label="Bill Date"
+              value={editBillDate}
+              onChange={(e) => setEditBillDate(e.target.value)}
+            />
+            <Input
+              type="date"
+              label="Due Date"
+              value={editDueDate}
+              onChange={(e) => setEditDueDate(e.target.value)}
+            />
+          </div>
+          <Input
+            label="Notes"
+            value={editNotes}
+            onChange={(e) => setEditNotes(e.target.value)}
+            placeholder="Optional"
+          />
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => setEditModalOpen(false)}>Cancel</Button>
+            <Button onClick={handleEditBill} loading={editing}>Save Changes</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Void Payment Modal (PR-13, 2026-05-10) */}
+      <Modal
+        open={voidPaymentTarget !== null}
+        onClose={() => { setVoidPaymentTarget(null); setVoidPaymentReason(''); }}
+        title="Void Vendor Payment"
+      >
+        <div className="space-y-4">
+          {voidPaymentTarget && (
+            <div className="text-sm space-y-1">
+              <p>
+                Voiding <strong>{fmt(voidPaymentTarget.amount_cents)}</strong>{' '}
+                {voidPaymentTarget.payment_method ? `(${voidPaymentTarget.payment_method})` : ''}{' '}
+                paid {new Date(voidPaymentTarget.payment_date + 'T00:00:00').toLocaleDateString()}.
+              </p>
+              <p className="text-secondary text-xs">
+                The bill's paid total will be reduced by this amount and its status will be
+                recalculated. The audit log will record this void.
+              </p>
+            </div>
+          )}
+          <Input
+            label="Reason (required)"
+            value={voidPaymentReason}
+            onChange={(e) => setVoidPaymentReason(e.target.value)}
+            placeholder="Why is this payment being voided?"
+          />
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => { setVoidPaymentTarget(null); setVoidPaymentReason(''); }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleVoidPayment}
+              loading={voidingPayment}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              Void Payment
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Void Bill Modal */}
       <Modal open={voidModalOpen} onClose={() => setVoidModalOpen(false)} title="Void Bill">
         <div className="space-y-4">
           <p className="text-sm text-secondary">

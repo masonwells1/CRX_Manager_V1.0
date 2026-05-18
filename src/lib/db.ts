@@ -67,7 +67,14 @@ export function checkMutationResult(
   operation: string
 ): void {
   if (result.error) throw result.error;
-  if (result.data !== null && Array.isArray(result.data) && result.data.length === 0) {
+  // Audit #14: `data: null` is a silent RLS denial when `.select()` was used.
+  // `.select()` returns `[]` (no match) or `[...rows]`; `.select().single()`
+  // returns the row or null. In both cases, `data === null` after a mutation
+  // means the row wasn't visible to the caller — treat as denied.
+  if (result.data === null || result.data === undefined) {
+    throw new Error(`${operation} failed: no rows were affected. You may not have permission.`);
+  }
+  if (Array.isArray(result.data) && result.data.length === 0) {
     throw new Error(`${operation} failed: no rows were affected. You may not have permission.`);
   }
 }
@@ -89,12 +96,44 @@ export const RpcErrorCodes = {
   AUTH_REQUIRED: 'AUTH_REQUIRED',
   ACTOR_MISMATCH: 'ACTOR_MISMATCH',
   INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE',
+  FORBIDDEN: 'FORBIDDEN',
   INVALID_HOLD_TYPE: 'INVALID_HOLD_TYPE',
   INVALID_QUANTITY: 'INVALID_QUANTITY',
   FORCE_REQUIRES_ADMIN: 'FORCE_REQUIRES_ADMIN',
   FORCE_REQUIRES_REASON: 'FORCE_REQUIRES_REASON',
   INSUFFICIENT_HOLD_INVENTORY: 'INSUFFICIENT_HOLD_INVENTORY',
   INVENTORY_NOT_FOUND: 'INVENTORY_NOT_FOUND',
+  // create_rebate_claim / transition_rebate_claim (audit #33)
+  PROGRAM_REQUIRED: 'PROGRAM_REQUIRED',
+  QUANTITY_INVALID: 'QUANTITY_INVALID',
+  CLAIM_AMOUNT_INVALID: 'CLAIM_AMOUNT_INVALID',
+  CLAIM_ID_REQUIRED: 'CLAIM_ID_REQUIRED',
+  STATUS_REQUIRED: 'STATUS_REQUIRED',
+  CLAIM_NOT_FOUND: 'CLAIM_NOT_FOUND',
+  INVALID_TRANSITION: 'INVALID_TRANSITION',
+  PAID_AMOUNT_INVALID: 'PAID_AMOUNT_INVALID',
+  // create_delivery_with_items / bulk_import_order / save_blend_recipe (audits #10, #31, #34)
+  ORDER_ID_REQUIRED: 'ORDER_ID_REQUIRED',
+  CUSTOMER_ID_REQUIRED: 'CUSTOMER_ID_REQUIRED',
+  SCHEDULED_DATE_REQUIRED: 'SCHEDULED_DATE_REQUIRED',
+  ITEMS_REQUIRED: 'ITEMS_REQUIRED',
+  ITEMS_INVALID: 'ITEMS_INVALID',
+  ITEM_INVALID: 'ITEM_INVALID',
+  ORDER_NUMBER_REQUIRED: 'ORDER_NUMBER_REQUIRED',
+  NAME_REQUIRED: 'NAME_REQUIRED',
+  RECIPE_TYPE_INVALID: 'RECIPE_TYPE_INVALID',
+  RECIPE_NOT_FOUND: 'RECIPE_NOT_FOUND',
+  // create_delivery_with_items hardening (Codex 2026-05-17/18)
+  ORDER_NOT_FOUND: 'ORDER_NOT_FOUND',
+  CUSTOMER_ORDER_MISMATCH: 'CUSTOMER_ORDER_MISMATCH',
+  ORDER_NOT_SCHEDULABLE: 'ORDER_NOT_SCHEDULABLE',
+  ADDRESS_NOT_FOUND: 'ADDRESS_NOT_FOUND',
+  ADDRESS_CUSTOMER_MISMATCH: 'ADDRESS_CUSTOMER_MISMATCH',
+  ITEM_DUPLICATE_IN_REQUEST: 'ITEM_DUPLICATE_IN_REQUEST',
+  ITEM_OVER_REMAINING_INCL_ACTIVE: 'ITEM_OVER_REMAINING_INCL_ACTIVE',
+  ITEM_NOT_FOUND: 'ITEM_NOT_FOUND',
+  ITEM_ORDER_MISMATCH: 'ITEM_ORDER_MISMATCH',
+  ITEM_PRODUCT_MISMATCH: 'ITEM_PRODUCT_MISMATCH',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

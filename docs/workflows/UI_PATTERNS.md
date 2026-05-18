@@ -40,7 +40,7 @@ const MyNewPage = lazy(() => import('./pages/MyNewPage'));
 
 ---
 
-## Existing Pages (57 total)
+## Existing Pages (65 total)
 
 Before creating a new page, check that it doesn't already exist. Here are all current pages grouped by area:
 

@@ -999,6 +999,331 @@ describe('RPC contract: issue_return_credit', () => {
 });
 
 // -------------------------------------------------------------------------
+// create_rebate_claim / transition_rebate_claim (audit #33)
+// -------------------------------------------------------------------------
+
+interface CreateRebateClaimParams {
+  p_program_id: string;          // uuid
+  p_quantity: number;            // numeric
+  p_claim_amount_cents: number;  // bigint
+  p_order_id?: string | null;
+  p_customer_id?: string | null;
+  p_product_id?: string | null;
+  p_notes?: string | null;
+  p_idempotency_key?: string | null;
+}
+
+interface CreateRebateClaimResult {
+  success: true;
+  claim_id: string;
+  claim_number: string;  // RC-YYYY-NNNN
+}
+
+interface TransitionRebateClaimParams {
+  p_claim_id: string;
+  p_new_status: 'submitted' | 'approved' | 'paid' | 'rejected';
+  p_paid_amount_cents?: number | null;
+  p_manufacturer_ref?: string | null;
+  p_idempotency_key?: string | null;
+}
+
+interface TransitionRebateClaimResult {
+  success: true;
+  claim_id: string;
+  old_status: string;
+  new_status: string;
+}
+
+describe('RPC contract: create_rebate_claim', () => {
+  it('accepts the minimal required params', () => {
+    const params = assertShape<CreateRebateClaimParams>({
+      p_program_id: 'prog-uuid',
+      p_quantity: 100,
+      p_claim_amount_cents: 50000,
+    });
+    expect(params.p_program_id).toBeTruthy();
+  });
+
+  it('accepts all optional params + idempotency key', () => {
+    const params = assertShape<CreateRebateClaimParams>({
+      p_program_id: 'prog-uuid',
+      p_quantity: 250,
+      p_claim_amount_cents: 125000,
+      p_order_id: 'ord-uuid',
+      p_customer_id: 'cust-uuid',
+      p_product_id: 'prod-uuid',
+      p_notes: 'Q3 manufacturer rebate batch',
+      p_idempotency_key: 'create_rebate_claim:user-uuid:1234567890',
+    });
+    expect(params.p_idempotency_key).toBeTruthy();
+  });
+
+  it('result includes generated claim_number in RC-YYYY-NNNN form', () => {
+    const result: CreateRebateClaimResult = {
+      success: true,
+      claim_id: 'claim-uuid',
+      claim_number: 'RC-2026-0001',
+    };
+    expect(result.claim_number).toMatch(/^RC-\d{4}-\d{4}$/);
+  });
+});
+
+describe('RPC contract: transition_rebate_claim', () => {
+  it('accepts a simple submit transition', () => {
+    const params = assertShape<TransitionRebateClaimParams>({
+      p_claim_id: 'claim-uuid',
+      p_new_status: 'submitted',
+    });
+    expect(params.p_new_status).toBe('submitted');
+  });
+
+  it('accepts a paid transition with explicit paid_amount and manufacturer_ref', () => {
+    const params = assertShape<TransitionRebateClaimParams>({
+      p_claim_id: 'claim-uuid',
+      p_new_status: 'paid',
+      p_paid_amount_cents: 49500,
+      p_manufacturer_ref: 'CHK-2026-1234',
+      p_idempotency_key: 'transition_rebate_claim:user-uuid:1234567890',
+    });
+    expect(params.p_paid_amount_cents).toBe(49500);
+  });
+
+  it('result reports old and new status for caller diffing', () => {
+    const result: TransitionRebateClaimResult = {
+      success: true,
+      claim_id: 'claim-uuid',
+      old_status: 'approved',
+      new_status: 'paid',
+    };
+    expect(result.old_status).not.toBe(result.new_status);
+  });
+});
+
+// -------------------------------------------------------------------------
+// create_delivery_with_items / bulk_import_order / save_blend_recipe
+// (audits #10, #31, #34 — atomic multi-table writes)
+// -------------------------------------------------------------------------
+
+interface CreateDeliveryWithItemsParams {
+  p_order_id: string;
+  p_customer_id: string;
+  p_scheduled_date: string;  // ISO date
+  p_items: Array<{
+    order_item_id: string;
+    product_id: string;
+    quantity: number;
+    unit_size: string | null;
+    tote_number: string | null;
+    notes: string | null;
+  }>;
+  p_delivery_address_id?: string | null;
+  p_assigned_driver?: string | null;
+  p_scheduled_time?: string | null;
+  p_delivery_notes?: string | null;
+  p_idempotency_key?: string | null;
+}
+
+interface CreateDeliveryWithItemsResult {
+  success: true;
+  delivery_id: string;
+  delivery_number: string;
+  item_count: number;
+}
+
+interface BulkImportOrderParams {
+  p_order_number: string;
+  p_customer_id: string;
+  p_status: string;
+  p_total_price: number;
+  p_total_cost: number;
+  p_total_profit: number;
+  p_total_margin_pct: number;
+  p_order_date: string;  // ISO date
+  p_items: Array<{
+    product_id: string | null;
+    product_name: string;
+    price_per_unit: number;
+    unit_cost: number;
+    total_units_needed: number;
+    unit_size?: string;
+    notes?: string;
+    sort_order: number;
+  }>;
+  p_notes?: string | null;
+  p_idempotency_key?: string | null;
+}
+
+interface SaveBlendRecipeParams {
+  p_recipe_id: string | null;  // null for create, uuid for update
+  p_name: string;
+  p_recipe_type: 'generic' | 'crop_specific';
+  p_items: Array<{
+    product_id: string;
+    product_name: string;
+    quantity: number;
+    unit: string;
+    rate_per_acre: number | null;
+    notes: string | null;
+  }>;
+  p_description?: string | null;
+  p_crop_type?: string | null;
+  p_timing?: string | null;
+  p_idempotency_key?: string | null;
+}
+
+interface SaveBlendRecipeResult {
+  success: true;
+  recipe_id: string;
+  created: boolean;
+  item_count: number;
+}
+
+describe('RPC contract: create_delivery_with_items', () => {
+  it('accepts the minimum required params with one item', () => {
+    const params = assertShape<CreateDeliveryWithItemsParams>({
+      p_order_id: 'ord-uuid',
+      p_customer_id: 'cust-uuid',
+      p_scheduled_date: '2026-05-15',
+      p_items: [
+        {
+          order_item_id: 'oi-uuid',
+          product_id: 'prod-uuid',
+          quantity: 5,
+          unit_size: '2.5 gal',
+          tote_number: null,
+          notes: null,
+        },
+      ],
+    });
+    expect(params.p_items).toHaveLength(1);
+  });
+
+  it('accepts driver + address + idempotency for full path', () => {
+    const params = assertShape<CreateDeliveryWithItemsParams>({
+      p_order_id: 'ord-uuid',
+      p_customer_id: 'cust-uuid',
+      p_scheduled_date: '2026-05-15',
+      p_items: [],
+      p_delivery_address_id: 'addr-uuid',
+      p_assigned_driver: 'drv-uuid',
+      p_scheduled_time: '14:30',
+      p_delivery_notes: 'Gate code 1234',
+      p_idempotency_key: 'create_delivery_with_items:user-uuid:1234567890',
+    });
+    expect(params.p_assigned_driver).toBe('drv-uuid');
+  });
+
+  it('result includes generated delivery_number and item_count', () => {
+    const result: CreateDeliveryWithItemsResult = {
+      success: true,
+      delivery_id: 'del-uuid',
+      delivery_number: 'D-2026-0123',
+      item_count: 3,
+    };
+    expect(result.item_count).toBeGreaterThan(0);
+  });
+});
+
+describe('RPC contract: bulk_import_order', () => {
+  it('accepts a single order with computed totals', () => {
+    const params = assertShape<BulkImportOrderParams>({
+      p_order_number: 'IMP-001',
+      p_customer_id: 'cust-uuid',
+      p_status: 'confirmed',
+      p_total_price: 1000,
+      p_total_cost: 700,
+      p_total_profit: 300,
+      p_total_margin_pct: 30,
+      p_order_date: '2026-05-15',
+      p_items: [
+        {
+          product_id: 'prod-uuid',
+          product_name: 'Roundup PowerMax',
+          price_per_unit: 100,
+          unit_cost: 70,
+          total_units_needed: 10,
+          unit_size: '2.5 gal',
+          notes: 'imported',
+          sort_order: 1,
+        },
+      ],
+      p_notes: 'CSV row 12',
+      p_idempotency_key: 'bulk_import_order:IMP-001:user-uuid:1234567890',
+    });
+    expect(params.p_items[0].product_id).toBeTruthy();
+  });
+
+  it('accepts items with null product_id (unknown product fallback)', () => {
+    const params = assertShape<BulkImportOrderParams>({
+      p_order_number: 'IMP-002',
+      p_customer_id: 'cust-uuid',
+      p_status: 'confirmed',
+      p_total_price: 0,
+      p_total_cost: 0,
+      p_total_profit: 0,
+      p_total_margin_pct: 0,
+      p_order_date: '2026-05-15',
+      p_items: [
+        {
+          product_id: null,
+          product_name: 'Unknown product',
+          price_per_unit: 0,
+          unit_cost: 0,
+          total_units_needed: 1,
+          sort_order: 1,
+        },
+      ],
+    });
+    expect(params.p_items[0].product_id).toBeNull();
+  });
+});
+
+describe('RPC contract: save_blend_recipe', () => {
+  it('accepts create-path params (recipe_id = null)', () => {
+    const params = assertShape<SaveBlendRecipeParams>({
+      p_recipe_id: null,
+      p_name: 'Spring Burndown',
+      p_recipe_type: 'generic',
+      p_items: [
+        {
+          product_id: 'prod-uuid',
+          product_name: 'Glyphosate 5L',
+          quantity: 32,
+          unit: 'fl oz',
+          rate_per_acre: 32,
+          notes: null,
+        },
+      ],
+      p_description: 'Standard pre-plant',
+    });
+    expect(params.p_recipe_id).toBeNull();
+  });
+
+  it('accepts update-path params with crop_type + timing', () => {
+    const params = assertShape<SaveBlendRecipeParams>({
+      p_recipe_id: 'recipe-uuid',
+      p_name: 'V4 Corn Foliar',
+      p_recipe_type: 'crop_specific',
+      p_crop_type: 'corn',
+      p_timing: 'V4',
+      p_items: [],
+      p_idempotency_key: 'save_blend_recipe:recipe-uuid:user-uuid:1234567890',
+    });
+    expect(params.p_recipe_type).toBe('crop_specific');
+  });
+
+  it('result reports whether the operation was a create vs update', () => {
+    const result: SaveBlendRecipeResult = {
+      success: true,
+      recipe_id: 'recipe-uuid',
+      created: false,
+      item_count: 4,
+    };
+    expect(result.created).toBe(false);
+  });
+});
+
+// -------------------------------------------------------------------------
 // Idempotency Key Coverage — Track which mutating RPCs accept p_idempotency_key
 // -------------------------------------------------------------------------
 
@@ -1018,6 +1343,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'batch_post_invoices',
   'batch_reschedule_deliveries',
   'batch_void_invoices',
+  'bulk_import_order',
   'cancel_cycle_count',
   'cancel_delivery',
   'cancel_order',
@@ -1031,12 +1357,14 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'convert_quote_to_order',
   'create_application_record_from_blend_ticket',
   'create_commission_payment',
+  'create_delivery_with_items',
   'create_direct_order',
   'create_followup_delivery',
   'create_invoice_from_delivery',
   'create_invoice_from_order',
   'create_order_from_blend_ticket',
   'create_quick_delivery',
+  'create_rebate_claim',
   'create_vendor_bill',
   'delete_prepay_credit',
   'delete_purchase_order',
@@ -1069,6 +1397,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'reverse_completed_cycle_count',
   'reverse_write_off',
   'revert_quote_status',
+  'save_blend_recipe',
   'save_blend_ticket',
   'save_customer',
   'save_invoice',
@@ -1076,6 +1405,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'save_purchase_order',
   'save_quote',
   'transfer_job_to_invoice',
+  'transition_rebate_claim',
   'unapply_credit_memo',
   'unlink_blend_ticket_from_order',
   'update_cycle_count_item',
@@ -1100,8 +1430,8 @@ const MUTATING_RPCS_MISSING_IDEMPOTENCY: string[] = [
 ];
 
 describe('Idempotency Key Coverage', () => {
-  it('covers at least 73 mutating RPCs with p_idempotency_key', () => {
-    expect(MUTATING_RPCS_WITH_IDEMPOTENCY.length).toBeGreaterThanOrEqual(73);
+  it('covers at least 78 mutating RPCs with p_idempotency_key', () => {
+    expect(MUTATING_RPCS_WITH_IDEMPOTENCY.length).toBeGreaterThanOrEqual(78);
   });
 
   it('has no duplicates in the covered list', () => {
@@ -1135,8 +1465,8 @@ describe('Idempotency Key Coverage', () => {
     expect(MUTATING_RPCS_MISSING_IDEMPOTENCY).toEqual(sortedMissing);
   });
 
-  it('total tracked RPCs (covered + missing) is at least 76', () => {
+  it('total tracked RPCs (covered + missing) is at least 81', () => {
     const total = MUTATING_RPCS_WITH_IDEMPOTENCY.length + MUTATING_RPCS_MISSING_IDEMPOTENCY.length;
-    expect(total).toBeGreaterThanOrEqual(76);
+    expect(total).toBeGreaterThanOrEqual(81);
   });
 });

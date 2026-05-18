@@ -1,4 +1,4 @@
-# Database Schema Reference (89 Tables)
+# Database Schema Reference (90 Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -22,7 +22,7 @@
 - `quote_template_sections` - Sections within a quote template (section_name, sort_order)
 - `quote_template_items` - Items within a template section (product_id, pricing defaults)
 - `orders` - Confirmed orders (order_number, status, totals, order_date, customer_po_number, is_planned, season, program_notes). Note: total_paid/balance_due columns are DEPRECATED — AR is tracked via invoices.
-- `order_items` - Order line items (quantity_delivered, quantity_remaining, notes)
+- `order_items` - Order line items (quantity_delivered, quantity_remaining, notes, **cost_at_time_cents** bigint — snapshot of `products.current_cost` at insert time, populated by `trg_snapshot_order_item_cost` BEFORE INSERT trigger; migration 20260513050000, audit #32)
 - `payments` - Legacy payment records (DEPRECATED — use allocation_sets + invoice_line_allocations instead)
 - `commissions` - Per-order per-recipient (split_percentage, commission_amount numeric dollars, status CHECK: pending/paid/cancelled, paid_date)
 
@@ -70,7 +70,7 @@
 - `notifications` - Per-user notifications (user_id, title, message, notification_type, is_read)
 
 ## Billing / Invoices
-- `invoices` - Invoice headers (invoice_number, order_id, customer_id, delivery_id [auto-set by complete_delivery, NULL for non-delivery invoices], status: draft/posted/void, balance_cents bigint, due_date, invoice_group_id, application_service_id [Phase 1: persists service for fee calculation])
+- `invoices` - Invoice headers (invoice_number, order_id, customer_id, delivery_id [auto-set by complete_delivery, NULL for non-delivery invoices], status: draft/posted/void, balance_cents bigint [GENERATED, CHECK >= 0 added 2026-05-13 audit #19], due_date, invoice_group_id, application_service_id [Phase 1: persists service for fee calculation])
 - `invoice_items` - Invoice line items (invoice_id, order_item_id, product_id, quantity, unit_price_cents, line_total_cents, quoted_price_cents, price_source)
 - `allocation_sets` - Payment-to-invoice allocation groups (payment_id, allocated_at, customer_id, total_payment_cents, total_allocated_cents, payment_method, reference_number, check_number, payment_date, season)
 - `order_line_allocations` - Payment portions applied to order items
@@ -111,7 +111,8 @@
 
 ## Rebates
 - `rebate_programs` - Manufacturer rebate programs (program_name, manufacturer, season, product_id, rebate_type, rebate_amount, start_date, end_date, status)
-- `rebate_claims` - Rebate claims (program_id, claim_number, quantity, claim_amount_cents, status: pending/submitted/approved/paid/rejected)
+- `rebate_claims` - Rebate claims (program_id, claim_number UNIQUE, quantity, claim_amount_cents, paid_amount_cents, status: pending/submitted/approved/paid/rejected). UNIQUE on `claim_number` added by migration 20260513000000 (audit #33).
+- `rebate_claim_counters` - Per-year atomic counter for `RC-YYYY-NNNN` claim numbers (year PK, next_value). System table — RLS on, no policies; written only by `create_rebate_claim()` RPC. Migration 20260513000000 (audit #33).
 
 ## Email & Notifications
 - `email_log` - Email audit trail with idempotency (email_type, recipient, subject, status, idempotency_key)

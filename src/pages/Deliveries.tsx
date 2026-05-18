@@ -112,6 +112,17 @@ export default function Deliveries() {
   const [printingLoadSheet, setPrintingLoadSheet] = useState(false);
   const [showReschedule, setShowReschedule] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState('');
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset batchRescheduleIdem when the
+  // selection or target date changes. Same response-lost replay bug pattern
+  // as the BlendTickets/Invoices batch ops — stable selection+date = same
+  // key = idempotent retry; different selection or date = fresh intent.
+  const rescheduleIntentKey = `${Array.from(selected).sort().join(',')}|${rescheduleDate}`;
+  useEffect(() => {
+    batchRescheduleIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rescheduleIntentKey]);
+
   const [rescheduling, setRescheduling] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
 
@@ -135,9 +146,10 @@ export default function Deliveries() {
   const isDriver = role === 'driver';
 
   const fetchDrivers = useCallback(async () => {
+    // PR-07 follow-up: driver filter dropdown only uses d.id + d.full_name; safe via view.
     const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
+      .from('profile_public_view')
+      .select('id, full_name, role, is_active')
       .eq('role', 'driver')
       .eq('is_active', true)
       .order('full_name');
@@ -175,9 +187,11 @@ export default function Deliveries() {
   }, []);
 
   const fetchDeliveries = useCallback(async () => {
+    // PR-07 follow-up: dropped `driver:profiles!fk(full_name)` embed; driver
+    // names resolved via profile_public_view post-fetch (see below).
     let query = supabase
       .from('deliveries')
-      .select('*, customer:customers(farm_name, parent_customer_id), driver:profiles!deliveries_assigned_driver_fkey(full_name)')
+      .select('*, customer:customers(farm_name, parent_customer_id)')
       .neq('status', 'cancelled')
       .order('scheduled_date', { ascending: false })
       .limit(500);
@@ -205,8 +219,17 @@ export default function Deliveries() {
         .filter(Boolean) as string[]
     )];
 
-    // Run both queries in parallel — they depend on delData but not on each other
-    const [itemCountsResult, parentsResult] = await Promise.all([
+    // PR-07 follow-up: resolve driver names via profile_public_view (safe
+    // columns only) so non-admin users still see driver names after
+    // profiles_select tightens to admin-or-self.
+    const driverIds = [...new Set(
+      (delData || [])
+        .map((d: Record<string, unknown>) => d.assigned_driver as string | null)
+        .filter(Boolean) as string[]
+    )];
+
+    // Run all post-fetch queries in parallel — they depend on delData but not each other
+    const [itemCountsResult, parentsResult, driversResult] = await Promise.all([
       deliveryIds.length > 0
         ? supabase
             .from('delivery_items')
@@ -218,6 +241,12 @@ export default function Deliveries() {
             .from('customers')
             .select('id, farm_name')
             .in('id', parentIds)
+        : Promise.resolve({ data: null, error: null }),
+      driverIds.length > 0
+        ? supabase
+            .from('profile_public_view')
+            .select('id, full_name')
+            .in('id', driverIds)
         : Promise.resolve({ data: null, error: null }),
     ]);
 
@@ -237,13 +266,16 @@ export default function Deliveries() {
     }
     (parents || []).forEach((p: { id: string; farm_name: string }) => { parentNameMap[p.id] = p.farm_name; });
 
+    const driverNameMap: Record<string, string> = {};
+    const { data: drivers } = driversResult;
+    (drivers || []).forEach((d: { id: string; full_name: string }) => { driverNameMap[d.id] = d.full_name; });
+
     const rows = ((delData || []) as Array<Delivery & {
       customer: { farm_name: string; parent_customer_id: string | null } | null;
-      driver: { full_name: string } | null;
     }>).map((d) => ({
       ...d,
       customer_name: d.customer?.farm_name || 'Unknown',
-      driver_name: d.driver?.full_name || 'Unassigned',
+      driver_name: d.assigned_driver ? (driverNameMap[d.assigned_driver] || 'Unknown driver') : 'Unassigned',
       item_count: countMap[d.id] || 0,
       farm_group_name: d.customer?.parent_customer_id ? parentNameMap[d.customer.parent_customer_id] || null : null,
     }));
@@ -414,6 +446,10 @@ export default function Deliveries() {
   };
 
   const handleBatchCancel = async (reason: string) => {
+    if (!profile) {
+      toast('error', 'Cannot cancel deliveries — profile not loaded. Please refresh.');
+      return;
+    }
     const ids = selectedCancellable.map((d) => d.id);
     if (ids.length === 0) {
       toast('error', 'No cancellable deliveries selected');
@@ -425,12 +461,12 @@ export default function Deliveries() {
         const { data, error } = await supabase.rpc('batch_cancel_deliveries', {
           p_delivery_ids: ids,
           p_cancel_reason: reason,
-          p_performed_by: profile?.id,
+          p_performed_by: profile.id,
           p_idempotency_key: cancelKey,
         });
         if (error) throw error;
         batchCancelIdem.resetKey();
-        logActivity({ event: 'batch_cancel_deliveries', description: `Batch cancelled ${ids.length} delivery(ies). Reason: ${reason}`, performedBy: profile?.id || '' });
+        logActivity({ event: 'batch_cancel_deliveries', description: `Batch cancelled ${ids.length} delivery(ies). Reason: ${reason}`, performedBy: profile.id });
         return assertRpcResult(data, 'batch_cancel_deliveries');
       },
       toast,
@@ -567,19 +603,24 @@ export default function Deliveries() {
       toast('error', 'Please select a new date');
       return;
     }
+    if (!profile) {
+      toast('error', 'Cannot reschedule deliveries — profile not loaded. Please refresh.');
+      return;
+    }
     const ids = selectedCancellable.map((d) => d.id);
     await runCriticalAction({
       action: async () => {
         const rescheduleKey = batchRescheduleIdem.getKey();
-        const { error } = await supabase.rpc('batch_reschedule_deliveries', {
+        const { data, error } = await supabase.rpc('batch_reschedule_deliveries', {
           p_delivery_ids: ids,
           p_new_date: rescheduleDate,
-          p_performed_by: profile?.id,
+          p_performed_by: profile.id,
           p_idempotency_key: rescheduleKey,
         });
         if (error) throw error;
+        assertRpcResult(data, 'batch_reschedule_deliveries');
         batchRescheduleIdem.resetKey();
-        logActivity({ event: 'batch_reschedule_deliveries', description: `Rescheduled ${ids.length} delivery(ies) to ${rescheduleDate}`, performedBy: profile?.id || '' });
+        logActivity({ event: 'batch_reschedule_deliveries', description: `Rescheduled ${ids.length} delivery(ies) to ${rescheduleDate}`, performedBy: profile.id });
       },
       toast,
       successMessage: `Rescheduled ${ids.length} delivery(ies) to ${parseLocalDate(rescheduleDate).toLocaleDateString()}`,
@@ -646,18 +687,23 @@ export default function Deliveries() {
     const myCompleted = deliveries.filter((d) => d.status === 'completed').slice(0, 10);
 
     const handleTakeDelivery = async (deliveryId: string) => {
+      if (!profile) {
+        toast('error', 'Cannot take delivery — profile not loaded. Please refresh.');
+        return;
+      }
       await runCriticalAction({
         action: async () => {
           const reassignKey = reassignIdem.getKey();
-          const { error } = await supabase.rpc('reassign_delivery', {
+          const { data, error } = await supabase.rpc('reassign_delivery', {
             p_delivery_id: deliveryId,
-            p_new_driver: profile?.id,
-            p_performed_by: profile?.id,
+            p_new_driver: profile.id,
+            p_performed_by: profile.id,
             p_idempotency_key: reassignKey,
           });
           if (error) throw error;
+          assertRpcResult(data, 'reassign_delivery');
           reassignIdem.resetKey();
-          logActivity({ event: 'reassign_delivery', description: `Took delivery ${deliveryId}`, performedBy: profile?.id || '', entityType: 'delivery', entityId: deliveryId });
+          logActivity({ event: 'reassign_delivery', description: `Took delivery ${deliveryId}`, performedBy: profile.id, entityType: 'delivery', entityId: deliveryId });
         },
         toast,
         successMessage: 'Delivery assigned to you',

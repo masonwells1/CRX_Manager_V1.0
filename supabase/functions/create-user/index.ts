@@ -1,15 +1,21 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
+import { requireActiveProfile } from "../_shared/auth.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
+// PR-16: removed the silent fallback to https://croprxsolutions.app —
+// missing env var now throws at function startup.
 function getAllowedOrigin(): string {
   const origin = Deno.env.get("ALLOWED_ORIGIN");
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  // Fallback to production domain when secret not configured
-  return "https://croprxsolutions.app";
+  throw new Error(
+    "ALLOWED_ORIGIN env var is required for production deployments. " +
+      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
+  );
 }
 
 const corsHeaders = {
@@ -50,15 +56,11 @@ Deno.serve(async (req: Request) => {
     }
 
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
-    const { data: callerProfile } = await adminClient
-      .from("profiles")
-      .select("role")
-      .eq("id", caller.id)
-      .maybeSingle();
-
-    if (!callerProfile || callerProfile.role !== "admin") {
-      return new Response(JSON.stringify({ error: "Admin access required" }), {
-        status: 403,
+    // Codex audit F1 (P1, 2026-05-16): is_active gate enforced server-side.
+    const gate = await requireActiveProfile(adminClient, caller.id, ["admin"]);
+    if ("error" in gate) {
+      return new Response(JSON.stringify({ error: gate.error }), {
+        status: gate.status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -148,6 +150,13 @@ Deno.serve(async (req: Request) => {
       }
     );
   } catch (err) {
+    // Audit #28: surface unhandled errors to Sentry — admin user creation
+    // failures are security-relevant (e.g. service-role permission issues,
+    // mass-create attempts) and need oncall visibility.
+    await captureEdgeException(err, {
+      function: "create-user",
+      level: "error",
+    });
     return new Response(
       JSON.stringify({ error: err instanceof Error ? err.message : "Unknown error" }),
       {

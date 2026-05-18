@@ -1,41 +1,160 @@
 {
   "_meta": {
-    "generated_at": "2026-05-07",
+    "generated_at": "2026-05-13",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs",
-    "purpose": "Single source of truth for hooks: generated columns, status enum values, tables-with/without updated_at."
+    "purpose": "Single source of truth for hooks: generated columns, status enum values, tables-with/without updated_at.",
+    "note": "For a fresh refresh from the live DB, ask Claude Code to do it (it has Supabase MCP introspection)."
   },
-
   "generated_columns": [
-    { "table": "invoices", "column": "balance_cents", "expression": "((total_amount_cents - paid_amount_cents) - prepay_applied_cents) - write_off_cents" }
+    {
+      "table": "invoices",
+      "column": "balance_cents",
+      "expression": "((total_amount_cents - paid_amount_cents) - prepay_applied_cents) - write_off_cents"
+    }
   ],
-
   "status_enums": {
-    "accounting_periods.status": ["open", "closed"],
-    "blend_tickets.status": ["pending", "processing", "completed", "failed", "needs_review"],
-    "blend_tickets.order_link_status": ["unlinked", "linked"],
-    "blend_tickets.payment_status": ["unbilled", "billed", "prepaid", "no_charge"],
-    "blend_tickets.review_status": ["unreviewed", "approved", "rejected"],
-    "commission_payments.status": ["unposted", "posted", "voided"],
-    "commissions.status": ["pending", "paid", "cancelled"],
-    "cycle_counts.status": ["in_progress", "completed", "cancelled"],
-    "deliveries.status": ["scheduled", "in_progress", "completed", "cancelled", "voided"],
-    "delivery_remainders.status": ["pending", "scheduled", "fulfilled", "cancelled"],
-    "email_log.status": ["sent", "failed", "bounced"],
-    "invoices.status": ["draft", "unposted", "posted", "paid", "overdue", "voided", "cancelled"],
-    "jobs.status": ["scheduled", "in_progress", "completed", "cancelled", "invoiced"],
-    "ocr_processing_queue.status": ["pending", "processing", "completed", "failed"],
-    "orders.status": ["confirmed", "partially_fulfilled", "fulfilled", "cancelled", "voided"],
-    "purchase_orders.status": ["draft", "submitted", "partially_received", "fully_received", "cancelled"],
-    "quotes.status": ["draft", "sent", "revised", "accepted", "declined", "expired", "cancelled"],
-    "rebate_claims.status": ["pending", "submitted", "approved", "paid", "rejected"],
-    "rebate_programs.status": ["active", "expired", "closed"],
-    "returns.status": ["requested", "approved", "received", "credited", "rejected", "cancelled"],
-    "rup_sales_records.compliance_status": ["compliant", "warning", "non_compliant"],
-    "vehicles.status": ["active", "inactive", "maintenance"],
-    "vendor_bills.status": ["unpaid", "partially_paid", "paid", "voided"]
+    "accounting_periods.status": [
+      "open",
+      "closed"
+    ],
+    "blend_tickets.status": [
+      "pending",
+      "processing",
+      "completed",
+      "failed",
+      "needs_review"
+    ],
+    "blend_tickets.order_link_status": [
+      "unlinked",
+      "linked"
+    ],
+    "blend_tickets.payment_status": [
+      "unbilled",
+      "billed",
+      "prepaid",
+      "no_charge"
+    ],
+    "blend_tickets.review_status": [
+      "unreviewed",
+      "approved",
+      "rejected"
+    ],
+    "commission_payments.status": [
+      "unposted",
+      "posted",
+      "voided"
+    ],
+    "commissions.status": [
+      "pending",
+      "paid",
+      "cancelled"
+    ],
+    "cycle_counts.status": [
+      "in_progress",
+      "completed",
+      "cancelled"
+    ],
+    "deliveries.status": [
+      "scheduled",
+      "in_progress",
+      "completed",
+      "cancelled",
+      "voided"
+    ],
+    "delivery_remainders.status": [
+      "pending",
+      "scheduled",
+      "fulfilled",
+      "cancelled"
+    ],
+    "email_log.status": [
+      "sent",
+      "failed",
+      "bounced"
+    ],
+    "invoices.status": [
+      "draft",
+      "unposted",
+      "posted",
+      "paid",
+      "overdue",
+      "voided",
+      "cancelled"
+    ],
+    "jobs.status": [
+      "scheduled",
+      "in_progress",
+      "completed",
+      "cancelled",
+      "invoiced"
+    ],
+    "ocr_processing_queue.status": [
+      "pending",
+      "processing",
+      "completed",
+      "failed"
+    ],
+    "orders.status": [
+      "confirmed",
+      "partially_fulfilled",
+      "fulfilled",
+      "cancelled",
+      "voided"
+    ],
+    "purchase_orders.status": [
+      "draft",
+      "submitted",
+      "partially_received",
+      "fully_received",
+      "cancelled"
+    ],
+    "quotes.status": [
+      "draft",
+      "sent",
+      "revised",
+      "accepted",
+      "declined",
+      "expired",
+      "cancelled"
+    ],
+    "rebate_claims.status": [
+      "pending",
+      "submitted",
+      "approved",
+      "paid",
+      "rejected"
+    ],
+    "rebate_programs.status": [
+      "active",
+      "expired",
+      "closed"
+    ],
+    "returns.status": [
+      "requested",
+      "approved",
+      "received",
+      "credited",
+      "rejected",
+      "cancelled"
+    ],
+    "rup_sales_records.compliance_status": [
+      "compliant",
+      "warning",
+      "non_compliant"
+    ],
+    "vehicles.status": [
+      "active",
+      "inactive",
+      "maintenance"
+    ],
+    "vendor_bills.status": [
+      "unpaid",
+      "partially_paid",
+      "paid",
+      "voided"
+    ]
   },
-
   "tables_without_updated_at": [
     "activity_feed",
     "application_record_fields",

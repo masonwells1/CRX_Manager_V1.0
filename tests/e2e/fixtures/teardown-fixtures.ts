@@ -18,8 +18,15 @@ const ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJoeXpwY3Fobml6cWJ4cGhxZGtyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAzOTM2NDAsImV4cCI6MjA4NTk2OTY0MH0.WR0vAi_KeGF0OoJ8_dFH7uW6ael9M5xnm6OUo2IZy7U';
 
 async function getAuthToken(): Promise<string> {
-  const email = process.env.E2E_TEST_EMAIL || 'mason@croprxsolutions.com';
-  const password = process.env.E2E_TEST_PASSWORD || 'Mwells0413';
+  // PR-05: fail-closed — no hardcoded credential fallback
+  const email = process.env.E2E_TEST_EMAIL;
+  const password = process.env.E2E_TEST_PASSWORD;
+  if (!email || !password) {
+    throw new Error(
+      'E2E env vars E2E_TEST_EMAIL and E2E_TEST_PASSWORD are required for fixtures teardown.\n' +
+        'See docs/CONTRIBUTING.md (E2E section).',
+    );
+  }
 
   const resp = await fetch(
     `${SUPABASE_URL}/auth/v1/token?grant_type=password`,

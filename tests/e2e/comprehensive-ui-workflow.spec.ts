@@ -11,7 +11,7 @@
  * All test entities use [E2E] prefix for cleanup.
  */
 import { test, expect, Page } from '@playwright/test';
-import { login } from './utils/auth';
+import { login, TEST_USER } from './utils/auth';
 import { waitForPageStable } from './utils/math-helpers';
 import { supabaseRest, supabaseRpc, asArray } from './golive/utils/supabase-helpers';
 
@@ -22,8 +22,9 @@ const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsI
 let _nodeToken = '';
 async function getNodeToken(): Promise<string> {
   if (_nodeToken) return _nodeToken;
-  const email = process.env.E2E_TEST_EMAIL || 'mason@croprxsolutions.com';
-  const password = process.env.E2E_TEST_PASSWORD || 'Mwells0413';
+  // PR-05 / Phase 1.5: read through TEST_USER (auth.ts) so missing env vars
+  // throw at module-load, no silent hardcoded-credential fallback.
+  const { email, password } = TEST_USER;
   const resp = await fetch(`${SUPA_URL}/auth/v1/token?grant_type=password`, {
     method: 'POST',
     headers: { apikey: SUPA_KEY, 'Content-Type': 'application/json' },

@@ -3,7 +3,7 @@
  *
  * Sprint 11: Financial Workflows
  */
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, X, ChevronDown, ChevronUp, Pencil, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
@@ -20,6 +20,7 @@ import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
+import { logActivity } from '../lib/activityLogger';
 
 interface CustomerPrepay {
   [k: string]: unknown;
@@ -57,6 +58,30 @@ export default function PrepaymentManager() {
   const navigate = useNavigate();
   const applyPrepayIdem = useIdempotencyKey('apply_remaining_prepayments', profile?.id || '');
   const batchApplyIdem = useIdempotencyKey('batch_apply_all_prepayments', profile?.id || '');
+  const splitCheckIdem = useIdempotencyKey('create_prepay_check_splits', profile?.id || '');
+
+  // Codex P2 fix (PR #59, 2026-05-16): scope edit/delete idempotency keys per
+  // credit_id. The page-scoped useIdempotencyKey shared a single key across
+  // all credits — if an admin edited credit A, the response was lost, then
+  // they opened credit B and edited it, both requests would carry the same
+  // key. The server's idempotency cache would replay credit A's "success"
+  // for credit B's request, returning success without mutating credit B.
+  // Map<credit_id, key> + per-credit reset closes that gap. Pattern is local
+  // to this page since other useIdempotencyKey callsites already have
+  // single-entity intents per click.
+  const editKeysRef = useRef<Map<string, string>>(new Map());
+  const deleteKeysRef = useRef<Map<string, string>>(new Map());
+  const getScopedKey = useCallback((map: Map<string, string>, operation: string, creditId: string): string => {
+    let key = map.get(creditId);
+    if (!key) {
+      key = `${operation}:${profile?.id || ''}:${creditId}:${crypto.randomUUID()}`;
+      map.set(creditId, key);
+    }
+    return key;
+  }, [profile?.id]);
+  const resetScopedKey = useCallback((map: Map<string, string>, creditId: string): void => {
+    map.delete(creditId);
+  }, []);
 
   const [customers, setCustomers] = useState<CustomerPrepay[]>([]);
   const [loading, setLoading] = useState(true);
@@ -182,6 +207,7 @@ export default function PrepaymentManager() {
 
     await runCriticalAction({
       action: async () => {
+        const editKey = getScopedKey(editKeysRef.current, 'edit_prepay_credit', editCredit.id);
         const { data, error } = await supabase.rpc('edit_prepay_credit', {
           p_credit_id: editCredit.id,
           p_new_balance_cents: newBalanceCents,
@@ -189,11 +215,12 @@ export default function PrepaymentManager() {
           p_bucket_label: editForm.bucket_label || null,
           p_notes: editForm.notes || null,
           p_performed_by: profile?.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: editKey,
         });
         if (error) throw error;
         const result = assertRpcResult<{ success: boolean }>(data, 'edit_prepay_credit');
         if (!result?.success) throw new Error('Edit failed');
+        resetScopedKey(editKeysRef.current, editCredit.id);
       },
       toast,
       setLoading: setSavingEdit,
@@ -221,15 +248,17 @@ export default function PrepaymentManager() {
 
     await runCriticalAction({
       action: async () => {
+        const deleteKey = getScopedKey(deleteKeysRef.current, 'delete_prepay_credit', deleteCredit.id);
         const { data, error } = await supabase.rpc('delete_prepay_credit', {
           p_credit_id: deleteCredit.id,
           p_reason: deleteReason.trim(),
           p_performed_by: profile?.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: deleteKey,
         });
         if (error) throw error;
         const result = assertRpcResult<{ success: boolean }>(data, 'delete_prepay_credit');
         if (!result?.success) throw new Error('Delete failed');
+        resetScopedKey(deleteKeysRef.current, deleteCredit.id);
       },
       toast,
       setLoading: setSavingDelete,
@@ -262,6 +291,16 @@ export default function PrepaymentManager() {
   }, []);
 
   const openNewCheck = () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset the splitCheckIdem key on
+    // every modal open. Without this, if check A succeeds but the response
+    // is lost, then the admin edits the still-open form for a different
+    // customer/reference and submits check B, both calls share the same
+    // page-scoped key and the server replays A's cached success without
+    // creating check B's credits or updating B's customer balance.
+    // Reset-on-open means each modal-open starts a fresh idempotency
+    // intent. Retries of THE SAME submission still reuse the key correctly
+    // because resetKey() is only called here and in the onSuccess path.
+    splitCheckIdem.resetKey();
     setCheckForm({ customer_id: '', reference_number: '', total: '' });
     setBucketSplits([{ label: '', amount: '' }]);
     setShowNewCheck(true);
@@ -289,19 +328,35 @@ export default function PrepaymentManager() {
 
     await runCriticalAction({
       action: async () => {
-        // M6: Use atomic RPC — inserts all credits + updates customer balance in one transaction
+        // M6: Use atomic RPC — inserts all credits + updates customer balance in one transaction.
+        // RPC restored 2026-05-11 (was never applied originally) — see migration
+        // 20260511020000_create_prepay_check_splits.sql for history.
         const splits = validSplits.map((s, i) => ({
           label: s.label,
           amount_cents: splitAmountsCents[i],
         }));
-        const { error } = await supabase.rpc('create_prepay_check_splits', {
+        const splitKey = splitCheckIdem.getKey();
+        const { data, error } = await supabase.rpc('create_prepay_check_splits', {
           p_customer_id: checkForm.customer_id,
           p_reference_number: checkForm.reference_number,
           p_splits: splits,
           p_performed_by: (await supabase.auth.getUser()).data.user?.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: splitKey,
         });
         if (error) throw new Error(error.message);
+        const result = assertRpcResult<{ success: boolean; credit_ids: string[]; total_cents: number; split_count: number }>(data, 'create_prepay_check_splits');
+        splitCheckIdem.resetKey();
+        // Audit #27: surface prepay creation in activity feed.
+        if (profile) {
+          await logActivity({
+            event: 'prepay_check_created',
+            description: `Prepay check #${checkForm.reference_number} (${fmt(result.total_cents)}) split into ${result.split_count} bucket(s)`,
+            performedBy: profile.id,
+            entityType: 'customer',
+            entityId: checkForm.customer_id,
+            customerId: checkForm.customer_id,
+          });
+        }
       },
       toast,
       setLoading: setSavingCheck,
@@ -334,6 +389,17 @@ export default function PrepaymentManager() {
       if (error) throw error;
       applyPrepayIdem.resetKey();
       const result = assertRpcResult<{ applied_count: number; applied_cents: number; remaining_prepay_cents: number }>(data, 'apply_remaining_prepayments');
+      // Audit #27: surface prepay application in activity feed.
+      if (profile && result.applied_count > 0) {
+        await logActivity({
+          event: 'prepay_applied',
+          description: `Applied ${fmt(result.applied_cents)} prepay to ${result.applied_count} invoice(s) for ${confirmCustomer.farm_name}`,
+          performedBy: profile.id,
+          entityType: 'customer',
+          entityId: confirmCustomer.id,
+          customerId: confirmCustomer.id,
+        });
+      }
       toast(
         'success',
         `Applied ${fmt(result.applied_cents)} to ${result.applied_count} invoice(s). Remaining: ${fmt(result.remaining_prepay_cents)}`,
@@ -358,6 +424,14 @@ export default function PrepaymentManager() {
       if (error) throw error;
       batchApplyIdem.resetKey();
       const result = assertRpcResult<{ total_customers: number; total_applied_cents: number; details: unknown[] }>(data, 'batch_apply_all_prepayments');
+      // Audit #27: surface batch prepay run in activity feed.
+      if (profile && result.total_customers > 0) {
+        await logActivity({
+          event: 'prepay_batch_applied',
+          description: `Batch prepay run: applied ${fmt(result.total_applied_cents)} across ${result.total_customers} customer(s)`,
+          performedBy: profile.id,
+        });
+      }
       if (result.total_customers === 0) {
         toast('info', 'No prepayments could be applied (no customers with both prepay credits and unpaid invoices)');
       } else {

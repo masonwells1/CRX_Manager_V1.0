@@ -108,15 +108,14 @@ export function BlendTicketDetail() {
   const loadTicketData = useCallback(async () => {
     try {
       const [ticketResult, imagesResult, productsResult, allProductsResult, customersResult, fieldsResult, linkedResult, jobsResult] = await Promise.all([
+        // PR-07 follow-up: dropped uploader/reviewer/salesman FK embeds;
+        // resolved via profile_public_view post-fetch (see below).
         supabase
           .from('blend_tickets')
           .select(`
             *,
-            uploader:profiles!blend_tickets_uploaded_by_fkey(id, full_name),
-            reviewer:profiles!blend_tickets_reviewed_by_fkey(id, full_name),
             customer:customers(id, farm_name),
-            field:fields(id, field_name),
-            salesman:profiles!blend_tickets_salesman_id_fkey(id, full_name)
+            field:fields(id, field_name)
           `)
           .eq('id', id)
           .single(),
@@ -160,7 +159,27 @@ export function BlendTicketDetail() {
       if (imagesResult.error) throw imagesResult.error;
       if (productsResult.error) throw productsResult.error;
 
-      setTicket(ticketResult.data);
+      // PR-07 follow-up: resolve uploader/reviewer/salesman names via
+      // profile_public_view (safe columns only). UI uses .full_name.
+      const tdata = ticketResult.data as { uploaded_by?: string | null; reviewed_by?: string | null; salesman_id?: string | null };
+      const profIds = [tdata?.uploaded_by, tdata?.reviewed_by, tdata?.salesman_id].filter(Boolean) as string[];
+      const profMap: Record<string, { id: string; full_name: string }> = {};
+      if (profIds.length > 0) {
+        const { data: profRows } = await supabase
+          .from('profile_public_view')
+          .select('id, full_name')
+          .in('id', profIds);
+        (profRows || []).forEach((p: { id: string; full_name: string }) => {
+          profMap[p.id] = p;
+        });
+      }
+      const enrichedTicket = {
+        ...ticketResult.data,
+        uploader: tdata?.uploaded_by ? profMap[tdata.uploaded_by] || null : null,
+        reviewer: tdata?.reviewed_by ? profMap[tdata.reviewed_by] || null : null,
+        salesman: tdata?.salesman_id ? profMap[tdata.salesman_id] || null : null,
+      };
+      setTicket(enrichedTicket);
 
       const fetchedImages = imagesResult.data || [];
       const imagesWithSignedUrls = await Promise.all(

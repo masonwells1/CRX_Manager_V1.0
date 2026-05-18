@@ -1,4 +1,4 @@
-# RPC Functions Reference (~173 unique functions)
+# RPC Functions Reference (~184 unique functions)
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -11,6 +11,7 @@
 - `save_job()` — upsert job + chemicals
 - `save_customer()` — upsert customer; validates commission splits sum to 100%
 - `save_blend_ticket()` — upsert blend ticket + items
+- `save_blend_recipe(p_recipe_id uuid, p_name text, p_recipe_type text, p_items jsonb, ...)` — atomic create-or-replace for blend recipes. For updates, DELETE + INSERT items happen in the same transaction so a failed insert rolls back the DELETE too — closes audit #34 (BlendRecipes wiped items on failed save). Migration 20260513010000.
 - `save_purchase_order()` — upsert PO + items
 - `save_invoice()` — upsert invoice + items
 - `save_field()` — upsert field record
@@ -37,7 +38,9 @@
 - `reassign_delivery()` — reassign delivery to different driver
 - `create_followup_delivery()` — create follow-up delivery for remaining items
 - `get_customer_delivery_remainders()` — get undelivered remainder items for a customer
-- `create_quick_delivery()` — atomic order + delivery + draft invoice in one transaction; includes inventory pre-check with `FOR UPDATE` locks to prevent overselling
+- `create_quick_delivery()` — atomic order + delivery + draft invoice in one transaction; includes inventory pre-check with `FOR UPDATE` locks to prevent overselling. **2026-05-13 (audit #6):** uses `_insert_commissions_for_order()` helper instead of inline INSERT — fixes a latent bug where the prior inline block referenced columns that don't exist on `commissions`. **2026-05-13 (audit #7):** uses `safe_cents_qty(price_cents, qty)` instead of the truncating `(price_cents * qty)::bigint` cast.
+- `create_delivery_with_items(p_order_id uuid, p_customer_id uuid, p_scheduled_date date, p_items jsonb, ...)` — atomic delivery + items create. Frontend (`NewDelivery.tsx`) calls this instead of two separate `.insert()`s — closes audit #10 (orphaned-delivery race). Generates `delivery_number` via `next_delivery_number()`. SECURITY DEFINER, role-gated to admin/sales_rep. Migration 20260513010000.
+- `bulk_import_order(p_order_number text, p_customer_id uuid, p_status text, totals..., p_items jsonb, ...)` — atomic per-order create for `BulkOrderImport.tsx`. Closes audit #31 (orphaned-orders during CSV import). Frontend resolves customer/product IDs first then ships per-order to this RPC. Migration 20260513010000.
 - `check_duplicate_delivery()` — check if a duplicate delivery exists for an order
 - `void_delivery()` — void a completed delivery, reversing inventory transactions. **P4-10 (2026-05-07):** same WARN-only backdated check as `complete_delivery` — voiding for a date in a closed period emits a non-blocking warning and proceeds.
 
@@ -157,12 +160,20 @@
 - `get_dashboard_action_items(p_limit int DEFAULT 5)` → jsonb — Returns specific actionable items per category for Dashboard Action Queue: overdue invoices, cancelled+posted orders, overdue deliveries, low stock items, expiring quotes, unassigned deliveries. Each item includes entity ID, primary text, secondary text, and category-specific details.
 
 ## Accounts Payable
-- `create_vendor_bill(p_vendor_id, p_purchase_order_id, p_bill_number, p_bill_date, p_payment_terms, p_subtotal_cents, p_adjustment_cents, p_notes)` — creates vendor bill with auto-calculated due_date from payment terms (Net 15/30/45/60/90/Due on Receipt). Returns bill UUID. Backfills vendor from existing PO data if needed
-- `record_vendor_payment(p_vendor_bill_id, p_payment_date, p_amount_cents, p_payment_method, p_reference_number, p_notes)` — records payment against a bill, updates paid_cents/balance_cents, auto-transitions status (unpaid -> partially_paid -> paid). Validates amount <= balance
-- `void_vendor_bill(p_vendor_bill_id, p_reason)` — voids a bill (must not be 'paid'), sets status='voided', appends reason to notes
-- `get_ap_aging(p_as_of_date)` — AP aging report: Current / 31-60 / 61-90 / 90+ day buckets with vendor breakdown. Returns totals and per-vendor detail
-- `get_ap_dashboard_summary()` — KPI totals: total_owed, due_this_week, due_this_month, overdue_amount, bill counts, recent vendor bills
-- `cancel_purchase_order()` — cancel a PO (soft delete with status change)
+
+> ⚠️ **Migrations queued, not yet live (2026-05-10)**: PR-04 / PR-13 / PR-14 / PR-22 / PR-22b / PR-25 rewrites of the AP RPCs are committed to `fix/audit-2026-05-09` but not applied to live Supabase. Signatures below reflect the QUEUED state. The helper-function idempotency pattern is `check_idempotency` / `save_idempotency` — see CLAUDE.md "Canonical Patterns for New RPCs."
+
+- `create_vendor_bill(p_vendor_id, p_purchase_order_id, p_bill_number, p_bill_date, p_due_date, p_payment_terms, p_subtotal_cents, p_adjustment_cents, p_notes, p_idempotency_key)` → uuid — admin-only. Creates vendor bill with auto-calculated due_date from payment terms (Net 15/30/45/60/90/Due on Receipt). Calls `check_period_open(bill_date)` (PR-04). Validates `subtotal > 0` AND `total = subtotal + adjustment > 0` (PR-04 + audit-fix-2 codex F4). Verifies vendor exists + is not soft-deleted. PR-22b additionally checks PO-to-bill vendor consistency (raises `VENDOR_PO_MISMATCH`) and posts a soft-warn notification when bill total drifts >5% from the linked PO total. Audit log entry with `operation_type='vendor_bill_created'`. Canonical idempotency.
+- `record_vendor_payment(p_vendor_bill_id, p_payment_date, p_amount_cents, p_payment_method, p_reference_number, p_notes, p_idempotency_key)` → uuid — admin-only. Records payment against a bill; updates `paid_cents` only (`balance_cents` is GENERATED ALWAYS post-PR-04, recomputes automatically). Auto-transitions status (`unpaid` → `partially_paid` → `paid`). Validates `amount <= balance`. Audit log with `operation_type='vendor_payment_recorded'`. No period gate (per Q8: only bill creation gates the period, not payment recording). Canonical idempotency.
+- `update_vendor_bill(p_bill_id, p_subtotal_cents, p_adjustment_cents, p_bill_date, p_due_date, p_notes, p_idempotency_key)` → jsonb — admin-only (PR-14). Edits an unpaid bill with no active payments. Re-runs `check_period_open(bill_date)` since the date may change. Recomputes `total_cents`. `bill_number` is NOT editable (uniqueness invariant). Audit log with `operation_type='vendor_bill_updated'`. Returns `{success, bill_id, old_total_cents, new_total_cents}`. Canonical idempotency.
+- `void_vendor_bill(p_vendor_bill_id, p_reason, p_idempotency_key)` → void — admin-only. Voids a bill; populates `voided_at`/`voided_by`/`void_reason` columns (PR-04 added these). **Hard-blocks if any active (non-voided) payments exist regardless of bill status** (audit-fix-2 codex F3). Workflow: void each payment via `void_vendor_payment` first, then void the bill. Audit log with `operation_type='vendor_bill_voided'`. Canonical idempotency. Frontend (`VendorBillDetail.tsx:268`) uses `.throwOnError()` since there's no return payload to assert. Docs corrected 2026-05-16 (ultra-review P3 #8).
+- `void_vendor_payment(p_payment_id, p_reason, p_idempotency_key)` → jsonb — admin-only (PR-13). Reverses a wrong vendor payment. Locks payment + bill, validates payment isn't already voided, decrements `paid_cents` (balance recomputes via GENERATED), recalculates bill status (`paid` / `partially_paid` / `unpaid`), populates payment void columns. `REASON_REQUIRED` raised on blank reason. Audit log with `operation_type='vendor_payment_voided'`.
+- `cancel_purchase_order(p_po_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only. Soft-cancels a PO. PR-22b adds: refuses with `PO_HAS_ACTIVE_BILLS` if any non-voided vendor_bills reference the PO. Existing checks: refuses if any items have `quantity_received > 0` or status is already `fully_received`.
+- `delete_purchase_order(p_po_id, p_performed_by, p_idempotency_key)` → jsonb — admin-only (PR-10 wired idempotency). PR-22b adds: refuses with `PO_HAS_LINKED_BILLS` if ANY vendor_bills reference the PO (stricter than cancel; even voided bills count since delete is permanent). DELETEs the PO + items.
+- `save_vendor(p_vendor_id, p_payload jsonb, p_idempotency_key)` → jsonb — admin-only (PR-25). INSERT-or-UPDATE; pass NULL `p_vendor_id` to create. Partial-update pattern: `p_payload ? key` to differentiate "update to NULL" from "preserve existing." Vendor name required.
+- `delete_vendor(p_vendor_id, p_idempotency_key)` → jsonb — admin-only (PR-25). Soft-delete via `deleted_at`. Refuses if any unpaid `vendor_bills` exist. PO check intentionally omitted (purchase_orders uses legacy `vendor` TEXT column, not `vendor_id` — FK migration is out of scope per CLAUDE.md "What's NOT in this plan").
+- `get_ap_aging(p_as_of_date)` — AP aging report: Current / 31-60 / 61-90 / 90+ day buckets with vendor breakdown. PR-22 dropped the unused `p_idempotency_key` parameter (read-only RPC).
+- `get_ap_dashboard_summary()` — KPI totals: total_owed, due_this_week, due_this_month, overdue_amount, bill counts, recent vendor bills.
 
 ## RUP Sales Reporting
 - `generate_rup_sales_records(p_invoice_id)` — auto-called after `post_invoice()` for invoices with RUP products. Creates rup_sales_records for each RUP line item, snapshots product/customer/license data, flags compliance_status (compliant/warning/non_compliant based on applicator license validity)
@@ -199,7 +210,22 @@ is_sales_rep()  -- SECURITY DEFINER STABLE
 is_driver()     -- SECURITY DEFINER STABLE
 is_applicator() -- SECURITY DEFINER STABLE
 is()            -- base role-check helper
+
+-- Audit #6 (2026-05-13) — canonical commission math
+compute_commission_amount(p_profit numeric, p_percentage numeric) RETURNS numeric
+  -- IMMUTABLE; GREATEST(ROUND(profit * pct / 100, 2), 0). The ONLY place
+  -- the formula lives. Called by _insert_commissions_for_order().
+
+-- Audit #7 (2026-05-13) — to-nearest-cent multiplication
+safe_cents_qty(p_cents bigint, p_qty numeric) RETURNS bigint
+  -- IMMUTABLE; ROUND(p_cents * p_qty)::bigint. Use this instead of
+  -- (p_cents * p_qty)::bigint which truncates fractional cents. The
+  -- sql-safety.mjs hook flags the unsafe pattern in new migrations.
 ```
+
+## Rebate RPCs (audit #33, 2026-05-13)
+- `create_rebate_claim(p_program_id uuid, p_quantity numeric, p_claim_amount_cents bigint, p_order_id uuid?, p_customer_id uuid?, p_product_id uuid?, p_notes text?, p_idempotency_key text?)` — atomic claim create with auto-generated `RC-YYYY-NNNN` claim_number from per-year `rebate_claim_counters` table (atomic via `INSERT ... ON CONFLICT DO UPDATE` row-lock). Replaces the racy `count(*) + 1` pattern in `Rebates.tsx`. SECURITY DEFINER, role-gated to admin/sales_rep.
+- `transition_rebate_claim(p_claim_id uuid, p_new_status text, p_paid_amount_cents bigint?, p_manufacturer_ref text?, p_idempotency_key text?)` — state-machine transition under `SELECT FOR UPDATE` row lock. Validates pending→submitted/rejected, submitted→approved/rejected, approved→paid. Raises `INVALID_TRANSITION` token on stale-state. For `'paid'`, writes `paid_amount_cents` (defaults to `claim_amount_cents`) — closes the gap where the original UI never set this column. Admin-only.
 
 ---
 
@@ -230,6 +256,10 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 - `check_idempotency()` — check if an idempotency key has been used
 - `save_idempotency()` — persist an idempotency key result
 - `check_rate_limit()` — rate limiting check
+
+### Commission / Order Helpers (audit #6, 2026-05-13)
+- `_insert_commissions_for_order(p_order_id uuid, p_customer_id uuid, p_order_profit numeric, p_commission_split jsonb, p_order_date date)` — single source of truth for commission INSERT. Called via `PERFORM` from `convert_quote_to_order`, `create_direct_order`, and `create_quick_delivery`. Uses `compute_commission_amount()` helper for the formula. SECURITY DEFINER. EXECUTE revoked from PUBLIC/anon/authenticated — only callable from inside other SECURITY DEFINER bodies (which run as the owner).
+- `_snapshot_order_item_cost()` — BEFORE INSERT trigger function on `order_items`. Snapshots `products.current_cost * 100` into `order_items.cost_at_time_cents` if caller didn't pre-populate. SECURITY DEFINER. Migration 20260513050000 (audit #32).
 
 ### Status Change Triggers
 - `trg_delivery_status_change()` — fires on delivery status change (notifications, side effects)

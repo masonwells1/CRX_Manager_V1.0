@@ -11,8 +11,16 @@ export interface PagePermission {
  * Canonical list of all permissionable pages.
  * Dashboard, Team Board, Notifications, and Settings are excluded
  * (always accessible per existing role rules).
+ *
+ * Every protected route in App.tsx MUST have an entry here, otherwise the
+ * deny-list (`profile.denied_pages`) silently does nothing for that route.
+ * `pagePermissions.test.ts` enforces this — adding a Route without an entry
+ * fails CI.
  */
 export const PAGE_PERMISSIONS: PagePermission[] = [
+  // Onboarding
+  { key: 'getting-started', label: 'Getting Started', category: 'Onboarding', roles: ['admin', 'sales_rep', 'driver', 'applicator'] },
+
   // Sales
   { key: 'quotes', label: 'Quotes', category: 'Sales', roles: ['admin', 'sales_rep'] },
   { key: 'orders', label: 'Orders', category: 'Sales', roles: ['admin', 'sales_rep'] },
@@ -36,6 +44,9 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'vehicles', label: 'Vehicles', category: 'Operations', roles: ['admin'] },
   { key: 'blend-tickets', label: 'Blend Tickets', category: 'Operations', roles: ['admin', 'sales_rep'] },
   { key: 'application-records', label: 'App Records', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
+  { key: 'application-services', label: 'Application Services', category: 'Operations', roles: ['admin'] },
+  { key: 'dispatch', label: 'Dispatch', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
+  { key: 'program-tracker', label: 'Program Tracker', category: 'Operations', roles: ['admin', 'sales_rep'] },
 
   // Inventory
   { key: 'inventory', label: 'Inventory', category: 'Inventory', roles: ['admin', 'sales_rep'] },
@@ -47,7 +58,9 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   // Finance
   { key: 'ar-aging', label: 'AR Aging', category: 'Finance', roles: ['admin'] },
   { key: 'accounts-payable', label: 'Accounts Payable', category: 'Finance', roles: ['admin'] },
+  { key: 'vendors', label: 'Vendors', category: 'Finance', roles: ['admin'] },
   { key: 'prepayments', label: 'Prepayments', category: 'Finance', roles: ['admin'] },
+  { key: 'prepay-workspace', label: 'Prepay Workspace', category: 'Finance', roles: ['admin'] },
   { key: 'commission-payments', label: 'Commission Pay', category: 'Finance', roles: ['admin'] },
   { key: 'customer-transactions', label: 'Transactions', category: 'Finance', roles: ['admin'] },
   { key: 'month-end', label: 'Month-End', category: 'Finance', roles: ['admin'] },
@@ -64,6 +77,25 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
 ];
 
 /**
+ * Page-key first-segments that intentionally have no PAGE_PERMISSIONS entry.
+ * These are auth/utility routes that exist for every authenticated user
+ * (or have their own role gating). ProtectedRoute treats null `pageKey` as
+ * a routing bug UNLESS the segment is in this set.
+ *
+ * `pagePermissions.test.ts` validates the App.tsx → PAGE_PERMISSIONS coverage
+ * against the same exempt list.
+ */
+export const EXEMPT_ROUTE_SEGMENTS: ReadonlySet<string> = new Set([
+  'login',
+  'forgot-password',
+  'reset-password',
+  'dashboard',
+  'settings',
+  'team-board',
+  'notifications',
+]);
+
+/**
  * Extract the page key from a route pathname.
  * e.g., '/quotes/new' → 'quotes', '/customers/abc-123' → 'customers'
  * Returns null for non-permissionable paths (dashboard, team-board, etc.)
@@ -76,6 +108,17 @@ export function getPageKeyFromPath(pathname: string): string | null {
   // Check if it matches a known page key
   const found = PAGE_PERMISSIONS.find((p) => p.key === firstSegment);
   return found ? found.key : null;
+}
+
+/**
+ * Returns true when a path's first segment is intentionally exempt from
+ * PAGE_PERMISSIONS coverage (e.g. /settings, /login, /team-board).
+ * The root path ('/' or '') is also exempt — it's the dashboard.
+ */
+export function isExemptRoute(pathname: string): boolean {
+  const firstSegment = pathname.replace(/^\//, '').split('/')[0] || '';
+  if (firstSegment === '') return true; // root → dashboard, no permission needed
+  return EXEMPT_ROUTE_SEGMENTS.has(firstSegment);
 }
 
 /**

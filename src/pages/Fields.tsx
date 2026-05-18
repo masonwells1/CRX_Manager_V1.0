@@ -209,13 +209,13 @@ export default function Fields() {
     try {
       const childIds = selectedRows.filter((f) => f.id !== groupParentId).map((f) => f.id);
       const idemKey = groupIdem.getKey();
-      const { error } = await supabase.rpc('link_fields_to_parent', {
+      // RETURNS void — use .throwOnError() (regex coverage skips fire-and-forget).
+      await supabase.rpc('link_fields_to_parent', {
         p_parent_id: groupParentId,
         p_child_ids: childIds,
         p_performed_by: profile!.id,
         p_idempotency_key: idemKey,
-      });
-      if (error) throw error;
+      }).throwOnError();
       groupIdem.resetKey();
       toast('success', `Grouped ${childIds.length} field(s) under parent`);
       clearSelection();

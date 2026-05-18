@@ -208,8 +208,10 @@ export default function DeliveryDetail() {
           del.delivery_address_id
             ? supabase.from('customer_addresses').select('*').eq('id', del.delivery_address_id).maybeSingle()
             : Promise.resolve({ data: null }),
+          // PR-07 follow-up: read driver name via profile_public_view (UI uses
+          // only .full_name — see lines ~1534/1626/2395).
           del.assigned_driver
-            ? supabase.from('profiles').select('*').eq('id', del.assigned_driver).maybeSingle()
+            ? supabase.from('profile_public_view').select('id, full_name, role, is_active').eq('id', del.assigned_driver).maybeSingle()
             : Promise.resolve({ data: null }),
           supabase.from('delivery_photos').select('*').eq('delivery_id', id!).order('sort_order'),
         ]);
@@ -396,7 +398,8 @@ export default function DeliveryDetail() {
     // Fetch addresses, drivers, order items for edit dropdowns
     const [addrRes, driverRes, oiRes] = await Promise.all([
       supabase.from('customer_addresses').select('*').eq('customer_id', customer.id).order('is_default', { ascending: false }),
-      supabase.from('profiles').select('*').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
+      // PR-07 follow-up: driver picker only uses id/full_name/role; safe via view.
+      supabase.from('profile_public_view').select('id, full_name, role, is_active').in('role', ['driver', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       supabase.from('order_items').select('*').eq('order_id', delivery.order_id).order('section_name'),
     ]);
     setAddresses((addrRes.data || []) as CustomerAddress[]);
@@ -499,7 +502,7 @@ export default function DeliveryDetail() {
       : null;
 
     const idemKey = editIdem.getKey();
-    const { error } = await supabase.rpc('edit_delivery', {
+    const { data, error } = await supabase.rpc('edit_delivery', {
       p_delivery_id: id!,
       p_assigned_driver: editDriver || null,
       p_scheduled_date: editDate,
@@ -517,6 +520,7 @@ export default function DeliveryDetail() {
     if (error) {
       toast('error', sanitizeError(error));
     } else {
+      assertRpcResult(data, 'edit_delivery');
       editIdem.resetKey();
       toast('success', isScheduled ? 'Delivery and items updated' : 'Delivery updated');
       setEditing(false);
@@ -594,7 +598,7 @@ export default function DeliveryDetail() {
     setReassignConfirmOpen(false);
     try {
       const idemKey = reassignIdem.getKey();
-      const { error } = await supabase.rpc('reassign_delivery', {
+      const { data, error } = await supabase.rpc('reassign_delivery', {
         p_delivery_id: id!,
         p_new_driver: profile.id,
         p_performed_by: profile.id,
@@ -604,6 +608,7 @@ export default function DeliveryDetail() {
       if (error) {
         toast('error', sanitizeError(error));
       } else {
+        assertRpcResult(data, 'reassign_delivery');
         reassignIdem.resetKey();
         toast('success', 'Delivery assigned to you');
         fetchDelivery();
@@ -706,11 +711,12 @@ export default function DeliveryDetail() {
     setConfirming(true);
     try {
       const idemKey = confirmIdem.getKey();
-      const { error } = await supabase.rpc('confirm_delivery', {
+      const { data, error } = await supabase.rpc('confirm_delivery', {
         p_delivery_id: id!,
         p_idempotency_key: idemKey,
       });
       if (error) throw error;
+      assertRpcResult(data, 'confirm_delivery');
       confirmIdem.resetKey();
       toast('success', `Delivery ${delivery.delivery_number} started`);
       setStartModalOpen(false);

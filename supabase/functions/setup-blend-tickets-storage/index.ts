@@ -1,15 +1,23 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { captureEdgeException } from "../_shared/sentry.ts";
+import { requireActiveProfile } from "../_shared/auth.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
+// 2026-05-16 (ultra-review P3 #7): removed silent prod-URL fallback. Missing
+// secret now fails loud, matching the PR-16 pattern used by every other
+// hardened Edge Function. Hides deployment misconfiguration is worse than
+// boot failure — at least boot failure is loud.
 function getAllowedOrigin(): string {
   const origin = Deno.env.get("ALLOWED_ORIGIN");
   if (origin) return origin;
   const url = Deno.env.get("SUPABASE_URL") || "";
   if (url.includes("localhost") || url.includes("127.0.0.1")) return "http://localhost:5173";
-  // Fallback to production domain when secret not configured
-  return "https://croprxsolutions.app";
+  throw new Error(
+    "ALLOWED_ORIGIN env var is required for production deployments. " +
+      "Set via: supabase secrets set ALLOWED_ORIGIN=https://your-domain.com",
+  );
 }
 
 const corsHeaders = {
@@ -51,15 +59,11 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Invalid token" }, 401);
   }
 
-  // Role check — admin only for storage setup
+  // Codex audit F1 (P1, 2026-05-16): is_active gate enforced server-side.
   const adminClient = createClient(supabaseUrl, serviceRoleKey);
-  const { data: callerProfile } = await adminClient
-    .from("profiles")
-    .select("role")
-    .eq("id", caller.id)
-    .single();
-  if (!callerProfile || callerProfile.role !== "admin") {
-    return jsonResponse({ error: "Forbidden" }, 403);
+  const gate = await requireActiveProfile(adminClient, caller.id, ["admin"]);
+  if ("error" in gate) {
+    return jsonResponse({ error: gate.error }, gate.status);
   }
 
   try {
@@ -89,6 +93,12 @@ Deno.serve(async (req: Request) => {
       },
     });
   } catch (error) {
+    // Audit #28: surface unhandled errors. Storage setup failures usually
+    // indicate Supabase Storage misconfiguration or service-role key drift.
+    await captureEdgeException(error, {
+      function: "setup-blend-tickets-storage",
+      level: "error",
+    });
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
       {

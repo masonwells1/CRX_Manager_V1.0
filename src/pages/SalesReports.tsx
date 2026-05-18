@@ -109,7 +109,8 @@ export default function SalesReports() {
       .then(({ data }) => setProductOptions((data || []).map(r => ({ id: r.id, name: r.product_name }))));
     supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name').limit(1000)
       .then(({ data }) => setCustomerOptions((data || []).map(r => ({ id: r.id, name: r.farm_name }))));
-    supabase.from('profiles').select('id, full_name').in('role', ['admin', 'sales_rep']).order('full_name')
+    // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
+    supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).order('full_name')
       .then(({ data }) => setSalesRepOptions((data || []).map(r => ({ id: r.id, name: r.full_name }))));
     supabase.from('products').select('category').eq('is_active', true).not('category', 'is', null)
       .then(({ data }) => {
@@ -127,17 +128,22 @@ export default function SalesReports() {
       return;
     }
     const cid = selectedCustomerIds[0];
-    supabase.rpc('get_customer_farm_group', { p_customer_id: cid })
-      .then(({ data, error }) => {
-        if (error || !data || (assertRpcResult<FarmGroupMember[]>(data, 'get_customer_farm_group')).length <= 1) {
-          setFarmGroupMembers([]);
-          setFarmGroupCustomerIds([]);
-          return;
-        }
-        const members = assertRpcResult<FarmGroupMember[]>(data, 'get_customer_farm_group');
-        setFarmGroupMembers(members);
-        setFarmGroupCustomerIds(members.map(m => m.id));
-      });
+    (async () => {
+      const { data, error } = await supabase.rpc('get_customer_farm_group', { p_customer_id: cid });
+      if (error || !data) {
+        setFarmGroupMembers([]);
+        setFarmGroupCustomerIds([]);
+        return;
+      }
+      const members = assertRpcResult<FarmGroupMember[]>(data, 'get_customer_farm_group');
+      if (members.length <= 1) {
+        setFarmGroupMembers([]);
+        setFarmGroupCustomerIds([]);
+        return;
+      }
+      setFarmGroupMembers(members);
+      setFarmGroupCustomerIds(members.map(m => m.id));
+    })();
   }, [selectedCustomerIds]);
 
   // ── Fetch data ──

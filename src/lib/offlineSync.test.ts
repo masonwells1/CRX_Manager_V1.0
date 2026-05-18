@@ -4,6 +4,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockRpc = vi.fn();
 vi.mock('./db', () => ({
   supabase: { rpc: (...args: unknown[]) => mockRpc(...args) },
+  // assertRpcResult is used in executeAction to catch silent {data:null,error:null}
+  // responses (audit 2026-05-16 P1 #3). Mock the same behavior as the real impl.
+  assertRpcResult: <T,>(data: unknown, rpcName: string): T => {
+    if (data === null || data === undefined) {
+      throw new Error(`${rpcName} returned no data — operation may have been denied`);
+    }
+    return data as T;
+  },
 }));
 
 // Mock offlineQueue
@@ -40,7 +48,7 @@ describe('syncPendingActions', () => {
     mockGetPendingActions.mockResolvedValue([
       { id: 1, operation: 'complete_delivery', params: { delivery_id: 'd-1' }, createdAt: '2026-01-01', retryCount: 0 },
     ]);
-    mockRpc.mockResolvedValue({ error: null });
+    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
 
     const result = await syncPendingActions();
 
@@ -53,7 +61,7 @@ describe('syncPendingActions', () => {
     mockGetPendingActions.mockResolvedValue([
       { id: 2, operation: 'allocate_payment', params: { amount: 100 }, createdAt: '2026-01-01', retryCount: 0 },
     ]);
-    mockRpc.mockResolvedValue({ error: null });
+    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
 
     const result = await syncPendingActions();
 
@@ -110,7 +118,7 @@ describe('syncPendingActions', () => {
       { id: 11, operation: 'allocate_payment', params: { b: 2 }, createdAt: '2026-01-01', retryCount: 0 },
       { id: 12, operation: 'receive_po_items', params: { c: 3 }, createdAt: '2026-01-01', retryCount: 0 },
     ]);
-    mockRpc.mockResolvedValue({ error: null });
+    mockRpc.mockResolvedValue({ data: { success: true }, error: null });
 
     const result = await syncPendingActions();
 
@@ -127,12 +135,34 @@ describe('syncPendingActions', () => {
     // First call fails, second succeeds
     mockRpc
       .mockResolvedValueOnce({ error: { message: 'fail' } })
-      .mockResolvedValueOnce({ error: null });
+      .mockResolvedValueOnce({ data: { success: true }, error: null });
 
     const result = await syncPendingActions();
 
     expect(result).toEqual({ synced: 1, failed: 0, cleaned: 0, conflicts: [] });
     expect(mockUpdateAction).toHaveBeenCalledTimes(1); // failed one
     expect(mockRemoveAction).toHaveBeenCalledTimes(1); // synced one
+  });
+
+  // Audit 2026-05-16 P1 #3 regression coverage: { data: null, error: null }
+  // (RLS denial on a SELECT chain, trigger fail-soft path, etc.) must NOT
+  // remove the queued action. It should throw and increment retryCount.
+  it('does not mark action as synced when RPC returns null data with no error', async () => {
+    mockGetPendingActions.mockResolvedValue([
+      { id: 30, operation: 'complete_delivery', params: { delivery_id: 'd-1' }, createdAt: '2026-01-01', retryCount: 0 },
+    ]);
+    mockRpc.mockResolvedValue({ data: null, error: null });
+
+    const result = await syncPendingActions();
+
+    expect(mockRemoveAction).not.toHaveBeenCalled();
+    expect(mockUpdateAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 30,
+        retryCount: 1,
+        lastError: expect.stringContaining('returned no data'),
+      })
+    );
+    expect(result).toEqual({ synced: 0, failed: 0, cleaned: 0, conflicts: [] });
   });
 });

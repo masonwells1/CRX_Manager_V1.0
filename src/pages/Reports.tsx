@@ -320,9 +320,12 @@ export default function Reports() {
   }, [toast]);
 
   const fetchPostedApplications = useCallback(async () => {
+    // PR-07 follow-up: dropped `applicator:profiles(full_name)` embed; applicator
+    // names resolved via profile_public_view post-fetch (sales_rep loses
+    // profiles SELECT once 20260510999999_profiles_select_tighten lands).
     let query = supabase
       .from('application_records')
-      .select('record_number, application_date, customer:customers(farm_name), field:fields(field_name), applicator:profiles(full_name), total_acres, invoice_id, season')
+      .select('record_number, application_date, customer:customers(farm_name), field:fields(field_name), applicator_id, total_acres, invoice_id, season')
       .not('invoice_id', 'is', null)
       .order('application_date', { ascending: false })
       .limit(500);
@@ -330,11 +333,33 @@ export default function Reports() {
     if (endDate) query = query.lte('application_date', endDate);
     const { data, error } = await query;
     if (error) { toast('error', 'Failed to load posted applications.'); return; }
-    setPostedAppsData(((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; field?: { field_name?: string }; applicator?: { full_name?: string } }>).map((r) => ({
+
+    const rows = (data || []) as Array<Record<string, unknown> & {
+      customer?: { farm_name?: string };
+      field?: { field_name?: string };
+      applicator_id?: string | null;
+    }>;
+
+    const applicatorIds = [...new Set(
+      rows.map((r) => r.applicator_id).filter(Boolean) as string[]
+    )];
+
+    let applicatorNameMap: Record<string, string> = {};
+    if (applicatorIds.length > 0) {
+      const { data: applicators } = await supabase
+        .from('profile_public_view')
+        .select('id, full_name')
+        .in('id', applicatorIds);
+      applicatorNameMap = Object.fromEntries(
+        (applicators || []).map((a: { id: string; full_name: string }) => [a.id, a.full_name])
+      );
+    }
+
+    setPostedAppsData(rows.map((r) => ({
       ...r,
       customer_name: r.customer?.farm_name || 'Unknown',
       field_name: r.field?.field_name || '-',
-      applicator_name: r.applicator?.full_name || '-',
+      applicator_name: r.applicator_id ? (applicatorNameMap[r.applicator_id] || 'Unknown') : '-',
     })));
   }, [startDate, endDate, toast]);
 
@@ -440,7 +465,7 @@ export default function Reports() {
 
       let totalPaid = 0;
       for (const [, ids] of byRecipient) {
-        const { error } = await supabase.rpc('create_commission_payment', {
+        const { data, error } = await supabase.rpc('create_commission_payment', {
           p_commission_ids: ids,
           p_payment_method: 'other',
           p_reference: null,
@@ -450,6 +475,7 @@ export default function Reports() {
           p_idempotency_key: `reports-commission-pay-${ids.join('-')}-${Date.now()}`,
         });
         if (error) throw new Error(error.message);
+        assertRpcResult<string>(data, 'create_commission_payment');
         totalPaid += ids.length;
       }
 

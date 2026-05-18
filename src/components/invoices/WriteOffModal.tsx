@@ -9,7 +9,7 @@ import Button from '../ui/Button';
 import Input from '../ui/Input';
 import { useToast } from '../ui/Toast';
 import { useAuth } from '../../contexts/AuthContext';
-import { supabase } from '../../lib/db';
+import { supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../../lib/parseCents';
@@ -43,6 +43,10 @@ export default function WriteOffModal({
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
+    if (!profile) {
+      toast('error', 'Cannot apply write-off — profile not loaded. Please refresh.');
+      return;
+    }
     const amountCents = parseDollarsToCents(amount);
     if (amountCents <= 0) {
       toast('error', 'Enter a valid write-off amount');
@@ -60,7 +64,7 @@ export default function WriteOffModal({
     setSubmitting(true);
     try {
       const key = writeOffIdem.getKey();
-      const { error } = await supabase.rpc('apply_write_off', {
+      const { data, error } = await supabase.rpc('apply_write_off', {
         p_invoice_id: invoiceId,
         p_amount_cents: amountCents,
         p_reason: reason.trim(),
@@ -68,8 +72,9 @@ export default function WriteOffModal({
         p_idempotency_key: key,
       });
       if (error) throw error;
+      assertRpcResult<string>(data, 'apply_write_off');
       writeOffIdem.resetKey();
-      logActivity({ event: 'apply_write_off', description: `Write-off of ${fmt(amountCents)} applied to invoice ${invoiceNumber}. Reason: ${reason.trim()}`, performedBy: profile?.id || '', entityType: 'invoice', entityId: invoiceId });
+      logActivity({ event: 'apply_write_off', description: `Write-off of ${fmt(amountCents)} applied to invoice ${invoiceNumber}. Reason: ${reason.trim()}`, performedBy: profile.id, entityType: 'invoice', entityId: invoiceId });
       toast('success', `Write-off of ${fmt(amountCents)} applied to ${invoiceNumber}`);
       setAmount('');
       setReason('');

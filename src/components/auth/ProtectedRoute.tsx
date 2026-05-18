@@ -1,6 +1,6 @@
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { getPageKeyFromPath, hasPageAccess } from '../../lib/pagePermissions';
+import { getPageKeyFromPath, hasPageAccess, isExemptRoute } from '../../lib/pagePermissions';
 import type { UserRole } from '../../types';
 import { Loader2 } from 'lucide-react';
 
@@ -41,7 +41,19 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
 
   // Per-user page permission check (deny-list)
   const pageKey = getPageKeyFromPath(location.pathname);
-  if (pageKey && !hasPageAccess(profile.role, deniedPages, pageKey)) {
+  if (pageKey) {
+    if (!hasPageAccess(profile.role, deniedPages, pageKey)) {
+      return <Navigate to="/" replace />;
+    }
+  } else if (!isExemptRoute(location.pathname)) {
+    // PR-11: a wrapped-in-ProtectedRoute path with no PAGE_PERMISSIONS entry
+    // and not on the exempt list is a routing bug — the deny-list silently
+    // does nothing for it. Fail-closed: redirect to dashboard. The
+    // pagePermissions.test.ts coverage test catches this at build time.
+    console.warn(
+      `[ProtectedRoute] Path "${location.pathname}" has no PAGE_PERMISSIONS entry ` +
+        `and is not in EXEMPT_ROUTE_SEGMENTS. Add an entry to src/lib/pagePermissions.ts.`,
+    );
     return <Navigate to="/" replace />;
   }
 
