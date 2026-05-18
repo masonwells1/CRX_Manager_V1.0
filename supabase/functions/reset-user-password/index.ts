@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
+import { requireActiveProfile } from "../_shared/auth.ts";
 
 const ALLOWED_ORIGINS = [
   "https://croprxsolutions.app",
@@ -51,17 +52,12 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Verify the caller is an admin
+    // Codex audit F1 (P1, 2026-05-16): is_active gate enforced server-side.
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
-    const { data: callerProfile } = await adminClient
-      .from("profiles")
-      .select("role")
-      .eq("id", caller.id)
-      .maybeSingle();
-
-    if (!callerProfile || callerProfile.role !== "admin") {
-      return new Response(JSON.stringify({ error: "Admin access required" }), {
-        status: 403,
+    const gate = await requireActiveProfile(adminClient, caller.id, ["admin"]);
+    if ("error" in gate) {
+      return new Response(JSON.stringify({ error: gate.error }), {
+        status: gate.status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

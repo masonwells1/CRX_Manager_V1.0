@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
+import { requireActiveProfile } from "../_shared/auth.ts";
 
 // =============================================================================
 // CRX send-email — Sprint F #1 lockdown
@@ -105,16 +106,17 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Invalid token" }, 401);
     }
 
-    // 2. Role lookup
+    // 2. Role lookup (Codex audit F1, P1, 2026-05-16): is_active gate enforced.
+    // Pass `undefined` for allowedRoles because send-email branches on role via
+    // EMAIL_TYPES_BY_ROLE below — we still need a check, but the role membership
+    // is enforced by that lookup, not by requireActiveProfile.
     const adminClient = createClient(supabaseUrl, serviceRoleKey);
-    const { data: callerProfile } = await adminClient
-      .from("profiles")
-      .select("role")
-      .eq("id", caller.id)
-      .maybeSingle();
-
-    const role = callerProfile?.role;
-    if (!role || !EMAIL_TYPES_BY_ROLE[role]) {
+    const gate = await requireActiveProfile(adminClient, caller.id);
+    if ("error" in gate) {
+      return jsonResponse({ error: gate.error }, gate.status);
+    }
+    const role = gate.profile.role;
+    if (!EMAIL_TYPES_BY_ROLE[role]) {
       return jsonResponse({ error: "Insufficient role" }, 403);
     }
 

@@ -4,6 +4,22 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-17 — Codex `/audit` findings closure: is_active gate, OCR dedup, cross-delivery aggregate, doc drift (F1 P1, F2 P2, F3 P2, F4 P3)
+
+Codex ran `/audit` post-ultra-review closeout and surfaced 4 new findings none of which the prior ultra-review caught — all live at the integration boundary (Edge Function ↔ DB consistency, RPC ↔ frontend contract, cross-RPC aggregation). Independent review confirmed all 4 valid. All 4 closed in one branch.
+
+**F1 P1 — Edge Functions ignored `profiles.is_active`.** Frontend `ProtectedRoute.tsx:33-36` hard-blocks deactivated users, but all 6 JWT-gated Edge Functions only selected `role`. A user deactivated in the admin UI could continue calling `create-user`, `send-email`, `reset-user-password`, `setup-blend-tickets-storage`, `process-blend-ticket`, `process-document` until their JWT/refresh-token expired (days). New shared helper `supabase/functions/_shared/auth.ts` `requireActiveProfile(client, callerId, allowedRoles?)` centralizes the lookup. All 6 functions refactored + redeployed via MCP (versions bumped: setup-blend-tickets-storage v14→v15, send-email v11→v13, process-blend-ticket v17→v19, plus create-user, reset-user-password, process-document). Deactivated users now get 403 "Account is deactivated" from any Edge Function. Pattern: `const gate = await requireActiveProfile(adminClient, caller.id, ["admin"]); if ("error" in gate) return jsonResponse({ error: gate.error }, gate.status);`
+
+**F2 P2 — `create_delivery_with_items` allowed cross-delivery over-schedule (migration #344).** The 2026-05-16 fix added per-row `quantity_remaining` check but did NOT subtract quantities already scheduled on OTHER active deliveries. Two failure modes: (1) the same `order_item_id` listed twice in `p_items` — each row passes independently but together exceed remaining; (2) two concurrent `create_delivery_with_items` calls — Delivery A schedules 80 of 100, Delivery B also schedules 80, both complete, `complete_delivery` increments `quantity_delivered` to 160 > 100. The correct pattern existed in `edit_delivery_items_when_scheduled` (20260334200000:124-143) but was never reapplied to create. New migration: (1) `ITEM_DUPLICATE_IN_REQUEST` rejection via `jsonb_array_elements + GROUP BY HAVING COUNT(*) > 1` before any work; (2) inside the per-item loop, `SELECT COALESCE(SUM(di.quantity), 0) FROM delivery_items JOIN deliveries ... WHERE status IN ('scheduled', 'in_progress') AND d.id <> v_delivery_id` and check against `quantity_remaining - other_scheduled`; `ITEM_OVER_REMAINING_INCL_ACTIVE` on overschedule. Applied live via Supabase MCP.
+
+**F3 P2 — Blend-ticket reprocess duplicated product rows (process-blend-ticket v19).** Frontend `BlendTicketDetail.tsx:458` sends `reprocess: true` when user clicks "Re-process OCR", but the Edge Function never read the flag — it just appended new product rows on top of existing ones. Compounded by 2026-05-16 P2 #6 error-checks: previously silent failures now throw, making retries the expected path — but retries also duplicate. Fix: (1) read `body.reprocess === true` at top of handler; (2) when `reprocess=true`, `DELETE FROM blend_ticket_products WHERE blend_ticket_id = ? AND manually_corrected = false` BEFORE the insert loop (preserves any user hand-edits); (3) safety net on first-time runs — detect prior partial-failure rows (`manually_corrected=false` rows exist) and wipe them too, so a re-attempt after a mid-loop failure doesn't compound the duplication.
+
+**F4 P3 — Docs drift after closeout.** AGENTS.md said `333 migrations` (10 behind), `docs/reference/migration-history.md` said `337 migrations` (6 behind), `docs/CHANGELOG.md` line 21 said `process-blend-ticket` deploy pending while it was actually deployed v17. CLAUDE.md said `337 migrations` (already patched earlier this session to 343, now 344). All four patched in this entry.
+
+**Pre-commit checks:** `npm run lint`, `npm run typecheck`, `npm run build`, `npm run test`, and `bash scripts/validate-sql-migrations.sh` all pass with the new code. Test count unchanged: 1,914 unit tests (130 files, 70 skipped).
+
+---
+
 ## 2026-05-16 — Ultra-review Phase 3: send-email durability, error checks, CORS, docs (P2 #5, #6 + P3 #7, #8)
 
 **P2 #5 — `send-email` durable idempotency (Edge Function v11 + migration #337).**
@@ -18,7 +34,7 @@ Prior flow: check email_log → send via Resend → INSERT email_log. If the pos
 
 **P3 #8 — `void_vendor_bill` docs drift.** Updated `docs/reference/rpc-functions.md:169` to say `→ void` instead of `→ jsonb` (live SQL returns void per pg_proc; frontend already uses `.throwOnError()` correctly). One-line fix.
 
-**Pending Mason:** `process-blend-ticket` source code is committed but the Edge Function needs a manual deploy (file is 1,168 lines — impractical to inline via MCP, Supabase CLI not installed locally). Run `supabase functions deploy process-blend-ticket` from a workstation with the CLI installed.
+**Pending Mason:** ~~`process-blend-ticket` source code is committed but the Edge Function needs a manual deploy~~. **✅ Resolved 2026-05-16 PM** — deployed live as v17 via Supabase MCP after using node-via-bash to JSON-encode the 47KB file content + reading it back through Read.
 
 ---
 

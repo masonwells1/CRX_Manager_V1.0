@@ -185,7 +185,9 @@ for file in $ALL_SQL; do
   done
 
   # SECURITY DEFINER without search_path
-  if echo "$CODE_ONLY" | grep -qiE 'SECURITY\s+DEFINER' && ! echo "$CODE_ONLY" | grep -qiE 'SET\s+search_path'; then
+  # Strip SQL string literals first so SECURITY DEFINER inside COMMENT ON strings doesn't false-positive
+  CODE_NO_STRINGS=$(echo "$CODE_ONLY" | sed "s/'[^']*'//g")
+  if echo "$CODE_NO_STRINGS" | grep -qiE 'SECURITY\s+DEFINER' && ! echo "$CODE_ONLY" | grep -qiE 'SET\s+search_path'; then
     echo "WARNING: $file"
     echo "  Has SECURITY DEFINER without SET search_path."
     echo ""

@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
+import { requireActiveProfile } from "../_shared/auth.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 
@@ -807,19 +808,13 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Invalid token" }, 401);
   }
 
-  // Role check — only admin, sales_rep, and applicator can process documents
+  // Codex audit F1 (P1, 2026-05-16): is_active gate enforced server-side.
+  // Only admin, sales_rep, and applicator can process documents.
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const adminClient = createClient(supabaseUrl, serviceRoleKey);
-  const { data: callerProfile } = await adminClient
-    .from("profiles")
-    .select("role")
-    .eq("id", caller.id)
-    .single();
-  if (
-    !callerProfile ||
-    !["admin", "sales_rep", "applicator"].includes(callerProfile.role)
-  ) {
-    return jsonResponse({ error: "Forbidden" }, 403);
+  const gate = await requireActiveProfile(adminClient, caller.id, ["admin", "sales_rep", "applicator"]);
+  if ("error" in gate) {
+    return jsonResponse({ error: gate.error }, gate.status);
   }
 
   // Parse request body

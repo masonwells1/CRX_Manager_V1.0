@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 import { captureEdgeException } from "../_shared/sentry.ts";
+import { requireActiveProfile } from "../_shared/auth.ts";
 
 // IMPORTANT: Set ALLOWED_ORIGIN in Supabase Function secrets for production.
 // e.g. supabase secrets set ALLOWED_ORIGIN=https://your-domain.com
@@ -791,25 +792,28 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({ error: "Invalid token" }, 401);
   }
 
-  // Role check — only admin, sales_rep, and applicator can process blend tickets
+  // Codex audit F1 (P1, 2026-05-16): is_active gate enforced server-side.
+  // Only admin, sales_rep, and applicator can process blend tickets.
   const adminClient = createClient(supabaseUrl, serviceRoleKey);
-  const { data: callerProfile } = await adminClient
-    .from("profiles")
-    .select("role")
-    .eq("id", caller.id)
-    .single();
-  if (
-    !callerProfile ||
-    !["admin", "sales_rep", "applicator"].includes(callerProfile.role)
-  ) {
-    return jsonResponse({ error: "Forbidden" }, 403);
+  const gate = await requireActiveProfile(adminClient, caller.id, ["admin", "sales_rep", "applicator"]);
+  if ("error" in gate) {
+    return jsonResponse({ error: gate.error }, gate.status);
   }
+  const callerProfile = gate.profile;
 
   let blendTicketId: string;
+  let isReprocess = false;
   try {
     const body = await req.json();
     blendTicketId = body.blend_ticket_id;
     if (!blendTicketId) throw new Error("missing");
+    // Codex audit F3 (P2, 2026-05-16): the frontend (BlendTicketDetail.tsx:458)
+    // sends `reprocess: true` when the user clicks "Re-process OCR", but the
+    // server was silently dropping the flag and blindly INSERTing new product
+    // rows on top of existing ones. Repeated reprocesses = duplicate rows.
+    // Now honored: when reprocess=true, non-manually-corrected product rows
+    // for this ticket are deleted before the new inserts run.
+    isReprocess = body.reprocess === true;
   } catch {
     return jsonResponse({ error: "blend_ticket_id is required" }, 400);
   }
@@ -985,17 +989,44 @@ Deno.serve(async (req: Request) => {
       .eq("id", blendTicketId);
     if (tUpdateErr) throw new Error(`Failed to update ticket ${blendTicketId} with parsed data: ${tUpdateErr.message}`);
 
-    // Codex P2 fix (PR #59, 2026-05-16): clear any previously-inserted product
-    // rows for this ticket before the loop. Without this, a mid-loop throw on
-    // retry attempt N would leave attempt N-1's partial inserts behind, and
-    // the next retry would duplicate them (blend_ticket_products has no unique
-    // constraint on (blend_ticket_id, sequence_order)). DELETE-then-INSERT
-    // gives us idempotency without schema changes.
-    const { error: cleanupErr } = await adminClient
-      .from("blend_ticket_products")
-      .delete()
-      .eq("blend_ticket_id", blendTicketId);
-    if (cleanupErr) throw new Error(`Failed to clear existing products for ticket ${blendTicketId}: ${cleanupErr.message}`);
+    // Codex audit F3 (P2, 2026-05-16): on reprocess, wipe existing rows BEFORE
+    // re-inserting so retries/reprocesses don't append duplicates. The
+    // manually_corrected=false filter preserves any rows the user has hand-
+    // edited via BlendTicketDetail's product edit UI — those are sacred.
+    // (Supersedes the earlier remote-only commit 740e9d9 that unconditionally
+    // wiped every product row including user-corrected ones.)
+    //
+    // Even on first-time runs there's a risk: if a prior attempt failed
+    // mid-loop (after some inserts committed), the retry would also duplicate.
+    // To guard against that without nuking user edits, we also wipe on
+    // first-time runs when ANY non-manual rows already exist for this ticket
+    // (indicating a prior partial run).
+    if (isReprocess) {
+      const { error: delErr } = await adminClient
+        .from("blend_ticket_products")
+        .delete()
+        .eq("blend_ticket_id", blendTicketId)
+        .eq("manually_corrected", false);
+      if (delErr) throw new Error(`Failed to clear prior product rows for reprocess: ${delErr.message}`);
+    } else {
+      // First-time run safety net: detect prior partial-failure rows and
+      // remove them so this attempt doesn't compound the duplication.
+      const { data: priorRows, error: countErr } = await adminClient
+        .from("blend_ticket_products")
+        .select("id")
+        .eq("blend_ticket_id", blendTicketId)
+        .eq("manually_corrected", false)
+        .limit(1);
+      if (countErr) throw new Error(`Failed to check for prior product rows: ${countErr.message}`);
+      if (priorRows && priorRows.length > 0) {
+        const { error: delErr } = await adminClient
+          .from("blend_ticket_products")
+          .delete()
+          .eq("blend_ticket_id", blendTicketId)
+          .eq("manually_corrected", false);
+        if (delErr) throw new Error(`Failed to clear stale product rows from prior partial run: ${delErr.message}`);
+      }
+    }
 
     // Insert product records (critical — each row IS extracted product data)
     for (let i = 0; i < parsedData.products.length; i++) {

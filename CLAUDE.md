@@ -7,9 +7,9 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-05-13, end of day)
-- 66 pages, 93 tables (incl. `rebate_claim_counters`), ~184 RPCs, **337 migrations**, 7 Edge Functions
-- 1,913 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
+## Current State (2026-05-17, end of day)
+- 66 pages, 93 tables (incl. `rebate_claim_counters`), ~184 RPCs, **344 migrations**, 7 Edge Functions
+- 1,914 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
 - Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
@@ -205,6 +205,7 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 ---
 
 ## Schema Gotchas
+- `profile_public_view` uses `security_invoker = off` (SECURITY DEFINER semantics) **by design** — exposes only non-PII profile columns (id, full_name, role, is_active) so non-admin UIs can display user names without leaking email/phone. Supabase security advisor flags this as ERROR; it is an accepted finding. Do NOT switch to `security_invoker = on` without auditing every UI that reads through this view. (Migration: `20260510070000_tighten_customer_profile_rls.sql`)
 - `commissions.commission_amount` is `numeric` dollars (NOT `_cents bigint`)
 - `returns`: `requested_by` (not `created_by`), status `'requested'` (not `'pending'`)
 - `return_items`: references `order_item_id` only (not `delivery_item_id`)
