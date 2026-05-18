@@ -1,4 +1,4 @@
-# Pages & Routes Reference (65 total)
+# Pages & Routes Reference (66 total)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -46,6 +46,7 @@
 | `/accounts-payable/bills` | VendorBills | Admin-only. Vendor bill list with status filtering (unpaid/partially paid/paid/overdue), search |
 | `/accounts-payable/bills/new` | NewVendorBill | Admin-only. Create vendor bill (manual or linked to PO), auto-calculate due date from payment terms |
 | `/accounts-payable/bills/:id` | VendorBillDetail | Admin-only. Bill detail, payment history, record payment, void bill |
+| `/vendors` | Vendors | Admin-only. Vendor master-data CRUD (name, contact, payment terms). Save/delete via `save_vendor` / `delete_vendor` RPCs. Added 2026-05-10 in AP polish bundle (PR #59). |
 | `/sales-reports` | SalesReports | Comprehensive sales & chemical history. 5 tabs (Detail, By Product, By Customer, By Month, By Sales Rep), 6 filters, multi-customer select with farm group support, Customer View toggle (hides cost/margin), CSV/PDF export |
 | `/reports` | Reports | 14 reports: 4 logbook, 6 financial, 4 operational. CSV/PDF export. |
 | `/fields` | Fields | Field list with Mapbox map view + bulk import (shapefile/KML/GeoJSON) |

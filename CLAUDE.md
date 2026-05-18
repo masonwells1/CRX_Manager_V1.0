@@ -8,8 +8,8 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-05-18, end of day)
-- 66 pages, 93 tables (incl. `rebate_claim_counters`), ~184 RPCs, **348 migrations**, 7 Edge Functions
-- 1,914 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
+- 66 pages, 93 tables (incl. `rebate_claim_counters`), ~184 RPCs, **353 migrations**, 7 Edge Functions
+- 1,918 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
 - Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
