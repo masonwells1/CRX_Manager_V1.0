@@ -84,6 +84,27 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Codex P2 (PR #59, 2026-05-16): block password resets for
+    // entity_recipient service profiles (CMCTW LLC, Crop Rx Solutions —
+    // migration 20260516090000). These profiles exist only to receive
+    // commission payouts; they must never gain a usable login. Defense
+    // in depth — the Settings UI also filters them out, but block here
+    // in case a future caller misses the frontend filter.
+    const { data: targetProfile } = await adminClient
+      .from("profiles")
+      .select("role")
+      .eq("id", user_id)
+      .maybeSingle();
+    if (targetProfile?.role === "entity_recipient") {
+      return new Response(
+        JSON.stringify({ error: "Cannot reset password for service profiles" }),
+        {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
     // Use admin API to set the user's password
     const { error: updateError } =
       await adminClient.auth.admin.updateUserById(user_id, { password });

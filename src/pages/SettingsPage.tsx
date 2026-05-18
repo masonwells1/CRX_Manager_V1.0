@@ -182,9 +182,15 @@ export default function SettingsPage() {
   };
 
   const fetchUsers = async () => {
+    // Codex P2 (PR #59, 2026-05-16): exclude entity_recipient service profiles
+    // (CMCTW LLC, Crop Rx Solutions) from the user-management table — they
+    // can't log in and showing them in the Edit/Set-Password UI risks an
+    // admin accidentally setting a real password and defeating the
+    // "can never log in" guarantee from migration 20260516090000.
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
+      .neq('role', 'entity_recipient')
       .order('full_name');
     if (error) {
       toast('error', 'Failed to load users');

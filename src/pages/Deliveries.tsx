@@ -112,6 +112,17 @@ export default function Deliveries() {
   const [printingLoadSheet, setPrintingLoadSheet] = useState(false);
   const [showReschedule, setShowReschedule] = useState(false);
   const [rescheduleDate, setRescheduleDate] = useState('');
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset batchRescheduleIdem when the
+  // selection or target date changes. Same response-lost replay bug pattern
+  // as the BlendTickets/Invoices batch ops — stable selection+date = same
+  // key = idempotent retry; different selection or date = fresh intent.
+  const rescheduleIntentKey = `${Array.from(selected).sort().join(',')}|${rescheduleDate}`;
+  useEffect(() => {
+    batchRescheduleIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rescheduleIntentKey]);
+
   const [rescheduling, setRescheduling] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
 
