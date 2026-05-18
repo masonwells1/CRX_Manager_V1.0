@@ -313,6 +313,9 @@ export default function InventoryPage() {
   };
 
   const openHoldModal = () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset page-scoped key on each open
+    // so different products/customers can't share an idempotency intent.
+    createHoldIdem.resetKey();
     fetchProducts();
     fetchCustomers();
     setHoldProductId('');
@@ -483,6 +486,8 @@ export default function InventoryPage() {
   };
 
   const openReceiveModal = async (inventoryId: string) => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset key per inventory target.
+    receivePoIdem.resetKey();
     const target = inventory.find((i) => i.id === inventoryId);
     if (!target) return;
 
@@ -605,6 +610,8 @@ export default function InventoryPage() {
   // order/delivery between validation and delete. retire_inventory_item RPC
   // does it all in one transaction with FOR UPDATE on the inventory row.
   const handleDelete = (inventoryId: string) => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset retire key per inventory target.
+    retireIdem.resetKey();
     setDeleteConfirmId(inventoryId);
   };
 
@@ -859,7 +866,7 @@ export default function InventoryPage() {
                   <ArrowDownToLine className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setSelectedId(row.id); setAdjustOpen(true); }}
+                  onClick={(e) => { e.stopPropagation(); adjustIdem.resetKey(); setSelectedId(row.id); setAdjustOpen(true); }}
                   className="p-1.5 rounded hover:bg-gray-100 text-secondary"
                   title="Manual Adjustment"
                 >

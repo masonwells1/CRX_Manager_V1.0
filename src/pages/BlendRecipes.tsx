@@ -139,6 +139,11 @@ export default function BlendRecipes() {
 
   // Open editor for new or existing recipe
   const openEditor = async (recipe?: RecipeRow) => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset saveRecipeIdem on every editor
+    // open. The page-scoped key was shared across all recipes; if save A
+    // succeeded but the response was lost, opening the editor for recipe B
+    // and submitting would replay A's cached success without mutating B.
+    saveRecipeIdem.resetKey();
     if (recipe) {
       setEditId(recipe.id);
       setForm({

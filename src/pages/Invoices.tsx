@@ -73,6 +73,8 @@ export default function Invoices() {
   const { toast } = useToast();
   const batchPostIdem = useIdempotencyKey('batch_post_invoices', profile?.id || '');
   const batchVoidIdem = useIdempotencyKey('batch_void_invoices', profile?.id || '');
+  // Reset both batch keys whenever the selected set changes (Codex P2 fix).
+  // See the `selectedKey` derivation + useEffect below.
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -80,6 +82,19 @@ export default function Invoices() {
   const [quickDeliveryOnly, setQuickDeliveryOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [posting, setPosting] = useState(false);
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
+  // user changes their selection. Otherwise the page-scoped keys would carry
+  // over — batch-post A succeeds, response lost, user picks different invoices
+  // and clicks Post → server replays A's cached success without posting B.
+  // Hashing the sorted selected IDs detects intent changes; identical retries
+  // still reuse the key for safe retry-on-network-error.
+  const selectedKey = Array.from(selected).sort().join(',');
+  useEffect(() => {
+    batchPostIdem.resetKey();
+    batchVoidIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedKey]);
   const [voiding, setVoiding] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [showVoidModal, setShowVoidModal] = useState(false);

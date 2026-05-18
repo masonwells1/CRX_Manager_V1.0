@@ -230,6 +230,19 @@ export function BlendTickets() {
     .filter((t) => t.status === 'completed' && t.review_status === 'unreviewed')
     .map((t) => t.id);
 
+  // Codex P2 fix (PR #59, 2026-05-16): reset batch idempotency keys when the
+  // approvable selection changes. Page-scoped keys would otherwise carry over
+  // across submits — if batch-approve A succeeded but the response was lost,
+  // the next batch-approve with a different selection would replay A's
+  // cached success without approving the new tickets. Hashing the sorted
+  // IDs detects intent changes; identical retries still reuse the key.
+  const approvableKey = approvableIds.slice().sort().join(',');
+  useEffect(() => {
+    batchApproveIdem.resetKey();
+    batchRejectIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approvableKey]);
+
   const handleBatchApprove = async () => {
     if (!profile?.id || approvableIds.length === 0) return;
     setBatchApproving(true);

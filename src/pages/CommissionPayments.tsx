@@ -174,6 +174,8 @@ export default function CommissionPayments() {
   };
 
   const openCreate = async () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset page-scoped key on each open.
+    createPaymentIdem.resetKey();
     await fetchUnpaid();
     setSelectedRecipient('');
     setSelectedCommissions(new Set());
@@ -377,6 +379,8 @@ export default function CommissionPayments() {
                 icon={<Send className="w-3 h-3" />}
                 onClick={(e: React.MouseEvent) => {
                   e.stopPropagation();
+                  // Codex P2 fix: reset key so different post-target uses fresh intent.
+                  postPaymentIdem.resetKey();
                   setPostTargetId(r.id);
                   setShowPostConfirm(true);
                 }}
@@ -400,6 +404,8 @@ export default function CommissionPayments() {
                   icon={<RotateCcw className="w-3 h-3" />}
                   onClick={(e: React.MouseEvent) => {
                     e.stopPropagation();
+                    // Codex P2 fix: reset key so different void target uses fresh intent.
+                    voidPaymentIdem.resetKey();
                     setVoidTarget(r);
                     setVoidReason('');
                     setShowVoid(true);
