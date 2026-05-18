@@ -690,6 +690,8 @@ export default function OrderDetail() {
   );
 
   const onCreateInvoiceClick = () => {
+    // Codex P2 fix: reset key per invoice-creation attempt (date/notes vary).
+    createInvoiceIdem.resetKey();
     if (hasPendingDelivery) {
       setInvoiceWarnOpen(true);
       return;
@@ -777,7 +779,7 @@ export default function OrderDetail() {
                   variant="secondary"
                   icon={<Pencil className="w-4 h-4" />}
                   showChevron={false}
-                  onClick={() => setEditing(true)}
+                  onClick={() => { updateOrderIdem.resetKey(); setEditing(true); }}
                 >
                   Edit Order
                 </Button>
@@ -888,7 +890,7 @@ export default function OrderDetail() {
           <div className="flex items-center gap-3">
             {isAdmin && order.status !== 'voided' && order.status !== 'cancelled' && (
               <button
-                onClick={() => { setNewStatus(order.status); setStatusModalOpen(true); }}
+                onClick={() => { cancelOrderIdem.resetKey(); setNewStatus(order.status); setStatusModalOpen(true); }}
                 className="text-xs text-secondary hover:text-crx-green underline"
               >
                 Change Status
@@ -896,7 +898,7 @@ export default function OrderDetail() {
             )}
             {isAdmin && order.status === 'fulfilled' && (
               <button
-                onClick={() => setVoidModalOpen(true)}
+                onClick={() => { voidOrderIdem.resetKey(); setVoidModalOpen(true); }}
                 className="text-xs text-red-500 hover:text-red-700 underline font-medium"
               >
                 Void Order

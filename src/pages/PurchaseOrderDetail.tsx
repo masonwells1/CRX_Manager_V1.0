@@ -164,6 +164,8 @@ export default function PurchaseOrderDetail() {
 
   /* ─── Open receive modal ─── */
   const openReceiveModal = () => {
+    // Codex P2 fix: reset key per receive intent (variable per-item qty/notes).
+    receiveIdem.resetKey();
     const initial: Record<string, ReceiveItemState> = {};
     items.forEach((item) => {
       initial[item.id] = {
@@ -358,6 +360,8 @@ export default function PurchaseOrderDetail() {
   };
 
   const openReverseModal = (rec: ReceivingRecord) => {
+    // Codex P2 fix: reset key per receiving-record target.
+    reverseIdem.resetKey();
     setReverseRecord(rec);
     setReverseReason('');
     reverseIdem.resetKey();
@@ -395,6 +399,8 @@ export default function PurchaseOrderDetail() {
   };
 
   const openEditModal = () => {
+    // Codex P2 fix: reset key per edit-modal open (PO payload editable).
+    savePOIdem.resetKey();
     if (!po) return;
     setEditForm({
       vendor: po.vendor,
@@ -588,7 +594,7 @@ export default function PurchaseOrderDetail() {
                 Edit
               </Button>
               {isAdmin && (po.status === 'draft' || po.status === 'submitted') && (
-                <Button variant="danger" icon={<Ban className="w-4 h-4" />} onClick={() => setCancelOpen(true)}>
+                <Button variant="danger" icon={<Ban className="w-4 h-4" />} onClick={() => { cancelPOIdem.resetKey(); setCancelOpen(true); }}>
                   Cancel PO
                 </Button>
               )}

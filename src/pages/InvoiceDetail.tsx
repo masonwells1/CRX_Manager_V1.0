@@ -401,6 +401,13 @@ export default function InvoiceDetail() {
 
   // Save invoice
   const handleSave = async () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset saveIdem at the top of every
+    // save attempt. The invoice form is always-editable in-page (no separate
+    // edit toggle), so any change between failed submits constitutes a new
+    // intent. Reset-per-click means each save attempt gets a fresh key;
+    // a true network retry (without user edits) is handled by the RPC's
+    // own retry logic and not the React handler.
+    saveIdem.resetKey();
     if (!invoice.customer_id) {
       toast('error', 'Please select a customer');
       return;
@@ -814,7 +821,7 @@ export default function InvoiceDetail() {
           )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
           {!isNew && editable && isAdmin && (
-            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={() => setShowPostConfirm(true)} loading={posting}>
+            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={() => { postIdem.resetKey(); setShowPostConfirm(true); }} loading={posting}>
               Post
             </Button>
           )}
@@ -845,6 +852,8 @@ export default function InvoiceDetail() {
                 variant="secondary"
                 icon={<DollarSign className="w-4 h-4" />}
                 onClick={() => {
+                  // Codex P2 fix: reset pay key per modal open (variable amount/allocation).
+                  payIdem.resetKey();
                   setPayAmount(((invoice.balance_cents || 0) / 100).toFixed(2));
                   setShowPayModal(true);
                 }}
@@ -862,7 +871,7 @@ export default function InvoiceDetail() {
             </>
           )}
           {!isNew && invoice.status === 'posted' && isAdmin && (
-              <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => setShowVoidModal(true)}>
+              <Button variant="ghost" icon={<Ban className="w-4 h-4" />} onClick={() => { voidIdem.resetKey(); setShowVoidModal(true); }}>
                 Void
               </Button>
           )}
@@ -1170,7 +1179,7 @@ export default function InvoiceDetail() {
                 ) : (
                   isAdmin && (
                     <button
-                      onClick={() => { setReverseWoTarget(wo); setShowReverseWoModal(true); }}
+                      onClick={() => { reverseWoIdem.resetKey(); setReverseWoTarget(wo); setShowReverseWoModal(true); }}
                       className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium flex-shrink-0"
                     >
                       <RotateCcw className="w-3 h-3" />

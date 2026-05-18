@@ -315,6 +315,10 @@ export default function JobDetail() {
     : null;
 
   const handleSave = async () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset saveJobIdem per save attempt.
+    // The job form is always-editable (no separate edit toggle), so any
+    // change between failed submits is a new intent.
+    saveJobIdem.resetKey();
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
 
@@ -603,7 +607,7 @@ export default function JobDetail() {
             </Button>
           )}
           {canComplete && (
-            <Button variant="secondary" onClick={() => setShowCompleteModal(true)}>
+            <Button variant="secondary" onClick={() => { completeJobIdem.resetKey(); setShowCompleteModal(true); }}>
               <Check className="w-4 h-4" />
               Complete Job
             </Button>
@@ -768,7 +772,7 @@ export default function JobDetail() {
           <h2 className="text-lg font-semibold text-nav-dark">Chemicals ({chemRows.length})</h2>
           <div className="flex gap-2">
             {canEdit && !isNew && (
-              <Button size="sm" variant="secondary" onClick={() => { setSelectedRecipeId(''); setShowRecipeModal(true); }}>
+              <Button size="sm" variant="secondary" onClick={() => { loadRecipeIdem.resetKey(); setSelectedRecipeId(''); setShowRecipeModal(true); }}>
                 <Beaker className="w-4 h-4" /> Load Recipe
               </Button>
             )}

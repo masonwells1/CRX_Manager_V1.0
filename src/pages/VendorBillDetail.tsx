@@ -176,6 +176,11 @@ export default function VendorBillDetail() {
   };
 
   const openEditModal = () => {
+    // Codex P2 fix (PR #59, 2026-05-16): reset editIdem on every open. The
+    // bill payload (subtotal/adjustment/dates/notes) is user-editable; if
+    // update_vendor_bill succeeded but response was lost, reopening the modal
+    // and changing fields would replay prior result without applying edits.
+    editIdem.resetKey();
     if (!bill) return;
     setEditSubtotal((bill.subtotal_cents / 100).toFixed(2));
     setEditAdjustment(((bill.adjustment_cents || 0) / 100).toFixed(2));
@@ -336,6 +341,8 @@ export default function VendorBillDetail() {
         return (
           <button
             onClick={() => {
+              // Codex P2 fix: reset per-payment void key when target changes.
+              voidPaymentIdem.resetKey();
               setVoidPaymentTarget(r);
               setVoidPaymentReason('');
             }}
@@ -388,6 +395,8 @@ export default function VendorBillDetail() {
               <Button
                 icon={<CreditCard className="w-4 h-4" />}
                 onClick={() => {
+                  // Codex P2 fix: reset payment key per record-payment open.
+                  paymentIdem.resetKey();
                   setPayAmount((bill.balance_cents / 100).toFixed(2));
                   setPayModalOpen(true);
                 }}
@@ -397,7 +406,7 @@ export default function VendorBillDetail() {
               <Button
                 variant="ghost"
                 icon={<XCircle className="w-4 h-4" />}
-                onClick={() => setVoidModalOpen(true)}
+                onClick={() => { voidIdem.resetKey(); setVoidModalOpen(true); }}
                 className="text-red-600 hover:text-red-700"
               >
                 Void
