@@ -45,7 +45,13 @@ export default function NewVendorBill() {
   // Codex P2 fix (PR #59, 2026-05-16): reset createBillIdem when bill intent
   // changes. Page stays mounted after failed/lost-response submit; without
   // reset, editing vendor/bill#/totals and resubmitting replays cached id.
-  const billIntentHash = `${vendorId}|${purchaseOrderId}|${billNumber}|${billDate}|${subtotalDollars}|${adjustmentDollars}`;
+  // Hash MUST cover every submitted field. paymentTermsDays affects due_date
+  // (computed from bill_date + days), notes is sent verbatim. Codex 2026-05-16
+  // follow-up: omitting any field replays prior success silently.
+  const billIntentHash = [
+    vendorId, purchaseOrderId, billNumber, billDate, paymentTerms,
+    String(paymentTermsDays), subtotalDollars, adjustmentDollars, notes,
+  ].join('|');
   useEffect(() => {
     createBillIdem.resetKey();
     // eslint-disable-next-line react-hooks/exhaustive-deps

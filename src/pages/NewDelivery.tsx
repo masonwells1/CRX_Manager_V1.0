@@ -69,7 +69,17 @@ export default function NewDelivery() {
   // Codex P2 fix (PR #59, 2026-05-16): reset the createDeliveryKey when the
   // form intent (order/items/date/driver) changes. Stable form = same key
   // = idempotent retry. Changed form = fresh key = new intent.
-  const intentHash = `${selectedOrderId}|${scheduledDate}|${scheduledTime}|${selectedDriverId}|${selectedAddressId}|${deliveryItems.map((i) => `${i.product_id}:${i.quantity}`).sort().join(',')}`;
+  // Hash MUST cover EVERY submitted field — Codex 2026-05-16 follow-up flagged
+  // that omitting any field (notes, per-item unit_size/tote_number/notes) lets
+  // a same-key replay return success while silently dropping the edited data.
+  const intentHash = [
+    selectedOrderId, scheduledDate, scheduledTime, selectedDriverId,
+    selectedAddressId, deliveryNotes,
+    deliveryItems
+      .map((i) => `${i.order_item_id}:${i.product_id}:${i.quantity}:${i.unit_size || ''}:${i.tote_number || ''}:${i.notes || ''}`)
+      .sort()
+      .join(','),
+  ].join('|');
   useEffect(() => {
     createDeliveryKey.resetKey();
     // eslint-disable-next-line react-hooks/exhaustive-deps

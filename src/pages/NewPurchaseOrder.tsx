@@ -57,7 +57,15 @@ export default function NewPurchaseOrder() {
   // Codex P2 fix (PR #59, 2026-05-16): reset saveIdem when PO intent changes.
   // Page stays mounted after failed/lost-response submit; without reset,
   // editing vendor/items and resubmitting would replay the cached po_id.
-  const poIntentHash = `${vendor}|${expectedDate}|${items.map((i) => `${i.product_id}:${i.quantity_ordered}:${i.unit_cost}`).sort().join(',')}`;
+  // Hash MUST cover every submitted field (vendor/date/notes/items + po_id
+  // for retry-on-existing-PO). Codex 2026-05-16 follow-up enforcement.
+  const poIntentHash = [
+    vendor, expectedDate, notes, savedPoId || '',
+    items
+      .map((i) => `${i.product_id}:${i.quantity_ordered}:${i.unit_cost}:${i.unit_size || ''}`)
+      .sort()
+      .join(','),
+  ].join('|');
   useEffect(() => {
     saveIdem.resetKey();
     // eslint-disable-next-line react-hooks/exhaustive-deps
