@@ -41,6 +41,13 @@ export default function NewDelivery() {
   // both the delivery and its items atomically; the key prevents double-insert
   // on retry/double-submit.
   const createDeliveryKey = useIdempotencyKey('create_delivery_with_items', profile?.id || 'anon');
+  // Codex P2 fix (PR #59, 2026-05-16): reset the key when form intent changes.
+  // The page stays mounted across submissions — if create A succeeded but the
+  // response was lost, the user can edit the form (different order/items/date)
+  // and resubmit, and the persisted key would replay A's cached result without
+  // creating B. Hashing the submission-affecting inputs detects intent
+  // changes; identical retries (form unchanged) still reuse the key.
+  // See useEffect below — needs to fire AFTER state declarations.
   const { warning: driverWarning, check: checkDriverLoad, dismiss: dismissDriverWarning } = useOverloadedDriverCheck();
 
   const preselectedOrderId = searchParams.get('order') || '';
@@ -58,6 +65,16 @@ export default function NewDelivery() {
   const [scheduledDate, setScheduledDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [deliveryNotes, setDeliveryNotes] = useState('');
+
+  // Codex P2 fix (PR #59, 2026-05-16): reset the createDeliveryKey when the
+  // form intent (order/items/date/driver) changes. Stable form = same key
+  // = idempotent retry. Changed form = fresh key = new intent.
+  const intentHash = `${selectedOrderId}|${scheduledDate}|${scheduledTime}|${selectedDriverId}|${selectedAddressId}|${deliveryItems.map((i) => `${i.product_id}:${i.quantity}`).sort().join(',')}`;
+  useEffect(() => {
+    createDeliveryKey.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intentHash]);
+
   const [saving, setSaving] = useState(false);
   const [loadingOrders, setLoadingOrders] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);

@@ -42,6 +42,15 @@ export default function NewVendorBill() {
   const [adjustmentDollars, setAdjustmentDollars] = useState('0');
   const [notes, setNotes] = useState('');
 
+  // Codex P2 fix (PR #59, 2026-05-16): reset createBillIdem when bill intent
+  // changes. Page stays mounted after failed/lost-response submit; without
+  // reset, editing vendor/bill#/totals and resubmitting replays cached id.
+  const billIntentHash = `${vendorId}|${purchaseOrderId}|${billNumber}|${billDate}|${subtotalDollars}|${adjustmentDollars}`;
+  useEffect(() => {
+    createBillIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billIntentHash]);
+
   const fetchVendors = useCallback(async () => {
     const { data } = await supabase
       .from('vendors')

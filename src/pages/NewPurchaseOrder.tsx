@@ -54,6 +54,15 @@ export default function NewPurchaseOrder() {
   const blocker = useUnsavedChanges(isDirty);
   const saveIdem = useIdempotencyKey('save_purchase_order', profile?.id || '');
 
+  // Codex P2 fix (PR #59, 2026-05-16): reset saveIdem when PO intent changes.
+  // Page stays mounted after failed/lost-response submit; without reset,
+  // editing vendor/items and resubmitting would replay the cached po_id.
+  const poIntentHash = `${vendor}|${expectedDate}|${items.map((i) => `${i.product_id}:${i.quantity_ordered}:${i.unit_cost}`).sort().join(',')}`;
+  useEffect(() => {
+    saveIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poIntentHash]);
+
   const fetchProducts = useCallback(async () => {
     const { data } = await supabase
       .from('products')
