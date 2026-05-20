@@ -197,7 +197,17 @@ export default function Fields() {
       clearSelection();
       fetchFields();
     } catch (err: unknown) {
-      toast('error', sanitizeError(err));
+      // A field that's still referenced by jobs / application records / blend
+      // tickets is RESTRICT-protected by the DB (FK violation, code 23503).
+      // sanitizeError would mislabel this as "references data that does not
+      // exist" — the opposite of the truth — so handle it explicitly.
+      const code = (err as { code?: string } | null)?.code;
+      const msg = (err as { message?: string } | null)?.message ?? '';
+      if (code === '23503' || /update or delete on table .* violates foreign key/i.test(msg)) {
+        toast('error', 'Cannot delete: one or more selected fields are still in use by jobs, application records, blend tickets, or other records. Remove those references first.');
+      } else {
+        toast('error', sanitizeError(err));
+      }
     }
     setDeleting(false);
     setDeleteModalOpen(false);
