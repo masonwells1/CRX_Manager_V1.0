@@ -9,3 +9,4 @@ Phase 23 (DB CHECK constraints on inventory buckets) unlocks when negatives=0 fo
 | 2026-05-01 | 17 | 15 | 60 | Baseline (audit day) |
 | 2026-05-08 | 17 | 15 | 59 | -1 unbilled resolved |
 | 2026-05-15 | 17 | 15 | 59 | No change this week — zero rows resolved |
+| 2026-05-22 | 17 | 15 | 59 | No change this week — zero rows resolved |
