@@ -61,14 +61,12 @@ See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for full table.
 - Needs test fixtures from you: `.shp`, `.dbf`, `.prj`, `.kml` sample files for the field-import flow.
 - Once fixtures land, `shapefile` and `@mapbox/togeojson` can be swapped to `shpjs` and `@tmcw/togeojson`.
 
-### Entity commission recipients design call
-`CMCTW LLC` and `Crop Rx Solutions` are commission recipients with no profile row, so `recipient_user_id` stays NULL and `create_commission_payment` rejects them. Pre-existing limitation. **Pick 1 of 4 options:**
-1. Create service profile rows for entity recipients (smallest change; expands profile semantics)
-2. Refactor `CommissionSplitEditor` to source from `profile_public_view` and send profile UUIDs
-3. Update `create_commission_payment` to allow grouping by `recipient` text when `recipient_user_id IS NULL`
-4. Move entity-recipient payments to a separate manual flow
-
-Once decided, implementation is ~1 hour.
+### ~~Entity commission recipients design call~~ — RESOLVED 2026-05-16
+Decided **Option 1** (service profile rows) and implemented in migration `20260516090000`:
+non-loginable profiles with role `entity_recipient` for `CMCTW LLC` and `Crop Rx Solutions`,
+so `create_commission_payment`'s group-by-`recipient_user_id` works with no refactor.
+Verified live 2026-05-25: 2 entity profiles, 18 commissions linked ($72,174.90 CMCTW now payable),
+1 remaining NULL recipient is a benign cancelled $0 row. No further action.
 
 ### Live-fire smoke test of `send-email` v11 (recommended but not blocking)
 30-second test: trigger any customer-tied email from the app, confirm it arrives. Proves the v11 WAL-pattern code executes end-to-end (deploy proves the bundle is there; this proves the new flow works).
@@ -102,9 +100,9 @@ Blocked on creating `crx-manager-staging` Supabase project + adding `STAGING_SUP
 
 | Metric | Value |
 |---|---|
-| Migrations | 337 (340 once PR #60 merges) |
+| Migrations | 353 |
 | Pages | 66 |
-| Tables | 93 |
+| Tables | 95 |
 | RPCs | ~184 |
 | Edge Functions | 7 — all deployed live: `send-email` v11, `setup-blend-tickets-storage` v14, `process-blend-ticket` v17, others current |
 | Unit tests | 1,914 passing (130 files, 70 skipped) |

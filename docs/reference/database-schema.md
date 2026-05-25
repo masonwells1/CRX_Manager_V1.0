@@ -1,4 +1,4 @@
-# Database Schema Reference (90 Tables)
+# Database Schema Reference (95 Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -8,6 +8,7 @@
 - `cost_history` - Cost change audit log (product_id, old/new costs and prices, change_note)
 - `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, Mapbox polygon geometry)
 - `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
+- `field_polygons` - Multi-polygon support per field (field_id, polygon_geojson jsonb, label, acres, sort_order). Sibling to `fields.parent_field_id` grouping; migration 20260334900000 (Field Management V3)
 - `vehicles` - Ground/air application equipment (type, capacity, registration, FAA N-number or DOT#, status)
 - `application_services` - Named application services with per-acre pricing (name, vehicle_id, default_rate_per_acre_cents, cost_per_acre_cents, is_active). Services like "Hagie Y-Drop Nitrogen" or "Rogator Application"
 - `customer_application_rates` - Per-customer rate overrides for application services (~5% of customers). UNIQUE(customer_id, application_service_id, season)
@@ -51,6 +52,7 @@
 
 ## Application Records
 - `application_records` - Single source of truth for "what was applied, where, when, by whom." Fed from completed jobs AND approved blend tickets. JSONB for products and weather.
+- `application_record_fields` - Per-field rows linked to an application_record (application_record_id, field_id, acres, sort_order) — normalizes the fields covered by a single application event
 
 ## OCR / Blend Tickets
 - `blend_tickets` - OCR ticket records (ticket_number, status, review_status, ocr_confidence_score, raw_ocr_text, job_id, application_service_id)
@@ -132,6 +134,7 @@
 ## System / Infrastructure
 - `idempotency_keys` - Idempotent operation cache (idempotency_key UNIQUE, operation, result jsonb, expires_at — auto-cleanup after 24h)
 - `rate_limit_log` - Rate limiting tracker (user_id, operation, created_at — accessed only by SECURITY DEFINER functions)
+- `rate_limits` - Per-user sliding-window counter (user_id, action_name, window_start, request_count — accessed only by SECURITY DEFINER functions)
 
 ## Config
 - `app_settings` - Key-value settings (setting_key, setting_value)

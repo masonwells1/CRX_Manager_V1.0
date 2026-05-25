@@ -7,8 +7,8 @@
 - **Supabase ID:** rhyzpcqhnizqbxphqdkr
 - **Owner:** masonwells1 (beginner — explain things simply)
 
-## Current State (2026-05-18, end of day)
-- 66 pages, 93 tables (incl. `rebate_claim_counters`), ~184 RPCs, **353 migrations**, 7 Edge Functions
+## Current State (2026-05-25)
+- 66 pages, 95 tables (incl. `rebate_claim_counters`), ~184 RPCs, **353 migrations**, 7 Edge Functions (+ `_shared` lib dir)
 - 1,918 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
 - Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green
@@ -24,11 +24,11 @@
 - **2026-05-13 codex review of PR #59 — all P1s closed, 11/13 P2s closed.** 10 follow-up migrations + 1 frontend refactor + 1 strict-actor hotfix landed; all applied live via Supabase MCP. The 4 changed Edge Functions (`create-user`, `reset-user-password`, `seed-admin`, `setup-blend-tickets-storage`) deployed to live via MCP with the `_shared/sentry.ts` audit #28 hardening.
 - **2026-05-16:** `send-email` Edge Function deployed to v11 (PR-03 `farm_name` fix + WAL-pattern durable idempotency from ultra-review P2 #5); `setup-blend-tickets-storage` deployed to v14 (CORS hardening, ultra-review P3 #7). 3 new migrations: #335 (transfer_job_to_invoice canonical idempotency), #336 (notification RPCs idempotency), #337 (email_log.status += 'pending'). Ultra-review (`docs/reports/2026-05-16-ultra-code-review-findings.md`) — all 8 findings disposed: 7 fixed live, 1 (P2 #6 process-blend-ticket error checks) code committed but deploy pending. P1 #2 verified false positive. All 20 PR #59 codex threads now resolved. PR #60 advisory comment + follow-up posted: live state confirmed safe (drops were no-op or affected only Storage API list/download, not public-URL rendering).
 - **2026-05-16 (PM):** All Edge Functions now deployed live — `process-blend-ticket` v17 deployed via MCP (47KB inline worked fine after using node-via-bash to JSON-encode the file content + reading it back through Read). All 10 ultra-review P2 #6 error checks verified in deployed bundle.
-- **Pending Mason:** Phase 4 backup verification (Supabase dashboard — not exposed via MCP); Phase 4 restore drill (half-day operational exercise); #38 abandoned-package swap (needs `.shp`/`.dbf`/`.prj`/`.kml` test fixtures); entity commission recipients design call (4 options in TODO.md).
+- **Pending Mason:** Phase 4 backup verification (Supabase dashboard — not exposed via MCP); Phase 4 restore drill (half-day operational exercise); #38 abandoned-package swap (needs `.shp`/`.dbf`/`.prj`/`.kml` test fixtures).
 - **Deferred (follow-up sprint):**
   - 3 known `(*_cents * qty)::bigint` instances in `transfer_job_to_invoice`, `create_invoice_from_blend_ticket`, `save_field_app_invoice` — single-instance each, smaller blast radius — to be wrapped with `safe_cents_qty()`.
   - Customer RLS upper bound (P2 #3) — intentionally left as lower-bound-only; farm logistics require future visibility for route/job planning.
-  - Entity commission recipients (CMCTW LLC, Crop Rx Solutions) — `recipient_user_id` stays NULL because no profile row exists. Need design call on entity-recipient payment flow.
+  - Entity commission recipients — **RESOLVED 2026-05-16** (Option 1, migration `20260516090000`): non-loginable service profile rows with role `entity_recipient` created for CMCTW LLC + Crop Rx Solutions. 18 CMCTW commissions ($72,174.90) now payable; verified live 2026-05-25 (2 entity profiles, 18 linked commissions, only 1 NULL recipient which is a cancelled $0 row).
 
 ---
 
@@ -180,7 +180,7 @@ checkMutationResult(result, 'Update context');
 
 ---
 
-## Edge Functions (8 in `supabase/functions/`)
+## Edge Functions (7 in `supabase/functions/`, + `_shared/` lib dir)
 - **create-user** — Admin-only user creation
 - **process-blend-ticket** — OCR via Google Vision AI
 - **process-document** — Document processing
@@ -246,10 +246,10 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 
 | Doc | Contents |
 |-----|----------|
-| `docs/reference/database-schema.md` | 96+ tables + RLS matrix |
-| `docs/reference/rpc-functions.md` | ~165 RPCs + triggers |
-| `docs/reference/migration-history.md` | 333 migration entries |
-| `docs/reference/pages-routes.md` | 63 pages with routes |
+| `docs/reference/database-schema.md` | 95 tables + RLS matrix |
+| `docs/reference/rpc-functions.md` | ~184 RPCs + triggers |
+| `docs/reference/migration-history.md` | 353 migrations |
+| `docs/reference/pages-routes.md` | 66 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
 | `docs/CHANGELOG.md` | Sprint-by-sprint history |

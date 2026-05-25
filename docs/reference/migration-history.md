@@ -2,7 +2,27 @@
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
-> ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the table below. Index now covers #1–#345 without gaps. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
+> ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
+
+> 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Un-indexed migrations (backfilled 2026-05-25)
+
+These 10 historical migrations apply by timestamp order like all others; they simply lacked a row here. Listed newest-first.
+
+| Timestamp | File | Description |
+|-----------|------|-------------|
+| 20260516100000 | `create_prepay_check_splits_active_admin_check` | **Codex P1 (PR #59).** Added `AND is_active = true` to the admin role lookup in `create_prepay_check_splits` — a deactivated admin with a still-valid JWT could otherwise create `prepay_credits` and bump `customers.prepay_balance_cents`. Body otherwise verbatim. Applied live via MCP. |
+| 20260516090000 | `entity_commission_recipients_service_profiles` | **Design call 2026-05-16 (Option 1).** Created non-loginable service profile rows for `CMCTW LLC` and `Crop Rx Solutions` (new `entity_recipient` role) so `create_commission_payment`'s group-by-`recipient_user_id` works without refactor. Unblocked 18 CMCTW commissions ($72,174.90) and backfilled their `recipient_user_id`. Deterministic UUIDs for idempotent replay. |
+| 20260516080000 | `create_delivery_with_items_reject_duplicate_order_items` | **Codex P2 (PR #59).** Pre-scans `p_items` with `GROUP BY ... HAVING count > 1` and raises `ITEM_DUPLICATE` before any insert — two `{order_item_id:X}` entries against the same remaining qty would both pass the per-item check and silently over-fulfill. Body otherwise verbatim from 20260516050000. |
+| 20260516070000 | `log_failed_notification_restore_defaults` | **Codex P2 (PR #59).** Migration 20260516020000 accidentally dropped `DEFAULT NULL` from `log_failed_notification`'s `p_entity_type`/`p_entity_id`/`p_payload`; the two-arg catch-block callers in `Dashboard.tsx` then failed PostgREST overload resolution and silently lost failure logs. Restored the defaults. Applied live via MCP. |
+| 20260511095000 | `apply_prepay_drop_old_overload` | **Codex P1 (PR #59).** Drops the legacy 3-arg `apply_prepay_to_invoice(uuid,uuid,bigint)` so the next migration's 5-arg hardened version (adds `p_performed_by` + `p_idempotency_key`) installs cleanly — `CREATE OR REPLACE` won't replace across a changed identity signature, and `batch_apply_prepayments` would otherwise keep binding the un-hardened body. |
+| 20260511020000 | `create_prepay_check_splits` | **Spawned task 2026-05-11.** Restored the never-applied `create_prepay_check_splits` RPC (PrepaymentManager.tsx called a function absent from `pg_proc` — the "split a check into buckets" flow was broken). Rebuilt with canonical idempotency helpers, valid `prepay_credit_created` audit op, dedicated `bucket_label` column, and strict-actor pattern. |
+| 20260511010000 | `actor_spoof_cleanup` | **Post-audit PR-10.** `reassign_delivery` and `batch_cancel_deliveries` had inherited the spoofable `v_actor := COALESCE(p_performed_by, auth.uid())` pattern (privilege escalation in a SECURITY DEFINER RPC). Switched to strict `auth.uid()` + `AUTH_REQUIRED`/`ACTOR_MISMATCH`. No frontend changes needed. |
+| 20260510999999 | `profiles_select_tighten` | **Audit PR-07 part 2.** Tightens the `profiles` SELECT policy from `USING (true)` (PII leak) to admins-and-self. Timestamped `999999` so it sits **dormant** in apply order until every non-PII profile join migrates to `profile_public_view` — applying prematurely renders "Unknown User" across ~34 UI joins. |
+| 20260334900000 | `field_grouping_multi_polygon` | **Field Management V3.** Adds `fields.parent_field_id` (self-referencing, self-parent CHECK) for parent/child grouping and creates the **`field_polygons`** table (multi-polygon support per field, RLS-enabled). See `docs/plans/2026-03-31-field-management-v3-design.md`. |
+| 20260331000000 | `fix_postgis_search_path` | **Bug fix.** Added `extensions` to `search_path` on all PostGIS-using SECURITY DEFINER functions (`get_fields_with_geojson`, `get_field_geojson`, …) — they had `public, pg_temp` only, but `ST_AsGeoJSON`/`ST_GeogFromGeoJSON` live in `extensions`, causing 404s on the Fields page. |
+
 
 > ✅ **Migration 337 (20260516030000) applied live 2026-05-16.** Ultra-review P2 #5 prep — expanded `email_log.status` CHECK to allow `'pending'` (was `'sent', 'failed', 'bounced'`). Supports the durable write-ahead-log pattern in `send-email` Edge Function v11: insert pending row BEFORE Resend call, update to sent/failed after. Eliminates the "customer got email but no audit/idempotency record" failure mode when post-send INSERT fails. Existing code paths that filter by sent/failed/bounced unaffected.
 
