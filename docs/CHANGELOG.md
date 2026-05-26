@@ -4,6 +4,25 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-26 — Full-codebase ultra review execution
+
+Executed the 2026-05-25 ultra-review remediation in one migration plus targeted source fixes. Migration `20260526090000_execute_full_codebase_ultra_review.sql` revokes anon/PUBLIC execution from write-oriented SECURITY DEFINER RPCs, revokes anon table-level DML, hardens `apply_write_off`, `issue_return_credit`, and `void_order` against actor spoofing, restores server-side commission split validation, reconciles commission split rounding, consolidates `next_invoice_number` to one overload, adds idempotency to `duplicate_quote`, `create_followup_delivery`, and `generate_finance_charges`, serializes finance charge generation, allows voiding unposted commission payments, and blocks blank completed-delivery signatures.
+
+Source fixes: CSV exports now neutralize formula-leading values, CustomerDetail financial RPCs use `assertRpcResult`, commission payments can be voided from the unposted tab, offline completed-delivery queueing resets the idempotency key, RUP warning activity logs no longer use an empty actor, `reset-user-password` uses fail-loud `ALLOWED_ORIGIN`, `create-user` captures profile phone update errors, and `quotePdf.ts` removes the stray non-`reportPdf.ts` `any`.
+
+Docs now record migrations `20260517010000`, `20260517020000`, `20260518010000`, and `20260526090000`; migration count is 354. Pending live work: apply the new migration to Supabase and redeploy `reset-user-password` + `create-user`.
+
+**Parallel-session reconciliation (same day, later) added three blockers + one regex extension to the same migration** (see `docs/audits/2026-05-26-claude-disposition-of-codex-execution.md §10`):
+
+- **B4** — explicit `REVOKE EXECUTE ON FUNCTION public.execute_sql_readonly(text) FROM anon, PUBLIC`. SECURITY DEFINER + arbitrary-SELECT body would have let anon read every public table bypassing RLS. Regex prefix `execute_` was outside the original sweep set.
+- **B5** — same revoke on `unapply_credit_memo(uuid, text, uuid, text)`. Body uses `v_actor := COALESCE(p_performed_by, auth.uid())` — same actor-forgery anti-pattern as RLS-1. Regex prefix `unapply_` was outside the original sweep set.
+- **B6** — `CREATE SEQUENCE IF NOT EXISTS public.cm_invoice_number_seq` near the top of the migration. Live `pg_sequences` lookup showed only 3 invoice sequences (cs/mc/base) — `cm_invoice_number_seq` was missing because the historical migration creating it (`20260316100002_return_credit_ar_integration.sql`) lives on disk but was never applied (confirmed via MCP `list_migrations`). The new `next_invoice_number('credit_memo')` references this sequence; without B6, `issue_return_credit` would have crashed on the first credit-memo issuance (latent — live had 0 credit_memo rows at audit time).
+- **C1** — extended the REVOKE regex `^(apply|approve|…)` with `auto|retry|revert` prefixes, sweeping three more anon-callable SECDEF functions: `auto_expire_quotes`, `retry_failed_notifications`, `revert_quote_status`.
+
+Verification `DO $$` block gained three additive assertions: sequence existence (B6), `anon` has no EXECUTE on `execute_sql_readonly` (B4) and `unapply_credit_memo` (B5). Lint/typecheck/tests/SQL validator all clean post-edit.
+
+---
+
 ## 2026-05-17 — Codex `/audit` findings closure: is_active gate, OCR dedup, cross-delivery aggregate, doc drift (F1 P1, F2 P2, F3 P2, F4 P3)
 
 Codex ran `/audit` post-ultra-review closeout and surfaced 4 new findings none of which the prior ultra-review caught — all live at the integration boundary (Edge Function ↔ DB consistency, RPC ↔ frontend contract, cross-RPC aggregation). Independent review confirmed all 4 valid. All 4 closed in one branch.

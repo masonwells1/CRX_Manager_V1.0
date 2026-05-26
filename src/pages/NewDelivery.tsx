@@ -234,8 +234,8 @@ export default function NewDelivery() {
     checkRUPCompliance(customer.id, productIds).then((res) => {
       if (!cancelled) {
         setRupWarnings(res.warnings);
-        if (res.warnings.length > 0) {
-          logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on delivery for customer without valid license`, performedBy: profile?.id ?? '', entityType: 'customer', entityId: customer.id, customerId: customer.id });
+        if (res.warnings.length > 0 && profile?.id) {
+          logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on delivery for customer without valid license`, performedBy: profile.id, entityType: 'customer', entityId: customer.id, customerId: customer.id });
         }
       }
     });

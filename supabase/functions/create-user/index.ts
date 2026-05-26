@@ -136,10 +136,17 @@ Deno.serve(async (req: Request) => {
     }
 
     if (phone) {
-      await adminClient
+      const { error: phoneError } = await adminClient
         .from("profiles")
         .update({ phone })
         .eq("id", newUser.user.id);
+      if (phoneError) {
+        await captureEdgeException(phoneError, {
+          function: "create-user",
+          level: "warning",
+          extra: { context: "profile_phone_update", user_id: newUser.user.id },
+        });
+      }
     }
 
     return new Response(

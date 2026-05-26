@@ -1,5 +1,18 @@
 import { localToday } from './dateUtils';
 
+const FORMULA_LEADING_CHAR = /^[=+\-@\t\r]/;
+
+function quoteCsv(value: string): string {
+  const safeValue = FORMULA_LEADING_CHAR.test(value) ? `'${value}` : value;
+  return `"${safeValue.replace(/"/g, '""')}"`;
+}
+
+export function formatCSVCell(value: unknown): string {
+  if (value === null || value === undefined) return '""';
+  if (typeof value === 'number') return String(value);
+  return quoteCsv(String(value));
+}
+
 /**
  * Export data to a CSV file and trigger a download.
  * Works entirely in the browser - no server needed.
@@ -24,11 +37,9 @@ export function exportToCSV<T extends Record<string, unknown>>(
       .map((col) => {
         const value = row[col.key];
         if (col.format) {
-          return `"${col.format(value, row).replace(/"/g, '""')}"`;
+          return quoteCsv(col.format(value, row));
         }
-        if (value === null || value === undefined) return '""';
-        if (typeof value === 'number') return String(value);
-        return `"${String(value).replace(/"/g, '""')}"`;
+        return formatCSVCell(value);
       })
       .join(',');
   });

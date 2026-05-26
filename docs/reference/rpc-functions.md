@@ -9,14 +9,14 @@
 ## Atomic Save/Delete
 - `save_quote()` — upsert quote + items; validates commission splits sum to 100%
 - `save_job()` — upsert job + chemicals
-- `save_customer()` — upsert customer; validates commission splits sum to 100%
+- `save_customer()` — upsert customer; validates commission splits server-side (recipient required, no duplicates, each percentage >0 and <=100, total 100%)
 - `save_blend_ticket()` — upsert blend ticket + items
 - `save_blend_recipe(p_recipe_id uuid, p_name text, p_recipe_type text, p_items jsonb, ...)` — atomic create-or-replace for blend recipes. For updates, DELETE + INSERT items happen in the same transaction so a failed insert rolls back the DELETE too — closes audit #34 (BlendRecipes wiped items on failed save). Migration 20260513010000.
 - `save_purchase_order()` — upsert PO + items
 - `save_invoice()` — upsert invoice + items
 - `save_field()` — upsert field record
 - `delete_purchase_order()` — soft-delete PO (must be draft)
-- `duplicate_quote()` — deep-clone quote + items with new number
+- `duplicate_quote()` — deep-clone quote + items with new number; canonical idempotency wired in migration 20260526090000
 - `create_quote_version(p_quote_id uuid, p_performed_by uuid)` — snapshots full quote state (sections + items) for version history. SECURITY DEFINER, search_path = public, pg_temp
 - `restore_quote_version(p_version_id uuid, p_performed_by uuid)` — restores quote from a version snapshot as revised draft. SECURITY DEFINER, search_path = public, pg_temp
 - `admin_update_profile()` — admin-only profile updates (name, role, email, active flag)
@@ -36,7 +36,7 @@
 - `batch_cancel_deliveries()` — batch cancel multiple deliveries
 - `batch_reschedule_deliveries()` — batch reschedule deliveries to new dates
 - `reassign_delivery()` — reassign delivery to different driver
-- `create_followup_delivery()` — create follow-up delivery for remaining items
+- `create_followup_delivery()` — create follow-up delivery for remaining items; canonical idempotency wired in migration 20260526090000
 - `get_customer_delivery_remainders()` — get undelivered remainder items for a customer
 - `create_quick_delivery()` — atomic order + delivery + draft invoice in one transaction; includes inventory pre-check with `FOR UPDATE` locks to prevent overselling. **2026-05-13 (audit #6):** uses `_insert_commissions_for_order()` helper instead of inline INSERT — fixes a latent bug where the prior inline block referenced columns that don't exist on `commissions`. **2026-05-13 (audit #7):** uses `safe_cents_qty(price_cents, qty)` instead of the truncating `(price_cents * qty)::bigint` cast.
 - `create_delivery_with_items(p_order_id uuid, p_customer_id uuid, p_scheduled_date date, p_items jsonb, ...)` — atomic delivery + items create. Frontend (`NewDelivery.tsx`) calls this instead of two separate `.insert()`s — closes audit #10 (orphaned-delivery race). Generates `delivery_number` via `next_delivery_number()`. SECURITY DEFINER, role-gated to admin/sales_rep. Migration 20260513010000.
@@ -100,7 +100,7 @@
 - `next_po_number()` -> PO-YYYY-NNNN
 - `next_application_record_number()` -> APP-YYYY-NNNN
 - `next_job_number()` -> JOB-YYYY-NNNN
-- `next_invoice_number()` -> INV-YYYY-NNNN (accepts invoice type param)
+- `next_invoice_number(p_invoice_type text DEFAULT 'field_application')` -> typed prefixes (`INV`, `CS`, `MC`, `CM`); single overload after migration 20260526090000
 - `next_cycle_count_number()` -> CC-YYYY-NNNN
 - `next_return_number()` -> RET-YYYY-NNNN
 - `next_commission_payment_number()` -> CP-YYYY-NNNN
@@ -130,7 +130,7 @@
 - `create_commission_payment()`, `post_commission_payment()`
 - `apply_write_off(invoice_id, amount_cents, reason, performed_by, idempotency_key?)` — writes off balance with idempotency guard, creates write-off record and audit log entry. Auto-sets status='paid' when write-off brings balance to 0. Accepts 'posted' or 'overdue' invoices.
 - `reverse_write_off(write_off_id, reason, performed_by?, idempotency_key?)` — admin-only. Marks write-off `reversed_at`/`reversed_by`/`reversed_reason`, decrements `invoices.write_off_cents` (balance_cents is GENERATED — never written directly), and re-derives status when reversal lifts balance > 0: `'overdue'` if past due_date, `'posted'` otherwise. Returns `{ success, write_off_id, amount_cents, invoice_id, new_balance_cents, status_changed, new_status }`. Idempotent: replays return the previously stored result. Wave A.1 + 20260506200000 follow-up / migration 20260506170000 + 20260506200000.
-- `generate_finance_charges(performed_by, ...)` — admin-only (role check enforced in RPC body), generates finance charge invoices excluding prior charges
+- `generate_finance_charges(performed_by, ...)` — admin-only (role check enforced in RPC body), idempotent, advisory-locked by as-of date, generates finance charge invoices excluding prior charges
 - `get_customer_transaction_review()`
 - `apply_remaining_prepayments(customer_id, performed_by, idempotency_key?)` — applies a customer's available prepay balance to oldest-unpaid posted invoices. Wave A.4 / migration 20260506180000 enforces `check_period_open` per-invoice (not just `CURRENT_DATE`). Any invoice in a closed period raises and rolls back the entire batch.
 - `batch_apply_prepayments(allocations jsonb, performed_by, idempotency_key?)` — atomic batch of explicit prepay-credit→invoice allocations; loops `apply_prepay_to_invoice`. Wave A.4 / migration 20260506180000 enforces `check_period_open` per-invoice before each inner call.

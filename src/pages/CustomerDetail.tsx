@@ -268,19 +268,26 @@ export default function CustomerDetail() {
       try {
         const today = localToday();
         const ninetyDaysAgo = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
-        const [agingRes, txnRes, prepayRes] = await Promise.all([
-          supabase.rpc('get_ar_aging', { p_as_of_date: today }),
-          supabase.rpc('get_customer_statement', { p_customer_id: id, p_start_date: ninetyDaysAgo, p_end_date: today }),
-          supabase.from('prepay_credits').select('*').eq('customer_id', id!).gt('balance_cents', 0),
-        ]);
-        if (agingRes.error) toast('error', 'Failed to load AR aging');
-        if (txnRes.error) toast('error', 'Failed to load transactions');
-        if (prepayRes.error) toast('error', 'Failed to load prepay credits');
-        const allAging = (agingRes.data || []) as AgingRow[];
+        // Sequential awaits (not Promise.all) per the assertRpcResult coverage
+        // convention documented in src/lib/assertRpcCoverage.test.ts:76-79 — the
+        // regex requires `= await supabase.rpc(...)` immediately, which
+        // Promise.all array elements don't match. The prior Promise.all
+        // restoration (audit finding B2) traded the test's 0-debt baseline for
+        // parallelism; the parallel-session audit (2026-05-26 §10.8) reverted
+        // it to honor the codebase convention. ~2× slower on this tab only.
+        const { data: agingData, error: agingError } = await supabase.rpc('get_ar_aging', { p_as_of_date: today });
+        if (agingError) throw agingError;
+        const allAging = assertRpcResult<AgingRow[]>(agingData, 'get_ar_aging');
         const myAging = allAging.find((a) => a.customer_id === id) || null;
         setAging(myAging);
-        setTransactions(((txnRes.data || []) as TxnRow[]));
-        setPrepayCredits((prepayRes.data || []) as PrepayRow[]);
+
+        const { data: txnData, error: txnError } = await supabase.rpc('get_customer_statement', { p_customer_id: id, p_start_date: ninetyDaysAgo, p_end_date: today });
+        if (txnError) throw txnError;
+        setTransactions(assertRpcResult<TxnRow[]>(txnData, 'get_customer_statement'));
+
+        const { data: prepayData, error: prepayError } = await supabase.from('prepay_credits').select('*').eq('customer_id', id!).gt('balance_cents', 0);
+        if (prepayError) throw prepayError;
+        setPrepayCredits((prepayData || []) as PrepayRow[]);
         financialsFetched.current = true;
       } catch (err: unknown) {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'customer_financials_tab' } });
@@ -405,12 +412,28 @@ export default function CustomerDetail() {
       }
     }
 
-    // Commission split validation — splits must sum to 100%
+    // Commission split validation - mirrors the server-side RPC guard.
     if (customer.default_commission_split?.splits?.length) {
-      const splitTotal = customer.default_commission_split.splits.reduce(
-        (sum: number, s: { percentage: number }) => sum + (s.percentage || 0),
-        0
-      );
+      const seenRecipients = new Set<string>();
+      let splitTotal = 0;
+      for (const split of customer.default_commission_split.splits) {
+        const recipient = split.recipient.trim();
+        if (!recipient) {
+          toast('error', 'Every commission split needs a recipient');
+          return;
+        }
+        const recipientKey = recipient.toLowerCase();
+        if (seenRecipients.has(recipientKey)) {
+          toast('error', `Commission recipient "${recipient}" is listed more than once`);
+          return;
+        }
+        seenRecipients.add(recipientKey);
+        if (!Number.isFinite(split.percentage) || split.percentage <= 0 || split.percentage > 100) {
+          toast('error', `Commission percentage for ${recipient} must be between 0 and 100`);
+          return;
+        }
+        splitTotal += split.percentage;
+      }
       if (Math.abs(splitTotal - 100) >= 0.01) {
         toast('error', `Commission splits must total 100% (currently ${splitTotal.toFixed(1)}%)`);
         return;

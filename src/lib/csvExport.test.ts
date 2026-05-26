@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, type MockInstance } from 'vitest';
-import { exportToCSV, fmtCSV, fmtDateCSV } from './csvExport';
+import { exportToCSV, fmtCSV, fmtDateCSV, formatCSVCell } from './csvExport';
 
 describe('fmtCSV', () => {
   it('formats a positive number as USD', () => {
@@ -54,6 +54,24 @@ describe('fmtDateCSV', () => {
 
   it('returns empty string for empty string', () => {
     expect(fmtDateCSV('')).toBe('');
+  });
+});
+
+describe('formatCSVCell', () => {
+  it('neutralizes formula-leading text values', () => {
+    expect(formatCSVCell('=SUM(A1:A2)')).toBe('"\'=SUM(A1:A2)"');
+    expect(formatCSVCell('+cmd')).toBe('"\'+cmd"');
+    expect(formatCSVCell('-cmd')).toBe('"\'-cmd"');
+    expect(formatCSVCell('@cmd')).toBe('"\'@cmd"');
+  });
+
+  it('neutralizes tab and carriage-return leading values', () => {
+    expect(formatCSVCell('\t=SUM(A1:A2)')).toBe('"\'\t=SUM(A1:A2)"');
+    expect(formatCSVCell('\r=SUM(A1:A2)')).toBe('"\'\r=SUM(A1:A2)"');
+  });
+
+  it('escapes quotes after neutralizing values', () => {
+    expect(formatCSVCell('="hello"')).toBe('"\'=""hello"""');
   });
 });
 

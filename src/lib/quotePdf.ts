@@ -12,6 +12,12 @@ type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
   lastAutoTable: { finalY: number };
 };
 
+type AutoTableColumnStyle = {
+  cellWidth?: 'auto' | 'wrap' | number;
+  halign?: 'left' | 'center' | 'right' | 'justify';
+  fontStyle?: 'normal' | 'bold' | 'italic' | 'bolditalic';
+};
+
 // Brand colours
 const CRX_GREEN: [number, number, number] = [40, 162, 106]; // #28A26A
 const CHARCOAL: [number, number, number] = [46, 46, 46]; // #2E2E2E
@@ -201,8 +207,7 @@ export async function generateQuotePdf(data: PdfQuoteData, columns?: string[]) {
     );
 
     // Build column styles: right-align columns that need it, last col bold
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- jspdf-autotable Styles type is overly strict for dynamic column config
-    const colStyles: Record<number, any> = { 0: { cellWidth: 'auto' } };
+    const colStyles: Record<number, AutoTableColumnStyle> = { 0: { cellWidth: 'auto' } };
     activeCols.forEach((c, i) => {
       if (PDF_COLUMN_DEFS[c].align === 'right') {
         colStyles[i] = { ...(colStyles[i] || {}), halign: 'right' };

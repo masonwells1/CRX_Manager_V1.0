@@ -770,6 +770,7 @@ export default function DeliveryDetail() {
           createdAt: new Date().toISOString(),
           retryCount: 0,
         });
+        completeIdem.resetKey();
         toast('success', 'Delivery saved offline — will sync when you reconnect');
       } catch {
         toast('error', 'Failed to save offline. Please try again.');

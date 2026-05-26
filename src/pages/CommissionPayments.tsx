@@ -373,22 +373,39 @@ export default function CommissionPayments() {
             key: 'id',
             header: '',
             render: (r: CommissionPaymentRow) => (
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={<Send className="w-3 h-3" />}
-                onClick={(e: React.MouseEvent) => {
-                  e.stopPropagation();
-                  // Codex P2 fix: reset key so different post-target uses fresh intent.
-                  postPaymentIdem.resetKey();
-                  setPostTargetId(r.id);
-                  setShowPostConfirm(true);
-                }}
-                loading={posting === r.id}
-                showChevron={false}
-              >
-                Post
-              </Button>
+              <div className="flex justify-end gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<Send className="w-3 h-3" />}
+                  onClick={(e: React.MouseEvent) => {
+                    e.stopPropagation();
+                    // Codex P2 fix: reset key so different post-target uses fresh intent.
+                    postPaymentIdem.resetKey();
+                    setPostTargetId(r.id);
+                    setShowPostConfirm(true);
+                  }}
+                  loading={posting === r.id}
+                  showChevron={false}
+                >
+                  Post
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  icon={<RotateCcw className="w-3 h-3" />}
+                  onClick={(e: React.MouseEvent) => {
+                    e.stopPropagation();
+                    voidPaymentIdem.resetKey();
+                    setVoidTarget(r);
+                    setVoidReason('');
+                    setShowVoid(true);
+                  }}
+                  showChevron={false}
+                >
+                  Void
+                </Button>
+              </div>
             ),
           },
         ] as Column<CommissionPaymentRow>[]

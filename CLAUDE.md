@@ -8,7 +8,7 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-05-25)
-- 66 pages, 95 tables (incl. `rebate_claim_counters`), ~184 RPCs, **353 migrations**, 7 Edge Functions (+ `_shared` lib dir)
+- 66 pages, 95 tables (incl. `rebate_claim_counters`), ~184 RPCs, **354 migrations**, 7 Edge Functions (+ `_shared` lib dir)
 - 1,918 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
 - Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green
@@ -24,9 +24,10 @@
 - **2026-05-13 codex review of PR #59 — all P1s closed, 11/13 P2s closed.** 10 follow-up migrations + 1 frontend refactor + 1 strict-actor hotfix landed; all applied live via Supabase MCP. The 4 changed Edge Functions (`create-user`, `reset-user-password`, `seed-admin`, `setup-blend-tickets-storage`) deployed to live via MCP with the `_shared/sentry.ts` audit #28 hardening.
 - **2026-05-16:** `send-email` Edge Function deployed to v11 (PR-03 `farm_name` fix + WAL-pattern durable idempotency from ultra-review P2 #5); `setup-blend-tickets-storage` deployed to v14 (CORS hardening, ultra-review P3 #7). 3 new migrations: #335 (transfer_job_to_invoice canonical idempotency), #336 (notification RPCs idempotency), #337 (email_log.status += 'pending'). Ultra-review (`docs/reports/2026-05-16-ultra-code-review-findings.md`) — all 8 findings disposed: 7 fixed live, 1 (P2 #6 process-blend-ticket error checks) code committed but deploy pending. P1 #2 verified false positive. All 20 PR #59 codex threads now resolved. PR #60 advisory comment + follow-up posted: live state confirmed safe (drops were no-op or affected only Storage API list/download, not public-URL rendering).
 - **2026-05-16 (PM):** All Edge Functions now deployed live — `process-blend-ticket` v17 deployed via MCP (47KB inline worked fine after using node-via-bash to JSON-encode the file content + reading it back through Read). All 10 ultra-review P2 #6 error checks verified in deployed bundle.
+- **2026-05-26:** Full-codebase ultra review execution migration added (`20260526090000`): revokes anon/public write-oriented SECURITY DEFINER RPC execution, hardens `apply_write_off`/`issue_return_credit`/`void_order` actor checks, restores server-side commission split validation + reconciled rounding, consolidates `next_invoice_number`, adds idempotency to duplicate quote/follow-up delivery/finance charge generation, allows voiding unposted commission payments, and adds a DB signature guard for completed deliveries. Frontend/Edge fixes cover CSV formula injection, CustomerDetail RPC assertions, commission-payment void UI, offline complete-delivery idempotency reset, `reset-user-password` fail-loud CORS, and `create-user` phone-update error capture. Pending live apply/deploy.
+- **2026-05-26 (parallel audit additions to migration `20260526090000`):** Three new blockers folded into the same migration after parallel-session reconciliation (`docs/audits/2026-05-26-claude-disposition-of-codex-execution.md §10`): **B4** explicit `REVOKE EXECUTE … FROM anon` on `execute_sql_readonly(text)` (SECURITY DEFINER + arbitrary SELECT was an anon RLS-bypass; regex prefix `execute_` missed); **B5** same on `unapply_credit_memo(uuid,text,uuid,text)` (RLS-1 actor-forgery anti-pattern; regex prefix `unapply_` missed); **B6** `CREATE SEQUENCE IF NOT EXISTS public.cm_invoice_number_seq` (the historical migration creating it on disk was never applied live; verified via MCP `list_migrations`). Without B6, `next_invoice_number('credit_memo')` would have crashed on first credit-memo issuance. **C1** also folded — REVOKE regex extended with `auto|retry|revert` prefixes to sweep `auto_expire_quotes`, `retry_failed_notifications`, `revert_quote_status`. Verification `DO $$` block gained 3 assertions (sequence exists, B4/B5 anon revoke). Still pending live apply/deploy.
 - **Pending Mason:** Phase 4 backup verification (Supabase dashboard — not exposed via MCP); Phase 4 restore drill (half-day operational exercise); #38 abandoned-package swap (needs `.shp`/`.dbf`/`.prj`/`.kml` test fixtures).
 - **Deferred (follow-up sprint):**
-  - 3 known `(*_cents * qty)::bigint` instances in `transfer_job_to_invoice`, `create_invoice_from_blend_ticket`, `save_field_app_invoice` — single-instance each, smaller blast radius — to be wrapped with `safe_cents_qty()`.
   - Customer RLS upper bound (P2 #3) — intentionally left as lower-bound-only; farm logistics require future visibility for route/job planning.
   - Entity commission recipients — **RESOLVED 2026-05-16** (Option 1, migration `20260516090000`): non-loginable service profile rows with role `entity_recipient` created for CMCTW LLC + Crop Rx Solutions. 18 CMCTW commissions ($72,174.90) now payable; verified live 2026-05-25 (2 entity profiles, 18 linked commissions, only 1 NULL recipient which is a cancelled $0 row).
 
@@ -248,7 +249,7 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 |-----|----------|
 | `docs/reference/database-schema.md` | 95 tables + RLS matrix |
 | `docs/reference/rpc-functions.md` | ~184 RPCs + triggers |
-| `docs/reference/migration-history.md` | 353 migrations |
+| `docs/reference/migration-history.md` | 354 migrations |
 | `docs/reference/pages-routes.md` | 66 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
