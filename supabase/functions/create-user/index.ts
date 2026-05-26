@@ -83,6 +83,25 @@ Deno.serve(async (req: Request) => {
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+      // B8 (2026-05-26 post-Codex audit): mirror the entity_recipient guard
+      // from reset-user-password. SettingsPage.tsx:393 routes the Set-Password
+      // UI through THIS endpoint (action=reset_password), so the EDGE-2 fix
+      // applied to reset-user-password v12 was effectively dead code without
+      // this server-side check. The UI filter at SettingsPage.tsx:185-193 is
+      // defense-in-depth; this gate is the real one. Without it, a crafted
+      // POST with a known entity_recipient UUID would defeat the
+      // "can never log in" guarantee from migration 20260516090000.
+      const { data: targetProfile } = await adminClient
+        .from("profiles")
+        .select("role")
+        .eq("id", user_id)
+        .maybeSingle();
+      if (targetProfile?.role === "entity_recipient") {
+        return new Response(
+          JSON.stringify({ error: "Cannot reset password for service profiles" }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
       const { error: updateError } = await adminClient.auth.admin.updateUserById(user_id, { password: newPw });
       if (updateError) {
         return new Response(JSON.stringify({ error: updateError.message }), {

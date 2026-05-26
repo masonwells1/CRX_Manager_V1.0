@@ -4,13 +4,30 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-26 (post-Codex audit) — B7/B8/B9 follow-up fixes
+
+Codex performed a post-apply review of commits `fce0629` + `a824952` and surfaced three blockers the parallel-Claude session missed. All three remediated; live state verified.
+
+**B7 — Migration version drift (P2 administrative).** Supabase MCP `apply_migration` stamped the live record with `now()` (`20260526151856`) rather than parsing the disk filename's `20260526090000`. Disk renamed via `git mv` to match live — same content, same hash, just the timestamp prefix aligned. Same MCP behavior applied to the new B9 migration: disk-named `20260526170000`, live-stamped `20260526201319`, renamed to match. Prevents future `supabase db push` from trying to re-apply already-applied migrations.
+
+**B8 — `create-user` reset_password branch bypassed EDGE-2 (P1 security).** The deployed `reset-user-password` v12 carries the entity_recipient block, but the production UI (`SettingsPage.tsx:393`) routes Set-Password through `create-user?action=reset_password`, NOT `reset-user-password`. The EDGE-2 fix was therefore dead code in practice — a crafted POST with an entity_recipient UUID would bypass the UI filter and set a real password on the service profiles (CMCTW LLC / Crop Rx Solutions), defeating migration `20260516090000`. Added the same entity_recipient guard to `create-user`'s reset branch (lines 86-104 of source); redeployed as **v20 ACTIVE**. Deployed source verified via `get_edge_function`.
+
+**B9 — Six anon-callable SECDEF DML helpers (P2 cluster).** Codex's broader scan (post-regex sweep) found 6 SECURITY DEFINER helpers still anon-EXECUTE-able with DML + no `auth.uid()` check: `check_idempotency`, `check_rate_limit` (forgeable `p_user_id` — DoS vector), `check_remainder_reminders`, `cleanup_rate_limits`, `log_failed_notification`, `notify_damaged_receiving`. New migration `20260526201319_revoke_anon_on_secdef_dml_helpers.sql` revokes from `anon`/`authenticated`/`PUBLIC` and explicitly grants to `service_role`. Legitimate callers (SECDEF wrappers running as `postgres` owner; pg_cron running as superuser) unaffected. Verification block asserts the revocations held.
+
+Edge Function deployed live: `create-user` v19 → **v20 ACTIVE**.
+Migration applied live: `20260526201319_revoke_anon_on_secdef_dml_helpers` — verification block passed atomically.
+
+See `docs/audits/2026-05-26-claude-disposition-of-codex-execution.md §11` for the post-Codex audit reconciliation. Codex's full prompt is preserved at `docs/audits/2026-05-26-codex-post-apply-audit-prompt.md`.
+
+---
+
 ## 2026-05-26 — Full-codebase ultra review execution
 
-Executed the 2026-05-25 ultra-review remediation in one migration plus targeted source fixes. Migration `20260526090000_execute_full_codebase_ultra_review.sql` revokes anon/PUBLIC execution from write-oriented SECURITY DEFINER RPCs, revokes anon table-level DML, hardens `apply_write_off`, `issue_return_credit`, and `void_order` against actor spoofing, restores server-side commission split validation, reconciles commission split rounding, consolidates `next_invoice_number` to one overload, adds idempotency to `duplicate_quote`, `create_followup_delivery`, and `generate_finance_charges`, serializes finance charge generation, allows voiding unposted commission payments, and blocks blank completed-delivery signatures.
+Executed the 2026-05-25 ultra-review remediation in one migration plus targeted source fixes. Migration `20260526151856_execute_full_codebase_ultra_review.sql` revokes anon/PUBLIC execution from write-oriented SECURITY DEFINER RPCs, revokes anon table-level DML, hardens `apply_write_off`, `issue_return_credit`, and `void_order` against actor spoofing, restores server-side commission split validation, reconciles commission split rounding, consolidates `next_invoice_number` to one overload, adds idempotency to `duplicate_quote`, `create_followup_delivery`, and `generate_finance_charges`, serializes finance charge generation, allows voiding unposted commission payments, and blocks blank completed-delivery signatures.
 
 Source fixes: CSV exports now neutralize formula-leading values, CustomerDetail financial RPCs use `assertRpcResult`, commission payments can be voided from the unposted tab, offline completed-delivery queueing resets the idempotency key, RUP warning activity logs no longer use an empty actor, `reset-user-password` uses fail-loud `ALLOWED_ORIGIN`, `create-user` captures profile phone update errors, and `quotePdf.ts` removes the stray non-`reportPdf.ts` `any`.
 
-Docs now record migrations `20260517010000`, `20260517020000`, `20260518010000`, and `20260526090000`; migration count is 354. Pending live work: apply the new migration to Supabase and redeploy `reset-user-password` + `create-user`.
+Docs now record migrations `20260517010000`, `20260517020000`, `20260518010000`, and `20260526151856`; migration count is 354. Pending live work: apply the new migration to Supabase and redeploy `reset-user-password` + `create-user`.
 
 **Parallel-session reconciliation (same day, later) added three blockers + one regex extension to the same migration** (see `docs/audits/2026-05-26-claude-disposition-of-codex-execution.md §10`):
 

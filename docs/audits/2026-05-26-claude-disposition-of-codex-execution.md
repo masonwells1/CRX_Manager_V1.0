@@ -683,3 +683,111 @@ Promise.all + assertRpcResult is fundamentally incompatible with this test's reg
 **Net result on B-list:** B1 and B3 still good. **B2 (Promise.all restoration) reverted as wrong-direction.** B4/B5/B6 stand. Perf cost is ~2× wait on the financials tab only (single page, single tab, infrequent navigation); acceptable trade for keeping the 0-baseline coverage test green.
 
 *This is the most useful catch a parallel audit can produce: surfacing an in-flight implementation regression that no single session would have seen, because the prior session ran lint/typecheck/subset-tests (86/86) but did not re-run the full vitest suite that includes the coverage test.*
+
+---
+
+## 11. Post-Codex audit reconciliation (later same day)
+
+**Reviewer:** Codex (independent, repo + live-DB read access).
+**Prompt:** `docs/audits/2026-05-26-codex-post-apply-audit-prompt.md`.
+**Scope:** Adversarial review of commits `fce0629` (main remediation) + `a824952` (schema-registry stamp) — the work executed in Phases 1-7 by the parallel Claude session (sections 1-10 above).
+
+Codex confirmed the verification-block assertions, the B2 reversion, edge function deploy parity, B6 sequence creation, C1 regex extension — all OK. But Codex surfaced **three new blockers** the parallel audit missed:
+
+### 11.1 B7 — Migration version drift (P2 administrative)
+
+**Evidence:** Live `schema_migrations` shows version `20260526151856` for the ultra-review migration, but the disk filename committed in `fce0629` is `20260526090000_*.sql`. Function bodies match the migration content (live `md5(prosrc)` matches), so the divergence is purely in the version-tracking label.
+
+**Root cause:** Supabase MCP's `apply_migration` tool generates its own timestamp at apply time (`now()`) rather than parsing the disk filename. The ~6h gap (`090000` vs `151856` UTC) matches the actual apply moment of my run, not the file's pre-commit creation time.
+
+**Risk:** Future `supabase db push` (or any tool comparing disk filenames against `schema_migrations`) sees `20260526090000_*.sql` on disk with no matching row and would attempt to re-apply, breaking idempotency.
+
+**Fix applied:**
+```bash
+git mv supabase/migrations/20260526090000_execute_full_codebase_ultra_review.sql \
+       supabase/migrations/20260526151856_execute_full_codebase_ultra_review.sql
+```
+Plus four doc references updated (CLAUDE.md, CHANGELOG.md, migration-history.md, audit doc cross-references). Same MCP-stamp-vs-disk-name problem repeated for the new B9 migration (disk `20260526170000`, live `20260526201319`); resolved with a second `mv` immediately after apply.
+
+**Severity:** P2. Not a runtime bug; blocks `git push` until cleaned up.
+
+### 11.2 B8 — `create-user` reset_password branch bypassed EDGE-2 (P1 security)
+
+**Evidence:**
+- Production UI: `src/pages/SettingsPage.tsx:393` POSTs to `/functions/v1/create-user` with `body: { action: 'reset_password', user_id, password }`.
+- Zero callers of `reset-user-password` in `src/` (grep verified).
+- `create-user/index.ts:71-105` (pre-fix) handled `action === "reset_password"` by calling `adminClient.auth.admin.updateUserById(user_id, { password: newPw })` with **no entity_recipient check**.
+- The UI filter at `SettingsPage.tsx:185-193` (`.neq('role', 'entity_recipient')`) was the only defense — a crafted POST bypasses it.
+
+**Why this matters:** The EDGE-2 fix applied in Phase 6 (deployed `reset-user-password` v12 with the entity_recipient block) was **dead code in practice** because production never calls that endpoint. The "service profiles can never log in" guarantee from migration `20260516090000` was defeated server-side; only the UI filter prevented abuse.
+
+**Fix applied:** Added the same `entity_recipient` guard to `create-user`'s reset_password branch (lines 86-104 of `supabase/functions/create-user/index.ts`). Pattern: `SELECT role FROM profiles WHERE id = user_id; if role === 'entity_recipient' → return 403`. Redeployed `create-user` via MCP: **v19 → v20 ACTIVE**. Verified deployed source contains the guard via `get_edge_function`.
+
+**Severity:** P1 — actively exploitable until the redeploy. The parallel audit missed it because it scoped Edge Function verification narrowly to "does the deployed source match the repo source?" — both matched, but neither contained the guard on the actual production code path.
+
+### 11.3 B9 — Six anon-callable SECDEF DML helpers (P2 cluster)
+
+**Evidence:** Codex's broader query (after the parallel audit's regex-targeted sweep finished) found 6 SECURITY DEFINER helpers still anon-EXECUTE-able with DML and no `auth.uid()` check:
+
+| Function | Abuse vector |
+|---|---|
+| `check_idempotency(p_key,p_op)` | Cleanup-loop DoS via expired-key DELETE; minor |
+| `check_rate_limit(p_user_id,...)` | **Forgeable `p_user_id`** — anon can exhaust any user's rate limit (DoS legitimate logins) |
+| `check_remainder_reminders()` | Anon can trigger ALL remainder notifications on demand |
+| `cleanup_rate_limits()` | Anon can wipe rate-limit history, evading limits |
+| `log_failed_notification(...)` | Audit-log poisoning via fake failure rows |
+| `notify_damaged_receiving(...)` | Anon can send fake "Damaged Items Received" admin alerts |
+
+**Why the parallel audit missed it:** B4 and B5 caught the *mutating-prefix* helpers (`execute_*`, `unapply_*`) the original regex skipped. B9 catches helpers with *non-mutating* prefixes (`check_*`, `cleanup_*`, `log_*`, `notify_*`) that nonetheless perform DML. Different pattern; broader scan needed.
+
+**Fix applied:** New migration `20260526201319_revoke_anon_on_secdef_dml_helpers.sql`:
+```sql
+REVOKE EXECUTE ON FUNCTION public.<fn>(...) FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.<fn>(...) TO service_role;
+```
+on all 6 functions. Plus a verification `DO $$` block that raises if anon or authenticated still has EXECUTE on any of them. Applied via MCP; verification block passed atomically.
+
+**Why this is safe:**
+- All 6 are called by other SECDEF wrappers (e.g., `apply_write_off` calls `check_idempotency`) which run as the `postgres` owner — `postgres` bypasses its own EXECUTE grants.
+- `pg_cron` jobs (`check-remainder-reminders` daily at 06:30 UTC, etc.) run as the superuser — also unaffected.
+- No frontend code calls any of these helpers directly (grep verified).
+- `service_role` retains an explicit GRANT for defense-in-depth.
+
+**Severity:** P2 latent. Not exploited today, but real abuse vectors.
+
+### 11.4 Codex's "passed" verification (recorded)
+
+For completeness, Codex independently verified and **AGREED** with:
+- Migration content hash matches `fce0629` blob `141433af...`.
+- All 7 verification-block assertions from migration 347 hold live (`next_invoice_number` = 1 overload, `cm_invoice_number_seq` exists, anon cannot EXECUTE `apply_write_off`/`execute_sql_readonly`/`unapply_credit_memo`, `validate_commission_split_json` + `guard_completed_delivery_signature` exist, anon table-DML grants = 0).
+- B6 sequence: owner `postgres`, start 1, increment 1; no existing `CM-%` invoices → no duplicate risk.
+- C1 regex extension: `auto_expire_quotes`, `retry_failed_notifications`, `revert_quote_status` all now `anon=false`, `authenticated=true`.
+- B2 reversion in `CustomerDetail.tsx:271-290`: sequential awaits, `assertRpcResult` on both RPCs, error handling + Sentry capture preserved; `npx vitest run src/lib/assertRpcCoverage.test.ts` passes 3/3.
+- Edge Function deploy parity: `reset-user-password` v12 + `create-user` v19 matched repo source.
+
+### 11.5 CI side-effect note (deferred — not blocking)
+
+Codex flagged: `src/lib/schemaIntegrityLive.test.ts:44` calls `execute_sql_readonly` using `VITE_SUPABASE_ANON_KEY`. After B4 revoked anon EXECUTE on that function, the test will fail if CI runs against the live DB with anon credentials. Local dev is unaffected (`vite.config.ts:108-112` sets a stub URL, so live tests skip). CI (`.github/workflows/ci.yml:78-82`) does pass real env vars.
+
+**Decision:** deferred to a follow-up commit. Three viable options exist (rewrite the test to use a non-revoked read path, re-grant anon + add in-function role check, env-gate the live tests in CI); choice depends on whether CI's anon role should ever be trusted for live introspection. Not blocking the push of these fixes — the test is the only known consumer affected, and it can be patched in a separate change once the policy decision is made.
+
+### 11.6 Sign-off matrix (combined three sessions)
+
+| Item | Codex | Parallel | Post-Codex | Status |
+|---|---|---|---|---|
+| Original 10-domain audit findings (RLS-1, MIG-1, etc.) | Source | Verified | Re-verified | **Applied** |
+| B1 idempotency-body-check marker | — | Applied | OK | **Applied** |
+| B2 Promise.all → sequential | — | Mis-applied, then reverted | OK | **Applied** (sequential) |
+| B3 SECURITY INVOKER comment | — | Applied | OK | **Applied** |
+| B4 `execute_sql_readonly` revoke | — | Applied | OK | **Applied** |
+| B5 `unapply_credit_memo` revoke | — | Applied | OK | **Applied** |
+| B6 `cm_invoice_number_seq` create | — | Applied | OK | **Applied** |
+| C1 regex extension (`auto`/`retry`/`revert`) | — | Applied | OK | **Applied** |
+| **B7 migration version drift** | — | — | **Applied** (rename) | **Resolved** |
+| **B8 `create-user` reset_password guard** | — | — | **Applied** (v20) | **Deployed** |
+| **B9 SECDEF DML helpers revoke** | — | — | **Applied** (migration 348) | **Applied** |
+| CI side-effect (schemaIntegrityLive.test.ts) | Flagged | — | Deferred | Follow-up |
+
+All three sessions agree the codebase is **safe to push**. Local working tree clean apart from this commit's pending changes; live state matches the renamed disk filenames; no known runtime regressions.
+
+*Generated by Claude (post-Codex audit session, 2026-05-26). Verifications executed against live project `rhyzpcqhnizqbxphqdkr` via MCP `execute_sql` (read-only); deployment via MCP `apply_migration` + `deploy_edge_function`.*
