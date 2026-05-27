@@ -4,6 +4,27 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-26 (pre-push final audit) — B10 corrective fix for migration 348
+
+Codex's pre-push final audit caught a P1 production-breaking regression in commit `05be295`'s migration 348: the broad `REVOKE EXECUTE … FROM authenticated` on all 6 SECDEF DML helpers also revoked authenticated EXECUTE on 3 functions the frontend actively calls (`check_remainder_reminders` from `Dashboard.tsx:348`, `log_failed_notification` from `Dashboard.tsx:353/365` + `notificationTriggers.ts:37`, `notify_damaged_receiving` from `notificationTriggers.ts:278`). Those code paths were throwing 403 immediately on every dashboard load and every receiving-damaged-items flow.
+
+New migration `20260527020457_grant_authenticated_on_frontend_secdef_helpers.sql` (applied live):
+
+- **Re-grants `authenticated` EXECUTE** on `check_remainder_reminders`, `log_failed_notification`, `notify_damaged_receiving`.
+- **Adds body-level role checks** to 2 of those 3 (admin-only for `check_remainder_reminders`; admin OR sales_rep for `notify_damaged_receiving`). The pattern `IF auth.uid() IS NOT NULL AND NOT <role> THEN RAISE 'INSUFFICIENT_ROLE'` lets `pg_cron` and `service_role` (both have `auth.uid() = NULL`) bypass, preserving the existing 06:30 UTC `check-remainder-reminders` cron job.
+- **`log_failed_notification` body unchanged** — it's a pure logging helper; the GRANT-level gate is sufficient.
+- **3 pure server-side helpers stay locked down**: `check_idempotency`, `check_rate_limit`, `cleanup_rate_limits` remain `anon=false, authenticated=false, service_role=true`. Verified no frontend callers via fresh `rg`.
+
+Migration applied via MCP; all 11 verification assertions passed atomically (per-function policy + body-level guard presence). Live state confirmed: 3 frontend functions `authenticated=true`, 3 server helpers `authenticated=false`, all 6 `anon=false`.
+
+P3 doc drift also fixed in this commit:
+- Migration count 354 → **356** in `CLAUDE.md` (×2), `AGENTS.md`, and `docs/reference/migration-history.md`.
+- `create-user` version typo (`v19` → `v20`) in audit doc §11.4 corrected with a typo-note.
+
+See `docs/audits/2026-05-26-claude-disposition-of-codex-execution.md §12` for full reconciliation.
+
+---
+
 ## 2026-05-26 (post-Codex audit) — B7/B8/B9 follow-up fixes
 
 Codex performed a post-apply review of commits `fce0629` + `a824952` and surfaced three blockers the parallel-Claude session missed. All three remediated; live state verified.

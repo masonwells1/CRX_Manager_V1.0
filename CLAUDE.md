@@ -8,7 +8,7 @@
 - **Owner:** masonwells1 (beginner — explain things simply)
 
 ## Current State (2026-05-25)
-- 66 pages, 95 tables (incl. `rebate_claim_counters`), ~184 RPCs, **354 migrations**, 7 Edge Functions (+ `_shared` lib dir)
+- 66 pages, 95 tables (incl. `rebate_claim_counters`), ~184 RPCs, **356 migrations**, 7 Edge Functions (+ `_shared` lib dir)
 - 1,918 unit tests (130 files, 70 skipped) + 94 E2E spec files, all passing
 - Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green
@@ -250,7 +250,7 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 |-----|----------|
 | `docs/reference/database-schema.md` | 95 tables + RLS matrix |
 | `docs/reference/rpc-functions.md` | ~184 RPCs + triggers |
-| `docs/reference/migration-history.md` | 354 migrations |
+| `docs/reference/migration-history.md` | 356 migrations |
 | `docs/reference/pages-routes.md` | 66 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
