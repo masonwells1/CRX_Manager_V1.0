@@ -5,7 +5,7 @@
 // DURING THIS SESSION (not just dirty from before session start).
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -61,6 +61,29 @@ if (newCodeChanges.length === 0) {
   process.exit(0);
 }
 
+// Warn at most ONCE per distinct set of changes, so we don't block every turn
+// in an infinite loop. We persist a marker keyed on the current change-set.
+// If the change-set is unchanged since we last warned (i.e. the model already
+// saw the reminder and presumably ran build/test), allow the stop to proceed.
+// Only when NEW/different code changes appear do we warn again.
+const changeKey = newCodeChanges.slice().sort().join("\n");
+const markerPath = path.join(os.tmpdir(), "crx-claude-hooks", `session-${sessionId}.warned`);
+let alreadyWarned = "";
+if (existsSync(markerPath)) {
+  try { alreadyWarned = readFileSync(markerPath, "utf8"); } catch { /* ignore */ }
+}
+
+if (alreadyWarned === changeKey) {
+  // Same change-set we already warned about — don't re-block.
+  process.exit(0);
+}
+
+// New or changed set — record it, then warn once.
+try {
+  mkdirSync(path.dirname(markerPath), { recursive: true });
+  writeFileSync(markerPath, changeKey, "utf8");
+} catch { /* non-fatal: worst case we warn again next turn */ }
+
 const reason = `Code files changed THIS SESSION in src/, supabase/migrations/, supabase/functions/, or scripts/:
 ${newCodeChanges.slice(0, 5).map(l => "  " + l).join("\n")}
 
@@ -68,6 +91,6 @@ Before declaring the work complete, run:
   npm run build
   npm run test
 
-If you've already run them since the last code change, ignore this and continue.`;
+(This reminder fires once per change-set; it will not repeat unless new code changes appear.)`;
 
 process.stdout.write(JSON.stringify({ decision: "block", reason }));

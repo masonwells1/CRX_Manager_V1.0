@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">70 routes · 151 RPC calls · 0 issues · Updated May 20, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">71 routes · 165 RPC calls · 0 issues · Updated May 28, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -969,6 +969,14 @@ const NODES = [
       "problem": false
     },
     {
+      "id": "vendors",
+      "label": "Vendors",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/vendors",
+      "problem": false
+    },
+    {
       "id": "settings-page",
       "label": "SettingsPage",
       "type": "page-admin",
@@ -1627,6 +1635,11 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "blend-recipes",
+      "t": "r-blend",
+      "type": "rpc"
+    },
+    {
       "s": "blend-ticket-detail",
       "t": "r-blend",
       "type": "rpc"
@@ -1707,6 +1720,11 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "invoice-detail",
+      "t": "r-payment",
+      "type": "rpc"
+    },
+    {
       "s": "invoices",
       "t": "r-invoice",
       "type": "rpc"
@@ -1714,6 +1732,11 @@ const EDGES = [
     {
       "s": "job-detail",
       "t": "r-job",
+      "type": "rpc"
+    },
+    {
+      "s": "new-delivery",
+      "t": "r-delivery",
       "type": "rpc"
     },
     {
@@ -1794,6 +1817,11 @@ const EDGES = [
     {
       "s": "sales-reports",
       "t": "r-report",
+      "type": "rpc"
+    },
+    {
+      "s": "vendors",
+      "t": "r-po",
       "type": "rpc"
     },
     {

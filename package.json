@@ -16,6 +16,7 @@
     "test:e2e:report": "playwright show-report",
     "test": "vitest run",
     "test:watch": "vitest",
+    "generate-map": "node scripts/generate-workflow-map.mjs",
     "prepare": "husky"
   },
   "dependencies": {

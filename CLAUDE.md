@@ -164,6 +164,7 @@ These rules exist because **migration drift caused 40+ bugs** in March 2026.
 ### Job: `scheduled → in_progress → completed → cancelled → invoiced`
 ### PO: `draft → submitted → partially_received → fully_received → cancelled`
 ### Return: `requested → approved → received → credited → rejected → cancelled`
+### Commission Payment: `unposted → posted → voided`
 
 ### Tier Pricing
 - Customers: tier 1, 2, or 3. Products: tier1/2/3_price. Quotes inherit tier.
@@ -176,7 +177,13 @@ These rules exist because **migration drift caused 40+ bugs** in March 2026.
 ### Commissions
 - `commission_split` JSONB: `{ splits: [{ recipient, percentage }] }`
 - `save_customer()` validates splits sum to 100%
-- Status: `pending → paid → cancelled`
+- Per-order commission record status: `pending → paid → cancelled`
+
+### Commission Payment (batch): `unposted → posted → voided`
+- `commission_payments` table — a payout batch grouping multiple commission records for one recipient
+- Created with `status = 'unposted'`; finalized to `posted`; reversible via `void_commission_payment()` → `voided`
+- CHECK constraint: `status IN ('unposted', 'posted', 'voided')` (see `20260331120000_void_commission_payment.sql`)
+- Distinct from the per-order `commissions.status` above
 
 ---
 
@@ -501,6 +508,8 @@ To exempt a specific file from a PreToolUse hook, add the marker comment named i
 **Refresh schema registry after schema changes:** `node scripts/regenerate-schema-registry.mjs` (or ask Claude Code to do it via Supabase MCP).
 
 **Refresh AGENTS.md after CLAUDE.md changes:** `node scripts/regenerate-agents-md.mjs`.
+
+**Refresh architecture map:** `npm run generate-map` (or `node scripts/generate-workflow-map.mjs`). Auto-runs in pre-commit hook and stages `docs/app-workflow-map.html` automatically.
 
 ### Before Every Commit
 1. `npm run lint` — 0 errors (ESLint now blocks confirm/alert/wrong-imports)
