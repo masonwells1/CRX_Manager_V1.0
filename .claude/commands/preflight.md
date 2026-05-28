@@ -42,9 +42,9 @@ If NONE of the categories flipped (e.g., only docs changed), skip to Step 3.
 Run each and capture pass/fail:
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && npm run lint
-cd /c/Users/mason/CRX_Manager_V1.0 && npm run build
-cd /c/Users/mason/CRX_Manager_V1.0 && npm run test -- --reporter=verbose 2>&1 | tail -15
+cd /c/CRX_Manager && npm run lint
+cd /c/CRX_Manager && npm run build
+cd /c/CRX_Manager && npm run test -- --reporter=verbose 2>&1 | tail -15
 ```
 
 These also run automatically when Mason types `git commit` (via husky pre-commit hook). Running them here just surfaces failures earlier so Mason can fix before the commit attempt rejects.
@@ -52,7 +52,7 @@ These also run automatically when Mason types `git commit` (via husky pre-commit
 ## Step 4: Quick doc-drift check
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && echo "Pages: $(grep -c 'lazy(' src/App.tsx)" && echo "Migrations: $(ls supabase/migrations/*.sql | wc -l)"
+cd /c/CRX_Manager && echo "Pages: $(grep -c 'lazy(' src/App.tsx)" && echo "Migrations: $(ls supabase/migrations/*.sql | wc -l)"
 ```
 
 Compare to the counts in CLAUDE.md "Current State". Flag mismatches.

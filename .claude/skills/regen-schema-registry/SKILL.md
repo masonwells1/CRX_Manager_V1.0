@@ -10,7 +10,7 @@ Wraps `scripts/regenerate-schema-registry.mjs` with the surrounding hygiene that
 ## Step 1: Run the Script
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && node scripts/regenerate-schema-registry.mjs
+cd /c/CRX_Manager && node scripts/regenerate-schema-registry.mjs
 ```
 
 If this fails:
@@ -21,7 +21,7 @@ If this fails:
 ## Step 2: Diff Against Previous Version
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && git diff .claude/schema-registry.json
+cd /c/CRX_Manager && git diff .claude/schema-registry.json
 ```
 
 Capture and summarize the changes:
