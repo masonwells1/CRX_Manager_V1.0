@@ -185,6 +185,7 @@ export interface QuoteItem {
   sort_order: number;
   notes: string | null;
   price_per_unit: number;
+  price_override: number | null;
   current_cost: number;
   suggested_rate: string | null;
   actual_rate: number | null;

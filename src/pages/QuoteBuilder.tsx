@@ -379,16 +379,6 @@ export default function QuoteBuilder() {
       items: dbItems
         .filter((item) => item.section_id === s.id)
         .map((item) => {
-          // Detect price override: if saved price differs from tier price, it was overridden
-          const product = item.product as Product | undefined;
-          const t1 = product?.tier1_price || 0;
-          const tierPrice = q.tier === 2
-            ? (product?.tier2_price || t1)
-            : q.tier === 3
-              ? (product?.tier3_price || t1)
-              : t1;
-          const savedPrice = item.price_per_unit;
-          const isOverridden = product && Math.abs(savedPrice - tierPrice) > 0.001;
           return {
             _key: nextKey(),
             id: item.id,
@@ -396,7 +386,7 @@ export default function QuoteBuilder() {
             sort_order: item.sort_order,
             notes: item.notes,
             price_per_unit: item.price_per_unit,
-            price_override: isOverridden ? savedPrice : null,
+            price_override: item.price_override ?? null,
             current_cost: item.current_cost,
             suggested_rate: item.suggested_rate,
             actual_rate: item.actual_rate,
@@ -842,6 +832,7 @@ export default function QuoteBuilder() {
           sort_order: item.sort_order,
           notes: item.notes || null,
           price_per_unit: item.price_per_unit,
+          price_override: item.price_override ?? null,
           current_cost: item.current_cost,
           suggested_rate: item.suggested_rate,
           actual_rate: item.actual_rate,
