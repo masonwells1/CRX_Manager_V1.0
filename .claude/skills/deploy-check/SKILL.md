@@ -10,7 +10,7 @@ A final gate before deploying to production. Checks code quality, unapplied migr
 ## Step 1: Git Status
 
 ```bash
-cd /c/CRX_Manager && git status && git log --oneline -5
+git status && git log --oneline -5
 ```
 
 Check:
@@ -23,7 +23,7 @@ Check:
 Run these in sequence:
 
 ```bash
-cd /c/CRX_Manager && npm run lint && npm run typecheck && npm run build
+npm run lint && npm run typecheck && npm run build
 ```
 
 ALL THREE must pass. If any fail, stop and report — do not proceed to deployment.
@@ -31,7 +31,7 @@ ALL THREE must pass. If any fail, stop and report — do not proceed to deployme
 ## Step 3: Unit Tests
 
 ```bash
-cd /c/CRX_Manager && npm run test -- --reporter=verbose 2>&1 | tail -20
+npm run test -- --reporter=verbose 2>&1 | tail -20
 ```
 
 Must have 0 failures. Report test count and any failures.
@@ -56,7 +56,6 @@ Compare to the CLAUDE.md count. If there are NEW migrations that haven't been pu
 Verify no secrets are exposed:
 
 ```bash
-cd /c/CRX_Manager
 # Check for .env in git tracking
 git ls-files | grep -i "\.env"
 # Check for hardcoded keys in source
@@ -69,7 +68,6 @@ If any results, BLOCK deployment and report.
 ## Step 6: Bundle Size Check
 
 ```bash
-cd /c/CRX_Manager
 # Build already ran in step 2, check the output size
 ls -lh dist/assets/*.js 2>/dev/null | head -5
 ```

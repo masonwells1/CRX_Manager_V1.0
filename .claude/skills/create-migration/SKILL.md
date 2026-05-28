@@ -50,7 +50,7 @@ Follow existing conventions in the file (look at how other interfaces are struct
 ## Step 4: Run Type Check
 
 ```bash
-cd /c/CRX_Manager && npm run typecheck
+npm run typecheck
 ```
 
 If there are type errors caused by the new/changed types, fix them:
