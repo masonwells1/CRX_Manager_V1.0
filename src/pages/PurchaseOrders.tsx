@@ -410,10 +410,13 @@ export default function PurchaseOrders() {
     let cancelledCount = 0;
     for (const po of selectedRows) {
       if (po.status !== 'cancelled') {
+        // Bulk loop: deterministic per-PO key (NOT crypto.randomUUID()) so a
+        // retry of the same cancel batch reuses identical keys and the server
+        // dedupes already-cancelled POs instead of double-executing.
         const { data, error } = await supabase.rpc('cancel_purchase_order', {
           p_po_id: po.id,
           p_performed_by: profile?.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: `cancel_purchase_order:${profile?.id || 'anon'}:${po.id}`,
         });
         if (error) {
           toast('error', `Failed to cancel PO ${po.po_number}: ${error.message}`);

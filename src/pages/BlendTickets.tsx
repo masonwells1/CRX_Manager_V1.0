@@ -248,13 +248,14 @@ export function BlendTickets() {
     setBatchApproving(true);
     try {
       const key = batchApproveIdem.getKey();
-      const result = await supabase.rpc('batch_approve_blend_tickets', {
+      const { data, error } = await supabase.rpc('batch_approve_blend_tickets', {
         p_ticket_ids: approvableIds,
         p_approved_by: profile.id,
         p_idempotency_key: key,
       });
-      assertRpcResult(result, 'Batch approve blend tickets');
-      const approvedCount = result.data?.approved_count ?? approvableIds.length;
+      if (error) throw error;
+      const approved = assertRpcResult<{ approved_count?: number }>(data, 'batch_approve_blend_tickets');
+      const approvedCount = approved?.approved_count ?? approvableIds.length;
       batchApproveIdem.resetKey();
       toast('success', `Approved ${approvedCount} blend ticket(s)`);
       await logActivity({
@@ -278,13 +279,14 @@ export function BlendTickets() {
     setBatchRejecting(true);
     try {
       const key = batchRejectIdem.getKey();
-      const result = await supabase.rpc('batch_reject_blend_tickets', {
+      const { data, error } = await supabase.rpc('batch_reject_blend_tickets', {
         p_ticket_ids: approvableIds,
         p_rejected_by: profile.id,
         p_idempotency_key: key,
       });
-      assertRpcResult(result, 'Batch reject blend tickets');
-      const rejectedCount = result.data?.rejected_count ?? approvableIds.length;
+      if (error) throw error;
+      const rejected = assertRpcResult<{ rejected_count?: number }>(data, 'batch_reject_blend_tickets');
+      const rejectedCount = rejected?.rejected_count ?? approvableIds.length;
       batchRejectIdem.resetKey();
       toast('success', `Rejected ${rejectedCount} blend ticket(s)`);
       await logActivity({

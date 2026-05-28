@@ -889,10 +889,8 @@ export default function QuoteBuilder() {
         message: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'}`,
         data: { quoteId: result, quoteNumber, customer: selectedCustomer?.farm_name ?? '' },
       });
-      // === GAP FIX #5: Log activity for quote created/updated ===
-      if (profile) {
-        await logActivity({ event: isEditing ? 'quote_updated' : 'quote_created', description: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'} for ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`, performedBy: profile.id, entityType: 'quote', entityId: result, customerId });
-      }
+      // Quote activity is logged in-transaction by save_quote() (migration line 290-299).
+      // A frontend logActivity() here would double-log every save.
       // Planned program hold management
       if (isPlanned && profile) {
         const holdIdemKey = plannedHoldsIdem.getKey();

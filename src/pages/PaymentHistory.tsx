@@ -17,6 +17,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { parseLocalDate } from '../lib/dateUtils';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 
 interface AllocationSet {
   [k: string]: unknown;
@@ -51,6 +52,7 @@ const fmt = (cents: number) =>
 export default function PaymentHistory() {
   const { profile } = useAuth();
   const { toast } = useToast();
+  const voidPaymentIdem = useIdempotencyKey('void_payment', profile?.id || '');
 
   const [payments, setPayments] = useState<AllocationSet[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,6 +139,7 @@ export default function PaymentHistory() {
   const openVoid = (payment: AllocationSet) => {
     setVoidPayment(payment);
     setVoidReason('');
+    voidPaymentIdem.resetKey(); // new void intent — fresh key per target
   };
 
   const handleVoid = async () => {
@@ -151,7 +154,7 @@ export default function PaymentHistory() {
           p_allocation_set_id: voidPayment.id,
           p_reason: voidReason.trim(),
           p_performed_by: profile?.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: voidPaymentIdem.getKey(),
         });
         if (error) throw error;
         const result = assertRpcResult<{ success: boolean; reversed_cents: number; invoices_affected: number }>(data, 'void_payment');
@@ -162,6 +165,7 @@ export default function PaymentHistory() {
       successMessage: `Voided payment ${voidPayment.check_number || voidPayment.reference_number || voidPayment.id.slice(0, 8)} (${fmt(voidPayment.total_payment_cents)})`,
       sentryTag: 'void_payment',
       onSuccess: () => {
+        voidPaymentIdem.resetKey(); // confirmed success — next void is a new intent
         setVoidPayment(null);
         fetchPayments();
       },
