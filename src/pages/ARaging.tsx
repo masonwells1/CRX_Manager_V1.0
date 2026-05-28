@@ -656,7 +656,9 @@ export default function ARaging() {
               html,
               email_type: 'statement',
               customer_id: custId,
-              idempotency_key: `statement-email-${custId}-${options.as_of_date}-${Date.now()}`,
+              // Deterministic key (no Date.now()) so a retried "email all" batch
+              // dedupes per (customer, statement date) instead of double-sending.
+              idempotency_key: `statement-email-${custId}-${options.as_of_date}`,
               attachments: [{
                 filename: `Statement-${stmtData.customer.farm_name.replace(/[^a-zA-Z0-9]/g, '_')}-${options.as_of_date}.pdf`,
                 content: base64,
