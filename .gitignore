@@ -42,6 +42,10 @@ backups/
 
 # Claude Code runtime state (regenerated per machine)
 .claude/scheduled_tasks.lock
+.claude/worktrees/
+.claude/session-state/
+.claude/settings.local.json
+.playwright-mcp/
 
 # Working data for perf sweep / one-off analyses (regenerable from advisor + DB)
 .perf-sweep-data/
