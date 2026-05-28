@@ -33,6 +33,11 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/generated-column-check.mjs\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/env-guard.mjs\"",
+            "timeout": 5
           }
         ]
       },
@@ -42,6 +47,16 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/bash-safety.mjs\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/migration-apply-guard.mjs\"",
             "timeout": 5
           }
         ]
@@ -55,6 +70,11 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/posttooluse-migration.mjs\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/eslint-autofix.mjs\"",
+            "timeout": 20
           }
         ]
       }
@@ -66,6 +86,22 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-verify.mjs\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/stop-wrap.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/dangerous-phrase-warning.mjs\"",
             "timeout": 5
           }
         ]
@@ -91,6 +127,11 @@
             "timeout": 5
           },
           {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-staleness.mjs\"",
+            "timeout": 10
+          },
+          {
             "type": "prompt",
             "prompt": "You are starting a new session on the CRX Manager project. Silently read CLAUDE.md from the project root and docs/workflows/SAFE_DEVELOPMENT_RULES.md, then briefly confirm context is loaded. CRITICAL CONTEXT: Mason has ZERO coding experience — always explain in plain English; show a plan and wait for approval before editing files; never assume he knows code terminology."
           }
@@ -99,6 +140,6 @@
     ]
   },
   "enabledPlugins": {
-    "vercel@claude-plugins-official": false
+    "vercel@claude-plugins-official": true
   }
 }

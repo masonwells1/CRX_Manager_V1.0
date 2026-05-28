@@ -25,6 +25,8 @@
 - **2026-05-16:** `send-email` Edge Function deployed to v11 (PR-03 `farm_name` fix + WAL-pattern durable idempotency from ultra-review P2 #5); `setup-blend-tickets-storage` deployed to v14 (CORS hardening, ultra-review P3 #7). 3 new migrations: #335 (transfer_job_to_invoice canonical idempotency), #336 (notification RPCs idempotency), #337 (email_log.status += 'pending'). Ultra-review (`docs/reports/2026-05-16-ultra-code-review-findings.md`) — all 8 findings disposed: 7 fixed live, 1 (P2 #6 process-blend-ticket error checks) code committed but deploy pending. P1 #2 verified false positive. All 20 PR #59 codex threads now resolved. PR #60 advisory comment + follow-up posted: live state confirmed safe (drops were no-op or affected only Storage API list/download, not public-URL rendering).
 - **2026-05-16 (PM):** All Edge Functions now deployed live — `process-blend-ticket` v17 deployed via MCP (47KB inline worked fine after using node-via-bash to JSON-encode the file content + reading it back through Read). All 10 ultra-review P2 #6 error checks verified in deployed bundle.
 - **2026-05-26:** Full-codebase ultra review execution migration added (`20260526090000`): revokes anon/public write-oriented SECURITY DEFINER RPC execution, hardens `apply_write_off`/`issue_return_credit`/`void_order` actor checks, restores server-side commission split validation + reconciled rounding, consolidates `next_invoice_number`, adds idempotency to duplicate quote/follow-up delivery/finance charge generation, allows voiding unposted commission payments, and adds a DB signature guard for completed deliveries. Frontend/Edge fixes cover CSV formula injection, CustomerDetail RPC assertions, commission-payment void UI, offline complete-delivery idempotency reset, `reset-user-password` fail-loud CORS, and `create-user` phone-update error capture. Pending live apply/deploy.
+- **2026-05-27 (dummy-proofing wave 2):** Added 3 more hooks + activated 3 existing-but-unused plugins. New hooks: `migration-apply-guard.mjs` PreToolUse refuses Supabase `apply_migration` calls without a `.claude/session-state/migration-review-<name>.json` proof file from a recent (<30 min) subagent review; `session-staleness.mjs` SessionStart warns on stale schema-registry / CLAUDE.md count drift / uncommitted files from prior session; `stop-wrap.mjs` Stop hook blocks session end with loose-ends list (uncommitted files, unapplied migrations, undeployed Edge Functions, learning-capture prompt). `bash-safety.mjs` extended with 7 more patterns (`supabase db reset`, `dropdb`/`createdb`, force-delete main/master, `git push --mirror`, `git filter-branch`, broad `rm -rf /`, suspicious `npm run reset`). `/preflight` now also dispatches `pr-review-toolkit:code-reviewer` + `silent-failure-hunter` on TS changes and `type-design-analyzer` on new types in `src/types/index.ts`. CLAUDE.md skill table now wires PostHog session replay to "customer reported X" phrasing, `engineering:debug`/`incident-response`/`deploy-checklist`/`tech-debt` to natural triggers, and `feature-dev:code-explorer`/`code-architect` to architecture questions. **Updated totals: 8 PreToolUse hooks targeting code edits, 1 PreToolUse hook on MCP tools, 1 PreToolUse hook on Bash, 2 PostToolUse hooks, 1 UserPromptSubmit hook, 2 SessionStart hooks, 2 Stop hooks, 11 project skills, 4 project subagents + ~10 plugin agents now wired into preflight.**
+- **2026-05-27 (dummy-proofing wave 1):** Claude Code automation expansion — added 4 subagents (`rls-security-reviewer`, `migration-drift-reviewer`, `typescript-types-drift-reviewer`, `pdf-output-reviewer`), 5 skills (`/deploy-edge-function`, `/codex-cross-review`, `/explain-migration`, `/spot-check-prod`, `/regen-schema-registry`), and 3 hooks (`env-guard.mjs` PreToolUse blocks `.env` edits + service_role literals in `src/`; `eslint-autofix.mjs` PostToolUse runs `eslint --fix` on TS edits; `dangerous-phrase-warning.mjs` UserPromptSubmit injects safety context on risky phrasing). Vercel plugin enabled. `/preflight` rewritten to auto-dispatch the 4 reviewer subagents based on what changed; `posttooluse-migration.mjs` extended to force subagent dispatch before suggesting `apply_migration`. The four subagents + UserPromptSubmit hook directly target the B7/B8/B9 + March-2026-40-bug + service_role-leak + customer-facing-PDF failure classes.
 - **2026-05-26 (post-Codex audit, applied live):** Codex performed a post-apply review of commits `fce0629` + `a824952` and surfaced three blockers (B7/B8/B9) the parallel session missed. **B7** — Supabase MCP `apply_migration` stamped the live version `20260526151856` rather than the disk filename `20260526090000`; disk file renamed to match live to prevent future re-apply attempts (and the new B9 migration similarly renamed from `20260526170000` to its MCP-assigned `20260526201319`). **B8** — frontend Set-Password UI (`SettingsPage.tsx:393`) routes through `create-user?action=reset_password`, not `reset-user-password`, so the EDGE-2 `entity_recipient` block was dead code. Added the same guard to `create-user`'s reset branch, redeployed as **v20 ACTIVE**. **B9** — 6 SECURITY DEFINER DML helpers (`check_idempotency`, `check_rate_limit`, `check_remainder_reminders`, `cleanup_rate_limits`, `log_failed_notification`, `notify_damaged_receiving`) were still anon-EXECUTE-able. New migration `20260526201319_revoke_anon_on_secdef_dml_helpers.sql` revokes from `anon`/`authenticated`/`PUBLIC` and keeps `service_role`; legitimate SECDEF wrappers + pg_cron still call them as `postgres` owner. See `docs/audits/2026-05-26-claude-disposition-of-codex-execution.md §11`.
 - **2026-05-26 (parallel audit additions to migration `20260526151856`):** Three new blockers folded into the same migration after parallel-session reconciliation (`docs/audits/2026-05-26-claude-disposition-of-codex-execution.md §10`): **B4** explicit `REVOKE EXECUTE … FROM anon` on `execute_sql_readonly(text)` (SECURITY DEFINER + arbitrary SELECT was an anon RLS-bypass; regex prefix `execute_` missed); **B5** same on `unapply_credit_memo(uuid,text,uuid,text)` (RLS-1 actor-forgery anti-pattern; regex prefix `unapply_` missed); **B6** `CREATE SEQUENCE IF NOT EXISTS public.cm_invoice_number_seq` (the historical migration creating it on disk was never applied live; verified via MCP `list_migrations`). Without B6, `next_invoice_number('credit_memo')` would have crashed on first credit-memo issuance. **C1** also folded — REVOKE regex extended with `auto|retry|revert` prefixes to sweep `auto_expire_quotes`, `retry_failed_notifications`, `revert_quote_status`. Verification `DO $$` block gained 3 assertions (sequence exists, B4/B5 anon revoke). Still pending live apply/deploy.
 - **Pending Mason:** Phase 4 backup verification (Supabase dashboard — not exposed via MCP); Phase 4 restore drill (half-day operational exercise); #38 abandoned-package swap (needs `.shp`/`.dbf`/`.prj`/`.kml` test fixtures).
@@ -62,6 +64,19 @@ Claude MUST automatically invoke the matching skill/command when the task matche
 | Running a full health check, audit, or "is everything okay?" | `/audit` |
 | Deploying, or "is this ready to ship?" | `/deploy-check` |
 | Checking docs for drift or staleness | `/update-docs` |
+| Deploying a Supabase Edge Function (live deploy of `send-email`, `create-user`, etc.) | `/deploy-edge-function` |
+| Setting up a Codex cross-review for a finding, fix, or proposed change | `/codex-cross-review` |
+| Translating a SQL migration into plain English before approving `apply_migration` | `/explain-migration` |
+| Quick live production health check (Sentry + Supabase + Vercel + Edge Functions) | `/spot-check-prod` |
+| Regenerating `.claude/schema-registry.json` after a status enum / generated column / table change | `/regen-schema-registry` |
+| "How does X work?", "what's the architecture of Y?", "trace this flow" — codebase exploration | `feature-dev:code-explorer` |
+| "I want to add X feature" — needs architecture design before coding | `feature-dev:code-architect` |
+| "A customer reported X", "a customer can't Y", "something looks weird for user Z" | `posthog:investigating-replay` (pulls their actual session replay) |
+| "Why is this failing in prod?", "I see an error" — production debugging | `engineering:debug` |
+| "We had an incident" / "production is down" / "rollback X" | `engineering:incident-response` |
+| "Are we ready to deploy?", "deploy checklist" | `engineering:deploy-checklist` |
+| "Where are we slowing down?", "tech debt review" | `engineering:tech-debt` |
+| Any new feature with non-trivial complexity (before writing code) | `superpowers:brainstorming` (MUST — required by my system) |
 
 ### Commands (quick one-shot checks)
 | When the user says... | Auto-invoke |
@@ -433,8 +448,53 @@ These run when Claude Code tries to Write or Edit a file — they refuse the wri
 | `rls-on-new-tables.mjs` | New table without `ENABLE ROW LEVEL SECURITY` + `CREATE POLICY` | Prevents future RLS regressions |
 | `status-enum-check.mjs` | Writing a status string that isn't in the DB CHECK constraint | `4a25aea` — `'void'` vs `'voided'` |
 | `generated-column-check.mjs` | UPDATE on a GENERATED column (e.g. `invoices.balance_cents`) | `a419da8` — `reverse_write_off` |
+| `env-guard.mjs` | Any write/edit of `.env*` files; hard-coded JWT-shaped literals or `service_role` references in `src/` | Service-role-key leakage into frontend / transcripts |
+| `migration-apply-guard.mjs` | Supabase MCP `apply_migration` calls — refused unless `.claude/session-state/migration-review-<name>.json` proof exists from a recent (<30 min) `rls-security-reviewer` + `migration-drift-reviewer` run | B7/B8/B9 class — applying migrations without parallel-session review |
 
-To exempt a specific file from a hook, add the marker comment named in the hook's error message.
+### UserPromptSubmit Hooks (`.claude/hooks/`)
+These run when Mason submits a prompt, BEFORE Claude reads it. They inject extra context via `additionalContext` — they don't block — so Mason's intent is preserved while Claude is forced to slow down on risky wording.
+
+| Hook | What it warns on | Why |
+|------|------------------|-----|
+| `dangerous-phrase-warning.mjs` | "drop/delete migration", "drop/truncate table", "force push", "no-verify", "service_role in frontend", "disable RLS", "rebase published", "auto-commit/push/deploy", "bypass check_period_open", "edit financial_audit_log" | Forces Claude to explain consequences + offer safer alternative + get explicit confirmation before acting on phrasing that has caused incidents |
+
+### SessionStart Hooks (`.claude/hooks/`)
+Run when a new session begins. Inject `additionalContext` so Claude sees state-drift warnings up front.
+
+| Hook | What it surfaces |
+|------|------------------|
+| `session-snapshot.mjs` | Git porcelain snapshot (so Stop hook can tell session-scoped changes from prior WIP) |
+| `session-staleness.mjs` | Schema registry >7 days old, CLAUDE.md count drift vs reality, uncommitted files from a prior session |
+
+### Stop Hooks (`.claude/hooks/`)
+Run when a session ends. Block until Claude addresses loose ends.
+
+| Hook | What it surfaces |
+|------|------------------|
+| `stop-verify.mjs` | Code files changed this session — forces `npm run build` + `npm run test` before declaring done |
+| `stop-wrap.mjs` | Uncommitted files, written-but-unapplied migrations, edited-but-undeployed Edge Functions, learning-capture prompt on substantive sessions |
+
+### PostToolUse Hooks (`.claude/hooks/`)
+These run AFTER a successful Write/Edit. They can't block (file is already written) but they surface issues back to Claude immediately.
+
+| Hook | What it does | Why |
+|------|--------------|-----|
+| `posttooluse-migration.mjs` | Reminds Claude to update migration-history.md + regenerate schema registry after a migration edit | Prevents doc drift |
+| `eslint-autofix.mjs` | Runs `npx eslint --fix` on edited `.ts`/`.tsx` files in `src/` (skips tests, migrations, edge functions) | Catches import-order/local-rules/lint issues at edit time instead of at pre-commit |
+
+### Subagents (`.claude/agents/`)
+Specialized reviewers invoked via the `Agent` tool. They run in their own context window and return only a summary — perfect for parallel review without polluting the main session.
+
+| Agent | When to invoke | Bug class it prevents |
+|-------|----------------|-----------------------|
+| `rls-security-reviewer` | After writing any migration, BEFORE `apply_migration` | B7/B8/B9 (2026-05-26) — anon-EXECUTE-able SECDEF DML, missing `search_path`, missing RLS on new tables, actor-forgery anti-pattern |
+| `migration-drift-reviewer` | After writing any migration that touches an existing table/function | March 2026 (40-bug incident) — CHECK-constraint regression, function-overload collision, column-name drift |
+| `typescript-types-drift-reviewer` | After applying any migration that adds/changes columns; or sprint-cadence health check | Silent type drift between `src/types/index.ts` and live DB schema (code "works" until a real query hits a missing field) |
+| `pdf-output-reviewer` | After editing any file under `src/` that imports `jspdf` / `jspdf-autotable` | Off-brand colors, page overflow, missing image assets, undivided cents in customer-facing PDFs (tank labels, invoices, statements) |
+
+**Rule:** Dispatch both subagents in parallel via a single message with two `Agent` tool calls. They are independent — running them sequentially is wasted time.
+
+To exempt a specific file from a PreToolUse hook, add the marker comment named in the hook's error message.
 
 **Full audit (manual):** `scripts/validate-sql-migrations.sh` — scans ALL migration files. Run with `--idempotency-only` for focused check.
 

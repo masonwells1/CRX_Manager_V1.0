@@ -25,6 +25,12 @@ Before continuing, you MUST:
 1. Update src/types/index.ts to match any schema changes
 2. Check whether existing components need updates for the new/changed columns
 3. Run \`npm run typecheck\` to verify everything compiles
+4. BEFORE suggesting \`apply_migration\` to Mason, dispatch in PARALLEL (single message, multiple Agent calls):
+   - Agent: rls-security-reviewer  (scope: this migration)
+   - Agent: migration-drift-reviewer (scope: this migration)
+   - Agent: typescript-types-drift-reviewer (if types were updated)
+5. If any subagent returns BLOCKER findings, fix them before suggesting apply_migration.
+6. If Mason is non-technical (which he is), also offer to run /explain-migration so he understands what's about to change live.
 
 Do NOT proceed to other tasks until these steps are complete.`;
 
