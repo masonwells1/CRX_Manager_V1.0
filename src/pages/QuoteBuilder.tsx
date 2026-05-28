@@ -35,6 +35,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
+import { formatDollars } from '../lib/formatCents';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
@@ -1324,12 +1325,7 @@ export default function QuoteBuilder() {
     );
   }, [products, productQuery]);
 
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-    }).format(n);
+  const fmt = formatDollars; // quote math is dollar-denominated; canonical impl in lib/formatCents (audit P2-B)
 
   const pct = (n: number) => `${n.toFixed(1)}%`; // net_margin is already stored as percentage
 

@@ -18,6 +18,7 @@ import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { downloadStatementPdf, downloadBatchStatements, generateStatementPdf } from '../lib/statementPdf';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
+import { formatCents, formatDollars } from '../lib/formatCents';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
 import FinanceChargePreviewModal from '../components/invoices/FinanceChargePreviewModal';
@@ -150,8 +151,7 @@ export default function ARaging() {
     setLoading(false);
   };
 
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
+  const fmt = formatDollars; // aging RPC returns dollar amounts; canonical impl in lib/formatCents (audit P2-B)
 
   const fmtCents = (cents: number) => fmt(cents / 100);
 
@@ -485,7 +485,7 @@ export default function ARaging() {
 
         let sent = 0;
         let skipped = 0;
-        const fmtCents = (c: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(c / 100);
+        const fmtCents = formatCents; // canonical impl in lib/formatCents (audit P2-B)
 
         for (const cust of candidates) {
           const reminderLevel = cust.max_days_past_due >= 90 ? 90 : cust.max_days_past_due >= 60 ? 60 : 30;
@@ -591,7 +591,7 @@ export default function ARaging() {
       action: async () => {
         let sent = 0;
         let noEmail = 0;
-        const fmtCents = (c: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(c / 100);
+        const fmtCents = formatCents; // canonical impl in lib/formatCents (audit P2-B)
 
         for (const custId of selectedCustomers) {
           const { data, error } = await supabase.rpc('get_detailed_statement_data', {
