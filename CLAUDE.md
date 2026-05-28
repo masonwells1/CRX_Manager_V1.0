@@ -210,6 +210,16 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 
 ---
 
+## Codebase Knowledge Graph (Graphify)
+
+A knowledge graph of `src/pages/` lives at `graphify-out/` (gitignored — generated locally).
+- **View:** open `graphify-out/graph.html` in any browser
+- **Query:** ask Claude "trace the invoice flow" or "what connects to Deliveries?" — I'll read `graphify-out/graph.json`
+- **Update after adding/changing pages:** run via Bash: `python -m graphify src/pages --update`
+- **Full rebuild:** `python -m graphify src/pages`
+- **Work machine setup:** `pip install graphifyy && python -m graphify install` then rebuild
+- **Note:** must run via Bash tool (not PowerShell) — graphify is in user site-packages only visible to Bash Python
+
 ## Key Entry Points
 - `src/App.tsx` — Routes, auth provider, navigation tracking
 - `src/contexts/AuthContext.tsx` — Auth state, Sentry user context
