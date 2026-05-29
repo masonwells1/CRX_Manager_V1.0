@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-29 (workflow review + Codex cross-review) — 3 BLOCKER fixes applied live
+
+The new `/review-workflow` audit (full graph/lifecycle/cross-entity/invariant review, verified against live DB) surfaced BLOCKERs; Codex independently cross-reviewed them; every Codex claim was then re-verified against the live database (Codex itself had no Supabase MCP) before any fix. Three migrations applied live via MCP:
+
+- **`20260529214355_revoke_anon_execute_on_report_dashboard_secdef`** — closed an unauthenticated PII/financial leak. 37 SECURITY DEFINER report/dashboard/geo/financial RPCs were EXECUTE-able by the public `anon` key (SECDEF bypasses RLS); proven exploitable with no login (`global_search`, `get_customer_year_end_summary`, `dashboard_summary`, `_check_credit_limit`, etc.). REVOKE EXECUTE FROM anon,PUBLIC on all 37; GRANT to authenticated,service_role (app unaffected). anon-executable SECDEF dropped **89 → 52**; in-migration DO block asserts 0/37 leak. Remaining 52 verified safe (triggers, RLS predicates that must stay executable, sequence generators, self-guarding mutators, and 11 role-checked reports proven to RAISE for anon).
+- **`20260529214538_fix_void_order_void_invoice_status_transitions`** — `void_order` crashed on every call (the status-transition trigger gives `fulfilled` no path to `voided`, and the RPC never set `app.admin_override`); 0 orders had ever been voided despite 30 fulfilled. Fixed with a minimal transaction-local override bracket around the fulfilled→voided write. Draft invoices (in `void_order`'s loop and standalone `void_invoice`) now route to `cancelled` (an allowed transition) instead of `voided`; `void_invoice` draft/unposted also → cancelled.
+- **`20260529214423_fix_get_customer_transaction_review_running_balance_cast`** — fixed SQLSTATE 42804 (running-balance window `SUM()` returns numeric but column declared bigint; cast to `::bigint`).
+
+Both `rls-security-reviewer` and `migration-drift-reviewer` cleared all three. Codex's 4th "critical" finding (`batch_void_invoices` actor-spoof) was **refuted on live** — the vulnerable body exists only in the disk wave4 file; the deployed function gates on `auth.uid()` via `require_admin_or_sales_rep()` + `void_invoice`'s admin check. Deferred follow-ups (defense-in-depth internal guards on the 37; `batch_void_invoices` disk-drift hardening; restore-RPC fix-or-drop; migration rebuild-fidelity shadow-DB diff) are recorded in `docs/audits/2026-05-29-codex-disposition.md`. Migration count 357 → **360**.
+
+---
+
 ## 2026-05-26 (pre-push final audit) — B10 corrective fix for migration 348
 
 Codex's pre-push final audit caught a P1 production-breaking regression in commit `05be295`'s migration 348: the broad `REVOKE EXECUTE … FROM authenticated` on all 6 SECDEF DML helpers also revoked authenticated EXECUTE on 3 functions the frontend actively calls (`check_remainder_reminders` from `Dashboard.tsx:348`, `log_failed_notification` from `Dashboard.tsx:353/365` + `notificationTriggers.ts:37`, `notify_damaged_receiving` from `notificationTriggers.ts:278`). Those code paths were throwing 403 immediately on every dashboard load and every receiving-damaged-items flow.

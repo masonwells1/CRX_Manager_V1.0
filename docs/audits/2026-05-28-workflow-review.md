@@ -1,5 +1,7 @@
 # Workflow & Business-Logic Review — 2026-05-28
 
+> **UPDATE 2026-05-29 — all 3 BLOCKERs RESOLVED + applied live.** After a Codex cross-review and live re-verification, the anon-leak (expanded to 37 RPCs), `void_order`/`void_invoice` crashes, and the `get_customer_transaction_review` 42804 were fixed via migrations `20260529214355` / `20260529214538` / `20260529214423`. Codex's added `batch_void_invoices` "BLOCKER" was refuted on live (disk-only). Full reconciliation + deferred follow-ups: [`2026-05-29-codex-disposition.md`](2026-05-29-codex-disposition.md).
+
 > Produced by `/review-workflow`. Four parallel review layers (graph, lifecycle, cross-entity flow, invariants), each verified against the **live Supabase database** (project `rhyzpcqhnizqbxphqdkr`) and actual source — not docs, not the workflow map's auto-detector, not prior audits. Every finding carries a `file:line`, RPC, constraint, or migration citation. Crash findings were proven with rolled-back live transactional probes; the data leak was proven by calling RPCs as the `anon` role.
 
 ## Verdict
