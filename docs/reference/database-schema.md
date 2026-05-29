@@ -1,4 +1,4 @@
-# Database Schema Reference (95 Tables)
+# Database Schema Reference (97 Tables)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)

@@ -346,3 +346,77 @@ notes). Report a cleanup list ranked by safety (safe-to-delete vs needs-confirma
 ## 4. One-line summary for the top of your next session
 
 > Toolchain is green; the real work is: **(P0)** triage Sentry, recover the live-only `preserve_quote_price_overrides` migration into the repo, and disposition the 89 anon-executable SECDEF functions; **(P1)** verify money/RPC/state-machine correctness; **(P2)** break up the 2,600-line components so future features are safe to add.
+
+---
+
+## 5. Findings Log — All 14 Domains Executed (2026-05-29)
+
+**Method:** P0 → P3 in four waves. Independent reviewers (Agent subagents) ran each P2/P3 domain in parallel; the orchestrator did D1/D2/D3 directly and **independently re-verified every P1 claim against the live database** via Supabase MCP `execute_sql`. Reviewers cited file:line throughout. Read-only — no production code/schema/deploy changed during the review itself.
+
+### Headline verdict
+**The foundation is solid.** The "lots of errors" feeling was perception (big files + 3 untriaged DB errors), not actual fragility. Per-dimension: toolchain green, frontend "one of the most consistently disciplined" the reviewer had seen, types in sync, state machines sound, money math broadly correct, edge functions in the strongest state in the codebase's review history. The genuine bugs are concrete, bounded, and fixable — no catastrophic foundation issues.
+
+### Per-domain verdict
+| # | Domain | Verdict | Worst finding |
+|---|---|---|---|
+| 1 | Production error triage (live logs) | 🟡 3 real errors found | `o.blend_ticket_id`, `jsonb_array_length(record)`, `recipient_id` failing live |
+| 2 | Migration drift (disk vs live) | ✅ FIXED in-session | Recovered `preserve_quote_price_overrides` (lost real bug-fix); 440-vs-357 gap is benign packaging |
+| 3 | Anon-SECDEF surface | 🟡 44 over-exposed reads | Zero anon-callable mutators (B4–B9 closed). 44 read-only RPCs expose customer/financial/GPS/RUP data |
+| 4 | Money & financial integrity | ✅ broadly clean | P1 `reverse_write_off` forgeable actor (only mutating-financial RPC missed by 2026-05-26 sweep) |
+| 5 | RPC contract correctness | ✅ largely clean | P1 `save_job` (+5) declare `p_idempotency_key`, body never uses it; coverage test has a blind spot |
+| 6 | State-machine integrity | ✅ CHECK constraints all sound | P1 cancelling a planned quote orphans inventory holds (latent today) |
+| 7 | Giant-component refactor | 📋 plan delivered | DeliveryDetail (2433) + InventoryPage (1562) have ZERO unit tests — characterization tests needed first |
+| 8 | TypeScript type drift | ✅ in sync (0 high/medium) | 3 optional enum-narrowing polish items only |
+| 9 | Frontend integrity | ✅ CLEAN, zero findings | — |
+| 10 | PDF outputs | 🟡 money clean, address split | P1 Martinsville (invoices/statements) vs Robinson (quotes/deliveries) — customer-visible |
+| 11 | Edge functions & secrets | ✅ strongest state ever | Only P3: `validateSentryDsnOrThrow()` not at boot for 3 security-critical fns |
+| 12 | Test coverage gaps | 🟡 lib code 78%/80%; gaps in audit code | reconciliation.ts lines 613-947 (the drift-checker) at 47.99% line coverage |
+| 13 | Dependencies & supply chain | 🟡 3 prod CVEs (auto-fixable) | dompurify (via jspdf), ws + protocol-buffers-schema (via mapbox-gl) — `npm audit fix` resolves |
+| 14 | Dead code & doc drift | ✅ codebase clean | Doc drift fixed in-session (see §6). 1 dead export (`compressImages`), 3 TODO stub handlers |
+
+### P1 findings — verified live, fix soon
+| # | Finding | Source | File / RPC |
+|---|---------|--------|-----------|
+| P1-A | `reverse_write_off` uses forgeable `COALESCE(p_performed_by, auth.uid())` → non-admin can spoof admin to reverse write-offs; audit log records the forged admin | D4 | `supabase/migrations/20260506200000_reverse_write_off_overdue_status.sql:50` |
+| P1-B | `save_job` (+`save_blend_ticket`, `batch_apply_all_prepayments`, `batch_void_invoices`, `create_invoice_from_delivery`, `generate_rup_sales_records`) declare `p_idempotency_key`, body never touches `idempotency_keys`. **`save_job` create-path: double-click = 2 jobs.** `rpcContracts.test.ts:1335` lists them as covered — test only checks param exists, not body usage | D5 | `save_job` (LIVE), `save_blend_ticket` etc. |
+| P1-C | `release_holds_on_quote_status_change` fires only on `accepted/declined/expired`. `draft/sent/revised → cancelled` is legal → planned-quote cancel leaves inventory holds active forever (latent: 0 orphaned in prod today) | D6 | trigger fn `release_holds_on_quote_status_change` |
+| P1-D | Customer-facing PDFs disagree on the company's own address: invoices/statements/year-end = **Martinsville, IL** (incl. remit-to PO Box 123); quotes/deliveries/order-summary/receiving = **Robinson, IL**. Settings already has `company_*` fields — PDFs hardcode literals instead | D10 | 8 files in `src/lib/*Pdf.ts` (specific lines listed) |
+| P1-E | 3 moderate prod-bundle CVEs: `dompurify <3.4.0` (via jspdf), `ws 8.0.0-8.20.0` (via mapbox-gl), `protocol-buffers-schema <3.6.1` (via mapbox-gl). `npm audit fix` resolves all — minor bumps | D13 | package-lock.json |
+| P1-F | 3 live Postgres query errors in 1-hour window: `column o.blend_ticket_id does not exist`, `function jsonb_array_length(record) does not exist`, `column "recipient_id" does not exist`. Real users likely hitting. Full frequency/impact needs sentry.io dashboard | D1 | unknown sources — needs per-error debug |
+
+### P2 findings — hardening
+| # | Finding | Source |
+|---|---------|--------|
+| P2-A | 44 anon-callable read-only SECDEF RPCs expose customer financials / statements / GPS / RUP data (CRX has no anonymous user features → these should not be anon-EXECUTE-able) | D3 |
+| P2-B | PDF `didDrawPage` / `didDrawCell` / `didParseCell` callbacks not wrapped in try/catch — a throw aborts the whole document, single-document downloads have no try/catch in the caller either | D10 |
+| P2-C | `statementPdf.drawRemittanceStub` draws at fixed `pageH - 155` with no page-space guard → for customers with 8+ open invoices the stub overdraws the last transaction's table; comment at line 659 acknowledges "we'll draw over content (acceptable for tear-off)" — not safe | D10 |
+| P2-D | `delivery_items` RLS has no parent-status guard — admin/sales could INSERT/UPDATE/DELETE items on an `in_progress` delivery via direct PostgREST API (UI only uses guarded `edit_delivery()` RPC, so not currently exploited) | D6 |
+| P2-E | `approve_return` / `receive_return` lack explicit role check (rely on RLS); a sales_rep who filed the return could self-approve/receive it. Sibling `issue_return_credit` correctly enforces `role IN ('admin','sales_rep')` | D6 |
+| P2-F | `reconciliation.ts` lines 613-947 (the **drift-checker tool itself**) at 47.99% line coverage | D12 |
+| P2-G | `DeliveryDetail.tsx` (2433 LOC) and `InventoryPage.tsx` (1562 LOC) have **zero unit tests** — characterization tests needed before any refactor (D7 plan) | D12 |
+| P2-H | `save_blend_ticket` returns `jsonb_build_object('status','saved')` not the canonical `('success', true, …)` — return-shape inconsistency | D5 |
+| P2-I | Local `parseDollarsToCents` duplicate in `src/pages/ApplicationServiceDetail.tsx:19-22` bypasses the hardened canonical parser | D4 |
+
+### P3 findings — hygiene / polish
+- D11: `validateSentryDsnOrThrow()` not called at module boot for `create-user`, `reset-user-password`, `send-email` (silent Sentry degradation if DSN unset). The shared lib already provides the strict variant.
+- D10: 7pt fonts borderline on inkjet printers (acceptable); `deliveryPdf` signature force-fit to 200×60 squashes tall captures; batch download relies on sequential `doc.save()` (browsers may throttle).
+- D13: `pdfjs-dist` (~3 MB raw) has **zero `src/` consumers** — candidate for removal (`npm uninstall pdfjs-dist`); `CustomerDetail.tsx` is high-traffic and pulls the 1.68 MB mapbox vendor chunk → lazy-load the map components inside it for mobile-UX win.
+- D14: dead `compressImages` (plural) export in `src/lib/imageCompression.ts`; 3 TODO stub button handlers (FieldApplicationInvoice print button, FieldAppChemicalEntry recipe picker + save-recipe).
+- D14: `pages-routes.md` header "66 total" → could read "66 pages / 68 routes" (multiple routes per page is fine, just clearer wording).
+
+### Recommended fix order
+1. **Quick wins (~30 min):** `npm audit fix` (closes P1-E); answer Martinsville-or-Robinson (closes P1-D after a unifying edit pass); toggle Supabase leaked-password protection in dashboard.
+2. **SQL P1 sprint (3 migrations + 1 test):** P1-A (`reverse_write_off` strict actor), P1-B (`save_job` + 5 idempotency wrappers, tighten the coverage test), P1-C (add `cancelled` to `release_holds_on_quote_status_change`). Each routed through `rls-security-reviewer` + `migration-drift-reviewer` + `/explain-migration` per the migration-apply-guard hook.
+3. **D1 root-cause:** per-error debug for the 3 live Postgres errors; cross-reference Sentry dashboard for affected users/pages.
+4. **P2 sprint:** REVOKE anon EXECUTE on the data-exposure subset of the 44 read RPCs (P2-A); wrap PDF callbacks in try/catch (P2-B); add page-space guard to remit stub (P2-C); add status trigger to `delivery_items` (P2-D); add role check to return RPCs (P2-E); fix the small frontend P2s.
+5. **Test coverage sprint:** the 5 specific cases proposed in D12 — start with `reconciliation.ts` boundary tests.
+6. **Refactor sprint (long-running, separate):** D7 plan in order — inventory modals → order tables → driver delivery view → `quoteCalc.ts` (after characterization tests for DeliveryDetail + InventoryPage).
+
+---
+
+## 6. Housekeeping applied in-session (2026-05-29)
+- Recovered & wrote `supabase/migrations/20260528042000_preserve_quote_price_overrides.sql`; synced `src/types/index.ts` `QuoteItem.price_override`. Typecheck passes.
+- **CLAUDE.md** Current State date 2026-05-25 → 2026-05-29; counts 95 → 97 tables, ~184 → ~204 RPCs, 356 → 357 migrations; added live Edge Function version table; both "Pending live apply/deploy" notes on the 2026-05-26 migrations updated to "Applied live and verified"; removed completed `#38 abandoned-package swap` from "Pending Mason."
+- **docs/reference/migration-history.md** header 356 → 357.
+- **docs/reference/database-schema.md** header 95 → 97.
+- Memory: feedback note `feedback_ground-reviews-before-planning.md` added (ground reviews in real checks before writing the plan — surfaced the live-vs-disk drift a generic plan would have missed).
