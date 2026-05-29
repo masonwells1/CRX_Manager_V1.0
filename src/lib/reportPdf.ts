@@ -7,6 +7,7 @@
 
 import type jsPDF from 'jspdf';
 import { localToday } from './dateUtils';
+import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
 
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
   lastAutoTable: { finalY: number };
@@ -59,7 +60,7 @@ export async function generateReportPdf(options: ReportPdfOptions) {
   doc.text('CROP RX SOLUTIONS', margin, 28);
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
-  doc.text('Agricultural Input Solutions  •  Robinson, IL', margin, 44);
+  doc.text(COMPANY_TAGLINE_HEADER_NO_PHONE, margin, 44);
 
   // Report title on right
   doc.setFontSize(12);

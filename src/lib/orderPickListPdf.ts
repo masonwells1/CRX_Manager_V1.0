@@ -9,6 +9,7 @@
 import type jsPDF from 'jspdf';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import type { CellHookData } from 'jspdf-autotable';
+import { COMPANY_FOOTER_INTERNAL } from './companyInfo';
 
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
   lastAutoTable: { finalY: number };
@@ -235,7 +236,7 @@ function renderPickListPage(
   doc.setFontSize(7);
   doc.setTextColor(160, 160, 160);
   doc.text(
-    'Crop RX Solutions  •  Robinson, IL  •  Internal Use Only',
+    COMPANY_FOOTER_INTERNAL,
     pageW / 2,
     footerY,
     { align: 'center' },

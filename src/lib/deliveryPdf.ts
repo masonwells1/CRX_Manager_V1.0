@@ -8,6 +8,7 @@
 import type jsPDF from 'jspdf';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import type { CellHookData } from 'jspdf-autotable';
+import { COMPANY_FOOTER_THANKS } from './companyInfo';
 
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
   lastAutoTable: { finalY: number };
@@ -240,7 +241,7 @@ function renderDeliveryPage(
   doc.line(margin, footerY - 10, pageW - margin, footerY - 10);
   doc.setFontSize(7);
   doc.setTextColor(160, 160, 160);
-  doc.text('Crop RX Solutions  •  Robinson, IL  •  Thank you for your business!', pageW / 2, footerY, { align: 'center' });
+  doc.text(COMPANY_FOOTER_THANKS, pageW / 2, footerY, { align: 'center' });
 }
 
 export async function generateDeliveryPdf(data: PdfDeliveryData) {

@@ -18,6 +18,7 @@ import type {
 } from '../types';
 import type jsPDF from 'jspdf';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
+import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE, COMPANY_REMIT_ADDRESS } from './companyInfo';
 
 /** jsPDF instance with lastAutoTable from jspdf-autotable plugin */
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
@@ -44,8 +45,7 @@ const fmtDate = (d: string) =>
   new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 
 const COMPANY_NAME = 'CROP RX SOLUTIONS';
-const COMPANY_TAGLINE = 'Agricultural Input Solutions  •  Martinsville, IL  •  618-843-0413';
-const COMPANY_REMIT_ADDRESS = 'Crop RX Solutions, Inc.\nPO Box 123\nMartinsville, IL 62442';
+// COMPANY_TAGLINE + COMPANY_REMIT_ADDRESS now come from src/lib/companyInfo.ts (single source).
 
 // ── Main Generator ──────────────────────────────────────────────────────
 

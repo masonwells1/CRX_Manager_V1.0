@@ -18,6 +18,7 @@
 import type { YearEndSummaryData, YearEndProductUsage } from '../types';
 import type jsPDF from 'jspdf';
 import type { CellHookData } from 'jspdf-autotable';
+import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE } from './companyInfo';
 
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
   lastAutoTable: { finalY: number };
@@ -35,7 +36,7 @@ const ALT_ROW_BG: [number, number, number] = [252, 252, 252];
 const BLUE: [number, number, number] = [37, 99, 235];
 
 const COMPANY_NAME = 'CROP RX SOLUTIONS';
-const COMPANY_TAGLINE = 'Agricultural Input Solutions  •  Martinsville, IL  •  618-843-0413';
+// COMPANY_TAGLINE now comes from src/lib/companyInfo.ts (single source).
 
 // ── Options ──────────────────────────────────────────────────────────────
 

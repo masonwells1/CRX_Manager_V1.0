@@ -8,6 +8,7 @@
  */
 import type jsPDF from 'jspdf';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
+import { COMPANY_FOOTER_THANKS } from './companyInfo';
 
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
   lastAutoTable: { finalY: number };
@@ -176,7 +177,7 @@ function renderOrderSummaryPage(
   doc.setFontSize(7);
   doc.setTextColor(160, 160, 160);
   doc.text(
-    'Crop RX Solutions  •  Robinson, IL  •  Thank you for your business!',
+    COMPANY_FOOTER_THANKS,
     pageW / 2,
     footerY,
     { align: 'center' },

@@ -8,6 +8,7 @@
  * Follows the same dynamic-import + color-scheme pattern as deliveryPdf.ts.
  */
 import type jsPDF from 'jspdf';
+import { COMPANY_FOOTER_THANKS } from './companyInfo';
 
 export interface LoadSheetItem {
   product_name: string;
@@ -50,7 +51,7 @@ function drawFooter(doc: JsPDFWithAutoTable, margin: number) {
   doc.setFontSize(7);
   doc.setTextColor(160, 160, 160);
   doc.text(
-    'Crop RX Solutions  •  Robinson, IL  •  Thank you for your business!',
+    COMPANY_FOOTER_THANKS,
     pageW / 2,
     footerY + 12,
     { align: 'center' },

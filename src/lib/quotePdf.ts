@@ -7,6 +7,7 @@
 // jsPDF and autoTable are dynamically imported inside each function
 // to keep them out of the main bundle (~500KB each)
 import type jsPDF from 'jspdf';
+import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
 
 type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
   lastAutoTable: { finalY: number };
@@ -110,7 +111,7 @@ export async function generateQuotePdf(data: PdfQuoteData, columns?: string[]) {
   doc.text('CROP RX SOLUTIONS', margin, 35);
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text('Agricultural Input Solutions  •  Robinson, IL', margin, 53);
+  doc.text(COMPANY_TAGLINE_HEADER_NO_PHONE, margin, 53);
 
   // Quote number badge on right
   doc.setFontSize(14);

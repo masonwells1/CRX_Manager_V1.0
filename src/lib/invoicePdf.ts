@@ -11,6 +11,7 @@
  */
 
 import type { InvoicePrintOptions } from '../types';
+import { COMPANY_TAGLINE_HEADER } from './companyInfo';
 import type jsPDF from 'jspdf';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 
@@ -155,7 +156,7 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
   doc.text('CROP RX SOLUTIONS', margin, 35);
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text('Agricultural Input Solutions  •  Martinsville, IL  •  618-843-0413', margin, 53);
+  doc.text(COMPANY_TAGLINE_HEADER, margin, 53);
 
   // Invoice badge (right)
   doc.setFontSize(14);

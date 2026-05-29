@@ -11,6 +11,9 @@
  *   - Missing required parameters
  */
 import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 // -------------------------------------------------------------------------
 // RPC parameter type definitions (must match SQL function signatures)
@@ -1468,5 +1471,141 @@ describe('Idempotency Key Coverage', () => {
   it('total tracked RPCs (covered + missing) is at least 81', () => {
     const total = MUTATING_RPCS_WITH_IDEMPOTENCY.length + MUTATING_RPCS_MISSING_IDEMPOTENCY.length;
     expect(total).toBeGreaterThanOrEqual(81);
+  });
+});
+
+// -------------------------------------------------------------------------
+// Idempotency BODY verification — the lists above only track which RPCs
+// DECLARE p_idempotency_key. That is not enough: the 2026-05-29 review found
+// save_job (and others) declared the param but the SQL body never read or
+// wrote idempotency_keys, so a double-submit still created duplicate rows —
+// and the list-membership tests above happily reported them as "covered."
+//
+// This block reads the actual migration SQL and asserts that every "covered"
+// RPC's LATEST definition genuinely references idempotency_keys (or the
+// check_idempotency/save_idempotency helpers). Anything that legitimately does
+// NOT must be listed in IDEMPOTENCY_BODY_EXEMPT with a reason — so the gap is
+// explicit and visible, never silently mislabeled as covered again.
+// -------------------------------------------------------------------------
+
+const MIGRATIONS_DIR = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'supabase',
+  'migrations'
+);
+
+/**
+ * Covered-list RPCs whose *disk* body does NOT visibly reference idempotency_keys,
+ * each with the reason it is acceptable. Every entry was checked against the LIVE
+ * database on 2026-05-29 (pg_get_functiondef + mutation heuristic), since the disk
+ * migrations are consolidated/renamed and "latest by filename" is not always the
+ * true latest applied definition.
+ *
+ *  - 'verified-live'  : live body DOES use idempotency_keys, but the disk scan
+ *                       can't resolve it across consolidated migrations. Live-confirmed.
+ *  - 'natural'        : naturally idempotent — UPDATE-only path, or a NOT EXISTS /
+ *                       "already exists" guard makes replay safe.
+ *  - 'gap'            : genuine double-submit gap, fix pending. Should shrink to zero.
+ *  - 'non-mutating'   : a read / deprecated RPC that was historically parked in the
+ *                       covered list; mutates=false live, so idempotency is N/A.
+ *                       (Left in place to avoid churning count thresholds; flagged
+ *                       for a future list-hygiene cleanup.)
+ */
+const IDEMPOTENCY_BODY_EXEMPT: Record<
+  string,
+  'verified-live' | 'natural' | 'gap' | 'non-mutating'
+> = {
+  // disk scan can't resolve the latest body; live body_uses_idem=true (2026-05-29)
+  create_rebate_claim: 'verified-live',
+  manual_inventory_add: 'verified-live',
+  save_blend_recipe: 'verified-live',
+  transition_rebate_claim: 'verified-live',
+  unapply_credit_memo: 'verified-live',
+  // naturally idempotent
+  save_blend_ticket: 'natural', // UPDATE-only path; replay overwrites identically
+  create_invoice_from_delivery: 'natural', // guarded: "invoice already exists for delivery"
+  generate_rup_sales_records: 'natural', // per-row NOT EXISTS guard
+  // genuine double-submit gaps, fix pending
+  batch_apply_all_prepayments: 'gap', // TODO(review-2026-05-29 P1-B follow-up): wrap in idempotency
+  batch_void_invoices: 'gap', // partial: per-invoice status<>'posted' skip; TODO full wrap
+  // non-mutating reads / deprecated — idempotency N/A, list-hygiene cleanup pending
+  get_ap_aging: 'non-mutating', // pure read (does not even declare the param live)
+  get_ap_dashboard_summary: 'non-mutating', // pure read
+  generate_batch_statements: 'non-mutating', // mutates=false live
+  record_payment: 'non-mutating', // deprecated in favor of record_invoice_payment
+};
+
+/**
+ * Returns the body of the LATEST migration definition of `rpc`, or null if no
+ * disk migration defines it by name (some functions live in consolidated files
+ * under a different filename — existence is covered by other tests + live).
+ */
+function latestFunctionBody(rpc: string): string | null {
+  const files = readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort(); // timestamp-prefixed → ascending chronological
+  const sigRe = new RegExp(`FUNCTION\\s+(?:public\\.)?${rpc}\\s*\\(`, 'i');
+  for (let i = files.length - 1; i >= 0; i--) {
+    const content = readFileSync(join(MIGRATIONS_DIR, files[i]), 'utf8');
+    const sigIdx = content.search(sigRe);
+    if (sigIdx === -1) continue;
+    // Extract the dollar-quoted body that follows the signature:  AS $tag$ ... $tag$
+    const after = content.slice(sigIdx);
+    const bodyMatch = after.match(/AS\s+\$([A-Za-z_]*)\$([\s\S]*?)\$\1\$/);
+    return bodyMatch ? bodyMatch[2] : after;
+  }
+  return null;
+}
+
+function bodyUsesIdempotency(body: string): boolean {
+  return /idempotency_keys|check_idempotency|save_idempotency/i.test(body);
+}
+
+describe('Idempotency BODY verification (reads migration SQL)', () => {
+  it('every covered RPC body actually reads/writes idempotency_keys (not just declares the param)', () => {
+    const offenders: string[] = [];
+    for (const rpc of MUTATING_RPCS_WITH_IDEMPOTENCY) {
+      if (rpc in IDEMPOTENCY_BODY_EXEMPT) continue;
+      const body = latestFunctionBody(rpc);
+      if (body === null) continue; // defined in a consolidated file; existence covered elsewhere
+      if (!bodyUsesIdempotency(body)) offenders.push(rpc);
+    }
+    // If this fails, the listed RPCs declare p_idempotency_key but never use it.
+    // Either add the canonical idempotency block to the SQL, or (if genuinely
+    // naturally idempotent) add the RPC to IDEMPOTENCY_BODY_EXEMPT with a reason.
+    expect(offenders).toEqual([]);
+  });
+
+  it('save_job specifically uses idempotency_keys (regression guard for the 2026-05-29 fix)', () => {
+    const body = latestFunctionBody('save_job');
+    expect(body).not.toBeNull();
+    expect(bodyUsesIdempotency(body as string)).toBe(true);
+  });
+
+  it("every 'gap' exemption genuinely still lacks body idempotency (forces removal when fixed)", () => {
+    const stillGap = Object.entries(IDEMPOTENCY_BODY_EXEMPT)
+      .filter(([, kind]) => kind === 'gap')
+      .map(([rpc]) => rpc)
+      .filter((rpc) => {
+        const body = latestFunctionBody(rpc);
+        return body !== null && bodyUsesIdempotency(body);
+      });
+    // If an RPC here now uses idempotency, remove it from IDEMPOTENCY_BODY_EXEMPT
+    // and move it to fully-covered status.
+    expect(stillGap).toEqual([]);
+  });
+
+  it("known idempotency 'gap' set is small and shrinking (currently 2)", () => {
+    const gaps = Object.values(IDEMPOTENCY_BODY_EXEMPT).filter((k) => k === 'gap');
+    expect(gaps.length).toBeLessThanOrEqual(2);
+  });
+
+  it('every exempt RPC is also tracked in the covered list (no orphan exemptions)', () => {
+    const orphans = Object.keys(IDEMPOTENCY_BODY_EXEMPT).filter(
+      (rpc) => !MUTATING_RPCS_WITH_IDEMPOTENCY.includes(rpc)
+    );
+    expect(orphans).toEqual([]);
   });
 });
