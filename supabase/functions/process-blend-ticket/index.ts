@@ -867,17 +867,33 @@ Deno.serve(async (req: Request) => {
     // processing forever, missing products, etc.) and the function still
     // reported success.
 
-    // Mark queue as processing (critical — without this the queue can't track state)
+    // Atomically CLAIM the queue row so two concurrent invocations for the same
+    // ticket can't both run OCR and interleave the product delete/insert.
+    // (Whole-codebase audit 2026-05-30, finding M3.) The previous unconditional
+    // UPDATE let a poller-fired second invocation — which saw the row still
+    // 'pending' before the first invocation flipped it — proceed in parallel,
+    // producing duplicate extracted product rows. We claim a 'pending' row, OR a
+    // 'processing' row whose started_at is stale (>2 min, the poller's stuck-job
+    // recovery window). A fresh 'processing' row means another invocation is
+    // actively working this ticket, so we bail.
     if (queueId) {
-      const { error: qProcErr } = await adminClient
+      const staleBefore = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+      const nowIso = new Date().toISOString();
+      const { data: claimed, error: qProcErr } = await adminClient
         .from("ocr_processing_queue")
-        .update({
-          status: "processing",
-          started_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", queueId);
-      if (qProcErr) throw new Error(`Failed to mark queue ${queueId} as processing: ${qProcErr.message}`);
+        .update({ status: "processing", started_at: nowIso, updated_at: nowIso })
+        .eq("id", queueId)
+        .or(`status.eq.pending,and(status.eq.processing,started_at.lt.${staleBefore})`)
+        .select("id");
+      if (qProcErr) throw new Error(`Failed to claim queue ${queueId} as processing: ${qProcErr.message}`);
+      if (!claimed || claimed.length === 0) {
+        // Lost the race: another invocation is already actively processing this
+        // ticket. Bail without re-running OCR or touching product rows.
+        return jsonResponse(
+          { status: "already_processing", blend_ticket_id: blendTicketId },
+          200,
+        );
+      }
     }
 
     // Mark ticket as processing (critical — UI shows stale state if this fails)

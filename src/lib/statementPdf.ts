@@ -215,6 +215,13 @@ export async function generateStatementPdf(
   }
 
   // ── Remittance Stub (on last page) ─────────────────────────────────
+  // The stub draws at a fixed bottom position (tear-off line at pageH - 155).
+  // If transaction content ran down into that zone, move the stub to a fresh
+  // page so the tear-off remit block never overprints the last rows.
+  // (Whole-codebase audit 2026-05-30, finding M2.)
+  if (y > pageH - 170) {
+    doc.addPage();
+  }
   drawRemittanceStub(doc, data, margin, pageW, pageH, asOfDate);
 
   // Final page footer
@@ -656,9 +663,9 @@ function drawRemittanceStub(
   const stubH = 140;
   const stubY = pageH - stubH - 15;
 
-  // Check if we need space — the stub needs 140pt from the bottom
-  // If content already overlaps, add a new page
-  // We rely on the caller to leave space or we'll draw over content (acceptable for tear-off)
+  // The caller (generateStatementPdf) guarantees clear space above stubY by
+  // starting a fresh page when transaction content would reach this zone, so the
+  // stub can safely draw at this fixed bottom position. (Audit M2, 2026-05-30.)
 
   // Dotted tear-off line
   doc.setDrawColor(150, 150, 150);
