@@ -1,7 +1,8 @@
 -- P1-B (review 2026-05-29): add real idempotency to save_job.
 --
--- NOT YET APPLIED LIVE — written on branch fix/review-2026-05-29 for a
--- coordinated apply window (live DB shared with a parallel feature session).
+-- APPLIED LIVE 2026-05-30 as version 20260530020452 (from branch
+-- fix/review-2026-05-29, cherry-picked to main). File renamed to the applied
+-- version stamp per the B7 rule so tooling never re-applies it.
 --
 -- Bug: save_job declared p_idempotency_key but the body never read or wrote
 -- idempotency_keys (verified live 2026-05-29: declares_param=true,

@@ -1,7 +1,8 @@
 -- P1-C (review 2026-05-29): release inventory holds when a planned quote is cancelled.
 --
--- NOT YET APPLIED LIVE — written on branch fix/review-2026-05-29 for a
--- coordinated apply window (live DB shared with a parallel feature session).
+-- APPLIED LIVE 2026-05-30 as version 20260530020514 (from branch
+-- fix/review-2026-05-29, cherry-picked to main). File renamed to the applied
+-- version stamp per the B7 rule so tooling never re-applies it.
 --
 -- Bug: release_holds_on_quote_status_change fired only when a quote moved into
 -- ('accepted','declined','expired'). But the quote state machine also allows

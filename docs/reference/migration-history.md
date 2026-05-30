@@ -1,10 +1,23 @@
-# Migration History (357 migrations)
+# Migration History (363 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-05-29 → 2026-05-30 (un-indexed)
+
+Newest-first. The three `20260530*` rows are the `fix/review-2026-05-29` P1 sprint (applied live via MCP; disk filenames renamed to the MCP-stamped versions per the B7 rule). The three `20260529214*` rows are the parallel-session Codex remediation (see CLAUDE.md Current State for full detail).
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260530020514 | `release_holds_on_quote_cancel` | Added `'cancelled'` to both status sets in the `release_holds_on_quote_status_change` trigger so cancelling a planned quote releases its `inventory_holds` (was orphaning them → phantom reservations). Body otherwise verbatim. Reviewers clean; live-verified. |
+| 20260530020452 | `save_job_idempotency` | `save_job` declared `p_idempotency_key` but never used it (double-click created two jobs). Added canonical check-at-top/save-at-end idempotency against `idempotency_keys`. Body otherwise verbatim. Companion `rpcContracts.test.ts` body-scan hardening. |
+| 20260530020412 | `reverse_write_off_strict_actor` | Replaced forgeable `COALESCE(p_performed_by, auth.uid())` with the canonical strict-actor block (`AUTH_REQUIRED`/`ACTOR_MISMATCH`) + `is_active` admin check. The one mutating-financial RPC missed by the 2026-05-26 actor-forgery sweep. Body otherwise verbatim. |
+| 20260529214538 | `fix_void_order_void_invoice_status_transitions` | Parallel-session Codex fix — `void_order` crash + draft invoice→cancelled transitions. See CLAUDE.md. |
+| 20260529214423 | `fix_get_customer_transaction_review_running_balance_cast` | Parallel-session Codex fix — SQLSTATE 42804 numeric→bigint window-sum cast. See CLAUDE.md. |
+| 20260529214355 | `revoke_anon_execute_on_report_dashboard_secdef` | Parallel-session Codex fix — REVOKE anon/PUBLIC EXECUTE on 37 SECDEF report/dashboard/geo/financial RPCs leaking PII; anon-SECDEF dropped 89→52. See CLAUDE.md. |
 
 ## Un-indexed migrations (backfilled 2026-05-25)
 

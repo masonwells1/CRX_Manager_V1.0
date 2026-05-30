@@ -1,8 +1,8 @@
 -- P1-A (review 2026-05-29): harden reverse_write_off against actor forgery.
 --
--- NOT YET APPLIED LIVE — written on branch fix/review-2026-05-29 for a
--- coordinated apply window (the live DB is shared with a parallel feature
--- session; do not apply simultaneously).
+-- APPLIED LIVE 2026-05-30 as version 20260530020412 (from branch
+-- fix/review-2026-05-29, cherry-picked to main). File renamed to the applied
+-- version stamp per the B7 rule so tooling never re-applies it.
 --
 -- Bug: reverse_write_off is SECURITY DEFINER and derived the actor as
 --   v_actor := COALESCE(p_performed_by, auth.uid());
