@@ -1,4 +1,4 @@
-# Migration History (364 migrations)
+# Migration History (365 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -8,10 +8,11 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 ## Applied 2026-05-29 → 2026-05-30 (un-indexed)
 
-Newest-first. The three `20260530*` rows are the `fix/review-2026-05-29` P1 sprint (applied live via MCP; disk filenames renamed to the MCP-stamped versions per the B7 rule). The three `20260529214*` rows are the parallel-session Codex remediation (see CLAUDE.md Current State for full detail).
+Newest-first. The `20260530*` rows are the `fix/review-2026-05-29` P1 sprint + the workflow-review defense-in-depth (all applied live via MCP; disk filenames renamed to the MCP-stamped versions per the B7 rule). The three `20260529214*` rows are the parallel-session Codex remediation (see CLAUDE.md Current State for full detail).
 
 | Version | File | Description |
 |---------|------|-------------|
+| 20260530121737 | `gate_admin_only_financial_report_rpcs` | **Defense-in-depth (workflow review follow-up to the 2026-05-29 anon-revoke).** Added `PERFORM require_admin();` as the first statement to 7 admin-only SECURITY DEFINER report RPCs (`get_ap_aging`, `get_ap_dashboard_summary`, `get_customer_transaction_review`, `get_detailed_statement_data`, `get_monthly_summary`, `get_season_comparison`, `preview_finance_charges`) so a logged-in non-admin (sales_rep/driver/applicator) can't call them directly — the anon REVOKE only closed the public path. Caller-map verified all 7 reach only admin-only routes; no Edge/cron caller. Each body byte-faithful to live + the one guard line. Both reviewers clean; live-verified post-apply: admin context all 7 execute OK, anon context all 7 blocked by the guard. The 14 admin+sales report RPCs are a documented lower-priority follow-up (sales reps legitimately see that data). See `docs/audits/2026-05-29-codex-disposition.md`. |
 | 20260530121534 | `delivery_items_parent_lock_trigger` | P2-D — BEFORE INS/UPD/DEL trigger `enforce_delivery_items_parent_lock` on `delivery_items` rejecting writes when parent `deliveries.status IN ('in_progress','completed')` (honors `app.admin_override`). Closes the direct-PostgREST tamper path on locked deliveries. `complete_delivery` reproduced verbatim from live (md5-confirmed) + one `SET LOCAL app.admin_override` line. Both reviewers clean; live-verified (overload=1; rolled-back smoke test: completed blocked, scheduled allowed). |
 | 20260530020514 | `release_holds_on_quote_cancel` | Added `'cancelled'` to both status sets in the `release_holds_on_quote_status_change` trigger so cancelling a planned quote releases its `inventory_holds` (was orphaning them → phantom reservations). Body otherwise verbatim. Reviewers clean; live-verified. |
 | 20260530020452 | `save_job_idempotency` | `save_job` declared `p_idempotency_key` but never used it (double-click created two jobs). Added canonical check-at-top/save-at-end idempotency against `idempotency_keys`. Body otherwise verbatim. Companion `rpcContracts.test.ts` body-scan hardening. |
