@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Trash2, BookOpen, Save } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import Button from '../ui/Button';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
@@ -286,17 +286,12 @@ export default function FieldAppChemicalEntry({
         </table>
       </div>
 
-      {/* Add button + recipe buttons */}
+      {/* Add button (recipe picker / save-as-recipe were non-functional TODO
+          stubs — removed 2026-05-30 P3 hygiene; reintroduce when implemented) */}
       <div className="flex items-center justify-between">
         <div className="flex gap-2">
           <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={addLine}>
             Add Chemical
-          </Button>
-          <Button variant="ghost" size="sm" icon={<BookOpen className="w-4 h-4" />} onClick={() => { /* TODO: recipe picker */ }}>
-            Select Recipe
-          </Button>
-          <Button variant="ghost" size="sm" icon={<Save className="w-4 h-4" />} onClick={() => { /* TODO: save recipe */ }}>
-            Save As Recipe
           </Button>
         </div>
       </div>

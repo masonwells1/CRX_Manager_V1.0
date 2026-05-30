@@ -162,24 +162,29 @@ function renderPickListPage(
       6: { halign: 'center', cellWidth: 45 },
     } as Record<number, object>,
     didParseCell: (hookData: CellHookData) => {
-      // Status column highlighting
-      if (hookData.section === 'body' && hookData.column.index === 6) {
-        const item = data.items[hookData.row.index];
-        if (item?.has_shortage) {
-          hookData.cell.styles.textColor = RED;
-          hookData.cell.styles.fontStyle = 'bold';
-        } else if (item?.inventory_available !== null && !item?.has_shortage) {
-          hookData.cell.styles.textColor = CRX_GREEN;
-          hookData.cell.styles.fontStyle = 'bold';
+      try {
+        // Status column highlighting
+        if (hookData.section === 'body' && hookData.column.index === 6) {
+          const item = data.items[hookData.row.index];
+          if (item?.has_shortage) {
+            hookData.cell.styles.textColor = RED;
+            hookData.cell.styles.fontStyle = 'bold';
+          } else if (item?.inventory_available !== null && !item?.has_shortage) {
+            hookData.cell.styles.textColor = CRX_GREEN;
+            hookData.cell.styles.fontStyle = 'bold';
+          }
         }
-      }
-      // Highlight remaining column amber if there are items still to pick
-      if (hookData.section === 'body' && hookData.column.index === 4) {
-        const item = data.items[hookData.row.index];
-        if (item?.has_shortage) {
-          hookData.cell.styles.textColor = AMBER;
-          hookData.cell.styles.fontStyle = 'bold';
+        // Highlight remaining column amber if there are items still to pick
+        if (hookData.section === 'body' && hookData.column.index === 4) {
+          const item = data.items[hookData.row.index];
+          if (item?.has_shortage) {
+            hookData.cell.styles.textColor = AMBER;
+            hookData.cell.styles.fontStyle = 'bold';
+          }
         }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('orderPickListPdf: didParseCell failed', e);
       }
     },
   });

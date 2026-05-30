@@ -12,14 +12,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { supabase, checkMutationResult, sanitizeError } from '../lib/db';
+import { parseDollarsToCents } from '../lib/parseCents';
 import { Sentry } from '../lib/sentry';
 import type { Vehicle, Customer, CustomerApplicationRate } from '../types';
 
-// Money safety: all pricing stored as bigint cents, display divided by 100
-function parseDollarsToCents(val: string): number {
-  const n = parseFloat(val);
-  return isNaN(n) ? 0 : Math.round(n * 100);
-}
+// Money safety: all pricing stored as bigint cents, display divided by 100.
+// parseDollarsToCents now comes from the hardened canonical lib/parseCents
+// (positive-only, rejects scientific notation / multi-dot — no parseFloat).
 function formatCentsToDollars(cents: number): string {
   return (cents / 100).toFixed(2);
 }

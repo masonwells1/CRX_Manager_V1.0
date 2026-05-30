@@ -123,11 +123,16 @@ function renderReceivingPage(
     styles: { fontSize: 10, cellPadding: 6, textColor: CHARCOAL },
     headStyles: { fillColor: [240, 240, 240], textColor: CHARCOAL, fontStyle: 'bold' },
     didParseCell: (hookData: CellHookData) => {
-      // Color the condition column
-      if (hookData.section === 'body' && hookData.column.index === 2) {
-        const condition = data.items[hookData.row.index]?.condition ?? 'good';
-        hookData.cell.styles.textColor = conditionColor(condition);
-        hookData.cell.styles.fontStyle = 'bold';
+      try {
+        // Color the condition column
+        if (hookData.section === 'body' && hookData.column.index === 2) {
+          const condition = data.items[hookData.row.index]?.condition ?? 'good';
+          hookData.cell.styles.textColor = conditionColor(condition);
+          hookData.cell.styles.fontStyle = 'bold';
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('receivingPdf: didParseCell failed', e);
       }
     },
   });

@@ -69,18 +69,23 @@ export async function generateStatementPdf(
 
   // ── Page footer callback ───────────────────────────────────────────
   const drawPageFooter = () => {
-    pageNum++;
-    const footerY = pageH - 20;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
-    doc.setFontSize(7);
-    doc.setTextColor(160, 160, 160);
-    doc.text(
-      `Crop RX Solutions, Inc.  •  Statement generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
-      pageW / 2,
-      footerY,
-      { align: 'center' },
-    );
+    try {
+      pageNum++;
+      const footerY = pageH - 20;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
+      doc.setFontSize(7);
+      doc.setTextColor(160, 160, 160);
+      doc.text(
+        `Crop RX Solutions, Inc.  •  Statement generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
+        pageW / 2,
+        footerY,
+        { align: 'center' },
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('statementPdf: drawPageFooter failed', e);
+    }
   };
 
   // ── Header Bar ─────────────────────────────────────────────────────
@@ -215,14 +220,7 @@ export async function generateStatementPdf(
   }
 
   // ── Remittance Stub (on last page) ─────────────────────────────────
-  // The stub draws at a fixed bottom position (tear-off line at pageH - 155).
-  // If transaction content ran down into that zone, move the stub to a fresh
-  // page so the tear-off remit block never overprints the last rows.
-  // (Whole-codebase audit 2026-05-30, finding M2.)
-  if (y > pageH - 170) {
-    doc.addPage();
-  }
-  drawRemittanceStub(doc, data, margin, pageW, pageH, asOfDate);
+  drawRemittanceStub(doc, data, margin, pageW, pageH, asOfDate, y);
 
   // Final page footer
   drawPageFooter();
@@ -657,15 +655,23 @@ function drawRemittanceStub(
   pageW: number,
   pageH: number,
   asOfDate: string,
+  currentY: number,
 ) {
+  try {
   const c = data.customer;
   const aging = data.aging;
   const stubH = 140;
-  const stubY = pageH - stubH - 15;
+  let stubY = pageH - stubH - 15;
 
-  // The caller (generateStatementPdf) guarantees clear space above stubY by
-  // starting a fresh page when transaction content would reach this zone, so the
-  // stub can safely draw at this fixed bottom position. (Audit M2, 2026-05-30.)
+  // Check if we need space — the stub needs ~140pt from the bottom. If the
+  // transaction content (currentY) would reach the fixed stub zone, push the
+  // stub onto a fresh page so the tear-off block never overprints the last
+  // rows. stubY recomputes to the same bottom-of-page position on the new
+  // (empty) page. (Audit M2 + P2-B/C, 2026-05-30.)
+  if (currentY > stubY - 15) {
+    doc.addPage();
+    stubY = pageH - stubH - 15;
+  }
 
   // Dotted tear-off line
   doc.setDrawColor(150, 150, 150);
@@ -767,6 +773,10 @@ function drawRemittanceStub(
   doc.text('Amount Paid  $', rxStart, payY);
   doc.setDrawColor(...CHARCOAL);
   doc.line(rxStart + 80, payY, pageW - margin, payY);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('statementPdf: drawRemittanceStub failed', e);
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────

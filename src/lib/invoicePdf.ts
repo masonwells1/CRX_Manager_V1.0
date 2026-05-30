@@ -134,17 +134,22 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
 
   // ── Page footer callback ───────────────────────────────────────────
   const drawPageFooter = () => {
-    const footerY = pageH - 20;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
-    doc.setFontSize(7);
-    doc.setTextColor(160, 160, 160);
-    doc.text(
-      `Crop RX Solutions, Inc.  •  Generated ${new Date().toLocaleDateString()}`,
-      pageW / 2,
-      footerY,
-      { align: 'center' },
-    );
+    try {
+      const footerY = pageH - 20;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
+      doc.setFontSize(7);
+      doc.setTextColor(160, 160, 160);
+      doc.text(
+        `Crop RX Solutions, Inc.  •  Generated ${new Date().toLocaleDateString()}`,
+        pageW / 2,
+        footerY,
+        { align: 'center' },
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('invoicePdf: drawPageFooter failed', e);
+    }
   };
 
   // ── Header Bar ─────────────────────────────────────────────────────

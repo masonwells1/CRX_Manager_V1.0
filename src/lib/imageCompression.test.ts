@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { compressImage, compressImages } from './imageCompression';
+import { compressImage } from './imageCompression';
 
 // ── DOM API Mocks ────────────────────────────────────────────────────────
 
@@ -187,37 +187,5 @@ describe('compressImage', () => {
 
     const result = await compressImage(file);
     expect(result.name).toBe('document.jpg');
-  });
-});
-
-describe('compressImages', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    mockBlobSize = 800 * 1024;
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it('processes multiple files in parallel', async () => {
-    // All small files → returned as-is
-    const files = [
-      makeFile('a.jpg', 100 * 1024, 'image/jpeg'),
-      makeFile('b.jpg', 200 * 1024, 'image/jpeg'),
-      makeFile('c.csv', 50 * 1024, 'text/csv'),
-    ];
-
-    const results = await compressImages(files);
-    expect(results).toHaveLength(3);
-    // All should be returned unchanged (small / non-image)
-    expect(results[0]).toBe(files[0]);
-    expect(results[1]).toBe(files[1]);
-    expect(results[2]).toBe(files[2]);
-  });
-
-  it('returns empty array for empty input', async () => {
-    const results = await compressImages([]);
-    expect(results).toEqual([]);
   });
 });
