@@ -123,18 +123,23 @@ export async function generateReportPdf(options: ReportPdfOptions) {
     columnStyles: colStyles as any,
     alternateRowStyles: { fillColor: [252, 252, 252] },
     didDrawPage: () => {
-      // Footer on every page
-      const footerY = doc.internal.pageSize.getHeight() - 20;
-      doc.setDrawColor(200, 200, 200);
-      doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
-      doc.setFontSize(7);
-      doc.setTextColor(160, 160, 160);
-      doc.text(
-        `Crop RX Solutions  •  Generated ${new Date().toLocaleDateString()}`,
-        pageW / 2,
-        footerY,
-        { align: 'center' }
-      );
+      try {
+        // Footer on every page
+        const footerY = doc.internal.pageSize.getHeight() - 20;
+        doc.setDrawColor(200, 200, 200);
+        doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
+        doc.setFontSize(7);
+        doc.setTextColor(160, 160, 160);
+        doc.text(
+          `Crop RX Solutions  •  Generated ${new Date().toLocaleDateString()}`,
+          pageW / 2,
+          footerY,
+          { align: 'center' }
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('reportPdf: didDrawPage failed', e);
+      }
     },
   });
 

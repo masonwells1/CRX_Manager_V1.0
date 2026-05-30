@@ -88,18 +88,23 @@ export async function generateYearEndSummaryPdf(
 
   // ── Page footer callback ───────────────────────────────────────────
   const drawPageFooter = () => {
-    pageNum++;
-    const footerY = pageH - 20;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
-    doc.setFontSize(7);
-    doc.setTextColor(160, 160, 160);
-    doc.text(
-      `Crop RX Solutions, Inc.  •  Season Summary generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
-      pageW / 2,
-      footerY,
-      { align: 'center' },
-    );
+    try {
+      pageNum++;
+      const footerY = pageH - 20;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
+      doc.setFontSize(7);
+      doc.setTextColor(160, 160, 160);
+      doc.text(
+        `Crop RX Solutions, Inc.  •  Season Summary generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
+        pageW / 2,
+        footerY,
+        { align: 'center' },
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('yearEndSummaryPdf: drawPageFooter failed', e);
+    }
   };
 
   // ── Check page space & add new page if needed ──────────────────────
@@ -302,13 +307,18 @@ export async function generateYearEndSummaryPdf(
       },
       alternateRowStyles: { fillColor: ALT_ROW_BG },
       didDrawCell: (hookData: CellHookData) => {
-        // Color the Change column green/red
-        if (hookData.section === 'body' && hookData.column.index === 3) {
-          const pctVal = yoyRows[hookData.row.index]?.[3];
-          if (pctVal !== null && pctVal !== undefined) {
-            const color = (pctVal as number) >= 0 ? CRX_GREEN : RED;
-            doc.setTextColor(...color);
+        try {
+          // Color the Change column green/red
+          if (hookData.section === 'body' && hookData.column.index === 3) {
+            const pctVal = yoyRows[hookData.row.index]?.[3];
+            if (pctVal !== null && pctVal !== undefined) {
+              const color = (pctVal as number) >= 0 ? CRX_GREEN : RED;
+              doc.setTextColor(...color);
+            }
           }
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('yearEndSummaryPdf: didDrawCell failed', e);
         }
       },
       didDrawPage: drawPageFooter,

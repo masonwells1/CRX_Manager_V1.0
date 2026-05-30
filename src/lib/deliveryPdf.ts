@@ -157,14 +157,19 @@ function renderDeliveryPage(
     styles: { fontSize: 10, cellPadding: 6, textColor: CHARCOAL },
     headStyles: { fillColor: [240, 240, 240], textColor: CHARCOAL, fontStyle: 'bold' },
     didParseCell: (hookData: CellHookData) => {
-      // Highlight partial deliveries in amber
-      if (hasDelivered && hookData.section === 'body' && hookData.column.index === 2) {
-        const planned = data.items[hookData.row.index]?.quantity ?? 0;
-        const delivered = data.items[hookData.row.index]?.quantity_delivered ?? 0;
-        if (delivered < planned) {
-          hookData.cell.styles.textColor = AMBER;
-          hookData.cell.styles.fontStyle = 'bold';
+      try {
+        // Highlight partial deliveries in amber
+        if (hasDelivered && hookData.section === 'body' && hookData.column.index === 2) {
+          const planned = data.items[hookData.row.index]?.quantity ?? 0;
+          const delivered = data.items[hookData.row.index]?.quantity_delivered ?? 0;
+          if (delivered < planned) {
+            hookData.cell.styles.textColor = AMBER;
+            hookData.cell.styles.fontStyle = 'bold';
+          }
         }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('deliveryPdf: didParseCell failed', e);
       }
     },
   });

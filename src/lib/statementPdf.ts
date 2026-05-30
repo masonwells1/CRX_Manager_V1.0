@@ -69,18 +69,23 @@ export async function generateStatementPdf(
 
   // ── Page footer callback ───────────────────────────────────────────
   const drawPageFooter = () => {
-    pageNum++;
-    const footerY = pageH - 20;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
-    doc.setFontSize(7);
-    doc.setTextColor(160, 160, 160);
-    doc.text(
-      `Crop RX Solutions, Inc.  •  Statement generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
-      pageW / 2,
-      footerY,
-      { align: 'center' },
-    );
+    try {
+      pageNum++;
+      const footerY = pageH - 20;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
+      doc.setFontSize(7);
+      doc.setTextColor(160, 160, 160);
+      doc.text(
+        `Crop RX Solutions, Inc.  •  Statement generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
+        pageW / 2,
+        footerY,
+        { align: 'center' },
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('statementPdf: drawPageFooter failed', e);
+    }
   };
 
   // ── Header Bar ─────────────────────────────────────────────────────
@@ -215,7 +220,7 @@ export async function generateStatementPdf(
   }
 
   // ── Remittance Stub (on last page) ─────────────────────────────────
-  drawRemittanceStub(doc, data, margin, pageW, pageH, asOfDate);
+  drawRemittanceStub(doc, data, margin, pageW, pageH, asOfDate, y);
 
   // Final page footer
   drawPageFooter();
@@ -650,15 +655,23 @@ function drawRemittanceStub(
   pageW: number,
   pageH: number,
   asOfDate: string,
+  currentY: number,
 ) {
+  try {
   const c = data.customer;
   const aging = data.aging;
   const stubH = 140;
-  const stubY = pageH - stubH - 15;
+  let stubY = pageH - stubH - 15;
 
-  // Check if we need space — the stub needs 140pt from the bottom
-  // If content already overlaps, add a new page
-  // We rely on the caller to leave space or we'll draw over content (acceptable for tear-off)
+  // Check if we need space — the stub needs 140pt from the bottom.
+  // If the transaction content (currentY) would overlap the fixed stub
+  // position, push the stub onto a fresh page so it never overdraws the
+  // last rows. stubY recomputes to the same bottom-of-page position on the
+  // new (empty) page.
+  if (currentY > stubY - 8) {
+    doc.addPage();
+    stubY = pageH - stubH - 15;
+  }
 
   // Dotted tear-off line
   doc.setDrawColor(150, 150, 150);
@@ -760,6 +773,10 @@ function drawRemittanceStub(
   doc.text('Amount Paid  $', rxStart, payY);
   doc.setDrawColor(...CHARCOAL);
   doc.line(rxStart + 80, payY, pageW - margin, payY);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('statementPdf: drawRemittanceStub failed', e);
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
