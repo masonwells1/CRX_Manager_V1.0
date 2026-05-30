@@ -34,10 +34,14 @@ export const COMPANY_FOOTER_INTERNAL = `${COMPANY_NAME}  •  ${COMPANY_CITY}  �
  * Remit-to mailing block for statements — the address customers physically MAIL
  * CHECKS to.
  *
- * ⚠️ TODO(mason): CONFIRM the remit-to address after the West York relocation.
- * The PO Box + ZIP below are the PRE-EXISTING values and were intentionally NOT
- * changed during the 2026-05-29 review, because a wrong remit address loses
- * customer payments. If the PO Box / ZIP moved with the company, update here.
- * (HQ city above and the remit PO box below may legitimately differ.)
+ * Confirmed by Mason on 2026-05-30: this matches app_settings.company_address in
+ * the live DB ("9100 E 2000th ave Annapolis, IL 62413"). It replaced the stale
+ * pre-relocation "PO Box 123, Martinsville, IL 62442" literal flagged by the
+ * 2026-05-30 whole-codebase audit (finding M2).
+ *
+ * NOTE: the letterhead COMPANY_CITY above ("West York, IL") legitimately
+ * differs from this remit address (Annapolis, IL). Confirmed by Mason on
+ * 2026-05-30 that the office/letterhead town and the check-mailing address
+ * are two distinct, correct locations.
  */
-export const COMPANY_REMIT_ADDRESS = `${COMPANY_LEGAL_NAME}\nPO Box 123\nMartinsville, IL 62442`;
+export const COMPANY_REMIT_ADDRESS = `${COMPANY_LEGAL_NAME}\n9100 E 2000th Ave\nAnnapolis, IL 62413`;
