@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  Save, Send, Trash2, Printer, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye,
+  Save, Send, Trash2, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -567,11 +567,6 @@ export default function FieldApplicationInvoice() {
           {!isNew && canEdit && (
             <Button variant="danger" size="sm" icon={<Trash2 className="w-4 h-4" />} onClick={() => setShowDeleteConfirm(true)}>
               Delete
-            </Button>
-          )}
-          {!isNew && (
-            <Button variant="secondary" size="sm" icon={<Printer className="w-4 h-4" />} onClick={() => { /* TODO: print */ }}>
-              Print
             </Button>
           )}
           {!isNew && canPost && (

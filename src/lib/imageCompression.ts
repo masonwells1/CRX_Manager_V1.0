@@ -88,13 +88,6 @@ export async function compressImage(file: File): Promise<File> {
   }
 }
 
-/**
- * Compress multiple images in parallel.
- */
-export async function compressImages(files: File[]): Promise<File[]> {
-  return Promise.all(files.map(compressImage));
-}
-
 function canvasToBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
