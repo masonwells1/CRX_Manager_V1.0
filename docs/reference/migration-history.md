@@ -1,4 +1,4 @@
-# Migration History (363 migrations)
+# Migration History (364 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -12,6 +12,7 @@ Newest-first. The three `20260530*` rows are the `fix/review-2026-05-29` P1 spri
 
 | Version | File | Description |
 |---------|------|-------------|
+| 20260530121534 | `delivery_items_parent_lock_trigger` | P2-D — BEFORE INS/UPD/DEL trigger `enforce_delivery_items_parent_lock` on `delivery_items` rejecting writes when parent `deliveries.status IN ('in_progress','completed')` (honors `app.admin_override`). Closes the direct-PostgREST tamper path on locked deliveries. `complete_delivery` reproduced verbatim from live (md5-confirmed) + one `SET LOCAL app.admin_override` line. Both reviewers clean; live-verified (overload=1; rolled-back smoke test: completed blocked, scheduled allowed). |
 | 20260530020514 | `release_holds_on_quote_cancel` | Added `'cancelled'` to both status sets in the `release_holds_on_quote_status_change` trigger so cancelling a planned quote releases its `inventory_holds` (was orphaning them → phantom reservations). Body otherwise verbatim. Reviewers clean; live-verified. |
 | 20260530020452 | `save_job_idempotency` | `save_job` declared `p_idempotency_key` but never used it (double-click created two jobs). Added canonical check-at-top/save-at-end idempotency against `idempotency_keys`. Body otherwise verbatim. Companion `rpcContracts.test.ts` body-scan hardening. |
 | 20260530020412 | `reverse_write_off_strict_actor` | Replaced forgeable `COALESCE(p_performed_by, auth.uid())` with the canonical strict-actor block (`AUTH_REQUIRED`/`ACTOR_MISMATCH`) + `is_active` admin check. The one mutating-financial RPC missed by the 2026-05-26 actor-forgery sweep. Body otherwise verbatim. |
