@@ -1,4 +1,4 @@
-# Migration History (365 migrations)
+# Migration History (366 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -12,6 +12,8 @@ Newest-first. The three `20260530*` rows are the `fix/review-2026-05-29` P1 spri
 
 | Version | File | Description |
 |---------|------|-------------|
+| 20260530192441 | _(live-only correction; no disk file)_ | P2-3 follow-up `batch_rpc_idempotency_entity_type_fix` — corrected `batch_apply_all_prepayments` audit `entity_type` `'system'`→`'batch'` (a post-apply smoke test caught `'system'` violating `financial_audit_log_entity_type_check`). Consolidated into the `20260530191823` disk file below. |
+| 20260530191823 | `batch_rpc_idempotency` | P2-3 — canonical idempotency (`check_idempotency`/`save_idempotency`) for `batch_apply_all_prepayments` + `batch_void_invoices` (the last two `IDEMPOTENCY_BODY_EXEMPT` gaps). Bundled bugfix: `batch_apply` inserted `entity_id=NULL` into `financial_audit_log` (NOT NULL) → "Apply all prepayments" failed on every click (0 rows ever); fixed to `entity_type='batch'`, `entity_id=v_actor`. Both reviewers clean; live-verified. Disk file is the consolidated final ('batch') state; applied live in two steps (191823 + 192441). |
 | 20260530183926 | `returns_rpc_role_actor_guard` | P2-E — added the canonical auth + strict-actor (`AUTH_REQUIRED`/`ACTOR_MISMATCH`) + `role IN ('admin','sales_rep')` `is_active` gate (from `issue_return_credit`) to `approve_return` + `receive_return`, before the idempotency check. Both were SECDEF-but-ungated (forgeable actor, callable by any authenticated role). Bodies verbatim from live (md5-confirmed). Both reviewers clean; live-verified (overloads=1, guard fires `AUTH_REQUIRED`). |
 | 20260530121534 | `delivery_items_parent_lock_trigger` | P2-D — BEFORE INS/UPD/DEL trigger `enforce_delivery_items_parent_lock` on `delivery_items` rejecting writes when parent `deliveries.status IN ('in_progress','completed')` (honors `app.admin_override`). Closes the direct-PostgREST tamper path on locked deliveries. `complete_delivery` reproduced verbatim from live (md5-confirmed) + one `SET LOCAL app.admin_override` line. Both reviewers clean; live-verified (overload=1; rolled-back smoke test: completed blocked, scheduled allowed). |
 | 20260530020514 | `release_holds_on_quote_cancel` | Added `'cancelled'` to both status sets in the `release_holds_on_quote_status_change` trigger so cancelling a planned quote releases its `inventory_holds` (was orphaning them → phantom reservations). Body otherwise verbatim. Reviewers clean; live-verified. |

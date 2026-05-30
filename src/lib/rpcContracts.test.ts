@@ -1527,9 +1527,10 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   save_blend_ticket: 'natural', // UPDATE-only path; replay overwrites identically
   create_invoice_from_delivery: 'natural', // guarded: "invoice already exists for delivery"
   generate_rup_sales_records: 'natural', // per-row NOT EXISTS guard
-  // genuine double-submit gaps, fix pending
-  batch_apply_all_prepayments: 'gap', // TODO(review-2026-05-29 P1-B follow-up): wrap in idempotency
-  batch_void_invoices: 'gap', // partial: per-invoice status<>'posted' skip; TODO full wrap
+  // (no remaining 'gap' entries — batch_apply_all_prepayments + batch_void_invoices
+  //  were wrapped with the canonical check_idempotency/save_idempotency helpers in
+  //  the P2-3 migration (batch_rpc_idempotency); the body-scan below now detects
+  //  them, so they MUST NOT be re-added here.)
   // non-mutating reads / deprecated — idempotency N/A, list-hygiene cleanup pending
   get_ap_aging: 'non-mutating', // pure read (does not even declare the param live)
   get_ap_dashboard_summary: 'non-mutating', // pure read
@@ -1597,9 +1598,12 @@ describe('Idempotency BODY verification (reads migration SQL)', () => {
     expect(stillGap).toEqual([]);
   });
 
-  it("known idempotency 'gap' set is small and shrinking (currently 2)", () => {
+  it("known idempotency 'gap' set is zero (P2-3 closed the last two)", () => {
     const gaps = Object.values(IDEMPOTENCY_BODY_EXEMPT).filter((k) => k === 'gap');
-    expect(gaps.length).toBeLessThanOrEqual(2);
+    // batch_apply_all_prepayments + batch_void_invoices were the final two gaps,
+    // wrapped with canonical idempotency in the P2-3 migration. Keep this at 0 —
+    // any new gap must be fixed in the SQL, not parked here.
+    expect(gaps.length).toBe(0);
   });
 
   it('every exempt RPC is also tracked in the covered list (no orphan exemptions)', () => {
