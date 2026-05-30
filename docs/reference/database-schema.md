@@ -1,4 +1,4 @@
-# Database Schema Reference (97 Tables)
+# Database Schema Reference (95 Tables + 2 views)
 
 ## Core Business
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
@@ -20,8 +20,6 @@
 - `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)
 - `quote_pdf_templates` - Saved column presets for quote PDF generation (template_name, columns jsonb)
 - `quote_templates` - Reusable quote structures (template_name, description, created_by)
-- `quote_template_sections` - Sections within a quote template (section_name, sort_order)
-- `quote_template_items` - Items within a template section (product_id, pricing defaults)
 - `orders` - Confirmed orders (order_number, status, totals, order_date, customer_po_number, is_planned, season, program_notes). Note: `total_paid`/`balance_due` columns were DROPPED — AR is tracked via `invoices.balance_cents`.
 - `order_items` - Order line items (quantity_delivered, quantity_remaining, notes, **cost_at_time_cents** bigint — snapshot of `products.current_cost` at insert time, populated by `trg_snapshot_order_item_cost` BEFORE INSERT trigger; migration 20260513050000, audit #32)
 - `payments` - Legacy payment records (DEPRECATED — use allocation_sets + invoice_line_allocations instead)

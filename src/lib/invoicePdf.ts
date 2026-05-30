@@ -172,7 +172,7 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
       draft: [156, 163, 175],     // gray
       unposted: [234, 179, 8],    // amber
       posted: [59, 130, 246],     // blue
-      paid: [34, 197, 94],        // green
+      paid: CRX_GREEN,            // brand crx-green (#28A26A)
       overdue: [239, 68, 68],     // red
       voided: [107, 114, 128],    // slate
       cancelled: [107, 114, 128], // slate

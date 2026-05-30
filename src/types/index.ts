@@ -321,7 +321,6 @@ export interface Order {
   is_planned: boolean;
   notes: string | null;
   program_notes: string | null;
-  created_by: string | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;

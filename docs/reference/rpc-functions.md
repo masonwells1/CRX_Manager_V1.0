@@ -1,4 +1,4 @@
-# RPC Functions Reference (~184 unique functions)
+# RPC Functions Reference (218 unique functions)
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 

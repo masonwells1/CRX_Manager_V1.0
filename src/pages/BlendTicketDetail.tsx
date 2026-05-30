@@ -431,13 +431,14 @@ export function BlendTicketDetail() {
         customer_id: tf.customer_id,
         planned_acres: tf.planned_acres ? Number(tf.planned_acres) : null,
       }));
-      const result = await supabase.rpc('save_blend_ticket_fields', {
+      const { data, error } = await supabase.rpc('save_blend_ticket_fields', {
         p_blend_ticket_id: ticket.id,
         p_fields: payload,
         p_performed_by: profile.id,
         p_idempotency_key: fieldsIdem.getKey(),
       });
-      assertRpcResult(result, 'Save blend ticket fields');
+      if (error) throw error;
+      assertRpcResult(data, 'Save blend ticket fields');
       fieldsIdem.resetKey();
       await logActivity({ event: 'blend_ticket_fields_saved', description: `Saved ${payload.length} field assignments for ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id });
       toast('success', `Saved ${payload.length} field assignment${payload.length !== 1 ? 's' : ''}`);
