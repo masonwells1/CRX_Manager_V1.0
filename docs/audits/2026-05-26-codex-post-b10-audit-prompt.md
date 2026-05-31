@@ -18,7 +18,7 @@ M  AGENTS.md                                                              ← mi
 M  CLAUDE.md                                                              ← migration count 354 -> 356 (×2 spots)
 M  docs/CHANGELOG.md                                                      ← new "(pre-push final audit)" entry
 M  docs/audits/2026-05-26-claude-disposition-of-codex-execution.md        ← new §12 + v19/v20 typo fix in §11.4
-A  docs/audits/2026-05-26-codex-pre-push-final-audit-prompt.md            ← preserved your prior prompt
+A  docs/archive/2026-spring/2026-05-26-codex-pre-push-final-audit-prompt.md            ← preserved your prior prompt
 M  docs/reference/migration-history.md                                    ← migration count 354 -> 356, new entry #349
 A  supabase/migrations/20260527020457_grant_authenticated_on_frontend_secdef_helpers.sql
 ```
@@ -274,11 +274,11 @@ SELECT count(*) FROM supabase_migrations.schema_migrations;
 ---
 
 *Generated 2026-05-26 by the post-B10-fix Claude session. Cross-references:*
-- *`docs/audits/2026-05-25-full-codebase-ultra-review.md` (original 10-domain audit)*
-- *`docs/audits/2026-05-25-14-domain-review-supplement.md` (14-domain supplement)*
-- *`docs/audits/2026-05-25-codex-review-prompt.md` (pre-remediation Codex prompt)*
-- *`docs/audits/2026-05-25-remediation-plan.md` (Codex's draft plan)*
+- *`docs/archive/2026-spring/2026-05-25-full-codebase-ultra-review.md` (original 10-domain audit)*
+- *`docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (14-domain supplement)*
+- *`docs/archive/2026-spring/2026-05-25-codex-review-prompt.md` (pre-remediation Codex prompt)*
+- *`docs/archive/2026-spring/2026-05-25-remediation-plan.md` (Codex's draft plan)*
 - *`docs/audits/2026-05-26-claude-disposition-of-codex-execution.md` §1–12*
 - *`docs/audits/2026-05-26-codex-post-apply-audit-prompt.md` (post-apply Codex prompt — surfaced B7/B8/B9)*
-- *`docs/audits/2026-05-26-codex-pre-push-final-audit-prompt.md` (pre-push Codex prompt — surfaced B10)*
+- *`docs/archive/2026-spring/2026-05-26-codex-pre-push-final-audit-prompt.md` (pre-push Codex prompt — surfaced B10)*
 - *Commits `c36e25e`, `fce0629`, `a824952`, `05be295`, `ac8deb9`.*

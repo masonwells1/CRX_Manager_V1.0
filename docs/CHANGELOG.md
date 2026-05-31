@@ -865,7 +865,7 @@ The RPC and the RLS now enforce the same invariant from two layers — if one re
 
 ## 2026-05-01 — Field App Phase 17: Sprint E #2 — cycle count clamp/ledger drift (E2a)
 
-Migration `20260501120000_field_app_workflow_phase17.sql`. Closes audit finding P1-4 from `docs/audits/2026-04-30-data-integrity-workflow-locks-audit-findings.md`.
+Migration `20260501120000_field_app_workflow_phase17.sql`. Closes audit finding P1-4 from the 2026-04-30 data-integrity / workflow-locks audit _(findings doc not retained)_.
 
 ### The drift this closes
 
@@ -1074,7 +1074,7 @@ The two pieces (SQL rejection + UI button removal) had to ship together. Without
 
 ## 2026-04-30 — Field App Phase 9: Sprint A1 Auth Gates (3 of 12 SECURITY DEFINER RPCs)
 
-First migration of a multi-sprint hot-fix series addressing P1 findings from the money-inventory and security-permissions audits (`docs/audits/2026-04-30-money-inventory-audit-findings.md`, `docs/audits/2026-04-30-security-permissions-audit-findings.md`).
+First migration of a multi-sprint hot-fix series addressing P1 findings from the money-inventory and security-permissions audits (2026-04-30; _findings docs not retained_).
 
 ### Pattern (mirrors save_quote / Phase 7 start_job)
 
@@ -1113,7 +1113,7 @@ Auth gates added to:
 
 ## 2026-04-30 — Field Application Workflow Phases 7 + 8: Codex Re-Review Hot Fixes
 
-Two migrations addressing the four findings codex raised on its independent re-review of Phases 1–6 (`docs/audits/2026-04-30-field-app-phase1-6-codex-rereview-findings.md`).
+Two migrations addressing the four findings codex raised on its independent re-review of Phases 1–6 _(2026-04-30 codex re-review findings doc not retained)_.
 
 ### Phase 7 (`20260430190000_field_app_workflow_phase7.sql`) — Job RPC fixes
 
@@ -1252,7 +1252,7 @@ Addresses codex audit items #4 (no `start_job`), #5 (multi-customer jobs half-bu
 
 ## 2026-04-29 — Field Application Workflow Phase 1: Grouped Split Invoices + Grower-Share Mode
 
-Comprehensive rewrite of the multi-customer field application billing flow, prompted by the codex audit at `docs/audits/2026-04-28-field-application-workflow-review.md`. Bundles fixes for audit items #1, #2, #3, #9, #11, #13, M1, M2, M3.
+Comprehensive rewrite of the multi-customer field application billing flow, prompted by the 2026-04-28 field-application-workflow codex review _(audit doc not retained)_. Bundles fixes for audit items #1, #2, #3, #9, #11, #13, M1, M2, M3.
 
 ### Migration `20260429140635_field_app_workflow_phase1.sql` (~1,000 lines)
 
@@ -1628,7 +1628,7 @@ Phase 1 implementation for the blend ticket system — aligning the existing sch
 ### Context
 - All 10 open questions from the 2026-03-23 brainstorm answered
 - Key decisions: no mixer role (all roles can mix), single ticket with per-field customer assignments (Q6-B), skip Chem Man detection for Phase 1
-- Full plan: `docs/plans/2026-03-29-blend-ticket-phase1-implementation.md`
+- Full plan: `2026-03-29-blend-ticket-phase1-implementation.md` _(planning doc, not retained in repo)_
 
 ---
 
@@ -1782,7 +1782,7 @@ Comprehensive logic audit found 105+ issues across 8 domains. Phase 1 (Critical)
 - 1,653 unit tests passing, 0 lint/TS errors, CI green
 
 ### Audit Reference
-- Full audit: `docs/audits/2026-03-20-mega-logic-audit.md` (105+ issues found)
+- Full audit: 2026-03-20 mega-logic-audit _(doc not retained)_ (105+ issues found)
 - Phase 3 (Medium) fixes applied in same session (see below)
 
 ---
@@ -2177,7 +2177,7 @@ Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
 - **A7: ESLint `no-console` rule** — warns on `console.log`/`info`/`debug`, allows `error`/`warn`. Zero existing violations, purely preventive
 - **A3: Sentry sourcemap uploads** — installed `@sentry/vite-plugin`, `sourcemap: 'hidden'` generates maps without exposing to users. Plugin uploads to Sentry then deletes from `dist/`. Only active when `SENTRY_AUTH_TOKEN` env var is set (Vercel CI)
 - **A5: Per-route error boundaries** — enhanced `ErrorBoundary` with `inline` prop for compact in-page error UI. Added `RouteShell` wrapper in `App.tsx` so page crashes don't take down sidebar navigation. 2 new unit tests
-- Design doc: `docs/plans/2026-03-16-infrastructure-hardening-design.md`
+- Design doc: `2026-03-16-infrastructure-hardening-design.md` _(design doc, not retained in repo)_
 
 ---
 
@@ -2853,7 +2853,7 @@ Cell renders `<input type="number">` not plain text; `textContent()` returned `'
 - `tests/e2e/math-invoice-verification.spec.ts` — IV1/IV5/IV12 fixes
 - `tests/e2e/math-quote-pricing.spec.ts` — QP3/QP6 fixes
 - `tests/e2e/00-seed-test-data.spec.ts` — seed spec (new)
-- `docs/2026-03-03-math-test-investigation.md` — full investigation findings
+- 2026-03-03 math-test-investigation _(doc not retained)_ — full investigation findings
 
 ### Migration
 - `20260319000000_fix_trigger_functions_search_path.sql`: adds `SET search_path TO 'public'` to 11 trigger functions so `_is_admin_override()` resolves correctly when fired from security-definer RPCs

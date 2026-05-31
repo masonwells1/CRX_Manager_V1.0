@@ -3,7 +3,7 @@
 **Date:** 2026-05-30
 **Author:** Claude Code (autonomous P2/P3 sprint, follow-on to the 2026-05-28 14-domain review)
 **Branch:** `fix/review-2026-05-30-p2p3` (pushed to origin) — created from `449b20e` (the P2-D commit on main)
-**Companion:** `docs/audits/2026-05-28-full-codebase-review-plan.md` §5 (the findings this sprint closed)
+**Companion:** `docs/archive/2026-spring/2026-05-28-full-codebase-review-plan.md` §5 (the findings this sprint closed)
 
 > ⚠️ **All DB migrations in this sprint are ALREADY APPLIED LIVE + verified** (project `rhyzpcqhnizqbxphqdkr`). The branch is the *code/doc* record; the live DB is current. To finish landing, **merge this branch into `main`** (see "Merge plan" below).
 

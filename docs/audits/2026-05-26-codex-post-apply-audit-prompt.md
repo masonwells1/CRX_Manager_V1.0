@@ -41,8 +41,8 @@ A parallel Claude session executed a 7-phase remediation on the same day as the 
 ## Read first
 
 1. `docs/audits/2026-05-26-claude-disposition-of-codex-execution.md` — full disposition. Sections 1-9 are the prior session (Codex's original work audit). **Section 10** is the parallel-session audit + reconciliation under review.
-2. `docs/audits/2026-05-25-full-codebase-ultra-review.md` — the original 10-domain audit (Codex's source-of-record findings).
-3. `docs/audits/2026-05-25-14-domain-review-supplement.md` — the parallel session's 14-domain supplement (added AppSec / Concurrency / Date-time / Referential integrity domains).
+2. `docs/archive/2026-spring/2026-05-25-full-codebase-ultra-review.md` — the original 10-domain audit (Codex's source-of-record findings).
+3. `docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` — the parallel session's 14-domain supplement (added AppSec / Concurrency / Date-time / Referential integrity domains).
 4. `supabase/migrations/20260526090000_execute_full_codebase_ultra_review.sql` — the migration that was applied to live (1,604 lines).
 5. `CLAUDE.md` — project rules (Hard Red Lines, Schema Gotchas, Canonical Patterns).
 6. `git show fce0629 --stat` and `git show a824952 --stat` — the actual commits.
@@ -254,7 +254,7 @@ If any item fails, flag it with severity + proposed fix. Do NOT execute any fix 
 
 *Generated 2026-05-26 by the parallel Claude session that executed Phases 1-7 of the remediation. Cross-references:*
 - *`docs/audits/2026-05-26-claude-disposition-of-codex-execution.md` §10 (parallel reconciliation)*
-- *`docs/audits/2026-05-25-full-codebase-ultra-review.md` (original 10-domain audit)*
-- *`docs/audits/2026-05-25-14-domain-review-supplement.md` (14-domain supplement)*
-- *`docs/audits/2026-05-25-codex-review-prompt.md` (the pre-remediation Codex prompt — same workflow, different scope)*
+- *`docs/archive/2026-spring/2026-05-25-full-codebase-ultra-review.md` (original 10-domain audit)*
+- *`docs/archive/2026-spring/2026-05-25-14-domain-review-supplement.md` (14-domain supplement)*
+- *`docs/archive/2026-spring/2026-05-25-codex-review-prompt.md` (the pre-remediation Codex prompt — same workflow, different scope)*
 - *Commits `fce0629` (main) + `a824952` (schema-registry).*

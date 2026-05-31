@@ -3,7 +3,7 @@
 **Branch:** `fix/review-2026-05-29` (isolated git worktree)
 **Date:** 2026-05-29
 **Author:** Claude Code (autonomous fix sprint following the 14-domain review)
-**Companion docs:** `docs/audits/2026-05-28-full-codebase-review-plan.md` (the review + findings log)
+**Companion docs:** `docs/archive/2026-spring/2026-05-28-full-codebase-review-plan.md` (the review + findings log)
 
 > ⚠️ **NOTHING HERE HAS BEEN APPLIED TO THE LIVE DATABASE.** The live Supabase
 > project (`rhyzpcqhnizqbxphqdkr`) is shared with a parallel feature session, so
