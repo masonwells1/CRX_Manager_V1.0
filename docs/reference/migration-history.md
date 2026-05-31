@@ -1,4 +1,4 @@
-# Migration History (369 migrations)
+# Migration History (370 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -6,12 +6,13 @@ Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
 
-## Applied 2026-05-29 → 2026-05-30 (un-indexed)
+## Applied 2026-05-29 → 2026-05-31 (un-indexed)
 
 Newest-first. The `20260530*` rows are the `fix/review-2026-05-29` P1 sprint + the workflow-review defense-in-depth (all applied live via MCP; disk filenames renamed to the MCP-stamped versions per the B7 rule). The three `20260529214*` rows are the parallel-session Codex remediation (see CLAUDE.md Current State for full detail).
 
 | Version | File | Description |
 |---------|------|-------------|
+| 20260531151134 | `batch_rpc_strict_actor` | **Post-Codex strict-actor hardening (2026-05-31).** Replaced the forgeable `v_actor := COALESCE(p_performed_by, auth.uid())` in `batch_apply_all_prepayments` + `batch_void_invoices` with the canonical `AUTH_REQUIRED`/`ACTOR_MISMATCH` (`IS DISTINCT FROM`) block (matches `20260530020412`). Closes the 2 HIGH actor-forgery findings Codex + a live re-check confirmed (an authenticated admin/sales_rep could mis-attribute immutable `financial_audit_log` rows via a forged `p_performed_by`). Bodies byte-faithful to live otherwise; `require_admin_or_sales_rep()` gate retained. Both reviewers clean; applied live (MCP stamp `20260531151134`, disk file renamed to match per B7); rolled-back smoke test: forged `p_performed_by` → `ACTOR_MISMATCH`, overloads=1 each. See `docs/audits/2026-05-31-codex-review-verification-and-followup.md`. |
 | 20260530194520 | `save_blend_ticket_canonical_return` | P2-H — `save_blend_ticket` return `{status:'saved'}` → canonical `{success:true, ticket_id, ticket_number}`. Migration-only (sole caller uses `assertRpcResult` generically). Body verbatim from live (md5-confirmed); both reviewers clean; live-verified (overload=1). |
 | 20260530192441 | `batch_rpc_idempotency_entity_type_fix` | P2-3 follow-up — corrected `batch_apply_all_prepayments` audit `entity_type` `'system'`→`'batch'` (a post-apply smoke test caught `'system'` violating `financial_audit_log_entity_type_check`). Applied live as a separate stamp; **disk file recovered 2026-05-30 from live** (verbatim) so the disk version list matches live exactly. Re-asserts the same final `'batch'` state already encoded in `20260530191823` below (idempotent `CREATE OR REPLACE`). |
 | 20260530191823 | `batch_rpc_idempotency` | P2-3 — canonical idempotency (`check_idempotency`/`save_idempotency`) for `batch_apply_all_prepayments` + `batch_void_invoices` (the last two `IDEMPOTENCY_BODY_EXEMPT` gaps). Bundled bugfix: `batch_apply` inserted `entity_id=NULL` into `financial_audit_log` (NOT NULL) → "Apply all prepayments" failed on every click (0 rows ever); fixed to `entity_type='batch'`, `entity_id=v_actor`. Both reviewers clean; live-verified. Disk file is the consolidated final ('batch') state; applied live in two steps (191823 + 192441, the latter now also a disk file above). |
