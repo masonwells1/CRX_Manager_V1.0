@@ -2,7 +2,7 @@
 
 **Prepared for:** Codex cross-review **before** pushing to `origin/main` and before any live deploy.
 **Prepared by:** Claude (Opus 4.8), autonomous session 2026-05-30.
-**Branch under review:** `consolidation/2026-05-30-pre-push` (HEAD `c815d79`).
+**Branch under review:** `consolidation/2026-05-30-pre-push` (HEAD `e084a48` — this doc was drafted at `c815d79`, then committed as `e084a48` which added the doc itself; the two LOW doc-drift fixes from Codex's review land in a later commit).
 **Status:** Committed locally. **NOT pushed. NOT deployed.** Awaiting Codex sign-off.
 
 ---
