@@ -1,8 +1,10 @@
-# CRX Manager — TODO (as of 2026-05-16, end of day)
+# CRX Manager — TODO (as of 2026-05-31)
 
-Snapshot of what's done, what's outstanding, and what's deferred after the
-2026-05-09 audit sprint + 2026-05-13 codex review of PR #59 + 2026-05-16
-verification session + 2026-05-16 ultra-review Phases 1/2/3 + 2026-05-16 closeout.
+Snapshot of what's done, outstanding, and deferred. Recent waves: 2026-05-09 → 05-16
+audit/ultra-review (below); the 2026-05-26 → 05-29 full-codebase ultra-review + Codex
+remediation; the 2026-05-30 P2/P3 sprint + branch consolidation; and the 2026-05-31
+Codex pre-push review + batch-RPC strict-actor fix (applied live). Full detail in
+`CLAUDE.md` Current State, `docs/CHANGELOG.md`, and the recent handoffs in `docs/audits/`.
 
 ---
 
@@ -50,6 +52,23 @@ See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for full table.
 ---
 
 ## 🔴 Outstanding — Mason action required
+
+### ⏳ Deploy the OCR Edge Function fix (`process-blend-ticket` M3 atomic queue-claim)
+**The only open item from the 2026-05-30/31 consolidation.** The M3 atomic-claim change
+(prevents a poller race that duplicated extracted product rows) is committed on `main`
+but **NOT deployed** — `process-blend-ticket` is still live at **v19** (the pre-M3 build).
+Left undeployed on purpose: its safety gate is a real OCR smoke test, which needs you
+watching one live ticket.
+
+Steps (≈5 min):
+1. Run `/deploy-edge-function process-blend-ticket`.
+2. Upload ONE real blend ticket; confirm it OCRs normally — products extracted, no
+   duplicates, not stuck on "processing".
+3. If anything looks off, redeploy v19 (instant rollback).
+
+Why waiting is safe: the duplicate-row race already exists in prod and is low-severity;
+shipping an untested claim-filter could instead stall ALL OCR (worse). Status quo holds
+until the smoke test passes. See `docs/audits/2026-05-30-pre-push-consolidation-handoff.md` §6.
 
 ### Phase 4: Backup verification (Supabase dashboard only — not exposed via MCP)
 - Open Supabase dashboard → Settings → Database → Backups.
@@ -100,12 +119,12 @@ Blocked on creating `crx-manager-staging` Supabase project + adding `STAGING_SUP
 
 | Metric | Value |
 |---|---|
-| Migrations | 353 |
+| Migrations | 370 |
 | Pages | 66 |
-| Tables | 95 |
-| RPCs | ~184 |
-| Edge Functions | 7 — all deployed live: `send-email` v11, `setup-blend-tickets-storage` v14, `process-blend-ticket` v17, others current |
-| Unit tests | 1,914 passing (130 files, 70 skipped) |
+| Tables | 95 (+2 views) |
+| RPCs | 218 curated (262 live `public` functions, 0 overloads) |
+| Edge Functions | 7 — `process-blend-ticket` at **v19** (M3 OCR fix committed, deploy pending — see Outstanding); others current |
+| Unit tests | 1,924 passing (130 files, 70 skipped) |
 | E2E spec files | 94 |
 | ESLint errors | 0 |
 | TypeScript errors | 0 |

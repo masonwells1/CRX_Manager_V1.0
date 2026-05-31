@@ -532,7 +532,7 @@ Lesson recorded: future audits that drop infrastructure must grep ALL active bra
 
 ## 2026-05-11 — Security advisor cleanup from `/audit` run
 
-Acted on every fixable finding in `AUDIT_REPORT_2026-05-11.md`. Two migrations applied to the remote database:
+Acted on every fixable finding in `docs/archive/2026-spring/AUDIT_REPORT_2026-05-11.md`. Two migrations applied to the remote database:
 
 **`20260511120000_security_audit_2026_05_11.sql`** — five categories fixed:
 
@@ -559,7 +559,7 @@ Dropped the remaining bucket-specific SELECT policies on the 3 public buckets (`
 **Documentation:**
 - `CLAUDE.md` Current State date 2026-05-07 → 2026-05-11, migration count 285 → 287, Edge Functions prose 7 → 8.
 - `docs/reference/migration-history.md` count 285 → 287, rows 286 and 287 appended.
-- `AUDIT_REPORT_2026-05-11.md` already in repo (added in PR #60).
+- `docs/archive/2026-spring/AUDIT_REPORT_2026-05-11.md` already in repo (added in PR #60).
 
 **Deferred to follow-up PR:**
 - Performance advisor sweep: 63 `auth_rls_initplan`, 33 `multiple_permissive_policies`, 87 unused indexes, 72 unindexed FKs, 1 duplicate index.
