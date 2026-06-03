@@ -1121,8 +1121,8 @@ export default function OrderDetail() {
                   {displayItems
                     .filter((i) => (i.section_name || 'General') === section)
                     .map((item) => {
-                      const units = editing ? item.total_units_needed : item.total_units_needed;
-                      const ppu = editing ? item.price_per_unit : item.price_per_unit;
+                      const units = item.total_units_needed;
+                      const ppu = item.price_per_unit;
                       const pct =
                         units > 0
                           ? Math.round((item.quantity_delivered / units) * 100)

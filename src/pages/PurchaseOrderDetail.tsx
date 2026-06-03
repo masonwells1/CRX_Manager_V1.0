@@ -364,7 +364,6 @@ export default function PurchaseOrderDetail() {
     reverseIdem.resetKey();
     setReverseRecord(rec);
     setReverseReason('');
-    reverseIdem.resetKey();
     setReverseOpen(true);
   };
 

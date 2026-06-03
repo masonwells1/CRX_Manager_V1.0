@@ -25,11 +25,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     storage: window.localStorage,
   },
   global: {
-    headers: {
-      // Request correlation ID — links browser requests to Edge Function
-      // and database logs for end-to-end tracing. Logged in Sentry breadcrumbs.
-      'X-Request-ID': crypto.randomUUID(),
-    },
     fetch: (url, options = {}) => {
       const requestId = crypto.randomUUID();
       const headers = new Headers(options.headers);

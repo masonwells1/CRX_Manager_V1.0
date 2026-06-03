@@ -28,23 +28,10 @@ export interface ChemicalLine {
   manual_override?: boolean;
 }
 
-interface Recipe {
-  id: string;
-  name: string;
-  items: Array<{
-    product_id: string;
-    product_name: string;
-    quantity: number;
-    unit: string;
-    rate_per_acre: number | null;
-  }>;
-}
-
 interface FieldAppChemicalEntryProps {
   chemicals: ChemicalLine[];
   onChemicalsChange: (chemicals: ChemicalLine[]) => void;
   totalAppliedAcres: number;
-  recipes?: Recipe[];
   /**
    * Phase 1: tier of the primary customer derived from billing splits.
    * Used as the *display* price when a product is selected (so the user
