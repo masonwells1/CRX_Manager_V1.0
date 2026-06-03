@@ -199,8 +199,6 @@ export default function CustomerDetail() {
         .is('deleted_at', null)
         .order('order_date', { ascending: false });
       const rows = ((data || []) as Order[]).map((o) => {
-        const { data: items } = { data: null as null };
-        void items;
         return { ...o, fulfillment_pct: 0 };
       });
       setOrders(rows);

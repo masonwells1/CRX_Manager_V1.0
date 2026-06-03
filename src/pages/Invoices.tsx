@@ -509,9 +509,9 @@ export default function Invoices() {
   const anySelectedHasShares = selectedInvoices.some(
     (i) => i.invoice_type === 'field_application'
   );
-  const anySelectedIsFieldApp = selectedInvoices.some(
-    (i) => i.invoice_type === 'field_application'
-  );
+  // Identical predicate to anySelectedHasShares — reuse the computed value
+  // instead of scanning the selection a second time.
+  const anySelectedIsFieldApp = anySelectedHasShares;
 
   if (loading) {
     return (

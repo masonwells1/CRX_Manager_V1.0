@@ -125,11 +125,6 @@ export default function ReceivingLog() {
     fetchStaff();
   }, [fetchData, fetchStaff]);
 
-  /* Re-fetch when filters change */
-  useEffect(() => {
-    fetchData();
-  }, [vendorFilter, conditionFilter, receivedByFilter, dateFrom, dateTo, fetchData]);
-
   /* ─── Bulk selection ─── */
   const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
     useRowSelection({ data: records, getId: (r) => r.id });

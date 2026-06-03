@@ -129,7 +129,6 @@ export default function DeliveryDetail() {
   }>>([]);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [drivers, setDrivers] = useState<Profile[]>([]);
-  const [, setOrderItems] = useState<OrderItem[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Cancel modal state
@@ -405,7 +404,6 @@ export default function DeliveryDetail() {
     setAddresses((addrRes.data || []) as CustomerAddress[]);
     setDrivers((driverRes.data || []) as Profile[]);
     const allOrderItems = (oiRes.data || []) as OrderItem[];
-    setOrderItems(allOrderItems);
 
     // For scheduled deliveries, calculate real max quantities
     // by checking what other active deliveries have scheduled for each order item

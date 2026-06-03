@@ -134,7 +134,6 @@ export default function JobDetail() {
   const [recipes, setRecipes] = useState<BlendRecipe[]>([]);
 
   // Job form
-  const [, setJobId] = useState<string | null>(null);
   const [jobNumber, setJobNumber] = useState('');
   const [status, setStatus] = useState<JobStatus>('scheduled');
   const [customerId, setCustomerId] = useState('');
@@ -228,7 +227,6 @@ export default function JobDetail() {
     }
 
     const j = data as unknown as JobDbRow;
-    setJobId(j.id);
     setJobNumber(j.job_number);
     setStatus(j.status);
     setCustomerId(j.customer_id);
