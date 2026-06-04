@@ -55,8 +55,16 @@ to the per-call instances it replaces.
 - `src/pages/VendorBillDetail.tsx` (`fmt`)
 - `src/components/deliveries/QuickDeliveryModal.tsx` (`fmtCurrency`, 2-deep → `../../lib/money`)
 
-**Still TODO (cents):** ARaging only (2 inner-scope `fmtCents`) — handled together with ARaging's
-module-level DOLLARS `fmt` in the special step below.
+**Batch 3c-4 (ARaging — MIXED cents+dollars)** — commit `f132968`:
+- `src/pages/ARaging.tsx` — 4 local formatters → one combined import
+  `{ formatCents as fmtCents, formatUSD as fmt }`. Removed: component `fmt` (DOLLARS),
+  component `fmtCents = fmt(cents/100)` (CENTS), and TWO handler-scope `fmtCents` (CENTS).
+  ⚠️ The prior ledger said "two inner `fmtCents`"; code review found **three** `fmtCents` total
+  (it missed the component-scope one). All callsites verified: `fmt(...)` takes dollar values,
+  `fmtCents(...)` takes `*_cents`/`running_balance`. Green (build + 1924 tests).
+
+**Cents consolidation: COMPLETE.** No cents-based local formatters remain (outside the
+"deliberately left local" custom-option list below).
 
 ### DOLLARS → `formatUSD`  (alias kept as original local name; callsites untouched)
 _None converted yet._ **TODO** (`fmt`/`fmtCurrency` was `(n) => …format(n)` — NO `/100`):
@@ -99,10 +107,9 @@ block (anchor on an existing import line); don't leave it where the `const` was.
 **Remaining work, in order:**
 1. ✅ **DONE — Batch 3c-3 (commit `9713c2b`):** Cents (→ `formatCents`): AccountsPayable, Compliance,
    VendorBills, NewVendorBill, VendorBillDetail, QuickDeliveryModal. typecheck+lint+build+1924 tests green.
-2. **ARaging.tsx — SPECIAL, do carefully:** has a module-level `fmt` (DOLLARS → `formatUSD`)
-   AND two inner-scope `fmtCents` (CENTS → `formatCents`) inside handler functions. Convert all
-   three; remove the two inner `const fmtCents`, add ONE top-level `formatCents as fmtCents` +
-   one `formatUSD as fmt`.
+2. ✅ **DONE — Batch 3c-4 (commit `f132968`):** ARaging.tsx mixed file. Removed component `fmt`
+   (DOLLARS→formatUSD) + THREE `fmtCents` (CENTS→formatCents: one component-scope + two
+   handler-scope — prior ledger had undercounted to two). Single combined import added. Green.
 3. **Dollars** (→ `formatUSD`): the TODO list under "DOLLARS" above.
 4. Then the other contained report consolidations: `companyInfo` company-name (8 PDF files),
    `resolveProfileNames` (13 pages). NOTE `getPresetDates` is **DRIFTING** (the 5 copies differ) —
