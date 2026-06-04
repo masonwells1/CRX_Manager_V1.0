@@ -14,6 +14,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, sanitizeError, checkMutationResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
+import { formatUSD as fmt } from '../lib/money';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
 import { downloadBatchOrderSummaryPdf } from '../lib/orderSummaryPdf';
@@ -194,9 +195,6 @@ export default function Orders() {
     () => createCheckboxColumn<OrderWithFulfillment>(selected, toggleSelect, (o) => o.id),
     [selected, toggleSelect]
   );
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   const handleExportCSV = () => {
     exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
