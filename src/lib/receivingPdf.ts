@@ -4,17 +4,12 @@
  */
 // jsPDF and autoTable are dynamically imported inside each function
 // to keep them out of the main bundle (~500KB each)
-import type { JsPDFWithAutoTable } from './pdfTheme';
+import { CRX_GREEN, CHARCOAL, GRAY, RED, AMBER, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import type { CellHookData } from 'jspdf-autotable';
 import { COMPANY_FOOTER_THANKS } from './companyInfo';
 
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
-const RED: [number, number, number] = [220, 38, 38];
-const AMBER: [number, number, number] = [217, 119, 6];
 
 export interface PdfReceivingItem {
   product_name: string;

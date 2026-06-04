@@ -6,7 +6,7 @@
  */
 // jsPDF and autoTable are dynamically imported inside each function
 // to keep them out of the main bundle (~500KB each)
-import type { JsPDFWithAutoTable } from './pdfTheme';
+import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, type JsPDFWithAutoTable } from './pdfTheme';
 import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
 
 
@@ -16,11 +16,6 @@ type AutoTableColumnStyle = {
   fontStyle?: 'normal' | 'bold' | 'italic' | 'bolditalic';
 };
 
-// Brand colours
-const CRX_GREEN: [number, number, number] = [40, 162, 106]; // #28A26A
-const CHARCOAL: [number, number, number] = [46, 46, 46]; // #2E2E2E
-const GRAY: [number, number, number] = [78, 78, 78]; // #4E4E4E
-const LIGHT_BG: [number, number, number] = [245, 250, 247]; // very light green tint
 
 interface PdfQuoteSection {
   section_name: string;

@@ -6,14 +6,11 @@
  *
  * Follows the same dynamic-import + color-scheme pattern as deliveryPdf.ts.
  */
-import type { JsPDFWithAutoTable } from './pdfTheme';
+import { CRX_GREEN, CHARCOAL, GRAY, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import { COMPANY_FOOTER_THANKS } from './companyInfo';
 
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
 
 export interface OrderSummaryItem {
   product_name: string;

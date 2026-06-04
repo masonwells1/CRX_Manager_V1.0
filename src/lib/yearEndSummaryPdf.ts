@@ -16,21 +16,11 @@
  */
 
 import type { YearEndSummaryData, YearEndProductUsage } from '../types';
-import type { JsPDFWithAutoTable } from './pdfTheme';
+import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, BLUE, type JsPDFWithAutoTable } from './pdfTheme';
 import type { CellHookData } from 'jspdf-autotable';
 import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE } from './companyInfo';
 
 
-// ── Color palette (matches invoice/statement PDFs) ───────────────────────
-
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
-const LIGHT_BG: [number, number, number] = [245, 250, 247];
-const RED: [number, number, number] = [220, 38, 38];
-const TABLE_HEADER_BG: [number, number, number] = [240, 240, 240];
-const ALT_ROW_BG: [number, number, number] = [252, 252, 252];
-const BLUE: [number, number, number] = [37, 99, 235];
 
 const COMPANY_NAME = 'CROP RX SOLUTIONS';
 // COMPANY_TAGLINE now comes from src/lib/companyInfo.ts (single source).

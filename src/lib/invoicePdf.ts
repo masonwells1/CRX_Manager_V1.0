@@ -13,17 +13,10 @@
 import type { InvoicePrintOptions } from '../types';
 import { COMPANY_TAGLINE_HEADER } from './companyInfo';
 import type jsPDF from 'jspdf';
-import type { JsPDFWithAutoTable } from './pdfTheme';
+import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
-const LIGHT_BG: [number, number, number] = [245, 250, 247];
-const RED: [number, number, number] = [220, 38, 38];
-const TABLE_HEADER_BG: [number, number, number] = [240, 240, 240];
-const ALT_ROW_BG: [number, number, number] = [252, 252, 252];
 
 // ── PDF Data Interfaces ─────────────────────────────────────────────────
 
