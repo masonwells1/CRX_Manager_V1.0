@@ -6,12 +6,9 @@
  */
 // jsPDF and autoTable are dynamically imported inside each function
 // to keep them out of the main bundle (~500KB each)
-import type jsPDF from 'jspdf';
+import type { JsPDFWithAutoTable } from './pdfTheme';
 import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
 type AutoTableColumnStyle = {
   cellWidth?: 'auto' | 'wrap' | number;

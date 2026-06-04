@@ -16,14 +16,10 @@ import type {
   StatementOptions,
   InvoiceShare,
 } from '../types';
-import type jsPDF from 'jspdf';
+import type { JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE, COMPANY_REMIT_ADDRESS } from './companyInfo';
 
-/** jsPDF instance with lastAutoTable from jspdf-autotable plugin */
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
 const CRX_GREEN: [number, number, number] = [40, 162, 106];
 const CHARCOAL: [number, number, number] = [46, 46, 46];

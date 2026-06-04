@@ -5,13 +5,10 @@
  * Sprint 9: Generic Report PDF Generator
  */
 
-import type jsPDF from 'jspdf';
+import type { JsPDFWithAutoTable } from './pdfTheme';
 import { localToday } from './dateUtils';
 import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
 const CRX_GREEN: [number, number, number] = [40, 162, 106];
 const CHARCOAL: [number, number, number] = [46, 46, 46];

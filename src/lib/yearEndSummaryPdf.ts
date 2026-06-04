@@ -16,13 +16,10 @@
  */
 
 import type { YearEndSummaryData, YearEndProductUsage } from '../types';
-import type jsPDF from 'jspdf';
+import type { JsPDFWithAutoTable } from './pdfTheme';
 import type { CellHookData } from 'jspdf-autotable';
 import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE } from './companyInfo';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
 // ── Color palette (matches invoice/statement PDFs) ───────────────────────
 
