@@ -22,6 +22,7 @@ import { logActivity } from '../lib/activityLogger';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { parseLocalDate } from '../lib/dateUtils';
+import { formatCents as fmtCents, formatUSD as fmt } from '../lib/money';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { RebateProgram, RebateClaim, RebateClaimStatus } from '../types';
 
@@ -180,11 +181,6 @@ export default function Rebates() {
     if (tab === 'programs') fetchPrograms();
     else fetchClaims();
   }, [tab, fetchPrograms, fetchClaims]);
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
-
-  const fmtCents = (cents: number) => fmt(cents / 100);
 
   // ===== Program CRUD =====
   const openAddProgram = () => {

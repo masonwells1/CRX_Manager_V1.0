@@ -10,6 +10,7 @@ import { logActivity } from '../../lib/activityLogger';
 import { processDocumentWithOCR, isOCRSupported } from '../../lib/documentOCR';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
+import { formatUSD as fmt } from '../../lib/money';
 import type { Product } from '../../types';
 
 // ---------- interfaces ----------
@@ -77,9 +78,6 @@ function fuzzyMatchProductWithScore(
 
   return { product: bestScore >= 0.7 ? bestMatch : null, score: bestScore };
 }
-
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
 // ---------- Vision OCR parsing ----------
 

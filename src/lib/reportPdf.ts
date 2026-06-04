@@ -8,6 +8,7 @@
 import { CRX_GREEN, CHARCOAL, GRAY, type JsPDFWithAutoTable } from './pdfTheme';
 import { localToday } from './dateUtils';
 import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
+import { formatUSD as fmtCurrency } from './money';
 
 
 
@@ -28,9 +29,6 @@ export interface ReportPdfOptions {
   orientation?: 'portrait' | 'landscape';
   footerNote?: string;
 }
-
-const fmtCurrency = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
 export async function generateReportPdf(options: ReportPdfOptions) {
   const { default: jsPDF } = await import('jspdf');
