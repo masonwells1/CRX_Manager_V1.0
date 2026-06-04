@@ -50,8 +50,15 @@ to the per-call instances it replaces.
 **Still TODO (cents):** AccountsPayable, Compliance, VendorBills, NewVendorBill,
 VendorBillDetail, QuickDeliveryModal, ARaging (2 inner-scope `fmtCents`).
 
-### DOLLARS → `formatUSD`
-_(log updated as each batch lands)_
+### DOLLARS → `formatUSD`  (alias kept as original local name; callsites untouched)
+_None converted yet._ **TODO** (`fmt`/`fmtCurrency` was `(n) => …format(n)` — NO `/100`):
+- `src/pages/CustomerDetail.tsx` (also has inline `NumberFormat().format(total_spent)` on history rows — leave those inline ones)
+- `src/pages/Orders.tsx`, `src/pages/Products.tsx`, `src/pages/Quotes.tsx`
+- `src/pages/PurchaseOrders.tsx`, `src/pages/PurchaseOrderDetail.tsx`, `src/pages/NewPurchaseOrder.tsx`
+- `src/pages/CommissionPayments.tsx`, `src/pages/Rebates.tsx`, `src/pages/QuickReceive.tsx`
+- `src/components/purchase-orders/BulkPOImport.tsx`
+- `src/lib/reportPdf.ts` (`fmtCurrency`)
+- `src/pages/BrandVsGeneric.tsx` (ternary shape `n != null ? format(n) : '-'` — verify before converting)
 
 ### Deliberately LEFT LOCAL (custom options — NOT consolidated)
 These use non-default options, so they are NOT equivalent to formatCents/formatUSD:
@@ -63,6 +70,39 @@ These use non-default options, so they are NOT equivalent to formatCents/formatU
 - `statementPdf.ts` — `fmtNum` (configurable decimals, non-currency)
 - `yearEndSummaryPdf.ts` — `fmtAcres` / `fmtQty` (non-currency)
 - Inline `Intl.NumberFormat(...).format(...)` usages (e.g. `CustomerDetail.tsx` history rows) — left as-is for now
+
+---
+
+## Resume instructions (next session — pick up cold)
+
+**Branch:** `chore/safe-cleanup-2026-06-03` — 6 commits ahead of `origin/main`, all green, **NOT pushed**.
+`main` is clean at `origin/main`. `src/lib/money.ts` already exists with `formatCents` + `formatUSD`.
+
+**Proven, behavior-preserving pattern** — for each remaining file: delete the local
+`const fmt/fmtCents/fmtCurrency = (x) => new Intl.NumberFormat(...).format(...)` and add a
+**top-of-file** aliased import that keeps the SAME local name (so no callsite changes):
+- helper divided by `/ 100`  →  `import { formatCents as <name> } from '<path>/money';`
+- helper did NOT divide       →  `import { formatUSD  as <name> } from '<path>/money';`
+
+Paths: pages → `../lib/money`, components (2 deep) → `../../lib/money`, lib → `./money`.
+⚠️ This project's ESLint does NOT auto-hoist a mid-file import — put it in the TOP import
+block (anchor on an existing import line); don't leave it where the `const` was.
+
+**Remaining work, in order:**
+1. **Cents** (→ `formatCents`): AccountsPayable, Compliance, VendorBills, NewVendorBill,
+   VendorBillDetail, QuickDeliveryModal. (All in-component `const` defs; def removed in place,
+   import added at top.)
+2. **ARaging.tsx — SPECIAL, do carefully:** has a module-level `fmt` (DOLLARS → `formatUSD`)
+   AND two inner-scope `fmtCents` (CENTS → `formatCents`) inside handler functions. Convert all
+   three; remove the two inner `const fmtCents`, add ONE top-level `formatCents as fmtCents` +
+   one `formatUSD as fmt`.
+3. **Dollars** (→ `formatUSD`): the TODO list under "DOLLARS" above.
+4. Then the other contained report consolidations: `companyInfo` company-name (8 PDF files),
+   `resolveProfileNames` (13 pages). NOTE `getPresetDates` is **DRIFTING** (the 5 copies differ) —
+   needs a canonical-behavior decision from Mason, do NOT blind-merge.
+
+**After EACH batch:** `npm run typecheck && npm run lint && npm run build && npm run test` must be
+green, then commit to the branch and update this ledger.
 
 ---
 
