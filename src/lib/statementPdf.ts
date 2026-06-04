@@ -19,13 +19,12 @@ import type {
 import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE, COMPANY_REMIT_ADDRESS } from './companyInfo';
+import { formatCents as fmt } from './money';
 
 
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 const fmtNum = (n: number, decimals = 4) =>
   new Intl.NumberFormat('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(n);

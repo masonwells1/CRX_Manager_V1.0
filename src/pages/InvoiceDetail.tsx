@@ -15,6 +15,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 import type { Invoice, InvoiceType, InvoiceStatus, Product, Customer, InvoiceShare, InvoicePrintOptions } from '../types';
 import { downloadInvoicePdf, generateInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { formatCents as fmt } from '../lib/money';
 import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
@@ -47,8 +48,6 @@ interface LineItem {
   quoted_price_cents: number | null;
 }
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 const statusBadge = (status: InvoiceStatus) => {
   const map: Record<InvoiceStatus, { variant: 'default' | 'warning' | 'success' | 'error' | 'info'; label: string }> = {

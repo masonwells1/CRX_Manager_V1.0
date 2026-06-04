@@ -22,6 +22,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { localToday } from '../lib/dateUtils';
+import { formatCents as fmt } from '../lib/money';
 
 interface PrepayBucket {
   id: string;
@@ -48,8 +49,6 @@ interface PendingAllocation {
   amount_cents: number;
 }
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function PrepayWorkspace() {
   const { profile } = useAuth();

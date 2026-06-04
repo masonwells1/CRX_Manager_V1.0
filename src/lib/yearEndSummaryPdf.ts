@@ -19,6 +19,7 @@ import type { YearEndSummaryData, YearEndProductUsage } from '../types';
 import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, BLUE, type JsPDFWithAutoTable } from './pdfTheme';
 import type { CellHookData } from 'jspdf-autotable';
 import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE } from './companyInfo';
+import { formatCents as fmt } from './money';
 
 
 
@@ -35,8 +36,6 @@ export interface YearEndSummaryOptions {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 const fmtDate = (d: string) =>
   new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
