@@ -9,6 +9,7 @@
 import { CRX_GREEN, CHARCOAL, GRAY, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import { COMPANY_FOOTER_THANKS } from './companyInfo';
+import { formatUSD as fmtMoney } from './money';
 
 
 
@@ -34,9 +35,6 @@ export interface OrderSummaryData {
   total_price: number;
   notes: string | null;
 }
-
-const fmtMoney = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
 const fmtQty = (n: number) => n.toLocaleString();
 

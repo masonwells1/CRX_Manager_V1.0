@@ -8,6 +8,7 @@
 // to keep them out of the main bundle (~500KB each)
 import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, type JsPDFWithAutoTable } from './pdfTheme';
 import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
+import { formatUSD as fmt } from './money';
 
 
 type AutoTableColumnStyle = {
@@ -62,9 +63,6 @@ interface PdfQuoteData {
     avgMargin: number;
   };
 }
-
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
 // Column definitions for the dynamic PDF column system
 const PDF_COLUMN_DEFS: Record<string, { label: string; getValue: (item: PdfQuoteItem) => string; align?: 'right' }> = {
