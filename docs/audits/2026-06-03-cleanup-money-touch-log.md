@@ -103,19 +103,19 @@ These use non-default options, so they are NOT equivalent to formatCents/formatU
 The original ledger claimed to have "surveyed every local formatter," but an authoritative
 `rg "style: 'currency'"` sweep of all of `src/` found **8 standard, consolidatable formatters that
 were in NO ledger list** (neither TODO nor left-local). They are byte-identical to `formatCents` /
-`formatUSD` and follow the exact proven pattern — they were simply missed. **NOT yet converted**
-(awaiting Mason's go-ahead, since several are money-critical: customer invoices + payments).
+`formatUSD` and follow the exact proven pattern — they were simply missed. ✅ **ALL 8 NOW CONVERTED**
+(Mason approved the sweep). Each verified body-by-body; several are money-critical (customer invoices + payments).
 
-**Missed CENTS (→ `formatCents`)** — each `(cents) => …format(cents / 100)`:
+**Missed CENTS (→ `formatCents`)** — commit `de6c798` — each `(cents) => …format(cents / 100)`:
 - `src/pages/FieldApplicationInvoice.tsx:62` (`fmt`)
 - `src/pages/PrepaymentManager.tsx:47` (`fmt`)  ← distinct from already-done `PrepayWorkspace.tsx`
 - `src/lib/invoicePdf.ts:102` (`fmt`)  ← **customer-facing invoice PDF**
 - `src/pages/PaymentHistory.tsx:48` (`fmt`)  ← **payments**
-- `src/pages/PaymentAllocation.tsx:32` (`fmt`)  ← **payments**
+- `src/pages/PaymentAllocation.tsx:32` (`fmt`)  ← **payments** (left neighbor `toDollarDisplay` untouched)
 
-**Missed DOLLARS (→ `formatUSD`)** — each `(n) => …format(n)`:
-- `src/lib/orderSummaryPdf.ts:38` (`fmtMoney`)
-- `src/pages/OrderDetail.tsx:705` (`fmt`)  ← also has an inline NumberFormat at ~1528 (leave inline)
+**Missed DOLLARS (→ `formatUSD`)** — commit `4ac1d43` — each `(n) => …format(n)`:
+- `src/lib/orderSummaryPdf.ts:38` (`fmtMoney`)  ← **customer-facing order-summary PDF**
+- `src/pages/OrderDetail.tsx:705` (`fmt`)  ← inline NumberFormat at ~1527 left inline by design
 - `src/lib/quotePdf.ts:66` (`fmt`)  ← **customer-facing quote PDF**
 
 **Newly found, but LEAVE LOCAL (verified non-equivalent):**
@@ -131,8 +131,9 @@ were in NO ledger list** (neither TODO nor left-local). They are byte-identical 
 
 **Branch:** `chore/safe-cleanup-2026-06-03` — many commits ahead of `origin/main`, all green, **NOT pushed**.
 `main` is clean at `origin/main`. `src/lib/money.ts` already exists with `formatCents` + `formatUSD`.
-**Status 2026-06-03:** all ledger-listed cents + dollars consolidation DONE (see batches above). The only
-open money item is the 8 newly-discovered formatters in the "LEDGER WAS UNDER-SCOPED" section.
+**Status 2026-06-03:** money consolidation **COMPLETE** — all ledger-listed cents + dollars batches
+DONE, plus the 8 ledger-missed formatters swept (Mason-approved). Final `style:'currency'` scan clean
+(only intentional leave-locals remain). Ready for Codex money-review + ultra review. NOT pushed/merged.
 
 **Proven, behavior-preserving pattern** — for each remaining file: delete the local
 `const fmt/fmtCents/fmtCurrency = (x) => new Intl.NumberFormat(...).format(...)` and add a
@@ -152,9 +153,10 @@ block (anchor on an existing import line); don't leave it where the `const` was.
    handler-scope — prior ledger had undercounted to two). Single combined import added. Green.
 3. ✅ **DONE — Dollars batch 1 (`dbbf29d`) + batch 2/Rebates (`e4db0bb`):** all 12 ledger-listed
    dollars files. BrandVsGeneric left local (null-guard). Green each batch.
-4. ⏸️ **AWAITING MASON'S DECISION — the 8 newly-discovered formatters** (see "LEDGER WAS UNDER-SCOPED"
-   section above). Same safe pattern; several money-critical. Sweep them to TRULY finish the money
-   consolidation, OR stop here for Codex review of just the ledger-listed set first.
+4. ✅ **DONE — the 8 newly-discovered formatters** (Mason approved the sweep): cents `de6c798`,
+   dollars `4ac1d43`. A final `style:'currency'` sweep confirms **money consolidation is COMPLETE** —
+   every remaining currency formatter in `src/` is an intentional leave-local (custom options / inline /
+   null-guard wrapper) or `money.ts` itself. No standard `(x)=>format(...)` formatter remains.
 5. (Later, separate effort — NOT money) other contained consolidations: `companyInfo` company-name
    (8 PDF files), `resolveProfileNames` (13 pages). NOTE `getPresetDates` is **DRIFTING** (the 5 copies
    differ) — needs a canonical-behavior decision from Mason, do NOT blind-merge.
