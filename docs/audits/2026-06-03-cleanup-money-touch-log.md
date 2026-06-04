@@ -67,14 +67,23 @@ to the per-call instances it replaces.
 "deliberately left local" custom-option list below).
 
 ### DOLLARS → `formatUSD`  (alias kept as original local name; callsites untouched)
-_None converted yet._ **TODO** (`fmt`/`fmtCurrency` was `(n) => …format(n)` — NO `/100`):
-- `src/pages/CustomerDetail.tsx` (also has inline `NumberFormat().format(total_spent)` on history rows — leave those inline ones)
+
+**Dollars batch 1** — commit `dbbf29d` (all `fmt` was `(n) => …format(n)`, NO `/100`):
+- `src/pages/CustomerDetail.tsx` (named `fmt` only; its TWO inline `NumberFormat().format(total_spent)` history-row usages left inline by design)
 - `src/pages/Orders.tsx`, `src/pages/Products.tsx`, `src/pages/Quotes.tsx`
-- `src/pages/PurchaseOrders.tsx`, `src/pages/PurchaseOrderDetail.tsx`, `src/pages/NewPurchaseOrder.tsx`
-- `src/pages/CommissionPayments.tsx`, `src/pages/Rebates.tsx`, `src/pages/QuickReceive.tsx`
-- `src/components/purchase-orders/BulkPOImport.tsx`
-- `src/lib/reportPdf.ts` (`fmtCurrency`)
-- `src/pages/BrandVsGeneric.tsx` (ternary shape `n != null ? format(n) : '-'` — verify before converting)
+- `src/pages/PurchaseOrders.tsx`, `src/pages/PurchaseOrderDetail.tsx`
+
+**Dollars batch 2 + Rebates mixed** — commit `e4db0bb`:
+- `src/pages/NewPurchaseOrder.tsx` (`fmt`), `src/pages/CommissionPayments.tsx` (module `fmt`),
+  `src/pages/QuickReceive.tsx` (module `fmt`), `src/components/purchase-orders/BulkPOImport.tsx` (module `fmt`, 2-deep),
+  `src/lib/reportPdf.ts` (module `fmtCurrency`).
+- `src/pages/Rebates.tsx` — **MIXED** (ledger listed it dollars-only): module `fmt` (DOLLARS, used at
+  line 448 `rebate_amount`) → `formatUSD as fmt`; derived `fmtCents = (c)=>fmt(c/100)` (CENTS, used
+  501/594/604 on `*_cents`) → `formatCents as fmtCents`. Combined import. ⚠️ another ledger undercount.
+
+**LEFT LOCAL (verified non-equivalent):**
+- `src/pages/BrandVsGeneric.tsx` — `(n) => n != null ? format(n) : '-'`. Null-guard wrapper; bare
+  `formatUSD(null)` would render `$NaN`, so NOT a drop-in alias. Left local (consistent with custom-option list).
 
 ### Deliberately LEFT LOCAL (custom options — NOT consolidated)
 These use non-default options, so they are NOT equivalent to formatCents/formatUSD:
@@ -89,10 +98,41 @@ These use non-default options, so they are NOT equivalent to formatCents/formatU
 
 ---
 
+## ⚠️ LEDGER WAS UNDER-SCOPED — newly discovered formatters (2026-06-03, this session)
+
+The original ledger claimed to have "surveyed every local formatter," but an authoritative
+`rg "style: 'currency'"` sweep of all of `src/` found **8 standard, consolidatable formatters that
+were in NO ledger list** (neither TODO nor left-local). They are byte-identical to `formatCents` /
+`formatUSD` and follow the exact proven pattern — they were simply missed. **NOT yet converted**
+(awaiting Mason's go-ahead, since several are money-critical: customer invoices + payments).
+
+**Missed CENTS (→ `formatCents`)** — each `(cents) => …format(cents / 100)`:
+- `src/pages/FieldApplicationInvoice.tsx:62` (`fmt`)
+- `src/pages/PrepaymentManager.tsx:47` (`fmt`)  ← distinct from already-done `PrepayWorkspace.tsx`
+- `src/lib/invoicePdf.ts:102` (`fmt`)  ← **customer-facing invoice PDF**
+- `src/pages/PaymentHistory.tsx:48` (`fmt`)  ← **payments**
+- `src/pages/PaymentAllocation.tsx:32` (`fmt`)  ← **payments**
+
+**Missed DOLLARS (→ `formatUSD`)** — each `(n) => …format(n)`:
+- `src/lib/orderSummaryPdf.ts:38` (`fmtMoney`)
+- `src/pages/OrderDetail.tsx:705` (`fmt`)  ← also has an inline NumberFormat at ~1528 (leave inline)
+- `src/lib/quotePdf.ts:66` (`fmt`)  ← **customer-facing quote PDF**
+
+**Newly found, but LEAVE LOCAL (verified non-equivalent):**
+- `src/pages/Jobs.tsx:174` — `fmtCents = (c)=> \`$${(c/100).toLocaleString(undefined,{minimumFractionDigits:2})}\``
+  — custom template + runtime-default locale, NOT `Intl 'en-US' currency`. Leave.
+- `src/lib/orderConfirmedEmail.ts:5` — `(n)=>format(n ?? 0)` null-coalescing wrapper (not a drop-in alias). Leave
+  (or future: `(n)=>formatUSD(n ?? 0)`).
+- Inline-only usages: `InvoiceDetail.tsx:715` (`.toLocaleString`), `OrderDetail.tsx:1528`, `NewOrder.tsx:791`.
+
+---
+
 ## Resume instructions (next session — pick up cold)
 
-**Branch:** `chore/safe-cleanup-2026-06-03` — 6 commits ahead of `origin/main`, all green, **NOT pushed**.
+**Branch:** `chore/safe-cleanup-2026-06-03` — many commits ahead of `origin/main`, all green, **NOT pushed**.
 `main` is clean at `origin/main`. `src/lib/money.ts` already exists with `formatCents` + `formatUSD`.
+**Status 2026-06-03:** all ledger-listed cents + dollars consolidation DONE (see batches above). The only
+open money item is the 8 newly-discovered formatters in the "LEDGER WAS UNDER-SCOPED" section.
 
 **Proven, behavior-preserving pattern** — for each remaining file: delete the local
 `const fmt/fmtCents/fmtCurrency = (x) => new Intl.NumberFormat(...).format(...)` and add a
@@ -110,10 +150,14 @@ block (anchor on an existing import line); don't leave it where the `const` was.
 2. ✅ **DONE — Batch 3c-4 (commit `f132968`):** ARaging.tsx mixed file. Removed component `fmt`
    (DOLLARS→formatUSD) + THREE `fmtCents` (CENTS→formatCents: one component-scope + two
    handler-scope — prior ledger had undercounted to two). Single combined import added. Green.
-3. **Dollars** (→ `formatUSD`): the TODO list under "DOLLARS" above.
-4. Then the other contained report consolidations: `companyInfo` company-name (8 PDF files),
-   `resolveProfileNames` (13 pages). NOTE `getPresetDates` is **DRIFTING** (the 5 copies differ) —
-   needs a canonical-behavior decision from Mason, do NOT blind-merge.
+3. ✅ **DONE — Dollars batch 1 (`dbbf29d`) + batch 2/Rebates (`e4db0bb`):** all 12 ledger-listed
+   dollars files. BrandVsGeneric left local (null-guard). Green each batch.
+4. ⏸️ **AWAITING MASON'S DECISION — the 8 newly-discovered formatters** (see "LEDGER WAS UNDER-SCOPED"
+   section above). Same safe pattern; several money-critical. Sweep them to TRULY finish the money
+   consolidation, OR stop here for Codex review of just the ledger-listed set first.
+5. (Later, separate effort — NOT money) other contained consolidations: `companyInfo` company-name
+   (8 PDF files), `resolveProfileNames` (13 pages). NOTE `getPresetDates` is **DRIFTING** (the 5 copies
+   differ) — needs a canonical-behavior decision from Mason, do NOT blind-merge.
 
 **After EACH batch:** `npm run typecheck && npm run lint && npm run build && npm run test` must be
 green, then commit to the branch and update this ledger.
