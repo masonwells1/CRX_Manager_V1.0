@@ -4,6 +4,7 @@ import Button from '../ui/Button';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import type { Product } from '../../types';
+import { formatCents as fmt } from '../../lib/money';
 
 export interface ChemicalLine {
   id: string;
@@ -42,8 +43,6 @@ interface FieldAppChemicalEntryProps {
   primaryCustomerTier?: number;
 }
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 let nextLineId = 1;
 function genId() {

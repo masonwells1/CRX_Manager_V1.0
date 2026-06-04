@@ -28,6 +28,7 @@ import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
+import { formatCents as fmtCents } from '../lib/money';
 import { Sentry } from '../lib/sentry';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -64,8 +65,6 @@ const PRIORITY_BADGE: Record<string, BadgeVariant> = {
   urgent: 'error',
 };
 
-const fmtCents = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function DeliveryDetail() {
   const { id } = useParams<{ id: string }>();

@@ -39,6 +39,17 @@ to the per-call instances it replaces.
 - `src/pages/CustomerTransactionReview.tsx`
 - `src/pages/PrepayWorkspace.tsx`
 
+**Batch 3c-2** (`fmt`/`fmtCents` was `(cents) => …format(cents / 100)`):
+- `src/components/field-app/FieldAppChemicalEntry.tsx`
+- `src/components/field-app/ApplicationServicePicker.tsx`
+- `src/components/field-app/CustomerSharesTable.tsx`
+- `src/components/invoices/WriteOffModal.tsx`
+- `src/components/invoices/FinanceChargePreviewModal.tsx`
+- `src/pages/DeliveryDetail.tsx`
+
+**Still TODO (cents):** AccountsPayable, Compliance, VendorBills, NewVendorBill,
+VendorBillDetail, QuickDeliveryModal, ARaging (2 inner-scope `fmtCents`).
+
 ### DOLLARS → `formatUSD`
 _(log updated as each batch lands)_
 
