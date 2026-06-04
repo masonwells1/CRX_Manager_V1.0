@@ -21,6 +21,7 @@ import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday, localDatePlusDays, parseLocalDate } from '../lib/dateUtils';
+import { formatCents as fmtCurrency } from '../lib/money';
 import type { ApplicatorLicense, RUPSalesRecord } from '../types';
 
 type TabKey = 'licenses' | 'rup_products' | 'rup_sales' | 'field_listing';
@@ -388,9 +389,6 @@ export default function Compliance() {
     warning: 'warning',
     non_compliant: 'error',
   };
-
-  const fmtCurrency = (cents: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
   const rupSalesColumns: Column<RUPSalesRecord>[] = [
     {
