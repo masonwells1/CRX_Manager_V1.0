@@ -47,8 +47,16 @@ to the per-call instances it replaces.
 - `src/components/invoices/FinanceChargePreviewModal.tsx`
 - `src/pages/DeliveryDetail.tsx`
 
-**Still TODO (cents):** AccountsPayable, Compliance, VendorBills, NewVendorBill,
-VendorBillDetail, QuickDeliveryModal, ARaging (2 inner-scope `fmtCents`).
+**Batch 3c-3** (`fmt`/`fmtCurrency` was `(cents) => …format(cents / 100)`) — commit `9713c2b`:
+- `src/pages/AccountsPayable.tsx` (`fmt`)
+- `src/pages/Compliance.tsx` (`fmtCurrency`)
+- `src/pages/VendorBills.tsx` (`fmt`)
+- `src/pages/NewVendorBill.tsx` (`fmt`)
+- `src/pages/VendorBillDetail.tsx` (`fmt`)
+- `src/components/deliveries/QuickDeliveryModal.tsx` (`fmtCurrency`, 2-deep → `../../lib/money`)
+
+**Still TODO (cents):** ARaging only (2 inner-scope `fmtCents`) — handled together with ARaging's
+module-level DOLLARS `fmt` in the special step below.
 
 ### DOLLARS → `formatUSD`  (alias kept as original local name; callsites untouched)
 _None converted yet._ **TODO** (`fmt`/`fmtCurrency` was `(n) => …format(n)` — NO `/100`):
@@ -89,9 +97,8 @@ Paths: pages → `../lib/money`, components (2 deep) → `../../lib/money`, lib 
 block (anchor on an existing import line); don't leave it where the `const` was.
 
 **Remaining work, in order:**
-1. **Cents** (→ `formatCents`): AccountsPayable, Compliance, VendorBills, NewVendorBill,
-   VendorBillDetail, QuickDeliveryModal. (All in-component `const` defs; def removed in place,
-   import added at top.)
+1. ✅ **DONE — Batch 3c-3 (commit `9713c2b`):** Cents (→ `formatCents`): AccountsPayable, Compliance,
+   VendorBills, NewVendorBill, VendorBillDetail, QuickDeliveryModal. typecheck+lint+build+1924 tests green.
 2. **ARaging.tsx — SPECIAL, do carefully:** has a module-level `fmt` (DOLLARS → `formatUSD`)
    AND two inner-scope `fmtCents` (CENTS → `formatCents`) inside handler functions. Convert all
    three; remove the two inner `const fmtCents`, add ONE top-level `formatCents as fmtCents` +
