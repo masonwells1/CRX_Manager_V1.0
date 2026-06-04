@@ -25,12 +25,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
+import { formatCents as fmt } from '../lib/money';
 import type { PaymentAllocationEntry, PaymentAllocationResult, InvoiceType } from '../types';
 
 /* ─── Helpers ──────────────────────────────────────────────────────────── */
-
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 const toDollarDisplay = (cents: number): string => (cents / 100).toFixed(2);
 

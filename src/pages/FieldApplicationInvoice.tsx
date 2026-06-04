@@ -13,6 +13,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
+import { formatCents as fmt } from '../lib/money';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
@@ -58,9 +59,6 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: 'customers', label: 'Customers', icon: <Users className="w-4 h-4" /> },
   { key: 'applied_info', label: 'Applied Info', icon: <ClipboardList className="w-4 h-4" /> },
 ];
-
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function FieldApplicationInvoice() {
   const { id } = useParams<{ id: string }>();
