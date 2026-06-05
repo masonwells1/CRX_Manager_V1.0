@@ -14,9 +14,8 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import type { CustomerTransactionRow } from '../types';
+import { formatCents as fmt } from '../lib/money';
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function CustomerTransactionReview() {
   const { toast } = useToast();

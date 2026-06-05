@@ -13,6 +13,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { localToday } from '../lib/dateUtils';
+import { formatUSD as fmt } from '../lib/money';
 import type { Product } from '../types';
 
 interface POItemDraft {
@@ -132,9 +133,6 @@ export default function NewPurchaseOrder() {
     (sum, i) => sum + i.quantity_ordered * i.unit_cost,
     0
   );
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   const handleSave = async (submitStatus: 'draft' | 'submitted') => {
     if (!vendor.trim()) {

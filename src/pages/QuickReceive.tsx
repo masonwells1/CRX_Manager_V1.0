@@ -23,6 +23,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import HelpTip from '../components/ui/HelpTip';
 import { notifyDamagedReceiving } from '../lib/notificationTriggers';
+import { formatUSD as fmt } from '../lib/money';
 import type {
   Product,
   ReceivingCondition,
@@ -35,9 +36,6 @@ let keyCounter = 0;
 function nextKey() {
   return `qr_${++keyCounter}`;
 }
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
-
 const STORAGE_LOCATIONS = [
   'Main Warehouse',
   'Secondary Storage',

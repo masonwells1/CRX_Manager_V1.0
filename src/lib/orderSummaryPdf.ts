@@ -6,17 +6,12 @@
  *
  * Follows the same dynamic-import + color-scheme pattern as deliveryPdf.ts.
  */
-import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import { COMPANY_FOOTER_THANKS } from './companyInfo';
+import { formatUSD as fmtMoney } from './money';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
 
 export interface OrderSummaryItem {
   product_name: string;
@@ -40,9 +35,6 @@ export interface OrderSummaryData {
   total_price: number;
   notes: string | null;
 }
-
-const fmtMoney = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
 const fmtQty = (n: number) => n.toLocaleString();
 

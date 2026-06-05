@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
+import { formatCents as fmt } from '../../lib/money';
 
 interface ApplicationService {
   id: string;
@@ -15,8 +16,6 @@ interface ApplicationServicePickerProps {
   disabled?: boolean;
 }
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 /**
  * Dropdown for selecting an application service (Hagie Y-Drop, airplane, etc.).

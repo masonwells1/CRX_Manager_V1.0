@@ -6,20 +6,12 @@
  *
  * Follows the same dynamic-import + color-scheme pattern as deliveryPdf.ts.
  */
-import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, RED, AMBER, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import type { CellHookData } from 'jspdf-autotable';
 import { COMPANY_FOOTER_INTERNAL } from './companyInfo';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
-const RED: [number, number, number] = [220, 38, 38];
-const AMBER: [number, number, number] = [217, 119, 6];
 
 export interface PickListItem {
   product_name: string;

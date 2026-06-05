@@ -8,7 +8,6 @@ import {
   Warehouse,
   ClipboardList,
   ClipboardCheck,
-  AlertTriangle,
   Clock,
   CalendarCheck,
   ChevronRight,
@@ -19,8 +18,6 @@ import {
   CheckCircle2,
   Circle,
   Inbox,
-  Shield,
-  Timer,
   Calendar,
   CheckSquare,
 } from 'lucide-react';
@@ -97,14 +94,6 @@ interface OperationalRpc {
   orders_this_month: number;
   deliveries_completed_total: number;
   deliveries_completed_this_month: number;
-  low_stock_count: number;
-  driver_issues_count: number;
-  expired_holds_count: number;
-  cancelled_posted_count: number;
-  expiring_quotes_count: number;
-  overdue_deliveries_count: number;
-  pos_expected_today_count: number;
-  expiring_licenses_count: number;
   monthly_activity: MonthlyActivity[];
   season_label: string;
   season_days_remaining: number;
@@ -141,14 +130,6 @@ interface OperationalData {
   ordersThisMonth: number;
   deliveriesCompletedTotal: number;
   deliveriesCompletedThisMonth: number;
-  lowStockCount: number;
-  driverIssuesCount: number;
-  expiredHoldsCount: number;
-  cancelledPostedCount: number;
-  expiringQuotesCount: number;
-  overdueDeliveriesCount: number;
-  posExpectedTodayCount: number;
-  expiringLicensesCount: number;
   monthlyActivity: MonthlyActivity[];
   seasonLabel: string;
   seasonDaysRemaining: number;
@@ -236,14 +217,6 @@ const defaultData: OperationalData = {
   ordersThisMonth: 0,
   deliveriesCompletedTotal: 0,
   deliveriesCompletedThisMonth: 0,
-  lowStockCount: 0,
-  driverIssuesCount: 0,
-  expiredHoldsCount: 0,
-  cancelledPostedCount: 0,
-  expiringQuotesCount: 0,
-  overdueDeliveriesCount: 0,
-  posExpectedTodayCount: 0,
-  expiringLicensesCount: 0,
   monthlyActivity: [],
   seasonLabel: '',
   seasonDaysRemaining: 0,
@@ -262,7 +235,6 @@ export default function Dashboard() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<OperationalData>(defaultData);
-  const [expiringPlannedHoldsCount, setExpiringPlannedHoldsCount] = useState(0);
 
   const fetchDashboard = useCallback(async () => {
     setLoading(true);
@@ -297,14 +269,6 @@ export default function Dashboard() {
         ordersThisMonth: Number(d.orders_this_month) || 0,
         deliveriesCompletedTotal: Number(d.deliveries_completed_total) || 0,
         deliveriesCompletedThisMonth: Number(d.deliveries_completed_this_month) || 0,
-        lowStockCount: Number(d.low_stock_count) || 0,
-        driverIssuesCount: Number(d.driver_issues_count) || 0,
-        expiredHoldsCount: Number(d.expired_holds_count) || 0,
-        cancelledPostedCount: Number(d.cancelled_posted_count) || 0,
-        expiringQuotesCount: Number(d.expiring_quotes_count) || 0,
-        overdueDeliveriesCount: Number(d.overdue_deliveries_count) || 0,
-        posExpectedTodayCount: Number(d.pos_expected_today_count) || 0,
-        expiringLicensesCount: Number(d.expiring_licenses_count) || 0,
         monthlyActivity: (d.monthly_activity || []).map((m) => ({
           month: m.month,
           orders_created: Number(m.orders_created) || 0,
@@ -320,12 +284,6 @@ export default function Dashboard() {
         recentActivity: d.recent_activity || [],
         programCompletionPct: null,
       });
-      // Fetch expiring planned holds count
-      const { data: holdsData } = await supabase.rpc('get_expiring_planned_holds', { p_days_ahead: 7 });
-      if (assertRpcResult(holdsData, 'get_expiring_planned_holds')) {
-        const parsed = typeof holdsData === 'string' ? JSON.parse(holdsData) : holdsData;
-        setExpiringPlannedHoldsCount(Array.isArray(parsed) ? parsed.length : 0);
-      }
       // Fetch program completion for dashboard card
       try {
         const { data: progData } = await supabase.rpc('get_program_completion');
@@ -399,135 +357,6 @@ export default function Dashboard() {
   const seasonTotalDays = data.seasonDaysElapsed + data.seasonDaysRemaining;
   const seasonPercent = seasonTotalDays > 0 ? Math.round((data.seasonDaysElapsed / seasonTotalDays) * 100) : 0;
 
-  // Legacy alert counts — kept for reference; ActionQueue now handles display
-  const _alerts: Array<{
-    key: string;
-    count: number;
-    label: string;
-    sublabel: string;
-    icon: React.ReactNode;
-    bg: string;
-    border: string;
-    iconColor: string;
-    textColor: string;
-    subColor: string;
-    path: string;
-    driverVisible: boolean;
-  }> = [
-    {
-      key: 'overdue',
-      count: data.overdueDeliveriesCount,
-      label: 'Overdue Deliveries',
-      sublabel: `${data.overdueDeliveriesCount} past scheduled date`,
-      icon: <Timer className="w-5 h-5" />,
-      bg: 'bg-red-50', border: 'border-red-200',
-      iconColor: 'text-red-600', textColor: 'text-red-800', subColor: 'text-red-600',
-      path: '/deliveries',
-      driverVisible: true,
-    },
-    {
-      key: 'low_stock',
-      count: data.lowStockCount,
-      label: 'Low Stock',
-      sublabel: `${data.lowStockCount} item(s) below reorder point`,
-      icon: <AlertTriangle className="w-5 h-5" />,
-      bg: 'bg-amber-50', border: 'border-amber-200',
-      iconColor: 'text-amber-600', textColor: 'text-amber-800', subColor: 'text-amber-600',
-      path: '/inventory',
-      driverVisible: false,
-    },
-    {
-      key: 'driver_issues',
-      count: data.driverIssuesCount,
-      label: 'Driver Issues',
-      sublabel: `${data.driverIssuesCount} unresolved issue(s)`,
-      icon: <Truck className="w-5 h-5" />,
-      bg: 'bg-orange-50', border: 'border-orange-200',
-      iconColor: 'text-orange-600', textColor: 'text-orange-800', subColor: 'text-orange-600',
-      path: '/deliveries',
-      driverVisible: true,
-    },
-    {
-      key: 'expiring_quotes',
-      count: data.expiringQuotesCount,
-      label: 'Expiring Quotes',
-      sublabel: `${data.expiringQuotesCount} expiring within 3 days`,
-      icon: <Clock className="w-5 h-5" />,
-      bg: 'bg-yellow-50', border: 'border-yellow-200',
-      iconColor: 'text-yellow-600', textColor: 'text-yellow-800', subColor: 'text-yellow-600',
-      path: '/quotes',
-      driverVisible: false,
-    },
-    {
-      key: 'expired_holds',
-      count: data.expiredHoldsCount,
-      label: 'Stale Inventory Holds',
-      sublabel: `${data.expiredHoldsCount} expired quote(s) with active holds`,
-      icon: <Warehouse className="w-5 h-5" />,
-      bg: 'bg-purple-50', border: 'border-purple-200',
-      iconColor: 'text-purple-600', textColor: 'text-purple-800', subColor: 'text-purple-600',
-      path: '/quotes',
-      driverVisible: false,
-    },
-    {
-      key: 'cancelled_posted',
-      count: data.cancelledPostedCount,
-      label: 'Cancelled + Posted',
-      sublabel: `${data.cancelledPostedCount} cancelled with posted invoices`,
-      icon: <FileText className="w-5 h-5" />,
-      bg: 'bg-red-50', border: 'border-red-200',
-      iconColor: 'text-red-600', textColor: 'text-red-800', subColor: 'text-red-600',
-      path: '/invoices',
-      driverVisible: false,
-    },
-    {
-      key: 'unassigned',
-      count: data.deliveryUnassigned,
-      label: 'Unassigned Deliveries',
-      sublabel: `${data.deliveryUnassigned} need a driver`,
-      icon: <User className="w-5 h-5" />,
-      bg: 'bg-sky-50', border: 'border-sky-200',
-      iconColor: 'text-sky-600', textColor: 'text-sky-800', subColor: 'text-sky-600',
-      path: '/deliveries',
-      driverVisible: false,
-    },
-    {
-      key: 'pos_expected',
-      count: data.posExpectedTodayCount,
-      label: 'POs Expected Today',
-      sublabel: `${data.posExpectedTodayCount} PO(s) arriving today`,
-      icon: <Inbox className="w-5 h-5" />,
-      bg: 'bg-teal-50', border: 'border-teal-200',
-      iconColor: 'text-teal-600', textColor: 'text-teal-800', subColor: 'text-teal-600',
-      path: '/receiving',
-      driverVisible: false,
-    },
-    {
-      key: 'expiring_licenses',
-      count: data.expiringLicensesCount,
-      label: 'Expiring Licenses',
-      sublabel: `${data.expiringLicensesCount} within 30 days`,
-      icon: <Shield className="w-5 h-5" />,
-      bg: 'bg-indigo-50', border: 'border-indigo-200',
-      iconColor: 'text-indigo-600', textColor: 'text-indigo-800', subColor: 'text-indigo-600',
-      path: '/compliance',
-      driverVisible: false,
-    },
-    {
-      key: 'expiring_planned_holds',
-      count: expiringPlannedHoldsCount,
-      label: 'Planned Holds Expiring',
-      sublabel: `${expiringPlannedHoldsCount} planned program hold(s) expiring within 7 days`,
-      icon: <Calendar className="w-5 h-5" />,
-      bg: 'bg-amber-50', border: 'border-amber-200',
-      iconColor: 'text-amber-600', textColor: 'text-amber-800', subColor: 'text-amber-600',
-      path: '/quotes?filter=planned',
-      driverVisible: false,
-    },
-  ];
-
-  // Filter alerts: only non-zero, and filter by role for drivers
-  void _alerts; // ActionQueue replaces the old alerts rendering
 
   return (
     <div className="space-y-6">

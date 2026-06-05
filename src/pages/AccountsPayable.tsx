@@ -15,6 +15,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
+import { formatCents as fmt } from '../lib/money';
 import type { APAgingRow, APDashboardSummary } from '../types';
 
 export default function AccountsPayable() {
@@ -24,9 +25,6 @@ export default function AccountsPayable() {
   const [summary, setSummary] = useState<APDashboardSummary | null>(null);
   const [agingData, setAgingData] = useState<APAgingRow[]>([]);
   const [asOfDate, setAsOfDate] = useState(localToday());
-
-  const fmt = (cents: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
   // Audit #35: split the dashboard fetch into two so changing the as-of-date
   // only re-runs the aging query (which depends on it). The summary query is

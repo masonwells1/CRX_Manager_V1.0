@@ -21,6 +21,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { logActivity } from '../lib/activityLogger';
+import { formatCents as fmt } from '../lib/money';
 
 interface CustomerPrepay {
   [k: string]: unknown;
@@ -43,9 +44,6 @@ interface PrepayCredit {
   source_type: string | null;
   created_at: string;
 }
-
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 interface BucketSplit {
   label: string;

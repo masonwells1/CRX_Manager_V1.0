@@ -18,6 +18,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
 import { generateBatchInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
+import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { getSeasonDates } from '../utils/season';
 
@@ -64,8 +65,6 @@ const typeBadge = (t: string) => {
   return <Badge variant="info">{map[t] || t}</Badge>;
 };
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function Invoices() {
   const navigate = useNavigate();
@@ -509,9 +508,9 @@ export default function Invoices() {
   const anySelectedHasShares = selectedInvoices.some(
     (i) => i.invoice_type === 'field_application'
   );
-  const anySelectedIsFieldApp = selectedInvoices.some(
-    (i) => i.invoice_type === 'field_application'
-  );
+  // Identical predicate to anySelectedHasShares — reuse the computed value
+  // instead of scanning the selection a second time.
+  const anySelectedIsFieldApp = anySelectedHasShares;
 
   if (loading) {
     return (

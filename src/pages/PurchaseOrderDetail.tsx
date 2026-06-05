@@ -16,6 +16,7 @@ import { notifyDamagedReceiving, notifyOverReceive } from '../lib/notificationTr
 import { logActivity } from '../lib/activityLogger';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { formatUSD as fmt } from '../lib/money';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import HelpTip from '../components/ui/HelpTip';
@@ -158,9 +159,6 @@ export default function PurchaseOrderDetail() {
       fetchReceivingHistory();
     }
   }, [id, fetchPO, fetchReceivingHistory]);
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   /* ─── Open receive modal ─── */
   const openReceiveModal = () => {
@@ -364,7 +362,6 @@ export default function PurchaseOrderDetail() {
     reverseIdem.resetKey();
     setReverseRecord(rec);
     setReverseReason('');
-    reverseIdem.resetKey();
     setReverseOpen(true);
   };
 

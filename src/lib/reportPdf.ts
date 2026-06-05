@@ -5,17 +5,12 @@
  * Sprint 9: Generic Report PDF Generator
  */
 
-import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, type JsPDFWithAutoTable } from './pdfTheme';
 import { localToday } from './dateUtils';
 import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
+import { formatUSD as fmtCurrency } from './money';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
 
 export interface ReportPdfColumn {
   header: string;
@@ -34,9 +29,6 @@ export interface ReportPdfOptions {
   orientation?: 'portrait' | 'landscape';
   footerNote?: string;
 }
-
-const fmtCurrency = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
 export async function generateReportPdf(options: ReportPdfOptions) {
   const { default: jsPDF } = await import('jspdf');

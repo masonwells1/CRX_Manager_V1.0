@@ -15,6 +15,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { formatCents as fmt } from '../lib/money';
 import type { VendorBill } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -61,9 +62,6 @@ export default function VendorBills() {
   useEffect(() => {
     fetchBills();
   }, [fetchBills]);
-
-  const fmt = (cents: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
   const counts = useMemo(() => {
     const unpaid = bills.filter((b) => b.status === 'unpaid').length;

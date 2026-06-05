@@ -22,6 +22,7 @@ import { Sentry } from '../lib/sentry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
 import { parseLocalDate } from '../lib/dateUtils';
+import { formatUSD as fmt } from '../lib/money';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import HelpTip from '../components/ui/HelpTip';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -702,9 +703,6 @@ export default function OrderDetail() {
     handleCreateInvoice();
   };
 
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
-
   if (loading) {
     return (
       <div className="space-y-4">
@@ -1121,8 +1119,8 @@ export default function OrderDetail() {
                   {displayItems
                     .filter((i) => (i.section_name || 'General') === section)
                     .map((item) => {
-                      const units = editing ? item.total_units_needed : item.total_units_needed;
-                      const ppu = editing ? item.price_per_unit : item.price_per_unit;
+                      const units = item.total_units_needed;
+                      const ppu = item.price_per_unit;
                       const pct =
                         units > 0
                           ? Math.round((item.quantity_delivered / units) * 100)

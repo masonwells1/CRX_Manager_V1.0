@@ -17,6 +17,7 @@ import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
+import { formatUSD as fmt } from '../lib/money';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
@@ -96,9 +97,6 @@ export default function Products() {
     () => createCheckboxColumn<Product>(selected, toggleSelect, (p) => p.id, (p) => p.is_active),
     [selected, toggleSelect]
   );
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   const handleExportCSV = () => {
     const fmtMargin = (v: unknown) => v != null ? `${(Number(v) * 100).toFixed(1)}%` : '';

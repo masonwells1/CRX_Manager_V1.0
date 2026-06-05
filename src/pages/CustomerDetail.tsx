@@ -19,6 +19,7 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType, ActivityFeedItem } from '../types';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
+import { formatUSD as fmt } from '../lib/money';
 import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import { downloadYearEndSummaryPdf } from '../lib/yearEndSummaryPdf';
@@ -199,8 +200,6 @@ export default function CustomerDetail() {
         .is('deleted_at', null)
         .order('order_date', { ascending: false });
       const rows = ((data || []) as Order[]).map((o) => {
-        const { data: items } = { data: null as null };
-        void items;
         return { ...o, fulfillment_pct: 0 };
       });
       setOrders(rows);
@@ -511,9 +510,6 @@ export default function CustomerDetail() {
   };
 
   const update = (field: string, value: unknown) => setCustomer((c) => ({ ...c, [field]: value }));
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   if (loading) {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;

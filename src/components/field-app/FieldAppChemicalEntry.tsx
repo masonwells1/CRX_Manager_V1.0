@@ -4,6 +4,7 @@ import Button from '../ui/Button';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import type { Product } from '../../types';
+import { formatCents as fmt } from '../../lib/money';
 
 export interface ChemicalLine {
   id: string;
@@ -28,23 +29,10 @@ export interface ChemicalLine {
   manual_override?: boolean;
 }
 
-interface Recipe {
-  id: string;
-  name: string;
-  items: Array<{
-    product_id: string;
-    product_name: string;
-    quantity: number;
-    unit: string;
-    rate_per_acre: number | null;
-  }>;
-}
-
 interface FieldAppChemicalEntryProps {
   chemicals: ChemicalLine[];
   onChemicalsChange: (chemicals: ChemicalLine[]) => void;
   totalAppliedAcres: number;
-  recipes?: Recipe[];
   /**
    * Phase 1: tier of the primary customer derived from billing splits.
    * Used as the *display* price when a product is selected (so the user
@@ -55,8 +43,6 @@ interface FieldAppChemicalEntryProps {
   primaryCustomerTier?: number;
 }
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 let nextLineId = 1;
 function genId() {

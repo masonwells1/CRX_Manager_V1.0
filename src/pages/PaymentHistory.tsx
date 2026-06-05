@@ -17,6 +17,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { parseLocalDate } from '../lib/dateUtils';
+import { formatCents as fmt } from '../lib/money';
 
 interface AllocationSet {
   [k: string]: unknown;
@@ -44,9 +45,6 @@ interface InvoiceAllocation {
   bill_to_customer_id: string;
   bill_to_farm_name?: string;
 }
-
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function PaymentHistory() {
   const { profile } = useAuth();

@@ -27,6 +27,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
+import { formatCents as fmt } from '../lib/money';
 import type { VendorBill, VendorPayment } from '../types';
 
 const statusVariant: Record<string, BadgeVariant> = {
@@ -80,9 +81,6 @@ export default function VendorBillDetail() {
   const [editing, setEditing] = useState(false);
 
   const today = localToday();
-
-  const fmt = (cents: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
   const fetchBill = useCallback(async () => {
     if (!id) return;
