@@ -11,3 +11,4 @@ Phase 23 (DB CHECK constraints on inventory buckets) unlocks when negatives=0 fo
 | 2026-05-15 | 17 | 15 | 59 | No change this week — zero rows resolved |
 | 2026-05-22 | 17 | 15 | 59 | No change this week — zero rows resolved |
 | 2026-05-29 | 17 | 15 | 59 | No change this week — zero rows resolved |
+| 2026-06-05 | 17 | 15 | 59 | No change this week — zero rows resolved |
