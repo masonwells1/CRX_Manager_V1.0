@@ -171,6 +171,9 @@ green, then commit to the branch and update this ledger.
   [`2026-06-04-claude-disposition-of-codex-money-review.md`](2026-06-04-claude-disposition-of-codex-money-review.md).
 - [x] **Confirm no dollars-based callsite was converted to `formatCents` (or vice-versa)** — confirmed by
   Codex + local `pdf-output-reviewer` + per-file body verification. Zero misclassifications.
-- [ ] Full ultra review of the cleanup branch (`/code-review ultra`) — **NEXT**
+- [x] **Full ultra review of the cleanup branch** (`/ultrareview`, cloud — free run 1/3) — 1 NIT only
+  (dead-code producers left behind after consumers removed); FIXED in `1638a14` (dropped orphaned
+  `OCRQueueStatus` + 8 unread Dashboard count fields). Also independently covered by a 3-agent in-session
+  review (dead-code / pdfTheme / money batches 1–2) — all clean.
 - [ ] Spot-check a rendered invoice/statement PDF + an AR screen (human visual backstop; code path already
   vetted by `pdf-output-reviewer` — low risk, but worth one real render before merge)
