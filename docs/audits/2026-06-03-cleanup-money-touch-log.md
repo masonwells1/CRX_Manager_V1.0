@@ -167,7 +167,10 @@ green, then commit to the branch and update this ledger.
 ---
 
 ## Review checklist (do BEFORE merging to main)
-- [ ] Codex review of EVERY money-touching change in this branch (per Mason)
-- [ ] Full ultra review of the cleanup branch
-- [ ] Spot-check a rendered invoice/statement PDF + an AR screen for correct dollar amounts
-- [ ] Confirm no dollars-based callsite was converted to `formatCents` (or vice-versa)
+- [x] **Codex review of EVERY money-touching change** — CLEAN, no findings (2026-06-04). See
+  [`2026-06-04-claude-disposition-of-codex-money-review.md`](2026-06-04-claude-disposition-of-codex-money-review.md).
+- [x] **Confirm no dollars-based callsite was converted to `formatCents` (or vice-versa)** — confirmed by
+  Codex + local `pdf-output-reviewer` + per-file body verification. Zero misclassifications.
+- [ ] Full ultra review of the cleanup branch (`/code-review ultra`) — **NEXT**
+- [ ] Spot-check a rendered invoice/statement PDF + an AR screen (human visual backstop; code path already
+  vetted by `pdf-output-reviewer` — low risk, but worth one real render before merge)
