@@ -94,14 +94,6 @@ interface OperationalRpc {
   orders_this_month: number;
   deliveries_completed_total: number;
   deliveries_completed_this_month: number;
-  low_stock_count: number;
-  driver_issues_count: number;
-  expired_holds_count: number;
-  cancelled_posted_count: number;
-  expiring_quotes_count: number;
-  overdue_deliveries_count: number;
-  pos_expected_today_count: number;
-  expiring_licenses_count: number;
   monthly_activity: MonthlyActivity[];
   season_label: string;
   season_days_remaining: number;
@@ -138,14 +130,6 @@ interface OperationalData {
   ordersThisMonth: number;
   deliveriesCompletedTotal: number;
   deliveriesCompletedThisMonth: number;
-  lowStockCount: number;
-  driverIssuesCount: number;
-  expiredHoldsCount: number;
-  cancelledPostedCount: number;
-  expiringQuotesCount: number;
-  overdueDeliveriesCount: number;
-  posExpectedTodayCount: number;
-  expiringLicensesCount: number;
   monthlyActivity: MonthlyActivity[];
   seasonLabel: string;
   seasonDaysRemaining: number;
@@ -233,14 +217,6 @@ const defaultData: OperationalData = {
   ordersThisMonth: 0,
   deliveriesCompletedTotal: 0,
   deliveriesCompletedThisMonth: 0,
-  lowStockCount: 0,
-  driverIssuesCount: 0,
-  expiredHoldsCount: 0,
-  cancelledPostedCount: 0,
-  expiringQuotesCount: 0,
-  overdueDeliveriesCount: 0,
-  posExpectedTodayCount: 0,
-  expiringLicensesCount: 0,
   monthlyActivity: [],
   seasonLabel: '',
   seasonDaysRemaining: 0,
@@ -293,14 +269,6 @@ export default function Dashboard() {
         ordersThisMonth: Number(d.orders_this_month) || 0,
         deliveriesCompletedTotal: Number(d.deliveries_completed_total) || 0,
         deliveriesCompletedThisMonth: Number(d.deliveries_completed_this_month) || 0,
-        lowStockCount: Number(d.low_stock_count) || 0,
-        driverIssuesCount: Number(d.driver_issues_count) || 0,
-        expiredHoldsCount: Number(d.expired_holds_count) || 0,
-        cancelledPostedCount: Number(d.cancelled_posted_count) || 0,
-        expiringQuotesCount: Number(d.expiring_quotes_count) || 0,
-        overdueDeliveriesCount: Number(d.overdue_deliveries_count) || 0,
-        posExpectedTodayCount: Number(d.pos_expected_today_count) || 0,
-        expiringLicensesCount: Number(d.expiring_licenses_count) || 0,
         monthlyActivity: (d.monthly_activity || []).map((m) => ({
           month: m.month,
           orders_created: Number(m.orders_created) || 0,

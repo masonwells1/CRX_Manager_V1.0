@@ -790,7 +790,6 @@ export type BlendTicketReviewStatus = 'unreviewed' | 'approved' | 'rejected';
 export type BlendTicketOrderLinkStatus = 'unlinked' | 'linked';
 export type BlendTicketPaymentStatus = 'unbilled' | 'billed' | 'prepaid' | 'no_charge';
 export type BlendTicketSource = 'ocr' | 'manual' | 'digital';
-export type OCRQueueStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 export interface BlendTicket {
   id: string;
