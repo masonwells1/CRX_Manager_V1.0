@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">71 routes · 164 RPC calls · 0 issues · Updated Jun 5, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">71 routes · 164 RPC calls · 0 issues · Updated Jun 8, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -366,9 +366,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 
   <div class="prob-section">
     <h3>Real Issues — Verified, Actionable</h3>
-    <div class="prob-item warn"><strong>commission_payments lifecycle not documented</strong>
-      <p>The <span class="loc">commission_payments</span> table has a status CHECK of <code>unposted → posted → voided</code>, but this lifecycle is missing from CLAUDE.md's Business Logic Lifecycles section. Doc-only fix, safe.</p>
-      <span class="loc">CLAUDE.md (Business Logic Lifecycles)</span>
+    <div class="prob-item info"><strong>commission_payments lifecycle — RESOLVED 2026-06-08</strong>
+      <p>Documented at CLAUDE.md Business Logic Lifecycles (<code>Commission Payment (batch): unposted → posted → voided</code>). Stale note retained for provenance; no action. (2026-06-08 workflow review LOW.)</p>
+      <span class="loc">CLAUDE.md:198-202</span>
     </div>
     <div class="prob-item warn"><strong>Two RPCs appear UI-unused (optional cleanup)</strong>
       <p><code>dashboard_summary()</code> (superseded by <code>operational_dashboard_summary()</code>) and <code>create_invoice_from_delivery()</code> are not called from any page. They ARE referenced in rpcContracts.test.ts / schemaIntegrity.test.ts contract lists, so dropping them means updating those tests too. Destructive on a live prod DB and low value — only do it if you specifically want the cleanup.</p>
@@ -1069,6 +1069,24 @@ const NODES = [
       "group": "Entity"
     },
     {
+      "id": "e-vendorbill",
+      "label": "Vendor Bill (AP)",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-cyclecount",
+      "label": "Cycle Count",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-rebate",
+      "label": "Rebate",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
       "id": "r-quote",
       "label": "RPCs: Quote",
       "type": "rpc",
@@ -1131,6 +1149,30 @@ const NODES = [
     {
       "id": "r-return",
       "label": "RPCs: Return",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-commission",
+      "label": "RPCs: Commission Pay",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-vendor",
+      "label": "RPCs: Vendor/AP",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-cycle",
+      "label": "RPCs: Cycle Count",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-rebate",
+      "label": "RPCs: Rebate",
       "type": "rpc",
       "group": "RPC"
     }
@@ -1660,6 +1702,11 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "commission-payments",
+      "t": "r-commission",
+      "type": "rpc"
+    },
+    {
       "s": "customer-detail",
       "t": "r-report",
       "type": "rpc"
@@ -1667,6 +1714,11 @@ const EDGES = [
     {
       "s": "customer-detail",
       "t": "r-quote",
+      "type": "rpc"
+    },
+    {
+      "s": "cycle-counts",
+      "t": "r-cycle",
       "type": "rpc"
     },
     {
@@ -1750,6 +1802,11 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "new-vendor-bill",
+      "t": "r-vendor",
+      "type": "rpc"
+    },
+    {
       "s": "order-detail",
       "t": "r-order",
       "type": "rpc"
@@ -1805,8 +1862,18 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "rebates",
+      "t": "r-rebate",
+      "type": "rpc"
+    },
+    {
       "s": "reports",
       "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "reports",
+      "t": "r-commission",
       "type": "rpc"
     },
     {
@@ -1817,6 +1884,11 @@ const EDGES = [
     {
       "s": "sales-reports",
       "t": "r-report",
+      "type": "rpc"
+    },
+    {
+      "s": "vendor-bill-detail",
+      "t": "r-vendor",
       "type": "rpc"
     },
     {
@@ -1957,6 +2029,31 @@ const EDGES = [
     {
       "s": "e-field",
       "t": "e-quote",
+      "type": "data"
+    },
+    {
+      "s": "r-commission",
+      "t": "e-commission",
+      "type": "data"
+    },
+    {
+      "s": "r-vendor",
+      "t": "e-vendorbill",
+      "type": "data"
+    },
+    {
+      "s": "r-cycle",
+      "t": "e-cyclecount",
+      "type": "data"
+    },
+    {
+      "s": "e-cyclecount",
+      "t": "e-inventory",
+      "type": "data"
+    },
+    {
+      "s": "r-rebate",
+      "t": "e-rebate",
       "type": "data"
     }
   ];

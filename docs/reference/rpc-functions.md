@@ -54,7 +54,7 @@
 - `batch_post_invoices()` — batch post multiple invoices at once
 - `batch_void_invoices()` — batch void multiple invoices
 - `record_invoice_payment()` — record payment against a specific invoice
-- `record_payment()` — record a payment and allocate across invoices
+- ~~`record_payment()`~~ — **DROPPED 2026-06-08** (migration `20260608145944`, audit AW-3): deprecated + unreachable; use `allocate_payment` / `record_invoice_payment` instead
 - `allocate_payment()` — allocate/re-allocate payment amounts across invoices
 
 ## Inventory & Receiving
