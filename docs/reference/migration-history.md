@@ -1,4 +1,4 @@
-# Migration History (378 migrations)
+# Migration History (379 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -431,3 +431,4 @@ These 10 historical migrations apply by timestamp order like all others; they si
 | 291 | 20260608154230 | **`void_delivery` draft-invoice status fix (MED)** — draft invoices now set to `cancelled` (matching `cancel_delivery`/`void_order`/`void_invoice`/`cancel_order`) instead of `voided`; user-facing "auto-voided" wording → "auto-cancelled". Per-item loop body reordered (inventory UPDATE → ledger INSERT → order_items UPDATE), behavior-identical. Verbatim-from-live otherwise. |
 | 292 | 20260608154245 | **`auto_expire_quotes` constrain statuses (MED)** — loop now driven off `status IN ('sent','revised')` (the only statuses the quote trigger lets expire) instead of a `NOT IN` exclusion, removing a latent `draft → expired` crash; dropped the orphan `'converted'` token. Function is dead/uncron'd but no longer a loaded gun. |
 | 293 | 20260608154253 | **Backfill blank commission recipient (LOW data fix)** — one legacy pending $50 commission had a blank `recipient` display name (predates the `_insert_commissions_for_order` non-blank filter) but a valid `recipient_user_id`. Backfills the name from the profile for non-cancelled blank-recipient rows. Idempotent, environment-safe no-op elsewhere. |
+| 294 | 20260608181650 | **`cancel_return` strict-actor + role gate (P1, Codex review of PR #67)** — `cancel_return` was granted to `authenticated` but had NO in-function auth/role gate (trusted caller-supplied `p_performed_by`). The 154151 admin_override removed the status trigger's incidental block on `received→cancelled`, exposing an ungated path for any logged-in user to reverse inventory + cancel a received return. Added the canonical `AUTH_REQUIRED`/`ACTOR_MISMATCH`/`INSUFFICIENT_ROLE` (`admin`/`sales_rep`, `is_active`) gate before the idempotency check (verbatim pattern from `approve_return`). Both reviewers clean; applied live; 4-path rolled-back smoke test (no-auth→AUTH_REQUIRED, non-admin→INSUFFICIENT_ROLE, forged→ACTOR_MISMATCH, admin→success); overload=1. |
