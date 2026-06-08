@@ -158,7 +158,8 @@ These rules exist because **migration drift caused 40+ bugs** in March 2026.
 
 ## Business Logic Lifecycles
 
-### Quote: `draft → sent → revised → accepted → declined → expired → cancelled`
+### Quote: `draft → sent ⇄ revised`; from sent/revised → `accepted` / `declined` / `expired`; `cancelled` from draft/sent/revised
+- **Branching, not linear** — the old single-arrow chain was misleading: `declined`/`expired`/`cancelled` are **terminal**, and `accepted` can revert to `sent`. See the quote SVG in `docs/app-workflow-map.html` for the exact enforcer-allowed transitions.
 - `is_planned` reserves inventory via holds (linked via `source_id`)
 - Accepted quotes convert via `convert_quote_to_order()` — holds released
 - Declined/expired auto-release holds AND restore `quantity_available`
@@ -179,8 +180,14 @@ These rules exist because **migration drift caused 40+ bugs** in March 2026.
 
 ### Job: `scheduled → in_progress → completed → cancelled → invoiced`
 ### PO: `draft → submitted → partially_received → fully_received → cancelled`
-### Return: `requested → approved → received → credited → rejected → cancelled`
+### Return: `requested → {approved, rejected, cancelled}`; `approved → {received, cancelled}`; `received → credited` (credited/rejected/cancelled are terminal — branches, not a chain)
 ### Commission Payment: `unposted → posted → voided`
+
+### Blend Ticket: 4 orthogonal status axes (not a single lifecycle)
+- `status` (OCR pipeline): `pending → processing → completed → failed | needs_review` — set by `process-blend-ticket` Edge Function + `save_blend_ticket`
+- `review_status`: `unreviewed → approved | rejected` — `batch_approve_blend_tickets` / `batch_reject_blend_tickets` / `reverse_blend_ticket_approval` (require `status='completed'` first)
+- `payment_status`: `unbilled → billed | prepaid | no_charge` — `create_invoice_from_blend_ticket` / `sync_blend_ticket_payment_status`
+- `order_link_status`: `unlinked → linked` — `link_blend_ticket_to_order` / `create_order_from_blend_ticket`
 
 ### Tier Pricing
 - Customers: tier 1, 2, or 3. Products: tier1/2/3_price. Quotes inherit tier.
@@ -246,6 +253,7 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 
 ## Schema Gotchas
 - `profile_public_view` uses `security_invoker = off` (SECURITY DEFINER semantics) **by design** — exposes only non-PII profile columns (id, full_name, role, is_active) so non-admin UIs can display user names without leaking email/phone. Supabase security advisor flags this as ERROR; it is an accepted finding. Do NOT switch to `security_invoker = on` without auditing every UI that reads through this view. (Migration: `20260510070000_tighten_customer_profile_rls.sql`)
+- The **52 anon-executable SECURITY DEFINER functions** the Supabase advisor flags (`Public Can Execute SECURITY DEFINER Function`) are **accepted/inert grant-debt, NOT a hole**: each self-gates on `auth.uid()`/`require_admin()` as its first executable statement (runtime-proven 2026-06-08 the `anon` role is rejected — e.g. `admin_update_profile`→"requires admin role", `get_ar_aging`→"Admin access required"), and the trigger functions in the set error on a direct call. Migration `20260529214355` revoked anon EXECUTE on the **37 report/dashboard** RPCs that were leaking PII; the remaining 52 are a *different* set whose real gate is the in-body check, not the EXECUTE grant. Revoking them is optional defense-in-depth (migration gate + `get_advisors` re-check). (2026-06-08 workflow review LOW #6.)
 - `commissions.commission_amount` is `numeric` dollars (NOT `_cents bigint`)
 - `returns`: `requested_by` (not `created_by`), status `'requested'` (not `'pending'`)
 - `return_items`: references `order_item_id` only (not `delivery_item_id`)

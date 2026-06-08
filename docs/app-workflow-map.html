@@ -366,9 +366,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 
   <div class="prob-section">
     <h3>Real Issues — Verified, Actionable</h3>
-    <div class="prob-item warn"><strong>commission_payments lifecycle not documented</strong>
-      <p>The <span class="loc">commission_payments</span> table has a status CHECK of <code>unposted → posted → voided</code>, but this lifecycle is missing from CLAUDE.md's Business Logic Lifecycles section. Doc-only fix, safe.</p>
-      <span class="loc">CLAUDE.md (Business Logic Lifecycles)</span>
+    <div class="prob-item info"><strong>commission_payments lifecycle — RESOLVED 2026-06-08</strong>
+      <p>Documented at CLAUDE.md Business Logic Lifecycles (<code>Commission Payment (batch): unposted → posted → voided</code>). Stale note retained for provenance; no action. (2026-06-08 workflow review LOW.)</p>
+      <span class="loc">CLAUDE.md:198-202</span>
     </div>
     <div class="prob-item warn"><strong>Two RPCs appear UI-unused (optional cleanup)</strong>
       <p><code>dashboard_summary()</code> (superseded by <code>operational_dashboard_summary()</code>) and <code>create_invoice_from_delivery()</code> are not called from any page. They ARE referenced in rpcContracts.test.ts / schemaIntegrity.test.ts contract lists, so dropping them means updating those tests too. Destructive on a live prod DB and low value — only do it if you specifically want the cleanup.</p>
