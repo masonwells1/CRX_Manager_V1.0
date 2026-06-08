@@ -1,4 +1,4 @@
-# Migration History (371 migrations)
+# Migration History (372 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -12,6 +12,7 @@ Newest-first. From the 2026-06-08 architecture-weakness audit (`docs/audits/2026
 
 | Version | File | Description |
 |---------|------|-------------|
+| 20260608145944 | `drop_deprecated_record_payment` | **AW-3 — drop the dead money RPC.** `record_payment` was a deprecated, unreachable SECURITY DEFINER money RPC (already a live deprecation stub that only raised an exception): no frontend `.rpc`, no other `pg_proc` caller, no Edge Function, no `cron.job` reference (all verified live 2026-06-08). Superseded by `allocate_payment`. Dropped to shed a dead SECDEF money-mutator with no idempotency. Both reviewers clean; applied live (MCP stamp `20260608145944`, disk renamed per B7); post-apply `record_payment` overload count = 0 (gone). Recoverable from git history. |
 | 20260608144210 | `save_blend_ticket_idempotency` | **AW-1 — wire the ignored idempotency key.** `save_blend_ticket` DECLARED `p_idempotency_key` but its body never used it, so the key the UI passes (`BlendTicketDetail.tsx:362` via `useIdempotencyKey`) was dropped — a false sense of double-submit protection that let a double-click write a duplicate `activity_feed` row (the UPDATEs were already naturally idempotent). Wrapped with canonical `check_idempotency`/`save_idempotency`, placed AFTER the auth check so a cached result can't leak to an unauthorized caller. Body verbatim from live otherwise; both reviewers clean; applied live (MCP stamp `20260608144210`, disk renamed per B7); rolled-back smoke test on a temp ticket: 2nd call returned the cached result with `activity_delta=1` (no duplicate row); overload=1, `uses_idem=true`. |
 
 ## Applied 2026-05-29 → 2026-05-31 (un-indexed)
