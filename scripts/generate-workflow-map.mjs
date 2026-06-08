@@ -333,6 +333,13 @@ function rpcToGroupId(name) {
     [/^(save_blend|batch_approve_blend|batch_reject_blend|create_invoice_from_blend|create_order_from_blend|create_application_record_from_blend|link_blend|unlink_blend)/, 'r-blend'],
     [/^(get_ar_aging|get_customer_statement|get_detailed|get_sales|get_logbook|operational_dashboard|financial_dashboard|get_profile_detail|dashboard_summary)/, 'r-report'],
     [/^(approve_return|cancel_return|receive_return|issue_return_credit|request_return|save_return)/, 'r-return'],
+    // Appended 2026-06-08 (map-drift audit MAP-1): subsystems the app grew into.
+    // Placed LAST so first-match-wins leaves every existing grouping unchanged —
+    // these only catch RPC names that previously matched no group at all.
+    [/commission_payment/, 'r-commission'],
+    [/vendor_bill|vendor_payment/, 'r-vendor'],
+    [/cycle_count/, 'r-cycle'],
+    [/rebate/, 'r-rebate'],
   ];
   for (const [re, gid] of map) if (re.test(name)) return gid;
   return null;
@@ -357,6 +364,10 @@ const ENTITY_NODES = [
   {id:'e-blend',label:'BlendTicket',type:'entity',group:'Entity'},
   {id:'e-commission',label:'Commission',type:'entity',group:'Entity'},
   {id:'e-field',label:'Field',type:'entity',group:'Entity'},
+  // Added 2026-06-08 (map-drift audit MAP-1) — entities for the newly-modeled subsystems
+  {id:'e-vendorbill',label:'Vendor Bill (AP)',type:'entity',group:'Entity'},
+  {id:'e-cyclecount',label:'Cycle Count',type:'entity',group:'Entity'},
+  {id:'e-rebate',label:'Rebate',type:'entity',group:'Entity'},
 ];
 
 const RPC_GROUP_NODES = [
@@ -371,6 +382,11 @@ const RPC_GROUP_NODES = [
   {id:'r-blend',label:'RPCs: BlendTicket',type:'rpc',group:'RPC'},
   {id:'r-report',label:'RPCs: Reports',type:'rpc',group:'RPC'},
   {id:'r-return',label:'RPCs: Return',type:'rpc',group:'RPC'},
+  // Added 2026-06-08 (map-drift audit MAP-1) — previously unmodeled write subsystems
+  {id:'r-commission',label:'RPCs: Commission Pay',type:'rpc',group:'RPC'},
+  {id:'r-vendor',label:'RPCs: Vendor/AP',type:'rpc',group:'RPC'},
+  {id:'r-cycle',label:'RPCs: Cycle Count',type:'rpc',group:'RPC'},
+  {id:'r-rebate',label:'RPCs: Rebate',type:'rpc',group:'RPC'},
 ];
 
 const DATA_FLOW_EDGES = [
@@ -388,6 +404,13 @@ const DATA_FLOW_EDGES = [
   {s:'e-customer',t:'e-quote',type:'data'},{s:'e-customer',t:'e-order',type:'data'},
   {s:'e-customer',t:'e-invoice',type:'data'},{s:'e-order',t:'e-commission',type:'data'},
   {s:'e-product',t:'e-inventory',type:'data'},{s:'e-field',t:'e-quote',type:'data'},
+  // Added 2026-06-08 (map-drift audit MAP-1): connect the newly-modeled RPC groups
+  // to their entities so the subsystems aren't left floating. cyclecount→inventory
+  // is the one well-established cross-entity link (cycle counts reconcile inventory).
+  {s:'r-commission',t:'e-commission',type:'data'},
+  {s:'r-vendor',t:'e-vendorbill',type:'data'},
+  {s:'r-cycle',t:'e-cyclecount',type:'data'},{s:'e-cyclecount',t:'e-inventory',type:'data'},
+  {s:'r-rebate',t:'e-rebate',type:'data'},
 ];
 
 // ─────────────────────────────────────────────

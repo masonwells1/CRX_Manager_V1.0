@@ -1069,6 +1069,24 @@ const NODES = [
       "group": "Entity"
     },
     {
+      "id": "e-vendorbill",
+      "label": "Vendor Bill (AP)",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-cyclecount",
+      "label": "Cycle Count",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-rebate",
+      "label": "Rebate",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
       "id": "r-quote",
       "label": "RPCs: Quote",
       "type": "rpc",
@@ -1131,6 +1149,30 @@ const NODES = [
     {
       "id": "r-return",
       "label": "RPCs: Return",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-commission",
+      "label": "RPCs: Commission Pay",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-vendor",
+      "label": "RPCs: Vendor/AP",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-cycle",
+      "label": "RPCs: Cycle Count",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-rebate",
+      "label": "RPCs: Rebate",
       "type": "rpc",
       "group": "RPC"
     }
@@ -1660,6 +1702,11 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "commission-payments",
+      "t": "r-commission",
+      "type": "rpc"
+    },
+    {
       "s": "customer-detail",
       "t": "r-report",
       "type": "rpc"
@@ -1667,6 +1714,11 @@ const EDGES = [
     {
       "s": "customer-detail",
       "t": "r-quote",
+      "type": "rpc"
+    },
+    {
+      "s": "cycle-counts",
+      "t": "r-cycle",
       "type": "rpc"
     },
     {
@@ -1750,6 +1802,11 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "new-vendor-bill",
+      "t": "r-vendor",
+      "type": "rpc"
+    },
+    {
       "s": "order-detail",
       "t": "r-order",
       "type": "rpc"
@@ -1805,8 +1862,18 @@ const EDGES = [
       "type": "rpc"
     },
     {
+      "s": "rebates",
+      "t": "r-rebate",
+      "type": "rpc"
+    },
+    {
       "s": "reports",
       "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "reports",
+      "t": "r-commission",
       "type": "rpc"
     },
     {
@@ -1817,6 +1884,11 @@ const EDGES = [
     {
       "s": "sales-reports",
       "t": "r-report",
+      "type": "rpc"
+    },
+    {
+      "s": "vendor-bill-detail",
+      "t": "r-vendor",
       "type": "rpc"
     },
     {
@@ -1957,6 +2029,31 @@ const EDGES = [
     {
       "s": "e-field",
       "t": "e-quote",
+      "type": "data"
+    },
+    {
+      "s": "r-commission",
+      "t": "e-commission",
+      "type": "data"
+    },
+    {
+      "s": "r-vendor",
+      "t": "e-vendorbill",
+      "type": "data"
+    },
+    {
+      "s": "r-cycle",
+      "t": "e-cyclecount",
+      "type": "data"
+    },
+    {
+      "s": "e-cyclecount",
+      "t": "e-inventory",
+      "type": "data"
+    },
+    {
+      "s": "r-rebate",
+      "t": "e-rebate",
       "type": "data"
     }
   ];

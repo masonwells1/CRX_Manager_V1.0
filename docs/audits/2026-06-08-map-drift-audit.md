@@ -21,6 +21,7 @@
 ## Findings (ranked)
 
 ### [MED] MAP-1 — The map generator under-represents ~4 write subsystems (silent missing edges)
+- **Status: RESOLVED 2026-06-08** — added `r-commission` / `r-vendor` / `r-cycle` / `r-rebate` RPC-group nodes + `rpcToGroupId` patterns (appended last, so no existing grouping changed) and `e-vendorbill` / `e-cyclecount` / `e-rebate` entity nodes + data edges. Map regenerated to **101 nodes / 175 edges** (was 94 / 164), still 0 auto-problems. Now draws page→RPC edges from CommissionPayments, CycleCounts, NewVendorBill/VendorBillDetail, and Rebates.
 - **Pass:** 6 (map defect)  ·  **Where:** `scripts/generate-workflow-map.mjs:323-374` (`rpcToGroupId` + `RPC_GROUP_NODES`)
 - **Evidence:** The generator buckets RPCs into **11** families (quote, order, delivery, invoice, payment, inventory, po, job, blend, report, return). Several **frontend-called write families match none of them**, so their page→RPC edges are silently dropped from the graph:
   - **Commission payments** — `create_commission_payment`, `post_commission_payment`, `void_commission_payment` (an entire `unposted→posted→voided` lifecycle). `e-commission` exists as an entity node but is fed only by the static `e-order → e-commission` data edge — no RPC layer.
