@@ -1,10 +1,20 @@
-# Migration History (392 migrations)
+# Migration History (395 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-09 (Codex cross-review remediation — round 2: actor-forgery sweep)
+
+Codex round-2 returned NEEDS-WORK: the round-1 actor-forgery sweep was INCOMPLETE — 10 authenticated-callable SECURITY DEFINER mutators still had NO auth.uid() identity gate (direct-call privilege escalation + actor forgery, not just audit attribution). Found via a complete sweep (authenticated SECDEF + DML + no auth.uid()/require_admin()/is_admin()/is_sales_rep()). All applied live after parallel rls-security + migration-drift reviewers clean (0 BLOCKER/HIGH) + proof; disk renamed to MCP stamp. Live verification: each is SECDEF, authenticated-callable, **anon NOT callable**, **overload=1**, now binds auth.uid(). Rolled-back smoke: forged actor -> ACTOR_MISMATCH (x10), non-admin(entity_recipient) -> INSUFFICIENT_ROLE, no-auth -> AUTH_REQUIRED, sales_rep allowed on quote/blend ops but blocked (INSUFFICIENT_ROLE) on the admin-only prepayment op.
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260609195843 | `strict_actor_quote_rpcs` | Strict-actor (admin/sales_rep) on create_planned_holds, create_quote_from_template, create_quote_version, rollover_quote_to_season, save_quote_template, create_job_from_quote_section. created_by/sent_by/activity_log actor -> v_actor; create_quote_version idempotency result v_version_id::text -> to_jsonb(v_version_id) (latent text-into-jsonb implicit cast). |
+| 20260609195713 | `strict_actor_blend_ticket_rpcs` | Strict-actor (admin/sales_rep) on batch_approve_blend_tickets, batch_reject_blend_tickets, save_blend_ticket_fields. reviewed_by -> v_actor; ACTOR_MISMATCH on p_approved_by / p_rejected_by / p_performed_by. (batch_approve/reject were NOT in Codex's named 8 — found by the complete sweep; same forgery class, fixed too.) |
+| 20260609195646 | `strict_actor_apply_remaining_prepayments` | Strict-actor (**admin** only, matches PrepaymentManager UI) on apply_remaining_prepayments. financial_audit_log actor_user_id -> v_actor. Uses check_idempotency/save_idempotency helpers. |
 
 ## Applied 2026-06-09 (Codex cross-review remediation)
 
