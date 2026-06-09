@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "generated_at": "2026-05-26",
+    "generated_at": "2026-06-08",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs",
     "purpose": "Single source of truth for hooks: generated columns, status enum values, tables-with/without updated_at.",
@@ -10,7 +10,12 @@
     {
       "table": "invoices",
       "column": "balance_cents",
-      "expression": "((total_amount_cents - paid_amount_cents) - prepay_applied_cents) - write_off_cents"
+      "expression": "(((total_amount_cents - paid_amount_cents) - prepay_applied_cents) - write_off_cents)"
+    },
+    {
+      "table": "vendor_bills",
+      "column": "balance_cents",
+      "expression": "(total_cents - COALESCE(paid_cents, (0)::bigint))"
     }
   ],
   "status_enums": {
@@ -69,6 +74,7 @@
       "cancelled"
     ],
     "email_log.status": [
+      "pending",
       "sent",
       "failed",
       "bounced"
@@ -202,6 +208,7 @@
     "quote_versions",
     "rate_limit_log",
     "rate_limits",
+    "rebate_claim_counters",
     "receiving_photos",
     "receiving_records",
     "return_items",

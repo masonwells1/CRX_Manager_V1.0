@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState , useCallback } from 'react';
+import { useEffect, useRef, useState , useCallback, lazy, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Save, Plus, Trash2, Search, MapPin, FileText, Truck, AlertTriangle, MessageSquarePlus, Copy, ClipboardList } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -19,13 +19,18 @@ import RelatedNotes from '../components/team/RelatedNotes';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType, ActivityFeedItem } from '../types';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
+import { formatUSD as fmt } from '../lib/money';
 import CustomerSummaryBar from '../components/customers/CustomerSummaryBar';
-import MapContainer from '../components/map/MapContainer';
-import FieldMarkers from '../components/map/FieldMarkers';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import { downloadYearEndSummaryPdf } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryOptions } from '../lib/yearEndSummaryPdf';
 import type { YearEndSummaryData } from '../types';
+
+// P3 perf: lazy-load the heavy Mapbox map components so CustomerDetail (a
+// high-traffic page) doesn't pull the ~1.68 MB vendor-mapbox chunk on initial
+// load — only when the Field Locations card actually renders.
+const MapContainer = lazy(() => import('../components/map/MapContainer'));
+const FieldMarkers = lazy(() => import('../components/map/FieldMarkers'));
 
 interface PurchaseHistoryItem {
   product_name: string;
@@ -195,8 +200,6 @@ export default function CustomerDetail() {
         .is('deleted_at', null)
         .order('order_date', { ascending: false });
       const rows = ((data || []) as Order[]).map((o) => {
-        const { data: items } = { data: null as null };
-        void items;
         return { ...o, fulfillment_pct: 0 };
       });
       setOrders(rows);
@@ -507,9 +510,6 @@ export default function CustomerDetail() {
   };
 
   const update = (field: string, value: unknown) => setCustomer((c) => ({ ...c, [field]: value }));
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   if (loading) {
     return <div className="animate-pulse"><div className="h-64 bg-gray-200 rounded" /></div>;
@@ -870,12 +870,14 @@ export default function CustomerDetail() {
           {!tabLoading && fields.some((f) => f.centroid_geojson) && (
             <Card>
               <CardHeader title="Field" accent="Locations" />
-              <MapContainer className="h-[250px] w-full rounded-lg overflow-hidden">
-                <FieldMarkers
-                  fields={fields as Field[]}
-                  onFieldClick={(fieldId) => navigate(`/fields/${fieldId}`)}
-                />
-              </MapContainer>
+              <Suspense fallback={<div className="h-[250px] w-full rounded-lg bg-gray-50 flex items-center justify-center text-sm text-gray-400">Loading map…</div>}>
+                <MapContainer className="h-[250px] w-full rounded-lg overflow-hidden">
+                  <FieldMarkers
+                    fields={fields as Field[]}
+                    onFieldClick={(fieldId) => navigate(`/fields/${fieldId}`)}
+                  />
+                </MapContainer>
+              </Suspense>
             </Card>
           )}
 

@@ -14,6 +14,7 @@ import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../../lib/parseCents';
 import { logActivity } from '../../lib/activityLogger';
+import { formatCents as fmt } from '../../lib/money';
 
 interface WriteOffModalProps {
   open: boolean;
@@ -24,8 +25,6 @@ interface WriteOffModalProps {
   onSuccess: () => void;
 }
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function WriteOffModal({
   open,

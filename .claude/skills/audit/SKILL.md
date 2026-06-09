@@ -12,7 +12,7 @@ Run every validation check CRX Manager has in one pass. This catches SQL bugs, f
 Run the SQL validation script:
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && bash scripts/validate-sql-migrations.sh
+bash scripts/validate-sql-migrations.sh
 ```
 
 If this fails, report each violation with the file and line number.
@@ -22,7 +22,7 @@ If this fails, report each violation with the file and line number.
 Run the frontend validation script:
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && bash scripts/validate-frontend.sh
+bash scripts/validate-frontend.sh
 ```
 
 If this fails, report each violation.
@@ -30,7 +30,7 @@ If this fails, report each violation.
 ## Step 3: ESLint
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && npm run lint
+npm run lint
 ```
 
 Report the error count. If > 0, list each error with file and line.
@@ -38,7 +38,7 @@ Report the error count. If > 0, list each error with file and line.
 ## Step 4: TypeScript Check
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && npm run typecheck
+npm run typecheck
 ```
 
 Report PASS or the specific errors.
@@ -46,7 +46,7 @@ Report PASS or the specific errors.
 ## Step 5: Production Build
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && npm run build
+npm run build
 ```
 
 Report PASS or the specific errors.
@@ -54,7 +54,7 @@ Report PASS or the specific errors.
 ## Step 6: Unit Tests
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && npm run test -- --reporter=verbose 2>&1 | tail -20
+npm run test -- --reporter=verbose 2>&1 | tail -20
 ```
 
 Report total tests, passed, failed.

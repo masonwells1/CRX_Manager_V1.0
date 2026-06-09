@@ -81,8 +81,8 @@ If a hook fails, fix the underlying issue. NEVER use `--no-verify`.
 
 ## Migrations
 
-See [`SAFE_DEVELOPMENT_RULES.md`](../SAFE_DEVELOPMENT_RULES.md) and
-[`DATABASE_CHANGE_CHECKLIST.md`](../DATABASE_CHANGE_CHECKLIST.md) for the
+See [`SAFE_DEVELOPMENT_RULES.md`](workflows/SAFE_DEVELOPMENT_RULES.md) and
+[`DATABASE_CHANGE_CHECKLIST.md`](workflows/DATABASE_CHANGE_CHECKLIST.md) for the
 full migration safety protocol.
 
 After ANY migration:

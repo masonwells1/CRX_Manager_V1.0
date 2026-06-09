@@ -156,7 +156,7 @@ Update RPC count in the "Current State" line if needed.
 ## Step 6: Verify
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && npm run typecheck && npm run build
+npm run typecheck && npm run build
 ```
 
 ## Step 7: Print Summary

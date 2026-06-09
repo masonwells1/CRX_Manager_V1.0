@@ -22,6 +22,7 @@ import { Sentry } from '../lib/sentry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
 import { parseLocalDate } from '../lib/dateUtils';
+import { formatUSD as fmt } from '../lib/money';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import HelpTip from '../components/ui/HelpTip';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -521,7 +522,10 @@ export default function OrderDetail() {
         }
 
         logActivity({ event: 'order_status_changed', description: `Order ${order.order_number} status changed to ${targetStatus}`, performedBy: profile.id, entityType: 'order', entityId: order.id, customerId: order.customer_id });
-        notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', targetStatus, order.created_by ?? undefined);
+        // NOTE: the `orders` table has no created_by column, so the order-creator
+        // notification path is not available here (it would require a migration to
+        // add the column). Admins are still notified inside notifyOrderStatusChange.
+        notifyOrderStatusChange(order.id, order.order_number, customer?.farm_name || 'customer', targetStatus);
 
         // The "Order Confirmed" customer email is now sent at the order
         // creation sites (QuoteBuilder.executeConvertToOrder and
@@ -698,9 +702,6 @@ export default function OrderDetail() {
     }
     handleCreateInvoice();
   };
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   if (loading) {
     return (
@@ -1118,8 +1119,8 @@ export default function OrderDetail() {
                   {displayItems
                     .filter((i) => (i.section_name || 'General') === section)
                     .map((item) => {
-                      const units = editing ? item.total_units_needed : item.total_units_needed;
-                      const ppu = editing ? item.price_per_unit : item.price_per_unit;
+                      const units = item.total_units_needed;
+                      const ppu = item.price_per_unit;
                       const pct =
                         units > 0
                           ? Math.round((item.quantity_delivered / units) * 100)

@@ -25,6 +25,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
+import { formatUSD as fmt } from '../lib/money';
 import { downloadReportPdf, type ReportPdfColumn } from '../lib/reportPdf';
 import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
@@ -164,9 +165,6 @@ export default function PurchaseOrders() {
     if (statusFilter && p.status !== statusFilter) return false;
     return true;
   });
-
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
   /* ─── Outstanding items stats & filtering ─── */
   const outstandingVendors = useMemo(

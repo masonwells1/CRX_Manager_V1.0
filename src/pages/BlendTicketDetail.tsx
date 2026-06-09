@@ -821,17 +821,6 @@ export function BlendTicketDetail() {
           )}
         </Card>
 
-        {ticket.raw_ocr_text && (
-          <details className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <summary className="px-6 py-3 cursor-pointer text-sm font-medium text-gray-700 hover:bg-gray-50 select-none">
-              Raw OCR Text
-            </summary>
-            <pre className="px-6 py-4 text-xs text-gray-600 bg-gray-50 whitespace-pre-wrap break-words max-h-64 overflow-y-auto border-t border-gray-200">
-              {ticket.raw_ocr_text}
-            </pre>
-          </details>
-        )}
-
         <Card className="p-6">
           <h2 className="text-lg font-semibold mb-4">Ticket Information</h2>
 

@@ -4,19 +4,12 @@
  */
 // jsPDF and autoTable are dynamically imported inside each function
 // to keep them out of the main bundle (~500KB each)
-import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, RED, AMBER, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import type { CellHookData } from 'jspdf-autotable';
+import { COMPANY_FOOTER_THANKS } from './companyInfo';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
-const RED: [number, number, number] = [220, 38, 38];
-const AMBER: [number, number, number] = [217, 119, 6];
 
 export interface PdfReceivingItem {
   product_name: string;
@@ -122,11 +115,16 @@ function renderReceivingPage(
     styles: { fontSize: 10, cellPadding: 6, textColor: CHARCOAL },
     headStyles: { fillColor: [240, 240, 240], textColor: CHARCOAL, fontStyle: 'bold' },
     didParseCell: (hookData: CellHookData) => {
-      // Color the condition column
-      if (hookData.section === 'body' && hookData.column.index === 2) {
-        const condition = data.items[hookData.row.index]?.condition ?? 'good';
-        hookData.cell.styles.textColor = conditionColor(condition);
-        hookData.cell.styles.fontStyle = 'bold';
+      try {
+        // Color the condition column
+        if (hookData.section === 'body' && hookData.column.index === 2) {
+          const condition = data.items[hookData.row.index]?.condition ?? 'good';
+          hookData.cell.styles.textColor = conditionColor(condition);
+          hookData.cell.styles.fontStyle = 'bold';
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('receivingPdf: didParseCell failed', e);
       }
     },
   });
@@ -197,7 +195,7 @@ function renderReceivingPage(
   doc.line(margin, footerY - 10, pageW - margin, footerY - 10);
   doc.setFontSize(7);
   doc.setTextColor(160, 160, 160);
-  doc.text('Crop RX Solutions  •  Robinson, IL  •  Thank you for your business!', pageW / 2, footerY, { align: 'center' });
+  doc.text(COMPANY_FOOTER_THANKS, pageW / 2, footerY, { align: 'center' });
 }
 
 export async function generateReceivingPdf(data: PdfReceivingData) {

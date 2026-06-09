@@ -17,6 +17,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { downloadBatchStatements } from '../lib/statementPdf';
 import { downloadBatchYearEndSummaries } from '../lib/yearEndSummaryPdf';
+import { formatCents as fmt } from '../lib/money';
 import StatementPrintDialog from '../components/statements/StatementPrintDialog';
 import YearEndSummaryDialog from '../components/reports/YearEndSummaryDialog';
 import type { DetailedStatementData, StatementOptions, YearEndSummaryData } from '../types';
@@ -41,8 +42,6 @@ interface MonthlySummary {
   ar_balance_cents: number;
 }
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 function getCurrentPeriod(): { start: string; end: string; label: string } {
   const now = new Date();

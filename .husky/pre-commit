@@ -55,4 +55,17 @@ if [ $TEST_EXIT -ne 0 ]; then
 fi
 
 echo ""
-echo "✅ Lint, build, and tests passed — committing."
+echo "🗺  Regenerating workflow map..."
+node scripts/generate-workflow-map.mjs
+MAP_EXIT=$?
+
+if [ $MAP_EXIT -ne 0 ]; then
+  echo ""
+  echo "⚠️  Workflow map generation failed — committing anyway (non-blocking)."
+else
+  # Stage the updated map so it's included in this commit automatically
+  git add docs/app-workflow-map.html
+fi
+
+echo ""
+echo "✅ Lint, build, tests, and map passed — committing."

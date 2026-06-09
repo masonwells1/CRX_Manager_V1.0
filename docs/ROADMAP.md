@@ -1,12 +1,14 @@
 # CRX Manager — Roadmap
 
 > **Last updated:** 2026-03-17 | **Owner:** Mason Wells
+>
+> _Q1 brainstorm docs were moved to `docs/archive/2026-Q1-brainstorms/` and the links below repointed (2026-05-31). Feature statuses reflect the March planning cycle; for current system state see `CLAUDE.md`._
 
 ---
 
 ## Priority 1: Team Board Enhancements (IN PROGRESS)
 
-Detailed brainstorm: `docs/plans/2026-03-01-team-board-brainstorm.md`
+Detailed brainstorm: `docs/archive/2026-Q1-brainstorms/2026-03-01-team-board-brainstorm.md`
 
 | # | Feature | Effort | Notes | Status |
 |---|---------|--------|-------|--------|
@@ -29,7 +31,7 @@ Detailed brainstorm: `docs/plans/2026-03-01-team-board-brainstorm.md`
 
 ## Priority 2: Blend Ticket Improvements (FUTURE)
 
-Detailed brainstorm: `docs/plans/2026-03-01-superpower-brainstorm-inventory-delivery-blendtickets.md`
+Detailed brainstorm: `docs/archive/2026-Q1-brainstorms/2026-03-01-superpower-brainstorm-inventory-delivery-blendtickets.md`
 
 | # | Feature | Effort | Impact |
 |---|---------|--------|--------|
@@ -56,7 +58,7 @@ Detailed brainstorm: `docs/plans/2026-03-01-superpower-brainstorm-inventory-deli
 
 ## Priority 4: Code Quality & Infrastructure (FUTURE)
 
-Detailed doc: `docs/plans/2026-03-01-gap-remediation-handoff.md`
+Detailed doc: `docs/archive/2026-Q1-brainstorms/2026-03-01-gap-remediation-handoff.md`
 
 | # | Feature | Effort |
 |---|---------|--------|

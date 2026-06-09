@@ -16,26 +16,15 @@
  */
 
 import type { YearEndSummaryData, YearEndProductUsage } from '../types';
-import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, BLUE, type JsPDFWithAutoTable } from './pdfTheme';
 import type { CellHookData } from 'jspdf-autotable';
+import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE } from './companyInfo';
+import { formatCents as fmt } from './money';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
-// ── Color palette (matches invoice/statement PDFs) ───────────────────────
-
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
-const LIGHT_BG: [number, number, number] = [245, 250, 247];
-const RED: [number, number, number] = [220, 38, 38];
-const TABLE_HEADER_BG: [number, number, number] = [240, 240, 240];
-const ALT_ROW_BG: [number, number, number] = [252, 252, 252];
-const BLUE: [number, number, number] = [37, 99, 235];
 
 const COMPANY_NAME = 'CROP RX SOLUTIONS';
-const COMPANY_TAGLINE = 'Agricultural Input Solutions  •  Martinsville, IL  •  618-843-0413';
+// COMPANY_TAGLINE now comes from src/lib/companyInfo.ts (single source).
 
 // ── Options ──────────────────────────────────────────────────────────────
 
@@ -47,8 +36,6 @@ export interface YearEndSummaryOptions {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 const fmtDate = (d: string) =>
   new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
@@ -87,18 +74,23 @@ export async function generateYearEndSummaryPdf(
 
   // ── Page footer callback ───────────────────────────────────────────
   const drawPageFooter = () => {
-    pageNum++;
-    const footerY = pageH - 20;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
-    doc.setFontSize(7);
-    doc.setTextColor(160, 160, 160);
-    doc.text(
-      `Crop RX Solutions, Inc.  •  Season Summary generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
-      pageW / 2,
-      footerY,
-      { align: 'center' },
-    );
+    try {
+      pageNum++;
+      const footerY = pageH - 20;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
+      doc.setFontSize(7);
+      doc.setTextColor(160, 160, 160);
+      doc.text(
+        `Crop RX Solutions, Inc.  •  Season Summary generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
+        pageW / 2,
+        footerY,
+        { align: 'center' },
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('yearEndSummaryPdf: drawPageFooter failed', e);
+    }
   };
 
   // ── Check page space & add new page if needed ──────────────────────
@@ -301,13 +293,18 @@ export async function generateYearEndSummaryPdf(
       },
       alternateRowStyles: { fillColor: ALT_ROW_BG },
       didDrawCell: (hookData: CellHookData) => {
-        // Color the Change column green/red
-        if (hookData.section === 'body' && hookData.column.index === 3) {
-          const pctVal = yoyRows[hookData.row.index]?.[3];
-          if (pctVal !== null && pctVal !== undefined) {
-            const color = (pctVal as number) >= 0 ? CRX_GREEN : RED;
-            doc.setTextColor(...color);
+        try {
+          // Color the Change column green/red
+          if (hookData.section === 'body' && hookData.column.index === 3) {
+            const pctVal = yoyRows[hookData.row.index]?.[3];
+            if (pctVal !== null && pctVal !== undefined) {
+              const color = (pctVal as number) >= 0 ? CRX_GREEN : RED;
+              doc.setTextColor(...color);
+            }
           }
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error('yearEndSummaryPdf: didDrawCell failed', e);
         }
       },
       didDrawPage: drawPageFooter,

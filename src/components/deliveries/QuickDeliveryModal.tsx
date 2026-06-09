@@ -15,6 +15,7 @@ import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
+import { formatCents as fmtCurrency } from '../../lib/money';
 import type { Product, Profile } from '../../types';
 
 interface QuickItem {
@@ -284,9 +285,6 @@ export default function QuickDeliveryModal({
       onClose();
     }
   };
-
-  const fmtCurrency = (cents: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
   return (
     <>

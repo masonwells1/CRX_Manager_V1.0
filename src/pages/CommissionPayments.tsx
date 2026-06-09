@@ -20,6 +20,7 @@ import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { localToday } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
+import { formatUSD as fmt } from '../lib/money';
 
 interface CommissionPaymentRow {
   [k: string]: unknown;
@@ -47,9 +48,6 @@ interface UnpaidCommission {
   recipient_name: string;
   recipient_user_id: string;
 }
-
-const fmt = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
 export default function CommissionPayments() {
   const { profile } = useAuth();

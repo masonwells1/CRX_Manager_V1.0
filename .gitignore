@@ -54,3 +54,7 @@ backups/
 # Vercel CLI working directory
 .vercel/
 
+# Machine-local agent/AI tooling scratch dirs
+.agents/
+.codex/
+

@@ -11,21 +11,13 @@
  */
 
 import type { InvoicePrintOptions } from '../types';
+import { COMPANY_TAGLINE_HEADER } from './companyInfo';
+import { formatCents as fmt } from './money';
 import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 
-/** jsPDF instance with lastAutoTable from jspdf-autotable plugin */
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
-const LIGHT_BG: [number, number, number] = [245, 250, 247];
-const RED: [number, number, number] = [220, 38, 38];
-const TABLE_HEADER_BG: [number, number, number] = [240, 240, 240];
-const ALT_ROW_BG: [number, number, number] = [252, 252, 252];
 
 // ── PDF Data Interfaces ─────────────────────────────────────────────────
 
@@ -108,9 +100,6 @@ export interface InvoicePdfData {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
-
 const fmtNum = (n: number, decimals = 4) =>
   new Intl.NumberFormat('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(n);
 
@@ -133,17 +122,22 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
 
   // ── Page footer callback ───────────────────────────────────────────
   const drawPageFooter = () => {
-    const footerY = pageH - 20;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
-    doc.setFontSize(7);
-    doc.setTextColor(160, 160, 160);
-    doc.text(
-      `Crop RX Solutions, Inc.  •  Generated ${new Date().toLocaleDateString()}`,
-      pageW / 2,
-      footerY,
-      { align: 'center' },
-    );
+    try {
+      const footerY = pageH - 20;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
+      doc.setFontSize(7);
+      doc.setTextColor(160, 160, 160);
+      doc.text(
+        `Crop RX Solutions, Inc.  •  Generated ${new Date().toLocaleDateString()}`,
+        pageW / 2,
+        footerY,
+        { align: 'center' },
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('invoicePdf: drawPageFooter failed', e);
+    }
   };
 
   // ── Header Bar ─────────────────────────────────────────────────────
@@ -155,7 +149,7 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
   doc.text('CROP RX SOLUTIONS', margin, 35);
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text('Agricultural Input Solutions  •  Martinsville, IL  •  618-843-0413', margin, 53);
+  doc.text(COMPANY_TAGLINE_HEADER, margin, 53);
 
   // Invoice badge (right)
   doc.setFontSize(14);
@@ -171,7 +165,7 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
       draft: [156, 163, 175],     // gray
       unposted: [234, 179, 8],    // amber
       posted: [59, 130, 246],     // blue
-      paid: [34, 197, 94],        // green
+      paid: CRX_GREEN,            // brand crx-green (#28A26A)
       overdue: [239, 68, 68],     // red
       voided: [107, 114, 128],    // slate
       cancelled: [107, 114, 128], // slate

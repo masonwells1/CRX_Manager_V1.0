@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Trash2, BookOpen, Save } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import Button from '../ui/Button';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import type { Product } from '../../types';
+import { formatCents as fmt } from '../../lib/money';
 
 export interface ChemicalLine {
   id: string;
@@ -28,23 +29,10 @@ export interface ChemicalLine {
   manual_override?: boolean;
 }
 
-interface Recipe {
-  id: string;
-  name: string;
-  items: Array<{
-    product_id: string;
-    product_name: string;
-    quantity: number;
-    unit: string;
-    rate_per_acre: number | null;
-  }>;
-}
-
 interface FieldAppChemicalEntryProps {
   chemicals: ChemicalLine[];
   onChemicalsChange: (chemicals: ChemicalLine[]) => void;
   totalAppliedAcres: number;
-  recipes?: Recipe[];
   /**
    * Phase 1: tier of the primary customer derived from billing splits.
    * Used as the *display* price when a product is selected (so the user
@@ -55,8 +43,6 @@ interface FieldAppChemicalEntryProps {
   primaryCustomerTier?: number;
 }
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 let nextLineId = 1;
 function genId() {
@@ -286,17 +272,12 @@ export default function FieldAppChemicalEntry({
         </table>
       </div>
 
-      {/* Add button + recipe buttons */}
+      {/* Add button (recipe picker / save-as-recipe were non-functional TODO
+          stubs — removed 2026-05-30 P3 hygiene; reintroduce when implemented) */}
       <div className="flex items-center justify-between">
         <div className="flex gap-2">
           <Button variant="secondary" size="sm" icon={<Plus className="w-4 h-4" />} onClick={addLine}>
             Add Chemical
-          </Button>
-          <Button variant="ghost" size="sm" icon={<BookOpen className="w-4 h-4" />} onClick={() => { /* TODO: recipe picker */ }}>
-            Select Recipe
-          </Button>
-          <Button variant="ghost" size="sm" icon={<Save className="w-4 h-4" />} onClick={() => { /* TODO: save recipe */ }}>
-            Save As Recipe
           </Button>
         </div>
       </div>

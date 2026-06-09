@@ -16,26 +16,15 @@ import type {
   StatementOptions,
   InvoiceShare,
 } from '../types';
-import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
+import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE, COMPANY_REMIT_ADDRESS } from './companyInfo';
+import { formatCents as fmt } from './money';
 
-/** jsPDF instance with lastAutoTable from jspdf-autotable plugin */
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
-const LIGHT_BG: [number, number, number] = [245, 250, 247];
-const RED: [number, number, number] = [220, 38, 38];
-const TABLE_HEADER_BG: [number, number, number] = [240, 240, 240];
-const ALT_ROW_BG: [number, number, number] = [252, 252, 252];
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 const fmtNum = (n: number, decimals = 4) =>
   new Intl.NumberFormat('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(n);
@@ -44,8 +33,7 @@ const fmtDate = (d: string) =>
   new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 
 const COMPANY_NAME = 'CROP RX SOLUTIONS';
-const COMPANY_TAGLINE = 'Agricultural Input Solutions  •  Martinsville, IL  •  618-843-0413';
-const COMPANY_REMIT_ADDRESS = 'Crop RX Solutions, Inc.\nPO Box 123\nMartinsville, IL 62442';
+// COMPANY_TAGLINE + COMPANY_REMIT_ADDRESS now come from src/lib/companyInfo.ts (single source).
 
 // ── Main Generator ──────────────────────────────────────────────────────
 
@@ -69,18 +57,23 @@ export async function generateStatementPdf(
 
   // ── Page footer callback ───────────────────────────────────────────
   const drawPageFooter = () => {
-    pageNum++;
-    const footerY = pageH - 20;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
-    doc.setFontSize(7);
-    doc.setTextColor(160, 160, 160);
-    doc.text(
-      `Crop RX Solutions, Inc.  •  Statement generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
-      pageW / 2,
-      footerY,
-      { align: 'center' },
-    );
+    try {
+      pageNum++;
+      const footerY = pageH - 20;
+      doc.setDrawColor(200, 200, 200);
+      doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
+      doc.setFontSize(7);
+      doc.setTextColor(160, 160, 160);
+      doc.text(
+        `Crop RX Solutions, Inc.  •  Statement generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
+        pageW / 2,
+        footerY,
+        { align: 'center' },
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('statementPdf: drawPageFooter failed', e);
+    }
   };
 
   // ── Header Bar ─────────────────────────────────────────────────────
@@ -215,7 +208,7 @@ export async function generateStatementPdf(
   }
 
   // ── Remittance Stub (on last page) ─────────────────────────────────
-  drawRemittanceStub(doc, data, margin, pageW, pageH, asOfDate);
+  drawRemittanceStub(doc, data, margin, pageW, pageH, asOfDate, y);
 
   // Final page footer
   drawPageFooter();
@@ -650,15 +643,23 @@ function drawRemittanceStub(
   pageW: number,
   pageH: number,
   asOfDate: string,
+  currentY: number,
 ) {
+  try {
   const c = data.customer;
   const aging = data.aging;
   const stubH = 140;
-  const stubY = pageH - stubH - 15;
+  let stubY = pageH - stubH - 15;
 
-  // Check if we need space — the stub needs 140pt from the bottom
-  // If content already overlaps, add a new page
-  // We rely on the caller to leave space or we'll draw over content (acceptable for tear-off)
+  // Check if we need space — the stub needs ~140pt from the bottom. If the
+  // transaction content (currentY) would reach the fixed stub zone, push the
+  // stub onto a fresh page so the tear-off block never overprints the last
+  // rows. stubY recomputes to the same bottom-of-page position on the new
+  // (empty) page. (Audit M2 + P2-B/C, 2026-05-30.)
+  if (currentY > stubY - 15) {
+    doc.addPage();
+    stubY = pageH - stubH - 15;
+  }
 
   // Dotted tear-off line
   doc.setDrawColor(150, 150, 150);
@@ -760,6 +761,10 @@ function drawRemittanceStub(
   doc.text('Amount Paid  $', rxStart, payY);
   doc.setDrawColor(...CHARCOAL);
   doc.line(rxStart + 80, payY, pageW - margin, payY);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('statementPdf: drawRemittanceStub failed', e);
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────

@@ -28,6 +28,7 @@ import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
+import { formatCents as fmtCents } from '../lib/money';
 import { Sentry } from '../lib/sentry';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -64,8 +65,6 @@ const PRIORITY_BADGE: Record<string, BadgeVariant> = {
   urgent: 'error',
 };
 
-const fmtCents = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function DeliveryDetail() {
   const { id } = useParams<{ id: string }>();
@@ -129,7 +128,6 @@ export default function DeliveryDetail() {
   }>>([]);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [drivers, setDrivers] = useState<Profile[]>([]);
-  const [, setOrderItems] = useState<OrderItem[]>([]);
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Cancel modal state
@@ -405,7 +403,6 @@ export default function DeliveryDetail() {
     setAddresses((addrRes.data || []) as CustomerAddress[]);
     setDrivers((driverRes.data || []) as Profile[]);
     const allOrderItems = (oiRes.data || []) as OrderItem[];
-    setOrderItems(allOrderItems);
 
     // For scheduled deliveries, calculate real max quantities
     // by checking what other active deliveries have scheduled for each order item

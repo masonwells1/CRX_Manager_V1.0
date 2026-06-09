@@ -7,7 +7,8 @@
  *
  * Follows the same dynamic-import + color-scheme pattern as deliveryPdf.ts.
  */
-import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, type JsPDFWithAutoTable } from './pdfTheme';
+import { COMPANY_FOOTER_THANKS } from './companyInfo';
 
 export interface LoadSheetItem {
   product_name: string;
@@ -31,14 +32,7 @@ export interface LoadSheetStop {
   items: LoadSheetItem[];
 }
 
-// CRX brand colors (RGB)
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
 /** Draw the footer on any page */
 function drawFooter(doc: JsPDFWithAutoTable, margin: number) {
@@ -50,7 +44,7 @@ function drawFooter(doc: JsPDFWithAutoTable, margin: number) {
   doc.setFontSize(7);
   doc.setTextColor(160, 160, 160);
   doc.text(
-    'Crop RX Solutions  •  Robinson, IL  •  Thank you for your business!',
+    COMPANY_FOOTER_THANKS,
     pageW / 2,
     footerY + 12,
     { align: 'center' },

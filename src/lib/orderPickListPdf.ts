@@ -6,19 +6,12 @@
  *
  * Follows the same dynamic-import + color-scheme pattern as deliveryPdf.ts.
  */
-import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, RED, AMBER, type JsPDFWithAutoTable } from './pdfTheme';
 import type { autoTable as autoTableFn } from 'jspdf-autotable';
 import type { CellHookData } from 'jspdf-autotable';
+import { COMPANY_FOOTER_INTERNAL } from './companyInfo';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
-const RED: [number, number, number] = [220, 38, 38];
-const AMBER: [number, number, number] = [217, 119, 6];
 
 export interface PickListItem {
   product_name: string;
@@ -161,24 +154,29 @@ function renderPickListPage(
       6: { halign: 'center', cellWidth: 45 },
     } as Record<number, object>,
     didParseCell: (hookData: CellHookData) => {
-      // Status column highlighting
-      if (hookData.section === 'body' && hookData.column.index === 6) {
-        const item = data.items[hookData.row.index];
-        if (item?.has_shortage) {
-          hookData.cell.styles.textColor = RED;
-          hookData.cell.styles.fontStyle = 'bold';
-        } else if (item?.inventory_available !== null && !item?.has_shortage) {
-          hookData.cell.styles.textColor = CRX_GREEN;
-          hookData.cell.styles.fontStyle = 'bold';
+      try {
+        // Status column highlighting
+        if (hookData.section === 'body' && hookData.column.index === 6) {
+          const item = data.items[hookData.row.index];
+          if (item?.has_shortage) {
+            hookData.cell.styles.textColor = RED;
+            hookData.cell.styles.fontStyle = 'bold';
+          } else if (item?.inventory_available !== null && !item?.has_shortage) {
+            hookData.cell.styles.textColor = CRX_GREEN;
+            hookData.cell.styles.fontStyle = 'bold';
+          }
         }
-      }
-      // Highlight remaining column amber if there are items still to pick
-      if (hookData.section === 'body' && hookData.column.index === 4) {
-        const item = data.items[hookData.row.index];
-        if (item?.has_shortage) {
-          hookData.cell.styles.textColor = AMBER;
-          hookData.cell.styles.fontStyle = 'bold';
+        // Highlight remaining column amber if there are items still to pick
+        if (hookData.section === 'body' && hookData.column.index === 4) {
+          const item = data.items[hookData.row.index];
+          if (item?.has_shortage) {
+            hookData.cell.styles.textColor = AMBER;
+            hookData.cell.styles.fontStyle = 'bold';
+          }
         }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('orderPickListPdf: didParseCell failed', e);
       }
     },
   });
@@ -235,7 +233,7 @@ function renderPickListPage(
   doc.setFontSize(7);
   doc.setTextColor(160, 160, 160);
   doc.text(
-    'Crop RX Solutions  •  Robinson, IL  •  Internal Use Only',
+    COMPANY_FOOTER_INTERNAL,
     pageW / 2,
     footerY,
     { align: 'center' },

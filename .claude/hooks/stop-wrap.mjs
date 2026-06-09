@@ -90,7 +90,7 @@ if (newOrChanged.length >= 5) {
   issues.push(
     `🧠 Substantive session (${newOrChanged.length} new/changed files).\n` +
     `     Did Mason learn or decide something non-obvious that should outlive this session?\n` +
-    `     If yes — save a memory file under C:\\Users\\mason\\.claude\\projects\\C--Users-mason-CRX-Manager-V1-0\\memory\\\n` +
+    `     If yes — save a memory file under C:\\Users\\mason\\.claude\\projects\\C--CRX-Manager\\memory\\\n` +
     `     (feedback memory, project memory, or reference memory — whichever fits).\n` +
     `     Don't save what's already derivable from code/docs/git history.`
   );

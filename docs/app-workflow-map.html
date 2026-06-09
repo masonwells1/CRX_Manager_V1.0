@@ -1,0 +1,2331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRX Manager — Architecture & Workflow Map</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --crx:#28A26A;--crx-dark:#1d7a4f;--crx-light:#e6f5ee;
+  --bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--border:#2e3352;
+  --text:#e2e8f0;--muted:#8892a4;
+  --page:#3b82f6;--page-admin:#f59e0b;--page-auth:#6b7280;
+  --entity:#a855f7;--rpc:#06b6d4;--problem:#ef4444;
+  --nav-edge:#4ade80;--rpc-edge:#06b6d4;--data-edge:#f97316;
+}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+#header{background:var(--surface);border-bottom:1px solid var(--border);padding:10px 20px;display:flex;align-items:center;gap:20px;flex-shrink:0}
+#header h1{font-size:1.1rem;font-weight:700;color:var(--crx)}
+#header span{color:var(--muted);font-size:.8rem}
+#tabs{display:flex;gap:4px;margin-left:auto}
+.tab{padding:6px 16px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);cursor:pointer;font-size:.85rem;transition:all .15s}
+.tab.active{background:var(--crx);border-color:var(--crx);color:#fff}
+.tab:hover:not(.active){background:var(--surface2);color:var(--text)}
+#content{flex:1;display:flex;overflow:hidden}
+.panel{display:none;width:100%;overflow:hidden}
+.panel.active{display:flex}
+
+/* ── GRAPH PANEL ── */
+#graph-panel{flex-direction:column}
+#graph-toolbar{background:var(--surface);border-bottom:1px solid var(--border);padding:8px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;flex-shrink:0}
+#graph-toolbar label{display:flex;align-items:center;gap:5px;font-size:.78rem;cursor:pointer}
+#graph-toolbar input[type=checkbox]{accent-color:var(--crx)}
+#graph-toolbar .sep{width:1px;height:18px;background:var(--border)}
+.edge-legend{display:flex;gap:10px;align-items:center;font-size:.75rem;color:var(--muted)}
+.edge-swatch{width:24px;height:3px;border-radius:2px;display:inline-block}
+#graph-body{flex:1;display:flex;overflow:hidden}
+#canvas-wrap{flex:1;position:relative;overflow:hidden;cursor:grab}
+#canvas-wrap.grabbing{cursor:grabbing}
+#g-canvas{display:block;width:100%;height:100%}
+#sidebar-legend{width:210px;background:var(--surface);border-left:1px solid var(--border);padding:14px;overflow-y:auto;flex-shrink:0;font-size:.78rem}
+#sidebar-legend h3{color:var(--crx);font-size:.8rem;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}
+.legend-item{display:flex;align-items:center;gap:7px;margin-bottom:5px;color:var(--muted)}
+.legend-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+.legend-line{width:24px;height:3px;border-radius:2px;flex-shrink:0}
+.legend-dashed{background:repeating-linear-gradient(90deg,var(--rpc-edge) 0,var(--rpc-edge) 4px,transparent 4px,transparent 8px);height:2px}
+#node-info{margin-top:14px;padding-top:14px;border-top:1px solid var(--border)}
+#node-info h3{color:var(--crx);font-size:.8rem;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em}
+#node-detail{color:var(--muted);font-size:.75rem;line-height:1.5}
+#node-detail strong{color:var(--text)}
+
+/* ── LIFECYCLE PANEL ── */
+#lifecycle-panel{overflow-y:auto;flex-direction:column;gap:0}
+#lc-inner{padding:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(460px,1fr));gap:20px;align-items:start}
+.lc-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
+.lc-card h3{font-size:.9rem;font-weight:700;color:var(--crx);margin-bottom:12px}
+.lc-card svg{width:100%;height:auto;display:block}
+
+/* ── PROBLEMS PANEL ── */
+#problems-panel{overflow-y:auto;flex-direction:column}
+#prob-inner{padding:20px;max-width:1100px}
+#prob-inner h2{font-size:1rem;color:var(--crx);margin-bottom:4px;display:flex;align-items:center;gap:8px}
+#prob-inner h2 .badge{background:var(--problem);color:#fff;border-radius:20px;padding:1px 8px;font-size:.72rem;font-weight:700}
+.prob-section{margin-bottom:24px}
+.prob-section h3{font-size:.82rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.prob-item{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--problem);border-radius:6px;padding:10px 14px;margin-bottom:7px;font-size:.8rem;line-height:1.55}
+.prob-item.warn{border-left-color:#f59e0b}
+.prob-item.info{border-left-color:#3b82f6}
+.prob-item .loc{font-family:monospace;background:var(--surface2);padding:1px 5px;border-radius:3px;font-size:.73rem;color:#a5b4fc}
+.prob-item strong{color:var(--text)}
+.prob-item p{color:var(--muted);margin-top:3px}
+.summary-box{background:var(--crx-light);border:1px solid var(--crx);border-radius:8px;padding:14px 18px;margin-bottom:24px;color:#0a3a22}
+.summary-box h2{color:var(--crx-dark);margin-bottom:8px;font-size:.95rem}
+.summary-box ol{padding-left:20px;font-size:.82rem;line-height:1.7}
+
+/* scrollbar */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>⬡ CRX Manager — Architecture Map</h1>
+  <!-- __STATS_START__ -->
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">71 routes · 164 RPC calls · 0 issues · Updated Jun 8, 2026</span>
+  <!-- __STATS_END__ -->
+  <div id="tabs">
+    <button class="tab active" onclick="showTab('graph')">Graph</button>
+    <button class="tab" onclick="showTab('lifecycle')">Lifecycles</button>
+    <button class="tab" onclick="showTab('problems')">Problems <span id="prob-count" style="background:#ef4444;color:#fff;border-radius:10px;padding:0 6px;font-size:.7rem;margin-left:4px">0</span></button>
+  </div>
+</div>
+
+<div id="content">
+
+<!-- ═══════════════════════════════════════════════════
+     LAYER A — INTERACTIVE GRAPH
+═══════════════════════════════════════════════════ -->
+<div id="graph-panel" class="panel active">
+  <div id="graph-toolbar">
+    <label><input type="checkbox" id="tog-nav" checked onchange="redraw()"> <span style="color:var(--nav-edge)">■</span> Nav edges</label>
+    <label><input type="checkbox" id="tog-rpc" checked onchange="redraw()"> <span style="color:var(--rpc-edge)">■</span> RPC calls</label>
+    <label><input type="checkbox" id="tog-data" checked onchange="redraw()"> <span style="color:var(--data-edge)">■</span> Data flow</label>
+    <div class="sep"></div>
+    <label><input type="checkbox" id="tog-pages" checked onchange="redraw()"> Pages</label>
+    <label><input type="checkbox" id="tog-entities" checked onchange="redraw()"> Entities</label>
+    <label><input type="checkbox" id="tog-rpcs" checked onchange="redraw()"> RPC groups</label>
+    <div class="sep"></div>
+    <button onclick="resetView()" style="padding:4px 10px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:.75rem">Reset view</button>
+    <button onclick="runLayout()" style="padding:4px 10px;border-radius:4px;border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:.75rem">Re-layout</button>
+    <span style="color:var(--muted);font-size:.75rem;margin-left:auto">Click node to highlight · Scroll to zoom · Drag to pan</span>
+  </div>
+  <div id="graph-body">
+    <div id="canvas-wrap">
+      <canvas id="g-canvas"></canvas>
+    </div>
+    <div id="sidebar-legend">
+      <h3>Node Types</h3>
+      <div class="legend-item"><span class="legend-dot" style="background:var(--page)"></span>Page (admin+sales)</div>
+      <div class="legend-item"><span class="legend-dot" style="background:var(--page-admin)"></span>Page (admin only)</div>
+      <div class="legend-item"><span class="legend-dot" style="background:#94a3b8"></span>Page (all roles)</div>
+      <div class="legend-item"><span class="legend-dot" style="background:var(--page-auth)"></span>Auth page</div>
+      <div class="legend-item"><span class="legend-dot" style="background:var(--entity)"></span>Core entity</div>
+      <div class="legend-item"><span class="legend-dot" style="background:var(--rpc)"></span>RPC group</div>
+      <div class="legend-item"><span class="legend-dot" style="background:var(--problem);border:2px dashed #fff"></span>⚠ Problem node</div>
+      <h3 style="margin-top:14px">Edge Types</h3>
+      <div class="legend-item"><span class="legend-line" style="background:var(--nav-edge)"></span>Navigation link</div>
+      <div class="legend-item"><span class="legend-line" style="background:var(--rpc-edge)"></span>RPC call</div>
+      <div class="legend-item"><span class="legend-line" style="background:var(--data-edge)"></span>Data flow</div>
+      <div id="node-info">
+        <h3>Selected Node</h3>
+        <div id="node-detail">Click a node to see details.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     LAYER B — LIFECYCLE DIAGRAMS
+═══════════════════════════════════════════════════ -->
+<div id="lifecycle-panel" class="panel">
+  <div id="lc-inner">
+
+    <!-- QUOTE -->
+    <div class="lc-card">
+      <h3>Quote Lifecycle</h3>
+      <svg viewBox="0 0 440 260" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8892a4"/></marker>
+        <marker id="arr-g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#28A26A"/></marker>
+        <marker id="arr-r" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/></marker></defs>
+        <!-- nodes -->
+        <g id="q-draft"><rect x="10" y="110" width="70" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="1.5"/><text x="45" y="129" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">draft</text></g>
+        <g><rect x="110" y="110" width="60" height="28" rx="6" fill="#1a1d27" stroke="#8892a4" stroke-width="1.5"/><text x="140" y="129" text-anchor="middle" fill="#e2e8f0" font-size="11" font-family="monospace">sent</text></g>
+        <g><rect x="200" y="110" width="68" height="28" rx="6" fill="#1a1d27" stroke="#8892a4" stroke-width="1.5"/><text x="234" y="129" text-anchor="middle" fill="#e2e8f0" font-size="11" font-family="monospace">revised</text></g>
+        <g><rect x="300" y="60" width="76" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="2"/><text x="338" y="79" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">accepted</text></g>
+        <g><rect x="300" y="110" width="70" height="28" rx="6" fill="#1a1d27" stroke="#ef4444" stroke-width="1.5"/><text x="335" y="129" text-anchor="middle" fill="#ef4444" font-size="11" font-family="monospace">declined</text></g>
+        <g><rect x="300" y="160" width="68" height="28" rx="6" fill="#1a1d27" stroke="#f59e0b" stroke-width="1.5"/><text x="334" y="179" text-anchor="middle" fill="#f59e0b" font-size="11" font-family="monospace">expired</text></g>
+        <g><rect x="10" y="200" width="76" height="28" rx="6" fill="#1a1d27" stroke="#6b7280" stroke-width="1.5"/><text x="48" y="219" text-anchor="middle" fill="#6b7280" font-size="11" font-family="monospace">cancelled</text></g>
+        <!-- cross-entity output -->
+        <g><rect x="300" y="10" width="80" height="28" rx="6" fill="#1a1d27" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="4,2"/><text x="340" y="29" text-anchor="middle" fill="#a855f7" font-size="10" font-family="monospace">→ ORDER</text></g>
+        <!-- arrows -->
+        <line x1="80" y1="124" x2="108" y2="124" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="170" y1="124" x2="198" y2="124" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="268" y1="116" x2="298" y2="74" stroke="#28A26A" stroke-width="1.5" marker-end="url(#arr-g)"/>
+        <line x1="268" y1="124" x2="298" y2="124" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arr-r)"/>
+        <line x1="268" y1="132" x2="298" y2="166" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="338" y1="60" x2="338" y2="40" stroke="#a855f7" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="180" y="100" text-anchor="middle" fill="#28A26A" font-size="9">convert_quote_to_order()</text>
+        <line x1="140" y1="138" x2="60" y2="198" stroke="#6b7280" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr)"/>
+        <text x="85" y="175" fill="#6b7280" font-size="8">cancel</text>
+        <!-- legend note -->
+        <text x="10" y="248" fill="#8892a4" font-size="9">* sent → revised on re-edit; expired via cron auto_expire_quotes()</text>
+        <text x="10" y="258" fill="#8892a4" font-size="9">cancel available from draft/sent/revised; declined &amp; expired auto-release holds</text>
+      </svg>
+    </div>
+
+    <!-- ORDER -->
+    <div class="lc-card">
+      <h3>Order Lifecycle</h3>
+      <svg viewBox="0 0 440 200" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="arr2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8892a4"/></marker>
+        <marker id="arr2g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#28A26A"/></marker></defs>
+        <g><rect x="10" y="70" width="82" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="2"/><text x="51" y="89" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">confirmed</text></g>
+        <g><rect x="120" y="40" width="110" height="28" rx="6" fill="#1a1d27" stroke="#8892a4" stroke-width="1.5"/><text x="175" y="59" text-anchor="middle" fill="#e2e8f0" font-size="10" font-family="monospace">partially_fulfilled</text></g>
+        <g><rect x="120" y="100" width="78" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="1.5"/><text x="159" y="119" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">fulfilled</text></g>
+        <g><rect x="260" y="40" width="78" height="28" rx="6" fill="#1a1d27" stroke="#ef4444" stroke-width="1.5"/><text x="299" y="59" text-anchor="middle" fill="#ef4444" font-size="11" font-family="monospace">cancelled</text></g>
+        <g><rect x="260" y="100" width="60" height="28" rx="6" fill="#1a1d27" stroke="#6b7280" stroke-width="1.5"/><text x="290" y="119" text-anchor="middle" fill="#6b7280" font-size="11" font-family="monospace">voided</text></g>
+        <!-- outputs -->
+        <g><rect x="10" y="150" width="82" height="24" rx="5" fill="#1a1d27" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="4,2"/><text x="51" y="166" text-anchor="middle" fill="#06b6d4" font-size="9" font-family="monospace">→ DELIVERY</text></g>
+        <g><rect x="120" y="150" width="78" height="24" rx="5" fill="#1a1d27" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="4,2"/><text x="159" y="166" text-anchor="middle" fill="#06b6d4" font-size="9" font-family="monospace">→ INVOICE</text></g>
+        <!-- arrows -->
+        <line x1="92" y1="77" x2="118" y2="54" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr2)"/>
+        <text x="94" y="58" fill="#8892a4" font-size="8">partial</text>
+        <line x1="92" y1="84" x2="118" y2="114" stroke="#28A26A" stroke-width="1.5" marker-end="url(#arr2g)"/>
+        <text x="94" y="108" fill="#28A26A" font-size="8">full qty</text>
+        <line x1="230" y1="54" x2="258" y2="54" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arr2)"/>
+        <line x1="175" y1="68" x2="175" y2="98" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr2)"/>
+        <line x1="198" y1="114" x2="258" y2="114" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr2)"/>
+        <line x1="92" y1="84" x2="50" y2="150" stroke="#06b6d4" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr2)"/>
+        <line x1="159" y1="128" x2="159" y2="150" stroke="#06b6d4" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr2)"/>
+        <text x="260" y="145" fill="#8892a4" font-size="9">cancel_order() / void_order()</text>
+        <text x="10" y="190" fill="#8892a4" font-size="9">Source: convert_quote_to_order() OR create_direct_order()</text>
+      </svg>
+    </div>
+
+    <!-- DELIVERY -->
+    <div class="lc-card">
+      <h3>Delivery Lifecycle</h3>
+      <svg viewBox="0 0 440 210" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="arr3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8892a4"/></marker>
+        <marker id="arr3g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#28A26A"/></marker></defs>
+        <g><rect x="10" y="80" width="76" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="2"/><text x="48" y="99" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">scheduled</text></g>
+        <g><rect x="120" y="80" width="86" height="28" rx="6" fill="#1a1d27" stroke="#f59e0b" stroke-width="1.5"/><text x="163" y="99" text-anchor="middle" fill="#f59e0b" font-size="11" font-family="monospace">in_progress</text></g>
+        <g><rect x="240" y="80" width="84" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="1.5"/><text x="282" y="99" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">completed</text></g>
+        <g><rect x="120" y="150" width="78" height="28" rx="6" fill="#1a1d27" stroke="#ef4444" stroke-width="1.5"/><text x="159" y="169" text-anchor="middle" fill="#ef4444" font-size="11" font-family="monospace">cancelled</text></g>
+        <g><rect x="240" y="150" width="60" height="28" rx="6" fill="#1a1d27" stroke="#6b7280" stroke-width="1.5"/><text x="270" y="169" text-anchor="middle" fill="#6b7280" font-size="11" font-family="monospace">voided</text></g>
+        <!-- output -->
+        <g><rect x="350" y="80" width="78" height="28" rx="5" fill="#1a1d27" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="4,2"/><text x="389" y="99" text-anchor="middle" fill="#06b6d4" font-size="9" font-family="monospace">→ INVOICE</text></g>
+        <!-- arrows -->
+        <line x1="86" y1="94" x2="118" y2="94" stroke="#f59e0b" stroke-width="2" marker-end="url(#arr3)"/>
+        <text x="91" y="90" fill="#f59e0b" font-size="8">confirm_delivery()</text>
+        <line x1="206" y1="94" x2="238" y2="94" stroke="#28A26A" stroke-width="2" marker-end="url(#arr3g)"/>
+        <text x="206" y="90" fill="#28A26A" font-size="8">complete_delivery()</text>
+        <line x1="324" y1="94" x2="348" y2="94" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#arr3)"/>
+        <line x1="163" y1="108" x2="163" y2="148" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arr3)"/>
+        <line x1="282" y1="108" x2="270" y2="148" stroke="#6b7280" stroke-width="1.5" marker-end="url(#arr3)"/>
+        <text x="10" y="40" fill="#f59e0b" font-size="9">⚠ MANDATORY two-step: cannot skip to completed</text>
+        <text x="10" y="52" fill="#8892a4" font-size="9">Items LOCKED once status ≠ scheduled</text>
+        <text x="10" y="200" fill="#8892a4" font-size="9">complete_delivery() requires p_signed_by; partial qty → delivery_remainders rows</text>
+      </svg>
+    </div>
+
+    <!-- INVOICE -->
+    <div class="lc-card">
+      <h3>Invoice Lifecycle</h3>
+      <svg viewBox="0 0 440 240" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="arr4" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8892a4"/></marker>
+        <marker id="arr4g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#28A26A"/></marker></defs>
+        <g><rect x="10" y="80" width="52" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="2"/><text x="36" y="99" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">draft</text></g>
+        <g><rect x="88" y="80" width="68" height="28" rx="6" fill="#1a1d27" stroke="#8892a4" stroke-width="1.5"/><text x="122" y="99" text-anchor="middle" fill="#e2e8f0" font-size="11" font-family="monospace">unposted</text></g>
+        <g><rect x="186" y="80" width="54" height="28" rx="6" fill="#1a1d27" stroke="#3b82f6" stroke-width="2"/><text x="213" y="99" text-anchor="middle" fill="#3b82f6" font-size="11" font-family="monospace">posted</text></g>
+        <g><rect x="270" y="50" width="44" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="1.5"/><text x="292" y="69" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">paid</text></g>
+        <g><rect x="270" y="110" width="60" height="28" rx="6" fill="#1a1d27" stroke="#f59e0b" stroke-width="1.5"/><text x="300" y="129" text-anchor="middle" fill="#f59e0b" font-size="11" font-family="monospace">overdue</text></g>
+        <g><rect x="355" y="80" width="52" height="28" rx="6" fill="#1a1d27" stroke="#6b7280" stroke-width="1.5"/><text x="381" y="99" text-anchor="middle" fill="#6b7280" font-size="11" font-family="monospace">voided</text></g>
+        <g><rect x="10" y="150" width="68" height="28" rx="6" fill="#1a1d27" stroke="#6b7280" stroke-width="1.5"/><text x="44" y="169" text-anchor="middle" fill="#6b7280" font-size="11" font-family="monospace">cancelled</text></g>
+        <!-- payment -->
+        <g><rect x="270" y="160" width="80" height="24" rx="5" fill="#1a1d27" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="4,2"/><text x="310" y="176" text-anchor="middle" fill="#a855f7" font-size="9" font-family="monospace">← PAYMENT</text></g>
+        <!-- arrows -->
+        <line x1="62" y1="94" x2="86" y2="94" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr4)"/>
+        <line x1="156" y1="94" x2="184" y2="94" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr4)"/>
+        <line x1="240" y1="86" x2="268" y2="64" stroke="#28A26A" stroke-width="1.5" marker-end="url(#arr4g)"/>
+        <line x1="240" y1="102" x2="268" y2="120" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr4)"/>
+        <line x1="330" y1="80" x2="353" y2="94" stroke="#6b7280" stroke-width="1" marker-end="url(#arr4)"/>
+        <line x1="330" y1="120" x2="353" y2="106" stroke="#6b7280" stroke-width="1" marker-end="url(#arr4)"/>
+        <line x1="300" y1="138" x2="300" y2="158" stroke="#a855f7" stroke-width="1.5" marker-end="url(#arr4)"/>
+        <line x1="44" y1="108" x2="44" y2="148" stroke="#6b7280" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr4)"/>
+        <text x="188" y="68" fill="#3b82f6" font-size="8">post_invoice() → check_period_open()</text>
+        <text x="10" y="220" fill="#8892a4" font-size="9">paid &amp; overdue ARE valid status values (in CHECK constraint); also derivable from balance_cents</text>
+        <text x="10" y="232" fill="#8892a4" font-size="9">balance_cents = GENERATED ALWAYS column (never write directly)</text>
+      </svg>
+    </div>
+
+    <!-- JOB -->
+    <div class="lc-card">
+      <h3>Job Lifecycle</h3>
+      <svg viewBox="0 0 440 180" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="arr5" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8892a4"/></marker></defs>
+        <g><rect x="10" y="70" width="76" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="2"/><text x="48" y="89" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">scheduled</text></g>
+        <g><rect x="116" y="70" width="86" height="28" rx="6" fill="#1a1d27" stroke="#f59e0b" stroke-width="1.5"/><text x="159" y="89" text-anchor="middle" fill="#f59e0b" font-size="11" font-family="monospace">in_progress</text></g>
+        <g><rect x="232" y="70" width="84" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="1.5"/><text x="274" y="89" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">completed</text></g>
+        <g><rect x="350" y="70" width="68" height="28" rx="6" fill="#1a1d27" stroke="#3b82f6" stroke-width="1.5"/><text x="384" y="89" text-anchor="middle" fill="#3b82f6" font-size="11" font-family="monospace">invoiced</text></g>
+        <g><rect x="116" y="140" width="78" height="28" rx="6" fill="#1a1d27" stroke="#ef4444" stroke-width="1.5"/><text x="155" y="159" text-anchor="middle" fill="#ef4444" font-size="11" font-family="monospace">cancelled</text></g>
+        <line x1="86" y1="84" x2="114" y2="84" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr5)"/>
+        <line x1="202" y1="84" x2="230" y2="84" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr5)"/>
+        <line x1="316" y1="84" x2="348" y2="84" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arr5)"/>
+        <text x="316" y="80" fill="#3b82f6" font-size="8">transfer_job_to_invoice()</text>
+        <line x1="155" y1="98" x2="155" y2="138" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arr5)"/>
+        <text x="10" y="165" fill="#8892a4" font-size="9">complete_job() → creates application_record, deducts inventory</text>
+      </svg>
+    </div>
+
+    <!-- PURCHASE ORDER -->
+    <div class="lc-card">
+      <h3>Purchase Order Lifecycle</h3>
+      <svg viewBox="0 0 440 180" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="arr6" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8892a4"/></marker></defs>
+        <g><rect x="10" y="70" width="52" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="2"/><text x="36" y="89" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">draft</text></g>
+        <g><rect x="88" y="70" width="70" height="28" rx="6" fill="#1a1d27" stroke="#8892a4" stroke-width="1.5"/><text x="123" y="89" text-anchor="middle" fill="#e2e8f0" font-size="11" font-family="monospace">submitted</text></g>
+        <g><rect x="186" y="40" width="112" height="28" rx="6" fill="#1a1d27" stroke="#f59e0b" stroke-width="1.5"/><text x="242" y="59" text-anchor="middle" fill="#f59e0b" font-size="10" font-family="monospace">partially_received</text></g>
+        <g><rect x="186" y="100" width="104" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="1.5"/><text x="238" y="119" text-anchor="middle" fill="#28A26A" font-size="10" font-family="monospace">fully_received</text></g>
+        <g><rect x="320" y="70" width="78" height="28" rx="6" fill="#1a1d27" stroke="#ef4444" stroke-width="1.5"/><text x="359" y="89" text-anchor="middle" fill="#ef4444" font-size="11" font-family="monospace">cancelled</text></g>
+        <line x1="62" y1="84" x2="86" y2="84" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr6)"/>
+        <line x1="158" y1="80" x2="184" y2="54" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr6)"/>
+        <line x1="158" y1="88" x2="184" y2="110" stroke="#28A26A" stroke-width="1.5" marker-end="url(#arr6)"/>
+        <line x1="242" y1="68" x2="242" y2="98" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr6)"/>
+        <line x1="298" y1="76" x2="318" y2="82" stroke="#ef4444" stroke-width="1" marker-end="url(#arr6)"/>
+        <text x="160" y="58" fill="#f59e0b" font-size="8">partial receive_po_items()</text>
+        <text x="10" y="158" fill="#8892a4" font-size="9">receive_po_items() auto-transitions based on qty_received vs qty_ordered</text>
+        <text x="10" y="170" fill="#8892a4" font-size="9">Receiving creates receiving_records rows + inventory transactions</text>
+      </svg>
+    </div>
+
+    <!-- RETURN -->
+    <div class="lc-card">
+      <h3>Return (RMA) Lifecycle</h3>
+      <svg viewBox="0 0 440 200" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="arr7" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8892a4"/></marker>
+        <marker id="arr7r" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#ef4444"/></marker></defs>
+        <g><rect x="10" y="80" width="78" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="2"/><text x="49" y="99" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">requested</text></g>
+        <g><rect x="118" y="50" width="70" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="1.5"/><text x="153" y="69" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">approved</text></g>
+        <g><rect x="118" y="120" width="70" height="28" rx="6" fill="#1a1d27" stroke="#ef4444" stroke-width="1.5"/><text x="153" y="139" text-anchor="middle" fill="#ef4444" font-size="11" font-family="monospace">rejected</text></g>
+        <g><rect x="220" y="50" width="72" height="28" rx="6" fill="#1a1d27" stroke="#f59e0b" stroke-width="1.5"/><text x="256" y="69" text-anchor="middle" fill="#f59e0b" font-size="11" font-family="monospace">received</text></g>
+        <g><rect x="320" y="50" width="64" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="1.5"/><text x="352" y="69" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">credited</text></g>
+        <g><rect x="220" y="150" width="78" height="28" rx="6" fill="#1a1d27" stroke="#6b7280" stroke-width="1.5"/><text x="259" y="169" text-anchor="middle" fill="#6b7280" font-size="11" font-family="monospace">cancelled</text></g>
+        <!-- arrows -->
+        <line x1="88" y1="86" x2="116" y2="64" stroke="#28A26A" stroke-width="1.5" marker-end="url(#arr7)"/>
+        <text x="90" y="64" fill="#28A26A" font-size="8">approve_return()</text>
+        <line x1="88" y1="98" x2="116" y2="128" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arr7r)"/>
+        <text x="88" y="124" fill="#ef4444" font-size="8">reject</text>
+        <line x1="188" y1="64" x2="218" y2="64" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr7)"/>
+        <text x="186" y="58" fill="#f59e0b" font-size="8">receive_return()</text>
+        <line x1="292" y1="64" x2="318" y2="64" stroke="#28A26A" stroke-width="1.5" marker-end="url(#arr7)"/>
+        <text x="288" y="58" fill="#28A26A" font-size="8">issue_return_credit()</text>
+        <line x1="259" y1="78" x2="259" y2="148" stroke="#6b7280" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr7)"/>
+        <text x="10" y="185" fill="#8892a4" font-size="9">Returns.tsx wires all transitions: approve_return / receive_return / issue_return_credit / cancel_return</text>
+        <text x="10" y="197" fill="#8892a4" font-size="9">all with idempotency keys + assertRpcResult — full lifecycle reachable from UI</text>
+      </svg>
+    </div>
+
+    <!-- BLEND TICKET -->
+    <div class="lc-card">
+      <h3>Blend Ticket Lifecycle</h3>
+      <svg viewBox="0 0 440 180" xmlns="http://www.w3.org/2000/svg">
+        <defs><marker id="arr8" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#8892a4"/></marker></defs>
+        <g><rect x="10" y="70" width="62" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="2"/><text x="41" y="89" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">pending</text></g>
+        <g><rect x="98" y="70" width="76" height="28" rx="6" fill="#1a1d27" stroke="#f59e0b" stroke-width="1.5"/><text x="136" y="89" text-anchor="middle" fill="#f59e0b" font-size="11" font-family="monospace">processing</text></g>
+        <g><rect x="200" y="40" width="84" height="28" rx="6" fill="#1a1d27" stroke="#28A26A" stroke-width="1.5"/><text x="242" y="59" text-anchor="middle" fill="#28A26A" font-size="11" font-family="monospace">completed</text></g>
+        <g><rect x="200" y="100" width="94" height="28" rx="6" fill="#1a1d27" stroke="#f59e0b" stroke-width="1.5"/><text x="247" y="119" text-anchor="middle" fill="#f59e0b" font-size="11" font-family="monospace">needs_review</text></g>
+        <g><rect x="200" y="145" width="52" height="28" rx="6" fill="#1a1d27" stroke="#ef4444" stroke-width="1.5"/><text x="226" y="164" text-anchor="middle" fill="#ef4444" font-size="11" font-family="monospace">failed</text></g>
+        <g><rect x="320" y="40" width="104" height="24" rx="5" fill="#1a1d27" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="4,2"/><text x="372" y="57" text-anchor="middle" fill="#06b6d4" font-size="9" font-family="monospace">→ INVOICE / APP_RECORD</text></g>
+        <line x1="72" y1="84" x2="96" y2="84" stroke="#8892a4" stroke-width="1.5" marker-end="url(#arr8)"/>
+        <text x="70" y="75" fill="#8892a4" font-size="8">OCR</text>
+        <line x1="174" y1="80" x2="198" y2="54" stroke="#28A26A" stroke-width="1.5" marker-end="url(#arr8)"/>
+        <line x1="174" y1="88" x2="198" y2="108" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arr8)"/>
+        <line x1="174" y1="94" x2="198" y2="155" stroke="#ef4444" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arr8)"/>
+        <line x1="284" y1="54" x2="318" y2="54" stroke="#06b6d4" stroke-width="1.5" marker-end="url(#arr8)"/>
+        <text x="10" y="168" fill="#8892a4" font-size="9">OCR via Google Vision AI (process-blend-ticket Edge Function)</text>
+      </svg>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     LAYER C — PROBLEM REPORT
+═══════════════════════════════════════════════════ -->
+<div id="problems-panel" class="panel">
+<div id="prob-inner">
+
+  <div class="summary-box">
+    <h2>Verification Note (2026-05-20)</h2>
+    <p style="font-size:.82rem;line-height:1.6;margin-bottom:8px">An earlier version of this report (auto-generated from grep heuristics) asserted many problems that <strong>did not survive verification against the actual source and live database</strong>. Each claim below was re-checked by reading the code. The vast majority of the codebase is correct. Only three genuinely actionable items remain, all minor.</p>
+  </div>
+
+  <div class="prob-section">
+    <h3>Real Issues — Verified, Actionable</h3>
+    <div class="prob-item info"><strong>commission_payments lifecycle — RESOLVED 2026-06-08</strong>
+      <p>Documented at CLAUDE.md Business Logic Lifecycles (<code>Commission Payment (batch): unposted → posted → voided</code>). Stale note retained for provenance; no action. (2026-06-08 workflow review LOW.)</p>
+      <span class="loc">CLAUDE.md:198-202</span>
+    </div>
+    <div class="prob-item warn"><strong>Two RPCs appear UI-unused (optional cleanup)</strong>
+      <p><code>dashboard_summary()</code> (superseded by <code>operational_dashboard_summary()</code>) and <code>create_invoice_from_delivery()</code> are not called from any page. They ARE referenced in rpcContracts.test.ts / schemaIntegrity.test.ts contract lists, so dropping them means updating those tests too. Destructive on a live prod DB and low value — only do it if you specifically want the cleanup.</p>
+      <span class="loc">src/lib/rpcContracts.test.ts · src/lib/schemaIntegrity.test.ts</span>
+    </div>
+    <div class="prob-item info"><strong>Fields delete has no app-level reference guard (optional)</strong>
+      <p><span class="loc">Fields.tsx:194</span> deletes via <code>checkMutationResult</code> + ConfirmModal (safe), but has no pre-delete check for active quotes/orders/deliveries referencing the field. Whether this matters depends on the FK ON DELETE rule — if FKs are RESTRICT, the DB already blocks it; if CASCADE, a guard would prevent silent data loss. Worth confirming the FK rule before adding anything.</p>
+      <span class="loc">src/pages/Fields.tsx:194</span>
+    </div>
+  </div>
+
+  <div class="prob-section">
+    <h3>Claims That Were FALSE (corrected after verification)</h3>
+    <div class="prob-item info"><strong>✗ "Return workflow is broken / unreachable" — FALSE</strong>
+      <p>Returns.tsx wires the full state machine: <code>approve_return</code> (line 282), <code>receive_return</code> (376), <code>issue_return_credit</code> (401), <code>cancel_return</code> (340), each with idempotency keys (lines 63–66) and assertRpcResult. The <code>.insert()</code> at line 243 just creates line items for a new return. Lifecycle is fully reachable from the UI.</p>
+      <span class="loc">src/pages/Returns.tsx</span>
+    </div>
+    <div class="prob-item info"><strong>✗ "/notifications and /payment-history are orphans" — FALSE</strong>
+      <p>/notifications is reached from the header bell — NotificationsPanel is mounted in TopBar.tsx:29 and calls navigate('/notifications') at NotificationsPanel.tsx:277. /payment-history is linked from FinancialDashboard.tsx:139 via a nav-config array (path: '/payment-history'). The auto-detector now recognizes array-config nav and no longer flags these.</p>
+      <span class="loc">src/components/layout/TopBar.tsx:29 · src/pages/FinancialDashboard.tsx:139</span>
+    </div>
+    <div class="prob-item info"><strong>✗ "navigate('/X/new') hits no route, redirects to /" — FALSE</strong>
+      <p>React Router matches /customers/new to the /customers/:id route. All four Detail pages handle create mode via <code>const isNew = id === 'new'</code> (ProductDetail:23, CustomerDetail:56, JobDetail:119, ApplicationServiceDetail:37). The buttons work correctly.</p>
+      <span class="loc">src/pages/*Detail.tsx</span>
+    </div>
+    <div class="prob-item info"><strong>✗ "Rebates / Vehicles / BlendRecipes bypass all safety" — FALSE</strong>
+      <p>Every write in these pages is wrapped in checkMutationResult inside runCriticalAction, with logActivity + ConfirmModal — exactly the codebase's endorsed pattern (Architecture Rule #3). A direct .from().write() guarded by checkMutationResult is NOT a bug. The auto-detector now only flags unguarded writes to financial tables (currently zero).</p>
+      <span class="loc">src/pages/Rebates.tsx · Vehicles.tsx · BlendRecipes.tsx</span>
+    </div>
+    <div class="prob-item info"><strong>✗ "Invoice paid/overdue are ghost states not in CHECK" — FALSE</strong>
+      <p>Live constraint: <code>CHECK (status = ANY (ARRAY['draft','unposted','posted','paid','overdue','voided','cancelled']))</code>. Migrations explicitly handle posted→paid and posted→overdue transitions. CLAUDE.md is correct. They are valid stored statuses (and also derivable from balance_cents).</p>
+      <span class="loc">supabase/migrations/20260228310000_high_priority_fixes.sql</span>
+    </div>
+    <div class="prob-item info"><strong>✗ "Drop dead RPC get_field_geojson()" — DANGEROUS, FALSE</strong>
+      <p>get_field_geojson is actively used at FieldSetup.tsx:131. Dropping it would break the Field Setup page. The earlier "drop these RPCs" advice would have caused a production outage.</p>
+      <span class="loc">src/pages/FieldSetup.tsx:131</span>
+    </div>
+  </div>
+
+  <div class="prob-section">
+    <h3>Why the original report was wrong</h3>
+    <div class="prob-item info"><strong>Root cause: grep heuristics, not code reading</strong>
+      <p>The first pass relied on pattern-matching that (1) only counted literal <code>navigate('/x')</code> calls, missing array-config and mounted-panel navigation; (2) flagged every direct table write as "bypassing RPC" even when wrapped in checkMutationResult — contradicting the codebase's own Architecture Rule #3; and (3) trusted a stale RPC catalogue. The generator script has been corrected on all three counts; the live auto-detected list below now reflects reality.</p>
+    </div>
+  </div>
+
+  <!-- __AUTO_PROBLEMS_START__ -->
+      <div class="prob-section">
+        <h3>Auto-detected Problems</h3>
+        <div class="prob-item info"><strong>None found</strong><p>No orphan pages, broken links, dead RPCs, or unguarded financial-table writes detected in the current codebase.</p></div>
+      </div><!-- __AUTO_PROBLEMS_END__ -->
+
+</div>
+</div>
+
+</div><!-- #content -->
+
+<script>
+// ═══════════════════════════════════════════════════════════
+//  DATA  (auto-generated — edit via scripts/generate-workflow-map.mjs)
+// ═══════════════════════════════════════════════════════════
+// __NODES_START__
+const NODES = [
+    {
+      "id": "login-page",
+      "label": "LoginPage",
+      "type": "page-auth",
+      "group": "Auth",
+      "path": "/login",
+      "problem": false
+    },
+    {
+      "id": "forgot-password-page",
+      "label": "ForgotPasswordPage",
+      "type": "page-auth",
+      "group": "Auth",
+      "path": "/forgot-password",
+      "problem": false
+    },
+    {
+      "id": "reset-password-page",
+      "label": "ResetPasswordPage",
+      "type": "page-auth",
+      "group": "Auth",
+      "path": "/reset-password",
+      "problem": false
+    },
+    {
+      "id": "dashboard",
+      "label": "Dashboard",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/",
+      "problem": false
+    },
+    {
+      "id": "team-board",
+      "label": "TeamBoard",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/team-board",
+      "problem": false
+    },
+    {
+      "id": "notifications",
+      "label": "Notifications",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/notifications",
+      "problem": false
+    },
+    {
+      "id": "getting-started",
+      "label": "GettingStarted",
+      "type": "page-all",
+      "group": "Core",
+      "path": "/getting-started",
+      "problem": false
+    },
+    {
+      "id": "products",
+      "label": "Products",
+      "type": "page-sales",
+      "group": "Products",
+      "path": "/products",
+      "problem": false
+    },
+    {
+      "id": "product-detail",
+      "label": "ProductDetail",
+      "type": "page-sales",
+      "group": "Products",
+      "path": "/products/:id",
+      "problem": false
+    },
+    {
+      "id": "customers",
+      "label": "Customers",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/customers",
+      "problem": false
+    },
+    {
+      "id": "customer-detail",
+      "label": "CustomerDetail",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/customers/:id",
+      "problem": false
+    },
+    {
+      "id": "fields",
+      "label": "Fields",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/fields",
+      "problem": false
+    },
+    {
+      "id": "field-setup",
+      "label": "FieldSetup",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/fields/:id",
+      "problem": false
+    },
+    {
+      "id": "field-dashboard",
+      "label": "FieldDashboard",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/fields/:id/dashboard",
+      "problem": false
+    },
+    {
+      "id": "quotes",
+      "label": "Quotes",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/quotes",
+      "problem": false
+    },
+    {
+      "id": "quote-builder",
+      "label": "QuoteBuilder",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/quotes/new",
+      "problem": false
+    },
+    {
+      "id": "orders",
+      "label": "Orders",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/orders",
+      "problem": false
+    },
+    {
+      "id": "new-order",
+      "label": "NewOrder",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/orders/new",
+      "problem": false
+    },
+    {
+      "id": "order-detail",
+      "label": "OrderDetail",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/orders/:id",
+      "problem": false
+    },
+    {
+      "id": "inventory-page",
+      "label": "InventoryPage",
+      "type": "page-sales",
+      "group": "Products",
+      "path": "/inventory",
+      "problem": false
+    },
+    {
+      "id": "invoices",
+      "label": "Invoices",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/invoices",
+      "problem": false
+    },
+    {
+      "id": "field-application-invoice",
+      "label": "FieldApplicationInvoice",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/invoices/field-app/new",
+      "problem": false
+    },
+    {
+      "id": "invoice-detail",
+      "label": "InvoiceDetail",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/invoices/:id",
+      "problem": false
+    },
+    {
+      "id": "blend-tickets",
+      "label": "BlendTickets",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/blend-tickets",
+      "problem": false
+    },
+    {
+      "id": "blend-ticket-detail",
+      "label": "BlendTicketDetail",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/blend-tickets/:id",
+      "problem": false
+    },
+    {
+      "id": "blend-recipes",
+      "label": "BlendRecipes",
+      "type": "page-sales",
+      "group": "Products",
+      "path": "/recipes",
+      "problem": false
+    },
+    {
+      "id": "cycle-counts",
+      "label": "CycleCounts",
+      "type": "page-admin",
+      "group": "Products",
+      "path": "/cycle-counts",
+      "problem": false
+    },
+    {
+      "id": "returns",
+      "label": "Returns",
+      "type": "page-sales",
+      "group": "Supply",
+      "path": "/returns",
+      "problem": false
+    },
+    {
+      "id": "receiving-log",
+      "label": "ReceivingLog",
+      "type": "page-sales",
+      "group": "Supply",
+      "path": "/receiving",
+      "problem": false
+    },
+    {
+      "id": "quick-receive",
+      "label": "QuickReceive",
+      "type": "page-sales",
+      "group": "Supply",
+      "path": "/receiving/quick",
+      "problem": false
+    },
+    {
+      "id": "purchase-orders",
+      "label": "PurchaseOrders",
+      "type": "page-sales",
+      "group": "Supply",
+      "path": "/purchase-orders",
+      "problem": false
+    },
+    {
+      "id": "new-purchase-order",
+      "label": "NewPurchaseOrder",
+      "type": "page-sales",
+      "group": "Supply",
+      "path": "/purchase-orders/new",
+      "problem": false
+    },
+    {
+      "id": "purchase-order-detail",
+      "label": "PurchaseOrderDetail",
+      "type": "page-sales",
+      "group": "Supply",
+      "path": "/purchase-orders/:id",
+      "problem": false
+    },
+    {
+      "id": "brand-vs-generic",
+      "label": "BrandVsGeneric",
+      "type": "page-sales",
+      "group": "Products",
+      "path": "/brand-vs-generic",
+      "problem": false
+    },
+    {
+      "id": "reports",
+      "label": "Reports",
+      "type": "page-sales",
+      "group": "Finance",
+      "path": "/reports",
+      "problem": false
+    },
+    {
+      "id": "sales-reports",
+      "label": "SalesReports",
+      "type": "page-sales",
+      "group": "Finance",
+      "path": "/sales-reports",
+      "problem": false
+    },
+    {
+      "id": "crop-programs",
+      "label": "CropPrograms",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/crop-programs",
+      "problem": false
+    },
+    {
+      "id": "payment-allocation",
+      "label": "PaymentAllocation",
+      "type": "page-sales",
+      "group": "Sales",
+      "path": "/payments",
+      "problem": false
+    },
+    {
+      "id": "payment-history",
+      "label": "PaymentHistory",
+      "type": "page-admin",
+      "group": "Sales",
+      "path": "/payment-history",
+      "problem": false
+    },
+    {
+      "id": "a-raging",
+      "label": "ARaging",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/ar-aging",
+      "problem": false
+    },
+    {
+      "id": "compliance",
+      "label": "Compliance",
+      "type": "page-sales",
+      "group": "Finance",
+      "path": "/compliance",
+      "problem": false
+    },
+    {
+      "id": "rebates",
+      "label": "Rebates",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/rebates",
+      "problem": false
+    },
+    {
+      "id": "vehicles",
+      "label": "Vehicles",
+      "type": "page-admin",
+      "group": "Ops",
+      "path": "/vehicles",
+      "problem": false
+    },
+    {
+      "id": "vehicle-detail",
+      "label": "VehicleDetail",
+      "type": "page-admin",
+      "group": "Ops",
+      "path": "/vehicles/:id",
+      "problem": false
+    },
+    {
+      "id": "application-services",
+      "label": "ApplicationServices",
+      "type": "page-admin",
+      "group": "Ops",
+      "path": "/application-services",
+      "problem": false
+    },
+    {
+      "id": "application-service-detail",
+      "label": "ApplicationServiceDetail",
+      "type": "page-admin",
+      "group": "Ops",
+      "path": "/application-services/:id",
+      "problem": false
+    },
+    {
+      "id": "application-records",
+      "label": "ApplicationRecords",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/application-records",
+      "problem": false
+    },
+    {
+      "id": "program-tracker",
+      "label": "ProgramTracker",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/program-tracker",
+      "problem": false
+    },
+    {
+      "id": "delivery-remainders",
+      "label": "DeliveryRemainders",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/delivery-remainders",
+      "problem": false
+    },
+    {
+      "id": "deliveries",
+      "label": "Deliveries",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/deliveries",
+      "problem": false
+    },
+    {
+      "id": "new-delivery",
+      "label": "NewDelivery",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/deliveries/new",
+      "problem": false
+    },
+    {
+      "id": "delivery-detail",
+      "label": "DeliveryDetail",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/deliveries/:id",
+      "problem": false
+    },
+    {
+      "id": "jobs",
+      "label": "Jobs",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/jobs",
+      "problem": false
+    },
+    {
+      "id": "job-detail",
+      "label": "JobDetail",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/jobs/:id",
+      "problem": false
+    },
+    {
+      "id": "dispatch-board",
+      "label": "DispatchBoard",
+      "type": "page-sales",
+      "group": "Ops",
+      "path": "/dispatch",
+      "problem": false
+    },
+    {
+      "id": "financial-dashboard",
+      "label": "FinancialDashboard",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/financial-dashboard",
+      "problem": false
+    },
+    {
+      "id": "month-end-close",
+      "label": "MonthEndClose",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/month-end",
+      "problem": false
+    },
+    {
+      "id": "integrity-report",
+      "label": "IntegrityReport",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/integrity-report",
+      "problem": false
+    },
+    {
+      "id": "integrity-cleanup",
+      "label": "IntegrityCleanup",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/integrity-cleanup",
+      "problem": false
+    },
+    {
+      "id": "commission-payments",
+      "label": "CommissionPayments",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/commission-payments",
+      "problem": false
+    },
+    {
+      "id": "customer-transaction-review",
+      "label": "CustomerTransactionReview",
+      "type": "page-admin",
+      "group": "Customers",
+      "path": "/customer-transactions",
+      "problem": false
+    },
+    {
+      "id": "prepayment-manager",
+      "label": "PrepaymentManager",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/prepayments",
+      "problem": false
+    },
+    {
+      "id": "prepay-workspace",
+      "label": "PrepayWorkspace",
+      "type": "page-admin",
+      "group": "Finance",
+      "path": "/prepay-workspace",
+      "problem": false
+    },
+    {
+      "id": "accounts-payable",
+      "label": "AccountsPayable",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/accounts-payable",
+      "problem": false
+    },
+    {
+      "id": "vendor-bills",
+      "label": "VendorBills",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/accounts-payable/bills",
+      "problem": false
+    },
+    {
+      "id": "new-vendor-bill",
+      "label": "NewVendorBill",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/accounts-payable/bills/new",
+      "problem": false
+    },
+    {
+      "id": "vendor-bill-detail",
+      "label": "VendorBillDetail",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/accounts-payable/bills/:id",
+      "problem": false
+    },
+    {
+      "id": "vendors",
+      "label": "Vendors",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/vendors",
+      "problem": false
+    },
+    {
+      "id": "settings-page",
+      "label": "SettingsPage",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/settings",
+      "problem": false
+    },
+    {
+      "id": "e-customer",
+      "label": "Customer",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-quote",
+      "label": "Quote",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-order",
+      "label": "Order",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-delivery",
+      "label": "Delivery",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-invoice",
+      "label": "Invoice",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-payment",
+      "label": "Payment",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-product",
+      "label": "Product",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-inventory",
+      "label": "Inventory",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-po",
+      "label": "PurchaseOrder",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-return",
+      "label": "Return",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-job",
+      "label": "Job",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-blend",
+      "label": "BlendTicket",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-commission",
+      "label": "Commission",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-field",
+      "label": "Field",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-vendorbill",
+      "label": "Vendor Bill (AP)",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-cyclecount",
+      "label": "Cycle Count",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "e-rebate",
+      "label": "Rebate",
+      "type": "entity",
+      "group": "Entity"
+    },
+    {
+      "id": "r-quote",
+      "label": "RPCs: Quote",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-order",
+      "label": "RPCs: Order",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-delivery",
+      "label": "RPCs: Delivery",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-invoice",
+      "label": "RPCs: Invoice",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-payment",
+      "label": "RPCs: Payment",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-inventory",
+      "label": "RPCs: Inventory",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-po",
+      "label": "RPCs: PO/Receiving",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-job",
+      "label": "RPCs: Job",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-blend",
+      "label": "RPCs: BlendTicket",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-report",
+      "label": "RPCs: Reports",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-return",
+      "label": "RPCs: Return",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-commission",
+      "label": "RPCs: Commission Pay",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-vendor",
+      "label": "RPCs: Vendor/AP",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-cycle",
+      "label": "RPCs: Cycle Count",
+      "type": "rpc",
+      "group": "RPC"
+    },
+    {
+      "id": "r-rebate",
+      "label": "RPCs: Rebate",
+      "type": "rpc",
+      "group": "RPC"
+    }
+  ];
+// __NODES_END__
+
+// __EDGES_START__
+const EDGES = [
+    {
+      "s": "accounts-payable",
+      "t": "vendor-bills",
+      "type": "nav"
+    },
+    {
+      "s": "accounts-payable",
+      "t": "new-vendor-bill",
+      "type": "nav"
+    },
+    {
+      "s": "application-service-detail",
+      "t": "application-services",
+      "type": "nav"
+    },
+    {
+      "s": "application-services",
+      "t": "application-service-detail",
+      "type": "nav"
+    },
+    {
+      "s": "blend-ticket-detail",
+      "t": "blend-tickets",
+      "type": "nav"
+    },
+    {
+      "s": "blend-ticket-detail",
+      "t": "invoice-detail",
+      "type": "nav"
+    },
+    {
+      "s": "blend-ticket-detail",
+      "t": "order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "customer-detail",
+      "t": "customers",
+      "type": "nav"
+    },
+    {
+      "s": "customer-detail",
+      "t": "field-setup",
+      "type": "nav"
+    },
+    {
+      "s": "customer-detail",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
+      "s": "customer-detail",
+      "t": "order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "customer-detail",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "customer-detail",
+      "t": "delivery-remainders",
+      "type": "nav"
+    },
+    {
+      "s": "customers",
+      "t": "customer-detail",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-order",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-purchase-order",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "new-delivery",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "inventory-page",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "receiving-log",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "orders",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "quotes",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "deliveries",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "purchase-orders",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "program-tracker",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "team-board",
+      "type": "nav"
+    },
+    {
+      "s": "dashboard",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "deliveries",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "deliveries",
+      "t": "new-delivery",
+      "type": "nav"
+    },
+    {
+      "s": "deliveries",
+      "t": "delivery-remainders",
+      "type": "nav"
+    },
+    {
+      "s": "deliveries",
+      "t": "orders",
+      "type": "nav"
+    },
+    {
+      "s": "delivery-detail",
+      "t": "deliveries",
+      "type": "nav"
+    },
+    {
+      "s": "delivery-detail",
+      "t": "order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "delivery-detail",
+      "t": "invoice-detail",
+      "type": "nav"
+    },
+    {
+      "s": "delivery-remainders",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "delivery-remainders",
+      "t": "customer-detail",
+      "type": "nav"
+    },
+    {
+      "s": "delivery-remainders",
+      "t": "order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "dispatch-board",
+      "t": "job-detail",
+      "type": "nav"
+    },
+    {
+      "s": "field-application-invoice",
+      "t": "invoices",
+      "type": "nav"
+    },
+    {
+      "s": "field-dashboard",
+      "t": "fields",
+      "type": "nav"
+    },
+    {
+      "s": "field-dashboard",
+      "t": "field-setup",
+      "type": "nav"
+    },
+    {
+      "s": "fields",
+      "t": "customer-detail",
+      "type": "nav"
+    },
+    {
+      "s": "fields",
+      "t": "field-setup",
+      "type": "nav"
+    },
+    {
+      "s": "fields",
+      "t": "field-dashboard",
+      "type": "nav"
+    },
+    {
+      "s": "field-setup",
+      "t": "fields",
+      "type": "nav"
+    },
+    {
+      "s": "field-setup",
+      "t": "field-dashboard",
+      "type": "nav"
+    },
+    {
+      "s": "financial-dashboard",
+      "t": "prepay-workspace",
+      "type": "nav"
+    },
+    {
+      "s": "financial-dashboard",
+      "t": "commission-payments",
+      "type": "nav"
+    },
+    {
+      "s": "financial-dashboard",
+      "t": "purchase-orders",
+      "type": "nav"
+    },
+    {
+      "s": "financial-dashboard",
+      "t": "inventory-page",
+      "type": "nav"
+    },
+    {
+      "s": "financial-dashboard",
+      "t": "orders",
+      "type": "nav"
+    },
+    {
+      "s": "financial-dashboard",
+      "t": "customers",
+      "type": "nav"
+    },
+    {
+      "s": "financial-dashboard",
+      "t": "payment-allocation",
+      "type": "nav"
+    },
+    {
+      "s": "invoice-detail",
+      "t": "invoices",
+      "type": "nav"
+    },
+    {
+      "s": "invoice-detail",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "invoices",
+      "t": "customer-detail",
+      "type": "nav"
+    },
+    {
+      "s": "invoices",
+      "t": "field-application-invoice",
+      "type": "nav"
+    },
+    {
+      "s": "invoices",
+      "t": "invoice-detail",
+      "type": "nav"
+    },
+    {
+      "s": "invoices",
+      "t": "orders",
+      "type": "nav"
+    },
+    {
+      "s": "job-detail",
+      "t": "jobs",
+      "type": "nav"
+    },
+    {
+      "s": "job-detail",
+      "t": "invoice-detail",
+      "type": "nav"
+    },
+    {
+      "s": "job-detail",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
+      "s": "jobs",
+      "t": "job-detail",
+      "type": "nav"
+    },
+    {
+      "s": "new-delivery",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "new-delivery",
+      "t": "deliveries",
+      "type": "nav"
+    },
+    {
+      "s": "new-order",
+      "t": "order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "new-order",
+      "t": "orders",
+      "type": "nav"
+    },
+    {
+      "s": "new-purchase-order",
+      "t": "purchase-order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "new-purchase-order",
+      "t": "purchase-orders",
+      "type": "nav"
+    },
+    {
+      "s": "new-vendor-bill",
+      "t": "vendor-bill-detail",
+      "type": "nav"
+    },
+    {
+      "s": "new-vendor-bill",
+      "t": "vendor-bills",
+      "type": "nav"
+    },
+    {
+      "s": "order-detail",
+      "t": "invoice-detail",
+      "type": "nav"
+    },
+    {
+      "s": "order-detail",
+      "t": "orders",
+      "type": "nav"
+    },
+    {
+      "s": "order-detail",
+      "t": "delivery-detail",
+      "type": "nav"
+    },
+    {
+      "s": "order-detail",
+      "t": "payment-allocation",
+      "type": "nav"
+    },
+    {
+      "s": "order-detail",
+      "t": "blend-ticket-detail",
+      "type": "nav"
+    },
+    {
+      "s": "orders",
+      "t": "new-order",
+      "type": "nav"
+    },
+    {
+      "s": "orders",
+      "t": "order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "orders",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
+      "s": "prepay-workspace",
+      "t": "prepayment-manager",
+      "type": "nav"
+    },
+    {
+      "s": "product-detail",
+      "t": "products",
+      "type": "nav"
+    },
+    {
+      "s": "products",
+      "t": "product-detail",
+      "type": "nav"
+    },
+    {
+      "s": "program-tracker",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
+      "s": "purchase-order-detail",
+      "t": "purchase-orders",
+      "type": "nav"
+    },
+    {
+      "s": "purchase-orders",
+      "t": "new-purchase-order",
+      "type": "nav"
+    },
+    {
+      "s": "purchase-orders",
+      "t": "purchase-order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "quick-receive",
+      "t": "receiving-log",
+      "type": "nav"
+    },
+    {
+      "s": "quote-builder",
+      "t": "quotes",
+      "type": "nav"
+    },
+    {
+      "s": "quote-builder",
+      "t": "job-detail",
+      "type": "nav"
+    },
+    {
+      "s": "quote-builder",
+      "t": "order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "quotes",
+      "t": "quote-builder",
+      "type": "nav"
+    },
+    {
+      "s": "receiving-log",
+      "t": "purchase-order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "receiving-log",
+      "t": "quick-receive",
+      "type": "nav"
+    },
+    {
+      "s": "vehicle-detail",
+      "t": "vehicles",
+      "type": "nav"
+    },
+    {
+      "s": "vehicles",
+      "t": "vehicle-detail",
+      "type": "nav"
+    },
+    {
+      "s": "vendor-bill-detail",
+      "t": "vendor-bills",
+      "type": "nav"
+    },
+    {
+      "s": "vendor-bill-detail",
+      "t": "purchase-order-detail",
+      "type": "nav"
+    },
+    {
+      "s": "vendor-bills",
+      "t": "new-vendor-bill",
+      "type": "nav"
+    },
+    {
+      "s": "vendor-bills",
+      "t": "vendor-bill-detail",
+      "type": "nav"
+    },
+    {
+      "s": "a-raging",
+      "t": "r-report",
+      "type": "rpc"
+    },
+    {
+      "s": "blend-recipes",
+      "t": "r-blend",
+      "type": "rpc"
+    },
+    {
+      "s": "blend-ticket-detail",
+      "t": "r-blend",
+      "type": "rpc"
+    },
+    {
+      "s": "blend-ticket-detail",
+      "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
+      "s": "blend-ticket-detail",
+      "t": "r-order",
+      "type": "rpc"
+    },
+    {
+      "s": "blend-tickets",
+      "t": "r-blend",
+      "type": "rpc"
+    },
+    {
+      "s": "commission-payments",
+      "t": "r-commission",
+      "type": "rpc"
+    },
+    {
+      "s": "customer-detail",
+      "t": "r-report",
+      "type": "rpc"
+    },
+    {
+      "s": "customer-detail",
+      "t": "r-quote",
+      "type": "rpc"
+    },
+    {
+      "s": "cycle-counts",
+      "t": "r-cycle",
+      "type": "rpc"
+    },
+    {
+      "s": "dashboard",
+      "t": "r-report",
+      "type": "rpc"
+    },
+    {
+      "s": "deliveries",
+      "t": "r-delivery",
+      "type": "rpc"
+    },
+    {
+      "s": "delivery-detail",
+      "t": "r-delivery",
+      "type": "rpc"
+    },
+    {
+      "s": "delivery-remainders",
+      "t": "r-delivery",
+      "type": "rpc"
+    },
+    {
+      "s": "field-application-invoice",
+      "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
+      "s": "financial-dashboard",
+      "t": "r-report",
+      "type": "rpc"
+    },
+    {
+      "s": "integrity-cleanup",
+      "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "integrity-cleanup",
+      "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
+      "s": "inventory-page",
+      "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "invoice-detail",
+      "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
+      "s": "invoice-detail",
+      "t": "r-payment",
+      "type": "rpc"
+    },
+    {
+      "s": "invoices",
+      "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
+      "s": "job-detail",
+      "t": "r-job",
+      "type": "rpc"
+    },
+    {
+      "s": "new-delivery",
+      "t": "r-delivery",
+      "type": "rpc"
+    },
+    {
+      "s": "new-order",
+      "t": "r-order",
+      "type": "rpc"
+    },
+    {
+      "s": "new-purchase-order",
+      "t": "r-po",
+      "type": "rpc"
+    },
+    {
+      "s": "new-vendor-bill",
+      "t": "r-vendor",
+      "type": "rpc"
+    },
+    {
+      "s": "order-detail",
+      "t": "r-order",
+      "type": "rpc"
+    },
+    {
+      "s": "order-detail",
+      "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
+      "s": "payment-allocation",
+      "t": "r-payment",
+      "type": "rpc"
+    },
+    {
+      "s": "payment-history",
+      "t": "r-payment",
+      "type": "rpc"
+    },
+    {
+      "s": "prepayment-manager",
+      "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
+      "s": "purchase-order-detail",
+      "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "purchase-order-detail",
+      "t": "r-po",
+      "type": "rpc"
+    },
+    {
+      "s": "purchase-orders",
+      "t": "r-po",
+      "type": "rpc"
+    },
+    {
+      "s": "quick-receive",
+      "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "quote-builder",
+      "t": "r-quote",
+      "type": "rpc"
+    },
+    {
+      "s": "quotes",
+      "t": "r-quote",
+      "type": "rpc"
+    },
+    {
+      "s": "rebates",
+      "t": "r-rebate",
+      "type": "rpc"
+    },
+    {
+      "s": "reports",
+      "t": "r-inventory",
+      "type": "rpc"
+    },
+    {
+      "s": "reports",
+      "t": "r-commission",
+      "type": "rpc"
+    },
+    {
+      "s": "returns",
+      "t": "r-return",
+      "type": "rpc"
+    },
+    {
+      "s": "sales-reports",
+      "t": "r-report",
+      "type": "rpc"
+    },
+    {
+      "s": "vendor-bill-detail",
+      "t": "r-vendor",
+      "type": "rpc"
+    },
+    {
+      "s": "vendors",
+      "t": "r-po",
+      "type": "rpc"
+    },
+    {
+      "s": "r-quote",
+      "t": "e-quote",
+      "type": "data"
+    },
+    {
+      "s": "e-quote",
+      "t": "e-inventory",
+      "type": "data"
+    },
+    {
+      "s": "r-order",
+      "t": "e-order",
+      "type": "data"
+    },
+    {
+      "s": "e-quote",
+      "t": "e-order",
+      "type": "data"
+    },
+    {
+      "s": "r-delivery",
+      "t": "e-delivery",
+      "type": "data"
+    },
+    {
+      "s": "e-order",
+      "t": "e-delivery",
+      "type": "data"
+    },
+    {
+      "s": "r-invoice",
+      "t": "e-invoice",
+      "type": "data"
+    },
+    {
+      "s": "e-delivery",
+      "t": "e-invoice",
+      "type": "data"
+    },
+    {
+      "s": "e-order",
+      "t": "e-invoice",
+      "type": "data"
+    },
+    {
+      "s": "e-blend",
+      "t": "e-invoice",
+      "type": "data"
+    },
+    {
+      "s": "r-payment",
+      "t": "e-payment",
+      "type": "data"
+    },
+    {
+      "s": "e-payment",
+      "t": "e-invoice",
+      "type": "data"
+    },
+    {
+      "s": "r-po",
+      "t": "e-po",
+      "type": "data"
+    },
+    {
+      "s": "e-po",
+      "t": "e-inventory",
+      "type": "data"
+    },
+    {
+      "s": "r-inventory",
+      "t": "e-inventory",
+      "type": "data"
+    },
+    {
+      "s": "r-job",
+      "t": "e-job",
+      "type": "data"
+    },
+    {
+      "s": "e-job",
+      "t": "e-invoice",
+      "type": "data"
+    },
+    {
+      "s": "r-blend",
+      "t": "e-blend",
+      "type": "data"
+    },
+    {
+      "s": "e-blend",
+      "t": "e-order",
+      "type": "data"
+    },
+    {
+      "s": "r-return",
+      "t": "e-return",
+      "type": "data"
+    },
+    {
+      "s": "e-return",
+      "t": "e-inventory",
+      "type": "data"
+    },
+    {
+      "s": "e-customer",
+      "t": "e-quote",
+      "type": "data"
+    },
+    {
+      "s": "e-customer",
+      "t": "e-order",
+      "type": "data"
+    },
+    {
+      "s": "e-customer",
+      "t": "e-invoice",
+      "type": "data"
+    },
+    {
+      "s": "e-order",
+      "t": "e-commission",
+      "type": "data"
+    },
+    {
+      "s": "e-product",
+      "t": "e-inventory",
+      "type": "data"
+    },
+    {
+      "s": "e-field",
+      "t": "e-quote",
+      "type": "data"
+    },
+    {
+      "s": "r-commission",
+      "t": "e-commission",
+      "type": "data"
+    },
+    {
+      "s": "r-vendor",
+      "t": "e-vendorbill",
+      "type": "data"
+    },
+    {
+      "s": "r-cycle",
+      "t": "e-cyclecount",
+      "type": "data"
+    },
+    {
+      "s": "e-cyclecount",
+      "t": "e-inventory",
+      "type": "data"
+    },
+    {
+      "s": "r-rebate",
+      "t": "e-rebate",
+      "type": "data"
+    }
+  ];
+// __EDGES_END__
+
+// ═══════════════════════════════════════════════════════════
+//  FORCE-DIRECTED GRAPH
+// ═══════════════════════════════════════════════════════════
+const canvas = document.getElementById('g-canvas');
+const ctx = canvas.getContext('2d');
+const wrap = document.getElementById('canvas-wrap');
+
+let W, H;
+let nodes = [], edges = [];
+let selectedId = null;
+let transform = {x:0,y:0,scale:1};
+let drag = null, panning = false, lastMouse = null;
+let simRunning = true, tick = 0;
+
+const COLOR = {
+  'page-auth':'#6b7280','page-all':'#94a3b8','page-sales':'#3b82f6',
+  'page-admin':'#f59e0b','entity':'#a855f7','rpc':'#06b6d4'
+};
+const GROUP_ORDER = ['Auth','Core','Sales','Customers','Products','Supply','Ops','Finance','Entity','RPC'];
+
+function initGraph(){
+  W = wrap.clientWidth; H = wrap.clientHeight;
+  canvas.width = W; canvas.height = H;
+
+  // Arrange nodes in a rough layout by group
+  const groups = {};
+  NODES.forEach(n=>{
+    if(!groups[n.group]) groups[n.group]=[];
+    groups[n.group].push(n);
+  });
+  const cols = 6, rowH = 90, colW = Math.max(140, W/cols);
+  let ci=0;
+  GROUP_ORDER.forEach(g=>{
+    const list = groups[g]||[];
+    list.forEach((n,i)=>{
+      const col = ci % cols;
+      const baseRow = Math.floor(ci/cols);
+      nodes.push({
+        ...n,
+        x: 80 + col*colW + (Math.random()-0.5)*20,
+        y: 80 + baseRow*rowH + i*36 + (Math.random()-0.5)*10,
+        vx:0,vy:0,r:22
+      });
+      ci++;
+    });
+  });
+
+  edges = EDGES.map(e=>({...e,
+    sn:nodes.find(n=>n.id===e.s),
+    tn:nodes.find(n=>n.id===e.t)
+  })).filter(e=>e.sn&&e.tn);
+
+  requestAnimationFrame(loop);
+}
+
+function simulate(){
+  if(!simRunning) return;
+  const k2 = 12000, spring = 0.015, damp = 0.85, rep = 2200;
+  nodes.forEach(a=>{
+    nodes.forEach(b=>{
+      if(a===b) return;
+      const dx=a.x-b.x, dy=a.y-b.y;
+      const d=Math.sqrt(dx*dx+dy*dy)||1;
+      const f=rep/(d*d);
+      a.vx+=dx/d*f; a.vy+=dy/d*f;
+    });
+    a.vx+=(W/2-a.x)*0.0005;
+    a.vy+=(H/2-a.y)*0.0005;
+  });
+  edges.forEach(e=>{
+    const a=e.sn,b=e.tn;
+    if(!a||!b) return;
+    const dx=b.x-a.x,dy=b.y-a.y;
+    const d=Math.sqrt(dx*dx+dy*dy)||1;
+    const ideal = (a.group==='RPC'||b.group==='RPC'||a.group==='Entity'||b.group==='Entity')?120:140;
+    const f=(d-ideal)*spring;
+    const fx=dx/d*f, fy=dy/d*f;
+    a.vx+=fx; a.vy+=fy;
+    b.vx-=fx; b.vy-=fy;
+  });
+  nodes.forEach(n=>{
+    if(drag && drag.node===n) return;
+    n.vx*=damp; n.vy*=damp;
+    n.x+=n.vx; n.y+=n.vy;
+    n.x=Math.max(40,Math.min(n.x,W*3));
+    n.y=Math.max(40,Math.min(n.y,H*3));
+  });
+  tick++;
+  if(tick>600) simRunning=false;
+}
+
+function redraw(){
+  ctx.clearRect(0,0,W,H);
+  ctx.save();
+  ctx.translate(transform.x,transform.y);
+  ctx.scale(transform.scale,transform.scale);
+
+  const showNav=document.getElementById('tog-nav').checked;
+  const showRpc=document.getElementById('tog-rpc').checked;
+  const showData=document.getElementById('tog-data').checked;
+  const showPages=document.getElementById('tog-pages').checked;
+  const showEntities=document.getElementById('tog-entities').checked;
+  const showRpcs=document.getElementById('tog-rpcs').checked;
+
+  const visNodes = new Set(nodes.filter(n=>{
+    if(n.type==='entity') return showEntities;
+    if(n.type==='rpc') return showRpcs;
+    return showPages;
+  }).map(n=>n.id));
+
+  const connIds = new Set();
+  if(selectedId){
+    connIds.add(selectedId);
+    edges.forEach(e=>{
+      if(e.s===selectedId||e.t===selectedId){connIds.add(e.s);connIds.add(e.t);}
+    });
+  }
+
+  // Draw edges
+  edges.forEach(e=>{
+    if(!visNodes.has(e.s)||!visNodes.has(e.t)) return;
+    if(e.type==='nav'&&!showNav) return;
+    if(e.type==='rpc'&&!showRpc) return;
+    if(e.type==='data'&&!showData) return;
+    const a=e.sn,b=e.tn;
+    const dim = selectedId && !connIds.has(e.s) && !connIds.has(e.t);
+    ctx.globalAlpha = dim ? 0.05 : (selectedId?0.7:0.45);
+    ctx.strokeStyle = e.type==='nav'?'#4ade80':e.type==='rpc'?'#06b6d4':'#f97316';
+    ctx.lineWidth = 1.2/transform.scale;
+    if(e.type==='rpc'){ctx.setLineDash([4,3]);}else{ctx.setLineDash([]);}
+    ctx.beginPath();
+    ctx.moveTo(a.x,a.y);
+    // curve
+    const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+    const off=20;
+    ctx.quadraticCurveTo(mx+off,my-off,b.x,b.y);
+    ctx.stroke();
+    // arrow
+    const dx=b.x-a.x,dy=b.y-a.y,d=Math.sqrt(dx*dx+dy*dy)||1;
+    const tx2=b.x-dx/d*(b.r||22),ty2=b.y-dy/d*(b.r||22);
+    const ang=Math.atan2(dy,dx);
+    ctx.setLineDash([]);
+    ctx.fillStyle=ctx.strokeStyle;
+    ctx.beginPath();
+    ctx.moveTo(tx2,ty2);
+    ctx.lineTo(tx2-8*Math.cos(ang-0.4),ty2-8*Math.sin(ang-0.4));
+    ctx.lineTo(tx2-8*Math.cos(ang+0.4),ty2-8*Math.sin(ang+0.4));
+    ctx.closePath();ctx.fill();
+    ctx.globalAlpha=1;
+  });
+  ctx.setLineDash([]);
+
+  // Draw nodes
+  nodes.forEach(n=>{
+    if(!visNodes.has(n.id)) return;
+    const dim = selectedId && !connIds.has(n.id);
+    ctx.globalAlpha = dim ? 0.15 : 1;
+    const sel = n.id===selectedId;
+    const r = sel ? 26 : 22;
+    let col = COLOR[n.type]||'#3b82f6';
+    if(n.problem) col = '#ef4444';
+
+    // glow
+    if(sel){
+      ctx.shadowColor=col;ctx.shadowBlur=18;
+    }
+    ctx.beginPath();
+    ctx.arc(n.x,n.y,r,0,Math.PI*2);
+    ctx.fillStyle=col+'22';
+    ctx.fill();
+    ctx.strokeStyle=col;
+    ctx.lineWidth=sel?2.5:1.8;
+    ctx.stroke();
+    ctx.shadowBlur=0;
+
+    // label
+    ctx.fillStyle=dim?'#444':'#e2e8f0';
+    ctx.font=`${sel?11:10}px 'Segoe UI',sans-serif`;
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    // truncate
+    const lbl = n.label.length>14?n.label.slice(0,13)+'…':n.label;
+    ctx.fillText(lbl,n.x,n.y);
+    ctx.globalAlpha=1;
+  });
+
+  ctx.restore();
+}
+
+function loop(){
+  simulate();
+  redraw();
+  requestAnimationFrame(loop);
+}
+
+// Interaction
+function canvasToWorld(cx,cy){
+  return {x:(cx-transform.x)/transform.scale, y:(cy-transform.y)/transform.scale};
+}
+function hitNode(wx,wy){
+  return nodes.find(n=>{const dx=n.x-wx,dy=n.y-wy;return dx*dx+dy*dy<30*30;});
+}
+
+canvas.addEventListener('mousedown',e=>{
+  const {x,y}=canvasToWorld(e.offsetX,e.offsetY);
+  const hit=hitNode(x,y);
+  if(hit){drag={node:hit,ox:x-hit.x,oy:y-hit.y};wrap.classList.add('grabbing');}
+  else{panning=true;lastMouse={x:e.clientX,y:e.clientY};wrap.classList.add('grabbing');}
+});
+canvas.addEventListener('mousemove',e=>{
+  if(drag){drag.node.x=canvasToWorld(e.offsetX,e.offsetY).x-drag.ox;drag.node.y=canvasToWorld(e.offsetX,e.offsetY).y-drag.oy;simRunning=true;tick=0;}
+  else if(panning){transform.x+=e.clientX-lastMouse.x;transform.y+=e.clientY-lastMouse.y;lastMouse={x:e.clientX,y:e.clientY};}
+});
+canvas.addEventListener('mouseup',e=>{
+  if(drag){
+    const {x,y}=canvasToWorld(e.offsetX,e.offsetY);
+    if(Math.abs(x-drag.node.x)<3&&Math.abs(y-drag.node.y)<3){
+      selectedId=(selectedId===drag.node.id)?null:drag.node.id;
+      updateNodeDetail(selectedId?nodes.find(n=>n.id===selectedId):null);
+    }
+  }
+  drag=null;panning=false;wrap.classList.remove('grabbing');
+});
+canvas.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const factor=e.deltaY<0?1.1:0.9;
+  const mx=e.offsetX,my=e.offsetY;
+  transform.x=mx-(mx-transform.x)*factor;
+  transform.y=my-(my-transform.y)*factor;
+  transform.scale*=factor;
+  transform.scale=Math.max(0.15,Math.min(transform.scale,4));
+},{passive:false});
+
+function updateNodeDetail(n){
+  const el=document.getElementById('node-detail');
+  if(!n){el.innerHTML='Click a node to see details.';return;}
+  const outs=edges.filter(e=>e.s===n.id).length;
+  const ins=edges.filter(e=>e.t===n.id).length;
+  el.innerHTML=`<strong>${n.label}</strong><br><span style="color:var(--muted)">`+
+    (n.path?`Path: <span style="color:#a5b4fc">${n.path}</span><br>`:'') +
+    `Type: ${n.type}<br>Group: ${n.group}<br>In edges: ${ins} · Out: ${outs}` +
+    (n.problem?`<br><span style="color:#ef4444">⚠ Has known issue</span>`:'')+
+    `</span>`;
+}
+
+function resetView(){transform={x:0,y:0,scale:1};simRunning=true;tick=0;}
+function runLayout(){simRunning=true;tick=0;}
+
+// Resize
+new ResizeObserver(()=>{
+  W=wrap.clientWidth;H=wrap.clientHeight;
+  canvas.width=W;canvas.height=H;
+}).observe(wrap);
+
+// ═══════════════════════════════════════════════════════════
+//  TABS
+// ═══════════════════════════════════════════════════════════
+function showTab(id){
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['graph','lifecycle','problems'][i]===id));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  const map={graph:'graph-panel',lifecycle:'lifecycle-panel',problems:'problems-panel'};
+  document.getElementById(map[id]).classList.add('active');
+  if(id==='graph'){W=wrap.clientWidth;H=wrap.clientHeight;canvas.width=W;canvas.height=H;}
+}
+
+// Boot
+window.addEventListener('load',initGraph);
+</script>
+</body>
+</html>

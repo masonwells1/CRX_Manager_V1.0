@@ -1,4 +1,5 @@
 import type { CustomerShareResult, PreviewFieldAppSplitResult } from '../../types';
+import { formatCents as fmt } from '../../lib/money';
 
 interface CustomerSharesTableProps {
   /**
@@ -16,8 +17,6 @@ interface CustomerSharesTableProps {
   preview?: PreviewFieldAppSplitResult | null;
 }
 
-const fmt = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function CustomerSharesTable({ shares, invoiceTotalCents, preview }: CustomerSharesTableProps) {
   // Server-computed preview path (Phase 1 split-aware): show real per-customer

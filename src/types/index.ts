@@ -321,7 +321,6 @@ export interface Order {
   is_planned: boolean;
   notes: string | null;
   program_notes: string | null;
-  created_by: string | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;
@@ -791,7 +790,6 @@ export type BlendTicketReviewStatus = 'unreviewed' | 'approved' | 'rejected';
 export type BlendTicketOrderLinkStatus = 'unlinked' | 'linked';
 export type BlendTicketPaymentStatus = 'unbilled' | 'billed' | 'prepaid' | 'no_charge';
 export type BlendTicketSource = 'ocr' | 'manual' | 'digital';
-export type OCRQueueStatus = 'pending' | 'processing' | 'completed' | 'failed';
 
 export interface BlendTicket {
   id: string;
@@ -949,20 +947,6 @@ export interface BlendRecipeItem {
   created_at: string;
   // Joined
   product?: Product;
-}
-
-export interface OCRProcessingQueue {
-  id: string;
-  blend_ticket_id: string;
-  status: OCRQueueStatus;
-  priority: number;
-  started_at: string | null;
-  completed_at: string | null;
-  error_message: string | null;
-  retry_count: number;
-  max_retries: number;
-  created_at: string;
-  updated_at: string;
 }
 
 // Phase 2: Billing / Invoices
@@ -1190,30 +1174,6 @@ export interface AllocationSet {
   updated_at: string;
 }
 
-export interface OrderLineAllocation {
-  id: string;
-  allocation_set_id: string;
-  order_item_id: string;
-  bill_to_customer_id: string;
-  split_percentage: number;
-  amount_cents: number;
-  created_at: string;
-  customer?: Customer;
-}
-
-export interface InvoiceLineAllocation {
-  id: string;
-  allocation_set_id: string;
-  invoice_item_id: string;
-  invoice_id: string | null;
-  bill_to_customer_id: string;
-  split_percentage: number;
-  amount_cents: number;
-  split_invoice_id: string | null;
-  created_at: string;
-  customer?: Customer;
-}
-
 export interface PrepayCredit {
   id: string;
   customer_id: string;
@@ -1241,20 +1201,6 @@ export interface PrepayApplication {
   applied_at: string;
 }
 
-export interface FinancialAuditEntry {
-  id: string;
-  operation_type: string;
-  entity_type: string;
-  entity_id: string;
-  actor_user_id: string;
-  actor_role: string | null;
-  old_values: Record<string, unknown> | null;
-  new_values: Record<string, unknown> | null;
-  total_impact_cents: number | null;
-  description: string | null;
-  created_at: string;
-}
-
 // Phase 1: Fields
 
 export interface Field {
@@ -1280,22 +1226,6 @@ export interface Field {
   updated_at: string;
   customer?: Customer;
   billing_defaults?: FieldBillingDefault[];
-}
-
-export interface FieldPolygon {
-  id: string;
-  field_id: string;
-  polygon_geojson: object;
-  label: string | null;
-  acres: number | null;
-  sort_order: number;
-  created_at?: string;
-}
-
-export interface FieldWithGroup extends Field {
-  child_count?: number;
-  children?: Field[];
-  polygons?: FieldPolygon[];
 }
 
 export interface FieldBillingDefault {
@@ -2359,15 +2289,6 @@ export interface EmailLog {
   created_at: string;
 }
 
-export interface ArReminderTracking {
-  id: string;
-  customer_id: string;
-  reminder_level: number;
-  sent_date: string;
-  email_log_id: string | null;
-  created_at: string;
-}
-
 // ── Financial Dashboard Margin Alerts ────────────────────────────────
 
 export interface BottomProduct {
@@ -2452,14 +2373,6 @@ export interface FieldAppLocationShare {
   created_at: string;
   // Joined
   customer?: Customer;
-}
-
-export interface FieldAppInvoicePayload {
-  invoice_number?: string;
-  customer_id?: string;
-  transaction_date?: string;
-  salesman_id?: string;
-  notes?: string;
 }
 
 export interface CustomerShareResult {

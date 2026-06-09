@@ -7,7 +7,7 @@ import localRules from 'eslint-plugin-local-rules';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage', 'CRX_Manager_V1.0', '.claude/worktrees', '.playwright-mcp', 'playwright-report', 'test-results'] },
+  { ignores: ['dist', 'coverage', 'CRX_Manager_V1.0', '.claude/worktrees', '.claude/workflows', '.playwright-mcp', 'playwright-report', 'test-results'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

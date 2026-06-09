@@ -184,7 +184,7 @@ Once these are green, a follow-up Claude Code session can write `20260508100000_
 
 - Trigger function: `release_holds_on_quote_status_change` defined in `supabase/migrations/20260316100001_inventory_hold_restoration.sql` (now fixed in `20260507210000_fix_holds_no_phantom_restoration.sql`).
 - E2E test that catches this bug: `tests/e2e/holds-cleanup-paths.spec.ts` Path B asserts `endQty === startQty`. **Update 2026-05-08:** Path B passes on production code with only the code fix applied — see resolution footer below.
-- Final-wave-review finding F7 in [docs/audits/2026-05-07-final-wave-review-prompt.md](../audits/2026-05-07-final-wave-review-prompt.md).
+- Final-wave-review finding F7 in [docs/archive/2026-spring/2026-05-07-final-wave-review-prompt.md](../archive/2026-spring/2026-05-07-final-wave-review-prompt.md).
 - Wave 3 anomaly that first surfaced this: `SESSION_FINAL_WAVE_3.md` § Anomalies.
 
 ---

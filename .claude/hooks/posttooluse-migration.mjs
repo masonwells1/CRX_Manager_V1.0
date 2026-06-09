@@ -31,6 +31,7 @@ Before continuing, you MUST:
    - Agent: typescript-types-drift-reviewer (if types were updated)
 5. If any subagent returns BLOCKER findings, fix them before suggesting apply_migration.
 6. If Mason is non-technical (which he is), also offer to run /explain-migration so he understands what's about to change live.
+7. If this migration changes an RPC signature, a status/CHECK enum, or a table, offer to run /map-drift-audit AFTER it's applied — it reconciles the app-workflow-map against the live DB and catches app-wide drift (missing/renamed RPCs, UI statuses the new CHECK would now reject) that the per-migration reviewers don't look for.
 
 Do NOT proceed to other tasks until these steps are complete.`;
 

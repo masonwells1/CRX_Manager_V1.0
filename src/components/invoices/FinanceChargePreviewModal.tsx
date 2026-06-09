@@ -20,6 +20,7 @@ import { supabase, assertRpcResult } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import type { FinanceChargePreview } from '../../types';
+import { formatCents as fmtCents } from '../../lib/money';
 
 interface FinanceChargePreviewModalProps {
   open: boolean;
@@ -28,8 +29,6 @@ interface FinanceChargePreviewModalProps {
   onSuccess: () => void;
 }
 
-const fmtCents = (cents: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
 export default function FinanceChargePreviewModal({
   open,

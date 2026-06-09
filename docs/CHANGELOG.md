@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-05-29 (workflow review + Codex cross-review) — 3 BLOCKER fixes applied live
+
+The new `/review-workflow` audit (full graph/lifecycle/cross-entity/invariant review, verified against live DB) surfaced BLOCKERs; Codex independently cross-reviewed them; every Codex claim was then re-verified against the live database (Codex itself had no Supabase MCP) before any fix. Three migrations applied live via MCP:
+
+- **`20260529214355_revoke_anon_execute_on_report_dashboard_secdef`** — closed an unauthenticated PII/financial leak. 37 SECURITY DEFINER report/dashboard/geo/financial RPCs were EXECUTE-able by the public `anon` key (SECDEF bypasses RLS); proven exploitable with no login (`global_search`, `get_customer_year_end_summary`, `dashboard_summary`, `_check_credit_limit`, etc.). REVOKE EXECUTE FROM anon,PUBLIC on all 37; GRANT to authenticated,service_role (app unaffected). anon-executable SECDEF dropped **89 → 52**; in-migration DO block asserts 0/37 leak. Remaining 52 verified safe (triggers, RLS predicates that must stay executable, sequence generators, self-guarding mutators, and 11 role-checked reports proven to RAISE for anon).
+- **`20260529214538_fix_void_order_void_invoice_status_transitions`** — `void_order` crashed on every call (the status-transition trigger gives `fulfilled` no path to `voided`, and the RPC never set `app.admin_override`); 0 orders had ever been voided despite 30 fulfilled. Fixed with a minimal transaction-local override bracket around the fulfilled→voided write. Draft invoices (in `void_order`'s loop and standalone `void_invoice`) now route to `cancelled` (an allowed transition) instead of `voided`; `void_invoice` draft/unposted also → cancelled.
+- **`20260529214423_fix_get_customer_transaction_review_running_balance_cast`** — fixed SQLSTATE 42804 (running-balance window `SUM()` returns numeric but column declared bigint; cast to `::bigint`).
+
+Both `rls-security-reviewer` and `migration-drift-reviewer` cleared all three. Codex's 4th "critical" finding (`batch_void_invoices` actor-spoof) was **refuted on live** — the vulnerable body exists only in the disk wave4 file; the deployed function gates on `auth.uid()` via `require_admin_or_sales_rep()` + `void_invoice`'s admin check. Deferred follow-ups (defense-in-depth internal guards on the 37; `batch_void_invoices` disk-drift hardening; restore-RPC fix-or-drop; migration rebuild-fidelity shadow-DB diff) are recorded in `docs/audits/2026-05-29-codex-disposition.md`. Migration count 357 → **360**.
+
+---
+
 ## 2026-05-26 (pre-push final audit) — B10 corrective fix for migration 348
 
 Codex's pre-push final audit caught a P1 production-breaking regression in commit `05be295`'s migration 348: the broad `REVOKE EXECUTE … FROM authenticated` on all 6 SECDEF DML helpers also revoked authenticated EXECUTE on 3 functions the frontend actively calls (`check_remainder_reminders` from `Dashboard.tsx:348`, `log_failed_notification` from `Dashboard.tsx:353/365` + `notificationTriggers.ts:37`, `notify_damaged_receiving` from `notificationTriggers.ts:278`). Those code paths were throwing 403 immediately on every dashboard load and every receiving-damaged-items flow.
@@ -520,7 +532,7 @@ Lesson recorded: future audits that drop infrastructure must grep ALL active bra
 
 ## 2026-05-11 — Security advisor cleanup from `/audit` run
 
-Acted on every fixable finding in `AUDIT_REPORT_2026-05-11.md`. Two migrations applied to the remote database:
+Acted on every fixable finding in `docs/archive/2026-spring/AUDIT_REPORT_2026-05-11.md`. Two migrations applied to the remote database:
 
 **`20260511120000_security_audit_2026_05_11.sql`** — five categories fixed:
 
@@ -547,7 +559,7 @@ Dropped the remaining bucket-specific SELECT policies on the 3 public buckets (`
 **Documentation:**
 - `CLAUDE.md` Current State date 2026-05-07 → 2026-05-11, migration count 285 → 287, Edge Functions prose 7 → 8.
 - `docs/reference/migration-history.md` count 285 → 287, rows 286 and 287 appended.
-- `AUDIT_REPORT_2026-05-11.md` already in repo (added in PR #60).
+- `docs/archive/2026-spring/AUDIT_REPORT_2026-05-11.md` already in repo (added in PR #60).
 
 **Deferred to follow-up PR:**
 - Performance advisor sweep: 63 `auth_rls_initplan`, 33 `multiple_permissive_policies`, 87 unused indexes, 72 unindexed FKs, 1 duplicate index.
@@ -853,7 +865,7 @@ The RPC and the RLS now enforce the same invariant from two layers — if one re
 
 ## 2026-05-01 — Field App Phase 17: Sprint E #2 — cycle count clamp/ledger drift (E2a)
 
-Migration `20260501120000_field_app_workflow_phase17.sql`. Closes audit finding P1-4 from `docs/audits/2026-04-30-data-integrity-workflow-locks-audit-findings.md`.
+Migration `20260501120000_field_app_workflow_phase17.sql`. Closes audit finding P1-4 from the 2026-04-30 data-integrity / workflow-locks audit _(findings doc not retained)_.
 
 ### The drift this closes
 
@@ -1062,7 +1074,7 @@ The two pieces (SQL rejection + UI button removal) had to ship together. Without
 
 ## 2026-04-30 — Field App Phase 9: Sprint A1 Auth Gates (3 of 12 SECURITY DEFINER RPCs)
 
-First migration of a multi-sprint hot-fix series addressing P1 findings from the money-inventory and security-permissions audits (`docs/audits/2026-04-30-money-inventory-audit-findings.md`, `docs/audits/2026-04-30-security-permissions-audit-findings.md`).
+First migration of a multi-sprint hot-fix series addressing P1 findings from the money-inventory and security-permissions audits (2026-04-30; _findings docs not retained_).
 
 ### Pattern (mirrors save_quote / Phase 7 start_job)
 
@@ -1101,7 +1113,7 @@ Auth gates added to:
 
 ## 2026-04-30 — Field Application Workflow Phases 7 + 8: Codex Re-Review Hot Fixes
 
-Two migrations addressing the four findings codex raised on its independent re-review of Phases 1–6 (`docs/audits/2026-04-30-field-app-phase1-6-codex-rereview-findings.md`).
+Two migrations addressing the four findings codex raised on its independent re-review of Phases 1–6 _(2026-04-30 codex re-review findings doc not retained)_.
 
 ### Phase 7 (`20260430190000_field_app_workflow_phase7.sql`) — Job RPC fixes
 
@@ -1240,7 +1252,7 @@ Addresses codex audit items #4 (no `start_job`), #5 (multi-customer jobs half-bu
 
 ## 2026-04-29 — Field Application Workflow Phase 1: Grouped Split Invoices + Grower-Share Mode
 
-Comprehensive rewrite of the multi-customer field application billing flow, prompted by the codex audit at `docs/audits/2026-04-28-field-application-workflow-review.md`. Bundles fixes for audit items #1, #2, #3, #9, #11, #13, M1, M2, M3.
+Comprehensive rewrite of the multi-customer field application billing flow, prompted by the 2026-04-28 field-application-workflow codex review _(audit doc not retained)_. Bundles fixes for audit items #1, #2, #3, #9, #11, #13, M1, M2, M3.
 
 ### Migration `20260429140635_field_app_workflow_phase1.sql` (~1,000 lines)
 
@@ -1616,7 +1628,7 @@ Phase 1 implementation for the blend ticket system — aligning the existing sch
 ### Context
 - All 10 open questions from the 2026-03-23 brainstorm answered
 - Key decisions: no mixer role (all roles can mix), single ticket with per-field customer assignments (Q6-B), skip Chem Man detection for Phase 1
-- Full plan: `docs/plans/2026-03-29-blend-ticket-phase1-implementation.md`
+- Full plan: `2026-03-29-blend-ticket-phase1-implementation.md` _(planning doc, not retained in repo)_
 
 ---
 
@@ -1770,7 +1782,7 @@ Comprehensive logic audit found 105+ issues across 8 domains. Phase 1 (Critical)
 - 1,653 unit tests passing, 0 lint/TS errors, CI green
 
 ### Audit Reference
-- Full audit: `docs/audits/2026-03-20-mega-logic-audit.md` (105+ issues found)
+- Full audit: 2026-03-20 mega-logic-audit _(doc not retained)_ (105+ issues found)
 - Phase 3 (Medium) fixes applied in same session (see below)
 
 ---
@@ -2165,7 +2177,7 @@ Fixed two findings from the 2026-04-10 functional audit in NewDelivery.tsx:
 - **A7: ESLint `no-console` rule** — warns on `console.log`/`info`/`debug`, allows `error`/`warn`. Zero existing violations, purely preventive
 - **A3: Sentry sourcemap uploads** — installed `@sentry/vite-plugin`, `sourcemap: 'hidden'` generates maps without exposing to users. Plugin uploads to Sentry then deletes from `dist/`. Only active when `SENTRY_AUTH_TOKEN` env var is set (Vercel CI)
 - **A5: Per-route error boundaries** — enhanced `ErrorBoundary` with `inline` prop for compact in-page error UI. Added `RouteShell` wrapper in `App.tsx` so page crashes don't take down sidebar navigation. 2 new unit tests
-- Design doc: `docs/plans/2026-03-16-infrastructure-hardening-design.md`
+- Design doc: `2026-03-16-infrastructure-hardening-design.md` _(design doc, not retained in repo)_
 
 ---
 
@@ -2841,7 +2853,7 @@ Cell renders `<input type="number">` not plain text; `textContent()` returned `'
 - `tests/e2e/math-invoice-verification.spec.ts` — IV1/IV5/IV12 fixes
 - `tests/e2e/math-quote-pricing.spec.ts` — QP3/QP6 fixes
 - `tests/e2e/00-seed-test-data.spec.ts` — seed spec (new)
-- `docs/2026-03-03-math-test-investigation.md` — full investigation findings
+- 2026-03-03 math-test-investigation _(doc not retained)_ — full investigation findings
 
 ### Migration
 - `20260319000000_fix_trigger_functions_search_path.sql`: adds `SET search_path TO 'public'` to 11 trigger functions so `_is_admin_override()` resolves correctly when fired from security-definer RPCs

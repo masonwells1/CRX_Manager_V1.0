@@ -1,5 +1,15 @@
 -- Preserve quote price overrides through save_quote() server recalculation.
 --
+-- RECOVERED FROM LIVE 2026-05-28: this migration was applied to the live database
+-- (project rhyzpcqhnizqbxphqdkr) as version 20260528042000 but the .sql file was
+-- never committed to the repo, leaving the repo unable to reproduce production.
+-- The SQL below is the exact statement retrieved from
+-- supabase_migrations.schema_migrations. The live `name` label was
+-- "20260528000001_preserve_quote_price_overrides"; the file is named with the
+-- live-applied version (20260528042000) so migration tooling treats it as already
+-- applied and never re-runs it. The statements are idempotent
+-- (ADD COLUMN IF NOT EXISTS / CREATE OR REPLACE FUNCTION) so a re-apply would be safe.
+--
 -- Previously, save_quote() always recalculated price_per_unit from product tier
 -- pricing, silently discarding any custom price a sales rep entered in QuoteBuilder.
 -- The UI supported price overrides but they were never actually persisted.

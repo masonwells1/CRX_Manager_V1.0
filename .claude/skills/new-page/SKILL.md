@@ -96,7 +96,7 @@ Read `CLAUDE.md` and update the page count in the "Current State" line (incremen
 ## Step 5: Verify
 
 ```bash
-cd /c/Users/mason/CRX_Manager_V1.0 && npm run typecheck && npm run build
+npm run typecheck && npm run build
 ```
 
 Fix any errors before reporting done.

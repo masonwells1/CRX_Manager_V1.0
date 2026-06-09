@@ -18,6 +18,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useAuth } from '../contexts/AuthContext';
 import { localToday, parseLocalDate, formatLocalDate } from '../lib/dateUtils';
 import { parseDollarsToCents, parseDollarsToCentsSigned } from '../lib/parseCents';
+import { formatCents as fmt } from '../lib/money';
 import type { Vendor, PurchaseOrder } from '../types';
 
 export default function NewVendorBill() {
@@ -168,8 +169,6 @@ export default function NewVendorBill() {
   };
 
   const totalCents = parseDollarsToCents(subtotalDollars || '0') + parseDollarsToCentsSigned(adjustmentDollars || '0');
-  const fmt = (cents: number) =>
-    new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
 
   // Calculate due date preview
   const dueDate = (() => {

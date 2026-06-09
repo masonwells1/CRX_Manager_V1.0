@@ -5,16 +5,12 @@
  * Sprint 9: Generic Report PDF Generator
  */
 
-import type jsPDF from 'jspdf';
+import { CRX_GREEN, CHARCOAL, GRAY, type JsPDFWithAutoTable } from './pdfTheme';
 import { localToday } from './dateUtils';
+import { COMPANY_TAGLINE_HEADER_NO_PHONE } from './companyInfo';
+import { formatUSD as fmtCurrency } from './money';
 
-type JsPDFWithAutoTable = InstanceType<typeof jsPDF> & {
-  lastAutoTable: { finalY: number };
-};
 
-const CRX_GREEN: [number, number, number] = [40, 162, 106];
-const CHARCOAL: [number, number, number] = [46, 46, 46];
-const GRAY: [number, number, number] = [78, 78, 78];
 
 export interface ReportPdfColumn {
   header: string;
@@ -33,9 +29,6 @@ export interface ReportPdfOptions {
   orientation?: 'portrait' | 'landscape';
   footerNote?: string;
 }
-
-const fmtCurrency = (n: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
 
 export async function generateReportPdf(options: ReportPdfOptions) {
   const { default: jsPDF } = await import('jspdf');
@@ -59,7 +52,7 @@ export async function generateReportPdf(options: ReportPdfOptions) {
   doc.text('CROP RX SOLUTIONS', margin, 28);
   doc.setFontSize(9);
   doc.setFont('helvetica', 'normal');
-  doc.text('Agricultural Input Solutions  •  Robinson, IL', margin, 44);
+  doc.text(COMPANY_TAGLINE_HEADER_NO_PHONE, margin, 44);
 
   // Report title on right
   doc.setFontSize(12);
@@ -122,18 +115,23 @@ export async function generateReportPdf(options: ReportPdfOptions) {
     columnStyles: colStyles as any,
     alternateRowStyles: { fillColor: [252, 252, 252] },
     didDrawPage: () => {
-      // Footer on every page
-      const footerY = doc.internal.pageSize.getHeight() - 20;
-      doc.setDrawColor(200, 200, 200);
-      doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
-      doc.setFontSize(7);
-      doc.setTextColor(160, 160, 160);
-      doc.text(
-        `Crop RX Solutions  •  Generated ${new Date().toLocaleDateString()}`,
-        pageW / 2,
-        footerY,
-        { align: 'center' }
-      );
+      try {
+        // Footer on every page
+        const footerY = doc.internal.pageSize.getHeight() - 20;
+        doc.setDrawColor(200, 200, 200);
+        doc.line(margin, footerY - 6, pageW - margin, footerY - 6);
+        doc.setFontSize(7);
+        doc.setTextColor(160, 160, 160);
+        doc.text(
+          `Crop RX Solutions  •  Generated ${new Date().toLocaleDateString()}`,
+          pageW / 2,
+          footerY,
+          { align: 'center' }
+        );
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error('reportPdf: didDrawPage failed', e);
+      }
     },
   });
 
