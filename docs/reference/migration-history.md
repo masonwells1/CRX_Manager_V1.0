@@ -1,10 +1,18 @@
-# Migration History (395 migrations)
+# Migration History (396 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-09 (Codex round-3 follow-up: maintenance-fn hardening)
+
+Codex round-3 (SHIP-WITH-FOLLOWUPS) flagged 6 leftover authenticated-callable SECDEF DML functions for lock-down-or-justify. This migration locks down the 4 with no frontend/Edge caller; the other 2 are documented as intentionally left (frontend-called; a hard auth gate would break their cron/service_role callers). Applied live after both reviewers clean + proof; disk renamed to MCP stamp. Self-verifying `has_function_privilege` assertion block passed; post-apply: all 4 authenticated/anon EXECUTE = false, service_role = true; smoke confirmed internal save_idempotency calls still work as owner.
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260609203541 | `harden_maintenance_secdef_revoke_authenticated` | REVOKE EXECUTE FROM PUBLIC/anon/authenticated + GRANT service_role on auto_expire_quotes(), mark_overdue_invoices(), retry_failed_notifications(), save_idempotency(text,text,jsonb) — no UI/Edge caller; cron + internal SECDEF callers run as owner (proven by the check_idempotency precedent 20260526201319). log_failed_notification + release_expired_quote_holds intentionally NOT changed (frontend-called; benign; hard auth gate would break cron/service_role). |
 
 ## Applied 2026-06-09 (Codex cross-review remediation — round 2: actor-forgery sweep)
 
