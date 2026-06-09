@@ -951,7 +951,7 @@ export interface BlendRecipeItem {
 
 // Phase 2: Billing / Invoices
 
-export type InvoiceType = 'chemical_sale' | 'field_application' | 'misc_charge';
+export type InvoiceType = 'chemical_sale' | 'field_application' | 'misc_charge' | 'credit_memo';
 export type InvoiceStatus = 'draft' | 'unposted' | 'posted' | 'paid' | 'overdue' | 'voided' | 'cancelled';
 
 export interface Invoice {
