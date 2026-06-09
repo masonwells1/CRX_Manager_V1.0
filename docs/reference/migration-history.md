@@ -1,10 +1,22 @@
-# Migration History (387 migrations)
+# Migration History (392 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-09 (Codex cross-review remediation)
+
+Newest-first. Fixes for Codex's NEEDS-WORK verdict on the foundation-audit batch (prompt `docs/audits/2026-06-09-codex-foundation-audit-remediation-prompt.md`). Each applied live via MCP after parallel rls-security + migration-drift reviewers clean + proof; disk renamed to MCP stamp. A full rolled-back end-to-end smoke test (build a received return -> issue_return_credit -> get_customer_statement single-count -> unapply_credit_memo) returned: ISSUE status=credited/credited_by set/total=5000, STMT credit_lines=1, UNAPPLY ok/cm voided/return received/total=0 — all PASS.
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260609191504 | `customer_statement_running_balance_bigint` | Found by the e2e smoke test (4th stacked latent break): get_customer_statement threw SQLSTATE 42804 (`SUM(bigint) OVER` returns numeric vs declared `running_balance bigint`) whenever the statement had rows — pre-existing, masked by the empty-result case + the frontend try/catch. Cast the window SUM to bigint (lossless — amounts are whole-cent bigint). Supersedes 190747's function version (carries the de-dup + relabel). |
+| 20260609190820 | `save_job_strict_actor` | **Codex BLOCKER 3 (actor-forgery).** save_job role-checked the forgeable `p_performed_by` directly (`WHERE id = p_performed_by`) with NO auth.uid() bind — any authenticated user could forge an admin/sales_rep id (readable via profile_public_view) to create/edit jobs. (The earlier H1 COALESCE-based sweep missed it; Codex found it by reading.) Replaced with the canonical strict-actor block (auth.uid() -> AUTH_REQUIRED / ACTOR_MISMATCH / INSUFFICIENT_ROLE on v_actor), before the idempotency check. Body verbatim otherwise. Smoke: forged p_performed_by -> ACTOR_MISMATCH, non-admin -> INSUFFICIENT_ROLE, overload=1. |
+| 20260609190747 | `customer_statement_dedupe_return_credit` | **Codex BLOCKER 2 (AR double-count).** get_customer_statement counted return credits TWICE — once as the posted negative credit_memo invoice, once via a separate "Return credits" UNION branch. Removed the returns-credit branch (the credit is counted once via the credit_memo invoice; invoices.balance_cents is AR truth) + relabel credit_memo rows as 'credit'/'Credit Memo'. Safe: 0 historical credited returns. Read-only STABLE SECDEF; role guard unchanged. |
+| 20260609190725 | `unapply_credit_memo_total_credit_zero` | **Codex BLOCKER 1.** unapply_credit_memo set returns.total_credit_cents = NULL, but the column is NOT NULL DEFAULT 0 -> the unapply aborted on a return-linked credit memo. Fixed to `= 0`. Only behavioral change vs the prior 20260609134025 body; strict-actor + admin_override bracket intact. Depends on 190659. |
+| 20260609190659 | `returns_add_credited_by_column` | **Completes B1 end-to-end (latent break the audit missed).** returns.credited_by was MISSING, but issue_return_credit (`SET credited_by = v_actor`) and unapply_credit_memo both write it, and the Return TS interface already declares it — so issue_return_credit's `UPDATE returns SET ... credited_by` still threw "column does not exist" even after the constraint/trigger fixes (the earlier B1 smoke test only exercised the invoice INSERT, not the full RPC). Added the nullable column (matches the requested_by/approved_by/received_by/cancelled_by `_by` pattern). |
 
 ## Applied 2026-06-09 (foundation-audit remediation)
 
