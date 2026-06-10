@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -15,6 +15,7 @@ import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCod
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
+import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -150,6 +151,8 @@ export default function JobDetail() {
   const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
   // B3: WPS pre-application notice PDF
   const [printingWps, setPrintingWps] = useState(false);
+  // C4: weather auto-capture at completion
+  const [fetchingWeather, setFetchingWeather] = useState(false);
 
   const handleWpsNotice = async () => {
     setPrintingWps(true);
@@ -375,6 +378,32 @@ export default function JobDetail() {
   const loadsNeeded = selectedVehicle?.capacity_gallons && totalGallons > 0
     ? Math.ceil(totalGallons / selectedVehicle.capacity_gallons)
     : null;
+
+  // C4: weather auto-capture at completion (first selected field's centroid)
+  const jobFieldCentroid = (() => {
+    const firstFieldId = fieldRows.find((r) => r.field_id)?.field_id;
+    if (!firstFieldId) return null;
+    return parseCentroid(allFields.find((f) => f.id === firstFieldId)?.centroid_geojson);
+  })();
+
+  const handleFetchWeather = async () => {
+    if (!jobFieldCentroid) return;
+    setFetchingWeather(true);
+    const w = await fetchCurrentWeather(jobFieldCentroid.lat, jobFieldCentroid.lng);
+    setFetchingWeather(false);
+    if (!w) {
+      toast('error', 'Could not fetch weather — enter conditions manually');
+      return;
+    }
+    setAppliedInfo((prev) => ({
+      ...prev,
+      wind_speed: w.wind_speed_mph.toString(),
+      wind_direction: w.wind_direction,
+      temperature: w.temperature_f.toString(),
+      humidity: w.humidity_pct.toString(),
+    }));
+    toast('success', 'Weather filled from current conditions — adjust if needed');
+  };
 
   const handleSave = async () => {
     // Codex P2 fix (PR #59, 2026-05-16): reset saveJobIdem per save attempt.
@@ -1051,6 +1080,12 @@ export default function JobDetail() {
           <p className="text-sm text-secondary">
             Record weather conditions and actual application data. This will create an application record and deduct inventory.
           </p>
+          {jobFieldCentroid && (
+            <Button variant="ghost" size="sm" onClick={handleFetchWeather} loading={fetchingWeather}>
+              <CloudSun className="w-4 h-4" />
+              Use current weather at {allFields.find(f => f.id === fieldRows.find(r => r.field_id)?.field_id)?.field_name || 'field'}
+            </Button>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <Input label="Wind Speed (mph)" type="number" value={appliedInfo.wind_speed}
               onChange={(e) => setAppliedInfo({ ...appliedInfo, wind_speed: e.target.value })} />

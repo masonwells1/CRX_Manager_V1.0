@@ -13,6 +13,14 @@ First `/ship` off the deep-dive roadmap, on branch `feat/h1-quick-wins-2026-06-1
 
 Deferred (LOW/pre-existing, reviewer-noted): authenticated-callable `generate_rup_sales_records` attribution-only gate; trigger's RLS fail-open dependency. Branch NOT pushed (prod-push gate).
 
+**Same branch, same session — 4 more H1 items shipped:**
+- **B1** RUP point-of-sale warnings: NewOrder banner (stable product-set key, once-per-set activity log) + InvoiceDetail post-confirm folds a NON-COMPLIANT warning into the modal (danger variant; check failure can never block posting). Frontend-only.
+- **B3** WPS pre-application notice: migration `20260610193241` adds `products.rei_hours`/`phi_days` (label data, applied live); new `wpsNoticePdf.ts` (40 CFR 170 notice from a job: treated areas, products w/ EPA reg + REI, required-notice bullets, per-page footer, page-break guards); JobDetail "WPS Notice" button; ProductDetail REI/PHI inputs.
+- **E3** Owner's daily brief: admin Dashboard card composing AR position (past-60 callout, over-credit count), prepay/commissions owed, period-close countdown, and today's workload from `financial_dashboard_summary` (dollars, formatUSD) + already-fetched operational data.
+- **C4** Weather auto-capture: `weatherCapture.ts` (Open-Meteo, keyless; CSP `connect-src` += api.open-meteo.com) — "Use current weather" in the Complete Job modal prefills wind/temp/humidity from the first field's centroid; failure falls back to manual entry. 18 new unit tests across the batch (suite 1,942).
+
+**Blocked on owner inputs (next H1 items):** A1 pay-now links (Stripe account/keys), D1 vendor-bill AI pilot (10 real bills for the accuracy gate), B6 state report pack (which states + the WI DATCP template if applicable — IL's on-demand RUP register + CSV export already exist on /compliance).
+
 ---
 
 ## 2026-06-10 (foundation ultra review + full remediation) — 7 migrations live, 4 latent crashes fixed, anon exposure closed

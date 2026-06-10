@@ -31,6 +31,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
 import ActionQueue from '../components/dashboard/ActionQueue';
+import DailyBrief from '../components/dashboard/DailyBrief';
 import ExpiringLicensesCard from '../components/compliance/ExpiringLicensesCard';
 
 // --- Types ---
@@ -361,6 +362,16 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Owner's daily brief (admin only; E3 deep-dive H1) */}
+      {isAdmin && (
+        <DailyBrief
+          deliveriesToday={data.deliveryToday}
+          deliveryUnassigned={data.deliveryUnassigned}
+          activeOrders={data.activeOrdersCount}
+          actionItemsCount={data.teamActionItems.length}
+        />
+      )}
+
       {/* ═══════════════════════════════════════════════════════════ */}
       {/* Quick Actions (hidden from drivers)                       */}
       {/* ═══════════════════════════════════════════════════════════ */}

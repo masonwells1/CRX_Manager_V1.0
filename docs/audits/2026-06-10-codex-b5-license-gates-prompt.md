@@ -30,6 +30,15 @@ Live `generate_rup_sales_records` filtered `al.deleted_at IS NULL` but `applicat
 - RUP smoke (rolled back): temp `is_rup` product + invoice item → `generate_rup_sales_records` = 1, `compliance_status='non_compliant'`, 2nd call = 0.
 - Overloads=1 each; trigger attached (`pg_trigger`); constraint present; typecheck/lint/build green; 1,934 unit tests pass.
 
+## Addendum — same-branch H1 batch (review these too)
+
+After B5, four more deep-dive H1 items landed on the branch (commits after `0dc0222`):
+
+- **B1 (frontend-only):** RUP warnings — `NewOrder.tsx` banner (effect keyed on sorted product-id set; activity-logged once per customer+set) + `InvoiceDetail.tsx` `openPostConfirm` folds a NON-COMPLIANT warning into the post ConfirmModal (danger + AlertTriangle). Invariant to verify: the check can NEVER block posting (try/catch falls through to the plain confirm).
+- **B3:** migration `20260610193241` (APPLIED LIVE) — additive `products.rei_hours`/`phi_days` integers; `src/lib/wpsNoticePdf.ts` (40 CFR 170 notice; pdfTheme palette, per-page footer, `ensureRoom` heading guards); JobDetail "WPS Notice" button (`fieldRows.some(f => f.field_id)` gate); ProductDetail inputs with non-negative save validation.
+- **E3 (frontend-only):** `DailyBrief.tsx` admin Dashboard card off `financial_dashboard_summary`. Money check: that RPC returns DOLLARS (not cents) — verify `formatUSD` (no ÷100) is correct by comparing with `FinancialDashboard.tsx`'s `fmt`.
+- **C4 (frontend-only + CSP):** `weatherCapture.ts` (Open-Meteo, keyless; `degreesToCardinal`/`parseCentroid` unit-tested) prefills Complete-Job weather from the first field's centroid; `vercel.json` CSP `connect-src` += `https://api.open-meteo.com` (only change). Invariant: weather failure can never block completion (null + toast).
+
 ## Questions for Codex
 1. Any path where a NON-admin reaches the override (UI or RPC)? Check both client branches and the RPC gate ordering.
 2. The two-phase JobDetail override save: any state where the job ends up assigned WITHOUT an audit row, or assigned by the trigger-bypass outside the bracketed UPDATE?
