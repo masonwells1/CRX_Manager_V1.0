@@ -218,8 +218,15 @@ landlord, or insurer ask is a one-click export instead of a shoebox of notes:
   automatically; every record lands on the field timeline (§8A).
 
 ### 6.4 Reminders & timers
-- **Planned-pass reminders** — "post-emerge window for North 80 opens ~June 1"
-  (date- or growth-stage-based), nudged via email/SMS with a portal deep link.
+- **Follow-up trip timers (Mason's core ask, confirmed 2026-06-10)** — logging a
+  pass starts the clock on the *next* one: pre-emerge applied May 5 with a ~26-day
+  residual → "2nd trip on North 80 due ~May 31," with a countdown on the spray
+  board and an email/SMS nudge as the window approaches. The interval is set per
+  product (default residual days on the catalog) or overridden per plan/pass.
+  Chains too: 2nd trip logged → fungicide timer starts, etc.
+- **CRX side of the same timer:** ops/sales see every customer whose 2nd-trip
+  window opens this week → schedule the chemical delivery or the custom-app crew
+  *before* the grower calls. The reminder engine doubles as a workload forecast.
 - **REI timer** — log a spray → portal shows "re-entry safe after Tue 6:00 AM"
   per field (REI hours from product label data).
 - **PHI guard** — "Field X sprayed with Y on date Z → earliest legal harvest is
@@ -228,25 +235,48 @@ landlord, or insurer ask is a one-click export instead of a shoebox of notes:
   remind if a checked-off pass is missing its compliance fields.
 - **Resupply** — "at current pace your shed runs out of Product X in ~2 passes."
 
-### 6.5 What CRX needs to add to make this work
+### 6.5 Internal crew use — custom acres + work planning (confirmed 2026-06-10)
+Mason: CRX's own crew should use this too, for custom-applied acres and to
+**plan/schedule future work**. Implications:
+- **One data model, two front doors.** The same spray plan / pass / application-log
+  tables serve both: a pass is *assigned* to either the grower (self-spray) or a
+  CRX crew (custom). A field can mix both in one season (grower sprays pre, CRX
+  flies the fungicide).
+- **Internal spray board in CRX Manager** — whole-book view across all customers:
+  every custom-acre pass, filterable by crew/rep/week, fed by the same follow-up
+  timers ("17 fields enter their 2nd-trip window next week" = the work forecast).
+- **Reuse, don't duplicate, the existing machinery:** CRX already has a Job
+  lifecycle (`scheduled → in_progress → completed → invoiced`) and a DispatchBoard
+  page. A scheduled custom pass is probably just a *planned job* with spray-plan
+  context attached — completing the job writes the compliance record (6.3) with the
+  crew's applicator license auto-filled. Investigate linking `spray_passes ↔ jobs`
+  rather than building a parallel scheduler.
+- Custom passes completed by CRX flow straight to billing (job → invoice — the
+  existing `transfer_job_to_invoice` path), so the compliance tool also tightens
+  the custom-app revenue loop.
+
+### 6.6 What CRX needs to add to make this work
 - Label data on the product catalog: EPA reg #, REI hours, PHI days by crop,
-  RUP yes/no, max rate/season. (One-time data lift per product CRX sells; start
-  with the top 20 movers, not the whole catalog.)
+  RUP yes/no, max rate/season, **default residual/follow-up interval days** (one-time
+  data lift per product CRX sells; start with the top 20 movers, not the whole catalog).
 - Notification delivery — email exists (`send-email` Edge Function); SMS is new
   (**OPEN QUESTION:** SMS provider, or email-only v1?).
 - A `customer_chemical_inventory` ledger + `spray_plans` / `spray_passes` /
   `application_logs` tables (portal-scoped RLS; design when we plan).
 
-### 6.6 Open questions on this piece (Mason)
-1. "Reminders for when we need to **post spray**" — confirm meaning: (a) reminder
-   that the post-emerge *pass* is due, (b) REI/PHI timers *after* spraying, or both?
-   (Doc currently assumes **both**.)
-2. Do *your own* custom-application crews also use this internally (CRX Manager
-   side), or is v1 grower-self-spray only?
+### 6.7 Open questions on this piece (Mason)
+1. ~~"Post spray" meaning~~ — **ANSWERED 2026-06-10:** follow-up trip timers —
+   e.g. pre-emerge applied → ~26 days of residual → reminder that the 2nd trip is
+   due. (REI/PHI timers kept as well — they're cheap once the log exists.)
+2. ~~Internal crew use?~~ — **ANSWERED 2026-06-10: yes** — crew uses it for custom
+   acres and for planning/scheduling future work (see 6.5).
 3. Do your growers hold applicator licenses we should track (private applicator
    cert numbers), incl. expiry-date reminders?
 4. Should checking off a pass *require* the compliance fields, or allow "quick
    check now, fill details later" (with the 14-day nudge chasing them)?
+5. Where do the residual/follow-up intervals come from — a default per product
+   that you maintain (e.g. "26 days"), set per customer program, or both
+   (product default + per-plan override)? Doc assumes both.
 
 ---
 
@@ -370,3 +400,4 @@ first. Grouped by theme. Mason: mark ❤️ / 🗑 / ✏️ or just say so in ch
 | 2026-06-10 | Initial doc: architecture decision, agronomy sketch, upload tiers, profitability map, phasing | 
 | 2026-06-10 | Reframed as VISION doc per Mason; added idea backlog (§8) across 5 themes + parked list |
 | 2026-06-10 | ⭐ Added §6 chemical tracking & spray compliance as Mason's priority focus (shed inventory auto-fed by CRX deliveries, spray checklist, compliance-grade log, REI/PHI + post-spray reminders); flagged it as candidate first portal feature |
+| 2026-06-10 | §6 iterated per Mason: "post spray" = follow-up trip timers (pre applied → ~26-day residual → 2nd-trip reminder; product-default interval + per-plan override); internal crew use confirmed (custom acres + work planning — new 6.5, likely `spray_passes ↔ jobs`/DispatchBoard link, job completion writes the compliance record, flows to invoicing) |
