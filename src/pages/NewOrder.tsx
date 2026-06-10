@@ -1,4 +1,4 @@
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -7,6 +7,7 @@ import {
   Trash2,
   Search,
   RotateCcw,
+  AlertTriangle,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -24,6 +25,8 @@ import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
 import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
+import { checkRUPCompliance } from '../lib/rupCompliance';
+import { logActivity } from '../lib/activityLogger';
 import { trackBusinessEvent } from '../lib/metrics';
 import { localToday, localDatePlusDays } from '../lib/dateUtils';
 import type { Product, Customer } from '../types';
@@ -83,6 +86,8 @@ export default function NewOrder() {
   const [customerPoNumber, setCustomerPoNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);
+  // B1 (deep-dive H1): RUP point-of-sale warning — same pattern as QuoteBuilder
+  const [rupWarnings, setRupWarnings] = useState<string[]>([]);
 
   // Codex P2 fix (PR #59, 2026-05-16): reset createOrderIdem when form intent
   // changes. Page stays mounted after a failed/lost-response submit; without
@@ -216,6 +221,28 @@ export default function NewOrder() {
   );
 
   // Get current customer tier
+  // RUP compliance check when customer or product SET changes (B1).
+  // Keyed on the sorted product-id string (not the items array identity) so
+  // quantity/price keystrokes don't re-fetch, and logged once per
+  // customer+product-set so editing doesn't spam activity_feed.
+  const rupProductKey = items.map((i) => i.product_id).filter(Boolean).sort().join(',');
+  const lastRupLogKey = useRef('');
+  useEffect(() => {
+    if (!customerId || !rupProductKey) { setRupWarnings([]); return; }
+    let cancelled = false;
+    checkRUPCompliance(customerId, rupProductKey.split(',')).then((res) => {
+      if (!cancelled) {
+        setRupWarnings(res.warnings);
+        const logKey = `${customerId}|${rupProductKey}`;
+        if (res.warnings.length > 0 && profile?.id && lastRupLogKey.current !== logKey) {
+          lastRupLogKey.current = logKey;
+          logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on direct order for customer without valid license`, performedBy: profile.id, entityType: 'customer', entityId: customerId, customerId });
+        }
+      }
+    });
+    return () => { cancelled = true; };
+  }, [customerId, rupProductKey, profile?.id]);
+
   const customerTier = customers.find((c) => c.id === customerId)?.assigned_tier || 1;
 
   const addItem = () => {
@@ -448,6 +475,17 @@ export default function NewOrder() {
       </div>
 
       <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
+
+      {rupWarnings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-sm text-amber-800">
+              {rupWarnings.map((w, i) => <p key={i}>{w}</p>)}
+            </div>
+          </div>
+        </div>
+      )}
 
       <Card>
         <CardHeader title="Order Information" />
