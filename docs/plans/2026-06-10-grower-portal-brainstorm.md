@@ -172,7 +172,85 @@ profit_per_acre(cell) = avg_dry_yield(cell) × price_per_unit
 
 ---
 
-## 6. Rough build order (sketch only — sequencing logic, not a commitment)
+## 6. ⭐ Chemical tracking & spray compliance (Mason priority — added 2026-06-10)
+
+**For growers who take delivery of their own chemical and spray it themselves.**
+Mason wants heavy focus here: compliance-grade application records, a "what's been
+sprayed / what hasn't" checklist with dates, and reminders (e.g. when the post
+spray is due). This may be the best *first* portal feature — it's daily-use
+in-season (growers open the portal every week, not once at harvest), and it's
+uniquely powered by CRX data.
+
+### 6.1 The chemical shed (product inventory per grower)
+- **Auto-credited from CRX deliveries** — every jug/tote/bulk load CRX delivers to
+  that customer already exists in the DB. Their on-hand inventory starts itself;
+  zero data entry. *This is the moat — FieldView/Deere can't see what's in the shed.*
+- Manual add for product bought elsewhere (keep it honest/complete).
+- Depleted by application logs (below): `delivered − applied = on hand`.
+- Side effects for CRX: low-stock nudges → reorder button → a quote/order lead in
+  CRX Manager. The compliance tool quietly becomes a sales channel.
+
+### 6.2 Spray plan checklist ("what's sprayed, what's not")
+- Per field per season: the planned passes — burndown, pre-emerge, post-emerge,
+  fungicide, insecticide, dessication — each a row with ✓/✗, date sprayed, product(s),
+  rate, who sprayed.
+- Whole-farm board view: every field down the side, passes across the top —
+  one screen answers "where do we stand?" during the spray rush.
+- Plans can be seeded from the grower's CRX nutrition/chem program (§3) or from
+  last year's plan ("copy 2026 → 2027").
+- Checking a pass off **creates the compliance record** (6.3) — one action, both jobs.
+
+### 6.3 Compliance-grade application log
+Records that satisfy federal RUP recordkeeping (and IL state rules) so an inspector,
+landlord, or insurer ask is a one-click export instead of a shoebox of notes:
+- Product + **EPA reg. number** (auto-filled from the CRX product catalog — grower
+  never types it), rate, total amount, method.
+- Field/location + acres (already in `fields` — auto-filled), crop.
+- Date/time, applicator name + **license/cert number**, RUP flag.
+- Weather at application: wind speed/direction, temp, sky — quick-pick UI; possibly
+  auto-suggested from a weather API against the field centroid at the logged time.
+- Tank-mix support (multiple products per pass — mirrors blend-ticket structure).
+- **Append-only after submission** (corrections as amendments, like
+  `financial_audit_log`) — that's what makes it credible as a compliance record.
+- Exports: per-field or whole-farm PDF/CSV, formatted for RUP audit / landlord /
+  crop-insurance / sustainability programs.
+- Feeds everything else: application costs flow into the profitability map (§5)
+  automatically; every record lands on the field timeline (§8A).
+
+### 6.4 Reminders & timers
+- **Planned-pass reminders** — "post-emerge window for North 80 opens ~June 1"
+  (date- or growth-stage-based), nudged via email/SMS with a portal deep link.
+- **REI timer** — log a spray → portal shows "re-entry safe after Tue 6:00 AM"
+  per field (REI hours from product label data).
+- **PHI guard** — "Field X sprayed with Y on date Z → earliest legal harvest is
+  date Z + PHI days." Flags conflicts with the planned harvest date.
+- **Records-due nudge** — federal RUP rule: records within 14 days of application;
+  remind if a checked-off pass is missing its compliance fields.
+- **Resupply** — "at current pace your shed runs out of Product X in ~2 passes."
+
+### 6.5 What CRX needs to add to make this work
+- Label data on the product catalog: EPA reg #, REI hours, PHI days by crop,
+  RUP yes/no, max rate/season. (One-time data lift per product CRX sells; start
+  with the top 20 movers, not the whole catalog.)
+- Notification delivery — email exists (`send-email` Edge Function); SMS is new
+  (**OPEN QUESTION:** SMS provider, or email-only v1?).
+- A `customer_chemical_inventory` ledger + `spray_plans` / `spray_passes` /
+  `application_logs` tables (portal-scoped RLS; design when we plan).
+
+### 6.6 Open questions on this piece (Mason)
+1. "Reminders for when we need to **post spray**" — confirm meaning: (a) reminder
+   that the post-emerge *pass* is due, (b) REI/PHI timers *after* spraying, or both?
+   (Doc currently assumes **both**.)
+2. Do *your own* custom-application crews also use this internally (CRX Manager
+   side), or is v1 grower-self-spray only?
+3. Do your growers hold applicator licenses we should track (private applicator
+   cert numbers), incl. expiry-date reminders?
+4. Should checking off a pass *require* the compliance fields, or allow "quick
+   check now, fill details later" (with the 14-day nudge chasing them)?
+
+---
+
+## 6b. Rough build order (sketch only — sequencing logic, not a commitment)
 
 | Phase | What | Where | Notes |
 |-------|------|-------|-------|
@@ -184,6 +262,12 @@ profit_per_acre(cell) = avg_dry_yield(cell) × price_per_unit
 | 5 | LLM assistant (Claude API via Edge Function, customer-scoped RAG) | Portal | Needs Phases 1–3 data to be useful |
 
 Each build phase goes through the normal `/ship` pipeline when we get there.
+
+**Sequencing note (2026-06-10):** with Mason's priority on chemical tracking (§6),
+the spray checklist + compliance log is a strong candidate for the **first
+grower-facing feature** — it's used weekly all season (vs harvest-time analytics),
+needs no geospatial work, and auto-seeds from CRX delivery data. Could slot in as
+Phase 2 alongside or ahead of the read-only portal MVP.
 
 ---
 
@@ -226,8 +310,9 @@ first. Grouped by theme. Mason: mark ❤️ / 🗑 / ✏️ or just say so in ch
 
 ### B. Grower data & records
 - Planting + harvest records (manual tier + monitor-upload tier — §4)
-- **Spray/application records compliance view** — what was applied, when, rate,
-  REI/PHI — exportable for crop insurance, landlords, organic/sustainability audits
+- **Spray/application records compliance view** — ⭐ promoted to its own priority
+  section, see §6 (chemical shed inventory, spray checklist, compliance log,
+  REI/PHI reminders)
 - **Rainfall & GDD per field** — pull a weather API against field centroids;
   context layer for yield results ("that field got 4 fewer inches")
 - **Storage/inventory of grain** (much later) — bushels in the bin vs sold
@@ -284,3 +369,4 @@ first. Grouped by theme. Mason: mark ❤️ / 🗑 / ✏️ or just say so in ch
 |------|--------|
 | 2026-06-10 | Initial doc: architecture decision, agronomy sketch, upload tiers, profitability map, phasing | 
 | 2026-06-10 | Reframed as VISION doc per Mason; added idea backlog (§8) across 5 themes + parked list |
+| 2026-06-10 | ⭐ Added §6 chemical tracking & spray compliance as Mason's priority focus (shed inventory auto-fed by CRX deliveries, spray checklist, compliance-grade log, REI/PHI + post-spray reminders); flagged it as candidate first portal feature |
