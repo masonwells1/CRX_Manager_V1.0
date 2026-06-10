@@ -49,6 +49,22 @@ npm run test -- --reporter=verbose 2>&1 | tail -15
 
 These also run automatically when Mason types `git commit` (via husky pre-commit hook). Running them here just surfaces failures earlier so Mason can fix before the commit attempt rejects.
 
+## Step 3b: Prevention-control checks
+
+Run both:
+
+```bash
+node scripts/check-doc-drift.mjs
+node scripts/verify-deps.mjs
+```
+
+- `check-doc-drift` failing → a reference doc (CLAUDE.md counts, migration-history rows, etc.) is stale; fix the doc, don't commit around it.
+- `verify-deps` failing → `node_modules` doesn't match the lockfile (or a peer range is violated); run `npm ci` and re-check.
+
+**If `MIGRATION_CHANGED=true`,** also run the db-invariant sweeps: `npm run db-sweeps` prints each predicate's SQL — execute the blocks read-only via Supabase MCP `execute_sql` and compare `violation_key`s against `scripts/db-invariant-sweeps/allowlist.json`. Any unallowlisted violation is a BLOCKER.
+
+**Smoke-chain hard rule (note, applies whenever a migration touched an RPC):** every migration-touched RPC must have a PASSING full business-chain spec in `scripts/smoke/smoke-specs.json` (`node scripts/smoke/run-smoke.mjs --spec <rpc>`, PASS = `SMOKE_PASS_ROLLBACK`). No spec (runner exit 2) = write a chain first; an isolated probe is never evidence of a fix. Flag any touched RPC without fresh chain PASS evidence.
+
 ## Step 4: Quick doc-drift check
 
 ```bash

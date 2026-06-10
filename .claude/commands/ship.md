@@ -31,6 +31,12 @@ npm run build
 npm run test
 ```
 
+If `package.json` or `package-lock.json` changed, also run:
+
+```bash
+node scripts/verify-deps.mjs
+```
+
 Capture pass/fail for each. Any failure → fix it now and re-run before continuing. Do not enter the review gate on a red build.
 
 ## Step 3 — Review fan-out (parallel, scoped to what changed)
@@ -68,9 +74,12 @@ Only after Step 4 is clean for the migration:
      "findings": "clean" }
    ```
 2. **Apply via Supabase MCP** `apply_migration`.
-3. **Smoke-test rolled back:** exercise the new behavior in a `BEGIN; ... ROLLBACK;` (or on a temp `[E2E]`-style row) and confirm the expected result — clean reviewers + md5 fidelity have missed a latently-broken prod RPC before.
+3. **Smoke-chain test (hard rule — chains, not probes):** EVERY RPC the migration creates or modifies must pass its full business-chain spec from `scripts/smoke/smoke-specs.json`. For each touched RPC run `node scripts/smoke/run-smoke.mjs --spec <rpc>`:
+   - Runner exits 2 with "no spec covers" → **write or extend a chain first** (per `scripts/smoke/README.md` — investigate live catalog, house conventions, register in `smoke-specs.json`). This is a gate, not a suggestion.
+   - Execute each printed chain as ONE statement via MCP `execute_sql`. PASS = the error text contains `SMOKE_PASS_ROLLBACK` (proves nothing persisted). Any other error, or no error → FAIL: fix it, then **re-run the FULL chain — never just the failing step** (clean reviewers + md5 fidelity have missed latently-broken prod RPCs before; an isolated statement probe is never evidence of a fix).
 4. **B7 rename:** rename the disk migration file to the version stamp the MCP assigned (so it can't be re-applied later).
 5. **Regen the schema registry** (`/regen-schema-registry` via MCP introspection) if the migration added a status enum, generated column, or table — otherwise the hooks run on stale data.
+6. **Run the db-invariant sweeps (post-apply gate):** `npm run db-sweeps` prints each predicate's SQL — execute every block read-only via MCP `execute_sql` and compare returned `violation_key`s against `scripts/db-invariant-sweeps/allowlist.json`. **Any unallowlisted violation BLOCKS the ship** — fix it (or report it as a finding); NEVER allowlist a real hole to get green.
 
 If the migration touches a CHECK constraint, function with an existing name, or an existing table, that is exactly what the two reviewers in Step 3 are for — do not skip them.
 
@@ -83,6 +92,8 @@ If worthy: run `/codex-cross-review` to draft the packet (`docs/audits/<date>-co
 ## Step 7 — Docs + commit (on the branch)
 
 Update the docs the change touched (per CLAUDE.md "Documentation Maintenance"): CLAUDE.md Current State counts, `docs/reference/migration-history.md`, `rpc-functions.md`, `pages-routes.md`, `database-schema.md`, `docs/CHANGELOG.md` as applicable.
+
+Before committing, run `node scripts/check-doc-drift.mjs` — fix any drift it reports (stale counts, missing migration-history rows) rather than committing around it.
 
 Re-verify the branch (`git branch --show-current`), then commit **on the branch** with a clear message. The husky pre-commit hook re-runs lint/build/test — if it rejects, fix and retry (never `--no-verify`).
 
