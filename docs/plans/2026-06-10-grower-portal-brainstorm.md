@@ -1,14 +1,19 @@
-# Grower Portal + Precision Profitability — Brainstorm / Design Doc
+# Grower Portal + Precision Profitability — Vision / Brainstorm Doc
 
-**Date:** 2026-06-10 · **Status:** BRAINSTORM (no code, no migrations — this doc is the deliverable)
-**Branch:** `claude/customer-portal-architecture-ej5in9`
+**Date:** 2026-06-10 (last iterated 2026-06-10) · **Status:** VISION — collecting & iterating ideas. NOT a plan yet.
+**Branch:** `claude/customer-portal-architecture-ej5in9` (PR #74 — the living home for this doc)
 **Owner:** Mason
 
-This doc captures the working plan for CRX's expansion into agronomy services
+This doc collects the vision for CRX's expansion into agronomy services
 (tissue sampling, soil testing, fertilizer/nutrition programs), a customer-facing
 grower portal, grower-uploaded planting/harvest data, and a field profitability map.
-It is meant to be iterated on — sections marked **OPEN QUESTION** need Mason's input
-before that piece gets built.
+
+**How to use this doc:** dump ideas in (chat them to Claude or comment on PR #74 and
+they get folded in), argue with what's here, mark things ❤️ keep / 🗑 cut. Nothing in
+here is committed-to. When the vision feels settled, we'll spin the *implementation
+plan* as a separate exercise (`/ship` per piece, with real data-model design). The
+technical sketches below are feasibility notes — "this is buildable and roughly how" —
+not specs.
 
 ---
 
@@ -167,7 +172,7 @@ profit_per_acre(cell) = avg_dry_yield(cell) × price_per_unit
 
 ---
 
-## 6. Phasing (revised)
+## 6. Rough build order (sketch only — sequencing logic, not a commitment)
 
 | Phase | What | Where | Notes |
 |-------|------|-------|-------|
@@ -197,7 +202,71 @@ Each build phase goes through the normal `/ship` pipeline when we get there.
 
 ---
 
-## 8. Explicitly out of scope for v1
+## 8. Idea backlog (unfiltered — react to these: keep / cut / change)
+
+Everything below is brainstorm material, deliberately wider than what we'd build
+first. Grouped by theme. Mason: mark ❤️ / 🗑 / ✏️ or just say so in chat.
+
+### A. Agronomy services (the new revenue lines)
+- **Grid/zone soil sampling program** — 2.5-ac grid sampling, results mapped over
+  the field, resample on a 3–4 year rotation with a "due for resample" tracker
+- **Nutrient removal engine** — yield map × crop removal rates = what the crop
+  hauled off per zone → the replacement-fertilizer rec writes itself. Soil test +
+  removal + yield goal = the dry fertilizer program, defensible with the grower's
+  own numbers
+- **Season-long tissue program** — scheduled pulls by growth stage (V5, VT, R1…),
+  trend charts across the season, flags when an analyte drops below sufficiency
+- **Soil test → program → quote pipeline** — a proposed nutrition program converts
+  straight into a CRX quote with one click (reuses the existing quote machinery);
+  grower e-accepts in the portal
+- **Variable-rate prescriptions** (later) — write Rx files back to the monitor from
+  soil zones + yield history; the natural endgame of owning both data layers
+- **Field history timeline** — one scrollable view per field: every application,
+  soil test, tissue pull, planting, harvest, invoice. "The field's medical chart."
+
+### B. Grower data & records
+- Planting + harvest records (manual tier + monitor-upload tier — §4)
+- **Spray/application records compliance view** — what was applied, when, rate,
+  REI/PHI — exportable for crop insurance, landlords, organic/sustainability audits
+- **Rainfall & GDD per field** — pull a weather API against field centroids;
+  context layer for yield results ("that field got 4 fewer inches")
+- **Storage/inventory of grain** (much later) — bushels in the bin vs sold
+
+### C. Financial tools for growers
+- **Breakeven calculator** per field/crop (the no-map MVP — §4 Tier A)
+- **Profitability map** (§5 — the headline)
+- **What-if sliders** — drag corn price / input costs and watch the breakeven line
+  and profit map recolor live. Cheap to build once the data's there, demos great
+- **Per-field P&L + whole-farm rollup** — every field a profit center
+- **Rented-ground analyzer** — profitability by farm/landlord; "this $325 cash-rent
+  farm lost money two years straight"
+- **APH / yield history view** — formatted for crop-insurance conversations
+- **Anonymized benchmarking** (later, needs scale) — "your corn-on-corn ran 12 bu
+  under the area median." Sensitive — opt-in only
+
+### D. Portal experience
+- Documents hub: invoices, statements, soil PDFs, program agreements in one place
+- **Program approval flow** — grower reviews + e-accepts a proposed program in the
+  portal → becomes an accepted quote in CRX (signature, timestamp, audit log)
+- Notifications: "soil results are in," "application completed on North 80,"
+  "invoice posted" — email/SMS with portal deep links
+- **LLM assistant ("agronomist in your pocket")** — answers over *their* data:
+  "explain my soil test in plain English," "which field should I sample next,"
+  "what did I spend on fungicide last year." Claude API via Edge Function,
+  customer-scoped context only
+- Mobile-first throughout — growers live in the truck cab, not at a desk
+
+### E. Business-model angles (Mason's call entirely)
+- Portal free with CRX business vs freemium (free docs/records, paid analytics tier)?
+- Agronomy services priced per-acre (sampling, program design) with portal included?
+- **Data as the retention moat** — every season of yield/soil/program history in the
+  portal makes leaving CRX more expensive. The portal is a switching-cost machine
+- White-label / multi-rep ready? (If CRX adds sales territories, reps see their
+  book of growers in the same portal infra)
+
+---
+
+## 9. Explicitly parked (not v1, revisit when vision settles)
 
 - Variable-rate prescription *writing* (Rx export back to monitors)
 - Multi-year yield trend / stability maps (needs ≥2 seasons of data first — design
@@ -205,3 +274,13 @@ Each build phase goes through the normal `/ship` pipeline when we get there.
 - Satellite imagery / NDVI layers
 - PostGIS server-side spatial analytics
 - Grain marketing / hedging tracking
+- Benchmarking across growers (needs scale + opt-in framework)
+
+---
+
+## Iteration log
+
+| Date | Change |
+|------|--------|
+| 2026-06-10 | Initial doc: architecture decision, agronomy sketch, upload tiers, profitability map, phasing | 
+| 2026-06-10 | Reframed as VISION doc per Mason; added idea backlog (§8) across 5 themes + parked list |
