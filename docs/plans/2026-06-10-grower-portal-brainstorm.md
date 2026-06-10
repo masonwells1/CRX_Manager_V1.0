@@ -393,11 +393,105 @@ first. Grouped by theme. Mason: mark ❤️ / 🗑 / ✏️ or just say so in ch
 
 ---
 
-## Iteration log
+## 10. Implementation realities & blind spots (added 2026-06-10 — 2nd iteration)
 
-| Date | Change |
-|------|--------|
+The non-feature stuff that decides whether this succeeds. Each gets a decision
+eventually; none block idea-collection now.
+
+### 10.1 Adoption — the empty-portal problem
+- A grower who logs in to an empty screen never comes back. **Rule: CRX pre-loads
+  everything before the invite goes out** — fields/boundaries drawn, this season's
+  spray plan seeded from their program, chemical shed already showing what we've
+  delivered. First login should feel like "my farm is already in here."
+- Invite flow: customer record in CRX → "Invite to portal" button → email/text
+  with magic link. Staff-driven, not self-signup.
+- **Pilot group:** 5–10 friendly growers for season one. Pick growers who (a) take
+  their own chemical, (b) text Mason already, (c) will complain honestly.
+- Tech comfort varies wildly: phone-first UI, big tap targets, max 2 taps to check
+  off a pass. If it's harder than a text message, they'll text instead.
+
+### 10.2 Offline & connectivity
+- Spraying happens where cell coverage doesn't. Checking off a pass / logging an
+  application **must tolerate offline**: PWA with a local queue that syncs when
+  signal returns (CRX already solved a version of this for offline
+  complete-delivery — reuse the idempotency-key pattern so a queued retry can't
+  double-log).
+- "Add to home screen" PWA before native apps. App stores are a maintenance tax
+  we don't need in year one.
+
+### 10.3 Who's at the keyboard — users within a farm
+- One customer ≠ one person: owner, spouse doing books, hired hand spraying.
+  `customer_users` is many-to-one already; v1 keeps it simple — **everyone on the
+  account sees everything**. Later: an "applicator" role (log sprays, no financials).
+- Landlords: NOT users in v1. Sharing = grower exports the per-field PDF.
+
+### 10.4 Data ownership & trust (selling point, not fine print)
+- Growers are deeply wary of ag-data platforms. A one-page plain-English policy —
+  **"your data is yours; export everything anytime; we never sell it or share it
+  without your say-so"** — is a competitive weapon vs the big platforms. Put it on
+  the marketing page, not buried in a TOS.
+- Export-everything (CSV/PDF) needs to be real from day one, not promised.
+
+### 10.5 Liability & label data (the sharp edge — needs care)
+- REI/PHI/residual numbers come from **product labels, which change**. If the
+  portal says PHI = 14 days and the current label says 21, that's a real problem.
+  - Mitigations: label fields carry a "verified on <date> against label <EPA reg #>"
+    stamp; annual pre-season label review as a standing CRX task; visible
+    disclaimer: **"always confirm against the product label — the label is the law."**
+- Application *recommendations* may legally require a licensed agronomist/CCA in
+  some states. The portal **records and reminds; it does not prescribe.** Timers
+  say "you planned a 2nd trip ~26 days out," not "you should spray X at Y rate."
+- **LLM guardrails (matters when we get to G14):** the assistant explains *their
+  data* ("your K is low on the east 40," "you spent $61k on chem") and must refuse
+  rate/product prescriptions — hand those to Mason/agronomist. This is a liability
+  wall, not a nice-to-have.
+- Compliance log: grower attests accuracy on submit; CRX provides the record-keeping
+  tool, grower owns the records. (Run the framing past insurance/attorney before launch.)
+
+### 10.6 Reminder engine plumbing (implementation note for later)
+- Timers = rows, not background magic: each logged pass writes its follow-up dates
+  (next-trip date, REI-expiry, PHI-earliest-harvest) to a `reminders` table; a
+  daily **pg_cron** job (already used in this stack) scans due reminders → existing
+  `send-email` Edge Function. SMS = add Twilio (or similar) to the same dispatch
+  point. Email-only pilot is fine; spray-rush users will want SMS fast.
+
+### 10.7 Label/catalog data maintenance (recurring chore — assign an owner)
+- EPA reg #s, REI, PHI, residual-interval defaults: ~top-20 products to start,
+  reviewed every winter before season. This is a named annual task (Mason or
+  agronomist), or it silently rots — see 10.5.
+
+### 10.8 Seasonal launch timing
+- A spray-compliance tool must be **live before burndown season** (Feb–Mar in IL)
+  or it waits a year. Working backwards: pilot-ready by ~Feb 1 → build in
+  fall/winter (Oct–Jan) → vision settled + planned by ~Sep. Harvest-time features
+  (yield upload, profitability map) have a *different* deadline: ready by
+  September. Two natural release windows; don't fight the calendar.
+
+### 10.9 Success metrics (so we know if it's working)
+- In-season weekly active growers (the honest number for a spray tool)
+- % of chemical deliveries auto-landing in a shed inventory
+- Passes checked off in-portal vs "grower texted Mason anyway"
+- Compliance exports pulled (each one = a shoebox of notes we replaced)
+- Reorders/leads originating from portal nudges (the revenue loop)
+
+### 10.10 Competitive positioning (one paragraph, so we stay honest)
+- FieldView / Deere Ops Center / Traction / Conservis own machine data and broad
+  farm-management. **We don't compete there.** CRX's portal is the
+  *retailer-connected* layer: shed inventory that fills itself from deliveries,
+  costs that flow from real invoices, programs from our own agronomist, compliance
+  records growers actually keep. The pitch: "you don't type anything twice —
+  because we're already your supplier." No platform can copy that without being
+  the supplier.
+
+### 10.11 Stepping-stone option worth considering (Mason call)
+- G1/G3 could ship **internal-first**: crew + staff run the spray board for custom
+  acres inside CRX Manager (no portal auth needed yet), and growers get the output
+  as emailed/printed reports for a season. Proves the data model, builds the label
+  catalog, trains the crew — then the portal launch is "here's self-serve access
+  to the thing that already works" instead of a cold start. Trade-off: slower
+  wow-factor for growers who self-spray.
 | 2026-06-10 | Initial doc: architecture decision, agronomy sketch, upload tiers, profitability map, phasing | 
 | 2026-06-10 | Reframed as VISION doc per Mason; added idea backlog (§8) across 5 themes + parked list |
 | 2026-06-10 | ⭐ Added §6 chemical tracking & spray compliance as Mason's priority focus (shed inventory auto-fed by CRX deliveries, spray checklist, compliance-grade log, REI/PHI + post-spray reminders); flagged it as candidate first portal feature |
 | 2026-06-10 | §6 iterated per Mason: "post spray" = follow-up trip timers (pre applied → ~26-day residual → 2nd-trip reminder; product-default interval + per-plan override); internal crew use confirmed (custom acres + work planning — new 6.5, likely `spray_passes ↔ jobs`/DispatchBoard link, job completion writes the compliance record, flows to invoicing) |
+| 2026-06-10 | Added §10 implementation realities & blind spots: adoption/empty-portal rule, offline PWA queue, multi-user farms, data-ownership policy as selling point, label-data liability + LLM guardrails, reminder-engine plumbing (pg_cron), label maintenance chore, seasonal launch windows (spray tool live by ~Feb), success metrics, competitive positioning, internal-first stepping-stone option |
