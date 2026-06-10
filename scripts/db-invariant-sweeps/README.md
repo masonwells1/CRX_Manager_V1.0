@@ -37,7 +37,7 @@ This runner makes those queries **standing executable gates** that run **before*
 | `secdef-searchpath.sql` | (e) SECDEF missing `search_path` | **zero** (no allowlist case) |
 | `overloads.sql` | (f) public proname with >1 signature | **zero** (no allowlist case) |
 | `status-literals.sql` | (g) function writes a literal outside a column's CHECK set | **zero** (regex approximation — see file header for FP/FN modes) |
-| `plpgsql-check.sql` | (h) 42703/42804/missing-relation static analysis | **no-op today** — `plpgsql_check` is available but **NOT installed** on this project |
+| `plpgsql-check.sql` | (h) 42703/42804/missing-relation static analysis | **ACTIVE** — extension installed 2026-06-10 (`20260610192229`); first scan: **30 errors / 11 live functions** (see `docs/audits/2026-06-10-error-prevention-execution-log.md` §4 — each needs its own /ship fix; treat that list as the baseline until fixed, do NOT allowlist) |
 
 ## When it runs
 
@@ -115,7 +115,7 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs --explain <predicate>  # header 
 | secdef-searchpath | 0 | 0 | 0 |
 | overloads | 0 | 0 | 0 |
 | status-literals | 0 | 0 | 0 |
-| plpgsql-check | n/a (extension not installed) | — | — |
+| plpgsql-check | 30 errors / 11 functions (2026-06-10 first scan) | 0 | 30 — baseline queue in the execution log §4, fix via /ship, never allowlist |
 
 **Open real finding (auth-bound-role-ungated):** `generate_rup_sales_records(p_invoice_id uuid,
 p_idempotency_key text)` is an `authenticated`-EXECUTE-able SECDEF that inserts `rup_sales_records`,

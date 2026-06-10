@@ -25,6 +25,14 @@ Follow-up hardening for the roadmap #1 v1 partial draw-down feature. 4 migration
 | 20260610184534 | `rollover_remainder_only` | `rollover_quote_to_season(uuid, integer, uuid, text)` — adds `FOR UPDATE` on source quote; block A: draw detection → raises `BOOKING_FULLY_DRAWN` if every item is fully drawn (nothing to roll); block B: FIFO remainder math per item (`LEAST(item_qty, GREATEST(cum_before + item_qty - drawn, 0))`), skipping fully-drawn lines. Returns `{ quote_id, quote_number, season, remainder_rollover: boolean }`. Canonical strict-actor block (AUTH_REQUIRED/ACTOR_MISMATCH/INSUFFICIENT_ROLE). ACL: authenticated+service_role. |
 | 20260610184551 | `draws_backfill_non_accepted` | Pure data backfill: `INSERT INTO quote_product_draws … ON CONFLICT (quote_id, product_id) DO NOTHING` for quotes-with-orders not in (`sent`,`revised`) status or missing draw rows. Self-verify asserts zero uncovered pairs after. Live effect: 1 row inserted (Q-2026-1811, cancelled quote). |
 
+## Applied 2026-06-10 (plpgsql_check extension enablement)
+
+Live-only MCP stamp (no disk file — extension enablement, no schema/function change). Activates the real static-analysis predicate in `scripts/db-invariant-sweeps/predicates/plpgsql-check.sql` (db-invariant sweep predicate (h)), targeting the 42703/42804/missing-relation "latent break never exercised" class (the `get_customer_statement` 42804 / `returns.credited_by` class that previously only surfaced via e2e smoke chains).
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260610192229 | `enable_plpgsql_check` | `CREATE EXTENSION plpgsql_check` (v2.7). Read-only static analyzer — adds the `plpgsql_check_function`/`plpgsql_check_function_tb` entry points used by the sweep predicate; no app-facing surface. First full live scan (2026-06-10, 202 public plpgsql functions): 30 error rows across 11 functions — real latent breaks logged for remediation (see the sweeps runner output / session report). |
+
 ## Applied 2026-06-10 (rollover + auto-expire supersessions — batch review H1/M1)
 
 Applied live (MCP stamps match filenames). Supersede earlier 184534 and 184254 bodies with fixes found by the post-apply batch review.
