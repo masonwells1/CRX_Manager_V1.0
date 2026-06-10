@@ -19,6 +19,7 @@ Run it before every major feature-building stretch.
 | **C. Edge-function bundle drift** | Does each *deployed* Edge Function match `supabase/functions/`? | B8-class — guard in repo, deployed bundle routes elsewhere. |
 | **D. Deferred-ledger reconciliation** | Is every "deferred / NOT applied / owner action" claim in CLAUDE.md + docs still accurate? | Stale ledger entries cause double-work and false confidence. |
 | **E. Frontend runtime safety** | Route-guard matrix vs roles, error/loading paths, unguarded async races | The layer the 2026-06-09 foundation audit touched lightest. |
+| **F. Authorization & exposure surface** | Who can READ what? table/view GRANTs to `anon`/`PUBLIC`, RLS read-policy correctness, anonymous REST reachability, Storage bucket policies, `pg_cron` jobs | The 2026-06-10 run MISSED an anon-readable `profile_public_view` employee directory — Layer A checked rows, Layer B checked *function* grants; nobody checked *view/table* grants or did an anon probe. Added after the Codex round. |
 
 **Non-goals (do NOT redo these here):**
 - Workflow *correctness* → `/review-workflow`
@@ -142,7 +143,36 @@ ledger entries = LOW (doc fix).
   guards on pages with rapid param changes; double-submit surfaces lacking
   `useIdempotencyKey` on money-mutating buttons.
 - Sample deeply rather than skim everything: the 10 money-heaviest pages first.
+- **State the sample.** Layer E cannot cover all 66 pages — name which pages were
+  examined and label the CLEAN claims as sample-based, not exhaustive.
 Severity: missing role guard on a mutating page = HIGH; swallowed money-path error = MED.
+
+### Agent F — Authorization & exposure surface (`general-purpose` or `rls-security-reviewer`)
+**Added 2026-06-10 — the 2026-06-10 run missed an anon-readable `profile_public_view`
+because no layer audited the read-authorization surface.** SELECT-only.
+- **anon/PUBLIC grants:** enumerate every table AND view granting SELECT/DML to `anon`
+  or `PUBLIC` — `SELECT relname, relkind, relacl FROM pg_class JOIN pg_namespace …
+  WHERE nspname='public' AND (relacl::text ILIKE '%anon=%' OR relacl::text ILIKE '%=r%/…PUBLIC%')`.
+  For EACH hit, **prove reachability with a real probe**: `SET ROLE anon; SELECT … FROM <obj>`
+  (and/or an anonymous REST call with the publishable anon key) — a catalog grant is not
+  proof; a returned row is. Cross-reference the accepted-findings list (the 52 anon-SECDEF
+  functions self-gate on `auth.uid()` and are accepted; a **view** has no in-body gate, so
+  an anon-readable view that bypasses RLS — `security_invoker = off` — is a real exposure).
+- **RLS read-policy spot-check:** on the PII/financial-bearing tables (`profiles`,
+  `customers`, `invoices`, `payments`, `commissions`), confirm SELECT policies match the
+  documented role bounds — not just that *a* policy exists.
+- **Storage bucket policies:** list buckets + their policies; flag any public bucket
+  exposing signed-URL-only assets (signatures, documents).
+- **pg_cron inventory:** `SELECT * FROM cron.job` — every scheduled job still expected +
+  pointing at a live function.
+Severity: anon-readable customer PII = BLOCKER; anon-readable internal/employee data or
+RLS read-policy weaker than documented = MED; public Storage of private assets = HIGH.
+
+### Out-of-scope deferrals (state these in the report so the verdict can't imply they were checked)
+Performance under realistic data volume; auth/session flow correctness; backup/restore
+drill; true end-to-end billing behavior; exhaustive per-page frontend coverage. These are
+NOT covered by A–F — name them as deferrals, and if money volume is near-zero, record the
+**mandatory post-first-billing-cycle re-run gate** (money/AR probes + Layer F) in the report.
 
 ### Delta reviewers (conditional)
 If Phase 0 found code/migration changes since the last clean audit, also dispatch the
