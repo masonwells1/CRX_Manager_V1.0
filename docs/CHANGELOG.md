@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-10 (world-class product deep dive) — strategic review, docs only
+
+Ran the first unconstrained product + design + architecture deep dive (5 parallel investigations: codebase reality scan, architecture readiness, competitor research, precision-ag/compliance research, payments/AI research, plus an adversarial filter). **Docs-only — no code, DB, or deploy changes.**
+
+- **`docs/research/2026-06-10-world-class-product-deep-dive-prompt.md`** — the reusable commissioning prompt (5-phase methodology).
+- **`docs/research/2026-06-10-world-class-deep-dive-report.md`** — the report: honest area scorecard (Comply weakest at 2.5/5), market map (grower portal + online pay is now table stakes; Agvance/FieldAlytics/AgWorks openings identified), 30-item scored opportunity backlog, three-horizon roadmap (H1: ACH pay-now links + compliance quick wins; H2: grower portal + ISOXML machine-data billing; H3: Leaf integration + label-rate validation), keep/change/kill verdicts (kill checks-only and no-portal; keep single-tenant and CRX-as-ledger for now), 5 architecture prework items (customer-org model, payment webhook, server-side PDFs, integration framework, materialized views), and an explicit what-NOT-to-build list (native apps, multi-tenancy now, ML forecasting, autonomous financial agents, QuickBooks two-way sync).
+- Notable correction to project lore: the app IS a PWA (VitePWA + Workbox + IndexedDB offline write-queue, `vite.config.ts:23-85`) — the gap is offline *reads* and mobile UI shape, not missing offline support.
+
+---
+
 ## 2026-05-29 (workflow review + Codex cross-review) — 3 BLOCKER fixes applied live
 
 The new `/review-workflow` audit (full graph/lifecycle/cross-entity/invariant review, verified against live DB) surfaced BLOCKERs; Codex independently cross-reviewed them; every Codex claim was then re-verified against the live database (Codex itself had no Supabase MCP) before any fix. Three migrations applied live via MCP:
