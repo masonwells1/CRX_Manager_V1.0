@@ -48,7 +48,6 @@ interface LineItem {
   quoted_price_cents: number | null;
 }
 
-
 const statusBadge = (status: InvoiceStatus) => {
   const map: Record<InvoiceStatus, { variant: 'default' | 'warning' | 'success' | 'error' | 'info'; label: string }> = {
     draft: { variant: 'default', label: 'Draft' },

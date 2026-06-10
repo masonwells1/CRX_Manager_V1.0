@@ -1,6 +1,14 @@
 /**
  * Pure math functions extracted from QuoteBuilder for testability.
  * These are the core pricing / unit-conversion calculations.
+ *
+ * NOT AUTHORITATIVE FOR PERSISTENCE. The server recalculates and persists all
+ * quote line math in save_quote() (migration 20260528042000) — that is the
+ * single source of truth for stored prices. These functions exist only for
+ * unit-test coverage of the pricing rules and as a reference for live-preview
+ * display math. They are NOT imported by QuoteBuilder's save payload, and new
+ * code must NOT route persisted values through them — read the server-returned
+ * values after save instead. (Foundation audit P2-E, 2026-05-28.)
  */
 import type { Product, UnitConversion } from '../types';
 

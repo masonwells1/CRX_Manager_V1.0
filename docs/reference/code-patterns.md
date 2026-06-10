@@ -67,8 +67,9 @@
 - ParsedImportField type in `src/types/index.ts`
 
 ## Mutation Safety Pattern
-- `checkMutationResult(data, error, context)` from `src/lib/businessLogicEnhancements.ts` — detects silent RLS failures (0 rows affected despite no error). Used on 13 pages after any Supabase `.insert()` / `.update()` / `.delete()` call.
-- Pattern: `const { data, error } = await supabase.from('table').update(…).select(); checkMutationResult(data, error, 'Updating delivery');`
+- `checkMutationResult(result, operation)` from `src/lib/db.ts` — detects silent RLS failures (0 rows affected despite no error). The single argument is the whole Supabase result object (`{ error, data, count }`). Used broadly after any Supabase `.update()` / `.delete()` call.
+- Pattern: `const result = await supabase.from('table').update(…).eq('id', id).select(); checkMutationResult(result, 'Updating delivery');`
+- Note: a legitimately-zero-rows update (e.g. "mark all read" with nothing unread) should NOT use `checkMutationResult` — guard for that case and check `result.error` only.
 
 ## Offline Conflict Detection
 - `PendingAction` in `src/lib/offlineQueue.ts` has optional `snapshotAt`, `entityTable`, `entityId` fields

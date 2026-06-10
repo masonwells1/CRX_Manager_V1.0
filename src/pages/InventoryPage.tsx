@@ -57,6 +57,8 @@ export default function InventoryPage() {
   const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
   const retireIdem = useIdempotencyKey('retire_inventory_item', profile?.id || '');
   const createHoldIdem = useIdempotencyKey('create_inventory_hold', profile?.id || '');
+  const releaseHoldIdem = useIdempotencyKey('release_inventory_hold', profile?.id || '');
+  const manualAddIdem = useIdempotencyKey('manual_inventory_add', profile?.id || '');
   const { toast } = useToast();
   const [inventory, setInventory] = useState<InventoryRow[]>([]);
   const [holds, setHolds] = useState<HoldWithRelations[]>([]);
@@ -435,10 +437,11 @@ export default function InventoryPage() {
       const { data, error } = await supabase.rpc('release_inventory_hold', {
         p_hold_id: holdId,
         p_performed_by: profile?.id,
-        p_idempotency_key: crypto.randomUUID(),
+        p_idempotency_key: releaseHoldIdem.getKey(),
       });
       if (error) throw error;
       assertRpcResult(data, 'release_inventory_hold');
+      releaseHoldIdem.resetKey();
 
       toast('success', 'Hold released');
       fetchInventory();
@@ -471,13 +474,14 @@ export default function InventoryPage() {
       p_performed_by: profile?.id || null,
       p_notes: qty > 0 ? `Initial inventory record created with ${qty} units` : null,
       p_unit_cost: unitCost && unitCost > 0 ? unitCost : null,
-      p_idempotency_key: crypto.randomUUID(),
+      p_idempotency_key: manualAddIdem.getKey(),
     });
     if (!error) assertRpcResult(manualAddData, 'manual_inventory_add');
 
     if (error) {
       toast('error', sanitizeError(error));
     } else {
+      manualAddIdem.resetKey();
       toast('success', 'Inventory record added');
       setAddOpen(false);
       fetchInventory();

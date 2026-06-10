@@ -254,8 +254,8 @@ export function BlendTickets() {
         p_idempotency_key: key,
       });
       if (error) throw error;
-      assertRpcResult(data, 'Batch approve blend tickets');
-      const approvedCount = data?.approved_count ?? approvableIds.length;
+      const approved = assertRpcResult<{ approved_count?: number }>(data, 'batch_approve_blend_tickets');
+      const approvedCount = approved?.approved_count ?? approvableIds.length;
       batchApproveIdem.resetKey();
       toast('success', `Approved ${approvedCount} blend ticket(s)`);
       await logActivity({
@@ -285,8 +285,8 @@ export function BlendTickets() {
         p_idempotency_key: key,
       });
       if (error) throw error;
-      assertRpcResult(data, 'Batch reject blend tickets');
-      const rejectedCount = data?.rejected_count ?? approvableIds.length;
+      const rejected = assertRpcResult<{ rejected_count?: number }>(data, 'batch_reject_blend_tickets');
+      const rejectedCount = rejected?.rejected_count ?? approvableIds.length;
       batchRejectIdem.resetKey();
       toast('success', `Rejected ${rejectedCount} blend ticket(s)`);
       await logActivity({

@@ -1389,7 +1389,6 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'receive_po_items',
   'receive_return',
   'record_invoice_payment',
-  'record_payment',
   'record_vendor_payment',
   'release_inventory_hold',
   'reopen_accounting_period',
@@ -1535,7 +1534,6 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   get_ap_aging: 'non-mutating', // pure read (does not even declare the param live)
   get_ap_dashboard_summary: 'non-mutating', // pure read
   generate_batch_statements: 'non-mutating', // mutates=false live
-  record_payment: 'non-mutating', // deprecated in favor of record_invoice_payment
 };
 
 /**

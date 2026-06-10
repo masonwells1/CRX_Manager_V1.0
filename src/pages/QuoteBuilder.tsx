@@ -35,6 +35,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
+import { formatUSD } from '../lib/money';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
@@ -379,16 +380,6 @@ export default function QuoteBuilder() {
       items: dbItems
         .filter((item) => item.section_id === s.id)
         .map((item) => {
-          // Detect price override: if saved price differs from tier price, it was overridden
-          const product = item.product as Product | undefined;
-          const t1 = product?.tier1_price || 0;
-          const tierPrice = q.tier === 2
-            ? (product?.tier2_price || t1)
-            : q.tier === 3
-              ? (product?.tier3_price || t1)
-              : t1;
-          const savedPrice = item.price_per_unit;
-          const isOverridden = product && Math.abs(savedPrice - tierPrice) > 0.001;
           return {
             _key: nextKey(),
             id: item.id,
@@ -396,7 +387,7 @@ export default function QuoteBuilder() {
             sort_order: item.sort_order,
             notes: item.notes,
             price_per_unit: item.price_per_unit,
-            price_override: isOverridden ? savedPrice : null,
+            price_override: item.price_override ?? null,
             current_cost: item.current_cost,
             suggested_rate: item.suggested_rate,
             actual_rate: item.actual_rate,
@@ -842,6 +833,7 @@ export default function QuoteBuilder() {
           sort_order: item.sort_order,
           notes: item.notes || null,
           price_per_unit: item.price_per_unit,
+          price_override: item.price_override ?? null,
           current_cost: item.current_cost,
           suggested_rate: item.suggested_rate,
           actual_rate: item.actual_rate,
@@ -898,10 +890,8 @@ export default function QuoteBuilder() {
         message: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'}`,
         data: { quoteId: result, quoteNumber, customer: selectedCustomer?.farm_name ?? '' },
       });
-      // === GAP FIX #5: Log activity for quote created/updated ===
-      if (profile) {
-        await logActivity({ event: isEditing ? 'quote_updated' : 'quote_created', description: `Quote ${quoteNumber} ${isEditing ? 'updated' : 'created'} for ${selectedCustomer?.farm_name || 'customer'} (${fmt(totals.totalPrice)})`, performedBy: profile.id, entityType: 'quote', entityId: result, customerId });
-      }
+      // Quote activity is logged in-transaction by save_quote() (migration line 290-299).
+      // A frontend logActivity() here would double-log every save.
       // Planned program hold management
       if (isPlanned && profile) {
         const holdIdemKey = plannedHoldsIdem.getKey();
@@ -1335,12 +1325,7 @@ export default function QuoteBuilder() {
     );
   }, [products, productQuery]);
 
-  const fmt = (n: number) =>
-    new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency: 'USD',
-      minimumFractionDigits: 2,
-    }).format(n);
+  const fmt = formatUSD; // quote math is dollar-denominated (not cents)
 
   const pct = (n: number) => `${n.toFixed(1)}%`; // net_margin is already stored as percentage
 

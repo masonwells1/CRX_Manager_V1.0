@@ -144,26 +144,31 @@ export default function DispatchBoard() {
   };
 
   async function handleAssign(jobId: string, applicatorId: string) {
-    const result = await supabase
-      .from('jobs')
-      .update({ applicator_id: applicatorId || null, updated_at: new Date().toISOString() })
-      .eq('id', jobId)
-      .select();
-    checkMutationResult(result, 'Assign applicator');
+    try {
+      const result = await supabase
+        .from('jobs')
+        .update({ applicator_id: applicatorId || null, updated_at: new Date().toISOString() })
+        .eq('id', jobId)
+        .select();
+      checkMutationResult(result, 'Assign applicator');
 
-    if (profile) {
-      const app = applicators.find(a => a.id === applicatorId);
-      logActivity({
-        event: 'job_assigned',
-        description: `Job assigned to ${app?.full_name || 'unassigned'}`,
-        performedBy: profile.id,
-        entityType: 'job',
-        entityId: jobId,
-      });
+      if (profile) {
+        const app = applicators.find(a => a.id === applicatorId);
+        logActivity({
+          event: 'job_assigned',
+          description: `Job assigned to ${app?.full_name || 'unassigned'}`,
+          performedBy: profile.id,
+          entityType: 'job',
+          entityId: jobId,
+        });
+      }
+
+      toast('success', 'Applicator assigned');
+      fetchData();
+    } catch (err) {
+      Sentry.captureException(err, { tags: { source: 'action', action: 'assign_applicator' } });
+      toast('error', 'Failed to assign applicator. Please try again.');
     }
-
-    toast('success', 'Applicator assigned');
-    fetchData();
   }
 
   // Stats

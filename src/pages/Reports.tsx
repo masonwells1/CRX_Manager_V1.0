@@ -472,7 +472,10 @@ export default function Reports() {
           p_payment_date: today,
           p_notes: 'Quick pay from Reports page',
           p_performed_by: profile!.id,
-          p_idempotency_key: `reports-commission-pay-${ids.join('-')}-${Date.now()}`,
+          // Deterministic key (no Date.now()) so a retried batch dedupes instead of
+          // creating duplicate commission payments. These commission ids transition
+          // to 'paid' on success, so the key can't collide with a future payment.
+          p_idempotency_key: `reports-commission-pay-${ids.join('-')}`,
         });
         if (error) throw new Error(error.message);
         assertRpcResult<string>(data, 'create_commission_payment');

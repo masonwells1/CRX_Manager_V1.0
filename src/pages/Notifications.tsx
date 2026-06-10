@@ -79,6 +79,9 @@ export default function Notifications() {
   const markAllRead = async () => {
     // Guard: Ensure profile is loaded
     if (!profile) return;
+    // No unread notifications — nothing to do. Skip the call so the
+    // zero-rows-affected outcome below doesn't surface a false error toast.
+    if (!notifications.some((n) => !n.is_read)) return;
 
     try {
       const markAllResult = await supabase
@@ -87,7 +90,10 @@ export default function Notifications() {
         .eq('user_id', profile.id)
         .eq('is_read', false)
         .select();
-      checkMutationResult(markAllResult, 'Mark all notifications as read');
+      // Zero rows is a valid outcome here (a concurrent read may have already
+      // cleared them), so only a real error counts as failure — do NOT use
+      // checkMutationResult, which treats an empty result array as denial.
+      if (markAllResult.error) throw markAllResult.error;
       setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'mark_all_notifications_read' } });

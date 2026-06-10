@@ -438,7 +438,7 @@ export function BlendTicketDetail() {
         p_idempotency_key: fieldsIdem.getKey(),
       });
       if (error) throw error;
-      assertRpcResult(data, 'Save blend ticket fields');
+      assertRpcResult(data, 'save_blend_ticket_fields');
       fieldsIdem.resetKey();
       await logActivity({ event: 'blend_ticket_fields_saved', description: `Saved ${payload.length} field assignments for ${ticket.ticket_number}`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id });
       toast('success', `Saved ${payload.length} field assignment${payload.length !== 1 ? 's' : ''}`);

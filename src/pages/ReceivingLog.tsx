@@ -120,10 +120,17 @@ export default function ReceivingLog() {
     setLoading(false);
   }, [vendorFilter, conditionFilter, receivedByFilter, dateFrom, dateTo, toast]);
 
+  /* Load staff list once (fetchStaff has stable [] deps) */
+  useEffect(() => {
+    fetchStaff();
+  }, [fetchStaff]);
+
+  /* Fetch data on mount and whenever filters change.
+   * fetchData's identity changes with each filter dep, so this single effect
+   * covers both cases — a second filter-watching effect would double-fetch. */
   useEffect(() => {
     fetchData();
-    fetchStaff();
-  }, [fetchData, fetchStaff]);
+  }, [fetchData]);
 
   /* ─── Bulk selection ─── */
   const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
