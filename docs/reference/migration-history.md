@@ -1,10 +1,18 @@
-# Migration History (397 migrations)
+# Migration History (398 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-10 (sell-side roadmap #1 v1: partial quote draw-down)
+
+Roadmap #1 stage v1 from `docs/audits/2026-06-10-sell-side-excellence-audit.md` §5: a quote now acts as an open season booking — staff pull PART of the booked quantity into an order ("send 200 of my 500 gallons"), repeatedly, at the quote's locked price, until fully drawn. Draw-down is tracked in a NEW per-(quote, product) ledger table `quote_product_draws` (NOT a quote_items column — `save_quote` recreates all items on every edit, which would wipe item-level history). 4 reviewers clean (rls-security, migration-drift, types-drift, compliance; rls M1 policy-parity fix applied pre-apply, M2 backfill-gap live count = 0). Post-apply fidelity: live `convert_quote_to_order` minus exactly the two inserted blocks md5-matches the pre-apply body (`c3ad989f…`). Rolled-back 9-path e2e smoke ALL PASS (partial draw 200/500 w/ hold 500→300 + prebooked +200 + quote stays `sent`; overdraw→`BOOKING_OVERDRAWN`; legacy convert on drawn quote→`BOOKING_PARTIALLY_DRAWN`; completing draw→`accepted` + holds released; accepted→`BOOKING_CLOSED`; empty→blocked; driver→`INSUFFICIENT_ROLE`; forged→`ACTOR_MISMATCH`; no-auth→`AUTH_REQUIRED`).
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260610145253 | `partial_quote_draw_down` | NEW table `quote_product_draws` (RLS: SELECT scoped `is_admin() OR is_sales_rep()`, writes via SECDEF only) + backfill (no-op live: 0 accepted quotes) + NEW RPC `draw_down_quote(p_quote_id, p_draws, p_performed_by, p_idempotency_key)` (strict-actor, admin/sales_rep, idempotency helpers, FOR UPDATE quote, per-product overdraw guard, weighted-avg booking price, FIFO hold decrement → prebooked move keeps Net Free invariant, full-drain → `accepted`) + `convert_quote_to_order` verbatim-from-live + status guard (audit W7: no more converting draft/declined/expired/cancelled) + partially-drawn guard + fully-drawn ledger upsert. UI: QuoteBuilder "Partial Order" modal. |
 
 ## Applied 2026-06-10 (sell-side audit W1: create_direct_order role gate)
 

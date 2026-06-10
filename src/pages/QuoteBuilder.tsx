@@ -19,6 +19,7 @@ import {
   CheckCircle,
   Copy,
   CalendarClock,
+  PackageOpen,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -159,6 +160,14 @@ export default function QuoteBuilder() {
   const createVersionIdem = useIdempotencyKey('create_quote_version', profile?.id || '');
   const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
   const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
+  const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
+
+  // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
+  // quantities into an order; the quote stays open with the remaining balance.
+  const [showDrawModal, setShowDrawModal] = useState(false);
+  const [drawRows, setDrawRows] = useState<Array<{ product_id: string; product_name: string; booked: number; drawn: number; remaining: number; qty: string }>>([]);
+  const [drawLoading, setDrawLoading] = useState(false);
+  const [drawing, setDrawing] = useState(false);
   const { warning: staleWarning, check: checkStaleQuote, dismiss: dismissStaleWarning } = useStaleQuoteCheck();
   const isEditing = Boolean(id);
 
@@ -1196,6 +1205,101 @@ export default function QuoteBuilder() {
   };
 
 
+  // Partial booking draw-down: open the modal with the per-product balance
+  const openDrawDownModal = async () => {
+    if (!id) return;
+    if (isDirty) {
+      toast('warning', 'Save the quote before drawing down the booking');
+      return;
+    }
+    setDrawLoading(true);
+    setShowDrawModal(true);
+    try {
+      const [itemsRes, drawsRes] = await Promise.all([
+        supabase.from('quote_items').select('product_id, total_units_needed').eq('quote_id', id),
+        supabase.from('quote_product_draws').select('product_id, quantity_drawn').eq('quote_id', id),
+      ]);
+      if (itemsRes.error) throw itemsRes.error;
+      if (drawsRes.error) throw drawsRes.error;
+      const drawnByProduct = new Map<string, number>();
+      (drawsRes.data || []).forEach((d) => drawnByProduct.set(d.product_id, Number(d.quantity_drawn) || 0));
+      const bookedByProduct = new Map<string, number>();
+      (itemsRes.data || []).forEach((it) => {
+        if (!it.product_id) return;
+        bookedByProduct.set(it.product_id, (bookedByProduct.get(it.product_id) || 0) + (Number(it.total_units_needed) || 0));
+      });
+      const rows = Array.from(bookedByProduct.entries())
+        .filter(([, booked]) => booked > 0)
+        .map(([productId, booked]) => {
+          const drawn = drawnByProduct.get(productId) || 0;
+          return {
+            product_id: productId,
+            product_name: products.find((p) => p.id === productId)?.product_name || 'Unknown product',
+            booked,
+            drawn,
+            remaining: Math.max(booked - drawn, 0),
+            qty: '',
+          };
+        })
+        .sort((a, b) => a.product_name.localeCompare(b.product_name));
+      setDrawRows(rows);
+    } catch (error: unknown) {
+      Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote_load' } });
+      toast('error', 'Failed to load the booking balance');
+      setShowDrawModal(false);
+    }
+    setDrawLoading(false);
+  };
+
+  const handleDrawDown = async () => {
+    if (!id) return;
+    const draws = drawRows
+      .map((r) => ({ ...r, quantity: parseFloat(r.qty) || 0 }))
+      .filter((d) => d.quantity > 0);
+    if (draws.length === 0) {
+      toast('warning', 'Enter a quantity for at least one product');
+      return;
+    }
+    const over = draws.find((d) => d.quantity > d.remaining);
+    if (over) {
+      toast('error', `${over.product_name}: only ${over.remaining} remaining on this booking`);
+      return;
+    }
+    setDrawing(true);
+    try {
+      const { data, error } = await supabase.rpc('draw_down_quote', {
+        p_quote_id: id,
+        p_draws: draws.map((d) => ({ product_id: d.product_id, quantity: d.quantity })),
+        p_performed_by: profile!.id,
+        p_idempotency_key: drawDownIdem.getKey(),
+      });
+      if (error) throw error;
+      drawDownIdem.resetKey();
+      const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[]; fully_drawn?: boolean }>(data, 'draw_down_quote');
+      toast('success', `Order ${result.order_number || ''} created${result.fully_drawn ? ' — booking fully drawn' : ' — booking stays open'}`);
+      if (result.warnings && result.warnings.length > 0) {
+        result.warnings.forEach((w) => toast('warning', `Inventory: ${w}`));
+      }
+      trackBusinessEvent('quote_drawn_down', {
+        message: `Booking draw → Order ${result.order_number || ''}`,
+        data: { orderId: result.order_id ?? '', orderNumber: result.order_number ?? '', quoteId: id },
+      });
+      sendOrderConfirmedEmail(result.order_id!);
+      setIsDirty(false);
+      setShowDrawModal(false);
+      navigate(`/orders/${result.order_id}`);
+    } catch (error: unknown) {
+      Sentry.captureException(error, { tags: { source: 'critical_action', action: 'draw_down_quote' } });
+      const errObj = error as Record<string, unknown> | null;
+      const errMsg = (error instanceof Error ? error.message : null)
+        || (errObj && typeof errObj.message === 'string' ? errObj.message : null)
+        || (errObj && typeof errObj.details === 'string' ? errObj.details : null)
+        || 'Failed to create order from booking';
+      toast('error', errMsg);
+    }
+    setDrawing(false);
+  };
+
   const handleConvertToOrder = async () => {
     // Guardrail: check for stale quote before converting
     if (quoteCreatedAt) {
@@ -1456,6 +1560,16 @@ export default function QuoteBuilder() {
                 Convert to Order
               </Button>
               <HelpTip text="Creates a confirmed order from this quote. Inventory holds transfer to the order and the customer gets a confirmation email." className="ml-1" />
+              <Button
+                variant="secondary"
+                icon={<PackageOpen className="w-4 h-4" />}
+                showChevron={false}
+                onClick={openDrawDownModal}
+                loading={drawLoading}
+              >
+                Partial Order
+              </Button>
+              <HelpTip text="Pull part of this booking into an order — e.g. send 200 of the 500 booked gallons. The quote keeps the remaining balance and stays open until fully drawn." className="ml-1" />
             </>
           )}
           {isEditing && currentStatus === 'sent' && (
@@ -2546,6 +2660,75 @@ export default function QuoteBuilder() {
                 className="px-4 py-2 text-sm bg-crx-green text-white rounded-lg disabled:opacity-50"
               >
                 Save Template
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showDrawModal && (
+        <Modal open={showDrawModal} onClose={() => setShowDrawModal(false)} title="Create Order from Booking">
+          <div className="space-y-4">
+            <p className="text-sm text-secondary">
+              Enter how much of each booked product to send now. The quote keeps the
+              remaining balance and stays open until it is fully drawn.
+            </p>
+            {drawLoading ? (
+              <p className="text-sm text-secondary">Loading booking balance…</p>
+            ) : (
+              <div className="max-h-80 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-secondary border-b">
+                      <th className="py-2 pr-2">Product</th>
+                      <th className="py-2 pr-2 text-right">Booked</th>
+                      <th className="py-2 pr-2 text-right">Drawn</th>
+                      <th className="py-2 pr-2 text-right">Remaining</th>
+                      <th className="py-2 text-right">Send now</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drawRows.map((row, idx) => (
+                      <tr key={row.product_id} className="border-b last:border-0">
+                        <td className="py-2 pr-2">{row.product_name}</td>
+                        <td className="py-2 pr-2 text-right">{row.booked}</td>
+                        <td className="py-2 pr-2 text-right">{row.drawn}</td>
+                        <td className="py-2 pr-2 text-right font-medium">{row.remaining}</td>
+                        <td className="py-2 text-right">
+                          <input
+                            type="number"
+                            min={0}
+                            max={row.remaining}
+                            step="any"
+                            value={row.qty}
+                            disabled={row.remaining <= 0}
+                            onChange={(e) => {
+                              const next = [...drawRows];
+                              next[idx] = { ...row, qty: e.target.value };
+                              setDrawRows(next);
+                            }}
+                            className="w-24 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg disabled:bg-gray-50"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowDrawModal(false)}
+                className="px-4 py-2 text-sm border rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDrawDown}
+                disabled={drawing || drawLoading || !drawRows.some((r) => (parseFloat(r.qty) || 0) > 0)}
+                className="px-4 py-2 text-sm bg-crx-green text-white rounded-lg disabled:opacity-50"
+              >
+                {drawing ? 'Creating…' : 'Create Order'}
               </button>
             </div>
           </div>
