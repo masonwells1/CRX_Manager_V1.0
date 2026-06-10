@@ -231,6 +231,7 @@ export default function InvoiceDetail() {
           .not('status', 'in', '("voided","cancelled")')
           .order('invoice_number'),
       ]);
+      if (isStale()) return;
       setParentOrder(orderRes.data as { id: string; order_number: string } | null);
 
       // PR-07 follow-up: resolve driver names via profile_public_view.

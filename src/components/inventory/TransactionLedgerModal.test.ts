@@ -143,6 +143,15 @@ describe('computeRunningBalance', () => {
     expect(computeRunningBalance(txns)).toEqual([500, 300, 350]);
   });
 
+  it('prebook_reconciliation reduces the net-free balance when prebooked increases (and vice versa)', () => {
+    const txns = [
+      { quantity: 500, transaction_type: 'received' },
+      { quantity: 2200, transaction_type: 'prebook_reconciliation' }, // +2200 prebooked -> -2200 net free
+      { quantity: -100, transaction_type: 'prebook_reconciliation' }, // -100 prebooked -> +100 net free
+    ];
+    expect(computeRunningBalance(txns)).toEqual([500, -1700, -1600]);
+  });
+
   it('handles a real-world scenario matching the screenshot data', () => {
     const txns = [
       { quantity: 153, transaction_type: 'booked' },

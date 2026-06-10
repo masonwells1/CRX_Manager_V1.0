@@ -33,6 +33,8 @@ export interface SendEmailResult {
   success: boolean;
   email_log_id?: string;
   resend_message_id?: string;
+  /** true when the edge function deduped this call via its idempotency key — no new email went out */
+  deduplicated?: boolean;
   error?: string;
 }
 

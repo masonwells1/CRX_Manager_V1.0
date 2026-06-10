@@ -82,7 +82,15 @@ export function computeRunningBalance(txns: Array<{ quantity: number; transactio
   const balances: number[] = [];
   let running = 0;
   for (const t of txns) {
-    running += signedQuantity(t.quantity, t.transaction_type);
+    if (t.transaction_type === 'prebook_reconciliation') {
+      // A signed correction to quantity_prebooked. In this modal's net-free
+      // running balance (booked/prebooked subtract, released adds back), an
+      // INCREASE in prebooked reduces the balance — the row still displays
+      // the signed correction as-is via signedQuantity.
+      running += -t.quantity;
+    } else {
+      running += signedQuantity(t.quantity, t.transaction_type);
+    }
     balances.push(running);
   }
   return balances;

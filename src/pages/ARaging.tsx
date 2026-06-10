@@ -554,8 +554,15 @@ export default function ARaging() {
             });
 
             if (emailResult.success) {
-              // A genuine send happened — count it even if dedup tracking fails below.
-              sent++;
+              // The edge function dedupes via idempotency key — a replay means no
+              // new email went out, so count it as skipped, not sent (but still
+              // backfill the tracking row below so the pre-check works next run).
+              if (emailResult.deduplicated) {
+                skipped++;
+              } else {
+                // A genuine send happened — count it even if dedup tracking fails below.
+                sent++;
+              }
               // Track in ar_reminder_tracking for dedup. A tracking failure must NOT
               // recount the customer as skipped/failed (the email went out) — but it
               // does mean tomorrow's run may re-send, so capture it loudly.
@@ -602,6 +609,7 @@ export default function ARaging() {
         let sent = 0;
         let noEmail = 0;
         let emailFailed = 0;
+        let statementsDeduped = 0;
 
         for (const custId of selectedCustomers) {
           const { data, error } = await supabase.rpc('get_detailed_statement_data', {
@@ -675,7 +683,12 @@ export default function ARaging() {
               }],
             });
             if (emailResult.success) {
-              sent++;
+              // Idempotency replay = no new email — don't inflate the sent count.
+              if (emailResult.deduplicated) {
+                statementsDeduped++;
+              } else {
+                sent++;
+              }
             } else {
               emailFailed++;
               Sentry.captureMessage(`Statement email send returned failure for customer ${custId}`, { level: 'error', tags: { action: 'email_batch_statements' } });
@@ -689,12 +702,12 @@ export default function ARaging() {
         }
 
         if (profile) {
-          logActivity({ event: 'batch_statements_emailed', description: `Emailed ${sent} statement(s)${noEmail > 0 ? ` (${noEmail} had no email)` : ''}${emailFailed > 0 ? ` (${emailFailed} FAILED)` : ''}`, performedBy: profile.id, entityType: 'system' });
+          logActivity({ event: 'batch_statements_emailed', description: `Emailed ${sent} statement(s)${statementsDeduped > 0 ? ` (${statementsDeduped} already sent — deduped)` : ''}${noEmail > 0 ? ` (${noEmail} had no email)` : ''}${emailFailed > 0 ? ` (${emailFailed} FAILED)` : ''}`, performedBy: profile.id, entityType: 'system' });
         }
         if (emailFailed > 0) {
-          toast('error', `Emailed ${sent} statement(s) — ${emailFailed} FAILED to send${noEmail > 0 ? `, ${noEmail} had no email on file` : ''}`);
+          toast('error', `Emailed ${sent} statement(s) — ${emailFailed} FAILED to send${statementsDeduped > 0 ? `, ${statementsDeduped} already sent` : ''}${noEmail > 0 ? `, ${noEmail} had no email on file` : ''}`);
         } else {
-          toast('success', `Emailed ${sent} statement(s)${noEmail > 0 ? ` — ${noEmail} customer(s) had no email on file` : ''}`);
+          toast('success', `Emailed ${sent} statement(s)${statementsDeduped > 0 ? ` — ${statementsDeduped} already sent (deduped)` : ''}${noEmail > 0 ? ` — ${noEmail} customer(s) had no email on file` : ''}`);
         }
       },
       toast,
