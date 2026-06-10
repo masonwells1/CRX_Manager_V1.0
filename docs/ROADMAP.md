@@ -1,8 +1,65 @@
 # CRX Manager — Roadmap
 
-> **Last updated:** 2026-03-17 | **Owner:** Mason Wells
+> **Last updated:** 2026-06-10 | **Owner:** Mason Wells
 >
-> _Q1 brainstorm docs were moved to `docs/archive/2026-Q1-brainstorms/` and the links below repointed (2026-05-31). Feature statuses reflect the March planning cycle; for current system state see `CLAUDE.md`._
+> _Q1 brainstorm docs were moved to `docs/archive/2026-Q1-brainstorms/` and the links below repointed (2026-05-31). Feature statuses for Priorities 1–6 reflect the March planning cycle; for current system state see `CLAUDE.md`._
+
+---
+
+## ⭐ Strategic Roadmap (2026-06-10 world-class deep dive)
+
+**Source:** `docs/research/2026-06-10-world-class-deep-dive-report.md` (full scored backlog, market research with citations, architecture prework, and the reasoning behind every item below). Opportunity IDs (A1, B1, C1, …) refer to that report. This section supersedes the March priorities below in strategic direction — the March items remain valid as tactical backlog.
+
+**The 5 moves that matter most:**
+1. Let customers pay online (ACH pay-now links → grower portal) — biggest gap vs. every competitor
+2. Compliance autopilot (weakest area, 2.5/5 → differentiator using data already captured)
+3. Bill from the machine (ISOXML as-applied ingestion — category-defining, unserved for small retailers)
+4. Expand AI doc-intelligence to vendor bills + price sheets (proven pattern, <$0.01/doc)
+5. Field-level profitability (both data halves already in the schema)
+
+### H1 — This season (≤3 months): cash + compliance quick wins
+| ID | Item | Effort | Status |
+|---|---|---|---|
+| A1 | ACH pay-now links on emailed invoices/statements (Stripe ACH, $5 cap) + webhook Edge Function | M | TODO |
+| B1 | RUP point-of-sale certification check (warn/block on expired/missing buyer cert) | S | TODO |
+| B5 | License-expiry gates on job assignment + renewal reminders | S | TODO |
+| B3 | WPS pre-application info sheet auto-generation | S | TODO |
+| B6 | State dealer report pack (WI annual report; IL on-demand records) | S | TODO |
+| E3 | Owner's daily brief (cash, AR movement, today's work, exceptions) | S | TODO |
+| D1 | Vendor-bill LLM extraction pilot (gate: 10-bill manual accuracy test) | M | TODO |
+| C4 | Weather auto-capture at application time (replace hand-typed entries) | S | TODO |
+| — | **Cheap tests that gate H2:** collect 3 real ISOXML monitor files (C1); CDMS/Greenbook label-data pricing inquiry (B7); A1 click-through data (gates A2) | — | TODO |
+
+### H2 — This year: the two strategic bets
+| ID | Item | Effort | Status |
+|---|---|---|---|
+| P1/P3 | Prework: customer-organization model + server-side PDF generation | M+M | TODO |
+| A2 | Grower portal v1 (login, balance, statements, invoice PDFs, pay) | L | TODO |
+| A3 | Online quote approval/e-sign in portal (likely industry-first) | M | TODO |
+| A4 | Autopay + scheduled payments | M | TODO |
+| C1 | ISOXML/ADAPT as-applied file upload → proposed application records (review queue) | L | TODO |
+| C3 | As-applied vs. billed reconciliation report ("bill every acre you applied") | S | TODO |
+| B2 | Dicamba 72-hour record auto-draft | M | TODO |
+| B4 | REI/PHI tracking per field + dispatch warnings | M | TODO |
+| E4 | Field-level profitability (margin per acre per field/customer/season) | M | TODO |
+| D2 | Vendor price-sheet ingestion → proposed cost updates | M | TODO |
+| E1 | Driver/applicator mobile workspace (refactor DeliveryDetail into task-first flow) | L | TODO |
+
+### H3 — Multi-year: the defensible end-state
+| ID | Item | Notes |
+|---|---|---|
+| C2 | Leaf API integration (John Deere / FieldView / CNH auto-pull) | After C1 proves reconciliation logic |
+| B7 | Label-rate validation at blend/order time | Gated on CDMS/Greenbook data licensing |
+| E2 | Role-workspace IA redesign (66 flat pages → Sell/Field/Money/Stock) | Only after portal + mobile usage data exists |
+| F3 | Multi-tenancy decision point (sell CRX to other retailers?) | Funded decision, not speculative; ~3–4 wk schema retrofit |
+
+### Keep / Change / Kill (current-setup verdicts)
+- **KILL:** checks-only payments; no customer-facing surface; compliance-as-passive-register
+- **KEEP:** single-tenant (for now); web PWA (no native apps); CRX **is** the ledger (accountant export only, no QuickBooks two-way sync)
+- **CHANGE:** OCR-centric intake (machine data above it, manual entry below it); 3 hard-coded price tiers (contract pricing before chasing larger accounts)
+
+### Explicitly NOT building (don't re-add without new evidence)
+Native iOS/Android apps · multi-tenancy now · ML demand forecasting (supersedes C7 below) · autonomous AI agents on financial records · QuickBooks two-way sync · grain/energy/feed modules · direct OEM telematics agreements as a first step · big-bang UI redesign.
 
 ---
 
@@ -95,7 +152,7 @@ Detailed doc: `docs/archive/2026-Q1-brainstorms/2026-03-01-gap-remediation-hando
 | # | Feature | Effort | Impact |
 |---|---------|--------|--------|
 | C2 | Suggested Reorders / Auto-PO generation | Medium | HIGH |
-| C7 | Seasonal Demand Forecasting | High | MEDIUM |
+| ~~C7~~ | ~~Seasonal Demand Forecasting~~ | High | ❌ Dropped 2026-06-10 — deep dive "what NOT to build" (one data point per SKU-season; classical reorder points win at this scale) |
 
 ---
 
