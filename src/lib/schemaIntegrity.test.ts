@@ -482,6 +482,7 @@ const CHECK_CONSTRAINT_CONTRACTS: Array<{
       'received', 'booked', 'delivered', 'returned', 'adjusted',
       'transferred', 'job_applied', 'cancelled_delivery_reversal',
       'void_delivery_reversal', 'prebooked', 'released',
+      'prebook_reconciliation',
     ],
   },
   {

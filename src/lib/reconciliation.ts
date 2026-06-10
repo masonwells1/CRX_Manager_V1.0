@@ -144,7 +144,8 @@ export interface InventoryTransactionRow {
     | 'cancelled_delivery_reversal'
     | 'void_delivery_reversal'
     | 'prebooked'
-    | 'released';
+    | 'released'
+    | 'prebook_reconciliation';
   quantity: number; // signed: positive = add, negative = subtract (for adjustments)
 }
 
@@ -188,6 +189,7 @@ export function checkInventoryLedger(
       case 'booked':
       case 'prebooked':
       case 'released':
+      case 'prebook_reconciliation':
         delta = 0;
         break;
 
