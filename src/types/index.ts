@@ -40,6 +40,10 @@ export interface Product {
   epa_registration: string | null;
   is_rup: boolean;
   signal_word: 'Danger' | 'Warning' | 'Caution' | null;
+  /** WPS restricted-entry interval in hours, from the product label (NULL = not entered) */
+  rei_hours: number | null;
+  /** Pre-harvest interval in days, from the product label (NULL = not entered) */
+  phi_days: number | null;
   product_form: ProductForm | null;
   inventory_unit: string | null;
   container_unit: string | null;

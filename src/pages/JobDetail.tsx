@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -14,6 +14,7 @@ import { logActivity } from '../lib/activityLogger';
 import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
+import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -147,6 +148,50 @@ export default function JobDetail() {
   const [savedApplicatorId, setSavedApplicatorId] = useState<string | null>(null);
   const [showLicenseOverrideConfirm, setShowLicenseOverrideConfirm] = useState(false);
   const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
+  // B3: WPS pre-application notice PDF
+  const [printingWps, setPrintingWps] = useState(false);
+
+  const handleWpsNotice = async () => {
+    setPrintingWps(true);
+    try {
+      await generateWpsNoticePdf({
+        job_number: jobNumber || 'draft',
+        customer_name: customers.find((c) => c.id === customerId)?.farm_name || 'Customer',
+        application_date: jobDate,
+        scheduled_time: scheduledTime || null,
+        applicator_name: applicators.find((a) => a.id === applicatorId)?.full_name || null,
+        fields: fieldRows
+          .filter((f) => f.field_id)
+          .map((f) => {
+            const fld = allFields.find((af) => af.id === f.field_id);
+            return {
+              field_name: fld?.field_name || 'Field',
+              county: fld?.county || null,
+              state: fld?.state || null,
+              acres: parseFloat(f.acres_to_treat) || 0,
+            };
+          }),
+        products: chemRows
+          .filter((c) => c.product_id)
+          .map((c) => {
+            const p = allProducts.find((ap) => ap.id === c.product_id);
+            return {
+              product_name: p?.product_name || c.product_name || 'Product',
+              epa_registration: p?.epa_registration || null,
+              signal_word: p?.signal_word || null,
+              rei_hours: p?.rei_hours ?? null,
+              rate_per_acre: parseFloat(c.rate_per_acre) || null,
+              rate_unit: c.rate_unit || null,
+            };
+          }),
+      });
+      if (profile) logActivity({ event: 'wps_notice_printed', description: `WPS pre-application notice generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'wps_notice_pdf' } });
+      toast('error', 'Failed to generate WPS notice');
+    }
+    setPrintingWps(false);
+  };
   const [vehicleId, setVehicleId] = useState('');
   const [recipeId, setRecipeId] = useState('');
   const [notes, setNotes] = useState('');
@@ -679,6 +724,12 @@ export default function JobDetail() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {!isNew && fieldRows.some((f) => f.field_id) && chemRows.some((c) => c.product_id) && (
+            <Button variant="secondary" onClick={handleWpsNotice} loading={printingWps}>
+              <Printer className="w-4 h-4" />
+              WPS Notice
+            </Button>
+          )}
           {!isNew && (status === 'scheduled' || status === 'in_progress') && (
             <Button variant="danger" onClick={() => setShowCancelConfirm(true)} loading={cancelling}>
               <Ban className="w-4 h-4" />

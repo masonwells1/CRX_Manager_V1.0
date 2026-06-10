@@ -4,7 +4,7 @@
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
 - `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-4, credit_limit, finance_charge_rate, prepay_balance)
 - `customer_addresses` - Multiple addresses per customer (label, address, delivery_notes, is_default)
-- `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, product_form, notes [grower description], internal_notes [internal only])
+- `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, rei_hours [WPS restricted-entry interval], phi_days [pre-harvest interval], product_form, notes [grower description], internal_notes [internal only])
 - `cost_history` - Cost change audit log (product_id, old/new costs and prices, change_note)
 - `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, Mapbox polygon geometry)
 - `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
