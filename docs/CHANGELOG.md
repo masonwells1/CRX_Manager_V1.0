@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-10 (sell-side excellence audit + W1 fix applied live)
+
+Read-only sell-side audit (quote → order → delivery → invoice → payment) benchmarked against the ag-retail field — Agvance, AgVantage EDGE, Merchant Ag, AgWorks, Levridge/AGRIS — with every competitor claim adversarially source-verified, and every core sell-side RPC verified against the live DB. Report: `docs/audits/2026-06-10-sell-side-excellence-audit.md`. Verdict: pipeline operationally strong; the two defining ag-retail constructs are missing — season-booking partial draw-down and ship-now/price-later — and form the top of a 7-item ranked roadmap (deep spec sketches included, ready for `/ship`).
+
+- **`20260610142204_create_direct_order_role_gate` (audit W1, applied live)** — the live `create_direct_order` had NO role gate (auth.uid() + actor-mismatch only): any authenticated user (driver/applicator) could create confirmed orders + inventory prebooks + commission rows via direct RPC, and missing prices COALESCE'd silently to $0. Prior forgery sweeps skipped it because it *does* reference `auth.uid()` — auth-only ≠ role-gated. Added the canonical `admin`/`sales_rep` `INSUFFICIENT_ROLE` gate (before idempotency); body otherwise byte-verbatim from live (md5-verified post-apply). 3 reviewers clean; rolled-back 4-path smoke all-correct. UI route already admin/sales_rep → zero legit-user impact.
+
 ## 2026-05-29 (workflow review + Codex cross-review) — 3 BLOCKER fixes applied live
 
 The new `/review-workflow` audit (full graph/lifecycle/cross-entity/invariant review, verified against live DB) surfaced BLOCKERs; Codex independently cross-reviewed them; every Codex claim was then re-verified against the live database (Codex itself had no Supabase MCP) before any fix. Three migrations applied live via MCP:

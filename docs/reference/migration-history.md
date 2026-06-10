@@ -1,10 +1,18 @@
-# Migration History (396 migrations)
+# Migration History (397 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-10 (sell-side audit W1: create_direct_order role gate)
+
+Finding W1 of `docs/audits/2026-06-10-sell-side-excellence-audit.md`: the live `create_direct_order` checked `auth.uid()` + actor-mismatch but never the caller's ROLE — any authenticated user (driver/applicator) could create confirmed orders (inventory prebooks + commission rows) via direct RPC. Every prior actor-forgery sweep skipped it because it does reference `auth.uid()` (auth-only ≠ role-gated). Applied live after 3 parallel reviewers clean (rls-security, migration-drift, compliance) + proof; disk renamed to MCP stamp. Post-apply byte-fidelity verified: prosrc minus the two inserted fragments md5-matches the pre-apply live body (`b16e630f…`). Rolled-back 4-path smoke: no-auth → `Authentication required`, driver → `INSUFFICIENT_ROLE`, forged `p_performed_by` → `Actor mismatch`, admin → order created. Overload=1.
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260610142204 | `create_direct_order_role_gate` | Canonical role gate (`admin`/`sales_rep`, `is_active`, matching the NewOrder route at `App.tsx:178`) inserted after the actor-mismatch check and BEFORE the idempotency check so cached results can't leak. Body otherwise verbatim from live; legacy error strings deliberately preserved. |
 
 ## Applied 2026-06-09 (Codex round-3 follow-up: maintenance-fn hardening)
 

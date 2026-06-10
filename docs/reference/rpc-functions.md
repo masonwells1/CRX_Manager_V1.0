@@ -25,7 +25,7 @@
 
 ## Order & Delivery
 - `convert_quote_to_order()` — also releases inventory holds linked to the quote. Copies `qi.notes` to `order_items.notes` and aggregates section_header_notes into `orders.program_notes`
-- `create_direct_order()` — create order without a quote; warns (not blocks) on low inventory using net position
+- `create_direct_order()` — create order without a quote; warns (not blocks) on low inventory using net position. Role-gated `admin`/`sales_rep` (`INSUFFICIENT_ROLE`) since `20260610142204` — audit W1 closed an RPC-direct hole where any authenticated user could create orders
 - `create_order_from_blend_ticket()` — create order from linked blend ticket
 - `cancel_order()` — cancels order, releases prebooked inventory. **F7 (2026-05-07):** no longer adds `v_hold.quantity` to `inventory.quantity_available` when deactivating planned-quote holds — holds are soft reservations that never debited it.
 - `update_order_items()` — update items on an existing order
