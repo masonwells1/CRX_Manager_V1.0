@@ -1,6 +1,17 @@
 #!/usr/bin/env node
-// Status-enum guard for CRX Manager.
-// Bug pattern: writing 'void' when the DB requires 'voided' (commit 4a25aea).
+// CHECK-constraint literal guard for CRX Manager (formerly status-enum-only).
+// Bug patterns:
+//   - writing 'void' when the DB requires 'voided' (commit 4a25aea)
+//   - writing entity_type 'system' when the CHECK only allows 'batch' etc.
+//     (financial_audit_log, 2026-05-30 — caught only by a post-apply smoke test)
+//
+// v2 (C3, 2026-06-10): generalized from status_enums to ALL parseable CHECK
+// IN-lists in .claude/schema-registry.json `check_constraints` (any literal
+// written to a CHECK-IN-list column must be in the allowed set), and now also
+// inspects SQL migration files, not just TS in src/.
+// Constraints the registry could NOT parse are listed in `skipped_constraints`
+// — this hook does NOT validate those.
+// File name kept as status-enum-check.mjs for settings.json wiring stability.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -24,15 +35,14 @@ try {
 const filePath = (payload?.tool_input?.file_path || "").replace(/\\/g, "/");
 if (!filePath) out("allow");
 
-const isTs = /\.tsx?$/.test(filePath);
-const isTest = /\.(test|spec)\.tsx?$/.test(filePath);
-const inSrc = filePath.includes("/src/");
-if (!isTs || isTest || !inSrc) out("allow");
+const isTs = /\.tsx?$/.test(filePath) && !/\.(test|spec)\.tsx?$/.test(filePath) && filePath.includes("/src/");
+const isSql = filePath.endsWith(".sql") && filePath.includes("supabase/migrations/");
+if (!isTs && !isSql) out("allow");
 
 const content = payload?.tool_input?.content || payload?.tool_input?.new_string || "";
 if (!content) out("allow");
 
-if (/\/\/\s*status-enum-check:\s*exempt/.test(content)) out("allow");
+if (/(?:\/\/|--)\s*status-enum-check:\s*exempt/.test(content)) out("allow");
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const registryPath = path.join(here, "..", "schema-registry.json");
@@ -43,46 +53,165 @@ try {
   out("allow");
 }
 
-const enums = registry.status_enums || {};
+// v2 registry: check_constraints { "table.column": { values: [...] } }.
+// Fallback for a v1-shaped registry: status_enums { "table.column": [...] }.
+const constraintMap = {};
+if (registry.check_constraints && typeof registry.check_constraints === "object") {
+  for (const [key, entry] of Object.entries(registry.check_constraints)) {
+    if (entry && Array.isArray(entry.values)) constraintMap[key] = entry.values;
+  }
+} else {
+  for (const [key, vals] of Object.entries(registry.status_enums || {})) {
+    if (Array.isArray(vals)) constraintMap[key] = vals;
+  }
+}
+if (Object.keys(constraintMap).length === 0) out("allow");
+
+// table -> { column -> values[] }
+const byTable = {};
+for (const [key, values] of Object.entries(constraintMap)) {
+  const dot = key.indexOf(".");
+  const table = key.slice(0, dot);
+  const col = key.slice(dot + 1);
+  (byTable[table] = byTable[table] || {})[col] = values;
+}
 
 const violations = [];
+const allowedList = (values) => values.map(v => `'${v}'`).join(", ");
+const inSet = (values, literal) => values.some(v => String(v) === String(literal));
 
-const fromRe = /\.from\s*\(\s*['"`]([\w]+)['"`]\s*\)/g;
-let fm;
-while ((fm = fromRe.exec(content)) !== null) {
-  const table = fm[1];
-  const after = content.slice(fm.index, fm.index + 800);
+function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-  const eqRe = /\.eq\s*\(\s*['"`]([\w]*status)['"`]\s*,\s*['"`]([^'"`]+)['"`]\s*\)/g;
-  let em;
-  while ((em = eqRe.exec(after)) !== null) {
-    const col = em[1];
-    const val = em[2];
-    const key = `${table}.${col}`;
-    if (enums[key] && !enums[key].includes(val)) {
-      violations.push(`${table}.${col} = '${val}' (allowed: ${enums[key].map(v => `'${v}'`).join(", ")})`);
+if (isTs) {
+  // ── TS: .from('<table>') windows, .eq() filters + update/insert/upsert object literals ──
+  const fromRe = /\.from\s*\(\s*['"`]([\w]+)['"`]\s*\)/g;
+  let fm;
+  while ((fm = fromRe.exec(content)) !== null) {
+    const table = fm[1];
+    const cols = byTable[table];
+    if (!cols) continue;
+    const after = content.slice(fm.index, fm.index + 800);
+
+    for (const [col, values] of Object.entries(cols)) {
+      const eqRe = new RegExp(`\\.eq\\s*\\(\\s*['"\`]${escRe(col)}['"\`]\\s*,\\s*(?:['"\`]([^'"\`]+)['"\`]|(-?\\d+(?:\\.\\d+)?))\\s*\\)`, "g");
+      let em;
+      while ((em = eqRe.exec(after)) !== null) {
+        const val = em[1] !== undefined ? em[1] : em[2];
+        if (!inSet(values, val)) {
+          violations.push(`${table}.${col} = '${val}' (allowed: ${allowedList(values)})`);
+        }
+      }
+
+      const objRe = new RegExp(`\\.(?:update|insert|upsert)\\s*\\(\\s*\\{[^}]*?\\b${escRe(col)}\\s*:\\s*(?:['"\`]([^'"\`]+)['"\`]|(-?\\d+(?:\\.\\d+)?))`, "g");
+      let om;
+      while ((om = objRe.exec(after)) !== null) {
+        const val = om[1] !== undefined ? om[1] : om[2];
+        if (!inSet(values, val)) {
+          violations.push(`${table}.${col} = '${val}' (allowed: ${allowedList(values)})`);
+        }
+      }
     }
   }
+}
 
-  const objRe = /\.(?:update|insert|upsert)\s*\(\s*\{[^}]*?\b([\w]*status)\s*:\s*['"`]([^'"`]+)['"`]/g;
-  let om;
-  while ((om = objRe.exec(after)) !== null) {
-    const col = om[1];
-    const val = om[2];
-    const key = `${table}.${col}`;
-    if (enums[key] && !enums[key].includes(val)) {
-      violations.push(`${table}.${col} = '${val}' (allowed: ${enums[key].map(v => `'${v}'`).join(", ")})`);
+if (isSql) {
+  // Strip SQL line comments so doc comments don't false-positive.
+  const sql = content.replace(/--[^\n]*/g, "");
+
+  // Carve-out: if this migration ALTERs a table's CHECK constraints (expanding
+  // the allowed set), skip validation for that table — the registry is stale
+  // by definition until /regen-schema-registry runs post-apply.
+  const tableConstraintTouched = new Set();
+  const alterRe = /ALTER\s+TABLE\s+(?:ONLY\s+)?(?:public\.)?(\w+)\b([\s\S]*?);/gi;
+  let am;
+  while ((am = alterRe.exec(sql)) !== null) {
+    if (/\bCHECK\b|\bCONSTRAINT\b/i.test(am[2])) tableConstraintTouched.add(am[1]);
+  }
+
+  // Splits one VALUES tuple / column list on top-level commas (paren + quote aware).
+  function splitTopLevel(s) {
+    const parts = [];
+    let depth = 0, inQ = false, cur = "";
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (inQ) {
+        cur += ch;
+        if (ch === "'") { if (s[i + 1] === "'") { cur += "'"; i++; } else inQ = false; }
+        continue;
+      }
+      if (ch === "'") { inQ = true; cur += ch; continue; }
+      if (ch === "(") depth++;
+      if (ch === ")") depth--;
+      if (ch === "," && depth === 0) { parts.push(cur.trim()); cur = ""; continue; }
+      cur += ch;
+    }
+    if (cur.trim()) parts.push(cur.trim());
+    return parts;
+  }
+
+  for (const [table, cols] of Object.entries(byTable)) {
+    if (tableConstraintTouched.has(table)) continue;
+
+    // (a) UPDATE <table> SET ... <col> = '<literal>'
+    const updRe = new RegExp(`UPDATE\\s+(?:ONLY\\s+)?(?:public\\.)?${escRe(table)}(?:\\s+(?:AS\\s+)?\\w+)?\\s+SET\\b([\\s\\S]*?)(?=\\bWHERE\\b|\\bRETURNING\\b|;|$)`, "gi");
+    let um;
+    while ((um = updRe.exec(sql)) !== null) {
+      for (const [col, values] of Object.entries(cols)) {
+        const setRe = new RegExp(`\\b${escRe(col)}\\s*=\\s*'((?:[^']|'')*)'`, "gi");
+        let sm;
+        while ((sm = setRe.exec(um[1])) !== null) {
+          const val = sm[1].replace(/''/g, "'");
+          if (!inSet(values, val)) {
+            violations.push(`SQL UPDATE ${table} SET ${col} = '${val}' (allowed: ${allowedList(values)})`);
+          }
+        }
+      }
+    }
+
+    // (b) INSERT INTO <table> (col, ...) VALUES (...), (...) — positional literal check
+    const insRe = new RegExp(`INSERT\\s+INTO\\s+(?:public\\.)?${escRe(table)}\\s*\\(([^)]+)\\)\\s*VALUES\\s*([\\s\\S]*?)(?=;|ON\\s+CONFLICT|RETURNING|$)`, "gi");
+    let im;
+    while ((im = insRe.exec(sql)) !== null) {
+      const colList = splitTopLevel(im[1]).map(c => c.replace(/"/g, "").trim());
+      const tupleRe = /\(([\s\S]*?)\)(?=\s*(?:,\s*\(|;|$|\s*ON|\s*RETURNING))/g;
+      let tm;
+      while ((tm = tupleRe.exec(im[2])) !== null) {
+        const vals = splitTopLevel(tm[1]);
+        colList.forEach((col, idx) => {
+          const values = cols[col];
+          if (!values || idx >= vals.length) return;
+          const lit = vals[idx].match(/^'((?:[^']|'')*)'$/);
+          if (!lit) return; // expression / variable — can't validate statically
+          const val = lit[1].replace(/''/g, "'");
+          if (!inSet(values, val)) {
+            violations.push(`SQL INSERT INTO ${table} (${col}) = '${val}' (allowed: ${allowedList(values)})`);
+          }
+        });
+      }
+    }
+
+    // (c) qualified comparisons:  <table>.<col> = '<literal>'
+    for (const [col, values] of Object.entries(cols)) {
+      const qRe = new RegExp(`\\b${escRe(table)}\\.${escRe(col)}\\s*=\\s*'((?:[^']|'')*)'`, "gi");
+      let qm;
+      while ((qm = qRe.exec(sql)) !== null) {
+        const val = qm[1].replace(/''/g, "'");
+        if (!inSet(values, val)) {
+          violations.push(`SQL ${table}.${col} = '${val}' (allowed: ${allowedList(values)})`);
+        }
+      }
     }
   }
 }
 
 if (violations.length > 0) {
   out("block",
-    "STATUS ENUM VIOLATION: " + violations.join(" | ") +
+    "CHECK CONSTRAINT VIOLATION: " + [...new Set(violations)].join(" | ") +
     ". The DB CHECK constraint will reject this at runtime. " +
     "If the CHECK constraint is intentionally being expanded in this change, " +
-    "add // status-enum-check: exempt near the top of the file and refresh " +
-    ".claude/schema-registry.json after the migration lands.");
+    "add // status-enum-check: exempt (TS) or -- status-enum-check: exempt (SQL) near the top of " +
+    "the file and refresh .claude/schema-registry.json after the migration lands. " +
+    "Constraints the registry could not parse are listed in skipped_constraints — those are NOT validated here.");
 }
 
 out("allow");

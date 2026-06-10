@@ -1,0 +1,361 @@
+{
+  "_README": "Each entry exempts ONE violation_key for ONE predicate. Discipline (see ./README.md): every entry MUST carry a `dated` ISO date and a `justification` that cites the live pg_get_functiondef semantics proving the flag is NOT a real hole. NEVER allowlist a genuine escalation/leak — fix or report it. Re-verify entries when the function is next edited. Seeded 2026-06-10 from the first live validation run (project rhyzpcqhnizqbxphqdkr).",
+  "entries": [
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "_guard_inventory_transactions_immutable()",
+      "justification": "Trigger function; anon EXECUTE is inert (errors on a direct call, only fires via the trigger). RLS/immutability-guard set.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "_guard_prepay_applications_immutable()",
+      "justification": "Trigger function; anon EXECUTE inert (direct call errors). Immutability-guard set.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "_guard_profile_role_lock()",
+      "justification": "Trigger function guarding profile role changes; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "_prebook_quick_delivery_inventory()",
+      "justification": "Trigger function; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "_receiving_records_before_delete()",
+      "justification": "BEFORE DELETE trigger function; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "_recompute_prepay_credit_balance()",
+      "justification": "Trigger function recomputing prepay balances; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "_require_auth()",
+      "justification": "RLS helper predicate; its whole purpose is to reject unauthenticated callers (raises when auth.uid() is null). anon EXECUTE is load-bearing for RLS evaluation; revoking would break logged-out RLS checks.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "adjust_inventory(p_inventory_id uuid, p_delta numeric, p_reason text, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Self-gates on auth.uid()/role as its first executable statement (anon rejected at runtime). Accepted inert grant-debt per CLAUDE.md Schema-Gotchas; real control is the in-body gate.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "admin_update_profile(target_user_id uuid, new_role text, new_full_name text, new_phone text, new_is_active boolean, new_denied_pages text[], p_idempotency_key text)",
+      "justification": "Self-gates: anon call returns 'requires admin role' (runtime-proven 2026-06-08). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "allocate_payment(p_customer_id uuid, p_total_cents bigint, p_payment_method text, p_reference_number text, p_check_number text, p_payment_date date, p_notes text, p_allocations jsonb, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Self-gates on auth.uid() (derives actor from auth.uid(), rejects forged p_performed_by). Codex-verified 2026-05-31 NOT vulnerable. Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "calculate_billing_splits(p_total_cents bigint, p_percentages numeric[])",
+      "justification": "Pure arithmetic helper (no table reads/writes, no PII). anon EXECUTE harmless.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "calculate_prices_from_margin()",
+      "justification": "Trigger function computing tier prices; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "check_period_open(p_date date)",
+      "justification": "Read-only period-status helper used inside RLS/RPC bodies; returns boolean, no PII. anon EXECUTE load-bearing for in-body checks.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "enforce_quote_accepted_fully_drawn()",
+      "justification": "Trigger function enforcing the partial-draw invariant; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "financial_dashboard_summary()",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Report RPC; remaining accepted grant-debt (the 37 PII-leaking report RPCs were already REVOKEd in 20260529214355 — this one self-gates).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "get_ar_aging(p_as_of_date date)",
+      "justification": "Self-gates: anon call returns 'Admin access required' (runtime-proven 2026-06-08). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "get_ar_reminder_candidates()",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "get_commission_balance_report(p_as_of_date date)",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "get_customer_statement(p_customer_id uuid, p_start_date date, p_end_date date)",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt per CLAUDE.md.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "get_inventory_cost_report()",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "get_receiving_log(p_limit integer, p_offset integer, p_vendor text, p_condition text, p_received_by uuid, p_date_from date, p_date_to date)",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "get_receiving_summary()",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "get_sales_detail_report(p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "get_sales_summary_report(p_group_by text, p_start_date date, p_end_date date, p_product_id uuid, p_customer_ids uuid[], p_sales_rep_id uuid, p_category text, p_season integer)",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "handle_new_user()",
+      "justification": "auth.users INSERT trigger (runs as owner on signup); anon EXECUTE inert (direct call errors). Required for the auth flow.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "is_admin()",
+      "justification": "RLS role-helper predicate; anon EXECUTE is load-bearing for RLS policy evaluation. Returns boolean, no PII. Revoking risks a logged-out-user outage.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "is_applicator()",
+      "justification": "RLS role-helper predicate; anon EXECUTE load-bearing for RLS evaluation. No PII.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "is_driver()",
+      "justification": "RLS role-helper predicate; anon EXECUTE load-bearing for RLS evaluation. No PII.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "is_sales_rep()",
+      "justification": "RLS role-helper predicate; anon EXECUTE load-bearing for RLS evaluation. No PII.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "log_comment_activity()",
+      "justification": "Trigger function logging comment activity; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "log_note_activity()",
+      "justification": "Trigger function logging note activity; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "match_quick_receive_items(p_items jsonb, p_vendor text)",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Read-only matching helper. Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "next_application_record_number()",
+      "justification": "Sequence/number generator; returns a formatted next-number string, no PII, no caller-controlled input. anon EXECUTE harmless.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "next_commission_payment_number()",
+      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "next_cycle_count_number()",
+      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "next_delivery_number()",
+      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "next_job_number()",
+      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "next_po_number()",
+      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "next_return_number()",
+      "justification": "Sequence/number generator; no PII. anon EXECUTE harmless.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "notify_mentioned_users_in_comment()",
+      "justification": "Trigger function creating mention notifications; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "operational_dashboard_summary()",
+      "justification": "Self-gates on auth.uid()/role internally (anon rejected). Accepted inert grant-debt.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "prevent_order_shares_edit_after_post()",
+      "justification": "Trigger function locking posted order shares; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "require_admin()",
+      "justification": "RLS/RPC role-gate helper; anon EXECUTE load-bearing (the gate itself raises for anon). Revoking would break in-body gates and RLS evaluation.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "require_admin_or_sales_rep()",
+      "justification": "RLS/RPC role-gate helper; anon EXECUTE load-bearing (raises for anon). Revoking would break in-body gates.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "snapshot_field_crop_history()",
+      "justification": "Trigger function snapshotting crop history; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "sync_blend_ticket_payment_status()",
+      "justification": "Trigger function syncing blend-ticket payment_status; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "trg_delivery_status_change()",
+      "justification": "Status-change trigger function; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "trg_inventory_significant_change()",
+      "justification": "Inventory-change trigger function; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "trg_order_status_change()",
+      "justification": "Order status-change trigger function; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "trg_po_status_change()",
+      "justification": "PO status-change trigger function; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "trg_po_submitted_update_on_order()",
+      "justification": "PO-submitted trigger function; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "trg_recalc_order_totals()",
+      "justification": "Order-totals recalculation trigger function; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "vendor_bills_positive_subtotal_trigger()",
+      "justification": "Vendor-bill validation trigger function; anon EXECUTE inert (direct call errors).",
+      "dated": "2026-06-10"
+    },
+
+    {
+      "predicate": "ungated-secdef-mutators",
+      "violation_key": "create_order_from_blend_ticket(p_blend_ticket_id uuid, p_order_number text, p_order_date date, p_notes text, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Transitively role-gated: body calls link_blend_ticket_to_order(...) which runs PERFORM require_admin_or_sales_rep() in the same transaction, so an unauthorized caller's order/order_items/inventory INSERTs are rolled back (verified live pg_get_functiondef 2026-06-10). No direct auth helper token in body so predicate (b) flags it. HARDENING CANDIDATE: front-load a require_admin_or_sales_rep() call at the top so the gate runs before any mutation rather than at link time.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "ungated-secdef-mutators",
+      "violation_key": "log_failed_notification(p_notification_type text, p_entity_type text, p_entity_id uuid, p_error_message text, p_payload jsonb, p_idempotency_key text)",
+      "justification": "Frontend/cron-called failed-notification logging helper (callers: Dashboard.tsx, notificationTriggers.ts). Insert-only into failed_notifications; no financial mutation, no privilege escalation, no PII read. Intentionally left ungated per 2026-06-09 round-3 disposition (a hard auth.uid() gate would break its cron/service_role callers). Verified live pg_get_functiondef 2026-06-10.",
+      "dated": "2026-06-10"
+    },
+
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "FALSE POSITIVE (non-canonical token): body DOES strict-actor-check (IF p_performed_by IS NOT NULL AND auth.uid() IS DISTINCT FROM p_performed_by THEN RAISE 'actor mismatch') and gates role on the auth.uid()-derived actor (admin/sales_rep, is_active). Flagged only because it raises 'actor mismatch' (with a space) instead of the canonical ACTOR_MISMATCH token. Verified live 2026-06-10. HARDENING: canonicalize the raised token to ACTOR_MISMATCH.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "create_invoice_from_delivery(p_delivery_id uuid, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Authorization derives from auth.uid() (role IN ('admin','sales_rep') on auth.uid()); p_performed_by is attribution-only (written to invoices.created_by). Allocate_payment precedent. Verified live pg_get_functiondef 2026-06-10.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "link_blend_ticket_to_order(p_blend_ticket_id uuid, p_order_id uuid, p_item_mappings jsonb, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Body opens with PERFORM require_admin_or_sales_rep() (auth.uid()-based); p_performed_by is attribution-only (created_by on link rows + activity log). Allocate_payment precedent. Verified live 2026-06-10.",
+      "dated": "2026-06-10"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "unlink_blend_ticket_from_order(p_blend_ticket_id uuid, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "Body opens with PERFORM require_admin_or_sales_rep() (auth.uid()-based); p_performed_by is attribution-only (activity_feed + financial_audit_log actor). Allocate_payment precedent. Verified live 2026-06-10.",
+      "dated": "2026-06-10"
+    }
+  ]
+}

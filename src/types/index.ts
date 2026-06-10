@@ -318,6 +318,9 @@ export interface Order {
   order_number: string;
   order_name: string | null;
   quote_id: string | null;
+  /** true when the order was created by draw_down_quote (a booking draw) —
+   * voiding/cancelling a draw order returns its quantity to the booking. */
+  booking_draw?: boolean;
   customer_id: string;
   status: OrderStatus;
   commission_split: CommissionSplit | null;

@@ -94,6 +94,30 @@ export default tseslint.config(
     },
   },
   {
+    // ── C6 controls (2026-06-10 error-prevention review §4) ──
+    // App code only: Edge Functions (Deno) and Node scripts have no React
+    // hook available, so the idempotency rule would only produce noise there.
+    files: ['src/**/*.{ts,tsx}'],
+    rules: {
+      // assertRpcResult(X) where X is the whole {data,error} response → no-op guard (P1B class)
+      'local-rules/assert-rpc-result-arg-shape': 'error',
+      // p_idempotency_key minted fresh at the callsite → retries double-execute
+      'local-rules/idempotency-key-from-hook': 'error',
+    },
+  },
+  {
+    // Unit tests / mocks intentionally use synthetic keys and fake responses
+    files: [
+      'src/**/*.test.{ts,tsx}',
+      'src/tests/**/*.{ts,tsx}',
+      'src/**/__mocks__/**/*.{ts,tsx}',
+    ],
+    rules: {
+      'local-rules/assert-rpc-result-arg-shape': 'off',
+      'local-rules/idempotency-key-from-hook': 'off',
+    },
+  },
+  {
     files: ['tests/**/*.{ts,tsx}'],
     rules: {
       'no-console': 'off',

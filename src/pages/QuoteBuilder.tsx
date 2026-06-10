@@ -31,7 +31,7 @@ import { useToast } from '../components/ui/Toast';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -242,6 +242,10 @@ export default function QuoteBuilder() {
   const canEdit = ['draft', 'revised'].includes(currentStatus);
   const canSend = ['draft', 'revised'].includes(currentStatus);
   const canConvert = currentStatus === 'sent';
+  // draw_down_quote accepts BOTH 'sent' and 'revised' bookings — keep the
+  // Partial Order button in parity with the RPC (whole-convert stays
+  // sent-only by design). 2026-06-10 error-prevention review §3 LOW.
+  const canDraw = currentStatus === 'sent' || currentStatus === 'revised';
 
   // Mark dirty whenever user changes form data (after initial load)
   useEffect(() => {
@@ -980,9 +984,16 @@ export default function QuoteBuilder() {
       p_performed_by: profile.id,
       p_idempotency_key: rollIdemKey,
     });
-    if (error) { toast('error', 'Failed to roll over quote'); return; }
+    if (error) {
+      if (hasRpcCode(error, RpcErrorCodes.BOOKING_FULLY_DRAWN)) {
+        toast('error', 'This booking is fully drawn — all quantities are already on orders. Nothing left to roll over.');
+      } else {
+        toast('error', 'Failed to roll over quote');
+      }
+      return;
+    }
     rolloverIdem.resetKey();
-    const result = assertRpcResult<{ quote_id: string; quote_number: string; season: number }>(data, 'rollover_quote_to_season');
+    const result = assertRpcResult<{ quote_id: string; quote_number: string; season: number; remainder_rollover: boolean }>(data, 'rollover_quote_to_season');
     toast('success', `Rolled over to season ${result.season} — ${result.quote_number}`);
     navigate(`/quotes/${result.quote_id}`);
   };
@@ -1208,6 +1219,14 @@ export default function QuoteBuilder() {
   // Partial booking draw-down: open the modal with the per-product balance
   const openDrawDownModal = async () => {
     if (!id) return;
+    // Guardrail parity with handleConvertToOrder: a booking drawn months after
+    // it was created may carry stale prices. First click surfaces the
+    // GuardrailBanner below the header; "Continue Anyway" lets the next click
+    // through. (2026-06-10 error-prevention review §3 LOW.)
+    if (quoteCreatedAt) {
+      const fresh = checkStaleQuote(quoteCreatedAt);
+      if (!fresh && !staleWarning?.dismissed) return;
+    }
     if (isDirty) {
       toast('warning', 'Save the quote before drawing down the booking');
       return;
@@ -1295,7 +1314,20 @@ export default function QuoteBuilder() {
         || (errObj && typeof errObj.message === 'string' ? errObj.message : null)
         || (errObj && typeof errObj.details === 'string' ? errObj.details : null)
         || 'Failed to create order from booking';
-      toast('error', errMsg);
+      // Friendly mapping for the booking guards — UX parity with the convert
+      // path (2026-06-10 error-prevention review §3 LOW). BOOKING_PARTIALLY_DRAWN
+      // can't fire here: draw_down_quote IS the partial path.
+      if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
+        // The server message already names the product and remaining balance
+        // (e.g. another draw landed from a second tab) — surface it as-is.
+        toast('error', errMsg);
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_CLOSED)) {
+        toast('error', 'This booking is closed — only sent or revised quotes can be drawn down.');
+      } else if (hasRpcCode(error, RpcErrorCodes.EMPTY_DRAW)) {
+        toast('warning', 'Enter a quantity for at least one product');
+      } else {
+        toast('error', errMsg);
+      }
     }
     setDrawing(false);
   };
@@ -1336,6 +1368,34 @@ export default function QuoteBuilder() {
     setDuplicateOrderConfirmOpen(false);
     setConverting(true);
     setConfirmConvertOpen(false);
+
+    // A partially-drawn booking must never be whole-converted — and crucially
+    // must not be saved as 'accepted' first: that status flip releases the
+    // booking's remaining holds BEFORE the RPC gets a chance to refuse
+    // (2026-06-10 BLOCKER). Check the draw ledger up front and route to the
+    // Partial Order flow instead. Fail closed: if the ledger can't be read,
+    // don't risk the destructive pre-accept.
+    if (id) {
+      try {
+        const { data: drawCheck, error: drawCheckError } = await supabase
+          .from('quote_product_draws')
+          .select('quantity_drawn')
+          .eq('quote_id', id)
+          .gt('quantity_drawn', 0)
+          .limit(1);
+        if (drawCheckError) throw drawCheckError;
+        if (drawCheck && drawCheck.length > 0) {
+          toast('warning', 'This booking has partial draw-downs — use "Partial Order" to draw the remaining balance instead of converting.');
+          setConverting(false);
+          return;
+        }
+      } catch (error: unknown) {
+        Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_draw_check' } });
+        toast('error', 'Could not verify the booking balance — please try again');
+        setConverting(false);
+        return;
+      }
+    }
 
     // Save the quote first (sets status to 'accepted')
     const savedId = await saveQuote('accepted');
@@ -1395,6 +1455,13 @@ export default function QuoteBuilder() {
       navigate(`/orders/${result.order_id}`);
     } catch (error: unknown) {
       Sentry.captureException(error, { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
+      // Friendly mapping for the booking guards (server-side backstop for the
+      // pre-check above — e.g. a draw landed from another tab mid-convert).
+      if (hasRpcCode(error, RpcErrorCodes.BOOKING_PARTIALLY_DRAWN)) {
+        toast('warning', 'This booking has partial draw-downs — use "Partial Order" to draw the remaining balance instead of converting.');
+      } else if (hasRpcCode(error, RpcErrorCodes.BOOKING_CLOSED)) {
+        toast('error', 'This booking is closed — only sent or revised quotes can be converted.');
+      } else {
       // Bug #30 fix: Extract error message from Supabase RPC error objects
       const errObj = error as Record<string, unknown> | null;
       const errMsg = (error instanceof Error ? error.message : null)
@@ -1403,6 +1470,7 @@ export default function QuoteBuilder() {
         || (errObj && typeof errObj.hint === 'string' ? errObj.hint : null)
         || 'Failed to create order';
       toast('error', errMsg);
+      }
       // Bug #29 fix: Revert quote status since conversion failed
       // Use the status BEFORE conversion (was 'accepted' from saveQuote, revert to previous)
       const revertTo = status === 'accepted' ? 'sent' : (status || 'sent');
@@ -1560,6 +1628,10 @@ export default function QuoteBuilder() {
                 Convert to Order
               </Button>
               <HelpTip text="Creates a confirmed order from this quote. Inventory holds transfer to the order and the customer gets a confirmation email." className="ml-1" />
+            </>
+          )}
+          {isEditing && canDraw && (
+            <>
               <Button
                 variant="secondary"
                 icon={<PackageOpen className="w-4 h-4" />}
@@ -1598,6 +1670,14 @@ export default function QuoteBuilder() {
           )}
         </div>
       </div>
+
+      {/* Stale-quote warning for the Partial Order path — the convert path
+          shows this banner inside its confirm modal, but openDrawDownModal
+          returns before any modal opens, so surface it at page level here.
+          Renders nothing unless a warning is active and undismissed. */}
+      {!confirmConvertOpen && (
+        <GuardrailBanner warning={staleWarning} onDismiss={dismissStaleWarning} />
+      )}
 
       {isEditing && !canEdit && currentStatus !== 'sent' && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 text-sm">

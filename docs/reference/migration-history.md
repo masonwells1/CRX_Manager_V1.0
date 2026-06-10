@@ -1,10 +1,38 @@
-# Migration History (398 migrations)
+# Migration History (405 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-10 (draw-ledger reversal on void/cancel — finding A3)
+
+Draw-ledger reversal to close the bookkeeping gap: voiding or cancelling a draw order previously consumed the booking balance permanently (no decrement of `quote_product_draws`). Now `void_order` and `cancel_order` both reverse the ledger — full quantity for void, undelivered-only for cancel. Adds `orders.booking_draw boolean NOT NULL DEFAULT false` to distinguish draw orders from whole-conversion orders; `draw_down_quote` marks new draw orders. If the parent quote was fully drawn (accepted) and the reversal restores balance, quote reopens to `sent`. F7 hold-deactivation in `cancel_order` skips draw orders (the undrawn booking's holds must survive). 2 reviewers clean (0 BLOCKER/0 HIGH); live census confirmed 0 draw orders (backfill touches 0 rows); self-verify block asserts all invariants at apply time. Disk renamed to MCP stamp per B7.
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260610185806 | `draw_ledger_reversal_on_void_cancel` | NEW `orders.booking_draw boolean NOT NULL DEFAULT false` column + backfill. `draw_down_quote` verbatim + marks new order `booking_draw=true`. `void_order` verbatim + A3 block: decrements `quote_product_draws` by full qty, reopens accepted booking to `sent` if no longer fully drawn. `cancel_order` verbatim + A3 block: decrements by undelivered qty only (mirrors prebook release); F7 hold-deactivation skips draw orders so undrawn balance holds survive. REVOKE anon/PUBLIC on all 3 fns; self-verify block asserts column existence, overload=1, sentinel strings, grants. |
+
+## Applied 2026-06-10 (partial draw-down follow-up hardening)
+
+Follow-up hardening for the roadmap #1 v1 partial draw-down feature. 4 migrations, 2 reviewers clean (rls-security + migration-drift) per migration, proof files written, applied via MCP, disk renamed to MCP stamps per B7. Covers: (1) save_quote overdraw guard — prevents editing a booking down below already-drawn qty; (2) auto_expire skip — prevents cron from expiring open season bookings with active draws; (3) rollover remainder-only — skips fully-drawn lines, raises `BOOKING_FULLY_DRAWN` if nothing left to roll, returns `remainder_rollover: boolean`; (4) backfill non-accepted — retroactive draw rows for pre-feature converted quotes (live: 1 row inserted for cancelled Q-2026-1811). Frontend: `BOOKING_FULLY_DRAWN` added to `RpcErrorCodes`; `QuoteBuilder.handleRollover` handles the token with a user-facing message.
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260610184230 | `save_quote_drawn_product_guard` | `save_quote(uuid, jsonb, jsonb, uuid, text)` verbatim from live (md5: `1705f7190bcd8819a94bb946d9be2fca`) + drawn-product guard: after server-authoritative recalc, checks `quote_product_draws` and raises `BOOKING_OVERDRAWN` if new booked qty < drawn qty for any line. Prevents a user from editing a booking below its already-committed draw quantity. Self-verify: overload=1, guard present, md5 fidelity, SECDEF+search_path. |
+| 20260610184254 | `auto_expire_skip_partially_drawn` | `auto_expire_quotes()` verbatim from live (md5: `eaa4974b2807dbb6d1153b3461ad140a`) + `NOT EXISTS (SELECT 1 FROM quote_product_draws d WHERE d.quote_id = q.id AND d.quantity_drawn > 0)` predicate in cursor WHERE. Prevents the cron job from auto-expiring open season bookings that have active draw rows. Grant: service_role only (authenticated/anon revoked by `20260609203541`). |
+| 20260610184534 | `rollover_remainder_only` | `rollover_quote_to_season(uuid, integer, uuid, text)` — adds `FOR UPDATE` on source quote; block A: draw detection → raises `BOOKING_FULLY_DRAWN` if every item is fully drawn (nothing to roll); block B: FIFO remainder math per item (`LEAST(item_qty, GREATEST(cum_before + item_qty - drawn, 0))`), skipping fully-drawn lines. Returns `{ quote_id, quote_number, season, remainder_rollover: boolean }`. Canonical strict-actor block (AUTH_REQUIRED/ACTOR_MISMATCH/INSUFFICIENT_ROLE). ACL: authenticated+service_role. |
+| 20260610184551 | `draws_backfill_non_accepted` | Pure data backfill: `INSERT INTO quote_product_draws … ON CONFLICT (quote_id, product_id) DO NOTHING` for quotes-with-orders not in (`sent`,`revised`) status or missing draw rows. Self-verify asserts zero uncovered pairs after. Live effect: 1 row inserted (Q-2026-1811, cancelled quote). |
+
+## Applied 2026-06-10 (draw-down BLOCKER + HIGH remediation — error-prevention review §3)
+
+The 2026-06-10 error-prevention review (`docs/audits/2026-06-10-error-prevention-review.md`) Codex-simulated the draw-down batch and found 1 BLOCKER + 1 HIGH that the feature's 4-reviewer gate missed — both only visible when tracing the UI's real call sequence into the new guards. Both fixed live same-day: 3 reviewers clean (rls-security 0/0/0, migration-drift 0 BLOCKER/0 HIGH, compliance clean on the frontend diff), proof files written, applied via MCP, disk renamed to MCP stamps per B7, registry regenerated (verified in sync). Rolled-back 9-path e2e smoke ALL PASS — including the exact corrupt state the BLOCKER produced (override-forced `accepted` + partial draws → convert now raises `BOOKING_PARTIALLY_DRAWN` instead of returning `already_converted`), the UI pre-flip simulation (direct `accepted` UPDATE on a partially-drawn quote → blocked by the new trigger), duplicate-key draw → same order returned/no double-draw, final draw → `accepted` allowed, control quote converts normally, no-auth/forged-actor probes correct.
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260610181612 | `convert_partially_drawn_guard_first` | **BLOCKER:** QuoteBuilder pre-flips status to `accepted` (releasing all holds) before calling convert, which routed partially-drawn bookings into the `already_converted` short-circuit — silently destroying the undrawn balance. Fix: draws guard hoisted FIRST and made status-independent (partial → `BOOKING_PARTIALLY_DRAWN`; fully drawn → `already_converted`, never re-book); NEW integrity trigger `enforce_quote_accepted_fully_drawn` (BEFORE UPDATE OF status, `_is_admin_override()` hatch) blocks ANY writer from accepting a partially-drawn booking. Frontend: executeConvertToOrder checks the draw ledger before the destructive pre-accept (fail-closed) + `hasRpcCode` mappings for `BOOKING_PARTIALLY_DRAWN`/`BOOKING_CLOSED`. |
+| 20260610181726 | `draw_down_idempotency_after_lock` | **HIGH (double-draw TOCTOU):** `check_idempotency` ran before the quotes `FOR UPDATE` lock and the check/save pair is non-atomic — two same-key concurrent requests (double-click/retry) could both pass and double-draw the booking + double-insert commissions. Fix: idempotency check relocated AFTER the lock (still before the status guard so final-draw retries return the cached result, not `BOOKING_CLOSED`); the lock now serializes same-key duplicates. Body otherwise verbatim from live. |
 
 ## Applied 2026-06-10 (sell-side roadmap #1 v1: partial quote draw-down)
 

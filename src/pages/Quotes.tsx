@@ -155,7 +155,27 @@ export default function Quotes() {
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      const ids = selectedRows.map((q) => q.id);
+      let ids = selectedRows.map((q) => q.id);
+      // Open bookings with partial draw-downs must not be soft-deleted:
+      // deletion changes no status, so the hold-release trigger never fires —
+      // the booking's reserved inventory would stay held on a hidden quote.
+      const { data: drawnRows, error: drawnErr } = await supabase
+        .from('quote_product_draws')
+        .select('quote_id')
+        .in('quote_id', ids)
+        .gt('quantity_drawn', 0);
+      if (drawnErr) throw drawnErr;
+      const drawnIds = new Set((drawnRows || []).map((d) => d.quote_id));
+      if (drawnIds.size > 0) {
+        const blocked = selectedRows.filter((q) => drawnIds.has(q.id));
+        toast('warning', `${blocked.length} booking(s) with draw-downs skipped — close the booking (draw or cancel the remainder) before deleting: ${blocked.map((q) => q.quote_number).join(', ')}`);
+        ids = ids.filter((id) => !drawnIds.has(id));
+        if (ids.length === 0) {
+          setDeleting(false);
+          setDeleteModalOpen(false);
+          return;
+        }
+      }
       const result = await supabase
         .from('quotes')
         .update({ deleted_at: new Date().toISOString() })

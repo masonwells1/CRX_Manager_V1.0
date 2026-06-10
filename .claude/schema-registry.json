@@ -1,10 +1,12 @@
 {
   "_meta": {
-    "generated_at": "2026-06-08",
+    "registry_version": 2,
+    "generated_at": "2026-06-10",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
-    "regenerate_with": "node scripts/regenerate-schema-registry.mjs",
-    "purpose": "Single source of truth for hooks: generated columns, status enum values, tables-with/without updated_at.",
-    "note": "For a fresh refresh from the live DB, ask Claude Code to do it (it has Supabase MCP introspection)."
+    "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
+    "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
+    "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
+    "migrations_high_water": "20260610185806"
   },
   "generated_columns": [
     {
@@ -23,13 +25,6 @@
       "open",
       "closed"
     ],
-    "blend_tickets.status": [
-      "pending",
-      "processing",
-      "completed",
-      "failed",
-      "needs_review"
-    ],
     "blend_tickets.order_link_status": [
       "unlinked",
       "linked"
@@ -44,6 +39,13 @@
       "unreviewed",
       "approved",
       "rejected"
+    ],
+    "blend_tickets.status": [
+      "pending",
+      "processing",
+      "completed",
+      "failed",
+      "needs_review"
     ],
     "commission_payments.status": [
       "unposted",
@@ -218,5 +220,3594 @@
     "unit_conversions",
     "vendor_payments",
     "write_offs"
+  ],
+  "check_constraints": {
+    "accounting_periods.status": {
+      "values": [
+        "open",
+        "closed"
+      ],
+      "constraints": [
+        "accounting_periods_status_check"
+      ]
+    },
+    "allocation_sets.entity_type": {
+      "values": [
+        "order",
+        "invoice",
+        "payment"
+      ],
+      "constraints": [
+        "allocation_sets_entity_type_check"
+      ]
+    },
+    "application_records.source_type": {
+      "values": [
+        "job",
+        "blend_ticket"
+      ],
+      "constraints": [
+        "application_records_source_type_check"
+      ]
+    },
+    "applicator_licenses.license_type": {
+      "values": [
+        "private",
+        "commercial",
+        "public"
+      ],
+      "constraints": [
+        "applicator_licenses_license_type_check"
+      ]
+    },
+    "ar_reminder_tracking.reminder_level": {
+      "values": [
+        30,
+        60,
+        90
+      ],
+      "constraints": [
+        "ar_reminder_tracking_reminder_level_check"
+      ]
+    },
+    "blend_recipes.recipe_type": {
+      "values": [
+        "crop_specific",
+        "generic"
+      ],
+      "constraints": [
+        "blend_recipes_recipe_type_check"
+      ]
+    },
+    "blend_tickets.order_link_status": {
+      "values": [
+        "unlinked",
+        "linked"
+      ],
+      "constraints": [
+        "blend_tickets_order_link_status_check"
+      ]
+    },
+    "blend_tickets.payment_status": {
+      "values": [
+        "unbilled",
+        "billed",
+        "prepaid",
+        "no_charge"
+      ],
+      "constraints": [
+        "blend_tickets_payment_status_check"
+      ]
+    },
+    "blend_tickets.review_status": {
+      "values": [
+        "unreviewed",
+        "approved",
+        "rejected"
+      ],
+      "constraints": [
+        "blend_tickets_review_status_check"
+      ]
+    },
+    "blend_tickets.source": {
+      "values": [
+        "ocr",
+        "manual",
+        "digital"
+      ],
+      "constraints": [
+        "blend_tickets_source_check"
+      ]
+    },
+    "blend_tickets.status": {
+      "values": [
+        "pending",
+        "processing",
+        "completed",
+        "failed",
+        "needs_review"
+      ],
+      "constraints": [
+        "blend_tickets_status_check"
+      ]
+    },
+    "commission_payments.status": {
+      "values": [
+        "unposted",
+        "posted",
+        "voided"
+      ],
+      "constraints": [
+        "commission_payments_status_check"
+      ]
+    },
+    "commissions.status": {
+      "values": [
+        "pending",
+        "paid",
+        "cancelled"
+      ],
+      "constraints": [
+        "commissions_status_check"
+      ]
+    },
+    "customers.assigned_tier": {
+      "values": [
+        1,
+        2,
+        3
+      ],
+      "constraints": [
+        "customers_assigned_tier_check"
+      ]
+    },
+    "cycle_counts.status": {
+      "values": [
+        "in_progress",
+        "completed",
+        "cancelled"
+      ],
+      "constraints": [
+        "cycle_counts_status_check"
+      ]
+    },
+    "deliveries.issue_type": {
+      "values": [
+        "none",
+        "customer_not_home",
+        "gate_locked",
+        "road_blocked",
+        "wrong_address",
+        "refused",
+        "weather",
+        "other"
+      ],
+      "constraints": [
+        "deliveries_issue_type_check"
+      ],
+      "nullable": true
+    },
+    "deliveries.priority": {
+      "values": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ],
+      "constraints": [
+        "deliveries_priority_check"
+      ]
+    },
+    "deliveries.status": {
+      "values": [
+        "scheduled",
+        "in_progress",
+        "completed",
+        "cancelled",
+        "voided"
+      ],
+      "constraints": [
+        "deliveries_status_check"
+      ]
+    },
+    "delivery_remainders.status": {
+      "values": [
+        "pending",
+        "scheduled",
+        "fulfilled",
+        "cancelled"
+      ],
+      "constraints": [
+        "delivery_remainders_status_check"
+      ]
+    },
+    "document_processing_log.document_type": {
+      "values": [
+        "invoice",
+        "purchase_order",
+        "price_list",
+        "product_list",
+        "customer_list",
+        "quote_list"
+      ],
+      "constraints": [
+        "document_processing_log_document_type_check"
+      ]
+    },
+    "email_log.status": {
+      "values": [
+        "pending",
+        "sent",
+        "failed",
+        "bounced"
+      ],
+      "constraints": [
+        "email_log_status_check"
+      ]
+    },
+    "financial_audit_log.entity_type": {
+      "values": [
+        "invoice",
+        "payment",
+        "split",
+        "prepay",
+        "prepay_credit",
+        "customer",
+        "order",
+        "delivery",
+        "write_off",
+        "finance_charge",
+        "credit_memo",
+        "return",
+        "allocation_set",
+        "void",
+        "batch",
+        "commission_payment",
+        "cycle_count",
+        "blend_ticket",
+        "vendor_bill",
+        "vendor_payment",
+        "purchase_order",
+        "accounting_period",
+        "quote"
+      ],
+      "constraints": [
+        "financial_audit_log_entity_type_check"
+      ]
+    },
+    "financial_audit_log.operation_type": {
+      "values": [
+        "invoice_created",
+        "invoice_posted",
+        "invoice_voided",
+        "invoice_cancelled",
+        "invoice_updated",
+        "invoice_deleted",
+        "invoice_marked_overdue",
+        "payment_recorded",
+        "payment_allocation",
+        "payment_voided",
+        "payment_allocated",
+        "split_modified",
+        "split_invoices_generated",
+        "prepay_created",
+        "prepay_applied",
+        "prepay_credit_created",
+        "prepay_batch_applied",
+        "prepay_edited",
+        "prepay_deleted",
+        "prepay_reconciliation",
+        "batch_prepay_apply",
+        "write_off_recorded",
+        "write_off_reversed",
+        "write_off_applied",
+        "finance_charge",
+        "finance_charge_generated",
+        "finance_charge_voided",
+        "credit_memo_created",
+        "credit_memo_applied",
+        "credit_memo_unapplied",
+        "return_created",
+        "return_approved",
+        "return_received",
+        "return_credit_issued",
+        "order_created",
+        "order_updated",
+        "order_voided",
+        "order_cancelled",
+        "order_restored",
+        "delivery_created",
+        "delivery_updated",
+        "delivery_cancelled",
+        "delivery_voided",
+        "delivery_restored",
+        "quote_converted",
+        "blend_ticket_linked",
+        "blend_ticket_unlinked",
+        "commission_payment_created",
+        "commission_payment_posted",
+        "commission_payment_voided",
+        "batch_post",
+        "batch_void",
+        "batch_payment",
+        "period_reopened",
+        "quote_status_reverted",
+        "blend_ticket_approval_reversed",
+        "cycle_count_completed",
+        "vendor_bill_created",
+        "vendor_bill_voided",
+        "vendor_bill_updated",
+        "vendor_payment_recorded",
+        "vendor_payment_voided"
+      ],
+      "constraints": [
+        "financial_audit_log_operation_type_check"
+      ]
+    },
+    "inventory_holds.hold_type": {
+      "values": [
+        "manual",
+        "crop_program"
+      ],
+      "constraints": [
+        "inventory_holds_hold_type_check"
+      ]
+    },
+    "inventory_transactions.transaction_type": {
+      "values": [
+        "received",
+        "booked",
+        "delivered",
+        "returned",
+        "adjusted",
+        "transferred",
+        "job_applied",
+        "cancelled_delivery_reversal",
+        "void_delivery_reversal",
+        "prebooked",
+        "released",
+        "prebook_reconciliation"
+      ],
+      "constraints": [
+        "inventory_transactions_transaction_type_check"
+      ]
+    },
+    "invoice_items.price_source": {
+      "values": [
+        "quoted",
+        "tier",
+        "manual"
+      ],
+      "constraints": [
+        "chk_invoice_items_price_source"
+      ],
+      "nullable": true
+    },
+    "invoices.invoice_type": {
+      "values": [
+        "chemical_sale",
+        "field_application",
+        "misc_charge",
+        "credit_memo"
+      ],
+      "constraints": [
+        "invoices_invoice_type_check"
+      ]
+    },
+    "invoices.status": {
+      "values": [
+        "draft",
+        "unposted",
+        "posted",
+        "paid",
+        "overdue",
+        "voided",
+        "cancelled"
+      ],
+      "constraints": [
+        "invoices_status_check"
+      ]
+    },
+    "jobs.priority": {
+      "values": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ],
+      "constraints": [
+        "jobs_priority_check"
+      ]
+    },
+    "jobs.status": {
+      "values": [
+        "scheduled",
+        "in_progress",
+        "completed",
+        "cancelled",
+        "invoiced"
+      ],
+      "constraints": [
+        "jobs_status_check"
+      ]
+    },
+    "ocr_processing_queue.status": {
+      "values": [
+        "pending",
+        "processing",
+        "completed",
+        "failed"
+      ],
+      "constraints": [
+        "ocr_processing_queue_status_check"
+      ]
+    },
+    "orders.status": {
+      "values": [
+        "confirmed",
+        "partially_fulfilled",
+        "fulfilled",
+        "cancelled",
+        "voided"
+      ],
+      "constraints": [
+        "orders_status_check"
+      ]
+    },
+    "payments.payment_method": {
+      "values": [
+        "check",
+        "ach",
+        "cash",
+        "credit_card",
+        "other"
+      ],
+      "constraints": [
+        "payments_payment_method_check"
+      ]
+    },
+    "products.container_type": {
+      "values": [
+        "Jug",
+        "Drum",
+        "Pallet",
+        "Mini-Bulk",
+        "Shuttle",
+        "Bag",
+        "Tote",
+        "Ea",
+        "Jar"
+      ],
+      "constraints": [
+        "products_container_type_check"
+      ]
+    },
+    "products.product_form": {
+      "values": [
+        "liquid",
+        "dry"
+      ],
+      "constraints": [
+        "products_product_form_check"
+      ]
+    },
+    "products.signal_word": {
+      "values": [
+        "Danger",
+        "Warning",
+        "Caution"
+      ],
+      "constraints": [
+        "products_signal_word_check"
+      ],
+      "nullable": true
+    },
+    "profiles.role": {
+      "values": [
+        "admin",
+        "sales_rep",
+        "driver",
+        "applicator",
+        "entity_recipient"
+      ],
+      "constraints": [
+        "profiles_role_check"
+      ]
+    },
+    "purchase_orders.status": {
+      "values": [
+        "draft",
+        "submitted",
+        "partially_received",
+        "fully_received",
+        "cancelled"
+      ],
+      "constraints": [
+        "purchase_orders_status_check"
+      ]
+    },
+    "quotes.status": {
+      "values": [
+        "draft",
+        "sent",
+        "revised",
+        "accepted",
+        "declined",
+        "expired",
+        "cancelled"
+      ],
+      "constraints": [
+        "quotes_status_check"
+      ]
+    },
+    "quotes.tier": {
+      "values": [
+        1,
+        2,
+        3
+      ],
+      "constraints": [
+        "quotes_tier_check"
+      ]
+    },
+    "rebate_claims.status": {
+      "values": [
+        "pending",
+        "submitted",
+        "approved",
+        "paid",
+        "rejected"
+      ],
+      "constraints": [
+        "rebate_claims_status_check"
+      ]
+    },
+    "rebate_programs.rebate_type": {
+      "values": [
+        "per_unit",
+        "percentage",
+        "volume_tier",
+        "flat"
+      ],
+      "constraints": [
+        "rebate_programs_rebate_type_check"
+      ]
+    },
+    "rebate_programs.status": {
+      "values": [
+        "active",
+        "expired",
+        "closed"
+      ],
+      "constraints": [
+        "rebate_programs_status_check"
+      ]
+    },
+    "receiving_records.condition": {
+      "values": [
+        "good",
+        "damaged",
+        "short",
+        "wrong_product",
+        "mixed"
+      ],
+      "constraints": [
+        "receiving_records_condition_check"
+      ]
+    },
+    "return_items.condition": {
+      "values": [
+        "unopened",
+        "opened",
+        "damaged",
+        "expired"
+      ],
+      "constraints": [
+        "return_items_condition_check"
+      ]
+    },
+    "returns.reason": {
+      "values": [
+        "defective",
+        "damaged",
+        "wrong_product",
+        "overstock",
+        "expired",
+        "other"
+      ],
+      "constraints": [
+        "returns_reason_check"
+      ]
+    },
+    "returns.status": {
+      "values": [
+        "requested",
+        "approved",
+        "received",
+        "credited",
+        "rejected",
+        "cancelled"
+      ],
+      "constraints": [
+        "returns_status_check"
+      ]
+    },
+    "rup_sales_records.compliance_status": {
+      "values": [
+        "compliant",
+        "warning",
+        "non_compliant"
+      ],
+      "constraints": [
+        "rup_sales_records_compliance_status_check"
+      ]
+    },
+    "team_notes.note_type": {
+      "values": [
+        "note",
+        "todo",
+        "announcement"
+      ],
+      "constraints": [
+        "team_notes_note_type_check"
+      ]
+    },
+    "team_notes.priority": {
+      "values": [
+        "low",
+        "medium",
+        "high",
+        "urgent"
+      ],
+      "constraints": [
+        "team_notes_priority_check"
+      ]
+    },
+    "unit_conversions.unit_type": {
+      "values": [
+        "liquid",
+        "dry",
+        "both"
+      ],
+      "constraints": [
+        "unit_conversions_unit_type_check"
+      ]
+    },
+    "vehicles.status": {
+      "values": [
+        "active",
+        "inactive",
+        "maintenance"
+      ],
+      "constraints": [
+        "vehicles_status_check"
+      ]
+    },
+    "vehicles.vehicle_type": {
+      "values": [
+        "ground",
+        "air"
+      ],
+      "constraints": [
+        "vehicles_vehicle_type_check"
+      ]
+    },
+    "vendor_bills.status": {
+      "values": [
+        "unpaid",
+        "partially_paid",
+        "paid",
+        "voided"
+      ],
+      "constraints": [
+        "vendor_bills_status_check"
+      ]
+    }
+  },
+  "skipped_constraints": [
+    {
+      "table": "accounting_periods",
+      "constraint": "accounting_periods_check",
+      "def": "CHECK ((period_end >= period_start))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "application_record_fields",
+      "constraint": "application_record_fields_acres_check",
+      "def": "CHECK ((acres >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "applicator_licenses",
+      "constraint": "applicator_licenses_holder_check",
+      "def": "CHECK (((customer_id IS NOT NULL) OR (profile_id IS NOT NULL)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "blend_ticket_products",
+      "constraint": "blend_ticket_products_confidence_score_check",
+      "def": "CHECK (((confidence_score >= (0)::numeric) AND (confidence_score <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "blend_tickets",
+      "constraint": "blend_tickets_ocr_confidence_score_check",
+      "def": "CHECK (((ocr_confidence_score >= (0)::numeric) AND (ocr_confidence_score <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commissions",
+      "constraint": "chk_commission_amount",
+      "def": "CHECK ((commission_amount >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "commissions",
+      "constraint": "chk_commission_pct",
+      "def": "CHECK (((split_percentage >= (0)::numeric) AND (split_percentage <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "delivery_items",
+      "constraint": "chk_di_quantity",
+      "def": "CHECK ((quantity > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "delivery_remainders",
+      "constraint": "delivery_remainders_quantity_remaining_check",
+      "def": "CHECK ((quantity_remaining > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "field_app_location_shares",
+      "constraint": "field_app_location_shares_split_pct_check",
+      "def": "CHECK (((split_pct > (0)::numeric) AND (split_pct <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "field_app_locations",
+      "constraint": "fal_requires_parent",
+      "def": "CHECK (((invoice_id IS NOT NULL) OR (job_id IS NOT NULL) OR (invoice_group_id IS NOT NULL)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "field_billing_defaults",
+      "constraint": "field_billing_defaults_split_pct_check",
+      "def": "CHECK (((split_pct > (0)::numeric) AND (split_pct <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "fields",
+      "constraint": "chk_no_self_parent",
+      "def": "CHECK ((parent_field_id IS DISTINCT FROM id))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "inventory_holds",
+      "constraint": "inventory_holds_quantity_check",
+      "def": "CHECK ((quantity >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "inventory",
+      "constraint": "chk_inventory_qty_on_order",
+      "def": "CHECK ((quantity_on_order >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "inventory",
+      "constraint": "chk_inventory_qty_prebooked",
+      "def": "CHECK ((quantity_prebooked >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoice_line_allocations",
+      "constraint": "ila_target_check",
+      "def": "CHECK (((invoice_item_id IS NOT NULL) OR (invoice_id IS NOT NULL)))",
+      "reason": "conditional/multi-column — not a single-column IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoice_line_allocations",
+      "constraint": "invoice_line_allocations_split_percentage_check",
+      "def": "CHECK (((split_percentage > (0)::numeric) AND (split_percentage <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoice_shares",
+      "constraint": "invoice_shares_split_percentage_check",
+      "def": "CHECK (((split_percentage > (0)::numeric) AND (split_percentage <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
+      "constraint": "invoices_balance_non_negative",
+      "def": "CHECK (((invoice_type = 'credit_memo'::text) OR (balance_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
+      "constraint": "invoices_paid_non_negative",
+      "def": "CHECK ((paid_amount_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "invoices",
+      "constraint": "invoices_total_non_negative",
+      "def": "CHECK (((invoice_type = 'credit_memo'::text) OR (total_amount_cents >= 0)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "order_items",
+      "constraint": "chk_oi_qty_delivered",
+      "def": "CHECK ((quantity_delivered >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "order_items",
+      "constraint": "chk_oi_qty_remaining",
+      "def": "CHECK ((quantity_remaining >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "order_line_allocations",
+      "constraint": "order_line_allocations_split_percentage_check",
+      "def": "CHECK (((split_percentage > (0)::numeric) AND (split_percentage <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "order_shares",
+      "constraint": "order_shares_split_percentage_check",
+      "def": "CHECK (((split_percentage > (0)::numeric) AND (split_percentage <= (100)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "orders",
+      "constraint": "orders_total_price_non_negative",
+      "def": "CHECK ((total_price >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "payments",
+      "constraint": "chk_payment_amount",
+      "def": "CHECK ((amount > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "prepay_applications",
+      "constraint": "prepay_applications_applied_amount_cents_check",
+      "def": "CHECK ((applied_amount_cents > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "prepay_credits",
+      "constraint": "prepay_balance_non_negative",
+      "def": "CHECK ((balance_cents >= 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "products",
+      "constraint": "chk_product_cost",
+      "def": "CHECK ((current_cost >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "products",
+      "constraint": "chk_product_tier1",
+      "def": "CHECK ((tier1_price >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "products",
+      "constraint": "chk_product_tier2",
+      "def": "CHECK ((tier2_price >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "products",
+      "constraint": "chk_product_tier3",
+      "def": "CHECK ((tier3_price >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_order_items",
+      "constraint": "chk_poi_qty_ordered",
+      "def": "CHECK ((quantity_ordered >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "purchase_order_items",
+      "constraint": "chk_poi_qty_received",
+      "def": "CHECK ((quantity_received >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "quote_product_draws",
+      "constraint": "quote_product_draws_quantity_drawn_check",
+      "def": "CHECK ((quantity_drawn >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "receiving_records",
+      "constraint": "receiving_records_quantity_received_check",
+      "def": "CHECK ((quantity_received > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "returns",
+      "constraint": "returns_cancelled_has_reason_check",
+      "def": "CHECK (((status <> 'cancelled'::text) OR (cancellation_reason IS NOT NULL)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "vendor_bills",
+      "constraint": "vendor_bills_total_check",
+      "def": "CHECK ((total_cents = (subtotal_cents + COALESCE(adjustment_cents, (0)::bigint))))",
+      "reason": "unparseable — hooks do NOT validate this constraint"
+    },
+    {
+      "table": "write_offs",
+      "constraint": "write_offs_amount_cents_check",
+      "def": "CHECK ((amount_cents > 0))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    }
+  ],
+  "not_null_columns": {
+    "accounting_periods": {
+      "no_default": [
+        "period_start",
+        "period_end"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "activity_feed": {
+      "no_default": [
+        "performed_by"
+      ],
+      "with_default": [
+        "id",
+        "event_type",
+        "description",
+        "created_at"
+      ]
+    },
+    "allocation_sets": {
+      "no_default": [
+        "entity_type",
+        "entity_id"
+      ],
+      "with_default": [
+        "id",
+        "version",
+        "is_active",
+        "created_at"
+      ]
+    },
+    "app_settings": {
+      "no_default": [
+        "setting_key"
+      ],
+      "with_default": [
+        "id",
+        "setting_value",
+        "updated_at"
+      ]
+    },
+    "application_record_fields": {
+      "no_default": [
+        "application_record_id",
+        "field_id",
+        "acres"
+      ],
+      "with_default": [
+        "id",
+        "sort_order",
+        "created_at"
+      ]
+    },
+    "application_records": {
+      "no_default": [
+        "record_number",
+        "source_type",
+        "source_id",
+        "customer_id",
+        "application_date"
+      ],
+      "with_default": [
+        "id",
+        "product_data",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "application_services": {
+      "no_default": [
+        "name"
+      ],
+      "with_default": [
+        "id",
+        "default_rate_per_acre_cents",
+        "cost_per_acre_cents",
+        "is_active",
+        "sort_order",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "applicator_licenses": {
+      "no_default": [
+        "license_number",
+        "holder_name",
+        "expiry_date"
+      ],
+      "with_default": [
+        "id",
+        "license_type",
+        "state",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "ar_reminder_tracking": {
+      "no_default": [
+        "customer_id",
+        "reminder_level"
+      ],
+      "with_default": [
+        "id",
+        "sent_date"
+      ]
+    },
+    "blend_recipe_items": {
+      "no_default": [
+        "recipe_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "product_name",
+        "quantity",
+        "unit",
+        "sort_order",
+        "created_at"
+      ]
+    },
+    "blend_recipes": {
+      "no_default": [
+        "name"
+      ],
+      "with_default": [
+        "id",
+        "recipe_type",
+        "created_by",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "blend_ticket_fields": {
+      "no_default": [
+        "blend_ticket_id",
+        "field_id"
+      ],
+      "with_default": [
+        "id"
+      ]
+    },
+    "blend_ticket_images": {
+      "no_default": [
+        "blend_ticket_id",
+        "storage_path",
+        "image_url"
+      ],
+      "with_default": [
+        "id",
+        "file_size",
+        "mime_type",
+        "upload_order",
+        "created_at"
+      ]
+    },
+    "blend_ticket_products": {
+      "no_default": [
+        "blend_ticket_id"
+      ],
+      "with_default": [
+        "id",
+        "product_name",
+        "quantity",
+        "sequence_order",
+        "created_at"
+      ]
+    },
+    "blend_ticket_to_order_items": {
+      "no_default": [
+        "blend_ticket_id",
+        "order_item_id",
+        "order_id"
+      ],
+      "with_default": [
+        "id",
+        "created_at",
+        "created_by"
+      ]
+    },
+    "blend_tickets": {
+      "no_default": [
+        "ticket_number",
+        "uploaded_by"
+      ],
+      "with_default": [
+        "id",
+        "upload_date",
+        "status",
+        "review_status",
+        "created_at",
+        "updated_at",
+        "order_link_status",
+        "payment_status",
+        "source"
+      ]
+    },
+    "commission_payment_items": {
+      "no_default": [
+        "commission_payment_id",
+        "commission_id",
+        "amount"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "commission_payments": {
+      "no_default": [
+        "payment_number",
+        "recipient_id"
+      ],
+      "with_default": [
+        "id",
+        "total_amount",
+        "status",
+        "payment_date",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "commissions": {
+      "no_default": [
+        "order_id",
+        "customer_id"
+      ],
+      "with_default": [
+        "id",
+        "recipient",
+        "split_percentage",
+        "commission_amount",
+        "order_profit",
+        "status",
+        "created_at"
+      ]
+    },
+    "cost_history": {
+      "no_default": [
+        "product_id",
+        "changed_by"
+      ],
+      "with_default": [
+        "id",
+        "changed_at"
+      ]
+    },
+    "customer_addresses": {
+      "no_default": [
+        "customer_id"
+      ],
+      "with_default": [
+        "id",
+        "label",
+        "is_default",
+        "created_at"
+      ]
+    },
+    "customer_application_rates": {
+      "no_default": [
+        "customer_id",
+        "application_service_id",
+        "rate_per_acre_cents",
+        "season"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "customers": {
+      "no_default": [
+        "farm_name"
+      ],
+      "with_default": [
+        "id",
+        "assigned_tier",
+        "is_active",
+        "created_at",
+        "updated_at",
+        "prepay_balance_cents"
+      ]
+    },
+    "cycle_count_items": {
+      "no_default": [
+        "cycle_count_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "expected_qty",
+        "is_counted",
+        "created_at"
+      ]
+    },
+    "cycle_counts": {
+      "no_default": [
+        "count_number"
+      ],
+      "with_default": [
+        "id",
+        "warehouse",
+        "status",
+        "initiated_by",
+        "started_at",
+        "created_at"
+      ]
+    },
+    "deliveries": {
+      "no_default": [
+        "delivery_number",
+        "order_id",
+        "customer_id",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "scheduled_date",
+        "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "delivery_items": {
+      "no_default": [
+        "delivery_id",
+        "order_item_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "quantity"
+      ]
+    },
+    "delivery_photos": {
+      "no_default": [
+        "delivery_id",
+        "storage_path",
+        "image_url",
+        "uploaded_by"
+      ],
+      "with_default": [
+        "id",
+        "uploaded_at",
+        "sort_order"
+      ]
+    },
+    "delivery_remainders": {
+      "no_default": [
+        "original_delivery_id",
+        "order_id",
+        "order_item_id",
+        "customer_id",
+        "product_id",
+        "quantity_remaining"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "document_processing_log": {
+      "no_default": [
+        "user_id",
+        "document_type",
+        "file_name"
+      ],
+      "with_default": [
+        "id",
+        "success",
+        "created_at"
+      ]
+    },
+    "email_log": {
+      "no_default": [
+        "recipient_email",
+        "email_type",
+        "subject"
+      ],
+      "with_default": [
+        "id",
+        "status"
+      ]
+    },
+    "failed_notifications": {
+      "no_default": [
+        "notification_type",
+        "error_message"
+      ],
+      "with_default": [
+        "id",
+        "attempts",
+        "max_attempts",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "field_app_location_shares": {
+      "no_default": [
+        "location_id",
+        "customer_id",
+        "split_pct"
+      ],
+      "with_default": [
+        "id",
+        "amount_cents",
+        "created_at"
+      ]
+    },
+    "field_app_locations": {
+      "no_default": [
+        "field_id"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "field_billing_defaults": {
+      "no_default": [
+        "field_id",
+        "customer_id",
+        "split_pct"
+      ],
+      "with_default": [
+        "id",
+        "is_primary",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "field_crop_history": {
+      "no_default": [
+        "field_id",
+        "season",
+        "crop_type"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "field_polygons": {
+      "no_default": [
+        "field_id",
+        "polygon_geojson"
+      ],
+      "with_default": [
+        "id"
+      ]
+    },
+    "fields": {
+      "no_default": [
+        "customer_id",
+        "field_name"
+      ],
+      "with_default": [
+        "id",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "finance_charges": {
+      "no_default": [
+        "customer_id",
+        "amount_cents",
+        "charge_rate",
+        "base_amount_cents",
+        "period_start",
+        "period_end"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "financial_audit_log": {
+      "no_default": [
+        "operation_type",
+        "entity_type",
+        "entity_id"
+      ],
+      "with_default": [
+        "id",
+        "actor_user_id",
+        "created_at"
+      ]
+    },
+    "idempotency_keys": {
+      "no_default": [
+        "idempotency_key",
+        "operation"
+      ],
+      "with_default": [
+        "id"
+      ]
+    },
+    "ingredient_map": {
+      "no_default": [],
+      "with_default": [
+        "id",
+        "branded_ingredient",
+        "generic_has_bulk"
+      ]
+    },
+    "inventory": {
+      "no_default": [
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "location",
+        "quantity_available",
+        "quantity_prebooked",
+        "quantity_on_order",
+        "updated_at",
+        "reorder_point",
+        "min_stock_level",
+        "manufactured_at_delivery"
+      ]
+    },
+    "inventory_holds": {
+      "no_default": [
+        "product_id",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "quantity",
+        "hold_type",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "inventory_transactions": {
+      "no_default": [
+        "product_id",
+        "transaction_type",
+        "performed_by"
+      ],
+      "with_default": [
+        "id",
+        "quantity",
+        "created_at",
+        "requires_review"
+      ]
+    },
+    "invoice_items": {
+      "no_default": [
+        "invoice_id"
+      ],
+      "with_default": [
+        "id",
+        "description",
+        "quantity",
+        "unit_price_cents",
+        "extended_cents",
+        "cost_cents",
+        "sort_order",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "invoice_line_allocations": {
+      "no_default": [
+        "allocation_set_id",
+        "bill_to_customer_id",
+        "split_percentage",
+        "amount_cents"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "invoice_shares": {
+      "no_default": [
+        "invoice_id",
+        "customer_id",
+        "customer_name",
+        "split_percentage",
+        "amount_cents"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "invoices": {
+      "no_default": [
+        "customer_id"
+      ],
+      "with_default": [
+        "id",
+        "invoice_number",
+        "invoice_type",
+        "status",
+        "season",
+        "created_by",
+        "total_amount_cents",
+        "paid_amount_cents",
+        "prepay_applied_cents",
+        "invoice_date",
+        "created_at",
+        "updated_at",
+        "write_off_cents"
+      ]
+    },
+    "job_applied_info": {
+      "no_default": [
+        "job_id"
+      ],
+      "with_default": [
+        "id",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "job_chemicals": {
+      "no_default": [
+        "job_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "quantity"
+      ]
+    },
+    "job_fields": {
+      "no_default": [
+        "job_id",
+        "field_id"
+      ],
+      "with_default": [
+        "id"
+      ]
+    },
+    "jobs": {
+      "no_default": [
+        "job_number",
+        "customer_id",
+        "job_date"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "created_at",
+        "updated_at",
+        "priority"
+      ]
+    },
+    "note_activity_log": {
+      "no_default": [
+        "user_id",
+        "action_type"
+      ],
+      "with_default": [
+        "id"
+      ]
+    },
+    "note_tags": {
+      "no_default": [
+        "name",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "color"
+      ]
+    },
+    "notifications": {
+      "no_default": [
+        "user_id"
+      ],
+      "with_default": [
+        "id",
+        "title",
+        "message",
+        "notification_type",
+        "is_read",
+        "created_at"
+      ]
+    },
+    "ocr_processing_queue": {
+      "no_default": [
+        "blend_ticket_id"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "priority",
+        "retry_count",
+        "max_retries",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "order_items": {
+      "no_default": [
+        "order_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "product_name",
+        "price_per_unit",
+        "cost_per_unit",
+        "total_units_needed",
+        "total_price",
+        "profit",
+        "net_margin",
+        "quantity_delivered",
+        "quantity_remaining"
+      ]
+    },
+    "order_line_allocations": {
+      "no_default": [
+        "allocation_set_id",
+        "order_item_id",
+        "bill_to_customer_id",
+        "split_percentage",
+        "amount_cents"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "order_shares": {
+      "no_default": [
+        "order_id",
+        "customer_id",
+        "customer_name",
+        "split_percentage",
+        "amount_cents"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "orders": {
+      "no_default": [
+        "order_number",
+        "customer_id"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "total_price",
+        "total_cost",
+        "total_profit",
+        "total_margin_pct",
+        "order_date",
+        "created_at",
+        "updated_at",
+        "is_planned",
+        "booking_draw"
+      ]
+    },
+    "payments": {
+      "no_default": [
+        "customer_id",
+        "recorded_by"
+      ],
+      "with_default": [
+        "id",
+        "payment_date",
+        "amount",
+        "payment_method",
+        "created_at"
+      ]
+    },
+    "prepay_applications": {
+      "no_default": [
+        "prepay_credit_id",
+        "invoice_id",
+        "applied_amount_cents"
+      ],
+      "with_default": [
+        "id",
+        "applied_at"
+      ]
+    },
+    "prepay_credits": {
+      "no_default": [
+        "customer_id",
+        "original_amount_cents",
+        "balance_cents"
+      ],
+      "with_default": [
+        "id",
+        "season",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "products": {
+      "no_default": [
+        "product_name"
+      ],
+      "with_default": [
+        "id",
+        "is_active",
+        "created_at",
+        "updated_at",
+        "is_rup"
+      ]
+    },
+    "profiles": {
+      "no_default": [
+        "id",
+        "email"
+      ],
+      "with_default": [
+        "full_name",
+        "role",
+        "is_active",
+        "created_at",
+        "updated_at",
+        "denied_pages"
+      ]
+    },
+    "purchase_order_items": {
+      "no_default": [
+        "purchase_order_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "quantity_ordered",
+        "unit_cost",
+        "quantity_received"
+      ]
+    },
+    "purchase_orders": {
+      "no_default": [
+        "po_number",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "vendor",
+        "status",
+        "total_cost",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "quote_items": {
+      "no_default": [
+        "quote_id",
+        "section_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "sort_order",
+        "price_per_unit",
+        "current_cost",
+        "profit",
+        "total_price",
+        "net_margin"
+      ]
+    },
+    "quote_pdf_templates": {
+      "no_default": [
+        "template_name"
+      ],
+      "with_default": [
+        "id",
+        "columns",
+        "is_default",
+        "is_system",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "quote_product_draws": {
+      "no_default": [
+        "quote_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "quantity_drawn",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "quote_sections": {
+      "no_default": [
+        "quote_id"
+      ],
+      "with_default": [
+        "id",
+        "section_name",
+        "sort_order"
+      ]
+    },
+    "quote_templates": {
+      "no_default": [
+        "template_name"
+      ],
+      "with_default": [
+        "id",
+        "sections",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "quote_versions": {
+      "no_default": [
+        "quote_id",
+        "sent_by",
+        "snapshot_data"
+      ],
+      "with_default": [
+        "id",
+        "version_number",
+        "sent_at"
+      ]
+    },
+    "quotes": {
+      "no_default": [
+        "quote_number",
+        "customer_id",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "tier",
+        "status",
+        "total_price",
+        "total_cost",
+        "total_profit",
+        "total_margin_pct",
+        "valid_days",
+        "created_at",
+        "updated_at",
+        "is_planned"
+      ]
+    },
+    "rate_limit_log": {
+      "no_default": [
+        "user_id",
+        "operation"
+      ],
+      "with_default": [
+        "id"
+      ]
+    },
+    "rate_limits": {
+      "no_default": [
+        "user_id",
+        "action_name"
+      ],
+      "with_default": [
+        "id",
+        "window_start",
+        "request_count"
+      ]
+    },
+    "rebate_claim_counters": {
+      "no_default": [
+        "year"
+      ],
+      "with_default": [
+        "next_value"
+      ]
+    },
+    "rebate_claims": {
+      "no_default": [
+        "program_id",
+        "claim_number"
+      ],
+      "with_default": [
+        "id",
+        "quantity",
+        "claim_amount_cents",
+        "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "rebate_programs": {
+      "no_default": [
+        "program_name",
+        "manufacturer",
+        "season",
+        "start_date",
+        "end_date"
+      ],
+      "with_default": [
+        "id",
+        "rebate_type",
+        "rebate_amount",
+        "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "receiving_photos": {
+      "no_default": [
+        "receiving_record_id",
+        "storage_path",
+        "image_url",
+        "uploaded_by"
+      ],
+      "with_default": [
+        "id",
+        "uploaded_at",
+        "sort_order"
+      ]
+    },
+    "receiving_records": {
+      "no_default": [
+        "purchase_order_id",
+        "po_item_id",
+        "product_id",
+        "quantity_received",
+        "received_by"
+      ],
+      "with_default": [
+        "id",
+        "received_at",
+        "condition",
+        "storage_location",
+        "created_at",
+        "is_non_returnable"
+      ]
+    },
+    "return_items": {
+      "no_default": [
+        "return_id",
+        "product_id"
+      ],
+      "with_default": [
+        "id",
+        "product_name",
+        "quantity",
+        "unit",
+        "unit_price_cents",
+        "extended_cents",
+        "condition",
+        "restock",
+        "restocked",
+        "sort_order",
+        "created_at"
+      ]
+    },
+    "returns": {
+      "no_default": [
+        "return_number",
+        "customer_id"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "reason",
+        "requested_by",
+        "total_credit_cents",
+        "requested_at",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "rup_sales_records": {
+      "no_default": [
+        "customer_id",
+        "product_id",
+        "sale_date",
+        "product_name",
+        "quantity",
+        "unit",
+        "buyer_name"
+      ],
+      "with_default": [
+        "id"
+      ]
+    },
+    "team_note_attachments": {
+      "no_default": [
+        "note_id",
+        "file_url",
+        "file_name",
+        "file_type",
+        "file_size_bytes",
+        "uploaded_by"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
+    "team_note_comments": {
+      "no_default": [
+        "note_id",
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "content",
+        "created_at"
+      ]
+    },
+    "team_note_tags": {
+      "no_default": [
+        "note_id",
+        "tag_id"
+      ],
+      "with_default": []
+    },
+    "team_notes": {
+      "no_default": [
+        "created_by"
+      ],
+      "with_default": [
+        "id",
+        "title",
+        "note_type",
+        "priority",
+        "is_completed",
+        "is_pinned",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "unit_conversions": {
+      "no_default": [
+        "unit"
+      ],
+      "with_default": [
+        "id",
+        "factor_oz",
+        "unit_type"
+      ]
+    },
+    "vehicles": {
+      "no_default": [
+        "vehicle_name",
+        "vehicle_type"
+      ],
+      "with_default": [
+        "id",
+        "status",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "vendor_bills": {
+      "no_default": [
+        "vendor_id",
+        "bill_number",
+        "bill_date",
+        "due_date",
+        "subtotal_cents",
+        "total_cents"
+      ],
+      "with_default": [
+        "id",
+        "status"
+      ]
+    },
+    "vendor_payments": {
+      "no_default": [
+        "vendor_bill_id",
+        "payment_date",
+        "amount_cents"
+      ],
+      "with_default": [
+        "id"
+      ]
+    },
+    "vendors": {
+      "no_default": [
+        "name"
+      ],
+      "with_default": [
+        "id"
+      ]
+    },
+    "warehouses": {
+      "no_default": [
+        "name"
+      ],
+      "with_default": [
+        "id",
+        "is_active",
+        "is_default",
+        "created_at",
+        "updated_at"
+      ]
+    },
+    "write_offs": {
+      "no_default": [
+        "invoice_id",
+        "customer_id",
+        "amount_cents",
+        "reason"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    }
+  },
+  "columns": {
+    "accounting_periods": [
+      "id",
+      "period_start",
+      "period_end",
+      "status",
+      "closed_by",
+      "closed_at",
+      "notes",
+      "created_at",
+      "updated_at"
+    ],
+    "activity_feed": [
+      "id",
+      "event_type",
+      "description",
+      "performed_by",
+      "related_entity_type",
+      "related_entity_id",
+      "customer_id",
+      "created_at"
+    ],
+    "allocation_sets": [
+      "id",
+      "entity_type",
+      "entity_id",
+      "version",
+      "created_by",
+      "is_active",
+      "notes",
+      "created_at",
+      "customer_id",
+      "total_payment_cents",
+      "total_allocated_cents",
+      "payment_method",
+      "reference_number",
+      "check_number",
+      "payment_date",
+      "season",
+      "updated_at"
+    ],
+    "app_settings": [
+      "id",
+      "setting_key",
+      "setting_value",
+      "updated_by",
+      "updated_at",
+      "description",
+      "created_at"
+    ],
+    "application_record_fields": [
+      "id",
+      "application_record_id",
+      "field_id",
+      "acres",
+      "sort_order",
+      "created_at"
+    ],
+    "application_records": [
+      "id",
+      "record_number",
+      "source_type",
+      "source_id",
+      "customer_id",
+      "applicator_id",
+      "field_id",
+      "application_date",
+      "application_time",
+      "product_data",
+      "total_acres",
+      "total_volume",
+      "total_volume_unit",
+      "vehicle_id",
+      "weather_conditions",
+      "notes",
+      "season",
+      "invoice_id",
+      "created_by",
+      "created_at",
+      "updated_at"
+    ],
+    "application_services": [
+      "id",
+      "name",
+      "vehicle_id",
+      "default_rate_per_acre_cents",
+      "cost_per_acre_cents",
+      "is_active",
+      "sort_order",
+      "created_by",
+      "created_at",
+      "updated_at"
+    ],
+    "applicator_licenses": [
+      "id",
+      "customer_id",
+      "license_number",
+      "license_type",
+      "holder_name",
+      "state",
+      "issued_date",
+      "expiry_date",
+      "certification_categories",
+      "is_active",
+      "notes",
+      "created_at",
+      "updated_at",
+      "profile_id"
+    ],
+    "ar_reminder_tracking": [
+      "id",
+      "customer_id",
+      "reminder_level",
+      "sent_date",
+      "email_log_id",
+      "created_at"
+    ],
+    "blend_recipe_items": [
+      "id",
+      "recipe_id",
+      "product_id",
+      "product_name",
+      "quantity",
+      "unit",
+      "rate_per_acre",
+      "sort_order",
+      "notes",
+      "created_at"
+    ],
+    "blend_recipes": [
+      "id",
+      "name",
+      "description",
+      "recipe_type",
+      "crop_type",
+      "timing",
+      "created_by",
+      "is_active",
+      "created_at",
+      "updated_at",
+      "deleted_at"
+    ],
+    "blend_ticket_fields": [
+      "id",
+      "blend_ticket_id",
+      "field_id",
+      "customer_id",
+      "planned_acres",
+      "actual_acres",
+      "applied_at",
+      "applied_by",
+      "notes",
+      "sort_order",
+      "created_at"
+    ],
+    "blend_ticket_images": [
+      "id",
+      "blend_ticket_id",
+      "storage_path",
+      "image_url",
+      "file_size",
+      "mime_type",
+      "upload_order",
+      "width",
+      "height",
+      "created_at"
+    ],
+    "blend_ticket_products": [
+      "id",
+      "blend_ticket_id",
+      "product_id",
+      "product_name",
+      "quantity",
+      "unit",
+      "lot_number",
+      "sequence_order",
+      "confidence_score",
+      "manually_corrected",
+      "created_at",
+      "rate_per_acre",
+      "rate_per_acre_unit",
+      "unit_cost_cents",
+      "unit_price_cents"
+    ],
+    "blend_ticket_to_order_items": [
+      "id",
+      "blend_ticket_id",
+      "order_item_id",
+      "order_id",
+      "quantity_applied",
+      "notes",
+      "created_at",
+      "created_by"
+    ],
+    "blend_tickets": [
+      "id",
+      "ticket_number",
+      "uploaded_by",
+      "customer_id",
+      "upload_date",
+      "ticket_date",
+      "status",
+      "review_status",
+      "reviewed_by",
+      "reviewed_at",
+      "ocr_confidence_score",
+      "raw_ocr_text",
+      "driver_name",
+      "tank_number",
+      "applicator_name",
+      "signature_detected",
+      "notes",
+      "created_at",
+      "updated_at",
+      "job_number",
+      "invoice_number",
+      "ticket_time",
+      "vehicle_info",
+      "mixer_name",
+      "field_names",
+      "total_acres",
+      "application_rate",
+      "total_volume",
+      "total_volume_unit",
+      "season",
+      "deleted_at",
+      "field_id",
+      "salesman_id",
+      "order_link_status",
+      "payment_status",
+      "applicator_id",
+      "vehicle_id",
+      "source",
+      "job_id",
+      "application_service_id"
+    ],
+    "commission_payment_items": [
+      "id",
+      "commission_payment_id",
+      "commission_id",
+      "amount",
+      "created_at"
+    ],
+    "commission_payments": [
+      "id",
+      "payment_number",
+      "recipient_id",
+      "total_amount",
+      "status",
+      "payment_method",
+      "reference_number",
+      "payment_date",
+      "posted_by",
+      "posted_at",
+      "notes",
+      "season",
+      "created_by",
+      "created_at",
+      "updated_at"
+    ],
+    "commissions": [
+      "id",
+      "order_id",
+      "customer_id",
+      "recipient",
+      "split_percentage",
+      "commission_amount",
+      "order_profit",
+      "order_date",
+      "status",
+      "created_at",
+      "paid_date",
+      "paid_note",
+      "recipient_user_id",
+      "season",
+      "deleted_at",
+      "order_number",
+      "customer_name"
+    ],
+    "cost_history": [
+      "id",
+      "product_id",
+      "changed_by",
+      "old_cost",
+      "new_cost",
+      "old_tier1_price",
+      "new_tier1_price",
+      "old_tier2_price",
+      "new_tier2_price",
+      "old_tier3_price",
+      "new_tier3_price",
+      "change_note",
+      "changed_at"
+    ],
+    "customer_addresses": [
+      "id",
+      "customer_id",
+      "label",
+      "address_line",
+      "city",
+      "state",
+      "zip",
+      "delivery_notes",
+      "is_default",
+      "created_at",
+      "latitude",
+      "longitude"
+    ],
+    "customer_application_rates": [
+      "id",
+      "customer_id",
+      "application_service_id",
+      "rate_per_acre_cents",
+      "season",
+      "notes",
+      "created_by",
+      "created_at"
+    ],
+    "customers": [
+      "id",
+      "farm_name",
+      "contact_name",
+      "phone",
+      "email",
+      "billing_address",
+      "assigned_tier",
+      "assigned_sales_rep",
+      "total_acres",
+      "corn_acres",
+      "soybean_acres",
+      "other_acres",
+      "payment_terms",
+      "default_commission_split",
+      "notes",
+      "is_active",
+      "created_at",
+      "updated_at",
+      "parent_customer_id",
+      "credit_limit_cents",
+      "finance_charge_rate",
+      "prepay_balance_cents",
+      "shipping_address",
+      "city",
+      "state",
+      "zip",
+      "account_number",
+      "finance_charge_enabled",
+      "finance_charge_grace_days"
+    ],
+    "cycle_count_items": [
+      "id",
+      "cycle_count_id",
+      "product_id",
+      "inventory_id",
+      "expected_qty",
+      "counted_qty",
+      "variance",
+      "variance_pct",
+      "is_counted",
+      "counted_by",
+      "counted_at",
+      "notes",
+      "created_at"
+    ],
+    "cycle_counts": [
+      "id",
+      "count_number",
+      "warehouse",
+      "status",
+      "initiated_by",
+      "completed_by",
+      "notes",
+      "started_at",
+      "completed_at",
+      "created_at"
+    ],
+    "deliveries": [
+      "id",
+      "delivery_number",
+      "order_id",
+      "customer_id",
+      "delivery_address_id",
+      "assigned_driver",
+      "scheduled_date",
+      "scheduled_time",
+      "status",
+      "delivery_notes",
+      "completed_at",
+      "signature_url",
+      "signed_by",
+      "receipt_pdf_url",
+      "created_by",
+      "created_at",
+      "updated_at",
+      "season",
+      "deleted_at",
+      "priority",
+      "delivery_window_start",
+      "delivery_window_end",
+      "cancelled_at",
+      "cancelled_by",
+      "cancel_reason",
+      "issue_type",
+      "issue_notes",
+      "last_edited_by",
+      "last_edited_at",
+      "is_quick_delivery"
+    ],
+    "delivery_items": [
+      "id",
+      "delivery_id",
+      "order_item_id",
+      "product_id",
+      "quantity",
+      "unit_size",
+      "notes",
+      "quantity_delivered",
+      "tote_number"
+    ],
+    "delivery_photos": [
+      "id",
+      "delivery_id",
+      "storage_path",
+      "image_url",
+      "caption",
+      "uploaded_by",
+      "uploaded_at",
+      "file_size",
+      "sort_order"
+    ],
+    "delivery_remainders": [
+      "id",
+      "original_delivery_id",
+      "order_id",
+      "order_item_id",
+      "customer_id",
+      "product_id",
+      "quantity_remaining",
+      "unit_size",
+      "status",
+      "followup_delivery_id",
+      "notes",
+      "created_at",
+      "updated_at",
+      "reminder_sent_at",
+      "escalation_sent_at"
+    ],
+    "document_processing_log": [
+      "id",
+      "user_id",
+      "document_type",
+      "file_name",
+      "file_size_bytes",
+      "page_count",
+      "processing_time_ms",
+      "confidence",
+      "items_extracted",
+      "success",
+      "error_message",
+      "created_at"
+    ],
+    "email_log": [
+      "id",
+      "customer_id",
+      "recipient_email",
+      "email_type",
+      "subject",
+      "html_body",
+      "attachment_name",
+      "resend_message_id",
+      "status",
+      "error_message",
+      "idempotency_key",
+      "created_by",
+      "created_at"
+    ],
+    "failed_notifications": [
+      "id",
+      "notification_type",
+      "entity_type",
+      "entity_id",
+      "error_message",
+      "payload",
+      "attempts",
+      "max_attempts",
+      "resolved_at",
+      "created_at",
+      "updated_at"
+    ],
+    "field_app_location_shares": [
+      "id",
+      "location_id",
+      "customer_id",
+      "split_pct",
+      "acres",
+      "amount_cents",
+      "created_at"
+    ],
+    "field_app_locations": [
+      "id",
+      "invoice_id",
+      "job_id",
+      "field_id",
+      "map_number",
+      "total_acres",
+      "planted_acres",
+      "applied_acres",
+      "crop_type",
+      "wind_direction",
+      "sort_order",
+      "created_at",
+      "invoice_group_id"
+    ],
+    "field_billing_defaults": [
+      "id",
+      "field_id",
+      "customer_id",
+      "split_pct",
+      "is_primary",
+      "notes",
+      "created_at",
+      "updated_at",
+      "price_override_cents",
+      "pricing_note"
+    ],
+    "field_crop_history": [
+      "id",
+      "field_id",
+      "season",
+      "crop_type",
+      "variety",
+      "planting_date",
+      "harvest_date",
+      "yield_per_acre",
+      "yield_unit",
+      "notes",
+      "created_at"
+    ],
+    "field_polygons": [
+      "id",
+      "field_id",
+      "polygon_geojson",
+      "label",
+      "acres",
+      "sort_order",
+      "created_at"
+    ],
+    "fields": [
+      "id",
+      "customer_id",
+      "field_name",
+      "legal_description",
+      "county",
+      "state",
+      "total_acres",
+      "fsa_farm_number",
+      "fsa_tract_number",
+      "fsa_field_number",
+      "crop_type",
+      "soil_type",
+      "irrigation",
+      "centroid",
+      "boundary",
+      "notes",
+      "is_active",
+      "created_at",
+      "updated_at",
+      "parent_field_id"
+    ],
+    "finance_charges": [
+      "id",
+      "customer_id",
+      "invoice_id",
+      "amount_cents",
+      "charge_rate",
+      "base_amount_cents",
+      "period_start",
+      "period_end",
+      "created_by",
+      "created_at"
+    ],
+    "financial_audit_log": [
+      "id",
+      "operation_type",
+      "entity_type",
+      "entity_id",
+      "actor_user_id",
+      "actor_role",
+      "old_values",
+      "new_values",
+      "total_impact_cents",
+      "description",
+      "created_at"
+    ],
+    "idempotency_keys": [
+      "id",
+      "idempotency_key",
+      "operation",
+      "result",
+      "created_at",
+      "expires_at"
+    ],
+    "ingredient_map": [
+      "id",
+      "branded_ingredient",
+      "generic_product_id",
+      "generic_has_bulk",
+      "fallback_branded_product",
+      "notes"
+    ],
+    "inventory": [
+      "id",
+      "product_id",
+      "location",
+      "quantity_available",
+      "quantity_prebooked",
+      "quantity_on_order",
+      "unit_size",
+      "last_counted_at",
+      "updated_at",
+      "reorder_point",
+      "min_stock_level",
+      "manufactured_at_delivery"
+    ],
+    "inventory_holds": [
+      "id",
+      "product_id",
+      "customer_id",
+      "quantity",
+      "hold_type",
+      "source_id",
+      "notes",
+      "created_by",
+      "expires_at",
+      "is_active",
+      "created_at",
+      "updated_at"
+    ],
+    "inventory_transactions": [
+      "id",
+      "product_id",
+      "transaction_type",
+      "quantity",
+      "from_location",
+      "to_location",
+      "order_id",
+      "purchase_order_id",
+      "delivery_id",
+      "performed_by",
+      "notes",
+      "created_at",
+      "requires_review",
+      "job_id"
+    ],
+    "invoice_items": [
+      "id",
+      "invoice_id",
+      "order_item_id",
+      "product_id",
+      "description",
+      "quantity",
+      "unit_price_cents",
+      "extended_cents",
+      "cost_cents",
+      "sort_order",
+      "rate_per_acre",
+      "acres",
+      "unit_size",
+      "notes",
+      "created_at",
+      "updated_at",
+      "rate_unit",
+      "total_applied",
+      "total_applied_unit",
+      "total_applied_gl_lb",
+      "gl_lb_unit",
+      "epa_registration",
+      "product_form",
+      "is_application_fee",
+      "tote_number",
+      "quoted_price_cents",
+      "price_source"
+    ],
+    "invoice_line_allocations": [
+      "id",
+      "allocation_set_id",
+      "invoice_item_id",
+      "bill_to_customer_id",
+      "split_percentage",
+      "amount_cents",
+      "split_invoice_id",
+      "created_at",
+      "invoice_id"
+    ],
+    "invoice_shares": [
+      "id",
+      "invoice_id",
+      "customer_id",
+      "customer_name",
+      "split_percentage",
+      "acres",
+      "amount_cents",
+      "is_primary",
+      "sort_order",
+      "created_at",
+      "price_per_acre_cents",
+      "pricing_note"
+    ],
+    "invoices": [
+      "id",
+      "invoice_number",
+      "order_id",
+      "blend_ticket_id",
+      "customer_id",
+      "invoice_type",
+      "status",
+      "season",
+      "salesman_id",
+      "created_by",
+      "total_amount_cents",
+      "paid_amount_cents",
+      "prepay_applied_cents",
+      "posted_by",
+      "posted_at",
+      "voided_by",
+      "voided_at",
+      "void_reason",
+      "invoice_date",
+      "due_date",
+      "purchase_order_ref",
+      "header_notes",
+      "footer_notes",
+      "parent_invoice_id",
+      "deleted_at",
+      "created_at",
+      "updated_at",
+      "crop_type",
+      "field_names",
+      "total_acres",
+      "applicator_name",
+      "vehicle_name",
+      "application_date",
+      "job_id",
+      "total_cost_cents",
+      "is_quick_delivery",
+      "write_off_cents",
+      "balance_cents",
+      "invoice_group_id",
+      "application_service_id",
+      "delivery_id",
+      "wind_direction",
+      "temperature_text"
+    ],
+    "job_applied_info": [
+      "id",
+      "job_id",
+      "actual_start_time",
+      "actual_end_time",
+      "wind_speed",
+      "wind_direction",
+      "temperature",
+      "humidity",
+      "actual_gallons_applied",
+      "notes",
+      "created_at",
+      "updated_at"
+    ],
+    "job_chemicals": [
+      "id",
+      "job_id",
+      "product_id",
+      "quantity",
+      "unit",
+      "rate_per_acre",
+      "rate_unit",
+      "cost_per_unit_cents",
+      "price_per_unit_cents",
+      "sort_order"
+    ],
+    "job_fields": [
+      "id",
+      "job_id",
+      "field_id",
+      "acres_to_treat",
+      "sort_order"
+    ],
+    "jobs": [
+      "id",
+      "job_number",
+      "customer_id",
+      "status",
+      "job_date",
+      "scheduled_time",
+      "applicator_id",
+      "vehicle_id",
+      "recipe_id",
+      "notes",
+      "tags",
+      "batch_id",
+      "season",
+      "total_acres",
+      "total_cost_cents",
+      "total_price_cents",
+      "invoice_id",
+      "created_by",
+      "deleted_at",
+      "created_at",
+      "updated_at",
+      "priority",
+      "estimated_hours",
+      "quote_id",
+      "quote_section_id",
+      "application_service_id"
+    ],
+    "note_activity_log": [
+      "id",
+      "note_id",
+      "user_id",
+      "action_type",
+      "changes",
+      "created_at"
+    ],
+    "note_tags": [
+      "id",
+      "name",
+      "color",
+      "created_by",
+      "created_at"
+    ],
+    "notifications": [
+      "id",
+      "user_id",
+      "title",
+      "message",
+      "notification_type",
+      "is_read",
+      "related_entity_type",
+      "related_entity_id",
+      "created_at"
+    ],
+    "ocr_processing_queue": [
+      "id",
+      "blend_ticket_id",
+      "status",
+      "priority",
+      "started_at",
+      "completed_at",
+      "error_message",
+      "retry_count",
+      "max_retries",
+      "created_at",
+      "updated_at"
+    ],
+    "order_items": [
+      "id",
+      "order_id",
+      "product_id",
+      "quote_item_id",
+      "section_name",
+      "product_name",
+      "price_per_unit",
+      "cost_per_unit",
+      "actual_rate",
+      "rate_unit",
+      "acres",
+      "total_units_needed",
+      "unit_size",
+      "total_price",
+      "profit",
+      "net_margin",
+      "quantity_delivered",
+      "quantity_remaining",
+      "sort_order",
+      "notes",
+      "cost_at_time_cents"
+    ],
+    "order_line_allocations": [
+      "id",
+      "allocation_set_id",
+      "order_item_id",
+      "bill_to_customer_id",
+      "split_percentage",
+      "amount_cents",
+      "created_at"
+    ],
+    "order_shares": [
+      "id",
+      "order_id",
+      "customer_id",
+      "customer_name",
+      "split_percentage",
+      "amount_cents",
+      "is_primary",
+      "sort_order",
+      "created_at"
+    ],
+    "orders": [
+      "id",
+      "order_number",
+      "quote_id",
+      "customer_id",
+      "status",
+      "commission_split",
+      "total_price",
+      "total_cost",
+      "total_profit",
+      "total_margin_pct",
+      "order_date",
+      "notes",
+      "created_at",
+      "updated_at",
+      "season",
+      "salesman_id",
+      "deleted_at",
+      "order_name",
+      "customer_po_number",
+      "is_planned",
+      "program_notes",
+      "booking_draw"
+    ],
+    "payments": [
+      "id",
+      "order_id",
+      "customer_id",
+      "payment_date",
+      "amount",
+      "payment_method",
+      "reference_number",
+      "notes",
+      "recorded_by",
+      "created_at",
+      "season",
+      "deleted_at"
+    ],
+    "prepay_applications": [
+      "id",
+      "prepay_credit_id",
+      "invoice_id",
+      "applied_amount_cents",
+      "applied_by",
+      "applied_at"
+    ],
+    "prepay_credits": [
+      "id",
+      "customer_id",
+      "season",
+      "original_amount_cents",
+      "balance_cents",
+      "payment_method",
+      "reference_number",
+      "notes",
+      "created_by",
+      "created_at",
+      "updated_at",
+      "source_type",
+      "source_reference",
+      "bucket_label"
+    ],
+    "products": [
+      "id",
+      "product_name",
+      "sku",
+      "category",
+      "vendor",
+      "manufacturer",
+      "container_size",
+      "unit_size",
+      "current_cost",
+      "cost_updated_date",
+      "tier1_price",
+      "tier1_margin",
+      "tier2_price",
+      "tier2_margin",
+      "tier3_price",
+      "tier3_margin",
+      "tier1_price_per_acre",
+      "tier2_price_per_acre",
+      "tier3_price_per_acre",
+      "suggested_rate",
+      "rate_per_acre",
+      "rate_unit",
+      "notes",
+      "is_active",
+      "created_at",
+      "updated_at",
+      "tier1_gross_margin",
+      "tier2_gross_margin",
+      "tier3_gross_margin",
+      "epa_registration",
+      "product_form",
+      "inventory_unit",
+      "container_unit",
+      "container_type",
+      "is_rup",
+      "signal_word",
+      "internal_notes"
+    ],
+    "profiles": [
+      "id",
+      "email",
+      "full_name",
+      "role",
+      "phone",
+      "is_active",
+      "created_at",
+      "updated_at",
+      "applicator_license_number",
+      "faa_certificate_number",
+      "denied_pages"
+    ],
+    "purchase_order_items": [
+      "id",
+      "purchase_order_id",
+      "product_id",
+      "quantity_ordered",
+      "unit_cost",
+      "quantity_received",
+      "unit_size",
+      "notes",
+      "product_name"
+    ],
+    "purchase_orders": [
+      "id",
+      "po_number",
+      "vendor",
+      "status",
+      "submitted_date",
+      "expected_delivery_date",
+      "total_cost",
+      "notes",
+      "created_by",
+      "created_at",
+      "updated_at",
+      "cancelled_at",
+      "cancelled_by",
+      "cancel_reason"
+    ],
+    "quote_items": [
+      "id",
+      "quote_id",
+      "section_id",
+      "product_id",
+      "sort_order",
+      "notes",
+      "price_per_unit",
+      "current_cost",
+      "suggested_rate",
+      "actual_rate",
+      "rate_unit",
+      "oz_per_acre",
+      "price_per_acre",
+      "acres",
+      "total_units_needed",
+      "unit_size",
+      "profit",
+      "total_price",
+      "net_margin",
+      "calc_mode",
+      "price_unit",
+      "price_override"
+    ],
+    "quote_pdf_templates": [
+      "id",
+      "template_name",
+      "columns",
+      "is_default",
+      "is_system",
+      "created_by",
+      "created_at",
+      "updated_at"
+    ],
+    "quote_product_draws": [
+      "id",
+      "quote_id",
+      "product_id",
+      "quantity_drawn",
+      "created_at",
+      "updated_at"
+    ],
+    "quote_sections": [
+      "id",
+      "quote_id",
+      "section_name",
+      "sort_order",
+      "section_notes",
+      "section_header_notes",
+      "needed_by_date",
+      "field_id"
+    ],
+    "quote_templates": [
+      "id",
+      "template_name",
+      "description",
+      "sections",
+      "created_by",
+      "is_active",
+      "created_at",
+      "updated_at"
+    ],
+    "quote_versions": [
+      "id",
+      "quote_id",
+      "version_number",
+      "sent_by",
+      "sent_at",
+      "sent_method",
+      "snapshot_data",
+      "pdf_url",
+      "notes"
+    ],
+    "quotes": [
+      "id",
+      "quote_number",
+      "customer_id",
+      "created_by",
+      "tier",
+      "status",
+      "commission_split",
+      "total_price",
+      "total_cost",
+      "total_profit",
+      "total_margin_pct",
+      "valid_days",
+      "expires_at",
+      "header_notes",
+      "footer_notes",
+      "created_at",
+      "updated_at",
+      "sent_at",
+      "is_planned",
+      "season",
+      "salesman_id",
+      "deleted_at",
+      "pdf_template_id",
+      "pdf_columns_override"
+    ],
+    "rate_limit_log": [
+      "id",
+      "user_id",
+      "operation",
+      "created_at"
+    ],
+    "rate_limits": [
+      "id",
+      "user_id",
+      "action_name",
+      "window_start",
+      "request_count"
+    ],
+    "rebate_claim_counters": [
+      "year",
+      "next_value"
+    ],
+    "rebate_claims": [
+      "id",
+      "program_id",
+      "order_id",
+      "customer_id",
+      "product_id",
+      "claim_number",
+      "quantity",
+      "claim_amount_cents",
+      "status",
+      "submitted_date",
+      "approved_date",
+      "paid_date",
+      "paid_amount_cents",
+      "manufacturer_ref",
+      "notes",
+      "created_by",
+      "created_at",
+      "updated_at"
+    ],
+    "rebate_programs": [
+      "id",
+      "program_name",
+      "manufacturer",
+      "season",
+      "product_id",
+      "rebate_type",
+      "rebate_amount",
+      "rebate_pct",
+      "min_volume",
+      "max_volume",
+      "start_date",
+      "end_date",
+      "status",
+      "notes",
+      "created_by",
+      "created_at",
+      "updated_at"
+    ],
+    "receiving_photos": [
+      "id",
+      "receiving_record_id",
+      "storage_path",
+      "image_url",
+      "caption",
+      "uploaded_by",
+      "uploaded_at",
+      "file_size",
+      "sort_order"
+    ],
+    "receiving_records": [
+      "id",
+      "purchase_order_id",
+      "po_item_id",
+      "product_id",
+      "quantity_received",
+      "received_by",
+      "received_at",
+      "notes",
+      "condition",
+      "lot_number",
+      "storage_location",
+      "unit_size",
+      "created_at",
+      "is_non_returnable"
+    ],
+    "return_items": [
+      "id",
+      "return_id",
+      "order_item_id",
+      "product_id",
+      "product_name",
+      "quantity",
+      "unit",
+      "unit_price_cents",
+      "extended_cents",
+      "condition",
+      "restock",
+      "restocked",
+      "sort_order",
+      "notes",
+      "created_at"
+    ],
+    "returns": [
+      "id",
+      "return_number",
+      "order_id",
+      "customer_id",
+      "status",
+      "reason",
+      "reason_notes",
+      "requested_by",
+      "approved_by",
+      "received_by",
+      "total_credit_cents",
+      "credit_invoice_id",
+      "requested_at",
+      "approved_at",
+      "received_at",
+      "credited_at",
+      "notes",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+      "cancelled_at",
+      "cancelled_by",
+      "cancellation_reason",
+      "credited_by"
+    ],
+    "rup_sales_records": [
+      "id",
+      "invoice_id",
+      "order_id",
+      "customer_id",
+      "product_id",
+      "sale_date",
+      "product_name",
+      "epa_registration",
+      "quantity",
+      "unit",
+      "unit_price_cents",
+      "total_cents",
+      "buyer_name",
+      "buyer_certification_number",
+      "buyer_certification_type",
+      "buyer_certification_expiry",
+      "signal_word",
+      "compliance_status",
+      "compliance_notes",
+      "season",
+      "created_at",
+      "created_by"
+    ],
+    "team_note_attachments": [
+      "id",
+      "note_id",
+      "file_url",
+      "file_name",
+      "file_type",
+      "file_size_bytes",
+      "uploaded_by",
+      "created_at"
+    ],
+    "team_note_comments": [
+      "id",
+      "note_id",
+      "content",
+      "created_by",
+      "created_at",
+      "parent_id",
+      "mentions",
+      "updated_at",
+      "deleted_at"
+    ],
+    "team_note_tags": [
+      "note_id",
+      "tag_id",
+      "created_at"
+    ],
+    "team_notes": [
+      "id",
+      "title",
+      "content",
+      "note_type",
+      "priority",
+      "is_completed",
+      "completed_by",
+      "completed_at",
+      "due_date",
+      "created_by",
+      "assigned_to",
+      "is_pinned",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+      "deleted_by",
+      "linked_entity_type",
+      "linked_entity_id",
+      "last_escalated_at"
+    ],
+    "unit_conversions": [
+      "id",
+      "unit",
+      "factor_oz",
+      "notes",
+      "unit_type"
+    ],
+    "vehicles": [
+      "id",
+      "vehicle_name",
+      "vehicle_type",
+      "category",
+      "capacity_gallons",
+      "capacity_unit",
+      "registration",
+      "status",
+      "notes",
+      "created_by",
+      "created_at",
+      "updated_at"
+    ],
+    "vendor_bills": [
+      "id",
+      "vendor_id",
+      "purchase_order_id",
+      "bill_number",
+      "bill_date",
+      "due_date",
+      "payment_terms",
+      "subtotal_cents",
+      "adjustment_cents",
+      "total_cents",
+      "paid_cents",
+      "status",
+      "notes",
+      "created_by",
+      "created_at",
+      "updated_at",
+      "deleted_at",
+      "voided_at",
+      "voided_by",
+      "void_reason",
+      "balance_cents"
+    ],
+    "vendor_payments": [
+      "id",
+      "vendor_bill_id",
+      "payment_date",
+      "amount_cents",
+      "payment_method",
+      "reference_number",
+      "notes",
+      "created_by",
+      "created_at",
+      "voided_at",
+      "voided_by",
+      "void_reason"
+    ],
+    "vendors": [
+      "id",
+      "name",
+      "contact_name",
+      "phone",
+      "email",
+      "address",
+      "default_payment_terms",
+      "default_payment_terms_days",
+      "notes",
+      "created_at",
+      "updated_at",
+      "deleted_at"
+    ],
+    "warehouses": [
+      "id",
+      "name",
+      "code",
+      "address",
+      "city",
+      "state",
+      "is_active",
+      "is_default",
+      "created_at",
+      "updated_at"
+    ],
+    "write_offs": [
+      "id",
+      "invoice_id",
+      "customer_id",
+      "amount_cents",
+      "reason",
+      "approved_by",
+      "created_by",
+      "created_at",
+      "reversed_at",
+      "reversed_reason",
+      "reversed_by"
+    ]
+  },
+  "sequences": [
+    "cm_invoice_number_seq",
+    "cs_invoice_number_seq",
+    "customer_account_number_seq",
+    "invoice_number_seq",
+    "mc_invoice_number_seq",
+    "order_number_seq",
+    "quote_number_seq"
   ]
 }
