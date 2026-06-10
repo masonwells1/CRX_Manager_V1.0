@@ -1,4 +1,4 @@
-# Migration History (405 migrations)
+# Migration History (407 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -24,6 +24,15 @@ Follow-up hardening for the roadmap #1 v1 partial draw-down feature. 4 migration
 | 20260610184254 | `auto_expire_skip_partially_drawn` | `auto_expire_quotes()` verbatim from live (md5: `eaa4974b2807dbb6d1153b3461ad140a`) + `NOT EXISTS (SELECT 1 FROM quote_product_draws d WHERE d.quote_id = q.id AND d.quantity_drawn > 0)` predicate in cursor WHERE. Prevents the cron job from auto-expiring open season bookings that have active draw rows. Grant: service_role only (authenticated/anon revoked by `20260609203541`). |
 | 20260610184534 | `rollover_remainder_only` | `rollover_quote_to_season(uuid, integer, uuid, text)` — adds `FOR UPDATE` on source quote; block A: draw detection → raises `BOOKING_FULLY_DRAWN` if every item is fully drawn (nothing to roll); block B: FIFO remainder math per item (`LEAST(item_qty, GREATEST(cum_before + item_qty - drawn, 0))`), skipping fully-drawn lines. Returns `{ quote_id, quote_number, season, remainder_rollover: boolean }`. Canonical strict-actor block (AUTH_REQUIRED/ACTOR_MISMATCH/INSUFFICIENT_ROLE). ACL: authenticated+service_role. |
 | 20260610184551 | `draws_backfill_non_accepted` | Pure data backfill: `INSERT INTO quote_product_draws … ON CONFLICT (quote_id, product_id) DO NOTHING` for quotes-with-orders not in (`sent`,`revised`) status or missing draw rows. Self-verify asserts zero uncovered pairs after. Live effect: 1 row inserted (Q-2026-1811, cancelled quote). |
+
+## Applied 2026-06-10 (rollover + auto-expire supersessions — batch review H1/M1)
+
+Applied live (MCP stamps match filenames). Supersede earlier 184534 and 184254 bodies with fixes found by the post-apply batch review.
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260610191456 | `rollover_open_booking_gate` | `rollover_quote_to_season` verbatim from live (md5: `c53cf8e2bdcb45c739a0e4493716d03a`) + A5 fix: (1) `FOR UPDATE` on source-quote SELECT (serializes against draw_down_quote); (2) FIFO remainder math per item — OPEN bookings with draws roll only the undrawn balance; fully-drawn OPEN bookings raise `BOOKING_FULLY_DRAWN`; all non-open quotes copy full qty unchanged (legacy-renewal path preserved); (3) `remainder_rollover: boolean` in return. Self-verify: overload=1, draw-awareness present, open-booking gate present, FOR UPDATE present, SECDEF+search_path. |
+| 20260610191550 | `auto_expire_holds_first_and_bracket` | `auto_expire_quotes()` supersession: (1) releases holds BEFORE the status flip so the `release_holds_on_quote_status_change` trigger finds 0 active holds and never fires its FK-crashing activity_feed insert under cron/service_role (null auth.uid()); (2) wraps the function's own summary activity_feed insert in an admin_override bracket. Grants unchanged: `{postgres, service_role}` only (hardening from `20260609203541`). |
 
 ## Applied 2026-06-10 (draw-down BLOCKER + HIGH remediation — error-prevention review §3)
 

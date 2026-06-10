@@ -32,6 +32,11 @@ Before continuing, you MUST:
 5. If any subagent returns BLOCKER findings, fix them before suggesting apply_migration.
 6. If Mason is non-technical (which he is), also offer to run /explain-migration so he understands what's about to change live.
 7. If this migration changes an RPC signature, a status/CHECK enum, or a table, offer to run /map-drift-audit AFTER it's applied — it reconciles the app-workflow-map against the live DB and catches app-wide drift (missing/renamed RPCs, UI statuses the new CHECK would now reject) that the per-migration reviewers don't look for.
+8. AFTER the migration is applied to live, run the DB invariant sweeps:
+   Run this in Bash: node scripts/db-invariant-sweeps/run-sweeps.mjs
+   It prints SQL queries — execute each one via Supabase MCP execute_sql on project rhyzpcqhnizqbxphqdkr.
+   Each query should return ZERO rows. Any rows = a security or schema problem to fix before the next session.
+   (Sweeps check: ungated SECDEF mutators, actor-forgery, missing search_path, overloads, anon-exec SECDEF.)
 
 Do NOT proceed to other tasks until these steps are complete.`;
 

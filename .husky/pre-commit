@@ -55,6 +55,25 @@ if [ $TEST_EXIT -ne 0 ]; then
 fi
 
 echo ""
+echo "📋 Checking doc drift (counts in CLAUDE.md / migration-history.md vs disk)..."
+node scripts/check-doc-drift.mjs
+DOC_EXIT=$?
+if [ $DOC_EXIT -ne 0 ]; then
+  echo ""
+  echo "⚠️  DOC DRIFT DETECTED (non-blocking) — update migration-history.md / CLAUDE.md counts before next session."
+fi
+
+echo ""
+echo "🔗 Verifying dependency integrity (vitest/vite peer ranges)..."
+node scripts/verify-deps.mjs
+DEPS_EXIT=$?
+if [ $DEPS_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ DEPENDENCY PROBLEMS — commit blocked. Run \`npm ci\` or fix peer ranges first."
+  exit 1
+fi
+
+echo ""
 echo "🗺  Regenerating workflow map..."
 node scripts/generate-workflow-map.mjs
 MAP_EXIT=$?
