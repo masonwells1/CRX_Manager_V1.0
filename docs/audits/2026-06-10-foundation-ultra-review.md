@@ -44,8 +44,8 @@ Now quantified (closes the deferred 2026-05-29 "rebuild-fidelity shadow diff"): 
 
 ### MED
 
-**M2 (Layer A→Phase 2) — `complete_job` and `create_application_record_from_blend_ticket` deduct inventory with NO insufficient-stock check.** `job_applied` can drive rows negative — and **already has** (the 2026-03-15 2,4D Amine crossing in H1 came through this path). The door stays open while `complete_delivery` blocks the delivered path.
-**Fix route (`/ship`):** add an insufficient-stock guard (block on the forward deduction, or warn+notify — match the chosen policy).
+**M2 (Layer A→Phase 2) — `create_application_record_from_blend_ticket` deducts inventory with no short-stock handling.** *(Remediation correction 2026-06-10: `complete_job` was misreported here — it already had a deliberate warn-and-flag design (`requires_review` + "[SHORT STOCK]" note + short count in its return); only the blend-ticket path lacked it.)* `job_applied` can drive rows negative — and already has (the 2026-03-15 2,4D Amine crossing in H1). Remediation additionally found the blend-ticket RPC had **four stacked latent crashes** (never exercised): nonexistent `reference_id` column (42703), string-into-jsonb idempotency save (22P02), and text-into-`time` cast (42804) on top of the missing flagging.
+**Fixed live 2026-06-10:** `20260610131129` + `20260610132244` — complete_job-style warn+flag added (block would be wrong: the chemical is already applied), all three crashes fixed, full e2e smoke PASS.
 
 **M3 (Layer A, F4) — 4 stale pending commissions out of sync with their orders' profit**, including ORD-2026-0343 where commission **$22,784.59 exceeds profit $22,716.14**. Orders edited 2026-05-12 after commission creation, no recalc.
 **Fix route:** recalc the 4 before any payout; consider recalc-on-order-edit for pending commissions.

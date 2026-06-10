@@ -1,10 +1,24 @@
-# Migration History (396 migrations)
+# Migration History (403 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-10 (foundation-ultra-review remediation — 7 migrations)
+
+Remediation of `docs/audits/2026-06-10-foundation-ultra-review.md` (+ its Codex round) via the `/ship` gate: every migration passed `rls-security-reviewer` + `migration-drift-reviewer` (+ `compliance-reviewer` on the first three) and a rolled-back smoke test; disk files renamed to MCP stamps per B7.
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260610131048 | `reverse_receiving_remove_available_clamp` | **H3 (HIGH)** — `reverse_receiving_record` + `_receiving_records_before_delete` clamped the inventory decrement at `GREATEST(...,0)` while the ledger logged the full negative (silently swallowed 1,325 units, Black Strap Tote 2026-03-23). Reversals now subtract fully; negative snapshot allowed so ledger ≡ applied change. PO-item clamps retained (correct). Smoke: reversal of 25 against 1 on-hand → −24 with ledger −25, exact. |
+| 20260610131129 | `blend_ticket_app_record_short_stock_and_ledger_fix` | **M2 + 2 latent crashes** — `create_application_record_from_blend_ticket` (never exercised: 0 blend tickets) had a bare inventory decrement with no short-stock handling, inserted into a nonexistent `inventory_transactions.reference_id` (42703), and saved `array_to_string(uuid[])` into jsonb `result` (22P02). Added complete_job-style warn+flag (`requires_review` + "[SHORT STOCK]" note), fixed both crashes (`to_jsonb` save / jsonb replay; record id moved to notes), type `delivered`→`job_applied`, canonical error tokens (compliance MED). |
+| 20260610131144 | `revoke_anon_profile_public_view` | **M6b (Codex round, MED)** — `profile_public_view` (security_invoker=off) was SELECT-granted to `anon`: all 10 employee rows (id, full_name, role, is_active) readable unauthenticated. REVOKE anon/PUBLIC; authenticated + service_role retained; all frontend callers are behind login. Smoke: `SET ROLE anon` now denied. |
+| 20260610132136 | `attach_receiving_records_delete_trigger` | **Smoke-test discovery** — `trg_receiving_records_before_delete` was NEVER ATTACHED live (disk 20260312200000 created it; live `pg_trigger` empty — pre-B7 drift), so a raw admin DELETE left ghost inventory. Attached as the lineage intended. Smoke: raw delete now reverses inventory exactly; PO-cascade path already guarded by `_guard_po_delete` (can't delete a PO with receiving history until cancelled). |
+| 20260610132244 | `blend_ticket_app_record_time_cast_fix` | **M2d — 4th latent break in the same RPC, caught by the e2e smoke AFTER reviewers passed 131129**: both `application_records` INSERTs passed `blend_tickets.ticket_time` (free-text OCR) into `application_time` (`time`) → 42804. Exception-wrapped cast: castable clock strings → time, anything else (incl. range-invalid `99:99`) → NULL. e2e smoke: ticket → record → deduction → short-flag → garbage-time NULL, all PASS. |
+| 20260610133241 | `data_fix_commissions_test_quote_split_hygiene` | **Data-only (M3 + L-A1 + L-A2)** — 4 stale pending commissions recalced to the canonical profit×split model (orders edited 2026-05-12 after creation; one EXCEEDED profit; **ORD-2026-0189 moved $50→$2,455.37 — flag for Mason, reversible while pending**); accepted test quote `Q-2026-1811` (A1 TEST FARM) cancelled via the canonical txn-local `app.admin_override` bracket (0 holds, not planned); 15 customers' JSONB-`null` `default_commission_split` normalized to SQL NULL. |
+| 20260610133256 | `prebook_reconciliation_transaction_type` | **M9 (Codex round, MED)** — new `prebook_reconciliation` transaction type (strict 12-value CHECK superset of the live 11) so prebooked-only corrections stop overloading `adjusted` with notes-only disambiguation (root cause of the audit's F2 false positive). Frontend enumerations updated (`reconciliation.ts`, `schemaIntegrity.test.ts`, `TransactionLedgerModal.tsx`); INVENTORY_RULES.md gained the recompute caveats. Smoke: new type accepted, bogus type still rejected. |
 
 ## Applied 2026-06-09 (Codex round-3 follow-up: maintenance-fn hardening)
 

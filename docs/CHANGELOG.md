@@ -4,6 +4,25 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-10 (foundation ultra review + full remediation) — 7 migrations live, 4 latent crashes fixed, anon exposure closed
+
+Built the reusable **`/foundation-ultra-review`** dynamic multi-agent audit (6 layers: live-data integrity, disk-vs-live drift, edge bundles, deferred ledger, frontend runtime safety, + authorization/exposure surface added after the Codex round). First run: **SOLID-WITH-FOLLOWUPS, 0 BLOCKER** — money/AR data fully consistent (vacuously; mandatory re-run gate after the first real billing cycle), 2026-06 security state intact live, edge bundles in sync, route guards clean. Codex cross-review (NEEDS-WORK, all 8 points accepted after independent live re-verification) upgraded the clamp finding to HIGH, refuted the prebooked-formula finding (measurement artifact), and contributed 2 new MEDs. Reports: `docs/audits/2026-06-10-foundation-ultra-review.md` + disposition.
+
+Remediation (each through the full `/ship` gate — reviewers clean + rolled-back smoke tests):
+
+- **`20260610131048_reverse_receiving_remove_available_clamp`** — receiving reversals no longer clamp at 0 (ledger ≡ snapshot; the clamp had silently swallowed 1,325 units).
+- **`20260610131129` + `20260610132244`** — `create_application_record_from_blend_ticket` had **four** stacked latent breaks (no short-stock flag; nonexistent column → 42703; string-into-jsonb → 22P02; text-into-time → 42804). All fixed; warn+flag matches `complete_job`; the 4th crash was caught by the e2e smoke test AFTER both reviewers passed the migration — never-exercised RPCs strike again.
+- **`20260610131144_revoke_anon_profile_public_view`** — closed the anonymous employee-directory read (Codex finding, verified via `SET ROLE anon`).
+- **`20260610132136_attach_receiving_records_delete_trigger`** — smoke test discovered the delete-compensation trigger was never attached live (pre-B7 drift); attached.
+- **`20260610133241_data_fix_commissions_test_quote_split_hygiene`** — 4 stale pending commissions recalced (ORD-2026-0189 $50→$2,455.37 — flagged for Mason); A1 TEST FARM quote cancelled; 15 JSONB-null splits normalized.
+- **`20260610133256_prebook_reconciliation_transaction_type`** — dedicated ledger type for prebooked-only corrections (12-value CHECK superset) + frontend enumerations + INVENTORY_RULES.md recompute caveats.
+
+Frontend: ARaging AR-reminder + batch-statement loops now count/Sentry/toast FAILED sends distinctly (were mislabeled "skipped"); QuoteBuilder surfaces a failed status-revert; InvoiceDetail stale-fetch guard. Docs: CLAUDE.md ledger fixes (PR #70 merged note, 217 RPCs, scoped version-parity claim, remit-to confirmed), INVENTORY_RULES 12-type table + caveats.
+
+Still open: H1 inventory re-base (needs Mason's physical counts — 17 products currently undeliverable), H2 squashed baseline (scheduled deliberately), L1 `process-blend-ticket` deploy, owner items M4/L4.
+
+---
+
 ## 2026-05-29 (workflow review + Codex cross-review) — 3 BLOCKER fixes applied live
 
 The new `/review-workflow` audit (full graph/lifecycle/cross-entity/invariant review, verified against live DB) surfaced BLOCKERs; Codex independently cross-reviewed them; every Codex claim was then re-verified against the live database (Codex itself had no Supabase MCP) before any fix. Three migrations applied live via MCP:

@@ -1306,8 +1306,11 @@ export default function QuoteBuilder() {
         const revertResult = await supabase.from('quotes').update({ status: revertTo }).eq('id', savedId).select();
         checkMutationResult(revertResult, 'Revert quote status');
         setStatus(revertTo);
-      } catch {
-        // Best effort — status revert failed
+      } catch (revertErr) {
+        // The quote is now stuck 'accepted' with no order — surface it instead
+        // of failing silently so someone fixes the status by hand.
+        Sentry.captureException(revertErr, { tags: { source: 'mutation', action: 'revert_quote_status_after_failed_convert' } });
+        toast('error', `Order creation failed AND the quote could not be reverted to "${revertTo}" — its status may need a manual fix`);
       }
     }
     setConverting(false);

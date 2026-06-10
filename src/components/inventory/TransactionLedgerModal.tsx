@@ -43,6 +43,7 @@ const TYPE_CONFIG: Record<string, { label: string; color: string; icon: React.El
   cancelled_delivery_reversal: { label: 'Cancelled Delivery', color: 'text-red-500', icon: XCircle },
   void_delivery_reversal:      { label: 'Void Delivery', color: 'text-red-500', icon: Undo2 },
   job_applied:                 { label: 'Job Applied', color: 'text-orange-600', icon: FlaskConical },
+  prebook_reconciliation:      { label: 'Prebook Reconciliation', color: 'text-indigo-600', icon: Lock },
 };
 
 /**
@@ -68,7 +69,8 @@ export function signedQuantity(qty: number, type: string): number {
       return -Math.abs(qty);
     case 'adjusted':
     case 'transferred':
-      return qty; // already signed
+    case 'prebook_reconciliation':
+      return qty; // already signed (prebook_reconciliation affects prebooked, shown as-is)
     default:
       return qty;
   }

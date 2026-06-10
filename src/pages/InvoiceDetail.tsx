@@ -112,6 +112,8 @@ export default function InvoiceDetail() {
   // Print PDF
   const [printing, setPrinting] = useState(false);
   const printingRef = useRef(false);
+  // Latest invoice id the route is showing — older in-flight fetches bail (stale guard).
+  const activeInvoiceIdRef = useRef<string | undefined>(undefined);
 
   // Email invoice
   const [emailing, setEmailing] = useState(false);
@@ -173,6 +175,9 @@ export default function InvoiceDetail() {
   }, []);
 
   const fetchInvoice = useCallback(async (invoiceId: string) => {
+    // Stale-fetch guard: on rapid invoice-to-invoice navigation an older
+    // in-flight fetch must not render the previous invoice's amounts.
+    const isStale = () => activeInvoiceIdRef.current !== invoiceId;
     setLoading(true);
     // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
@@ -181,6 +186,7 @@ export default function InvoiceDetail() {
       .eq('id', invoiceId)
       .single();
 
+    if (isStale()) return;
     if (error || !data) {
       toast('error', 'Invoice not found');
       navigate('/invoices');
@@ -200,6 +206,7 @@ export default function InvoiceDetail() {
     // Attach salesman in the same shape the JSX consumes (`invoice.salesman?.full_name`).
     (data as Record<string, unknown>).salesman = salesman;
 
+    if (isStale()) return;
     setInvoice(data as Invoice);
     setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
 
@@ -275,6 +282,7 @@ export default function InvoiceDetail() {
       .eq('invoice_id', invoiceId)
       .order('sort_order');
 
+    if (isStale()) return;
     if (itemData) {
       setItems(
         (itemData as Array<Record<string, unknown> & { id: string; product_id: string; product?: { product_name: string }; description: string; quantity: number; unit_price_cents: number; extended_cents: number; cost_cents: number; rate_per_acre?: number | null; acres?: number | null; unit_size?: string; rate_unit?: string; total_applied?: number; sort_order?: number }>).map((it) => ({
@@ -312,6 +320,7 @@ export default function InvoiceDetail() {
       .select('id, amount_cents, reason, created_at, reversed_at')
       .eq('invoice_id', invoiceId)
       .order('created_at');
+    if (isStale()) return;
     setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
     setLoading(false);
@@ -319,6 +328,7 @@ export default function InvoiceDetail() {
 
   // Fetch existing invoice
   useEffect(() => {
+    activeInvoiceIdRef.current = id;
     if (!isNew && id) fetchInvoice(id);
   }, [id, isNew, fetchInvoice]);
 

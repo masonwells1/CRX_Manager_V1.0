@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "generated_at": "2026-06-08",
+    "generated_at": "2026-06-10",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs",
     "purpose": "Single source of truth for hooks: generated columns, status enum values, tables-with/without updated_at.",

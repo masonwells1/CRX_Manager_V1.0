@@ -70,9 +70,9 @@ Delivered YTD = SUM(quantity) from inventory_transactions
 
 ---
 
-## Eleven Transaction Types
+## Twelve Transaction Types
 
-Every inventory change creates an `inventory_transactions` record. Here are all 11 types:
+Every inventory change creates an `inventory_transactions` record. Here are all 12 types:
 
 | Type | When used | Effect on quantity_available |
 |------|-----------|------------------------------|
@@ -80,13 +80,39 @@ Every inventory change creates an `inventory_transactions` record. Here are all 
 | `booked` | Inventory hold is created (quote planned) | No change to quantity_available (tracked via holds) |
 | `delivered` | Delivery is completed | - (decreases stock) |
 | `returned` | Customer return is received back | + (increases stock, if restocked) |
-| `adjusted` | Manual inventory adjustment or cycle count variance | +/- (can go either direction) |
+| `adjusted` | Manual inventory adjustment or cycle count variance | +/- (can go either direction) — **see caveat below** |
 | `transferred` | Stock moved between warehouses | +/- (decrease at source, increase at destination) |
-| `job_applied` | Product applied during a job | - (decreases stock) |
+| `job_applied` | Product applied during a job or field application (incl. blend-ticket applications) | - (decreases stock) |
 | `prebooked` | Order created, inventory reserved | No change to quantity_available (tracked via prebooked) |
 | `released` | Order cancelled or fulfilled, prebooked inventory released | No change to quantity_available (tracked via prebooked) |
+| `prebook_reconciliation` | Data-fix correction of `quantity_prebooked` only (added 2026-06-10) | **No change to quantity_available** (prebooked-only) |
 | `cancelled_delivery_reversal` | Cancelled delivery restores inventory | + (increases stock) |
 | `void_delivery_reversal` | Voided delivery restores inventory | + (increases stock) |
+
+### Caveats for anyone recomputing stock from the ledger
+
+- **Historical `adjusted` rows are not always available-affecting.** Before
+  `prebook_reconciliation` existed, prebooked-only corrections were recorded as
+  `adjusted` rows distinguishable only by their notes (e.g. "Prebooked
+  reconciliation: cancel_delivery bug fix (migration 20260331900000)",
+  "prebooked inventory ... was missing"). Exclude those rows when recomputing
+  `quantity_available`, or the recompute will be wrong by exactly their amounts
+  (this caused a false-positive HIGH in the 2026-06-10 audit). New
+  prebooked-only corrections MUST use `prebook_reconciliation` instead.
+- **Early-March 2026 seeds are unledgered.** A handful of products created
+  around 2026-03-04 had `quantity_available` seeded with no `received` ledger
+  rows; the ledger is not a complete derivation of stock for that era.
+- **The insufficient-stock hard block lives on `complete_delivery`** (restored
+  2026-04-30 after a deliberate 2026-03-19→04-30 no-block window). The
+  warn-not-block policy applies to ORDER CREATION (`create_direct_order` /
+  `convert_quote_to_order`), not delivery completion. Job/blend-ticket
+  applications (`complete_job`, `create_application_record_from_blend_ticket`)
+  warn-and-flag (`requires_review = true`, "[SHORT STOCK]" note) but do not
+  block — the chemical is already physically applied when they run.
+- **Reversals may drive stock negative by design** (2026-06-10): 
+  `reverse_receiving_record` / the `receiving_records` delete trigger subtract
+  the full reversed quantity so the ledger always equals the applied change; a
+  negative snapshot is surfaced for reconciliation rather than silently clamped.
 
 ### Critical rule: All inventory math happens in the database, NOT in React.
 
