@@ -147,6 +147,10 @@ export const RpcErrorCodes = {
   RETURN_CREDIT_EMPTY: 'RETURN_CREDIT_EMPTY',
   NO_PENDING_REMAINDERS: 'NO_PENDING_REMAINDERS',
   COMMISSION_PAYMENT_NOT_FOUND: 'COMMISSION_PAYMENT_NOT_FOUND',
+  // assign_job_applicator / license gates (2026-06-10 deep-dive H1 B5)
+  LICENSE_EXPIRED: 'LICENSE_EXPIRED',
+  OVERRIDE_REQUIRES_ADMIN: 'OVERRIDE_REQUIRES_ADMIN',
+  JOB_NOT_FOUND: 'JOB_NOT_FOUND',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

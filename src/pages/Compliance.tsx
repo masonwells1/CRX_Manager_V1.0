@@ -85,12 +85,16 @@ export default function Compliance() {
 
   // Customers for dropdowns
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  // Staff for staff-held licenses (B5 license gates)
+  const [staff, setStaff] = useState<{ id: string; full_name: string; role: string }[]>([]);
 
   // Add/Edit license modal
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState({
+    holder_type: 'customer' as 'customer' | 'staff',
     customer_id: '',
+    profile_id: '',
     license_number: '',
     license_type: 'private' as 'private' | 'commercial' | 'public',
     holder_name: '',
@@ -103,20 +107,35 @@ export default function Compliance() {
   const [saving, setSaving] = useState(false);
 
   const fetchLicenses = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('applicator_licenses')
-      .select('*, customer:customers(farm_name)')
-      .order('expiry_date', { ascending: true });
+    const [licRes, staffRes] = await Promise.all([
+      supabase
+        .from('applicator_licenses')
+        .select('*, customer:customers(farm_name)')
+        .order('expiry_date', { ascending: true }),
+      // Staff names for staff-held licenses (and the modal dropdown) — PII-safe view
+      supabase
+        .from('profile_public_view')
+        .select('id, full_name, role')
+        .eq('is_active', true)
+        .order('full_name'),
+    ]);
 
-    if (error) {
+    if (licRes.error) {
       toast('error', 'Failed to load licenses');
-      Sentry.captureException(error);
+      Sentry.captureException(licRes.error);
       return;
     }
 
-    const mapped = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string } }>).map((l) => ({
+    const staffRows = (staffRes.data || []) as { id: string; full_name: string; role: string }[];
+    setStaff(staffRows);
+    const staffNameById: Record<string, string> = {};
+    staffRows.forEach((s) => { staffNameById[s.id] = s.full_name; });
+
+    const mapped = ((licRes.data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string } }>).map((l) => ({
       ...l,
-      farm_name: l.customer?.farm_name || 'Unknown',
+      farm_name: l.profile_id
+        ? `Staff — ${staffNameById[l.profile_id as string] || 'Unknown'}`
+        : l.customer?.farm_name || 'Unknown',
     })) as unknown as LicenseWithCustomer[];
     setLicenses(mapped);
   }, [toast]);
@@ -218,7 +237,9 @@ export default function Compliance() {
   const openAdd = () => {
     setEditId(null);
     setForm({
+      holder_type: 'customer',
       customer_id: '',
+      profile_id: '',
       license_number: '',
       license_type: 'private',
       holder_name: '',
@@ -234,7 +255,9 @@ export default function Compliance() {
   const openEdit = (lic: LicenseWithCustomer) => {
     setEditId(lic.id);
     setForm({
-      customer_id: lic.customer_id,
+      holder_type: lic.profile_id ? 'staff' : 'customer',
+      customer_id: lic.customer_id || '',
+      profile_id: lic.profile_id || '',
       license_number: lic.license_number,
       license_type: lic.license_type as 'private' | 'commercial' | 'public',
       holder_name: lic.holder_name,
@@ -248,7 +271,8 @@ export default function Compliance() {
   };
 
   const handleSave = async () => {
-    if (!form.customer_id || !form.license_number || !form.holder_name || !form.expiry_date) {
+    const holderMissing = form.holder_type === 'customer' ? !form.customer_id : !form.profile_id;
+    if (holderMissing || !form.license_number || !form.holder_name || !form.expiry_date) {
       toast('error', 'Fill in all required fields');
       return;
     }
@@ -259,7 +283,8 @@ export default function Compliance() {
       .filter(Boolean);
 
     const payload = {
-      customer_id: form.customer_id,
+      customer_id: form.holder_type === 'customer' ? form.customer_id : null,
+      profile_id: form.holder_type === 'staff' ? form.profile_id : null,
       license_number: form.license_number,
       license_type: form.license_type,
       holder_name: form.holder_name,
@@ -310,7 +335,7 @@ export default function Compliance() {
         </button>
       ),
     },
-    { key: 'farm_name', header: 'Customer', sortable: true },
+    { key: 'farm_name', header: 'Customer / Staff', sortable: true },
     { key: 'license_number', header: 'License #', sortable: true },
     {
       key: 'license_type',
@@ -849,20 +874,69 @@ export default function Compliance() {
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editId ? 'Edit License' : 'Add Applicator License'}>
         <div className="space-y-4">
           <div>
-            <label className="text-sm font-medium text-nav-dark">Customer *</label>
-            <select
-              value={form.customer_id}
-              onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
-              className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">Select customer...</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.farm_name}
-                </option>
-              ))}
-            </select>
+            <label className="text-sm font-medium text-nav-dark">License belongs to</label>
+            <div className="mt-1 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, holder_type: 'customer', profile_id: '' })}
+                className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${form.holder_type === 'customer' ? 'bg-crx-green text-white border-crx-green' : 'bg-white text-nav-dark border-gray-200 hover:border-crx-green/40'}`}
+              >
+                Customer
+              </button>
+              <button
+                type="button"
+                onClick={() => setForm({ ...form, holder_type: 'staff', customer_id: '' })}
+                className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${form.holder_type === 'staff' ? 'bg-crx-green text-white border-crx-green' : 'bg-white text-nav-dark border-gray-200 hover:border-crx-green/40'}`}
+              >
+                Staff member
+              </button>
+            </div>
           </div>
+
+          {form.holder_type === 'customer' ? (
+            <div>
+              <label className="text-sm font-medium text-nav-dark">Customer *</label>
+              <select
+                value={form.customer_id}
+                onChange={(e) => setForm({ ...form, customer_id: e.target.value })}
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              >
+                <option value="">Select customer...</option>
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.farm_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div>
+              <label className="text-sm font-medium text-nav-dark">Staff member *</label>
+              <select
+                value={form.profile_id}
+                onChange={(e) => {
+                  const selected = staff.find((s) => s.id === e.target.value);
+                  setForm({
+                    ...form,
+                    profile_id: e.target.value,
+                    // Prefill the printed holder name from the profile; still editable
+                    holder_name: form.holder_name || selected?.full_name || '',
+                  });
+                }}
+                className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              >
+                <option value="">Select staff member...</option>
+                {staff.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.full_name} ({s.role})
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                Staff-held licenses gate job assignment: an applicator whose licenses have ALL expired cannot be assigned to a job (admin can override).
+              </p>
+            </div>
+          )}
 
           <Input
             label="License Holder Name *"

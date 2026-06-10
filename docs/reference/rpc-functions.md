@@ -73,6 +73,7 @@
 - `convert_to_gl_lb()` — convert quantity from any unit to gallons or pounds for standardized reporting
 
 ## Job Scheduling
+- `assign_job_applicator(p_job_id, p_applicator_id, p_license_override, p_performed_by, p_idempotency_key)` → jsonb — assign/unassign a job's applicator (strict-actor, admin/sales_rep; the `enforce_applicator_license` trigger on `jobs` raises `LICENSE_EXPIRED` when the applicator's linked active licenses are all expired; `p_license_override` is admin-only and brackets the update with `app.admin_override`). Sole assignment path for DispatchBoard; JobDetail uses it for the override flow. (B5, 20260610185714)
 - `complete_job()` — marks completed, creates application_record, deducts inventory
 - `transfer_job_to_invoice()` — creates invoice from job, sets status='invoiced'
 - `load_recipe_into_job()` — copies recipe items into job chemicals
@@ -176,7 +177,7 @@
 - `get_ap_dashboard_summary()` — KPI totals: total_owed, due_this_week, due_this_month, overdue_amount, bill counts, recent vendor bills.
 
 ## RUP Sales Reporting
-- `generate_rup_sales_records(p_invoice_id)` — auto-called after `post_invoice()` for invoices with RUP products. Creates rup_sales_records for each RUP line item, snapshots product/customer/license data, flags compliance_status (compliant/warning/non_compliant based on applicator license validity)
+- `generate_rup_sales_records(p_invoice_id)` — auto-called after `post_invoice()` for invoices with RUP products. Creates rup_sales_records for each RUP line item, snapshots product/customer/license data, flags compliance_status (compliant/warning/non_compliant based on applicator license validity). Fixed 20260610185741: license lookup filtered a nonexistent `deleted_at` column (latent 42703 that would have crashed `post_invoice` on the first RUP invoice); now filters `is_active = true` (customer-held licenses only — `customer_id = …` naturally excludes staff-held rows).
 - `get_rup_sales_register(p_start_date, p_end_date, p_product_id, p_customer_id, p_compliance_status)` — filterable register query for state reporting. Returns all FIFRA-required fields (date, product, EPA reg, qty, buyer cert)
 
 ## Email Infrastructure

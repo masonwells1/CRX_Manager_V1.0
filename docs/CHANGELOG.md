@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-10 (deep-dive H1 B5) — applicator license-expiry gates + RUP time-bomb fix, applied live
+
+First `/ship` off the deep-dive roadmap, on branch `feat/h1-quick-wins-2026-06-10`. Two migrations applied live through the full review gate (4 reviewers clean, rolled-back smoke tests, B7 renames):
+
+- **`20260610185714_applicator_license_gates`** — staff-held licenses on `applicator_licenses` (`profile_id`, nullable `customer_id`, holder CHECK); `jobs` trigger blocks assigning an applicator whose active licenses are ALL expired (`LICENSE_EXPIRED`, `app.admin_override` hatch); new `assign_job_applicator` RPC (strict-actor, admin-only override) now used by DispatchBoard instead of a raw table UPDATE. UI: license badges + admin override ConfirmModal (JobDetail/DispatchBoard), Customer↔Staff toggle on Compliance, expiring-licenses Dashboard card, `src/lib/licenseStatus.ts` + 10 tests (suite 1,934).
+- **`20260610185741_fix_generate_rup_sales_records_phantom_column`** — review gate found the live fn filtering a nonexistent `al.deleted_at` (42703) while `post_invoice` calls it unguarded: the first posted RUP invoice would have crashed billing. One-predicate fix (verbatim live body, md5-verified) + `rupCompliance.ts` twin fix.
+
+Deferred (LOW/pre-existing, reviewer-noted): authenticated-callable `generate_rup_sales_records` attribution-only gate; trigger's RLS fail-open dependency. Branch NOT pushed (prod-push gate).
+
+---
+
 ## 2026-06-10 (foundation ultra review + full remediation) — 7 migrations live, 4 latent crashes fixed, anon exposure closed
 
 Built the reusable **`/foundation-ultra-review`** dynamic multi-agent audit (6 layers: live-data integrity, disk-vs-live drift, edge bundles, deferred ledger, frontend runtime safety, + authorization/exposure surface added after the Codex round). First run: **SOLID-WITH-FOLLOWUPS, 0 BLOCKER** — money/AR data fully consistent (vacuously; mandatory re-run gate after the first real billing cycle), 2026-06 security state intact live, edge bundles in sync, route guards clean. Codex cross-review (NEEDS-WORK, all 8 points accepted after independent live re-verification) upgraded the clamp finding to HIGH, refuted the prebooked-formula finding (measurement artifact), and contributed 2 new MEDs. Reports: `docs/audits/2026-06-10-foundation-ultra-review.md` + disposition.

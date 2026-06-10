@@ -107,7 +107,7 @@
 - `return_items` - Return line items (return_id, order_item_id, product_id, quantity, unit_price, restocked, sort_order)
 
 ## Compliance
-- `applicator_licenses` - Applicator license tracking (customer_id, license_number, license_type: private/commercial/public, holder_name, state, expiry_date, certification_categories text[])
+- `applicator_licenses` - Applicator license tracking; held by a customer OR a staff profile (customer_id uuid NULL, profile_id uuid NULL REFERENCES profiles — CHECK `applicator_licenses_holder_check` requires one holder; license_number, license_type: private/commercial/public, holder_name, state, expiry_date, certification_categories text[], is_active). Staff-held licenses gate job assignment via the `enforce_applicator_license` trigger on `jobs` (migration 20260610185714).
 
 ## Rebates
 - `rebate_programs` - Manufacturer rebate programs (program_name, manufacturer, season, product_id, rebate_type, rebate_amount, start_date, end_date, status)

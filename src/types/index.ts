@@ -1444,7 +1444,10 @@ export type LicenseType = 'private' | 'commercial' | 'public';
 
 export interface ApplicatorLicense {
   id: string;
-  customer_id: string;
+  /** Customer-held license (RUP buyer). NULL when staff-held. */
+  customer_id: string | null;
+  /** Staff-held license (internal applicator profile). NULL when customer-held. */
+  profile_id: string | null;
   license_number: string;
   license_type: LicenseType;
   holder_name: string;

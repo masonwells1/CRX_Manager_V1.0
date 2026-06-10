@@ -31,6 +31,7 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
 import ActionQueue from '../components/dashboard/ActionQueue';
+import ExpiringLicensesCard from '../components/compliance/ExpiringLicensesCard';
 
 // --- Types ---
 
@@ -415,6 +416,9 @@ export default function Dashboard() {
           </div>
         </Card>
       )}
+
+      {/* License renewal reminders (admin + sales; B5 license gates) */}
+      {(isAdmin || role === 'sales_rep') && <ExpiringLicensesCard />}
 
       {/* ═══════════════════════════════════════════════════════════ */}
       {/* Section 1: Top KPI Row (hidden from drivers)              */}

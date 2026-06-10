@@ -11,8 +11,9 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -131,6 +132,8 @@ export default function JobDetail() {
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [applicators, setApplicators] = useState<Profile[]>([]);
+  // Staff-held license rows per profile (B5 license gates)
+  const [licensesByProfile, setLicensesByProfile] = useState<Record<string, { expiry_date: string; is_active: boolean }[]>>({});
   const [recipes, setRecipes] = useState<BlendRecipe[]>([]);
 
   // Job form
@@ -140,6 +143,10 @@ export default function JobDetail() {
   const [jobDate, setJobDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [applicatorId, setApplicatorId] = useState('');
+  // The applicator currently saved on the job — the license gate only fires on a CHANGE
+  const [savedApplicatorId, setSavedApplicatorId] = useState<string | null>(null);
+  const [showLicenseOverrideConfirm, setShowLicenseOverrideConfirm] = useState(false);
+  const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
   const [vehicleId, setVehicleId] = useState('');
   const [recipeId, setRecipeId] = useState('');
   const [notes, setNotes] = useState('');
@@ -200,6 +207,17 @@ export default function JobDetail() {
     setVehicles((vehicleResult.data || []) as Vehicle[]);
     setApplicators((appResult.data || []) as Profile[]);
     setRecipes((recipeResult.data || []) as BlendRecipe[]);
+
+    // Staff-held license rows for the license-gate badge + pre-save check (B5)
+    const licResult = await supabase
+      .from('applicator_licenses')
+      .select('profile_id, expiry_date, is_active')
+      .not('profile_id', 'is', null);
+    const byProfile: Record<string, { expiry_date: string; is_active: boolean }[]> = {};
+    ((licResult.data || []) as { profile_id: string; expiry_date: string; is_active: boolean }[]).forEach((l) => {
+      (byProfile[l.profile_id] ||= []).push({ expiry_date: l.expiry_date, is_active: l.is_active });
+    });
+    setLicensesByProfile(byProfile);
   };
 
   const fetchJob = useCallback(async () => {
@@ -233,6 +251,7 @@ export default function JobDetail() {
     setJobDate(j.job_date);
     setScheduledTime(j.scheduled_time || '');
     setApplicatorId(j.applicator_id || '');
+    setSavedApplicatorId(j.applicator_id || null);
     setVehicleId(j.vehicle_id || '');
     setRecipeId(j.recipe_id || '');
     setNotes(j.notes || '');
@@ -320,13 +339,55 @@ export default function JobDetail() {
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
 
+    // B5 license gate pre-check — only when assigning or CHANGING the applicator
+    // (editing other fields on a job that already has this applicator stays allowed,
+    // matching the DB trigger's IS NOT DISTINCT FROM skip).
+    if (applicatorId && applicatorId !== (savedApplicatorId || '')) {
+      const st = getLicenseStatus(licensesByProfile[applicatorId] || []);
+      if (st.status === 'expired') {
+        if (profile?.role === 'admin') {
+          setShowLicenseOverrideConfirm(true);
+        } else {
+          toast('error', "This applicator's license has expired — an admin can override if needed.");
+        }
+        return;
+      }
+    }
+
+    await performSave(false);
+  };
+
+  /** Assign the applicator via the override RPC (admin-only path, B5). */
+  const assignWithOverride = async (jobId: string) => {
+    assignIdem.resetKey();
+    const { data, error } = await supabase.rpc('assign_job_applicator', {
+      p_job_id: jobId,
+      p_applicator_id: applicatorId,
+      p_license_override: true,
+      p_performed_by: profile!.id,
+      p_idempotency_key: assignIdem.getKey(),
+    });
+    if (error) throw error;
+    assertRpcResult(data, 'assign_job_applicator');
+    assignIdem.resetKey();
+  };
+
+  const performSave = async (licenseOverride: boolean) => {
     setSaving(true);
     try {
+      // Existing job + override: set the applicator via the override RPC FIRST so
+      // the jobs trigger sees no applicator change during save_job.
+      if (licenseOverride && !isNew && id) {
+        await assignWithOverride(id);
+      }
+
       const payload = {
         customer_id: customerId,
         job_date: jobDate,
         scheduled_time: scheduledTime || null,
-        applicator_id: applicatorId || null,
+        // New job + override: create unassigned, then assign via the override RPC below
+        // (the BEFORE INSERT trigger would reject the expired applicator otherwise).
+        applicator_id: licenseOverride && isNew ? null : (applicatorId || null),
         vehicle_id: vehicleId || null,
         recipe_id: recipeId || null,
         notes: notes || null,
@@ -367,10 +428,27 @@ export default function JobDetail() {
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
 
+      // New job + override: now that the job exists, assign with the override hatch.
+      // The job is CREATED at this point regardless — if the assignment fails we must
+      // still navigate to it, or a re-click of Save would create a duplicate job.
+      if (licenseOverride && isNew && applicatorId) {
+        try {
+          await assignWithOverride(result.job_id);
+        } catch (assignErr) {
+          Sentry.captureException(assignErr instanceof Error ? assignErr : new Error(String(assignErr)), { extra: { context: 'assign_job_applicator_after_create' } });
+          toast('error', 'Job created, but the override assignment failed — assign the applicator from this page.');
+          setIsDirty(false);
+          navigate(`/jobs/${result.job_id}`);
+          setSaving(false);
+          return;
+        }
+      }
+
       if (profile) logActivity({ event: isNew ? 'job_created' : 'job_updated', description: isNew ? `Job created for ${customers.find(c => c.id === customerId)?.farm_name}` : `Job ${jobNumber} updated`, performedBy: profile.id });
 
       toast('success', isNew ? 'Job created' : 'Job saved');
       setIsDirty(false);
+      setSavedApplicatorId(applicatorId || null);
 
       if (isNew) {
         navigate(`/jobs/${result.job_id}`);
@@ -378,8 +456,17 @@ export default function JobDetail() {
         await fetchJob();
       }
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_job' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to save job');
+      // Race: licenses changed since page load and the DB trigger fired.
+      if (hasRpcCode(err, RpcErrorCodes.LICENSE_EXPIRED)) {
+        if (profile?.role === 'admin') {
+          setShowLicenseOverrideConfirm(true);
+        } else {
+          toast('error', "This applicator's license has expired — an admin can override if needed.");
+        }
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_job' } });
+        toast('error', err instanceof Error ? err.message : 'Failed to save job');
+      }
     }
     setSaving(false);
   };
@@ -678,6 +765,17 @@ export default function JobDetail() {
                 <option key={a.id} value={a.id}>{a.full_name} ({a.role})</option>
               ))}
             </select>
+            {applicatorId && (() => {
+              const st = getLicenseStatus(licensesByProfile[applicatorId] || []);
+              if (st.status === 'valid') return null;
+              return (
+                <p className={`mt-1 text-xs font-medium ${
+                  st.status === 'expired' ? 'text-red-600' : st.status === 'expiring_soon' ? 'text-yellow-600' : 'text-gray-500'
+                }`}>
+                  {licenseStatusLabel(st)}
+                </p>
+              );
+            })()}
           </div>
           <div>
             <label className="block text-sm font-medium text-nav-dark mb-1">Vehicle</label>
@@ -967,6 +1065,18 @@ export default function JobDetail() {
       )}
 
       {/* Complete Job Confirm */}
+      {/* License-override confirm (admin only, B5) */}
+      <ConfirmModal
+        open={showLicenseOverrideConfirm}
+        onClose={() => setShowLicenseOverrideConfirm(false)}
+        onConfirm={() => { setShowLicenseOverrideConfirm(false); performSave(true); }}
+        title="Applicator License Expired"
+        message="This applicator's license has expired. Save the job and assign them anyway? The override is recorded in the activity log."
+        confirmLabel="Assign Anyway"
+        variant="warning"
+        loading={saving}
+      />
+
       <ConfirmModal
         open={showCompleteConfirm}
         onClose={() => setShowCompleteConfirm(false)}
