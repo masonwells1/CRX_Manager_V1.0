@@ -20,7 +20,7 @@
 ### H1 — This season (≤3 months): cash + compliance quick wins
 | ID | Item | Effort | Status |
 |---|---|---|---|
-| A1 | ACH pay-now links on emailed invoices/statements (Stripe ACH, $5 cap) + webhook Edge Function | M | ⏸ Blocked — needs Stripe account/keys (Mason) |
+| A1 | ACH pay-now links on emailed invoices/statements (Stripe ACH, $5 cap) + webhook Edge Function | M | ⏸ Deferred 2026-06-10 (Mason's call — revisit later). To restart: create a Stripe account (stripe.com, ~15 min) and provide the API keys; this also gates the H2 grower-portal payment features (A2/A4). |
 | B1 | RUP point-of-sale certification check (warn/block on expired/missing buyer cert) | S | ✅ Done (2026-06-10 — NewOrder banner + InvoiceDetail post-confirm warning, `feat/h1-quick-wins-2026-06-10`) |
 | B5 | License-expiry gates on job assignment + renewal reminders | S | ✅ Done (2026-06-10 — jobs trigger + `assign_job_applicator` RPC + Dashboard card, migrations live) |
 | B3 | WPS pre-application info sheet auto-generation | S | ✅ Done (2026-06-10 — `wpsNoticePdf.ts` + JobDetail button + products REI/PHI columns live) |
