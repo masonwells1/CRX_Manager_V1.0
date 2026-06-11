@@ -26,7 +26,7 @@
 | B3 | WPS pre-application info sheet auto-generation | S | ✅ Done (2026-06-10 — `wpsNoticePdf.ts` + JobDetail button + products REI/PHI columns live) |
 | ~~B6~~ | ~~State dealer report pack~~ | S | ❌ Closed 2026-06-10 — Mason confirmed IL-only; IL requires records on demand and the /compliance RUP register + CSV export already satisfies it (8 Ill. Adm. Code 250.150, 2-yr retention). Reopen only if licensing expands to WI/other reporting states. |
 | E3 | Owner's daily brief (cash, AR movement, today's work, exceptions) | S | ✅ Done (2026-06-10 — DailyBrief admin Dashboard card) |
-| D1 | Vendor-bill LLM extraction pilot (gate: 10-bill manual accuracy test) | M | 🔄 In progress — Mason providing real vendor bills for the accuracy gate |
+| D1 | Vendor-bill LLM extraction pilot (gate: 10-bill manual accuracy test) | M | ⏸ Deferred 2026-06-10 (Mason's call — revisit later). To restart: attach ~10 real vendor bills (PDF/photo) for the accuracy gate; production build also needs an Anthropic API key in Edge Function secrets. |
 | C4 | Weather auto-capture at application time (replace hand-typed entries) | S | ✅ Done (2026-06-10 — Open-Meteo prefill in Complete Job modal) |
 | — | **Cheap tests that gate H2:** collect 3 real ISOXML monitor files (C1); CDMS/Greenbook label-data pricing inquiry (B7); A1 click-through data (gates A2) | — | TODO |
 
