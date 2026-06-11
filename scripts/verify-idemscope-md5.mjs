@@ -2,6 +2,10 @@
 // (originally written for the superseded phantom draft 20260611080937; the
 // baselines below were re-verified IDENTICAL against live on 2026-06-11 by the
 // second DRAFT session — live bodies stable all day).
+// FIXER REFRESH (2026-06-11, post-20260611203302): create_invoice_from_blend_ticket
+// re-baselined 036091796baa73eb0754e5c2dd4de95b -> 621c6844a47fa3b4594eaa6b075419e4
+// (function rebuilt live by 20260611203238_blend_invoice_app_service_guard);
+// all other baselines re-verified unchanged against live (2026-06-11 20:50 UTC).
 // For each CREATE OR REPLACE FUNCTION block: extract the $function$ body,
 // strip the single added ` AND operation = '<fn>'` clause, md5 the result,
 // and compare against the live prosrc md5 manifest.
@@ -17,7 +21,7 @@ const LIVE_MD5 = {
   batch_post_invoices: "8414b078aa51d5774960c22387d9c3cc",
   batch_reject_blend_tickets: "5619eafd51a48b0d44e17fb2b77cc9ff",
   complete_job: "8620e40a6f5f8ae2634815f818005c4e",
-  create_invoice_from_blend_ticket: "036091796baa73eb0754e5c2dd4de95b",
+  create_invoice_from_blend_ticket: "621c6844a47fa3b4594eaa6b075419e4",
   create_job_from_quote_section: "79f38c109f6549c5808ba7fec5f373cb",
   create_planned_holds: "912db30f89fce14b0d114f6c1ea20c01",
   create_quote_from_template: "d8d57dca6f3f5f091e7a2a754bef2a5f",

@@ -31,12 +31,17 @@ if (!TOKEN) {
 // Baseline md5(prosrc) per function — read from LIVE pg_proc this session
 // (2026-06-11, after live version 20260611190251; matches the 08:27 manifest
 // read, i.e. the bodies have been stable all day).
+// FIXER REFRESH (2026-06-11, post-20260611203302): create_invoice_from_blend_ticket
+// re-baselined 036091796baa73eb0754e5c2dd4de95b -> 621c6844a47fa3b4594eaa6b075419e4
+// — migration 20260611203238_blend_invoice_app_service_guard rebuilt that function
+// live AFTER the original draft; the other 19 baselines re-verified UNCHANGED
+// against live (md5 sweep, 2026-06-11 20:50 UTC).
 const BASELINES = {
   batch_approve_blend_tickets: "ecef62c9154d1246e0df5715d1d7ae82",
   batch_post_invoices: "8414b078aa51d5774960c22387d9c3cc",
   batch_reject_blend_tickets: "5619eafd51a48b0d44e17fb2b77cc9ff",
   complete_job: "8620e40a6f5f8ae2634815f818005c4e",
-  create_invoice_from_blend_ticket: "036091796baa73eb0754e5c2dd4de95b",
+  create_invoice_from_blend_ticket: "621c6844a47fa3b4594eaa6b075419e4",
   create_job_from_quote_section: "79f38c109f6549c5808ba7fec5f373cb",
   create_quote_from_template: "d8d57dca6f3f5f091e7a2a754bef2a5f",
   create_quote_version: "06ac27b08a9714130d02a1a326bcd188",
@@ -172,6 +177,21 @@ const header = `-- =============================================================
 -- scripts/.staging-migrations/ per the race guard — only the APPLY role moves
 -- this under supabase/migrations/, stamped with the MCP-assigned version.
 --
+-- FIXER REFRESH (2026-06-11, after live version 20260611203302): the apply
+-- role's staleness gate caught that section 05 (create_invoice_from_blend_
+-- ticket) was drafted from the OLD live body (baseline 036091796baa73eb0754
+-- e5c2dd4de95b). Migration 20260611203238_blend_invoice_app_service_guard
+-- rebuilt that function live (adds the v_has_app_service fee-gate guard)
+-- between draft and apply; applying the old section verbatim would have
+-- REVERTED that fix. Section 05 was regenerated from the NEW live body
+-- (baseline now 621c6844a47fa3b4594eaa6b075419e4 — old baseline SUPERSEDED),
+-- same sole delta. All other 19 baselines re-verified UNCHANGED against live
+-- at refresh time (the parallel 20260611201929_load_recipe_column_fix and
+-- 20260611203302_quick_delivery_column_fixes touched functions OUTSIDE this
+-- sweep). Carve-outs create_planned_holds/save_quote also re-verified
+-- unchanged, and 20260611132115 remains ABSENT from live schema_migrations —
+-- the carve-out stands.
+--
 -- SUPERSEDES the phantom draft "20260611080937_idempotency_lookup_operation_
 -- scope_sweep.sql" from a prior session, which sat under supabase/migrations/
 -- with a self-assigned stamp but was NEVER applied (verified: version
@@ -252,6 +272,9 @@ const header = `-- =============================================================
 --
 -- BASELINE md5(prosrc) MANIFEST (live, this session):
 ${FNS.map((fn) => `--   ${fn.padEnd(36)} ${BASELINES[fn]}`).join("\n")}
+--   -- create_invoice_from_blend_ticket: baseline above SUPERSEDES the original
+--   -- draft's 036091796baa73eb0754e5c2dd4de95b (function rebuilt live by
+--   -- 20260611203238_blend_invoice_app_service_guard between draft and apply).
 --   -- carved out (NOT in this sweep; live baselines recorded for the record):
 ${Object.entries(CARVED_OUT)
   .map(([fn, h]) => `--   ${fn.padEnd(36)} ${h}`)

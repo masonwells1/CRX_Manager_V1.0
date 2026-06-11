@@ -6,6 +6,21 @@
 -- scripts/.staging-migrations/ per the race guard — only the APPLY role moves
 -- this under supabase/migrations/, stamped with the MCP-assigned version.
 --
+-- FIXER REFRESH (2026-06-11, after live version 20260611203302): the apply
+-- role's staleness gate caught that section 05 (create_invoice_from_blend_
+-- ticket) was drafted from the OLD live body (baseline 036091796baa73eb0754
+-- e5c2dd4de95b). Migration 20260611203238_blend_invoice_app_service_guard
+-- rebuilt that function live (adds the v_has_app_service fee-gate guard)
+-- between draft and apply; applying the old section verbatim would have
+-- REVERTED that fix. Section 05 was regenerated from the NEW live body
+-- (baseline now 621c6844a47fa3b4594eaa6b075419e4 — old baseline SUPERSEDED),
+-- same sole delta. All other 19 baselines re-verified UNCHANGED against live
+-- at refresh time (the parallel 20260611201929_load_recipe_column_fix and
+-- 20260611203302_quick_delivery_column_fixes touched functions OUTSIDE this
+-- sweep). Carve-outs create_planned_holds/save_quote also re-verified
+-- unchanged, and 20260611132115 remains ABSENT from live schema_migrations —
+-- the carve-out stands.
+--
 -- SUPERSEDES the phantom draft "20260611080937_idempotency_lookup_operation_
 -- scope_sweep.sql" from a prior session, which sat under supabase/migrations/
 -- with a self-assigned stamp but was NEVER applied (verified: version
@@ -89,7 +104,7 @@
 --   batch_post_invoices                  8414b078aa51d5774960c22387d9c3cc
 --   batch_reject_blend_tickets           5619eafd51a48b0d44e17fb2b77cc9ff
 --   complete_job                         8620e40a6f5f8ae2634815f818005c4e
---   create_invoice_from_blend_ticket     036091796baa73eb0754e5c2dd4de95b
+--   create_invoice_from_blend_ticket     621c6844a47fa3b4594eaa6b075419e4
 --   create_job_from_quote_section        79f38c109f6549c5808ba7fec5f373cb
 --   create_quote_from_template           d8d57dca6f3f5f091e7a2a754bef2a5f
 --   create_quote_version                 06ac27b08a9714130d02a1a326bcd188
@@ -105,6 +120,9 @@
 --   save_quote_template                  afc3a240238f9049c3d94239b81522cc
 --   start_job                            72a2fb6ff788378b216e9dd84f4a423c
 --   void_payment                         8e18a5090bc1093b1836651beba3a780
+--   -- create_invoice_from_blend_ticket: baseline above SUPERSEDES the original
+--   -- draft's 036091796baa73eb0754e5c2dd4de95b (function rebuilt live by
+--   -- 20260611203238_blend_invoice_app_service_guard between draft and apply).
 --   -- carved out (NOT in this sweep; live baselines recorded for the record):
 --   create_planned_holds                 912db30f89fce14b0d114f6c1ea20c01
 --   save_quote                           980a624c4e29ce01de0c977a007c0a15
@@ -544,7 +562,7 @@ $function$
 
 -- ============================================================================
 -- [IDEMSCOPE 05/20] public.create_invoice_from_blend_ticket(p_blend_ticket_id uuid, p_created_by uuid, p_idempotency_key text)
---   baseline md5(prosrc): 036091796baa73eb0754e5c2dd4de95b   (live-verified this session)
+--   baseline md5(prosrc): 621c6844a47fa3b4594eaa6b075419e4   (live-verified this session)
 --   sole delta: the idempotency LOOKUP gains ` AND operation = 'create_invoice_from_blend_ticket'`
 -- [IDEMSCOPE-DELTA create_invoice_from_blend_ticket BEGIN] body below is live-verbatim except that
 --   single appended clause; strip it and md5 returns to the baseline above.
@@ -576,6 +594,9 @@ DECLARE
   v_invoice_group_id    uuid;
   v_invoice_ids         uuid[] := '{}';
   v_app_service         record;
+  -- DELTA-BLEND-INV-APPSVC-GUARD BEGIN (G1: guard boolean for the fee gate)
+  v_has_app_service     boolean := false;
+  -- DELTA-BLEND-INV-APPSVC-GUARD END (G1)
   v_fee_rate            bigint;
   v_btp                 record;
   v_share_row           jsonb;
@@ -656,6 +677,14 @@ BEGIN
 
   IF v_ticket.application_service_id IS NOT NULL THEN
     SELECT * INTO v_app_service FROM application_services WHERE id = v_ticket.application_service_id;
+    -- DELTA-BLEND-INV-APPSVC-GUARD BEGIN (G2: fold the fee-gate record tests into a
+    -- boolean HERE, the only spot v_app_service is guaranteed assigned (found row,
+    -- or the all-NULL row a zero-row SELECT INTO leaves; FOUND distinguishes them).
+    -- Term-for-term the original gate's semantics, minus the crash.)
+    v_has_app_service := FOUND
+                         AND (v_app_service IS NOT NULL)
+                         AND COALESCE(v_app_service.is_active, false);
+    -- DELTA-BLEND-INV-APPSVC-GUARD END (G2)
   END IF;
 
   v_quote_section_id := NULL;
@@ -825,7 +854,13 @@ BEGIN
       END IF;
     END LOOP;
 
-    IF v_ticket.application_service_id IS NOT NULL AND v_app_service IS NOT NULL AND v_app_service.is_active THEN
+    -- DELTA-BLEND-INV-APPSVC-GUARD BEGIN (G3: gate on the boolean only. The original
+    -- three-term AND referenced a field of v_app_service; plpgsql resolves record
+    -- fields while binding the expression, BEFORE short-circuit, so with no
+    -- application service the never-assigned record raised SQLSTATE 55000 on the
+    -- main no-service path.)
+    IF v_has_app_service THEN
+    -- DELTA-BLEND-INV-APPSVC-GUARD END (G3)
       SELECT car.rate_per_acre_cents INTO v_fee_rate
         FROM customer_application_rates car
        WHERE car.customer_id            = v_customer_id
@@ -2971,7 +3006,7 @@ BEGIN
       ('batch_post_invoices', '8414b078aa51d5774960c22387d9c3cc'),
       ('batch_reject_blend_tickets', '5619eafd51a48b0d44e17fb2b77cc9ff'),
       ('complete_job', '8620e40a6f5f8ae2634815f818005c4e'),
-      ('create_invoice_from_blend_ticket', '036091796baa73eb0754e5c2dd4de95b'),
+      ('create_invoice_from_blend_ticket', '621c6844a47fa3b4594eaa6b075419e4'),
       ('create_job_from_quote_section', '79f38c109f6549c5808ba7fec5f373cb'),
       ('create_quote_from_template', 'd8d57dca6f3f5f091e7a2a754bef2a5f'),
       ('create_quote_version', '06ac27b08a9714130d02a1a326bcd188'),
