@@ -1,10 +1,41 @@
-# Migration History (423 migrations)
+# Migration History (425 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-11 (final-four remediation — load_recipe / blend-invoice app-service guard / quick_delivery)
+
+The last 3 of the plpgsql_check latent-break queue (error-prevention execution log §4 item 1). Applied live via MCP (stamps match filenames); verbatim-from-live bodies with sentinel-delimited deltas + baseline md5 headers; both reviewers clean per migration; rolled-back smoke chains PASS (`smoke-load_recipe_column_fix.sql`, `smoke-blend_invoice_app_service_guard.sql`, `smoke-quick_delivery_column_fixes.sql`). Final-verify 2026-06-11: full errors-only `plpgsql_check_function_tb` scan over all public non-trigger plpgsql functions = **0 rows** (was 30 errors / 11 functions on 2026-06-10).
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260611201929 | `load_recipe_column_fix` | `load_recipe_into_job(uuid,uuid,text)` 42703: recipe-items loop read `p.cost_per_unit` — products has no such column (cost column is `current_cost`, numeric dollars). Baseline md5 `8ab8d6090c7a06e5c062102614c32175`; sentinel-delimited column fix only; SECDEF + `search_path=public, pg_temp` preserved; overload=1. |
+| 20260611203238 | `blend_invoice_app_service_guard` | `create_invoice_from_blend_ticket` 55000 on the no-application-service (MAIN) path: `v_app_service` is assigned only inside `IF v_ticket.application_service_id IS NOT NULL`, but the per-customer application-fee gate read `v_app_service.is_active` unconditionally — record-field binding happens before AND short-circuit, so every plain (no-service) ticket crashed `record "v_app_service" is not yet assigned`. Masked until `20260611001954` removed the earlier 42703. Guard rewritten to a nested IF so the record field is only referenced after assignment. |
+| 20260611203302 | `quick_delivery_column_fixes` | `create_quick_delivery` dead-on-arrival since the wave4 rewrite — every call failed and rolled back: B-a 23502 deliveries INSERT omitted NOT-NULL `created_by` (now `v_actor`); B-b 42703 order_items INSERT referenced nonexistent columns (corrected to the live schema); plus the remaining plpgsql_check 42703s on the unconditional path. Rolled-back smoke: atomic order + delivery + draft invoice all land. |
+
+## Applied 2026-06-11 (plpgsql_check latent-break batch — 00xx series + void_payment money fix)
+
+Eight migrations from the 2026-06-10 error-prevention follow-up queue (execution log §4 items 1–2), drafted in `scripts/.staging-migrations/` per the race guard, stamped + applied live via MCP after both reviewers clean each. Every body verbatim-from-live (baseline md5 in each header) with sentinel-delimited deltas; per-migration rolled-back smoke scripts under `scripts/smoke/`. (`20260611001248` revoke_generate_rup_sales_records and `20260611002043` gross_sales_report_column_fix from the same batch are indexed in the main table below as #297/#295.)
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260611000630 | `inventory_cost_report_column_fix` | `get_inventory_cost_report()` 42703: filtered `WHERE pr.deleted_at IS NULL` but products has NO `deleted_at` (soft-delete flag is `is_active`). Every authorized call crashed; the Inventory Cost report (Reports.tsx:306) had never returned a row live. |
+| 20260611001439 | `commission_payment_for_update_fix` | `create_commission_payment` 0A000: `SELECT DISTINCT … FOR UPDATE` is rejected at plan time — commission payment creation (CommissionPayments.tsx:224, Reports.tsx:468) hard-broken on every call that passed the guards. DISTINCT dropped from the locking statement. |
+| 20260611001615 | `split_invoices_jsonb_fix` | `create_split_invoices_from_order` 42804: idempotency save wrote `array_to_string(v_invoice_ids, ',')` (text) into `idempotency_keys.result` (jsonb) — the split+idempotency path did all its work then aborted at the save line (whole call rolled back). Fixed with `to_jsonb` (the `20260609195843` create_quote_version precedent). |
+| 20260611001904 | `void_payment_prepay_reversal` | **Production money bug (fin-prepay-balance finding, chip task_d53a1704):** `allocate_payment` writes overpayment credits with `source_reference = 'From payment ' \|\| COALESCE(ref, check, set_id)` but `void_payment` matched `source_reference = p_allocation_set_id::text` — guaranteed miss; voiding an overpaying payment stranded the prepay credit + `customers.prepay_balance_cents` forever. Reversal lookup fixed (+ the secondary defect in the same live block, folded into the same delta). |
+| 20260611001954 | `blend_invoice_column_fix` | `create_invoice_from_blend_ticket` 42703: chem-line loop read `p.unit_cost` — products' cost column is `current_cost` (numeric dollars). Every product-bearing ticket crashed; only product-less tickets could ever invoice. Latent siblings (`v_btp.unit_size`/`v_btp.rate_unit`) shipped in the same delta. |
+| 20260611002114 | `field_geo_search_path_fix` | `save_field_geometry` + `save_field_polygons` 42883: `st_geogfromgeojson(text)` unresolvable as deployed — both field-geometry RPCs latent-broken (no field-mapping save ever persisted centroid/boundary through them). Root cause corrected per live catalog (see header); both fixed in one migration. |
+| 20260611002226 | `job_from_quote_activity_feed_fix` | `create_job_from_quote_section` 42P01: logging INSERT targeted relation `activity_log`, which does not exist (correct: `activity_feed`) — every "Schedule Job" from QuoteBuilder rolled back job + job_fields + job_chemicals. Baseline md5 `71125a16b6b2652fc6a7add0612b45b7`. |
+| 20260611002255 | `transfer_job_invoice_column_fixes` | `transfer_job_to_invoice` dead on arrival — FIVE independent breaks: `v_job.scheduled_date` (real column `job_date`), `jc.total_cost_cents`/`jc.total_price_cents` (real: per-unit cents × quantity), + remaining 42703s. Header also dispositions the actor-forgery allowlist entry (authorizes via auth.uid() + role gate; `p_performed_by` attribution-only). |
+
+## Staged 2026-06-11 — NOT YET APPLIED LIVE (do not assume live)
+
+| Version | File | Status |
+|---------|------|--------|
+| 20260611132115 | `planned_holds_drawn_sync` | **On disk but NOT in live `schema_migrations` (verified 2026-06-11 final-verify run).** Codex round-2 #3: rebuild planned holds as GREATEST(booked − drawn, 0) on every save path (Revise/Mark-Presented included) instead of full `total_units_needed` (double-reservation vs `quote_product_draws`). Also carries 2 of the 22 idempotency operation-scope fixes (its `create_planned_holds` + `save_quote` rebuilds scope their lookups). Apply via the APPLY role + review gate before relying on it; the live idempotency probe still counts its 2 functions as unscoped. |
 
 ## Applied 2026-06-11 (Codex round-2 remediation — draw-order lock + restore guard)
 

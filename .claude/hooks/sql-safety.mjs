@@ -94,7 +94,11 @@ if (/idempotency_keys/i.test(content)) {
 }
 
 // 4. ::text cast on idempotency_keys.result (jsonb)
-if (/INSERT\s+INTO\s+idempotency_keys[\s\S]{0,400}?::text/i.test(content)) {
+// `to_jsonb(expr::text)` is SAFE — the cast is wrapped, so the inserted value
+// is still jsonb (live batch_post_invoices stores to_jsonb(v_count::text));
+// mask that shape first so only bare ::text near the INSERT trips the rule.
+const rule4Content = content.replace(/to_jsonb\s*\([^()]*::text[^()]*\)/gi, "to_jsonb(__safe_wrapped__)");
+if (/INSERT\s+INTO\s+idempotency_keys[\s\S]{0,400}?::text/i.test(rule4Content)) {
   violations.push("INSERT INTO idempotency_keys with ::text cast — result is jsonb. Pass jsonb_build_object(...) without ::text.");
 }
 

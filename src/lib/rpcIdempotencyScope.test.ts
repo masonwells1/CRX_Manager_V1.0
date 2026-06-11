@@ -61,7 +61,11 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 // -------------------------------------------------------------------------
-// Live snapshot — generated 2026-06-10 from live pg_proc (see header)
+// Live snapshot — generated 2026-06-10 from live pg_proc (see header);
+// updated 2026-06-11 for the staged operation-scoping sweep
+// (scripts/.staging-migrations/idempotency_operation_scope_sweep.sql; version
+// stamp assigned by the APPLY role) which closes 20 of the 22 gap entries —
+// the remaining 2 are a documented carve-out, see UNSCOPED_LOOKUP_GAP.
 // -------------------------------------------------------------------------
 
 /**
@@ -154,20 +158,46 @@ const HELPER_SCOPED: string[] = [
 /**
  * Functions using INLINE idempotency SQL whose lookup IS operation-scoped:
  * `WHERE idempotency_key = p_key AND operation = '<own name>'`.
+ *
+ * 20 entries moved here from UNSCOPED_LOOKUP_GAP by the one-migration sweep
+ * `idempotency_operation_scope_sweep` (staged in scripts/.staging-migrations/
+ * until the APPLY role stamps it; each body verbatim-from-live with only the
+ * lookup scoped; md5-verified by verify-idemscope-md5.mjs and the migration's
+ * own terminal DO block).
  */
 const INLINE_SCOPED: string[] = [
+  'batch_approve_blend_tickets',
+  'batch_post_invoices',
+  'batch_reject_blend_tickets',
+  'complete_job',
   'create_inventory_hold',
+  'create_invoice_from_blend_ticket',
+  'create_job_from_quote_section',
+  'create_quote_from_template',
+  'create_quote_version',
+  'create_split_invoices_from_order',
+  'delete_prepay_credit',
+  'edit_delivery',
+  'edit_prepay_credit',
   'mark_inventory_row_verified',
+  'post_invoice_group',
   'reopen_accounting_period',
   'restore_cancelled_delivery',
   'restore_cancelled_order',
   'restore_quote_version',
   'reverse_blend_ticket_approval',
+  'reverse_receiving_record',
   'reverse_write_off',
   'revert_quote_status',
+  'rollover_quote_to_season',
+  'save_blend_ticket_fields',
+  'save_field_app_invoice',
   'save_job',
+  'save_quote_template',
+  'start_job',
   'unapply_credit_memo',
   'void_delivery',
+  'void_payment',
 ];
 
 /**
@@ -188,39 +218,30 @@ const ALIAS_SCOPED: Record<string, string> = {
 /**
  * GAP LIST — live functions whose idempotency LOOKUP is NOT operation-scoped
  * (`WHERE idempotency_key = p_key` with no operation filter; the historical
- * CLAUDE.md inline copy-paste pattern). Their INSERT does record the correct
- * operation, but the lookup would honor a colliding key cached by ANY
- * operation. Verified live 2026-06-10.
+ * CLAUDE.md inline copy-paste pattern — snippet fixed 2026-06-11). Their
+ * INSERT does record the correct operation, but the lookup would honor a
+ * colliding key cached by ANY operation.
  *
- * This list may ONLY SHRINK. When a migration scopes one of these lookups
- * (add `AND operation = '<fn name>'`), regenerate the snapshot and move the
- * function to INLINE_SCOPED (or HELPER_SCOPED if converted to the helpers).
- * NEVER add a new entry — new/edited RPCs must use the canonical
- * check_idempotency/save_idempotency helpers.
+ * RATCHETED 22 -> 2 on 2026-06-11: 20 entries scoped in ONE sweep
+ * (`idempotency_operation_scope_sweep`, staged in
+ * scripts/.staging-migrations/ until the APPLY role stamps it) and moved to
+ * INLINE_SCOPED above.
+ *
+ * THE 2 REMAINING ENTRIES ARE A DOCUMENTED CARVE-OUT, not an oversight:
+ * create_planned_holds and save_quote are rebuilt — WITH operation-scoped
+ * lookups of their own — by the pending disk migration
+ * `20260611132115_planned_holds_drawn_sync.sql` (on disk, not yet applied
+ * live); sweeping them too would let whichever change applied second
+ * silently revert the other (rls-security-reviewer B1 on the first sweep
+ * draft). When that migration lands, regenerate the snapshot and move both
+ * to INLINE_SCOPED.
+ *
+ * This list may ONLY SHRINK. NEVER add an entry — new/edited RPCs must use
+ * the canonical check_idempotency/save_idempotency helpers.
  */
 const UNSCOPED_LOOKUP_GAP: string[] = [
-  'batch_approve_blend_tickets',
-  'batch_post_invoices',
-  'batch_reject_blend_tickets',
-  'complete_job',
-  'create_invoice_from_blend_ticket',
-  'create_job_from_quote_section',
   'create_planned_holds',
-  'create_quote_from_template',
-  'create_quote_version',
-  'create_split_invoices_from_order',
-  'delete_prepay_credit',
-  'edit_delivery',
-  'edit_prepay_credit',
-  'post_invoice_group',
-  'reverse_receiving_record',
-  'rollover_quote_to_season',
-  'save_blend_ticket_fields',
-  'save_field_app_invoice',
   'save_quote',
-  'save_quote_template',
-  'start_job',
-  'void_payment',
 ];
 
 // -------------------------------------------------------------------------
@@ -234,7 +255,7 @@ const ALL_SNAPSHOT_NAMES = [
   ...UNSCOPED_LOOKUP_GAP,
 ];
 
-describe('Idempotency operation-scoping snapshot (live pg_proc, 2026-06-10)', () => {
+describe('Idempotency operation-scoping snapshot (live pg_proc, 2026-06-11)', () => {
   it('snapshot categories are disjoint', () => {
     const seen = new Set<string>();
     const dupes: string[] = [];
@@ -266,11 +287,14 @@ describe('Idempotency operation-scoping snapshot (live pg_proc, 2026-06-10)', ()
     }
   });
 
-  it('unscoped-lookup gap list only shrinks (22 as of 2026-06-10)', () => {
+  it('unscoped-lookup gap list only shrinks (ratcheted 22 -> 2 on 2026-06-11; the 2 are a documented carve-out)', () => {
     // If this fails because the number GREW, a new RPC shipped with an
     // unscoped inline lookup — fix the SQL (use check_idempotency/
-    // save_idempotency), do not raise the cap.
-    expect(UNSCOPED_LOOKUP_GAP.length).toBeLessThanOrEqual(22);
+    // save_idempotency, or at minimum scope the lookup with
+    // AND operation = '<fn name>'), do not raise the cap. The 2 remaining
+    // entries belong to the planned_holds_drawn_sync rebuild (see the
+    // gap-list doc above).
+    expect(UNSCOPED_LOOKUP_GAP.length).toBeLessThanOrEqual(2);
   });
 
   it('operation aliases are globally unique (cannot collide with any function name or other alias)', () => {

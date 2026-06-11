@@ -42,6 +42,10 @@ security predicates, and the allowlist are owned separately (same directory).
 | fin-quote-override-survival | **0** |
 | fin-invoice-balance-identity | **0** |
 
+Re-run 2026-06-11 (post `20260611131549_customer_statement_blind_spots`, which
+closed Findings item 2 below): `fin-ar-statement-balance` with its updated
+transcription = **0** violations.
+
 Data-volume caveat: the AR subsystem is essentially pre-launch (0 payments,
 0 allocation_sets, 0 prepay_credits/applications, 0 write_offs, 2 draft
 invoices, 1 `requested` return, 0 quote_items with overrides). The zero counts
@@ -85,8 +89,14 @@ them here so they're fixed before that, not after.
    in `fin-prepay-balance` (and the `[VOIDED:` notes-marker exclusion that
    predicate documents will never match anything until this is fixed).
 
-2. **`get_customer_statement` blind spots** (pre-encoded as diagnostics in
-   `fin-ar-statement-balance`'s `statement_balance_drift` detail column):
+2. **`get_customer_statement` blind spots — FIXED 2026-06-11** by migration
+   `20260611131549_customer_statement_blind_spots` (CHIP task_25d25699; both
+   reviewers clean; rolled-back smoke chain
+   `scripts/smoke/smoke-customer_statement_blind_spots.sql` PASS; the
+   `fin-ar-statement-balance` transcription was updated in the same work unit
+   and the post-fix run returned **0 rows**). The four blind spots, as found
+   (they remain pre-encoded as diagnostics in `fin-ar-statement-balance`'s
+   `statement_balance_drift` detail column):
    - Payments recorded via `allocate_payment` are invisible — it writes
      `allocation_sets`, never `payments`, and the statement's payment branch
      reads `payments INNER JOIN orders` only.
