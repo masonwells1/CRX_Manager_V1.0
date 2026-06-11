@@ -20,14 +20,14 @@
 ### H1 — This season (≤3 months): cash + compliance quick wins
 | ID | Item | Effort | Status |
 |---|---|---|---|
-| A1 | ACH pay-now links on emailed invoices/statements (Stripe ACH, $5 cap) + webhook Edge Function | M | TODO |
-| B1 | RUP point-of-sale certification check (warn/block on expired/missing buyer cert) | S | TODO |
-| B5 | License-expiry gates on job assignment + renewal reminders | S | TODO |
-| B3 | WPS pre-application info sheet auto-generation | S | TODO |
-| B6 | State dealer report pack (WI annual report; IL on-demand records) | S | TODO |
-| E3 | Owner's daily brief (cash, AR movement, today's work, exceptions) | S | TODO |
-| D1 | Vendor-bill LLM extraction pilot (gate: 10-bill manual accuracy test) | M | TODO |
-| C4 | Weather auto-capture at application time (replace hand-typed entries) | S | TODO |
+| A1 | ACH pay-now links on emailed invoices/statements (Stripe ACH, $5 cap) + webhook Edge Function | M | ⏸ Blocked — needs Stripe account/keys (Mason) |
+| B1 | RUP point-of-sale certification check (warn/block on expired/missing buyer cert) | S | ✅ Done (2026-06-10 — NewOrder banner + InvoiceDetail post-confirm warning, `feat/h1-quick-wins-2026-06-10`) |
+| B5 | License-expiry gates on job assignment + renewal reminders | S | ✅ Done (2026-06-10 — jobs trigger + `assign_job_applicator` RPC + Dashboard card, migrations live) |
+| B3 | WPS pre-application info sheet auto-generation | S | ✅ Done (2026-06-10 — `wpsNoticePdf.ts` + JobDetail button + products REI/PHI columns live) |
+| ~~B6~~ | ~~State dealer report pack~~ | S | ❌ Closed 2026-06-10 — Mason confirmed IL-only; IL requires records on demand and the /compliance RUP register + CSV export already satisfies it (8 Ill. Adm. Code 250.150, 2-yr retention). Reopen only if licensing expands to WI/other reporting states. |
+| E3 | Owner's daily brief (cash, AR movement, today's work, exceptions) | S | ✅ Done (2026-06-10 — DailyBrief admin Dashboard card) |
+| D1 | Vendor-bill LLM extraction pilot (gate: 10-bill manual accuracy test) | M | 🔄 In progress — Mason providing real vendor bills for the accuracy gate |
+| C4 | Weather auto-capture at application time (replace hand-typed entries) | S | ✅ Done (2026-06-10 — Open-Meteo prefill in Complete Job modal) |
 | — | **Cheap tests that gate H2:** collect 3 real ISOXML monitor files (C1); CDMS/Greenbook label-data pricing inquiry (B7); A1 click-through data (gates A2) | — | TODO |
 
 ### H2 — This year: the two strategic bets
