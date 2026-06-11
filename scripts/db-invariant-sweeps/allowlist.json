@@ -319,7 +319,6 @@
       "justification": "Vendor-bill validation trigger function; anon EXECUTE inert (direct call errors).",
       "dated": "2026-06-10"
     },
-
     {
       "predicate": "ungated-secdef-mutators",
       "violation_key": "create_order_from_blend_ticket(p_blend_ticket_id uuid, p_order_number text, p_order_date date, p_notes text, p_performed_by uuid, p_idempotency_key text)",
@@ -332,7 +331,6 @@
       "justification": "Frontend/cron-called failed-notification logging helper (callers: Dashboard.tsx, notificationTriggers.ts). Insert-only into failed_notifications; no financial mutation, no privilege escalation, no PII read. Intentionally left ungated per 2026-06-09 round-3 disposition (a hard auth.uid() gate would break its cron/service_role callers). Verified live pg_get_functiondef 2026-06-10.",
       "dated": "2026-06-10"
     },
-
     {
       "predicate": "actor-forgery",
       "violation_key": "cancel_delivery(p_delivery_id uuid, p_cancel_reason text, p_performed_by uuid, p_idempotency_key text)",
@@ -356,6 +354,11 @@
       "violation_key": "unlink_blend_ticket_from_order(p_blend_ticket_id uuid, p_performed_by uuid, p_idempotency_key text)",
       "justification": "Body opens with PERFORM require_admin_or_sales_rep() (auth.uid()-based); p_performed_by is attribution-only (activity_feed + financial_audit_log actor). Allocate_payment precedent. Verified live 2026-06-10.",
       "dated": "2026-06-10"
+    },
+    {
+      "predicate": "actor-forgery",
+      "violation_key": "transfer_job_to_invoice(p_job_id uuid, p_performed_by uuid, p_idempotency_key text)",
+      "justification": "2026-06-11: attribution-only p_performed_by (allocate_payment precedent). Live body (rewritten by 20260611002255 transfer_job_invoice_column_fixes, whose header explicitly dispositions this) authorizes via auth.uid() + role gate - corroborated by predicates (b) ungated-secdef-mutators and (d) auth-bound-role-ungated both clearing it on the live catalog 2026-06-11. p_performed_by only feeds COALESCE(p_performed_by, auth.uid()) attribution columns. Candidate for the standing defense-in-depth ACTOR_MISMATCH sweep, not an escalation."
     }
   ]
 }

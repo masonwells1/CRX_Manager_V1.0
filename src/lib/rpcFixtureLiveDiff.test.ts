@@ -120,7 +120,11 @@ describe('rpcIdempotencyScope.test.ts snapshot buckets vs live pg_proc', () => {
   it.each([
     ['HELPER_SCOPED', 70],
     ['INLINE_SCOPED', 10],
-    ['UNSCOPED_LOOKUP_GAP', 1],
+    // UNSCOPED_LOOKUP_GAP minimum is 0 since 20260611080937
+    // (idempotency_lookup_operation_scope_sweep) closed the entire gap list —
+    // an empty bucket is the intended permanent end state. Vacuous extraction
+    // is still caught: extractArray throws if the const itself is missing.
+    ['UNSCOPED_LOOKUP_GAP', 0],
   ] as const)('every %s entry exists in live pg_proc', (constName, minLen) => {
     const fixture = extractArray(scopeSource, constName, 'rpcIdempotencyScope.test.ts');
     expect(fixture.length).toBeGreaterThanOrEqual(minLen); // vacuous-pass guard

@@ -31,6 +31,26 @@
       "description": "THE canonical return->credit chain (the B1/B2 class): direct-insert return -> approve_return -> receive_return (restock + inventory txns) -> issue_return_credit (posted credit_memo, credited_by stamped, both audit rows) -> idempotent replay (no double-issue) -> get_customer_statement counts the credit EXACTLY once -> unapply_credit_memo (memo voided, return back to received, total_credit_cents back to 0 NOT NULL) -> statement back to zero -> re-issue works.",
       "covers": ["approve_return", "receive_return", "issue_return_credit", "get_customer_statement", "unapply_credit_memo"]
     },
+    "update_order_items": {
+      "chain": "smoke-order-draw-lock.sql",
+      "description": "Draw-order item lock (Codex r2 HIGH): editing items on a booking_draw order raises BOOKING_DRAW_ORDER_LOCKED (qty change AND add-item) with order+ledger intact, the remaining balance still draws to closure, and a whole-conversion control order (booking_draw=false) edits freely.",
+      "covers": ["update_order_items", "draw_down_quote", "convert_quote_to_order"]
+    },
+    "restore_quote_version": {
+      "chain": "smoke-restore-version-drawn-guard.sql",
+      "description": "Drawn-version restore guard (Codex r2 MED): restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the restore's section DELETE rolls back atomically), a legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure, and a no-draws control quote restores freely.",
+      "covers": ["restore_quote_version", "create_quote_version", "draw_down_quote"]
+    },
+    "get_customer_statement": {
+      "chain": "smoke-customer_statement_blind_spots.sql",
+      "description": "Statement blind-spot fix (CHIP task_25d25699, migration 20260611131549): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); idempotent allocate_payment replay does not double-count; running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
+      "covers": ["get_customer_statement", "allocate_payment", "record_invoice_payment"]
+    },
+    "create_planned_holds": {
+      "chain": "smoke-planned-holds-drawn-sync.sql",
+      "description": "Authoritative planned-hold sync (Codex r2 #3, migration 20260611132115): active holds always equal booked − drawn per product after create_planned_holds, save_quote (Draft/Revise/Present), and restore_quote_version, with FIFO consumption so per-item expiry (needed_by+14d) follows the still-reserved tail; rebuild-after-draw no longer re-reserves drawn quantity; is_planned switched off + save releases all holds server-side.",
+      "covers": ["create_planned_holds", "_sync_planned_holds", "save_quote", "restore_quote_version", "draw_down_quote"]
+    },
     "draw_down_quote": {
       "chain": "smoke-auth-probe-template.sql",
       "description": "Standard 4-probe auth set, worked example against draw_down_quote: no-auth -> AUTH_REQUIRED; anon-key -> AUTH_REQUIRED with zero rows written; wrong-role (driver/applicator) -> INSUFFICIENT_ROLE; forged p_performed_by -> ACTOR_MISMATCH; plus a positive admin control draw proving the probes failed for the right reason. File header documents the placeholders for adapting it to any new RPC.",

@@ -1180,7 +1180,20 @@ export default function QuoteBuilder() {
       p_performed_by: profile.id,
       p_idempotency_key: restoreIdemKey,
     });
-    if (error) { toast('error', 'Failed to restore version'); return; }
+    if (error) {
+      // Drawn-version guard (Codex r2 MED): the server blocks restoring a
+      // snapshot that would drop a drawn product or fall below its drawn
+      // quantity. The server message names the product and quantities.
+      if (hasRpcCode(error, RpcErrorCodes.BOOKING_OVERDRAWN)) {
+        const errMsg = (error instanceof Error ? error.message : null)
+          || (typeof error.message === 'string' ? error.message : null)
+          || 'This version books less than what has already been drawn down to orders.';
+        toast('error', errMsg);
+      } else {
+        toast('error', 'Failed to restore version');
+      }
+      return;
+    }
     assertRpcResult(data, 'restore_quote_version');
     restoreVersionIdem.resetKey();
     toast('success', `Restored from V${selectedVersion?.version_number || '?'}`);

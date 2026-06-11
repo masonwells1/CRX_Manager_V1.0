@@ -15,6 +15,16 @@ SELECT p.proname AS violation_key,
        array_agg(pg_get_function_identity_arguments(p.oid) ORDER BY pg_get_function_identity_arguments(p.oid)) AS signatures
 FROM pg_proc p
 WHERE p.pronamespace = 'public'::regnamespace
+  -- 2026-06-11: exclude EXTENSION-owned functions (pg_depend deptype 'e').
+  -- Installing plpgsql_check (20260610192229) shipped 8 legitimately-overloaded
+  -- extension functions (plpgsql_check_function, _tb, profiler/coverage helpers)
+  -- into public. Extension members are managed by CREATE/ALTER EXTENSION — they
+  -- cannot fork via our CREATE OR REPLACE drift class, so they are out of scope.
+  -- App-defined functions (no 'e' dependency) remain fully covered.
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_depend d
+    WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e'
+  )
 GROUP BY p.proname
 HAVING count(*) > 1
 ORDER BY p.proname;

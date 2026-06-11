@@ -17,7 +17,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
-import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { runCriticalAction } from '../lib/criticalAction';
@@ -115,7 +115,10 @@ export default function OrderDetail() {
   const [printingPickList, setPrintingPickList] = useState(false);
 
   const isAdmin = role === 'admin';
-  const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled';
+  // Draw-created orders (booking_draw) mirror their booking's draw ledger —
+  // items are locked server-side (BOOKING_DRAW_ORDER_LOCKED); void/cancel the
+  // order to return quantity to the booking, then draw again.
+  const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled' && !order?.booking_draw;
 
   const fetchOrder = useCallback(async () => {
     const { data: orderData } = await supabase
@@ -429,7 +432,18 @@ export default function OrderDetail() {
           p_idempotency_key: idemKey,
         });
 
-        if (error) throw error;
+        if (error) {
+          // Server-side backstop for the hidden Edit button: a draw-created
+          // order's items are locked to the booking ledger (Codex r2 HIGH).
+          if (hasRpcCode(error, RpcErrorCodes.BOOKING_DRAW_ORDER_LOCKED)) {
+            toast('error', 'This order was created by a booking draw-down — its items are locked to the booking. Void or cancel the order to return quantity to the booking, then draw again.');
+            setEditing(false);
+            setNewItems([]);
+            fetchOrder();
+            return;
+          }
+          throw error;
+        }
         assertRpcResult(data, 'update_order_items');
 
         updateOrderIdem.resetKey();
@@ -784,6 +798,11 @@ export default function OrderDetail() {
                 >
                   Edit Order
                 </Button>
+              )}
+              {order.booking_draw && (role === 'admin' || role === 'sales_rep') && order.status !== 'cancelled' && order.status !== 'voided' && (
+                <span className="text-xs text-secondary self-center" title="This order was created by a booking draw-down. Its items mirror the booking ledger, so they can't be edited here — void or cancel the order to return quantity to the booking, then draw again.">
+                  Booking draw — items locked
+                </span>
               )}
               {order.status !== 'cancelled' && order.status !== 'fulfilled' && !hasActiveInvoice && (<>
                 <Button

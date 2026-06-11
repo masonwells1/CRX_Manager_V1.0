@@ -56,22 +56,23 @@ fi
 
 echo ""
 echo "📋 Checking doc drift (counts in CLAUDE.md / migration-history.md vs disk)..."
-node scripts/check-doc-drift.mjs
-DOC_EXIT=$?
-if [ $DOC_EXIT -ne 0 ]; then
+# husky runs this script under `sh -e`, so a bare failing command aborts the
+# whole hook before any $? check — the || branch is what makes this step
+# genuinely non-blocking (2026-06-11: five commit attempts died here silently).
+node scripts/check-doc-drift.mjs || {
   echo ""
   echo "⚠️  DOC DRIFT DETECTED (non-blocking) — update migration-history.md / CLAUDE.md counts before next session."
-fi
+}
 
 echo ""
 echo "🔗 Verifying dependency integrity (vitest/vite peer ranges)..."
-node scripts/verify-deps.mjs
-DEPS_EXIT=$?
-if [ $DEPS_EXIT -ne 0 ]; then
+# Same sh -e note as above: the || branch guarantees the friendly message
+# prints before the (intentional) block.
+node scripts/verify-deps.mjs || {
   echo ""
   echo "❌ DEPENDENCY PROBLEMS — commit blocked. Run \`npm ci\` or fix peer ranges first."
   exit 1
-fi
+}
 
 echo ""
 echo "🗺  Regenerating workflow map..."
