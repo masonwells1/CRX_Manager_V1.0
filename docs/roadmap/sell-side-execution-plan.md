@@ -1,0 +1,81 @@
+# CRX Sell-Side Roadmap — Execution Plan & Live State
+
+> **This file is the build loop's durable memory.** The `/loop` reads it at the start of
+> every iteration and updates + commits it at the end. It survives context compaction —
+> any fresh iteration resumes from here. Do not delete; only append/update.
+
+**PROGRAM STATUS:** `IN_PROGRESS`
+**Integration branch:** `chore/sell-side-roadmap` (worktree `C:\CRX_QuoteLifecycle`, based on `recovery/overlapping-sessions-2026-06-13`)
+**Source spec (full depth):** `docs/audits/2026-06-10-sell-side-excellence-audit.md` §5
+(retrieve: `git show docs/sell-side-excellence-audit-prompt:docs/audits/2026-06-10-sell-side-excellence-audit.md`)
+**Loop body / contract:** `docs/roadmap/sell-side-roadmap-kickoff.md`
+
+**Status tokens:** `TODO` · `IN_PROGRESS` · `BLOCKED-GATE:<id>` · `DONE` · `DEFERRED:<reason>`
+
+---
+
+## Hard rails (never violate)
+- **DB is FILE-ONLY:** write + review migrations, prove with rolled-back `execute_sql` smoke tests (ROLLBACK at end — zero prod footprint). **Never** `apply_migration`, never push/merge/deploy. (Overrides `/ship`'s auto-apply.)
+- Every migration → full review gate (rls-security-reviewer + migration-drift-reviewer [+ types/pdf/compliance as relevant]) → `/codex-review` → fix until clean → write the `.claude/session-state/migration-review-<name>.json` proof.
+- One feature/stage per iteration, committed on `chore/sell-side-roadmap`. After each: `lint && build && test` green + the feature's rolled-back smoke chain passes ("fixed" = full chain, never an isolated probe).
+- Money: bigint cents where stored as cents; numeric dollars order-side; append-only `financial_audit_log`; new entity_type/operation values added as CHECK **supersets**; idempotency + strict-actor + `search_path=public,pg_temp` on new RPCs; tokens in `RpcErrorCodes`; callers use `hasRpcCode` + `assertRpcResult`.
+- **PAUSE** (ask Mason, don't guess, don't reschedule) at any owner gate below.
+- Never edit `C:\CRX_Manager` (parallel session's WIP). Never touch the 3 blank-recipient commission rows. Never apply migration `20260611132115`.
+
+## Owner gates (Mason-only decisions)
+- **G1** — 3 blank commission recipients (Test Farm Alpha / Tim Jondle / Yeley Farms): correct names. `OPEN`
+- **G2** — RUP expired-license classification: WARNING vs NON-COMPLIANT. `OPEN`
+- **G3** — #2 revenue policy: rush orders post into ship-month or price-month? `OPEN`
+- **G4** — #7 driver-role credit behavior: warn vs block-with-override. `OPEN`
+- **G5** — FINAL GO-LIVE (apply migrations + merge recovery+roadmap → main + deploy). Loop NEVER does this. `OPEN`
+
+---
+
+## Roadmap items
+
+### #5 — Unstick quote lifecycle — `TODO`  [dep: none]
+- Decline + Cancel buttons on quote UI (statuses already in CHECK; verify hold-release trigger handles the paths).
+- Wire `revert_quote_status` (hardened, zero UI callers) → admin "Un-accept" (fixes W4).
+- Auto-expire: schedule `auto_expire_quotes` via pg_cron (hardened sent/revised-only, NOT cron'd) **excluding** booked/partially-drawn quotes — OR retire it (confirm with Mason if ambiguous).
+- Expired/declined badges + list filters.
+- **Done when:** decline/cancel/un-accept reachable in UI; expiry decision implemented; smoke chain (send→decline; send→expire(sim)→holds released; accept→un-accept) passes.
+
+### #2 — Ship-now / price-later — `TODO`  [dep: #5 DONE; gate G3]
+- Migration: `orders.pricing_status` text NOT NULL DEFAULT 'priced' CHECK in ('priced','needs_pricing'); `order_items.pricing_pending` bool default false; `invoices.pricing_pending` bool default false. (Verify W1's `create_direct_order` role gate is live — CLAUDE.md says fixed `20260610142204`; confirm, don't re-fix blindly.)
+- RPC `create_rush_order(customer, items[{product_id,qty}], notes, performed_by, idem)`: strict-actor; roles admin/sales_rep/driver/applicator; order confirmed + needs_pricing; items price 0 + pending; snapshot tier price; prebook (WARN never block); NO commissions yet; audit `order_created` (needs_pricing); notify reps.
+- RPC `price_order(order_id, items[{order_item_id,price}], performed_by, idem)`: admin/sales_rep; FOR UPDATE; bypasses W2 fulfillment lock (price-only); recompute totals/profit; when no pending → priced + insert commissions on final profit + sweep linked DRAFT/UNPOSTED invoices (unit/extended cents, total, invoice_date, clear pending).
+- **Gate:** `post_invoice` + `post_invoice_group` raise `PRICING_INCOMPLETE` if any pending; invoice CREATION still allowed, only POSTING blocked. Money-critical → Codex-worthy.
+- UX: Orders filter `needs_pricing` + nav badge; pricing screen (price-only inputs, tier suggestion). Cron `check_unpriced_orders` (48h/7d). MonthEndClose checklist: 0 needs_pricing.
+- **G3:** ship-month vs price-month revenue (invoice_date policy).
+- Stages: v1 columns+create_rush_order+post-gate+filter; v2 price_order+invoice sync+deferred commissions+pricing screen; v3 cron+month-end+credit surfacing.
+- **Done when:** rush order creatable unpriced, cannot mis-post; priced order posts; smoke chain (rush→post blocked→price→post ok) passes.
+
+### #3 — Quote → farmer — `TODO`  [dep: none; only Stage A is autonomous]
+- **Stage A (SHIP):** wire the dead "Email to Grower" button (`QuoteBuilder.tsx` ~2497) to the existing `send-email` Edge Function with the quote PDF; log to `email_log`.
+- **Stage B (DEFER unless Mason opts in):** tokenized public quote-view page (signed UUID, read-only, Accept/Decline via narrow SECDEF RPC → accepted-pending / declined; gives W3's `declined` a real source).
+- **Stage C (DEFER):** grower portal (booking balances from #1, invoices, statements, online pay).
+- **Done(A) when:** email sends + logs; smoke proves end-to-end. Mark B/C `DEFERRED:portal-scope` unless Mason opts in.
+
+### #4 — Order billing cockpit — `TODO`  [dep: none]
+- OrderDetail billing panel listing all invoices; "Consolidate drafts" RPC (merge draft per-delivery invoices into one — Agvance pattern; draft-only, period/audit untouched, idempotent, audited); "Post all drafts" (loop `post_invoice`, one idem scope). Guard W5: block `create_invoice_from_order` when ANY non-cancelled delivery exists (today only checks pending).
+- **Done when:** drafts consolidate + post in one step; double-representation prevented; smoke passes.
+
+### #6 — Prepay-backed bookings — `TODO`  [dep: #1 live (yes); G1 if commissions touched]
+- Link prepayments to a booking quote (`prepayments.quote_id` or join table); a draw's invoice auto-applies that booking's prepay first (extend existing auto/batch prepay apply); booking settlement view (booked/drawn/prepaid/remaining $ + qty); season-end rollover report.
+- **Done when:** prepay links to booking; draw invoice auto-applies; settlement view; smoke passes.
+
+### #7 — Credit enforce-with-override — `TODO`  [dep: gate G4]
+- Order-creating RPCs: projected exposure > limit → raise `CREDIT_LIMIT_EXCEEDED` unless `p_credit_override=true` (admin/sales_rep), which proceeds + writes override + actor to `financial_audit_log`. UI: ConfirmModal showing the numbers.
+- **G4:** driver-role behavior (warn vs block-with-override).
+- **Done when:** over-limit blocks without override, proceeds+audits with override; smoke passes.
+
+---
+
+## Iteration log (loop appends one line per iteration)
+- (none yet)
+
+## Follow-ups / deferred
+- (none yet)
+
+## GO-LIVE CHECKLIST (loop fills this in only when PROGRAM STATUS = ROADMAP-COMPLETE)
+- (pending)
