@@ -2,6 +2,21 @@
 -- ============================================================================
 -- Planned-hold synchronization across quote workflows (Codex round-2, #3)
 -- ----------------------------------------------------------------------------
+-- RE-HOMED 2026-06-13 (overlapping-sessions recovery): this migration SUPERSEDES
+-- the unapplied disk file 20260611132115_planned_holds_drawn_sync.sql, which had
+-- an impossible clean-rebuild order — it sorted BEFORE the operation-scope sweep
+-- 20260611211058 yet its precondition/baselines describe the POST-sweep live
+-- state. 20260611132115 was NEVER applied live (verified absent from
+-- supabase_migrations.schema_migrations 2026-06-13). This re-home carries a stamp
+-- AFTER 20260611211058 so a clean rebuild reaches the three baseline functions in
+-- their final post-sweep state before this runs (211058 carves out save_quote and
+-- create_planned_holds and never touches restore_quote_version, so all three sit
+-- at the asserted baselines when this lands). Body is byte-identical to the
+-- re-based 132115 working copy. The in-body sentinel comments keep the original
+-- "(20260611132115)" change-id as the historical marker; §5's strip-and-compare
+-- keys on that literal sentinel, so it is retained verbatim. The final on-disk
+-- stamp will be the MCP-assigned version at apply time (B7 rename).
+-- ----------------------------------------------------------------------------
 -- FINDING (Codex 2026-06-11, handoff §3): planned inventory holds were only
 -- rebuilt by the Save Draft handler's explicit create_planned_holds call.
 -- Revise and Mark-Presented saved quote data WITHOUT rebuilding holds (stale
@@ -48,19 +63,23 @@
 -- The frontend's direct hold release on plan-toggle-off (QuoteBuilder) keeps
 -- working and becomes redundant-but-harmless: the next save re-syncs.
 --
--- ORDERING PRECONDITION (rls-review H1, 2026-06-11): the equally-pending
--- sweep migration 20260611080937_idempotency_lookup_operation_scope_sweep
--- re-emits create_planned_holds and save_quote with OPERATION-SCOPED
--- idempotency lookups. This migration is REBASED on those bodies (both
--- lookups below carry the `AND operation = '...'` filter verbatim from the
--- sweep) and MUST apply AFTER it — enforced by the precondition block below,
--- which refuses to run until the live save_quote already carries the sweep's
--- operation filter. Baselines are SELF-CAPTURED at apply time (temp table)
--- instead of hard-coded md5s, so the insertion-only verification holds
--- against the post-sweep live bodies; the pre-sweep live md5s at authoring
--- time were save_quote 980a624c4e29ce01de0c977a007c0a15 and
--- restore_quote_version 9c5aedb109f35501dd53eadb5b4fcf1a (which 20260611080937
--- does not touch — its only mention of restore_quote_version is a comment).
+-- OPERATION-SCOPE RECONCILIATION (re-based 2026-06-11 against the ACTUAL live
+-- state): the live idempotency operation-scope sweep that shipped is
+-- 20260611211058_idempotency_operation_scope_sweep, and it INTENTIONALLY
+-- EXCLUDED save_quote and create_planned_holds (verified live: both remain at
+-- their pre-scope baselines — save_quote md5 980a624c4e29ce01de0c977a007c0a15,
+-- create_planned_holds 912db30f89fce14b0d114f6c1ea20c01, neither carries an
+-- `operation = '<fn>'` filter) precisely so THIS migration owns them and the
+-- two sessions don't clobber each other's re-emit. The superseded draft
+-- 20260611080937 never applied. Consequently this migration takes the UNSCOPED
+-- live baselines as its verbatim base and adds BOTH the operation-scope filter
+-- AND the planned-hold sync call to save_quote / create_planned_holds in one
+-- step. restore_quote_version was ALREADY operation-scoped live by the
+-- 20260611131000 drawn-guard (md5 9c5aedb109f35501dd53eadb5b4fcf1a), so it
+-- receives only the sync insertion. §0 asserts all three live baseline md5s
+-- before any CREATE (aborts on drift — another session touching these); §5
+-- strips the known insertions and md5-compares the remainder back to the
+-- captured baseline, proving the re-emit changed nothing else.
 --
 -- SMOKE TEST (rolled back): scripts/smoke/smoke-planned-holds-drawn-sync.sql
 -- (registered in scripts/smoke/smoke-specs.json under create_planned_holds).
@@ -71,15 +90,29 @@
 -- ----------------------------------------------------------------------------
 DO $pre$
 DECLARE
-  v_src text;
+  v_sq  text;
+  v_cph text;
+  v_rqv text;
 BEGIN
-  SELECT prosrc INTO v_src
-  FROM pg_proc WHERE proname = 'save_quote' AND pronamespace = 'public'::regnamespace;
-  IF v_src NOT LIKE '%operation = ''save_quote''%' THEN
-    RAISE EXCEPTION 'PRECONDITION: apply 20260611080937_idempotency_lookup_operation_scope_sweep BEFORE this migration (live save_quote idempotency lookup is not yet operation-scoped)';
+  SELECT md5(prosrc) INTO v_sq  FROM pg_proc WHERE proname = 'save_quote'            AND pronamespace = 'public'::regnamespace;
+  SELECT md5(prosrc) INTO v_cph FROM pg_proc WHERE proname = 'create_planned_holds'  AND pronamespace = 'public'::regnamespace;
+  SELECT md5(prosrc) INTO v_rqv FROM pg_proc WHERE proname = 'restore_quote_version' AND pronamespace = 'public'::regnamespace;
+
+  -- Assert the exact live baselines this migration was authored against. If any
+  -- differs, another session re-emitted the function since 2026-06-11 — ABORT
+  -- rather than risk reverting their change (the cross-session clobber class).
+  IF v_sq IS DISTINCT FROM '980a624c4e29ce01de0c977a007c0a15' THEN
+    RAISE EXCEPTION 'PRECONDITION: live save_quote md5 % <> expected unscoped baseline 980a624c4e29ce01de0c977a007c0a15 — re-base before applying', v_sq;
+  END IF;
+  IF v_cph IS DISTINCT FROM '912db30f89fce14b0d114f6c1ea20c01' THEN
+    RAISE EXCEPTION 'PRECONDITION: live create_planned_holds md5 % <> expected unscoped baseline 912db30f89fce14b0d114f6c1ea20c01 — re-base before applying', v_cph;
+  END IF;
+  IF v_rqv IS DISTINCT FROM '9c5aedb109f35501dd53eadb5b4fcf1a' THEN
+    RAISE EXCEPTION 'PRECONDITION: live restore_quote_version md5 % <> expected scoped baseline 9c5aedb109f35501dd53eadb5b4fcf1a — re-base before applying', v_rqv;
   END IF;
 END $pre$;
 
+-- Captured for the §5 strip-and-compare self-verification.
 CREATE TEMP TABLE _phs_baselines ON COMMIT DROP AS
 SELECT proname, md5(prosrc) AS base_md5
 FROM pg_proc
@@ -770,21 +803,22 @@ BEGIN
     RAISE EXCEPTION 'create_planned_holds does not delegate to _sync_planned_holds';
   END IF;
 
-  -- save_quote: strip the sentinel block -> must equal the APPLY-TIME live
-  -- body captured in §0 (self-baselining: proves this migration changed
-  -- nothing beyond the insertion, whatever 20260611080937 installed)
+  -- save_quote: strip BOTH insertions (the operation-scope filter AND the sync
+  -- block) -> the remainder must equal the captured UNSCOPED baseline 980a624c,
+  -- proving the re-emit added exactly those two things and nothing else.
   SELECT prosrc INTO v_src
   FROM pg_proc WHERE proname = 'save_quote' AND pronamespace = 'public'::regnamespace;
-  v_md5 := md5(replace(v_src,
+  v_md5 := md5(replace(replace(v_src,
     E'\n  -- BEGIN planned-hold sync (20260611132115)\n  -- Codex round-2 #3: planned holds must reflect the remaining reservation\n  -- (booked − drawn) after EVERY save — Draft save, Revise, and Mark\n  -- Presented all flow through save_quote. The helper self-gates: no-op for\n  -- non-planned quotes, releases holds when is_planned was switched off or\n  -- the status closed.\n  PERFORM _sync_planned_holds(v_quote_id, v_actor);\n  -- END planned-hold sync (20260611132115)\n',
-    ''));
+    ''),
+    E' AND operation = ''save_quote''', ''));
   IF v_md5 <> (SELECT base_md5 FROM _phs_baselines WHERE proname = 'save_quote') THEN
-    RAISE EXCEPTION 'save_quote body drifted beyond the sync insertion (stripped md5 = %, apply-time baseline = %)',
+    RAISE EXCEPTION 'save_quote body drifted beyond the two known insertions (stripped md5 = %, baseline = %)',
       v_md5, (SELECT base_md5 FROM _phs_baselines WHERE proname = 'save_quote');
   END IF;
-  -- ...and the sweep's operation-scoped lookup must have survived (H1 lock-in)
+  -- ...and the operation-scope filter this migration installs must be present
   IF v_src NOT LIKE '%operation = ''save_quote''%' THEN
-    RAISE EXCEPTION 'save_quote lost the 20260611080937 operation-scoped idempotency lookup';
+    RAISE EXCEPTION 'save_quote is missing the operation-scoped idempotency lookup';
   END IF;
 
   -- restore_quote_version: strip the sentinel block -> must equal the
@@ -799,11 +833,11 @@ BEGIN
       v_md5, (SELECT base_md5 FROM _phs_baselines WHERE proname = 'restore_quote_version');
   END IF;
 
-  -- create_planned_holds: rewritten body must carry the sweep's scoped lookup
+  -- create_planned_holds: rewritten body must carry the operation-scoped lookup
   SELECT prosrc INTO v_src
   FROM pg_proc WHERE proname = 'create_planned_holds' AND pronamespace = 'public'::regnamespace;
   IF v_src NOT LIKE '%operation = ''create_planned_holds''%' THEN
-    RAISE EXCEPTION 'create_planned_holds lost the 20260611080937 operation-scoped idempotency lookup';
+    RAISE EXCEPTION 'create_planned_holds is missing the operation-scoped idempotency lookup';
   END IF;
 
   -- Helper must not be client-callable
