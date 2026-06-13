@@ -15,7 +15,8 @@
 ---
 
 ## Hard rails (never violate)
-- **DB is FILE-ONLY:** write + review migrations, prove with rolled-back `execute_sql` smoke tests (ROLLBACK at end — zero prod footprint). **Never** `apply_migration`, never push/merge/deploy. (Overrides `/ship`'s auto-apply.)
+- **DB is FILE-ONLY:** write + review migrations, prove with rolled-back `execute_sql` smoke tests (ROLLBACK at end — zero prod footprint). **Never** `apply_migration`, never merge-to-main, never deploy. (Overrides `/ship`'s auto-apply.)
+  - **Backup-push AUTHORIZED 2026-06-13 (Mason):** after each iteration's commit, ALSO `git push origin chore/sell-side-roadmap` to keep the GitHub backup current. This is deploy-safe (non-`main` branch → no Vercel deploy, no migration apply). Still NEVER push/merge to `main` and NEVER apply/deploy — those remain the G5 owner gate.
 - Every migration → full review gate (rls-security-reviewer + migration-drift-reviewer [+ types/pdf/compliance as relevant]) → fix until clean → write the `.claude/session-state/migration-review-<name>.json` proof.
   - **AMENDED 2026-06-13 (Mason: "continue without codex"):** `/codex-review` is DEFERRED from per-migration to ONE comprehensive `codex review --base main` run **immediately before G5 go-live** (Codex CLI hit its hourly usage cap). The in-house reviewer gate above stays MANDATORY + CLEAN per migration. Each file-only migration records `codex=PENDING`; **G5 is BLOCKED until the batch Codex pass is clean** and any findings fixed. Pending-codex migrations so far: `20260613170000` (#2 v1a) — plus every later migration this loop ships.
 - One feature/stage per iteration, committed on `chore/sell-side-roadmap`. After each: `lint && build && test` green + the feature's rolled-back smoke chain passes ("fixed" = full chain, never an isolated probe).
