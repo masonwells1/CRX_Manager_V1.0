@@ -105,6 +105,8 @@ export const RpcErrorCodes = {
   BOOKING_FULLY_DRAWN: 'BOOKING_FULLY_DRAWN',
   BOOKING_DRAW_ORDER_LOCKED: 'BOOKING_DRAW_ORDER_LOCKED',
   EMPTY_DRAW: 'EMPTY_DRAW',
+  // post_invoice / post_invoice_group ship-now-price-later gate (sell-side roadmap #2)
+  PRICING_INCOMPLETE: 'PRICING_INCOMPLETE',
   // create_rebate_claim / transition_rebate_claim (audit #33)
   PROGRAM_REQUIRED: 'PROGRAM_REQUIRED',
   QUANTITY_INVALID: 'QUANTITY_INVALID',

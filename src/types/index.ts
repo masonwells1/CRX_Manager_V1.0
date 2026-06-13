@@ -338,6 +338,10 @@ export interface Order {
   deleted_at: string | null;
   customer_po_number: string | null;
   is_planned: boolean;
+  /** Ship-now/price-later (sell-side #2): 'needs_pricing' = rush order shipped
+   * before pricing was finalized; its invoices cannot POST until price_order
+   * runs. Defaults to 'priced' for every normal order. */
+  pricing_status: 'priced' | 'needs_pricing';
   notes: string | null;
   program_notes: string | null;
   created_at: string;
@@ -386,6 +390,9 @@ export interface OrderItem {
   quantity_remaining: number;
   sort_order: number;
   notes: string | null;
+  /** Ship-now/price-later (sell-side #2): true = line awaiting its final price
+   * (rush order shipped before pricing). Cleared by price_order. */
+  pricing_pending: boolean;
 }
 
 export interface Inventory {
@@ -997,6 +1004,10 @@ export interface Invoice {
   voided_by: string | null;
   voided_at: string | null;
   void_reason: string | null;
+  /** Ship-now/price-later (sell-side #2): true = invoice for a still-unpriced
+   * rush order. CREATION is allowed; post_invoice / post_invoice_group raise
+   * PRICING_INCOMPLETE until price_order finalizes and clears this. */
+  pricing_pending: boolean;
 
   // Metadata
   invoice_date: string;
