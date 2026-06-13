@@ -341,6 +341,7 @@ export default function Quotes() {
                   <option value="accepted">Accepted</option>
                   <option value="declined">Declined</option>
                   <option value="expired">Expired</option>
+                  <option value="cancelled">Cancelled</option>
                 </select>
                 <button
                   onClick={() => setPlannedFilter(!plannedFilter)}

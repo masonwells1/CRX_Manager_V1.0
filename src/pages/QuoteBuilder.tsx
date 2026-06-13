@@ -20,6 +20,9 @@ import {
   Copy,
   CalendarClock,
   PackageOpen,
+  XCircle,
+  Ban,
+  Undo2,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -161,6 +164,7 @@ export default function QuoteBuilder() {
   const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
   const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
   const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
+  const revertStatusIdem = useIdempotencyKey('revert_quote_status', profile?.id || '');
 
   // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
   // quantities into an order; the quote stays open with the remaining balance.
@@ -213,6 +217,15 @@ export default function QuoteBuilder() {
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const [revising, setRevising] = useState(false);
+  // Quote lifecycle terminal actions (sell-side roadmap #5 — unstick lifecycle):
+  // decline/cancel set a terminal status (triggers release holds); un-accept/
+  // reopen routes through the hardened admin-only revert_quote_status RPC.
+  const [confirmDeclineOpen, setConfirmDeclineOpen] = useState(false);
+  const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+  const [statusActionLoading, setStatusActionLoading] = useState(false);
+  const [showRevertModal, setShowRevertModal] = useState(false);
+  const [revertReason, setRevertReason] = useState('');
+  const [reverting, setReverting] = useState(false);
   const [customerView, setCustomerView] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
 
@@ -246,6 +259,15 @@ export default function QuoteBuilder() {
   // Partial Order button in parity with the RPC (whole-convert stays
   // sent-only by design). 2026-06-10 error-prevention review §3 LOW.
   const canDraw = currentStatus === 'sent' || currentStatus === 'revised';
+
+  // Quote lifecycle terminal/reopen actions (roadmap #5). The status-transition
+  // trigger allows: draft/sent/revised → cancelled; sent/revised → declined;
+  // accepted/declined/expired/cancelled → sent (admin revert RPC only).
+  const isAdmin = profile?.role === 'admin';
+  const canCancel = isEditing && ['draft', 'sent', 'revised'].includes(currentStatus);
+  const canDecline = isEditing && ['sent', 'revised'].includes(currentStatus);
+  const canRevert = isEditing && isAdmin && ['accepted', 'declined', 'expired', 'cancelled'].includes(currentStatus);
+  const revertLabel = currentStatus === 'accepted' ? 'Un-accept' : 'Reopen';
 
   // Mark dirty whenever user changes form data (after initial load)
   useEffect(() => {
@@ -1064,6 +1086,91 @@ export default function QuoteBuilder() {
     setRevising(false);
   };
 
+  // Decline / Cancel a quote (roadmap #5). The status-transition + hold-release
+  // triggers do the DB work; we only flip the status under RLS. Guardrail: never
+  // abandon an open booking's holds from here — a partially-drawn booking must be
+  // closed via its orders first (parity with the Quotes list bulk-delete skip).
+  const setTerminalStatus = async (newStatus: 'declined' | 'cancelled') => {
+    if (!id) return;
+    const verb = newStatus === 'declined' ? 'decline' : 'cancel';
+    setStatusActionLoading(true);
+    try {
+      const { data: draws, error: drawErr } = await supabase
+        .from('quote_product_draws')
+        .select('quantity_drawn')
+        .eq('quote_id', id)
+        .gt('quantity_drawn', 0)
+        .limit(1);
+      if (drawErr) throw drawErr;
+      if (draws && draws.length > 0) {
+        toast('warning', `This booking has partial draw-downs — close it from its orders (draw or cancel the remaining balance) before you ${verb} the quote.`);
+        return;
+      }
+      const result = await supabase
+        .from('quotes')
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select();
+      checkMutationResult(result, `${verb === 'decline' ? 'Decline' : 'Cancel'} quote`);
+      setStatus(newStatus);
+      setIsDirty(false);
+      await logActivity({
+        event: newStatus === 'declined' ? 'quote_declined' : 'quote_cancelled',
+        description: `Quote ${quoteNumber} ${newStatus}`,
+        performedBy: profile?.id || '',
+        entityType: 'quote',
+        entityId: id,
+      });
+      toast('success', `Quote ${newStatus} — any inventory holds were released.`);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'mutation', action: `quote_${newStatus}` } });
+      toast('error', err instanceof Error ? err.message : `Failed to ${verb} the quote`);
+    } finally {
+      setStatusActionLoading(false);
+      setConfirmDeclineOpen(false);
+      setConfirmCancelOpen(false);
+    }
+  };
+
+  // Un-accept / Reopen a quote back to 'sent' (roadmap #5, fixes W4). Routes
+  // through the admin-only hardened revert_quote_status RPC, which blocks
+  // reverting an accepted quote that already has an order.
+  const handleRevertStatus = async () => {
+    if (!id) return;
+    if (!revertReason.trim()) {
+      toast('warning', 'Please enter a reason for reopening this quote.');
+      return;
+    }
+    setReverting(true);
+    try {
+      const idemKey = revertStatusIdem.getKey();
+      const { data, error } = await supabase.rpc('revert_quote_status', {
+        p_quote_id: id,
+        p_reason: revertReason.trim(),
+        p_performed_by: profile?.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      const result = assertRpcResult<{ success: boolean; old_status: string; new_status: string }>(data, 'revert_quote_status');
+      revertStatusIdem.resetKey();
+      setStatus((result.new_status as QuoteStatus) || 'sent');
+      setShowRevertModal(false);
+      setRevertReason('');
+      toast('success', `Quote reopened to ${result.new_status}.`);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'revert_quote_status' } });
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) {
+        toast('error', 'Only an admin can reopen a quote.');
+      } else {
+        // Server messages here are plain-English and actionable (e.g. "an order
+        // has already been created from it") — surface them as-is.
+        toast('error', err instanceof Error ? err.message : 'Failed to reopen the quote');
+      }
+    } finally {
+      setReverting(false);
+    }
+  };
+
   const handlePreviewQuote = async () => {
     await runCriticalAction({
       action: async () => {
@@ -1670,6 +1777,42 @@ export default function QuoteBuilder() {
             >
               Revise Quote
             </Button>
+          )}
+          {canDecline && (
+            <Button
+              variant="secondary"
+              icon={<XCircle className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setConfirmDeclineOpen(true)}
+              loading={statusActionLoading}
+            >
+              Decline
+            </Button>
+          )}
+          {canCancel && (
+            <Button
+              variant="ghost"
+              icon={<Ban className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setConfirmCancelOpen(true)}
+              loading={statusActionLoading}
+            >
+              Cancel Quote
+            </Button>
+          )}
+          {canRevert && (
+            <>
+              <Button
+                variant="secondary"
+                icon={<Undo2 className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => { setRevertReason(''); setShowRevertModal(true); }}
+                loading={reverting}
+              >
+                {revertLabel}
+              </Button>
+              <HelpTip text="Reopens this quote to “sent” so it can be edited, re-sent, or converted again. Admin only. Blocked if an order was already created from an accepted quote." className="ml-1" />
+            </>
           )}
           {isEditing && quoteVersions.length > 0 && (
             <>
@@ -2860,6 +3003,70 @@ export default function QuoteBuilder() {
                 className="px-4 py-2 text-sm bg-crx-green text-white rounded-lg"
               >
                 Roll Over
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      <ConfirmModal
+        open={confirmDeclineOpen}
+        onClose={() => setConfirmDeclineOpen(false)}
+        onConfirm={() => setTerminalStatus('declined')}
+        title="Decline Quote"
+        message={`Mark quote ${quoteNumber} as declined? This releases any inventory holds and is terminal — an admin can reopen it later if needed.`}
+        confirmLabel="Decline Quote"
+        variant="danger"
+        icon={XCircle}
+        loading={statusActionLoading}
+      />
+
+      <ConfirmModal
+        open={confirmCancelOpen}
+        onClose={() => setConfirmCancelOpen(false)}
+        onConfirm={() => setTerminalStatus('cancelled')}
+        title="Cancel Quote"
+        message={`Cancel quote ${quoteNumber}? This releases any inventory holds and is terminal — an admin can reopen it later if needed.`}
+        confirmLabel="Cancel Quote"
+        variant="danger"
+        icon={Ban}
+        loading={statusActionLoading}
+      />
+
+      {showRevertModal && (
+        <Modal open={showRevertModal} onClose={() => { if (!reverting) { setShowRevertModal(false); setRevertReason(''); } }} title={`${revertLabel} Quote`}>
+          <div className="space-y-4">
+            <p className="text-sm text-secondary">
+              Reopens quote {quoteNumber} back to <strong>sent</strong> so it can be edited,
+              re-sent, or converted again.{' '}
+              {currentStatus === 'accepted'
+                ? 'Blocked if an order has already been created from this quote.'
+                : 'The quote re-enters the active pipeline.'}
+            </p>
+            <div>
+              <label className="block text-sm font-medium mb-1">Reason <span className="text-red-600">*</span></label>
+              <textarea
+                value={revertReason}
+                onChange={(e) => setRevertReason(e.target.value)}
+                rows={3}
+                placeholder="Why is this quote being reopened?"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => { setShowRevertModal(false); setRevertReason(''); }}
+                disabled={reverting}
+                className="px-4 py-2 text-sm border rounded-lg disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRevertStatus}
+                disabled={reverting || !revertReason.trim()}
+                className="px-4 py-2 text-sm bg-crx-green text-white rounded-lg disabled:opacity-50"
+              >
+                {reverting ? 'Reopening…' : revertLabel}
               </button>
             </div>
           </div>
