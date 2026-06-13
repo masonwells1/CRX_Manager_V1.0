@@ -75,11 +75,19 @@ jobs:
       - name: Run TypeScript type check
         run: npm run typecheck
 
-      - name: Run Vitest unit tests
+      - name: Run Vitest unit tests + coverage (ratchet thresholds)
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        run: npx vitest run
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
 
       - name: Build (Vite)
         env:
