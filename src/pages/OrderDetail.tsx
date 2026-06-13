@@ -5,7 +5,7 @@
  */
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle, MessageSquarePlus, Printer, ClipboardList } from 'lucide-react';
+import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle, MessageSquarePlus, Printer, ClipboardList, DollarSign } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -57,6 +57,7 @@ export default function OrderDetail() {
   const voidOrderIdem = useIdempotencyKey('void_order', profile?.id || '');
   const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '');
   const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
+  const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -114,6 +115,10 @@ export default function OrderDetail() {
   const [printingSummary, setPrintingSummary] = useState(false);
   const [printingPickList, setPrintingPickList] = useState(false);
 
+  // Ship-now/price-later (#2): per-line price inputs for a needs_pricing order.
+  const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
+  const [pricingOrder, setPricingOrder] = useState(false);
+
   const isAdmin = role === 'admin';
   // Draw-created orders (booking_draw) mirror their booking's draw ledger —
   // items are locked server-side (BOOKING_DRAW_ORDER_LOCKED); void/cancel the
@@ -153,6 +158,10 @@ export default function OrderDetail() {
       const itemsList = (itemsData || []) as OrderItem[];
       setItems(itemsList);
       setEditItems(itemsList.map((i) => ({ ...i })));
+      // Ship-now/price-later (#2): seed price inputs from each pending line's tier snapshot.
+      setPriceInputs(Object.fromEntries(
+        itemsList.filter((i) => i.pricing_pending).map((i) => [i.id, i.suggested_price != null ? String(i.suggested_price) : ''])
+      ));
 
       // Load related blend tickets
       const { data: btLinks } = await supabase
@@ -717,6 +726,40 @@ export default function OrderDetail() {
     handleCreateInvoice();
   };
 
+  // Ship-now/price-later (#2 v2): finalize a needs_pricing rush order via price_order.
+  const handlePriceOrder = async () => {
+    if (!order || !profile) return;
+    const priced = items
+      .filter((i) => i.pricing_pending)
+      .filter((i) => (priceInputs[i.id] ?? '').trim() !== '')
+      .map((i) => ({ order_item_id: i.id, price: parseFloat(priceInputs[i.id]) || 0 }));
+    if (priced.length === 0) { toast('warning', 'Enter a price for at least one line.'); return; }
+    if (priced.some((x) => x.price < 0)) { toast('error', 'Prices cannot be negative.'); return; }
+    setPricingOrder(true);
+    try {
+      const idemKey = priceOrderIdem.getKey();
+      const { data, error } = await supabase.rpc('price_order', {
+        p_order_id: order.id,
+        p_items: priced,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      const result = assertRpcResult<{ success: boolean; pricing_status: string; remaining_pending: number; invoices_swept: number }>(data, 'price_order');
+      priceOrderIdem.resetKey();
+      toast('success', result.pricing_status === 'priced'
+        ? `Order priced${result.invoices_swept ? ` — ${result.invoices_swept} draft invoice(s) updated` : ''}`
+        : `Saved — ${result.remaining_pending} line(s) still need a price`);
+      await fetchOrder();
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'price_order' } });
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can price orders.');
+      else toast('error', err instanceof Error ? err.message : 'Failed to price the order.');
+    } finally {
+      setPricingOrder(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -860,6 +903,44 @@ export default function OrderDetail() {
           )}
         </div>
       </div>
+
+      {/* Ship-now/price-later (#2): finalize pricing for a rush order */}
+      {order.pricing_status === 'needs_pricing' && (role === 'admin' || role === 'sales_rep') && (
+        <Card>
+          <CardHeader title="Set Pricing" />
+          <div className="p-5 space-y-3">
+            <p className="text-sm text-secondary">
+              This order shipped before pricing was finalized. Enter the final price per unit for each line — its invoice cannot be posted until pricing is complete.
+            </p>
+            {items.filter((i) => i.pricing_pending).map((i) => (
+              <div key={i.id} className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-medium">{i.product_name}</span>
+                  <span className="text-xs text-secondary ml-2">{i.total_units_needed}{i.unit_size ? ` ${i.unit_size}` : ''}</span>
+                </div>
+                {i.suggested_price != null && (
+                  <span className="text-xs text-secondary whitespace-nowrap">tier: {fmt(i.suggested_price)}</span>
+                )}
+                <input
+                  type="number"
+                  step="any"
+                  min={0}
+                  value={priceInputs[i.id] ?? ''}
+                  onChange={(e) => setPriceInputs((p) => ({ ...p, [i.id]: e.target.value }))}
+                  placeholder="price/unit"
+                  aria-label={`Price per unit for ${i.product_name}`}
+                  className="w-28 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+            ))}
+            <div className="flex justify-end">
+              <Button onClick={handlePriceOrder} loading={pricingOrder} icon={<DollarSign className="w-4 h-4" />} showChevron={false}>
+                Finalize Pricing
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Active delivery banner — shows when scheduled/in_progress deliveries exist */}
       {(() => {
