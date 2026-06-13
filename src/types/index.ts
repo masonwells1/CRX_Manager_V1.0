@@ -393,6 +393,10 @@ export interface OrderItem {
   /** Ship-now/price-later (sell-side #2): true = line awaiting its final price
    * (rush order shipped before pricing). Cleared by price_order. */
   pricing_pending: boolean;
+  /** Ship-now/price-later (sell-side #2): tier price snapshot captured by
+   * create_rush_order at ship time (per customer.assigned_tier); the v2 pricing
+   * screen's default suggestion. NULL on normally-priced lines. */
+  suggested_price: number | null;
 }
 
 export interface Inventory {

@@ -43,6 +43,8 @@ export default function Orders() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [planFilter, setPlanFilter] = useState('');
+  // Ship-now/price-later (sell-side #2): filter unpriced rush orders.
+  const [pricingFilter, setPricingFilter] = useState('');
   const [showImportModal, setShowImportModal] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -185,6 +187,7 @@ export default function Orders() {
     if (statusFilter && o.status !== statusFilter) return false;
     if (planFilter === 'planned' && !o.is_planned) return false;
     if (planFilter === 'committed' && o.is_planned) return false;
+    if (pricingFilter && o.pricing_status !== pricingFilter) return false;
     return true;
   });
 
@@ -592,6 +595,16 @@ export default function Orders() {
                   <option value="">All Orders</option>
                   <option value="planned">Planned Only</option>
                   <option value="committed">Committed Only</option>
+                </select>
+                <select
+                  value={pricingFilter}
+                  onChange={(e) => setPricingFilter(e.target.value)}
+                  aria-label="Filter by pricing status"
+                  className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                >
+                  <option value="">All Pricing</option>
+                  <option value="needs_pricing">Needs Pricing</option>
+                  <option value="priced">Priced</option>
                 </select>
                 {canBulkAction && filtered.length > 0 && (
                   <button
