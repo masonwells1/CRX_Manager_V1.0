@@ -25,7 +25,7 @@
 ## Owner gates (Mason-only decisions)
 - **G1** — 3 blank commission recipients (Test Farm Alpha / Tim Jondle / Yeley Farms): correct names. `OPEN`
 - **G2** — RUP expired-license classification: WARNING vs NON-COMPLIANT. `OPEN`
-- **G3** — #2 revenue policy: rush orders post into ship-month or price-month? `OPEN — ASKED 2026-06-13` (loop paused after #5; #2 is blocked on this).
+- **G3** — #2 revenue policy: rush orders post into ship-month or price-month? `ANSWERED 2026-06-13 → PRICE-MONTH`. When `price_order` finalizes a rush order, the linked invoice's `invoice_date` = the pricing/finalization date (default today), NOT the ship date — so revenue always posts into the current open period and never back-dates into a closed period. RESOLVED.
 - **G4** — #7 driver-role credit behavior: warn vs block-with-override. `OPEN`
 - **G5** — FINAL GO-LIVE (apply migrations + merge recovery+roadmap → main + deploy). Loop NEVER does this. `OPEN`
 - **G-AE** (#5 auto-expire) — `ANSWERED 2026-06-13 → Option 1`: auto-expire ad-hoc sent/revised quotes past `expires_at` (release holds), but SKIP Planned Programs and drawn bookings. Implemented file-only in `20260613160000_auto_expire_quotes_skip_planned_and_schedule.sql`. RESOLVED.
@@ -45,7 +45,8 @@
 - ✅ **Auto-expire decision RESOLVED (gate G-AE = Option 1, iteration 2):** migration `20260613160000_auto_expire_quotes_skip_planned_and_schedule.sql` (FILE-ONLY) adds `AND q.is_planned = false` to `auto_expire_quotes` (skip Planned Programs; drawn bookings already skipped) and schedules it on pg_cron at 06:05 daily. Reviewers CLEAN (rls + drift); Codex iterated 3× (doc-drift, smoke `hold_type`, ledger placement) → SHIP. Context: WITHOUT this nothing auto-expired quotes — the 6:15 `release_expired_quote_holds` cron only mops up holds on quotes *already* declined/expired; it never read `expires_at`.
 - **Done:** decline/cancel/un-accept reachable in UI ✅; expiry decision implemented ✅ (file-only migration, applies at G5); smoke scripts `05-quote-lifecycle.sql` + `05b-auto-expire-skip-planned.sql` written + reviewer/Codex-verified (live-run deferred — read-only MCP this session).
 
-### #2 — Ship-now / price-later — `BLOCKED-GATE:G3`  [dep: #5 DONE ✅; gate G3 OPEN]
+### #2 — Ship-now / price-later — `TODO`  [dep: #5 DONE ✅; gate G3 ANSWERED ✅ → price-month]
+> **Next iteration = #2 v1.** G3 = price-month: `price_order` sets the linked invoice `invoice_date` to the pricing date (default today), never the ship date.
 - Migration: `orders.pricing_status` text NOT NULL DEFAULT 'priced' CHECK in ('priced','needs_pricing'); `order_items.pricing_pending` bool default false; `invoices.pricing_pending` bool default false. (Verify W1's `create_direct_order` role gate is live — CLAUDE.md says fixed `20260610142204`; confirm, don't re-fix blindly.)
 - RPC `create_rush_order(customer, items[{product_id,qty}], notes, performed_by, idem)`: strict-actor; roles admin/sales_rep/driver/applicator; order confirmed + needs_pricing; items price 0 + pending; snapshot tier price; prebook (WARN never block); NO commissions yet; audit `order_created` (needs_pricing); notify reps.
 - RPC `price_order(order_id, items[{order_item_id,price}], performed_by, idem)`: admin/sales_rep; FOR UPDATE; bypasses W2 fulfillment lock (price-only); recompute totals/profit; when no pending → priced + insert commissions on final profit + sweep linked DRAFT/UNPOSTED invoices (unit/extended cents, total, invoice_date, clear pending).
