@@ -257,6 +257,45 @@ export async function notifyLargeOrder(
 }
 
 /**
+ * Notify admins + sales reps that a rush order was created and needs pricing
+ * (ship-now/price-later, #2). Call from NewOrder after create_rush_order — the
+ * people who can price it (admin/sales_rep) get an actionable alert.
+ */
+export async function notifyOrderNeedsPricing(
+  orderId: string,
+  orderNumber: string,
+  customerName: string
+) {
+  try {
+    // Read via profile_public_view so a non-admin creator (driver/applicator)
+    // can still fan out the alert (admin-or-self RLS would zero-out a direct
+    // profiles read) — same rationale as notifyAdmins.
+    const { data: staff } = await supabase
+      .from('profile_public_view')
+      .select('id')
+      .in('role', ['admin', 'sales_rep'])
+      .eq('is_active', true);
+    if (staff && staff.length > 0) {
+      const rows = staff.map((s) => ({
+        user_id: s.id,
+        title: 'Order needs pricing',
+        message: `Rush order ${orderNumber} for ${customerName} shipped without pricing — set its prices so it can be invoiced.`,
+        notification_type: 'needs_pricing',
+        related_entity_type: 'order',
+        related_entity_id: orderId,
+      }));
+      const { error } = await supabase.from('notifications').insert(rows);
+      if (error) Sentry.captureException(error, { tags: { source: 'notification_trigger', action: 'notify_order_needs_pricing' } });
+    }
+  } catch (err) {
+    await logNotificationFailure('needs_pricing', err, 'order', orderId, {
+      context: 'notifyOrderNeedsPricing',
+      orderNumber,
+    });
+  }
+}
+
+/**
  * Notify admins when PO items are received in damaged/wrong condition.
  * Call this from PurchaseOrderDetail after receive_po_items() completes.
  */

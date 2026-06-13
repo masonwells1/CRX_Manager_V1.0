@@ -23,7 +23,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useFormDraft } from '../hooks/useFormDraft';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
-import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { notifyCreditLimitExceeded, notifyOrderNeedsPricing } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { logActivity } from '../lib/activityLogger';
@@ -383,6 +383,8 @@ export default function NewOrder() {
             message: `Rush order ${rushResult.order_number} created — needs pricing`,
             data: { orderId: rushOrderId, orderNumber: rushResult.order_number, itemCount: validItems.length, priceLater: true },
           });
+          // Alert admins/sales that this rush order needs pricing (fire-and-forget).
+          notifyOrderNeedsPricing(rushOrderId, rushResult.order_number, customers.find((c) => c.id === customerId)?.farm_name ?? 'customer');
           navigate(`/orders/${rushOrderId}`);
           return;
         }
