@@ -387,12 +387,37 @@ export default function JobDetail() {
     ? Math.ceil(totalGallons / selectedVehicle.capacity_gallons)
     : null;
 
-  // C4: weather auto-capture at completion (first selected field's centroid)
-  const jobFieldCentroid = (() => {
-    const firstFieldId = fieldRows.find((r) => r.field_id)?.field_id;
-    if (!firstFieldId) return null;
-    return parseCentroid(allFields.find((f) => f.id === firstFieldId)?.centroid_geojson);
-  })();
+  // C4: weather auto-capture at completion (first selected field's centroid).
+  // fields.centroid is a PostGIS geometry — its GeoJSON text is exposed only by
+  // the get_field_geojson RPC (a plain fields.select('*') has NO centroid_geojson
+  // column), so fetch it for the first selected field. Fail-soft: any miss just
+  // hides the weather button, leaving manual entry (weather prefill is never a gate).
+  const firstFieldId = fieldRows.find((r) => r.field_id)?.field_id ?? null;
+  const [jobFieldCentroid, setJobFieldCentroid] = useState<{ lat: number; lng: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!firstFieldId) {
+      setJobFieldCentroid(null);
+      return;
+    }
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('get_field_geojson', { p_field_id: firstFieldId });
+        if (cancelled) return;
+        if (error) {
+          setJobFieldCentroid(null);
+          return;
+        }
+        const rows = assertRpcResult<Array<{ centroid_geojson?: string | null }>>(data, 'get_field_geojson');
+        setJobFieldCentroid(parseCentroid(rows[0]?.centroid_geojson));
+      } catch {
+        if (!cancelled) setJobFieldCentroid(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [firstFieldId]);
 
   const handleFetchWeather = async () => {
     if (!jobFieldCentroid) return;
