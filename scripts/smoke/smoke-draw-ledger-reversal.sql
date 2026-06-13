@@ -25,9 +25,11 @@
 -- Scenarios:
 --   S1  partial draw 200/500 → void the draw order → ledger back to 0,
 --       quote stays 'sent' → draw 200 again succeeds (balance restored)
---   S4  cancel a partial draw order → ledger back to 0, the booking's
---       still-active hold SURVIVES (F7 skip), already-cancelled re-cancel
---       does not double-decrement
+--   S4  cancel a partial draw order → ledger back to 0, the booking's REAL
+--       planned hold (built by create_planned_holds, decremented hold→prebooked
+--       by the draws) is REBUILT to booked−drawn (Net Free restored — Codex
+--       2026-06-13 finding 1 fix, migration 20260613150100), already-cancelled
+--       re-cancel does not double-decrement
 --   S2  draw 200 + final 300 → quote 'accepted' → void the FINAL draw order
 --       → ledger decremented to 200, quote reopened to 'sent',
 --       'booking_reopened' activity row written → re-draw 300 works and the
@@ -50,20 +52,31 @@ DECLARE
   v_o3a uuid;
   v_o3b uuid;
   v_oc uuid;
-  v_hold uuid;
   v_hold_qty_before numeric;
   v_hold_qty_after numeric;
-  v_hold_active boolean;
   v_drawn numeric;
   v_status text;
   v_n int;
 BEGIN
-  -- ── precondition: migration applied ──────────────────────────────────────
+  -- ── precondition: migrations applied ─────────────────────────────────────
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'orders' AND column_name = 'booking_draw'
   ) THEN
     RAISE EXCEPTION 'SMOKE_SETUP: orders.booking_draw missing — apply 20260610190000 first';
+  END IF;
+  -- S4 now exercises the real planned-hold rebuild on a draw cancel: it needs
+  -- the _sync_planned_holds helper (20260613150000) AND the cancel_order fix
+  -- (20260613150100) that calls it for booking_draw orders.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_proc
+    WHERE proname = '_sync_planned_holds' AND pronamespace = 'public'::regnamespace
+  ) THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: _sync_planned_holds missing — apply 20260613150000 first';
+  END IF;
+  IF (SELECT prosrc FROM pg_proc WHERE proname = 'cancel_order' AND pronamespace = 'public'::regnamespace)
+       NOT LIKE '%PERFORM _sync_planned_holds(v_order.quote_id, v_actor)%' THEN
+    RAISE EXCEPTION 'SMOKE_SETUP: cancel_order does not rebuild holds on draw cancel — apply 20260613150100 first';
   END IF;
 
   -- ── auth: impersonate an active admin ────────────────────────────────────
@@ -81,9 +94,11 @@ BEGIN
   INSERT INTO products (product_name)
   VALUES ('[SMOKE] DLR Herbicide') RETURNING id INTO v_product;
 
-  -- Q1: the season booking — 500 units of one product
-  INSERT INTO quotes (quote_number, customer_id, created_by, status, commission_split)
-  VALUES ('SMK-DLR-Q1', v_customer, v_admin, 'sent', '{"splits": []}'::jsonb)
+  -- Q1: the season booking — 500 units of one product. is_planned = true so the
+  -- real planned holds can be built/rebuilt by create_planned_holds /
+  -- _sync_planned_holds (S4 asserts the rebuild on draw cancel).
+  INSERT INTO quotes (quote_number, customer_id, created_by, status, is_planned, commission_split)
+  VALUES ('SMK-DLR-Q1', v_customer, v_admin, 'sent', true, '{"splits": []}'::jsonb)
   RETURNING id INTO v_q1;
   INSERT INTO quote_sections (quote_id, section_name)
   VALUES (v_q1, 'Main') RETURNING id INTO v_sec;
@@ -91,10 +106,11 @@ BEGIN
     price_per_unit, current_cost, total_units_needed, unit_size)
   VALUES (v_q1, v_sec, v_product, 10, 6, 500, 'gal');
 
-  -- Synthetic ACTIVE hold backing the booking (proves the F7 skip on cancel)
-  INSERT INTO inventory_holds (product_id, customer_id, quantity, source_id, created_by, is_active)
-  VALUES (v_product, v_customer, 500, v_q1, v_admin, true)
-  RETURNING id INTO v_hold;
+  -- REAL planned hold backing the booking (built by the production RPC, not a
+  -- synthetic row). 500 units held while drawn = 0. The draws below move the
+  -- hold → prebooked (FIFO inside draw_down_quote); S4 proves a draw cancel
+  -- rebuilds the hold to booked − drawn.
+  PERFORM create_planned_holds(v_q1, v_admin);
 
   -- ══ S1: partial draw 200/500 → VOID the draw order ═══════════════════════
   SELECT draw_down_quote(v_q1,
@@ -150,8 +166,21 @@ BEGIN
     RAISE EXCEPTION 'S1: ledger after re-draw = %, expected 200', v_drawn;
   END IF;
 
-  -- ══ S4: CANCEL a partial draw order — ledger restored, holds survive ═════
-  SELECT quantity INTO v_hold_qty_before FROM inventory_holds WHERE id = v_hold;
+  -- ══ S4: CANCEL a partial draw order — ledger restored, holds REBUILT ═════
+  -- Before the cancel the booking is drawn 200/500 (v_o2 active), but the hold
+  -- has been FIFO-consumed by BOTH S1 draws and never rebuilt (void_order does
+  -- not resurrect holds — the V1 simplification), so the active hold for the
+  -- quote is 100 (500 − 200 [v_o1, voided] − 200 [v_o2, active]). The BUG
+  -- (pre-20260613150100): cancel skipped holds for booking_draw orders, leaving
+  -- the stale 100 hold while it returned the undelivered 200 to the balance +
+  -- released the prebooked — under-reserving (Net Free over-counts). The FIX
+  -- rebuilds the hold to booked − drawn.
+  SELECT COALESCE(SUM(quantity), 0) INTO v_hold_qty_before
+  FROM inventory_holds
+  WHERE source_id = v_q1 AND product_id = v_product AND is_active = true;
+  IF v_hold_qty_before IS DISTINCT FROM 100 THEN
+    RAISE EXCEPTION 'S4: pre-cancel active hold = %, expected 100 (500 booked − 200 voided draw − 200 active draw, never rebuilt)', v_hold_qty_before;
+  END IF;
 
   SELECT cancel_order(v_o2, v_admin) INTO v_res;
   IF COALESCE((v_res->>'success')::boolean, false) IS NOT TRUE
@@ -172,17 +201,27 @@ BEGIN
     RAISE EXCEPTION 'S4: quote status after cancel = %, expected sent', v_status;
   END IF;
 
-  -- F7 skip: the open booking's still-active hold must SURVIVE the cancel
-  SELECT quantity, is_active INTO v_hold_qty_after, v_hold_active
-  FROM inventory_holds WHERE id = v_hold;
-  IF NOT v_hold_active THEN
-    RAISE EXCEPTION 'S4: cancelling a draw order deactivated the open booking''s hold (F7 skip failed)';
+  -- THE FIX: the open booking's planned hold is REBUILT to booked − drawn.
+  -- With the draw reversed (drawn = 0) the hold returns to the full 500 — the
+  -- 200 that leaked out of the reservation under the old skip is reserved again
+  -- (Net Free restored). The hold row id changed (helper DELETE + re-INSERT),
+  -- so the assertion sums the active holds for the quote rather than tracking
+  -- one row.
+  SELECT COALESCE(SUM(quantity), 0) INTO v_hold_qty_after
+  FROM inventory_holds
+  WHERE source_id = v_q1 AND product_id = v_product AND is_active = true;
+  IF v_hold_qty_after IS DISTINCT FROM 500 THEN
+    RAISE EXCEPTION 'S4: hold after draw cancel = %, expected 500 (rebuilt to booked − drawn; bug left it at the stale %)',
+      v_hold_qty_after, v_hold_qty_before;
   END IF;
-  IF v_hold_qty_after IS DISTINCT FROM v_hold_qty_before THEN
-    RAISE EXCEPTION 'S4: hold quantity changed across cancel (% -> %)', v_hold_qty_before, v_hold_qty_after;
+  IF NOT EXISTS (
+    SELECT 1 FROM inventory_holds
+    WHERE source_id = v_q1 AND product_id = v_product AND is_active = true
+  ) THEN
+    RAISE EXCEPTION 'S4: no active hold after draw cancel — rebuild produced nothing';
   END IF;
 
-  -- already-cancelled re-cancel: no-op, no double decrement
+  -- already-cancelled re-cancel: no-op, no double decrement, hold unchanged
   SELECT cancel_order(v_o2, v_admin) INTO v_res;
   IF v_res->>'status' IS DISTINCT FROM 'already_cancelled' THEN
     RAISE EXCEPTION 'S4: re-cancel returned %, expected already_cancelled', v_res;
@@ -192,6 +231,12 @@ BEGIN
   FROM quote_product_draws WHERE quote_id = v_q1 AND product_id = v_product;
   IF v_drawn IS DISTINCT FROM 0 THEN
     RAISE EXCEPTION 'S4: ledger changed on already_cancelled re-cancel (= %)', v_drawn;
+  END IF;
+  SELECT COALESCE(SUM(quantity), 0) INTO v_hold_qty_after
+  FROM inventory_holds
+  WHERE source_id = v_q1 AND product_id = v_product AND is_active = true;
+  IF v_hold_qty_after IS DISTINCT FROM 500 THEN
+    RAISE EXCEPTION 'S4: hold changed on already_cancelled re-cancel (= %, expected 500)', v_hold_qty_after;
   END IF;
 
   -- ══ S2: full draw (200 + final 300) → VOID the final draw → reopen ═══════

@@ -919,8 +919,11 @@ export default function Compliance() {
                   setForm({
                     ...form,
                     profile_id: e.target.value,
-                    // Prefill the printed holder name from the profile; still editable
-                    holder_name: form.holder_name || selected?.full_name || '',
+                    // Prefill the printed holder name from the SELECTED profile (still
+                    // editable). Must overwrite, not `form.holder_name || …` — keeping a
+                    // prior staff member's name would file a license under the wrong holder
+                    // when the user switches staff (Codex 2026-06-13 finding 3).
+                    holder_name: selected?.full_name || '',
                   });
                 }}
                 className="mt-1 w-full px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"

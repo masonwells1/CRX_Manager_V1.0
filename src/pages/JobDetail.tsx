@@ -165,6 +165,19 @@ export default function JobDetail() {
     }
     setPrintingWps(true);
     try {
+      // Pull label fields for EVERY product on the job, INCLUDING any since-
+      // deactivated ones — allProducts is is_active=true only, so a historical or
+      // scheduled job with a retired product would otherwise print a notice missing
+      // its EPA reg / signal word / REI / PHI (Codex 2026-06-13 finding 2).
+      const wpsPids = chemRows.filter((c) => c.product_id).map((c) => c.product_id);
+      const labelById = new Map<string, { product_name: string; epa_registration: string | null; signal_word: string | null; rei_hours: number | null; phi_days: number | null }>();
+      if (wpsPids.length > 0) {
+        const { data: lp } = await supabase
+          .from('products')
+          .select('id, product_name, epa_registration, signal_word, rei_hours, phi_days')
+          .in('id', wpsPids);
+        ((lp || []) as Array<{ id: string; product_name: string; epa_registration: string | null; signal_word: string | null; rei_hours: number | null; phi_days: number | null }>).forEach((p) => labelById.set(p.id, p));
+      }
       await generateWpsNoticePdf({
         job_number: jobNumber || 'draft',
         customer_name: customers.find((c) => c.id === customerId)?.farm_name || 'Customer',
@@ -185,7 +198,7 @@ export default function JobDetail() {
         products: chemRows
           .filter((c) => c.product_id)
           .map((c) => {
-            const p = allProducts.find((ap) => ap.id === c.product_id);
+            const p = labelById.get(c.product_id);
             return {
               product_name: p?.product_name || c.product_name || 'Product',
               epa_registration: p?.epa_registration || null,
