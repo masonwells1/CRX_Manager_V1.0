@@ -17,6 +17,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "generate-map": "node scripts/generate-workflow-map.mjs",
+    "check-doc-drift": "node scripts/check-doc-drift.mjs",
+    "verify-deps": "node scripts/verify-deps.mjs",
+    "db-sweeps": "node scripts/db-invariant-sweeps/run-sweeps.mjs",
+    "smoke": "node scripts/smoke/run-smoke.mjs",
+    "verify:deps": "node scripts/verify-deps.mjs",
+    "check:docs": "node scripts/check-doc-drift.mjs",
+    "test:contracts": "vitest run src/lib/rpcContracts.test.ts src/lib/rpcIdempotencyScope.test.ts src/lib/rpcFixtureLiveDiff.test.ts",
     "prepare": "husky"
   },
   "dependencies": {

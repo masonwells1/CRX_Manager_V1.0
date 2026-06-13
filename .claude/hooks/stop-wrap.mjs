@@ -5,13 +5,16 @@
 //   - Uncommitted files (so work doesn't get lost)
 //   - Migrations written but not applied to live
 //   - Edge Functions edited but not redeployed
+//   - C10 lessons-to-checks ratchet: a BLOCKER/HIGH closure in docs/audits/*
+//     must ship with an executable check in the same working tree
+//   - Migrations lacking a fresh migration-review-*.json proof
 //   - Prompt to capture learnings to memory if the session was substantive
 //
 // Returns "block" with the loose-ends list, so Claude is forced to surface it
 // before declaring the session done.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
@@ -74,6 +77,91 @@ if (edgeFnLines.length > 0) {
   issues.push(
     `⚡ ${edgeFnLines.length} Edge Function file(s) modified — confirm each was redeployed via /deploy-edge-function:\n` +
     edgeFnLines.map(l => "     " + l).join("\n")
+  );
+}
+
+// ─── C10 lessons-to-checks ratchet ────────────────────────────────────────
+// RC4 (docs/audits/2026-06-10-error-prevention-review.md §2): lessons land in
+// CLAUDE.md/audit prose and never become executable checks (actor-forgery
+// recurred across six dates). Heuristic: if this working tree adds/modifies a
+// docs/audits/* doc whose NEW content mentions a BLOCKER or HIGH finding
+// (i.e. a closure/disposition), the same tree must also carry an executable
+// check — a predicate sweep (scripts/db-invariant-sweeps/), a hook
+// (.claude/hooks/), a *.test.* file, or a smoke script (scripts/smoke/).
+// Otherwise it's a loose end (WARNING in the list — same block-by-listing
+// semantics as every other item here).
+const auditDocLines = lines.filter(l => /docs\/audits\/.+\.md$/.test(l.slice(3)));
+let closesHighFinding = null; // first audit doc whose new content matches
+for (const l of auditDocLines) {
+  const status = l.slice(0, 2);
+  const p = l.slice(3);
+  let added = "";
+  if (status.includes("?")) {
+    // Untracked: the whole file is new content.
+    try { added = readFileSync(path.join(projectDir, p), "utf8"); } catch { /* ignore */ }
+  } else {
+    // Modified: only count lines ADDED in this working tree, not prior text.
+    added = runGit(["diff", "HEAD", "--", p])
+      .split("\n")
+      .filter(d => d.startsWith("+") && !d.startsWith("+++"))
+      .join("\n");
+  }
+  if (/\b(BLOCKER|HIGH)\b/.test(added)) { closesHighFinding = p; break; }
+}
+if (closesHighFinding) {
+  const hasExecutableCheck = lines.some(l => {
+    const p = l.slice(3);
+    return p.startsWith("scripts/db-invariant-sweeps/")
+      || p.startsWith(".claude/hooks/")
+      || p.startsWith("scripts/smoke/")
+      || /\.test\.[^/]+$/.test(p);
+  });
+  if (!hasExecutableCheck) {
+    issues.push(
+      `🔧 WARNING — HIGH+ finding closed without an executable check (the lessons-to-checks ratchet) — add a predicate/hook/test or document why not in the disposition.\n` +
+      `     (audit doc in this tree: ${closesHighFinding} mentions BLOCKER/HIGH, but no sibling change under\n` +
+      `     scripts/db-invariant-sweeps/, .claude/hooks/, scripts/smoke/, or a *.test.* file)`
+    );
+  }
+}
+
+// ─── Migrations without a fresh review proof ──────────────────────────────
+// migration-apply-guard.mjs requires .claude/session-state/
+// migration-review-<name>.json before apply_migration; this closes the loop
+// at session end: any uncommitted supabase/migrations/*.sql with NO matching
+// proof newer than the file itself (missing review, or file edited AFTER the
+// review) gets listed. Proof stamps can differ from disk stamps (B7 renames
+// to the MCP stamp), so matching falls back to the slug — the filename minus
+// the leading numeric stamp.
+const stateDir = path.join(projectDir, ".claude", "session-state");
+let proofFiles = [];
+try {
+  proofFiles = readdirSync(stateDir).filter(f => /^migration-review-.+\.json$/.test(f));
+} catch { /* no session-state dir — every migration below will be flagged */ }
+
+const unprovenMigrations = [];
+for (const l of migrationLines) {
+  const p = l.slice(3);
+  const migPath = path.join(projectDir, p);
+  if (!existsSync(migPath)) continue; // deleted in tree — nothing to prove
+  const base = path.basename(p, ".sql");
+  const slug = base.replace(/^\d{8,14}_/, "");
+  const proven = proofFiles.some(f => {
+    const name = f.slice("migration-review-".length, -".json".length);
+    const proofSlug = name.replace(/^\d{8,14}_/, "");
+    if (name !== base && proofSlug !== slug) return false;
+    try {
+      return statSync(path.join(stateDir, f)).mtimeMs >= statSync(migPath).mtimeMs;
+    } catch {
+      return false;
+    }
+  });
+  if (!proven) unprovenMigrations.push(p);
+}
+if (unprovenMigrations.length > 0) {
+  issues.push(
+    `🛡️  ${unprovenMigrations.length} migration file(s) with NO fresh review proof (.claude/session-state/migration-review-*.json newer than the file) — review missing, or the file was edited after its review:\n` +
+    unprovenMigrations.map(p => "     " + p).join("\n")
   );
 }
 

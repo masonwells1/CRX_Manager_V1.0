@@ -1,0 +1,60 @@
+{
+  "_meta": {
+    "hard_rule": "A fix is 'fixed' ONLY when its full business-chain spec passes end-to-end - never an isolated probe. (B1, 2026-06-09, was falsely declared fixed off a single-insert probe; only the full return->credit->statement->unapply chain exposed the stacked breaks.)",
+    "pass_signal": "Every chain is a single DO block that ALWAYS terminates with RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK'. That exact error text = PASS (and guarantees rollback). ANY other error = FAIL.",
+    "how_to_run": "node scripts/smoke/run-smoke.mjs --list | --spec <rpc> | --all  (see scripts/smoke/README.md)",
+    "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
+  },
+  "specs": {
+    "save_quote": {
+      "chain": "smoke-save-quote-drawn-guard.sql",
+      "description": "Drawn-product edit guard (A4): reducing a booking below its drawn quantity and removing a drawn product both raise BOOKING_OVERDRAWN; a legal reduce keeps booked/drawn/status consistent and the booking still closes at the new total; a no-draws control quote edits freely.",
+      "covers": ["save_quote", "draw_down_quote"]
+    },
+    "rollover_quote_to_season": {
+      "chain": "smoke-rollover-remainder.sql",
+      "description": "Remainder-only season rollover (A5): 500-booked/200-drawn rolls over exactly 300 with FIFO consumption across split items and acre proration; fully-drawn raises BOOKING_FULLY_DRAWN; no-draws rollover preserves live copy behavior (total_units_needed stays NULL).",
+      "covers": ["rollover_quote_to_season"]
+    },
+    "auto_expire_quotes": {
+      "chain": "smoke-auto-expire-draw-skip.sql",
+      "description": "Expiry sweep skips partially-drawn bookings past expires_at, still expires an undrawn control quote, completes despite the best-effort activity_feed summary, and re-asserts the 20260609203541 grant hardening (no authenticated/anon EXECUTE).",
+      "covers": ["auto_expire_quotes"]
+    },
+    "void_order": {
+      "chain": "smoke-draw-ledger-reversal.sql",
+      "description": "Draw-ledger reversal on void/cancel: voiding a partial draw order restores the booking balance (re-draw works); cancelling a draw order restores the ledger but preserves the open booking's active hold (F7 skip); voiding the FINAL draw reopens an accepted booking ('booking_reopened' activity) and re-draw re-accepts; whole-conversion void leaves the booking closed; double-void/re-cancel guards hold.",
+      "covers": ["draw_down_quote", "void_order", "cancel_order", "convert_quote_to_order"]
+    },
+    "issue_return_credit": {
+      "chain": "smoke-return-credit-chain.sql",
+      "description": "THE canonical return->credit chain (the B1/B2 class): direct-insert return -> approve_return -> receive_return (restock + inventory txns) -> issue_return_credit (posted credit_memo, credited_by stamped, both audit rows) -> idempotent replay (no double-issue) -> get_customer_statement counts the credit EXACTLY once -> unapply_credit_memo (memo voided, return back to received, total_credit_cents back to 0 NOT NULL) -> statement back to zero -> re-issue works.",
+      "covers": ["approve_return", "receive_return", "issue_return_credit", "get_customer_statement", "unapply_credit_memo"]
+    },
+    "update_order_items": {
+      "chain": "smoke-order-draw-lock.sql",
+      "description": "Draw-order item lock (Codex r2 HIGH): editing items on a booking_draw order raises BOOKING_DRAW_ORDER_LOCKED (qty change AND add-item) with order+ledger intact, the remaining balance still draws to closure, and a whole-conversion control order (booking_draw=false) edits freely.",
+      "covers": ["update_order_items", "draw_down_quote", "convert_quote_to_order"]
+    },
+    "restore_quote_version": {
+      "chain": "smoke-restore-version-drawn-guard.sql",
+      "description": "Drawn-version restore guard (Codex r2 MED): restoring a snapshot below the drawn ledger raises BOOKING_OVERDRAWN (fall-below AND removes branches; the restore's section DELETE rolls back atomically), a legal restore (>= drawn) succeeds to 'revised' with the ledger intact and then draws to closure, and a no-draws control quote restores freely.",
+      "covers": ["restore_quote_version", "create_quote_version", "draw_down_quote"]
+    },
+    "get_customer_statement": {
+      "chain": "smoke-customer_statement_blind_spots.sql",
+      "description": "Statement blind-spot fix (CHIP task_25d25699, migration 20260611131549): legacy, NULL-order, and allocation-set payments each appear exactly once; paid/overdue invoices keep their charge lines; soft-deleted payments excluded; credit memo single-count; unapplied overpayment prepay NOT pre-counted (DEDUP RULE); idempotent allocate_payment replay does not double-count; running balance never negative; unknown-actor auth probe rejected by the in-body gate.",
+      "covers": ["get_customer_statement", "allocate_payment", "record_invoice_payment"]
+    },
+    "create_planned_holds": {
+      "chain": "smoke-planned-holds-drawn-sync.sql",
+      "description": "Authoritative planned-hold sync (Codex r2 #3, migration 20260611132115): active holds always equal booked − drawn per product after create_planned_holds, save_quote (Draft/Revise/Present), and restore_quote_version, with FIFO consumption so per-item expiry (needed_by+14d) follows the still-reserved tail; rebuild-after-draw no longer re-reserves drawn quantity; is_planned switched off + save releases all holds server-side.",
+      "covers": ["create_planned_holds", "_sync_planned_holds", "save_quote", "restore_quote_version", "draw_down_quote"]
+    },
+    "draw_down_quote": {
+      "chain": "smoke-auth-probe-template.sql",
+      "description": "Standard 4-probe auth set, worked example against draw_down_quote: no-auth -> AUTH_REQUIRED; anon-key -> AUTH_REQUIRED with zero rows written; wrong-role (driver/applicator) -> INSUFFICIENT_ROLE; forged p_performed_by -> ACTOR_MISMATCH; plus a positive admin control draw proving the probes failed for the right reason. File header documents the placeholders for adapting it to any new RPC.",
+      "covers": ["draw_down_quote"]
+    }
+  }
+}

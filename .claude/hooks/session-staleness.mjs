@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // SessionStart staleness checks. Surfaces things that have drifted while the
 // laptop was closed:
-//   - schema-registry.json older than 7 days
+//   - schema-registry.json BEHIND the migrations on disk (content-based, C3 v2:
+//     compares registry _meta.migrations_high_water against the highest
+//     supabase/migrations/*.sql filename stamp; falls back to the old 7-day
+//     mtime check for a v1-shaped registry without a high-water mark)
 //   - CLAUDE.md "Current State" counts that don't match reality (pages, migrations)
 //   - Uncommitted files from a prior session
 //
@@ -9,7 +12,7 @@
 // warnings at session start and can mention them to Mason proactively.
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, statSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import path from "node:path";
 
 function emit(extra) {
@@ -24,18 +27,48 @@ function emit(extra) {
 const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const warnings = [];
 
-// ─── CHECK 1 — schema registry staleness ─────────────────────────────────
+// ─── CHECK 1 — schema registry staleness (content-based, not mtime) ──────
 const registryPath = path.join(projectDir, ".claude", "schema-registry.json");
 try {
   if (existsSync(registryPath)) {
-    const stat = statSync(registryPath);
-    const ageDays = (Date.now() - stat.mtimeMs) / (1000 * 60 * 60 * 24);
-    if (ageDays > 7) {
-      warnings.push(
-        `📅 Schema registry is ${Math.round(ageDays)} days old (last regenerated ${stat.mtime.toISOString().slice(0, 10)}).\n` +
-        `   This is the source of truth for 4 PreToolUse hooks and the review subagents.\n` +
-        `   Recommend: invoke /regen-schema-registry to refresh from live Supabase.`
-      );
+    const registry = JSON.parse(readFileSync(registryPath, "utf8"));
+    const highWater = registry?._meta?.migrations_high_water;
+
+    if (highWater && /^\d{14}$/.test(String(highWater))) {
+      // v2: compare the registry's applied-migration high water against the
+      // highest migration filename stamp on disk. mtime lies (a git checkout
+      // refreshes it); content doesn't.
+      const migDir = path.join(projectDir, "supabase", "migrations");
+      const newer = [];
+      if (existsSync(migDir)) {
+        for (const f of readdirSync(migDir)) {
+          const m = f.match(/^(\d{14})_.+\.sql$/);
+          if (m && m[1] > String(highWater)) newer.push(f);
+        }
+      }
+      if (newer.length > 0) {
+        newer.sort();
+        const sample = newer.slice(0, 5).map(f => "      " + f).join("\n");
+        warnings.push(
+          `📅 Schema registry is BEHIND the migrations on disk: registry high-water is ${highWater}, ` +
+          `but ${newer.length} migration file(s) carry a newer stamp:\n` + sample +
+          (newer.length > 5 ? `\n      ... and ${newer.length - 5} more` : "") +
+          `\n   If these were applied live, the 4 schema-aware hooks are validating against a stale schema —\n` +
+          `   invoke /regen-schema-registry. If they are written-but-unapplied, apply (or park) them first.`
+        );
+      }
+    } else {
+      // v1-shaped registry (no high-water mark): fall back to the mtime check.
+      const stat = statSync(registryPath);
+      const ageDays = (Date.now() - stat.mtimeMs) / (1000 * 60 * 60 * 24);
+      if (ageDays > 7) {
+        warnings.push(
+          `📅 Schema registry is ${Math.round(ageDays)} days old (last regenerated ${stat.mtime.toISOString().slice(0, 10)}) ` +
+          `and has no _meta.migrations_high_water (v1 shape).\n` +
+          `   This is the source of truth for 4 PreToolUse hooks and the review subagents.\n` +
+          `   Recommend: invoke /regen-schema-registry to refresh from live Supabase (also upgrades it to v2).`
+        );
+      }
     }
   }
 } catch { /* ignore */ }

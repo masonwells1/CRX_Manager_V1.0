@@ -207,6 +207,18 @@ export interface QuoteItem {
   product?: Product;
 }
 
+// Per-(quote, product) booking draw-down ledger (sell-side roadmap #1).
+// Lives in its own table — NOT on quote_items — because save_quote recreates
+// all quote_items on every edit, which would wipe item-level draw history.
+export interface QuoteProductDraw {
+  id: string;
+  quote_id: string;
+  product_id: string;
+  quantity_drawn: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface QuoteVersion {
   id: string;
   quote_id: string;
@@ -310,6 +322,9 @@ export interface Order {
   order_number: string;
   order_name: string | null;
   quote_id: string | null;
+  /** true when the order was created by draw_down_quote (a booking draw) —
+   * voiding/cancelling a draw order returns its quantity to the booking. */
+  booking_draw?: boolean;
   customer_id: string;
   status: OrderStatus;
   commission_split: CommissionSplit | null;

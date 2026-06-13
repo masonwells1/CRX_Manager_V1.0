@@ -24,8 +24,9 @@
 - `create_quote_from_template()` — Creates a new quote from a saved template
 
 ## Order & Delivery
-- `convert_quote_to_order()` — also releases inventory holds linked to the quote. Copies `qi.notes` to `order_items.notes` and aggregates section_header_notes into `orders.program_notes`
-- `create_direct_order()` — create order without a quote; warns (not blocks) on low inventory using net position
+- `convert_quote_to_order()` — whole-quote conversion; also releases inventory holds linked to the quote. Copies `qi.notes` to `order_items.notes` and aggregates section_header_notes into `orders.program_notes`. Since `20260610145253`: rejects draft/declined/expired/cancelled quotes (`BOOKING_CLOSED`), rejects partially-drawn quotes (`BOOKING_PARTIALLY_DRAWN`), and marks all products fully drawn in `quote_product_draws`
+- `draw_down_quote(p_quote_id, p_draws, …)` — **partial booking draw-down** (sell-side roadmap #1 v1, `20260610145253`): pulls part of a sent/revised quote's booked quantities into a new confirmed order at the quote's locked (booking-weighted) price; tracks per-product balances in `quote_product_draws`; decrements the quote's active holds FIFO (drawn qty moves to `quantity_prebooked` — Net Free invariant); overdraw blocked (`BOOKING_OVERDRAWN`); final draw sets the quote `accepted`. admin/sales_rep, strict-actor, idempotent
+- `create_direct_order()` — create order without a quote; warns (not blocks) on low inventory using net position. Role-gated `admin`/`sales_rep` (`INSUFFICIENT_ROLE`) since `20260610142204` — audit W1 closed an RPC-direct hole where any authenticated user could create orders
 - `create_order_from_blend_ticket()` — create order from linked blend ticket
 - `cancel_order()` — cancels order, releases prebooked inventory. **F7 (2026-05-07):** no longer adds `v_hold.quantity` to `inventory.quantity_available` when deactivating planned-quote holds — holds are soft reservations that never debited it.
 - `update_order_items()` — update items on an existing order
