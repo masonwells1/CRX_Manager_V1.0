@@ -263,3 +263,25 @@ helper-dependency check + a rolled-back `SMOKE_PASS_ROLLBACK`):
 `20260613150000` (planned-holds re-home, creates `_sync_planned_holds`) →
 `20260613150100` (cancel_order hold-resync) →
 `20260613150200` (void_order hold-resync).
+
+### 9.5 Full Codex review (the "large review", run 2026-06-13 after the usage limit reset)
+
+`codex review --base main` over the ENTIRE recovery branch (consolidation + all session fixes + all 3
+migrations). **Verdict: builds + tests pass, NO BLOCKER / NO HIGH / NO P1 — 3 P2s, none in the migrations,
+inventory, money, or merge.** All 3 fixed (commit below):
+
+- **[P2] `grant-change-guard.mjs` bypass** (dev hook) — an Edit that changes only a role token inside an
+  existing `REVOKE` carried no grant/revoke word in `new_string`, so the fast path allowed it without caller
+  analysis. **Fixed:** for Edit/MultiEdit the hook now reconstructs the post-edit file and runs the fast
+  path + parser against the full statements.
+- **[P2] `.claude/caller-graph.json` stale** (dev tooling) — predated `assign_job_applicator`; a future
+  REVOKE on it would read zero callers and bypass the justification guard. **Fixed:** regenerated
+  (static-only refresh) — `assign_job_applicator` now maps to `DispatchBoard.tsx:155` + `JobDetail.tsx:499`.
+  (The live-derived sections are reused-as-of 2026-06-10, same class as the schema-registry; a full
+  `--live-json` regen rides the post-apply registry refresh in §8.)
+- **[P2] `ExpiringLicensesCard.tsx`** (real, minor UX) — with >6 expired licenses, ascending order + limit(6)
+  showed the *oldest* expired and could hide imminent renewals. **Fixed:** added a lower bound
+  (`expiry_date >= today−30`) so the card shows the actionable window (recently lapsed + next 60 days).
+
+No app-behavior, security, money, or migration finding in the full review — the consolidation core and all
+three inventory migrations are independently clean per Codex.

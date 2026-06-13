@@ -78,7 +78,26 @@ else if (typeof input.new_string === "string") newContent = input.new_string;
 else if (Array.isArray(input.edits)) newContent = input.edits.map((e) => e?.new_string || "").join("\n");
 if (!newContent) allow();
 
-// Fast path: nothing grant-shaped in the new content.
+// For Edit/MultiEdit, new_string is only a FRAGMENT — a role-token-only change
+// inside an existing REVOKE (e.g. `service_role` -> `authenticated`) carries no
+// grant/revoke word and would slip past the fast path + parser below. Apply the
+// edit against the on-disk file so both see the FULL post-edit statements (Codex
+// 2026-06-13). Falls back to the fragment if the file can't be read/applied.
+if (toolName !== "write" && existsSync(filePath)) {
+  try {
+    let disk = readFileSync(filePath, "utf8");
+    const applyOne = (o, n) => {
+      if (typeof o === "string" && o.length > 0 && typeof n === "string") disk = disk.split(o).join(n);
+    };
+    if (Array.isArray(input.edits)) input.edits.forEach((e) => applyOne(e?.old_string, e?.new_string));
+    else applyOne(input.old_string, input.new_string);
+    newContent = disk;
+  } catch {
+    /* keep the fragment */
+  }
+}
+
+// Fast path: nothing grant-shaped in the post-edit content.
 if (!/\b(grant|revoke)\b/i.test(newContent)) allow();
 
 // For Edits, the justification markers may already live elsewhere in the file

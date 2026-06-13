@@ -1,8 +1,9 @@
 /**
  * ExpiringLicensesCard — Dashboard renewal reminders (deep-dive H1 B5)
  *
- * Admin/sales-rep card listing applicator licenses that are expired or expire
- * within 60 days. Renders nothing when there's nothing to act on.
+ * Admin/sales-rep card listing applicator licenses that RECENTLY lapsed (within
+ * the last 30 days) or expire within the next 60 days — the actionable renewal
+ * window. Renders nothing when there's nothing to act on.
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -33,6 +34,10 @@ export default function ExpiringLicensesCard() {
         .from('applicator_licenses')
         .select('id, holder_name, license_type, expiry_date, customer_id, profile_id, customer:customers(farm_name)')
         .eq('is_active', true)
+        // Actionable renewal window: recently lapsed (last 30 days) through the
+        // next 60 days. The lower bound stops indefinitely-old expired licenses
+        // from crowding out imminent renewals under the limit(6) (Codex 2026-06-13).
+        .gte('expiry_date', localDatePlusDays(-30))
         .lte('expiry_date', localDatePlusDays(60))
         .order('expiry_date', { ascending: true })
         .limit(6);
