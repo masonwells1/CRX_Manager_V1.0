@@ -58,6 +58,7 @@ export default function OrderDetail() {
   const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '');
   const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
   const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
+  const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -118,6 +119,9 @@ export default function OrderDetail() {
   // Ship-now/price-later (#2): per-line price inputs for a needs_pricing order.
   const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
   const [pricingOrder, setPricingOrder] = useState(false);
+  // #4 billing cockpit: post-all-drafts / consolidate-drafts actions.
+  const [postingAll, setPostingAll] = useState(false);
+  const [consolidating, setConsolidating] = useState(false);
 
   const isAdmin = role === 'admin';
   // Draw-created orders (booking_draw) mirror their booking's draw ledger —
@@ -715,6 +719,12 @@ export default function OrderDetail() {
   const hasPendingDelivery = deliveries.some(
     (d) => d.status === 'scheduled' || d.status === 'in_progress'
   );
+  // W5 (sell-side #4): any non-cancelled/voided delivery means the order is billed
+  // per-delivery — create_invoice_from_order now hard-rejects an order-level invoice
+  // in that case, so don't even offer the "Create Invoice" button.
+  const hasActiveDelivery = deliveries.some(
+    (d) => d.status !== 'cancelled' && d.status !== 'voided'
+  );
 
   const onCreateInvoiceClick = () => {
     // Codex P2 fix: reset key per invoice-creation attempt (date/notes vary).
@@ -724,6 +734,61 @@ export default function OrderDetail() {
       return;
     }
     handleCreateInvoice();
+  };
+
+  // #4 billing cockpit: post every draft/unposted invoice on this order in one
+  // action. Each post_invoice is its own txn; PRICING_INCOMPLETE / period errors
+  // are surfaced per-invoice without aborting the rest.
+  const handlePostAllDrafts = async () => {
+    const drafts = invoices.filter((i) => i.status === 'draft' || i.status === 'unposted');
+    if (drafts.length === 0) { toast('warning', 'No draft invoices to post.'); return; }
+    setPostingAll(true);
+    let posted = 0;
+    const errors: string[] = [];
+    // No per-invoice idempotency key: post_invoice's own status guard makes a
+    // re-post a no-op (draft→posted; a posted invoice cannot post again), and the
+    // postingAll loading state blocks double-clicks — the same pattern
+    // post_invoice_group uses (it calls post_invoice(..., NULL) in its loop).
+    for (const inv of drafts) {
+      try {
+        const { data, error } = await supabase.rpc('post_invoice', { p_invoice_id: inv.id });
+        if (error) throw error;
+        assertRpcResult<{ success: boolean }>(data, 'post_invoice');
+        posted++;
+      } catch (err) {
+        if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) errors.push(`${inv.invoice_number}: needs pricing first`);
+        else errors.push(`${inv.invoice_number}: ${err instanceof Error ? err.message : 'failed to post'}`);
+      }
+    }
+    if (posted > 0) toast('success', `Posted ${posted} invoice(s).`);
+    if (errors.length > 0) {
+      Sentry.captureException(new Error('post_all_drafts partial failure'), { level: 'warning', tags: { source: 'critical_action', action: 'post_all_drafts' }, extra: { errors } });
+      for (const e of errors) toast('error', e);
+    }
+    await fetchOrder();
+    setPostingAll(false);
+  };
+
+  // #4 billing cockpit: merge this order's draft invoices into one (Agvance pattern).
+  const handleConsolidateDrafts = async () => {
+    if (!order || !profile) return;
+    setConsolidating(true);
+    try {
+      const idem = consolidateIdem.getKey();
+      const { data, error } = await supabase.rpc('consolidate_draft_invoices', { p_order_id: order.id, p_performed_by: profile.id, p_idempotency_key: idem });
+      if (error) throw error;
+      const result = assertRpcResult<{ success: boolean; consolidated: boolean; merged_count?: number }>(data, 'consolidate_draft_invoices');
+      consolidateIdem.resetKey();
+      if (result.consolidated) toast('success', `Consolidated ${(result.merged_count ?? 0) + 1} draft invoices into one.`);
+      else toast('info', 'Nothing to consolidate — fewer than 2 draft invoices.');
+      await fetchOrder();
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'consolidate_draft_invoices' } });
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can consolidate invoices.');
+      else toast('error', err instanceof Error ? err.message : 'Failed to consolidate invoices.');
+    } finally {
+      setConsolidating(false);
+    }
   };
 
   // Ship-now/price-later (#2 v2): finalize a needs_pricing rush order via price_order.
@@ -847,7 +912,7 @@ export default function OrderDetail() {
                   Booking draw — items locked
                 </span>
               )}
-              {order.status !== 'cancelled' && order.status !== 'fulfilled' && !hasActiveInvoice && (<>
+              {order.status !== 'cancelled' && order.status !== 'fulfilled' && !hasActiveInvoice && !hasActiveDelivery && (<>
                 <Button
                   variant="secondary"
                   icon={<FileText className="w-4 h-4" />}
@@ -1148,9 +1213,25 @@ export default function OrderDetail() {
       {/* Linked Invoices */}
       {invoices.length > 0 && (
         <Card>
-          <div className="flex items-center gap-2 mb-3">
-            <FileText className="w-5 h-5 text-crx-green" />
-            <h3 className="font-semibold text-nav-dark">Linked Invoices</h3>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2">
+              <FileText className="w-5 h-5 text-crx-green" />
+              <h3 className="font-semibold text-nav-dark">Linked Invoices</h3>
+            </div>
+            {(role === 'admin' || role === 'sales_rep') && (
+              <div className="flex items-center gap-2">
+                {invoices.filter((i) => i.status === 'draft').length >= 2 && (
+                  <Button variant="secondary" size="sm" showChevron={false} onClick={handleConsolidateDrafts} loading={consolidating}>
+                    Consolidate drafts
+                  </Button>
+                )}
+                {invoices.some((i) => i.status === 'draft' || i.status === 'unposted') && (
+                  <Button variant="secondary" size="sm" showChevron={false} onClick={handlePostAllDrafts} loading={postingAll}>
+                    Post all drafts
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
