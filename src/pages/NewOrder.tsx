@@ -73,6 +73,7 @@ export default function NewOrder() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const createOrderIdem = useIdempotencyKey('create_direct_order', profile?.id || '');
+  const rushOrderIdem = useIdempotencyKey('create_rush_order', profile?.id || '');
   const { warning: creditWarning, check: checkCreditLimit, dismiss: dismissCreditWarning } = useCreditLimitCheck();
 
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -86,6 +87,8 @@ export default function NewOrder() {
   const [customerPoNumber, setCustomerPoNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);
+  // Ship-now/price-later (#2): when on, submit via create_rush_order (unpriced).
+  const [priceLater, setPriceLater] = useState(false);
   // B1 (deep-dive H1): RUP point-of-sale warning — same pattern as QuoteBuilder
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
 
@@ -353,6 +356,36 @@ export default function NewOrder() {
 
     await runCriticalAction({
       action: async () => {
+        // Ship-now/price-later (#2): create an UNPRICED rush order (needs_pricing);
+        // prices are finalized later via the order's Set Pricing panel → price_order.
+        if (priceLater) {
+          const rushKey = rushOrderIdem.getKey();
+          const { data, error } = await supabase.rpc('create_rush_order', {
+            p_customer_id: customerId,
+            p_items: validItems.map((item) => ({ product_id: item.product_id, qty: item.quantity })),
+            p_notes: notes || null,
+            p_performed_by: profile.id,
+            p_idempotency_key: rushKey,
+          });
+          if (error) throw error;
+          rushOrderIdem.resetKey();
+          const rushResult = assertRpcResult<{ order_id: string; order_number: string; warnings?: string[] }>(data, 'create_rush_order');
+          const rushOrderId = rushResult.order_id;
+          if (customerPoNumber.trim() && rushOrderId) {
+            const poResult = await supabase.from('orders').update({ customer_po_number: customerPoNumber.trim() }).eq('id', rushOrderId).select();
+            checkMutationResult(poResult, 'Update customer PO number');
+          }
+          clearDraft();
+          if (rushResult.warnings && rushResult.warnings.length > 0) {
+            for (const w of rushResult.warnings) toast('warning', 'Inventory: ' + w);
+          }
+          trackBusinessEvent('order_created', {
+            message: `Rush order ${rushResult.order_number} created — needs pricing`,
+            data: { orderId: rushOrderId, orderNumber: rushResult.order_number, itemCount: validItems.length, priceLater: true },
+          });
+          navigate(`/orders/${rushOrderId}`);
+          return;
+        }
         const idemKey = createOrderIdem.getKey();
         const rpcItems = validItems.map((item) => ({
           product_id: item.product_id,
@@ -465,7 +498,7 @@ export default function NewOrder() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold text-nav-dark">New Order</h1>
-            <p className="text-sm text-secondary">Create a direct order</p>
+            <p className="text-sm text-secondary">{priceLater ? 'Ship now, price later — rush order (unpriced)' : 'Create a direct order'}</p>
           </div>
         </div>
         <Button onClick={handleSave} disabled={saving}>
@@ -490,6 +523,20 @@ export default function NewOrder() {
       <Card>
         <CardHeader title="Order Information" />
         <div className="p-5 space-y-4">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={priceLater}
+              onChange={(e) => setPriceLater(e.target.checked)}
+              className="rounded border-gray-300 text-crx-green focus:ring-crx-green"
+            />
+            <span className="font-medium">Ship now, price later (rush order)</span>
+          </label>
+          {priceLater && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 text-sm">
+              Price-later mode: the order is created <strong>unpriced</strong> (marked “needs pricing”) and inventory is reserved. The price/cost fields below are ignored — finalize prices later on the order's <strong>Set Pricing</strong> panel. The invoice can't be posted until then.
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-nav-dark mb-1">
@@ -630,6 +677,7 @@ export default function NewOrder() {
                           type="number"
                           step="any"
                           min={0}
+                          disabled={priceLater}
                           value={item.price_per_unit || ''}
                           onChange={(e) => {
                             const val = e.target.value ? parseFloat(e.target.value) : 0;
@@ -674,6 +722,7 @@ export default function NewOrder() {
                         type="number"
                         step="0.01"
                         value={item.unit_cost || ''}
+                        disabled={priceLater}
                         onChange={(e) =>
                           updateItem(item._key, 'unit_cost', parseFloat(e.target.value) || 0)
                         }
