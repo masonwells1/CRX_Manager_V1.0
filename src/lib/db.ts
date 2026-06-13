@@ -109,6 +109,10 @@ export const RpcErrorCodes = {
   PRICING_INCOMPLETE: 'PRICING_INCOMPLETE',
   // price_order (sell-side roadmap #2 v2)
   INVALID_PRICE: 'INVALID_PRICE',
+  // booking prepay earmark / auto-apply (sell-side roadmap #6b)
+  PREPAY_CREDIT_NOT_FOUND: 'PREPAY_CREDIT_NOT_FOUND',
+  BOOKING_NOT_FOUND: 'BOOKING_NOT_FOUND',
+  PREPAY_BOOKING_CUSTOMER_MISMATCH: 'PREPAY_BOOKING_CUSTOMER_MISMATCH',
   // create_rebate_claim / transition_rebate_claim (audit #33)
   PROGRAM_REQUIRED: 'PROGRAM_REQUIRED',
   QUANTITY_INVALID: 'QUANTITY_INVALID',
