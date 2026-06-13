@@ -172,11 +172,26 @@ export default function JobDetail() {
       const wpsPids = chemRows.filter((c) => c.product_id).map((c) => c.product_id);
       const labelById = new Map<string, { product_name: string; epa_registration: string | null; signal_word: string | null; rei_hours: number | null; phi_days: number | null }>();
       if (wpsPids.length > 0) {
-        const { data: lp } = await supabase
+        const { data: lp, error: lpErr } = await supabase
           .from('products')
           .select('id, product_name, epa_registration, signal_word, rei_hours, phi_days')
           .in('id', wpsPids);
-        ((lp || []) as Array<{ id: string; product_name: string; epa_registration: string | null; signal_word: string | null; rei_hours: number | null; phi_days: number | null }>).forEach((p) => labelById.set(p.id, p));
+        // A WPS notice is a compliance document — never print it with missing label
+        // data. Supabase returns { data:null, error } without throwing, so abort the
+        // PDF on a failed lookup, or if any job product has no label row at all
+        // (Codex 2026-06-13 round-3 finding 1).
+        if (lpErr || !lp) {
+          toast('error', 'Could not load product label data — try again before printing the WPS notice.');
+          setPrintingWps(false);
+          return;
+        }
+        (lp as Array<{ id: string; product_name: string; epa_registration: string | null; signal_word: string | null; rei_hours: number | null; phi_days: number | null }>).forEach((p) => labelById.set(p.id, p));
+        const missingLabel = wpsPids.filter((pid) => !labelById.has(pid));
+        if (missingLabel.length > 0) {
+          toast('error', 'Some products on this job have no label data on file — the WPS notice cannot be completed.');
+          setPrintingWps(false);
+          return;
+        }
       }
       await generateWpsNoticePdf({
         job_number: jobNumber || 'draft',

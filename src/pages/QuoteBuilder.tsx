@@ -253,25 +253,29 @@ export default function QuoteBuilder() {
     setIsDirty(true);
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
 
-  // RUP compliance check when customer or products change
+  // RUP compliance check when the customer or the PRODUCT SET changes. Keyed by a
+  // stable product-set string (NOT `sections`) so editing quantities/prices/notes
+  // does not re-run the check, and the activity log is deduped per
+  // (customer, product-set) via lastRupLogKey — matching the NewOrder flow. Without
+  // the dedup, every section edit flooded activity_feed with identical
+  // rup_compliance_warning rows (Codex 2026-06-13 round-3 finding 2).
+  const rupProductKey = sections.flatMap((s) => s.items.map((i) => i.product_id)).filter(Boolean).sort().join(',');
+  const lastRupLogKey = useRef('');
   useEffect(() => {
-    if (!customerId) { setRupWarnings([]); return; }
-    const productIds = sections.flatMap((s) => s.items.map((i) => i.product_id)).filter(Boolean);
-    if (!productIds.length) { setRupWarnings([]); return; }
+    if (!customerId || !rupProductKey) { setRupWarnings([]); return; }
     let cancelled = false;
-    checkRUPCompliance(customerId, productIds).then((res) => {
+    checkRUPCompliance(customerId, rupProductKey.split(',')).then((res) => {
       if (!cancelled) {
         setRupWarnings(res.warnings);
-        // PR-20: skip logging if profile hasn't loaded — this useEffect fires
-        // on every customer/section change and the warning surfaces in the UI
-        // anyway (setRupWarnings above). No need to bail out the whole effect.
-        if (res.warnings.length > 0 && profile?.id) {
+        const logKey = `${customerId}|${rupProductKey}`;
+        if (res.warnings.length > 0 && profile?.id && lastRupLogKey.current !== logKey) {
+          lastRupLogKey.current = logKey;
           logActivity({ event: 'rup_compliance_warning', description: `RUP products (${res.rupProductNames.join(', ')}) on quote for customer without valid license`, performedBy: profile.id, entityType: 'customer', entityId: customerId, customerId });
         }
       }
     });
     return () => { cancelled = true; };
-  }, [customerId, sections, profile?.id]);
+  }, [customerId, rupProductKey, profile?.id]);
 
   // Fetch transaction thread data (orders/deliveries/invoices linked to this quote)
   useEffect(() => {

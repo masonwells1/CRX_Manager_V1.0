@@ -239,9 +239,11 @@ export default function Dashboard() {
   const [data, setData] = useState<OperationalData>(defaultData);
   // Daily brief "open action items" count: operational_dashboard_summary returns
   // team_action_items as a FILTERED, LIMIT-10 list, so its length underreports the
-  // true open count. Count all open (incomplete, non-deleted) team_notes directly
-  // for the admin brief (team_notes RLS = SELECT to all; this is admin-only). Codex
-  // 2026-06-13 finding 3. Falls back to the capped list length if the count errors.
+  // true open count. Count open (incomplete, non-deleted) team_notes of the
+  // actionable type ('todo' — 'note'/'announcement' are informational, not action
+  // items) directly for the admin brief (team_notes RLS = SELECT to all; this is
+  // admin-only). Codex 2026-06-13 findings 3 + round-3 #3. Falls back to the capped
+  // list length if the count errors.
   const [openActionItemsCount, setOpenActionItemsCount] = useState<number | null>(null);
   useEffect(() => {
     if (role !== 'admin') return;
@@ -251,6 +253,7 @@ export default function Dashboard() {
         .from('team_notes')
         .select('id', { count: 'exact', head: true })
         .eq('is_completed', false)
+        .eq('note_type', 'todo')
         .is('deleted_at', null);
       if (!cancelled && !error) setOpenActionItemsCount(count ?? 0);
     })();
