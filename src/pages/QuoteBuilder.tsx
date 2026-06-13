@@ -45,6 +45,7 @@ import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
 import { localDatePlusDays } from '../lib/dateUtils';
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
+import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import HelpTip from '../components/ui/HelpTip';
@@ -165,6 +166,7 @@ export default function QuoteBuilder() {
   const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
   const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
   const revertStatusIdem = useIdempotencyKey('revert_quote_status', profile?.id || '');
+  const emailQuoteIdem = useIdempotencyKey('send_email_quote', profile?.id || '');
 
   // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
   // quantities into an order; the quote stays open with the remaining balance.
@@ -226,6 +228,8 @@ export default function QuoteBuilder() {
   const [showRevertModal, setShowRevertModal] = useState(false);
   const [revertReason, setRevertReason] = useState('');
   const [reverting, setReverting] = useState(false);
+  // #3 Stage A: email the quote PDF to the grower via the send-email Edge Function.
+  const [emailingGrower, setEmailingGrower] = useState(false);
   const [customerView, setCustomerView] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
 
@@ -1220,6 +1224,98 @@ export default function QuoteBuilder() {
       toast,
       sentryTag: 'preview_quote_pdf',
     });
+  };
+
+  // #3 Stage A: email the quote PDF to the grower via the send-email Edge Function.
+  // The Edge Function records the send in email_log and dedupes on the idempotency key.
+  const handleEmailToGrower = async () => {
+    if (!quoteId) { toast('warning', 'Save the quote before emailing it.'); return; }
+    if (!selectedCustomer?.email) { toast('error', 'This customer has no email address on file.'); return; }
+    setEmailingGrower(true);
+    try {
+      // Same rich (download) PDF the customer would receive.
+      const pdfData = {
+        quote_number: quoteNumber,
+        customer_name: selectedCustomer?.farm_name || 'Customer',
+        customer_email: selectedCustomer?.email || undefined,
+        customer_phone: selectedCustomer?.phone || undefined,
+        customer_address: selectedCustomer?.billing_address || undefined,
+        sales_rep_name: profile?.full_name || 'Sales Rep',
+        created_at: new Date().toISOString(),
+        expires_at: undefined,
+        valid_days: validDays,
+        tier,
+        header_notes: headerNotes || undefined,
+        footer_notes: footerNotes || undefined,
+        sections: sections.map((sec) => ({
+          section_name: sec.section_name,
+          section_notes: sec.section_notes || undefined,
+          section_header_notes: sec.section_header_notes || undefined,
+          items: sec.items
+            .filter((i) => i.product_id)
+            .map((i) => ({
+              product_name: i.product?.product_name || '',
+              category: i.product?.category || '',
+              notes: i.notes || undefined,
+              suggested_rate: i.product?.suggested_rate || undefined,
+              actual_rate: i.actual_rate || 0,
+              rate_unit: i.rate_unit || '',
+              acres: i.acres || 0,
+              total_units_needed: i.total_units_needed || 0,
+              inventory_unit: i.product?.inventory_unit || undefined,
+              unit_size: i.product?.unit_size || undefined,
+              price_per_unit: i.price_per_unit,
+              price_unit: i.price_unit || undefined,
+              price_per_acre: i.price_per_acre || undefined,
+              total_price: i.total_price,
+            })),
+        })),
+        totals: {
+          totalPrice: totals.totalPrice,
+          totalCost: totals.totalCost,
+          totalProfit: totals.totalProfit,
+          avgMargin: totals.totalMarginPct,
+        },
+      };
+      const doc = await generateQuotePdf(pdfData, customColumns || getTemplateColumns(selectedTemplateId));
+      const base64 = pdfToBase64(doc);
+      const idemKey = emailQuoteIdem.getKey();
+      const result = await sendEmail({
+        to: selectedCustomer.email,
+        subject: `Quote ${quoteNumber} from Crop Rx Solutions`,
+        html: buildEmailHtml(
+          `<p>Hi ${selectedCustomer.contact_name || selectedCustomer.farm_name || 'there'},</p>` +
+          `<p>Please find your quote <strong>${quoteNumber}</strong> attached as a PDF. ` +
+          `Let us know if you have any questions or would like to proceed.</p>` +
+          `<p>Thank you,<br/>Crop Rx Solutions</p>`
+        ),
+        email_type: 'quote',
+        customer_id: customerId,
+        resource_type: 'quote',
+        resource_id: quoteId,
+        idempotency_key: idemKey,
+        attachments: [{ filename: `Quote-${quoteNumber}.pdf`, content: base64 }],
+      });
+      emailQuoteIdem.resetKey();
+      if (result.deduplicated) {
+        toast('info', 'This quote was already emailed (duplicate send skipped).');
+      } else {
+        toast('success', `Quote emailed to ${selectedCustomer.email}`);
+      }
+      await logActivity({
+        event: 'quote_emailed',
+        description: `Quote ${quoteNumber} emailed to ${selectedCustomer.email}`,
+        performedBy: profile?.id || '',
+        entityType: 'quote',
+        entityId: quoteId,
+        customerId,
+      });
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'email_quote_to_grower' } });
+      toast('error', err instanceof Error ? err.message : 'Failed to email the quote');
+    } finally {
+      setEmailingGrower(false);
+    }
   };
 
   const handleMarkPresented = async () => {
@@ -2847,14 +2943,15 @@ export default function QuoteBuilder() {
             Mark as Presented
           </Button>
           <HelpTip text="Sends the quote PDF to the customer's email and locks it as 'Sent'. A version snapshot is saved automatically so you can always see what the customer received." className="ml-1" />
-          <button
-            disabled
-            title="Coming Soon"
-            className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 rounded-lg cursor-not-allowed text-sm"
+          <Button
+            variant="secondary"
+            icon={<Send className="w-4 h-4" />}
+            showChevron={false}
+            onClick={handleEmailToGrower}
+            loading={emailingGrower}
           >
-            <Send className="w-4 h-4" />
             Email to Grower
-          </button>
+          </Button>
         </div>
       </Modal>
 
