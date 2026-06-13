@@ -67,8 +67,10 @@ export default function LogbookReport() {
       } else if (tab === 'field') {
         const { data: rows, error } = await supabase.from('fields').select('id, field_name, customer:customers(farm_name)').eq('is_active', true).order('field_name').limit(500);
         if (error) { toast('error', 'Failed to load fields'); return; }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        setEntities(((rows || []) as any[]).map((r) => ({ id: r.id, label: `${r.field_name} — ${r.customer?.farm_name || 'Unknown'}` })));
+        // Supabase's inferred type for the embedded customer join doesn't narrow
+        // cleanly, so assert the exact row shape we selected (no `any`).
+        type FieldEntityRow = { id: string; field_name: string; customer: { farm_name: string } | null };
+        setEntities(((rows || []) as unknown as FieldEntityRow[]).map((r) => ({ id: r.id, label: `${r.field_name} — ${r.customer?.farm_name || 'Unknown'}` })));
       }
     }
     loadEntities();

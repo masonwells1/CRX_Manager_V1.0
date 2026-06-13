@@ -33,6 +33,17 @@ if [ $LINT_EXIT -ne 0 ]; then
 fi
 
 echo ""
+echo "🔎 Running TypeScript typecheck..."
+npm run typecheck 2>&1
+TYPECHECK_EXIT=$?
+
+if [ $TYPECHECK_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ TYPECHECK FAILED — commit blocked. Fix type errors first."
+  exit 1
+fi
+
+echo ""
 echo "🔨 Running build check..."
 npm run build 2>&1
 BUILD_EXIT=$?
