@@ -20,7 +20,7 @@ import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
-import { checkRUPCompliance } from '../lib/rupCompliance';
+import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -174,7 +174,10 @@ export default function InvoiceDetail() {
       if (invoice?.customer_id && productIds.length > 0) {
         const res = await checkRUPCompliance(invoice.customer_id, productIds);
         if (res.hasRUPProducts && !res.hasValidLicense) {
-          warning = `This invoice includes restricted-use products (${res.rupProductNames.join(', ')}) and the customer has ${res.missingLicense ? 'NO applicator license' : 'only EXPIRED applicator licenses'} on file — it will be recorded as NON-COMPLIANT in the RUP sales register.`;
+          // #6: align the warning's stated disposition with what the DB actually
+          // records — missing license = NON-COMPLIANT, expired = WARNING (flagged).
+          const disp = rupRegisterDisposition(res);
+          warning = `This invoice includes restricted-use products (${res.rupProductNames.join(', ')}) and the customer has ${res.missingLicense ? 'NO applicator license' : 'only EXPIRED applicator licenses'} on file — it will be recorded as ${disp.label} in the RUP sales register.`;
         }
       }
     } catch (err) {

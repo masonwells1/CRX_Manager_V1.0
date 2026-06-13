@@ -15,6 +15,7 @@ import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCod
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
 import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
+import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerateWpsNotice } from '../lib/jobSaveHelpers';
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
@@ -155,6 +156,13 @@ export default function JobDetail() {
   const [fetchingWeather, setFetchingWeather] = useState(false);
 
   const handleWpsNotice = async () => {
+    // #5: the notice is built from current form state, so it MUST reflect the saved
+    // job. Block while there are unsaved edits — the printed REI/PHI, fields, products
+    // and applicator must match the persisted record, not in-progress form values.
+    if (!canGenerateWpsNotice({ isDirty })) {
+      toast('error', 'Save the job before printing the WPS notice — it must match the saved record.');
+      return;
+    }
     setPrintingWps(true);
     try {
       await generateWpsNoticePdf({
@@ -449,19 +457,17 @@ export default function JobDetail() {
   const performSave = async (licenseOverride: boolean) => {
     setSaving(true);
     try {
-      // Existing job + override: set the applicator via the override RPC FIRST so
-      // the jobs trigger sees no applicator change during save_job.
-      if (licenseOverride && !isNew && id) {
-        await assignWithOverride(id);
-      }
-
       const payload = {
         customer_id: customerId,
         job_date: jobDate,
         scheduled_time: scheduledTime || null,
-        // New job + override: create unassigned, then assign via the override RPC below
-        // (the BEFORE INSERT trigger would reject the expired applicator otherwise).
-        applicator_id: licenseOverride && isNew ? null : (applicatorId || null),
+        // #4 (atomic-safe override): never change the applicator INSIDE save_job. New
+        // job -> create unassigned; existing job -> keep the persisted applicator (a
+        // same-value UPDATE OF applicator_id is a no-op for the license trigger, which
+        // returns early when NEW.applicator_id IS NOT DISTINCT FROM OLD). The override
+        // (re)assignment runs via assign_job_applicator AFTER save_job commits, so a
+        // failed save can never leave a committed applicator change behind.
+        applicator_id: overrideSaveApplicatorId({ licenseOverride, isNew, applicatorId, savedApplicatorId }),
         vehicle_id: vehicleId || null,
         recipe_id: recipeId || null,
         notes: notes || null,
@@ -502,17 +508,25 @@ export default function JobDetail() {
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
 
-      // New job + override: now that the job exists, assign with the override hatch.
-      // The job is CREATED at this point regardless — if the assignment fails we must
-      // still navigate to it, or a re-click of Save would create a duplicate job.
-      if (licenseOverride && isNew && applicatorId) {
+      // #4: the job is now persisted with its applicator UNCHANGED. Flip the
+      // applicator via assign_job_applicator (admin override) ONLY after the save
+      // committed. If THIS fails, the edits are already saved and the applicator is
+      // simply unchanged — a clean, retryable state, never a partial "applicator
+      // changed but the save was lost" (the failure-after-override-assignment case).
+      if (shouldReassignApplicatorAfterSave({ licenseOverride, applicatorId, savedApplicatorId })) {
         try {
-          await assignWithOverride(result.job_id);
+          await assignWithOverride(isNew ? result.job_id : id!);
         } catch (assignErr) {
-          Sentry.captureException(assignErr instanceof Error ? assignErr : new Error(String(assignErr)), { extra: { context: 'assign_job_applicator_after_create' } });
-          toast('error', 'Job created, but the override assignment failed — assign the applicator from this page.');
+          Sentry.captureException(assignErr instanceof Error ? assignErr : new Error(String(assignErr)), { extra: { context: 'assign_job_applicator_after_save' } });
+          toast('error', isNew
+            ? 'Job created, but the override applicator assignment failed — assign the applicator from this page.'
+            : 'Job saved, but the override applicator change failed — retry the applicator assignment.');
           setIsDirty(false);
-          navigate(`/jobs/${result.job_id}`);
+          if (isNew) {
+            navigate(`/jobs/${result.job_id}`);
+          } else {
+            await fetchJob();
+          }
           setSaving(false);
           return;
         }

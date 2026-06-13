@@ -85,3 +85,25 @@ export async function checkRUPCompliance(
 
   return result;
 }
+
+export type RUPRegisterDisposition = {
+  /** compliance_status generate_rup_sales_records will record for this sale. */
+  status: 'non_compliant' | 'warning' | null;
+  /** user-facing label matching that status (null = nothing to record). */
+  label: 'NON-COMPLIANT' | 'WARNING' | null;
+};
+
+/**
+ * Classify what the RUP sales register will record, MATCHING the server semantics
+ * in generate_rup_sales_records (migration 20260610185741):
+ *   - missing license -> non_compliant  (label NON-COMPLIANT)
+ *   - expired license -> warning        (label WARNING — flagged, NOT non-compliant)
+ *   - valid / no RUP   -> nothing to record
+ * Keep this in lockstep with that SQL CASE so the point-of-sale warning never
+ * overstates the recorded disposition (#6, 2026-06-13 overlapping-sessions recovery).
+ */
+export function rupRegisterDisposition(res: RUPComplianceResult): RUPRegisterDisposition {
+  if (!res.hasRUPProducts || res.hasValidLicense) return { status: null, label: null };
+  if (res.missingLicense) return { status: 'non_compliant', label: 'NON-COMPLIANT' };
+  return { status: 'warning', label: 'WARNING' };
+}
