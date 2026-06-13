@@ -237,13 +237,14 @@ export default function Dashboard() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<OperationalData>(defaultData);
-  // Daily brief "open action items" count: operational_dashboard_summary returns
-  // team_action_items as a FILTERED, LIMIT-10 list, so its length underreports the
-  // true open count. Count open (incomplete, non-deleted) team_notes of the
-  // actionable type ('todo' — 'note'/'announcement' are informational, not action
-  // items) directly for the admin brief (team_notes RLS = SELECT to all; this is
-  // admin-only). Codex 2026-06-13 findings 3 + round-3 #3. Falls back to the capped
-  // list length if the count errors.
+  // Daily-brief "open to-dos" count — a DISTINCT metric from the dashboard's
+  // attention-filtered action-items widget (operational_dashboard_summary's
+  // team_action_items, which is pinned/urgent/overdue/assigned + LIMIT 10). The
+  // brief reports the actionable backlog: open (incomplete, non-deleted) team_notes
+  // of type 'todo' ('note'/'announcement' are informational). team_notes RLS =
+  // SELECT-to-all; this card is admin-only. (Codex 2026-06-13 finding 3 + self-review
+  // DASH-1: relabeled "to-dos" so the count matches its own population.) Best-effort
+  // fallback to the widget list length only if the count query errors.
   const [openActionItemsCount, setOpenActionItemsCount] = useState<number | null>(null);
   useEffect(() => {
     if (role !== 'admin') return;

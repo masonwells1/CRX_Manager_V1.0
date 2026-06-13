@@ -84,7 +84,7 @@ export default function DailyBrief({ deliveriesToday, deliveryUnassigned, active
             Today: <button onClick={() => navigate('/deliveries')} className="font-semibold text-crx-green hover:underline">{deliveriesToday} deliver{deliveriesToday === 1 ? 'y' : 'ies'}</button>
             {deliveryUnassigned > 0 && <> (<span className="font-semibold text-amber-600">{deliveryUnassigned} unassigned</span>)</>}
             , {activeOrders} active order{activeOrders === 1 ? '' : 's'}
-            {actionItemsCount > 0 && <>, and <button onClick={() => navigate('/team-board')} className="font-semibold text-crx-green hover:underline">{actionItemsCount} open action item{actionItemsCount === 1 ? '' : 's'}</button></>}
+            {actionItemsCount > 0 && <>, and <button onClick={() => navigate('/team-board')} className="font-semibold text-crx-green hover:underline">{actionItemsCount} open to-do{actionItemsCount === 1 ? '' : 's'}</button></>}
             .
             {period && <> Accounting period <span className="font-semibold">{period.name}</span> is {period.status}{period.status === 'open' && period.days_remaining >= 0 ? ` — ${period.days_remaining} day${period.days_remaining === 1 ? '' : 's'} to close` : ''}.</>}
           </p>

@@ -22,9 +22,11 @@ owner decision. No new security hole, no latent break, no financial drift, no be
 recovery core (auto-merge + pending migration + applied migrations). Three independent Codex (gpt-5.5)
 review rounds surfaced **10 non-blocking findings in the new H1 features** — including one **real inventory
 under-reservation bug** (round 2) — and **ALL 10 were implemented and committed** per Mason's direction
-(§9.3). The fixes are battery-green; a 4th Codex confirmation round is pending the OpenAI usage-limit reset
-(≈12:52 PM). The change set now carries **2 pending migrations** (`20260613150000` + `20260613150100`),
-both proven by rolled-back `SMOKE_PASS_ROLLBACK`.
+(§9.3). All were implemented and committed. Per Mason, the Codex round-by-round loop was then stopped (in favor of
+one large review at the end) and replaced by Claude's own multi-agent self-review, which caught **2 more MED
+issues** — including `void_order` having the *same* inventory bug as `cancel_order` — both now fixed (§9.4).
+The change set carries **3 pending migrations** (`20260613150000` → `20260613150100` → `20260613150200`),
+each proven by rolled-back `SMOKE_PASS_ROLLBACK`.
 
 The single human gates that remain (per the standing CRX policy) are: applying the one pending migration
 to live, and the prod push. Both are recommended in §8.
@@ -170,10 +172,11 @@ Frontend-only; no migration. Verified: typecheck/lint/build/test all green.
 
 0. **Re-run Codex round-4** (`/codex-review`) once the OpenAI usage limit resets (≈12:52 PM) to confirm the
    round-3 fixes resolved findings — the loop's final confirmation before push.
-1. **Apply the two pending migrations IN STAMP ORDER** via the Supabase MCP apply gate (`migration-review`
-   proof → `apply_migration`): first `20260613150000_planned_holds_drawn_sync` (creates `_sync_planned_holds`),
-   then `20260613150100_cancel_order_resync_holds_on_draw_cancel` (depends on it — its §0 hard-aborts if the
-   helper is absent). Re-confirm each with its §5 self-verify + registered smoke (`SMOKE_PASS_ROLLBACK`).
+1. **Apply the THREE pending migrations IN STAMP ORDER** via the Supabase MCP apply gate (`migration-review`
+   proof → `apply_migration`): `20260613150000_planned_holds_drawn_sync` (creates `_sync_planned_holds`) →
+   `20260613150100_cancel_order_resync_holds_on_draw_cancel` → `20260613150200_void_order_resync_holds_on_draw_void`
+   (the latter two depend on the helper — each §0 hard-aborts if it's absent or the base function drifted).
+   Re-confirm each with its §5 self-verify + rolled-back `SMOKE_PASS_ROLLBACK`.
 2. **Regenerate** the schema registry FROM LIVE (`/regen-schema-registry` — full MCP introspection, not the
    stamp-only script) so it covers through `20260613150000` (incl. `_sync_planned_holds`, `products.rei_hours/phi_days`).
    Then re-run `check:docs`. *(Deliberately deferred to here rather than done pre-apply: a regen now would be
@@ -231,15 +234,32 @@ under-reservation — was caught in round 2 and fixed). Commits on the branch:
 | 1 | WPS completeness; invoice-group RUP advisory; daily-brief count; registry stale | `200f5aa` — WPS adds PHI + on-label scope callout; `openPostConfirm` aggregates RUP across group siblings; brief counts open team_notes directly; registry regenerated from live (high-water → `20260611211058`) |
 | 2 | **[P1, CONFIRMED inventory bug]** `cancel_order` under-reserved holds on a booking-draw cancel (measured live: Net Free 900→940); WPS lost label data for deactivated products; Compliance holder-name not reset on staff change | `6e0681d` — NEW pending migration `20260613150100` re-emits `cancel_order` (verbatim+§0/§5) calling `_sync_planned_holds` after the reversal, **`SMOKE_PASS_ROLLBACK`** (AFTER_CANCEL hold=100/netfree=900); WPS fetches label fields for all products unfiltered; holder-name overwrites on staff change |
 | 3 | WPS print-on-failed-lookup (incomplete round-2 fix); QuoteBuilder RUP-log flood; daily-brief count included non-actionable notes (incomplete round-2 fix) | `567d088` — WPS aborts the PDF on query error OR any missing label row; QuoteBuilder dedups the RUP log per (customer, product-set) via a `lastRupLogKey` ref (matches the NewOrder flow); brief count filtered to `note_type='todo'` |
-| 4 | **NOT RUN — Codex CLI hit the OpenAI usage limit** ("try again at 12:52 PM"). The round-3 fixes are committed + battery-green but await a final Codex confirmation. | — |
+| 4 | **NOT RUN — Codex CLI hit the OpenAI usage limit.** Mason then directed: stop the Codex round-by-round loop, keep working, and he'll run one large review at the end. So Codex round-4 was replaced by Claude's own multi-agent self-review (§9.4). | — |
 
-**State:** All 10 Codex findings across rounds 1–3 are implemented, committed, and battery-green
-(typecheck 0, lint 0, build clean, **1,997 tests pass**, `check:docs` PASS, `validate-sql` 0 violations in
-the new migration). The round-3 fixes follow established codebase patterns (NewOrder RUP dedup, the
-`team_notes` note_type contract, fail-closed compliance PDFs), so convergence is expected. **The only
-remaining step is re-running Codex round-4 after the usage limit resets** (≈12:52 PM) to confirm —
-recommended via `/codex-review` before the gated push.
+### 9.4 Self-review (replacing Codex round-4, per Mason) — 2 MED findings, both fixed
 
-**Pending migrations now: 2** — `20260613150000` (planned-holds re-home) then `20260613150100`
-(cancel_order hold-resync, depends on the first). Both validated by rolled-back `SMOKE_PASS_ROLLBACK`;
-apply in stamp order at the gate.
+A 3-dimension adversarial workflow (each finding empirically verified against live, rolled back) over the
+whole session diff. The new `cancel_order` migration passed all 5 inventory edge-case smokes (multi-product,
+partial-delivery, multi-draw, non-draw, non-planned). Two real MED findings surfaced and were fixed:
+
+- **VOID-1 (MED, confirmed)** — `void_order` has the **same** booking-draw inventory under-reservation as
+  `cancel_order` (my earlier "void is coincidentally correct" reasoning was wrong: `complete_delivery` drains
+  `prebooked` to 0 before 'fulfilled', so nothing offsets the un-rebuilt hold). Measured live: partial void
+  900→940, full void 900→**1000** (sellable twice). **Fixed** by a 3rd pending migration `20260613150200`
+  (`6th commit`), the symmetric twin of `150100` — re-emits `void_order` verbatim + one
+  `_sync_planned_holds` call, **`SMOKE_PASS_ROLLBACK`** (AFTER_VOID netfree=900 for both partial-deliver and
+  full-draw cases). The earlier claim that void was deliberately left untouched is hereby corrected.
+- **DASH-1 (MED)** — the daily-brief `note_type='todo'` count is a different population than the dashboard's
+  attention-filtered action-items widget; the comment misleadingly implied "same list". **Fixed** by
+  relabeling the brief metric "**open to-dos**" (which the `todo` count accurately measures) and correcting
+  the comment — a distinct, honest metric from the widget.
+
+**State:** All 10 Codex findings (rounds 1–3) **+** both self-review findings are implemented, committed, and
+battery-green (typecheck 0, lint 0, build clean, **1,997 tests pass**, `check:docs` PASS, `validate-sql` 0
+violations in the new migrations). **Mason will run one large review** of the whole branch before push.
+
+**Pending migrations now: 3** (apply in stamp order at the gate, each gated by §0 md5 precondition + the
+helper-dependency check + a rolled-back `SMOKE_PASS_ROLLBACK`):
+`20260613150000` (planned-holds re-home, creates `_sync_planned_holds`) →
+`20260613150100` (cancel_order hold-resync) →
+`20260613150200` (void_order hold-resync).
