@@ -1254,6 +1254,10 @@ export default function QuoteBuilder() {
   // The Edge Function records the send in email_log and dedupes on the idempotency key.
   const handleEmailToGrower = async () => {
     if (!quoteId) { toast('warning', 'Save the quote before emailing it.'); return; }
+    // Codex P1: an existing quote with unsaved edits still has quoteId, so the
+    // emailed PDF would render local edits the DB + version history don't have —
+    // the grower would get an unreproducible quote. Block until saved.
+    if (isDirty) { toast('warning', 'You have unsaved changes — save the quote before emailing it.'); return; }
     if (!selectedCustomer?.email) { toast('error', 'This customer has no email address on file.'); return; }
     setEmailingGrower(true);
     try {

@@ -7,16 +7,17 @@
 -- roll back (zero footprint). Runs as an admin via the JWT claim.
 --   P1  weighted-avg booked: 2 lines (40*100 + 60*100) -> booked_qty=200,
 --       wavg=50, booked_cents=1,000,000; draw=50 -> drawn_cents=250,000,
---       remaining_qty=150 -> remaining_cents=750,000; prepay credit original
---       10,000 / balance 6,000 -> earmarked=10,000, remaining=6,000, applied=4,000.
+--       remaining_qty=150 -> remaining_cents=750,000; prepay credit balance 6,000,
+--       NO application row -> applied=0, remaining=6,000, earmarked=applied+remaining=6,000.
 --   P2  unknown quote uuid -> found=false.
 --   P3  driver JWT -> INSUFFICIENT_ROLE (read RPC self-gates).
 --
--- NOTE on the prepay credit: balance_cents (6,000) is set < original (10,000)
--- directly to exercise the applied = earmarked − remaining derivation. This is a
--- transient, ROLLED-BACK synthetic state; the fin-prepay-balance sweep runs over
--- COMMITTED data only, so it is never tripped. (#6b will produce this state for
--- real via apply_prepay_to_invoice through the prepay_applications ledger.)
+-- NOTE on prepay attribution: applied is derived from the prepay_applications
+-- ledger joined invoice→order→quote (NOT original−balance), so this synthetic
+-- credit (balance 6,000, no application) reports applied=0. A non-zero applied is
+-- exercised end-to-end by 06bB (post → auto-apply creates a real application). The
+-- transient credit is ROLLED BACK; the fin-prepay-balance sweep runs over
+-- COMMITTED data only, so it is never tripped.
 --
 -- NOTE (2026-06-13): build-loop Supabase MCP is READ-ONLY → not run live here;
 -- verified by rls + drift + types reviewers (codex=PENDING per the pre-G5 batch).
@@ -54,8 +55,11 @@ BEGIN
           AND (r->>'booked_cents')::bigint = 1000000
           AND (r->>'drawn_cents')::bigint = 250000
           AND (r->>'remaining_cents')::bigint = 750000
-          AND (r->>'prepay_earmarked_cents')::bigint = 10000
-          AND (r->>'prepay_applied_cents')::bigint = 4000
+          -- applied is now derived from the prepay_applications ledger joined to
+          -- this booking's orders; this synthetic credit has NO application row,
+          -- so applied=0, remaining=6000 (current balance), earmarked=applied+remaining=6000.
+          AND (r->>'prepay_earmarked_cents')::bigint = 6000
+          AND (r->>'prepay_applied_cents')::bigint = 0
           AND (r->>'prepay_remaining_cents')::bigint = 6000
           AND (line0->>'booked_qty')::numeric = 200
           AND (line0->>'drawn_qty')::numeric = 50

@@ -85,11 +85,22 @@ BEGIN
   ),
   booking_prepay AS (
     SELECT pc.quote_id,
-           COALESCE(SUM(pc.original_amount_cents), 0) AS earmarked_cents,
            COALESCE(SUM(pc.balance_cents), 0) AS remaining_prepay_cents
       FROM prepay_credits pc
       WHERE pc.quote_id IN (SELECT id FROM open_bookings)
       GROUP BY pc.quote_id
+  ),
+  booking_applied AS (
+    -- Codex P2: prepay APPLIED to this booking = the application ledger joined
+    -- invoice→order→quote, NOT original−balance (which misattributes a reassigned
+    -- credit's other-booking history). earmarked = applied + remaining.
+    SELECT o.quote_id,
+           COALESCE(SUM(pa.applied_amount_cents), 0) AS applied_cents
+      FROM prepay_applications pa
+      JOIN invoices i ON i.id = pa.invoice_id
+      JOIN orders o ON o.id = i.order_id
+      WHERE o.quote_id IN (SELECT id FROM open_bookings)
+      GROUP BY o.quote_id
   )
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
     'quote_id', ob.id,
@@ -101,15 +112,16 @@ BEGIN
     'booked_cents', COALESCE(bm.booked_cents, 0),
     'drawn_cents', COALESCE(bm.drawn_cents, 0),
     'remaining_cents', COALESCE(bm.remaining_cents, 0),
-    'prepay_earmarked_cents', COALESCE(bp.earmarked_cents, 0),
+    'prepay_earmarked_cents', COALESCE(ba.applied_cents, 0) + COALESCE(bp.remaining_prepay_cents, 0),
     'prepay_remaining_cents', COALESCE(bp.remaining_prepay_cents, 0),
-    'prepay_applied_cents', COALESCE(bp.earmarked_cents, 0) - COALESCE(bp.remaining_prepay_cents, 0)
+    'prepay_applied_cents', COALESCE(ba.applied_cents, 0)
   ) ORDER BY c.farm_name, ob.quote_number), '[]'::jsonb)
   INTO v_result
   FROM open_bookings ob
   LEFT JOIN customers c ON c.id = ob.customer_id
   LEFT JOIN booking_money bm ON bm.quote_id = ob.id
-  LEFT JOIN booking_prepay bp ON bp.quote_id = ob.id;
+  LEFT JOIN booking_prepay bp ON bp.quote_id = ob.id
+  LEFT JOIN booking_applied ba ON ba.quote_id = ob.id;
 
   RETURN jsonb_build_object('success', true, 'bookings', v_result);
 END;

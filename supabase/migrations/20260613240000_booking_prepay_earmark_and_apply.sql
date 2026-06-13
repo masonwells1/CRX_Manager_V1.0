@@ -84,12 +84,18 @@ BEGIN
   END IF;
 
   IF p_quote_id IS NOT NULL THEN
-    SELECT id, customer_id, deleted_at INTO v_quote FROM quotes WHERE id = p_quote_id;
+    SELECT id, customer_id, status, deleted_at INTO v_quote FROM quotes WHERE id = p_quote_id;
     IF NOT FOUND OR v_quote.deleted_at IS NOT NULL THEN
       RAISE EXCEPTION 'BOOKING_NOT_FOUND';
     END IF;
     IF v_quote.customer_id IS DISTINCT FROM v_credit.customer_id THEN
       RAISE EXCEPTION 'PREPAY_BOOKING_CUSTOMER_MISMATCH';
+    END IF;
+    -- Codex P2: only an OPEN booking (sent/revised) can be earmarked. A closed
+    -- quote (draft/accepted/declined/expired/cancelled) can never produce a draw
+    -- invoice, so earmarking to it would strand the credit's auto-application.
+    IF v_quote.status NOT IN ('sent', 'revised') THEN
+      RAISE EXCEPTION 'BOOKING_CLOSED';
     END IF;
   END IF;
 

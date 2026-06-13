@@ -135,13 +135,23 @@ BEGIN
   INTO v_lines, v_booked_cents, v_drawn_cents, v_remaining_cents
   FROM line_rows;
 
-  -- Prepay earmarked to THIS booking via the new quote_id link (LEDGER, not cache).
-  SELECT COALESCE(SUM(pc.original_amount_cents), 0),
-         COALESCE(SUM(pc.balance_cents), 0)
-    INTO v_prepay_earmarked_cents, v_prepay_remaining_cents
+  -- Prepay position for THIS booking. remaining = current available balance of
+  -- credits earmarked to this booking. applied = prepay actually applied to this
+  -- booking's draw invoices, derived from the prepay_applications ledger joined
+  -- invoice→order→quote (Codex P2: NOT original−balance, which would misattribute
+  -- a reassigned/pre-used credit's other-booking history to this quote). earmarked
+  -- = applied + remaining (internally consistent; excludes other-booking usage).
+  SELECT COALESCE(SUM(pc.balance_cents), 0)
+    INTO v_prepay_remaining_cents
     FROM prepay_credits pc
     WHERE pc.quote_id = p_quote_id;
-  v_prepay_applied_cents := v_prepay_earmarked_cents - v_prepay_remaining_cents;
+  SELECT COALESCE(SUM(pa.applied_amount_cents), 0)
+    INTO v_prepay_applied_cents
+    FROM prepay_applications pa
+    JOIN invoices i ON i.id = pa.invoice_id
+    JOIN orders o ON o.id = i.order_id
+    WHERE o.quote_id = p_quote_id;
+  v_prepay_earmarked_cents := v_prepay_applied_cents + v_prepay_remaining_cents;
 
   RETURN jsonb_build_object(
     'success', true,

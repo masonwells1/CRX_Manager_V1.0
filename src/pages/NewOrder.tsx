@@ -108,6 +108,10 @@ export default function NewOrder() {
   ].join('|');
   useEffect(() => {
     createOrderIdem.resetKey();
+    // Codex P2: the rush-order path shares this form, so reset its key too —
+    // otherwise a lost rush response + edited customer/items would replay the
+    // stale cached rush order and silently ignore the edits.
+    rushOrderIdem.resetKey();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderIntentHash]);
 

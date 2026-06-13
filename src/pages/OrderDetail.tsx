@@ -754,9 +754,11 @@ export default function OrderDetail() {
     // post_invoice_group uses (it calls post_invoice(..., NULL) in its loop).
     for (const inv of drafts) {
       try {
-        const { data, error } = await supabase.rpc('post_invoice', { p_invoice_id: inv.id });
-        if (error) throw error;
-        assertRpcResult<{ success: boolean }>(data, 'post_invoice');
+        // post_invoice RETURNS void → no result to assert. Use the canonical
+        // void-RPC pattern (.throwOnError(), no `=` capture) — Codex P1: a prior
+        // assertRpcResult here threw on every successful post (null data), so the
+        // loop reported failure even though invoices posted.
+        await supabase.rpc('post_invoice', { p_invoice_id: inv.id }).throwOnError();
         posted++;
       } catch (err) {
         if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) errors.push(`${inv.invoice_number}: needs pricing first`);

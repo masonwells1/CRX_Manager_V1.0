@@ -14,6 +14,8 @@
 -- Body is BYTE-VERBATIM from the live definition (md5-style fidelity) except:
 --   (1) DECLARE += `v_delivery_count int;`
 --   (2) a new delivery-count guard immediately after the existing-invoice guard.
+--   (3) the order SELECT is now `FOR UPDATE` (Codex P1) so the delivery-count
+--       check serializes against a concurrent create_delivery_with_items insert.
 -- SECURITY DEFINER + search_path + auth/role gate + idempotency all unchanged;
 -- single overload (uuid,uuid,text,text); CREATE OR REPLACE preserves the ACL
 -- (no GRANT/REVOKE here). Reviewed: rls + drift (codex=PENDING → pre-G5 batch).
@@ -49,7 +51,12 @@ BEGIN
     IF v_existing IS NOT NULL THEN RETURN (v_existing->>'invoice_id')::uuid; END IF;
   END IF;
 
-  SELECT * INTO v_order FROM orders WHERE id = p_order_id;
+  -- Codex P1: lock the order row FOR UPDATE before the existence checks below.
+  -- create_delivery_with_items locks the order while it inserts a delivery; without
+  -- this lock the invoice txn could read zero deliveries while a concurrent
+  -- scheduled-delivery insert is still uncommitted, then create the order-level
+  -- invoice anyway — recreating the exact double-billing this guard prevents.
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Order not found: %', p_order_id; END IF;
 
   SELECT COUNT(*) INTO v_existing_count

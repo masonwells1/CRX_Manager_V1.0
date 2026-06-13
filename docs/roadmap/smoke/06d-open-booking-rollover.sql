@@ -6,14 +6,16 @@
 -- booking's row with the right booked/drawn/remaining + prepay totals. Filters by
 -- customer so it isolates from other live bookings. RAISEs to roll back. Admin JWT.
 --   Lines: 40*100 + 60*100 -> booked_qty 200, wavg 50, booked_cents 1,000,000;
---   draw 50 -> drawn_cents 250,000, remaining_cents 750,000; credit original
---   10,000 / balance 6,000 -> earmarked 10,000, applied 4,000, remaining 6,000.
+--   draw 50 -> drawn_cents 250,000, remaining_cents 750,000; credit balance 6,000
+--   with NO application row -> applied 0, remaining 6,000, earmarked 6,000.
 --   P1  the customer filter returns >=1 row and our booking's totals are exact.
 --   P2  a bogus customer filter returns an empty bookings array.
 --
--- (Synthetic credit balance<original is a transient, ROLLED-BACK state to exercise
--- the applied=earmarked-remaining derivation; fin-prepay sweeps run on committed
--- data only.) NOTE (2026-06-13): build-loop MCP READ-ONLY → not run live here;
+-- (applied is derived from the prepay_applications ledger joined to the booking's
+-- orders, so a synthetic credit with no application reports applied=0; a non-zero
+-- applied is exercised end-to-end by 06bB. The transient credit is ROLLED BACK;
+-- fin-prepay sweeps run on committed data only.) NOTE (2026-06-13): build-loop
+-- MCP READ-ONLY → not run live here;
 -- verified by rls + drift + types reviewers (codex=PENDING pre-G5 batch).
 
 DO $$
@@ -49,8 +51,11 @@ BEGIN
           AND (v_row->>'booked_cents')::bigint = 1000000
           AND (v_row->>'drawn_cents')::bigint = 250000
           AND (v_row->>'remaining_cents')::bigint = 750000
-          AND (v_row->>'prepay_earmarked_cents')::bigint = 10000
-          AND (v_row->>'prepay_applied_cents')::bigint = 4000
+          -- applied is derived from the prepay_applications ledger joined to the
+          -- booking's orders; this synthetic credit has no application row, so
+          -- applied=0, remaining=6000, earmarked=applied+remaining=6000.
+          AND (v_row->>'prepay_earmarked_cents')::bigint = 6000
+          AND (v_row->>'prepay_applied_cents')::bigint = 0
           AND (v_row->>'prepay_remaining_cents')::bigint = 6000
          THEN 'PASS' ELSE 'FAIL' END);
 

@@ -58,11 +58,18 @@ BEGIN
   SELECT * INTO v_order FROM orders WHERE id = p_order_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND'; END IF;
 
-  -- Lock the order's draft invoices, then collect (oldest first — created_at then
-  -- invoice_number, so the survivor is deterministic regardless of number format).
-  PERFORM 1 FROM invoices WHERE order_id = p_order_id AND status = 'draft' FOR UPDATE;
+  -- Lock + collect the order's draft invoices FOR THE ORDER'S OWN CUSTOMER only
+  -- (oldest first — created_at then invoice_number → deterministic survivor).
+  -- Codex P1: create_split_invoices_from_order makes same-order drafts for
+  -- DIFFERENT customers (field-billing splits); scoping to v_order.customer_id
+  -- guarantees we never merge one customer's lines onto another's invoice (which
+  -- would bill the wrong farm and cancel the others' invoices). Split-customer
+  -- drafts are intentionally left untouched.
+  PERFORM 1 FROM invoices
+    WHERE order_id = p_order_id AND status = 'draft' AND customer_id = v_order.customer_id FOR UPDATE;
   SELECT array_agg(id ORDER BY created_at, invoice_number) INTO v_source_ids
-    FROM invoices WHERE order_id = p_order_id AND status = 'draft';
+    FROM invoices
+    WHERE order_id = p_order_id AND status = 'draft' AND customer_id = v_order.customer_id;
 
   IF v_source_ids IS NULL OR array_length(v_source_ids, 1) < 2 THEN
     -- 0 or 1 draft — nothing to merge. Idempotent no-op.
@@ -82,10 +89,16 @@ BEGIN
   UPDATE invoice_items SET invoice_id = v_survivor
    WHERE invoice_id = ANY(v_others);
 
-  -- Recompute the survivor total from its now-merged items.
+  -- Recompute BOTH money columns of the survivor from its now-merged items
+  -- (Codex P1: total_cost_cents was left at the original delivery's cost →
+  -- overstated gross profit. total_cost_cents = SUM(cost_cents * quantity), the
+  -- create_invoice_from_delivery convention; cost_cents is per-unit).
   SELECT COALESCE(sum(extended_cents), 0) INTO v_total
     FROM invoice_items WHERE invoice_id = v_survivor;
-  UPDATE invoices SET total_amount_cents = v_total, updated_at = now()
+  UPDATE invoices SET
+    total_amount_cents = v_total,
+    total_cost_cents   = COALESCE((SELECT round(sum(cost_cents * quantity))::bigint FROM invoice_items WHERE invoice_id = v_survivor), 0),
+    updated_at         = now()
    WHERE id = v_survivor;
 
   -- Cancel the now-empty source drafts (draft→cancelled allowed by the enforcer;

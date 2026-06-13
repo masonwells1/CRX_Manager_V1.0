@@ -53,11 +53,16 @@ BEGIN
   SELECT * INTO v_oi FROM order_items WHERE id=v_item_id;
   SELECT * INTO v_inv FROM invoices WHERE id=v_inv_id;
   SELECT count(*) INTO v_comm FROM commissions WHERE order_id=v_oid;
-  out := out || format('P3 price: ord.pricing=%s item.price=%s item.pending=%s ord.profit=%s comm=%s inv.ext=%s inv.total=%s inv.pending=%s inv.date=%s -> %s | ',
+  out := out || format('P3 price: ord.pricing=%s item.price=%s item.pending=%s ord.profit=%s comm=%s inv.ext=%s inv.total=%s inv.cost=%s inv.pending=%s inv.date=%s -> %s | ',
     v_ord.pricing_status, v_oi.price_per_unit, v_oi.pricing_pending, v_ord.total_profit, v_comm,
-    (SELECT extended_cents FROM invoice_items WHERE invoice_id=v_inv_id LIMIT 1), v_inv.total_amount_cents, v_inv.pricing_pending, v_inv.invoice_date,
+    (SELECT extended_cents FROM invoice_items WHERE invoice_id=v_inv_id LIMIT 1), v_inv.total_amount_cents, v_inv.total_cost_cents, v_inv.pricing_pending, v_inv.invoice_date,
     CASE WHEN v_ord.pricing_status='priced' AND v_oi.price_per_unit=25 AND v_oi.pricing_pending IS FALSE
           AND v_inv.pricing_pending IS FALSE AND v_inv.total_amount_cents=25000 AND v_inv.invoice_date=CURRENT_DATE
+          -- Codex P1 cost fix: invoice_items.cost_cents is PER-UNIT and the header
+          -- total_cost_cents = SUM(cost_cents*quantity) (consistency, exact value
+          -- depends on the product's snapshot cost which the smoke doesn't pin).
+          AND (SELECT cost_cents FROM invoice_items WHERE invoice_id=v_inv_id LIMIT 1) = round(v_oi.cost_per_unit * 100)::bigint
+          AND v_inv.total_cost_cents = COALESCE((SELECT round(sum(cost_cents * quantity))::bigint FROM invoice_items WHERE invoice_id=v_inv_id), 0)
          THEN 'PASS' ELSE 'FAIL' END);
 
   -- P4: now the invoice posts

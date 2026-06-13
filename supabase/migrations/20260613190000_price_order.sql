@@ -76,7 +76,16 @@ BEGIN
 
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND'; END IF;
-  v_was_pending := (v_order.pricing_status = 'needs_pricing');
+  -- State guard (Codex P1): only an unpriced order may be priced. Once an order
+  -- is finalized to 'priced', reject re-pricing — a stale second tab would
+  -- otherwise update prices/totals while the v_was_pending-gated invoice +
+  -- commission refresh is skipped, desyncing the financial records. A partially
+  -- priced order stays 'needs_pricing' (the flip to 'priced' only happens when no
+  -- line remains pending), so legitimate multi-call pricing still passes here.
+  IF v_order.pricing_status IS DISTINCT FROM 'needs_pricing' THEN
+    RAISE EXCEPTION 'ALREADY_PRICED';
+  END IF;
+  v_was_pending := true;
 
   -- ── price each provided line (price-only) ─────────────────────────────────
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
@@ -122,15 +131,22 @@ BEGIN
       FOR v_inv IN SELECT * FROM invoices
                  WHERE order_id = p_order_id AND status IN ('draft','unposted') FOR UPDATE
     LOOP
+      -- cost_cents is PER-UNIT by convention (create_invoice_from_delivery:
+      -- total_cost_cents = SUM(cost_cents * quantity)). Codex P1: write per-unit
+      -- cost, NOT the line total, or total_cost_cents double-counts quantity.
       UPDATE invoice_items ii SET
         unit_price_cents = round(oi.price_per_unit * 100)::bigint,
         extended_cents   = round(oi.price_per_unit * ii.quantity * 100)::bigint,
-        cost_cents       = round(oi.cost_per_unit * ii.quantity * 100)::bigint
+        cost_cents       = round(oi.cost_per_unit * 100)::bigint
       FROM order_items oi
       WHERE ii.invoice_id = v_inv.id AND ii.order_item_id = oi.id;
 
+      -- Recompute BOTH header money columns (Codex P1: total_cost_cents was left
+      -- at 0/stale → wrong posted margin + month-end profit). total_cost_cents
+      -- mirrors the create_invoice_from_delivery convention SUM(cost_cents*qty).
       UPDATE invoices SET
         total_amount_cents = COALESCE((SELECT sum(extended_cents) FROM invoice_items WHERE invoice_id = v_inv.id), 0),
+        total_cost_cents   = COALESCE((SELECT round(sum(cost_cents * quantity))::bigint FROM invoice_items WHERE invoice_id = v_inv.id), 0),
         invoice_date       = CURRENT_DATE,   -- G3: PRICE-MONTH
         pricing_pending    = false,
         updated_at         = now()
