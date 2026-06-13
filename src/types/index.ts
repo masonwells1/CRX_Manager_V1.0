@@ -342,6 +342,10 @@ export interface Order {
    * before pricing was finalized; its invoices cannot POST until price_order
    * runs. Defaults to 'priced' for every normal order. */
   pricing_status: 'priced' | 'needs_pricing';
+  /** Ship-now/price-later (#2 v3): check_unpriced_orders cron dedupe stamps —
+   * when the 48h reminder / 7d escalation notification was last sent. Internal. */
+  pricing_reminder_sent_at: string | null;
+  pricing_escalation_sent_at: string | null;
   notes: string | null;
   program_notes: string | null;
   created_at: string;
