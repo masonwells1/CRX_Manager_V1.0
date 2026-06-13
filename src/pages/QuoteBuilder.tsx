@@ -39,7 +39,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
-import { formatUSD } from '../lib/money';
+import { formatUSD, formatCents } from '../lib/money';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
@@ -65,6 +65,7 @@ import type {
   UnitConversion,
   CommissionSplit,
   QuoteStatus,
+  BookingSettlement,
 } from '../types';
 
 interface LocalSection {
@@ -174,6 +175,9 @@ export default function QuoteBuilder() {
   const [drawRows, setDrawRows] = useState<Array<{ product_id: string; product_name: string; booked: number; drawn: number; remaining: number; qty: string }>>([]);
   const [drawLoading, setDrawLoading] = useState(false);
   const [drawing, setDrawing] = useState(false);
+  // Booking settlement (roadmap #6c): read-only booked/drawn/remaining + prepay
+  // position for an open booking (sent/revised quote), via get_booking_settlement.
+  const [bookingSettlement, setBookingSettlement] = useState<BookingSettlement | null>(null);
   const { warning: staleWarning, check: checkStaleQuote, dismiss: dismissStaleWarning } = useStaleQuoteCheck();
   const isEditing = Boolean(id);
 
@@ -278,6 +282,26 @@ export default function QuoteBuilder() {
     if (!initialLoadDone.current) return;
     setIsDirty(true);
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
+
+  // Booking settlement (roadmap #6c): for an open booking (saved sent/revised
+  // quote), load booked/drawn/remaining + prepay position. Re-runs when the
+  // status changes (e.g. after a draw flips it). Read-only; clears otherwise.
+  useEffect(() => {
+    const isOpenBooking = isEditing && quoteId && (currentStatus === 'sent' || currentStatus === 'revised');
+    if (!isOpenBooking) { setBookingSettlement(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('get_booking_settlement', { p_quote_id: quoteId });
+        if (error) throw error;
+        const s = assertRpcResult<BookingSettlement>(data, 'get_booking_settlement');
+        if (!cancelled) setBookingSettlement(s && s.found ? s : null);
+      } catch {
+        if (!cancelled) setBookingSettlement(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isEditing, quoteId, currentStatus]);
 
   // RUP compliance check when customer or products change
   useEffect(() => {
@@ -1951,6 +1975,60 @@ export default function QuoteBuilder() {
           <EyeOff className="w-4 h-4" />
           Customer View — cost, profit, and margin columns hidden
         </div>
+      )}
+
+      {/* Booking settlement (roadmap #6c): open-booking position. Read-only. */}
+      {isEditing && canDraw && bookingSettlement?.found && (
+        <Card>
+          <CardHeader title="Booking" accent="Settlement" />
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+            <div>
+              <div className="text-secondary">Booked</div>
+              <div className="font-semibold text-nav-dark">{formatCents(bookingSettlement.booked_cents ?? 0)}</div>
+            </div>
+            <div>
+              <div className="text-secondary">Drawn</div>
+              <div className="font-semibold text-nav-dark">{formatCents(bookingSettlement.drawn_cents ?? 0)}</div>
+            </div>
+            <div>
+              <div className="text-secondary">Remaining to draw</div>
+              <div className="font-semibold text-nav-dark">{formatCents(bookingSettlement.remaining_cents ?? 0)}</div>
+            </div>
+            <div>
+              <div className="text-secondary">Prepaid (remaining)</div>
+              <div className="font-semibold text-crx-green">{formatCents(bookingSettlement.prepay_remaining_cents ?? 0)}</div>
+            </div>
+          </div>
+          {(bookingSettlement.prepay_earmarked_cents ?? 0) > 0 && (
+            <div className="mt-2 text-xs text-secondary">
+              Prepay earmarked {formatCents(bookingSettlement.prepay_earmarked_cents ?? 0)} · applied {formatCents(bookingSettlement.prepay_applied_cents ?? 0)}
+            </div>
+          )}
+          {bookingSettlement.lines && bookingSettlement.lines.length > 0 && (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100 text-secondary">
+                    <th className="px-2 py-1 text-left font-medium">Product</th>
+                    <th className="px-2 py-1 text-right font-medium">Booked</th>
+                    <th className="px-2 py-1 text-right font-medium">Drawn</th>
+                    <th className="px-2 py-1 text-right font-medium">Remaining</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bookingSettlement.lines.map((ln) => (
+                    <tr key={ln.product_id} className="border-b border-gray-50">
+                      <td className="px-2 py-1">{ln.product_name ?? '—'}</td>
+                      <td className="px-2 py-1 text-right">{ln.booked_qty}</td>
+                      <td className="px-2 py-1 text-right">{ln.drawn_qty}</td>
+                      <td className="px-2 py-1 text-right">{ln.remaining_qty}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
       )}
 
       {showVersionHistory && quoteVersions.length > 0 && (
