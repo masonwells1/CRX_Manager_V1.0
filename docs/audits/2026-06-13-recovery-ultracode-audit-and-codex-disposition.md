@@ -19,10 +19,12 @@
 **SAFE TO REVIEW → SAFE TO PUSH** (after the gated apply of the one pending migration). One real HIGH
 finding was discovered and **fixed** (FE-1); everything else is clean, LOW/NIT/pre-existing, or an explicit
 owner decision. No new security hole, no latent break, no financial drift, no behavioral regression in the
-recovery core (auto-merge + pending migration + applied migrations). An independent Codex (gpt-5.5) review
-added **4 non-blocking follow-ups** — all pre-existing polish gaps in the new H1 features, none affecting
-push safety (§9): one is a regulatory/legal judgment for the owner, one a gated server-count change, one a
-push-sequence registry regen, and one an offered frontend follow-up.
+recovery core (auto-merge + pending migration + applied migrations). Three independent Codex (gpt-5.5)
+review rounds surfaced **10 non-blocking findings in the new H1 features** — including one **real inventory
+under-reservation bug** (round 2) — and **ALL 10 were implemented and committed** per Mason's direction
+(§9.3). The fixes are battery-green; a 4th Codex confirmation round is pending the OpenAI usage-limit reset
+(≈12:52 PM). The change set now carries **2 pending migrations** (`20260613150000` + `20260613150100`),
+both proven by rolled-back `SMOKE_PASS_ROLLBACK`.
 
 The single human gates that remain (per the standing CRX policy) are: applying the one pending migration
 to live, and the prod push. Both are recommended in §8.
@@ -166,9 +168,12 @@ Frontend-only; no migration. Verified: typecheck/lint/build/test all green.
 
 ## 8. Recommended push sequence (all gated on Mason)
 
-1. **Apply** `20260613150000_planned_holds_drawn_sync` to live via the Supabase MCP apply gate
-   (`migration-review` proof → `apply_migration`). Re-confirm with the §5 self-verify + the registered
-   smoke (`SMOKE_PASS_ROLLBACK`).
+0. **Re-run Codex round-4** (`/codex-review`) once the OpenAI usage limit resets (≈12:52 PM) to confirm the
+   round-3 fixes resolved findings — the loop's final confirmation before push.
+1. **Apply the two pending migrations IN STAMP ORDER** via the Supabase MCP apply gate (`migration-review`
+   proof → `apply_migration`): first `20260613150000_planned_holds_drawn_sync` (creates `_sync_planned_holds`),
+   then `20260613150100_cancel_order_resync_holds_on_draw_cancel` (depends on it — its §0 hard-aborts if the
+   helper is absent). Re-confirm each with its §5 self-verify + registered smoke (`SMOKE_PASS_ROLLBACK`).
 2. **Regenerate** the schema registry FROM LIVE (`/regen-schema-registry` — full MCP introspection, not the
    stamp-only script) so it covers through `20260613150000` (incl. `_sync_planned_holds`, `products.rei_hours/phi_days`).
    Then re-run `check:docs`. *(Deliberately deferred to here rather than done pre-apply: a regen now would be
@@ -212,7 +217,29 @@ recovery merge or the pending migration, and none changes the SAFE-TO-PUSH verdi
 | 3 | **[P2]** Daily-brief "open action items" count underreports (`src/pages/Dashboard.tsx:371`) | **Agree (P2/MED).** `data.teamActionItems` = `operational_dashboard_summary.team_action_items`, a *filtered* list (only pinned/urgent/high/overdue/assigned-to-me `team_notes`, ordered, capped) with **no total-count field** (verified live). So `.length` is "attention items (capped)", not "open action items". | **FOLLOW-UP (needs a server count field).** No clean frontend-only fix: add an unbounded count to `operational_dashboard_summary` (a gated RPC migration) and pass it to `DailyBrief`; or reword + show "N+". Pre-existing in the H1 E3 feature. |
 | 4 | **[P2]** Schema registry stale (`.claude/schema-registry.json:9`) | **Agree — = the audit's own TST-1.** High-water `20260610185806` < live `20260611211058`; missing `products.rei_hours/phi_days`. Dev-time hooks only. | **PUSH-SEQUENCE regen** (§8 step 2) — regenerate from live after the gated apply, in one pass. |
 
-**Net:** Codex confirms no push-blocker. The one confirmed *error* in the change set (FE-1) was already
-fixed and committed. Codex's four items are non-blocking follow-up polish on the H1 features (one a domain
-call, one a gated server change, one a push-sequence step, one an offered frontend follow-up). The recovery
-consolidation itself — the auto-merge and the pending migration — is independently clean and verified.
+**Net (round 1):** Codex confirms no push-blocker. The one confirmed *error* (FE-1) was already fixed. The
+four round-1 items were non-blocking follow-up polish on the H1 features.
+
+### 9.3 Iteration — Mason directed "implement ALL Codex findings; Codex reviews before push"
+
+Per Mason's instruction, every Codex finding was IMPLEMENTED (not just dispositioned), then re-reviewed,
+iterating until convergence. Severity shrank each round (the only serious bug — a real inventory
+under-reservation — was caught in round 2 and fixed). Commits on the branch:
+
+| Round | Codex findings | Fixes (commit) |
+|---|---|---|
+| 1 | WPS completeness; invoice-group RUP advisory; daily-brief count; registry stale | `200f5aa` — WPS adds PHI + on-label scope callout; `openPostConfirm` aggregates RUP across group siblings; brief counts open team_notes directly; registry regenerated from live (high-water → `20260611211058`) |
+| 2 | **[P1, CONFIRMED inventory bug]** `cancel_order` under-reserved holds on a booking-draw cancel (measured live: Net Free 900→940); WPS lost label data for deactivated products; Compliance holder-name not reset on staff change | `6e0681d` — NEW pending migration `20260613150100` re-emits `cancel_order` (verbatim+§0/§5) calling `_sync_planned_holds` after the reversal, **`SMOKE_PASS_ROLLBACK`** (AFTER_CANCEL hold=100/netfree=900); WPS fetches label fields for all products unfiltered; holder-name overwrites on staff change |
+| 3 | WPS print-on-failed-lookup (incomplete round-2 fix); QuoteBuilder RUP-log flood; daily-brief count included non-actionable notes (incomplete round-2 fix) | `567d088` — WPS aborts the PDF on query error OR any missing label row; QuoteBuilder dedups the RUP log per (customer, product-set) via a `lastRupLogKey` ref (matches the NewOrder flow); brief count filtered to `note_type='todo'` |
+| 4 | **NOT RUN — Codex CLI hit the OpenAI usage limit** ("try again at 12:52 PM"). The round-3 fixes are committed + battery-green but await a final Codex confirmation. | — |
+
+**State:** All 10 Codex findings across rounds 1–3 are implemented, committed, and battery-green
+(typecheck 0, lint 0, build clean, **1,997 tests pass**, `check:docs` PASS, `validate-sql` 0 violations in
+the new migration). The round-3 fixes follow established codebase patterns (NewOrder RUP dedup, the
+`team_notes` note_type contract, fail-closed compliance PDFs), so convergence is expected. **The only
+remaining step is re-running Codex round-4 after the usage limit resets** (≈12:52 PM) to confirm —
+recommended via `/codex-review` before the gated push.
+
+**Pending migrations now: 2** — `20260613150000` (planned-holds re-home) then `20260613150100`
+(cancel_order hold-resync, depends on the first). Both validated by rolled-back `SMOKE_PASS_ROLLBACK`;
+apply in stamp order at the gate.
