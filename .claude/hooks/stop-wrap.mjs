@@ -46,9 +46,30 @@ const meaningful = lines.filter(l => {
   const p = l.slice(3);
   return !p.startsWith(".claude/worktrees/")
     && !p.startsWith(".playwright-mcp/")
+    && !p.startsWith(".claude/session-state/")
     && !p.endsWith(".log")
     && !p.startsWith("node_modules/");
 });
+
+// ─── Acknowledgment escape valve ──────────────────────────────────────────
+// Implements the hook's own promise ("If Mason confirms each item is
+// intentional or already done, you can stop"). When
+// .claude/session-state/stop-wrap-ack.json records a signature that matches
+// the CURRENT uncommitted set, the session is allowed to end. Any new or
+// changed file shifts the signature and re-arms the hook, so genuinely new
+// loose ends still block. This stops the infinite re-fire loop that occurs
+// when the main checkout legitimately holds a PARALLEL session's WIP that the
+// current (worktree) session must not touch.
+// See memory: project_worktree-stop-hook-reports-main.
+const ackSignature = meaningful.map(l => l.trim()).sort().join("\n");
+try {
+  const ack = JSON.parse(
+    readFileSync(path.join(projectDir, ".claude", "session-state", "stop-wrap-ack.json"), "utf8")
+  );
+  if (ack && ack.signature === ackSignature) {
+    process.exit(0);
+  }
+} catch { /* no/unreadable ack file — fall through and block as usual */ }
 
 if (meaningful.length > 0) {
   issues.push(
