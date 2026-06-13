@@ -28,7 +28,7 @@
 - **G1** — 3 blank commission recipients (Test Farm Alpha / Tim Jondle / Yeley Farms): correct names. `OPEN`
 - **G2** — RUP expired-license classification: WARNING vs NON-COMPLIANT. `OPEN`
 - **G3** — #2 revenue policy: rush orders post into ship-month or price-month? `ANSWERED 2026-06-13 → PRICE-MONTH`. When `price_order` finalizes a rush order, the linked invoice's `invoice_date` = the pricing/finalization date (default today), NOT the ship date — so revenue always posts into the current open period and never back-dates into a closed period. RESOLVED.
-- **G4** — #7 driver-role credit behavior: warn vs block-with-override. `OPEN`
+- **G4** — #7 credit behavior. `ANSWERED 2026-06-13 → WARN-BUT-ALLOW (ALL ROLES)`. Over-limit must NOT block any role (incl. driver/field staff). #7 becomes a non-blocking credit WARNING, not enforce-with-override: order-creating paths surface projected-exposure-vs-limit as a warning + log it for admin visibility, but always let the order proceed. No CREDIT_LIMIT_EXCEEDED block, no p_credit_override needed. RESOLVED.
 - **G5** — FINAL GO-LIVE (apply migrations + merge recovery+roadmap → main + deploy). Loop NEVER does this. `OPEN`
 - **G-AE** (#5 auto-expire) — `ANSWERED 2026-06-13 → Option 1`: auto-expire ad-hoc sent/revised quotes past `expires_at` (release holds), but SKIP Planned Programs and drawn bookings. Implemented file-only in `20260613160000_auto_expire_quotes_skip_planned_and_schedule.sql`. RESOLVED.
 
@@ -93,10 +93,12 @@
 - ⏭ **(d) season-end rollover report** [frontend/RPC]: per-customer open-booking + prepay position across the season (aggregate `get_booking_settlement` or a list RPC).
 - **Done when:** prepay earmarks to a booking; a draw invoice auto-applies the booking's prepay first (Mechanism A, reversible); settlement view + rollover report; smoke chain passes (apply + void both honor the two fin-prepay identities).
 
-### #7 — Credit enforce-with-override — `TODO`  [dep: gate G4]
-- Order-creating RPCs: projected exposure > limit → raise `CREDIT_LIMIT_EXCEEDED` unless `p_credit_override=true` (admin/sales_rep), which proceeds + writes override + actor to `financial_audit_log`. UI: ConfirmModal showing the numbers.
-- **G4:** driver-role behavior (warn vs block-with-override).
-- **Done when:** over-limit blocks without override, proceeds+audits with override; smoke passes.
+### #7 — Credit WARNING (non-blocking) — `TODO`  [dep: gate G4 ANSWERED → warn-but-allow]
+> G4 = WARN-BUT-ALLOW (all roles). #7 is NOT enforce-with-override — it never blocks. Redesign:
+- Compute projected exposure (open AR `invoices.balance_cents` + the new order's value) vs `customers.credit_limit_cents` at order-creating paths (create_direct_order, create_rush_order, draw_down_quote, convert_quote_to_order, create_quick_delivery). When over limit: the order STILL succeeds for every role; the RPC returns a non-blocking `credit_warning` payload (projected_exposure_cents, credit_limit_cents, over_by_cents) AND writes a record for admin visibility (a `notifications` row to admins and/or a `financial_audit_log`/activity row — pick at build, no new CHECK value if reused). NO CREDIT_LIMIT_EXCEEDED block; NO p_credit_override param.
+- UI: a non-blocking banner/toast on the order-creating screens showing the numbers when `credit_warning` is present (NOT a ConfirmModal gate). Optionally an admin "over-limit orders" surfacing.
+- Keep verbatim+guard fidelity on any existing order RPC touched; reproduce live body, add the warning computation + return field only. Re-confirm G1 untriggered (warning logging ≠ commission change).
+- **Done when:** an over-limit order is CREATED by every role (incl. driver) with a visible warning + an admin-visible record; smoke confirms order created + warning emitted (never blocked).
 
 ---
 
@@ -119,7 +121,7 @@
 - **Iter 14 (2026-06-13):** #4(c) billing panel — closes #4. `OrderDetail.tsx`: `handlePostAllDrafts` (keyless `post_invoice` loop — status-guard + loading-flag dedupe, PRICING_INCOMPLETE/period errors per-invoice) + `handleConsolidateDrafts` (`consolidate_draft_invoices` RPC, idempotency + assertRpcResult + hasRpcCode) + two admin/sales_rep header buttons in the Linked Invoices card (Consolidate when ≥2 drafts, Post-all when ≥1 draft/unposted) + `hasActiveDelivery` gate hiding "Create Invoice" when non-cancelled deliveries exist (W5 UI follow-up). Frontend-only (no migration). eslint fix: removed a flagged hand-derived per-invoice idempotency key (rule `idempotency-key-from-hook`) — keyless loop instead. compliance-reviewer **CLEAN** (0 findings; all 11 red-line checks verified — parseFloat confirmed dollar-domain, RPC results assertRpcResult-wrapped, Sentry from lib/sentry, idempotency from useIdempotencyKey). tsc + lint + OrderDetail.test (3/3) green. **#4 DONE.** Committed + pushed. **Next: #6 (PAUSE at G1 if commissions) / #7 (PAUSE at G4) — surface to Mason at the gate.**
 
 ## Follow-ups / deferred
-- ✅ **PrepayWorkspace deleted_at bug (MED, pre-existing) — FIXED iter 16:** removed the `.is('deleted_at', null)` filter on the `prepay_credits` query (`PrepayWorkspace.tsx:96-98`); prepay_credits has no deleted_at column (was a latent 42703). Shipped with the #6(b) commit. NOTE: same bug exists on `main` — if Mason wants it patched on the live app before G5, cherry-pick this one-line fix.
+- ✅ **PrepayWorkspace deleted_at bug (MED, pre-existing) — FIXED iter 16:** removed the `.is('deleted_at', null)` filter on the `prepay_credits` query (`PrepayWorkspace.tsx:96-98`); prepay_credits has no deleted_at column (was a latent 42703). Shipped with the #6(b) commit. **Mason 2026-06-13: BUNDLE WITH G5** (same bug on `main`, but no standalone pre-G5 patch — it ships with the go-live).
 - **#5 hardening (LOW, optional):** the Decline/Cancel drawn-booking guard is frontend-only (small TOCTOU window; worst case = orphaned holds, not financial corruption) — same convention as the existing bulk-delete skip. A belt-and-suspenders fix would be a DB-side trigger blocking sent/revised→declined/cancelled when `quote_product_draws.quantity_drawn > 0`. Bundle into a later #5/#6 migration if this protection class is ever hardened.
 
 ## Environment notes (this build session)
