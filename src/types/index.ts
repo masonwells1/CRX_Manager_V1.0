@@ -1224,10 +1224,44 @@ export interface PrepayCredit {
   source_type: string | null;
   source_reference: string | null;
   bucket_label: string | null;
+  quote_id: string | null; // roadmap #6: earmark a prepay credit to a booking (quote)
   created_by: string | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;
+}
+
+// Roadmap #6(a): per-booking settlement read shape (get_booking_settlement RPC).
+// All *_cents are bigint cents (divide by 100 to display). Qty fields are product
+// units; locked_price is numeric dollars per unit (the booked weighted-average).
+export interface BookingSettlementLine {
+  product_id: string;
+  product_name: string | null;
+  booked_qty: number;
+  drawn_qty: number;
+  remaining_qty: number;
+  locked_price: number;
+  booked_cents: number;
+  drawn_cents: number;
+  remaining_cents: number;
+}
+
+export interface BookingSettlement {
+  success: boolean;
+  found: boolean;
+  quote_id: string;
+  quote_number?: string;
+  customer_id?: string;
+  status?: string;
+  season?: number | null;
+  is_planned?: boolean;
+  lines?: BookingSettlementLine[];
+  booked_cents?: number;
+  drawn_cents?: number;
+  remaining_cents?: number;
+  prepay_earmarked_cents?: number;
+  prepay_applied_cents?: number;
+  prepay_remaining_cents?: number;
 }
 
 export interface PrepayApplication {
