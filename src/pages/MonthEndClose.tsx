@@ -77,6 +77,9 @@ export default function MonthEndClose() {
   // M1/M2: explicit review confirmation for payments and commissions
   const [reviewedPayments, setReviewedPayments] = useState(false);
   const [reviewedCommissions, setReviewedCommissions] = useState(false);
+  // Ship-now/price-later (#2 v3): unpriced rush orders are unbilled revenue.
+  const [reviewedNeedsPricing, setReviewedNeedsPricing] = useState(false);
+  const [needsPricingCount, setNeedsPricingCount] = useState(0);
   const [yeLoading, setYeLoading] = useState(false);
 
   const current = getCurrentPeriod();
@@ -103,6 +106,15 @@ export default function MonthEndClose() {
     if (!error && summaryData) {
       setSummary(assertRpcResult<MonthlySummary>(summaryData, 'get_monthly_summary'));
     }
+
+    // Ship-now/price-later (#2 v3): count unpriced rush orders dated on/before this
+    // period's end — they're unbilled revenue and surface as a pre-close review item.
+    const { count: npCount } = await supabase
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('pricing_status', 'needs_pricing')
+      .lte('order_date', current.end);
+    setNeedsPricingCount(npCount || 0);
 
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -149,6 +161,14 @@ export default function MonthEndClose() {
             ? 'No commissions this period'
             : `${fmt(summary.commissions.earned_cents)} earned, ${summary.commissions.paid_count} paid — verify and check box to confirm`,
           reviewKey: summary.commissions.earned_cents > 0 ? 'commissions' : undefined,
+        },
+        {
+          label: 'Rush orders priced',
+          done: needsPricingCount === 0 || reviewedNeedsPricing,
+          detail: needsPricingCount === 0
+            ? 'No unpriced rush orders'
+            : `${needsPricingCount} order(s) still need pricing (unbilled revenue) — price them or verify and check the box`,
+          reviewKey: needsPricingCount > 0 ? 'needs_pricing' : undefined,
         },
         {
           label: 'Finance charges generated (optional)',
@@ -429,13 +449,14 @@ export default function MonthEndClose() {
                       <input
                         type="checkbox"
                         className="accent-crx-green"
-                        checked={item.reviewKey === 'payments' ? reviewedPayments : reviewedCommissions}
+                        checked={item.reviewKey === 'payments' ? reviewedPayments : item.reviewKey === 'commissions' ? reviewedCommissions : reviewedNeedsPricing}
                         onChange={(e) => {
                           if (item.reviewKey === 'payments') setReviewedPayments(e.target.checked);
-                          else setReviewedCommissions(e.target.checked);
+                          else if (item.reviewKey === 'commissions') setReviewedCommissions(e.target.checked);
+                          else setReviewedNeedsPricing(e.target.checked);
                         }}
                       />
-                      <span className="text-xs text-nav-dark">I have verified these {item.reviewKey} and they are correct</span>
+                      <span className="text-xs text-nav-dark">I have reviewed this and confirm it is correct</span>
                     </label>
                   )}
                 </div>
