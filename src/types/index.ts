@@ -1264,6 +1264,23 @@ export interface BookingSettlement {
   prepay_remaining_cents?: number;
 }
 
+// Roadmap #6(d): one summary row per open booking (get_open_booking_rollover RPC).
+// All *_cents are bigint cents (÷100 to display).
+export interface BookingRolloverRow {
+  quote_id: string;
+  quote_number: string;
+  customer_id: string;
+  customer_name: string | null;
+  status: string;
+  season: number | null;
+  booked_cents: number;
+  drawn_cents: number;
+  remaining_cents: number;
+  prepay_earmarked_cents: number;
+  prepay_remaining_cents: number;
+  prepay_applied_cents: number;
+}
+
 export interface PrepayApplication {
   id: string;
   prepay_credit_id: string;
