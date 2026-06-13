@@ -4,7 +4,7 @@
 > every iteration and updates + commits it at the end. It survives context compaction —
 > any fresh iteration resumes from here. Do not delete; only append/update.
 
-**PROGRAM STATUS:** `IN_PROGRESS`
+**PROGRAM STATUS:** `ROADMAP-COMPLETE` (2026-06-13) — all of #2–#7 built, in-house-reviewed CLEAN, FILE-ONLY, pushed to `origin/chore/sell-side-roadmap`. Awaiting the pre-G5 Codex batch + Mason's G5 go-live (apply + merge + deploy). See the GO-LIVE CHECKLIST at the bottom.
 **Integration branch:** `chore/sell-side-roadmap` (worktree `C:\CRX_QuoteLifecycle`, based on `recovery/overlapping-sessions-2026-06-13`)
 **Source spec (full depth):** `docs/audits/2026-06-10-sell-side-excellence-audit.md` §5
 (retrieve: `git show docs/sell-side-excellence-audit-prompt:docs/audits/2026-06-10-sell-side-excellence-audit.md`)
@@ -98,7 +98,8 @@
   - ✅ **(d-UI) SHIPPED (iteration 22):** `Quotes.tsx` — a collapsible admin/sales_rep "Open booking rollover" Card (lazy-loads on expand) calling `get_open_booking_rollover` → table customer/booking#/booked/drawn/remaining/prepaid-left ($ via fmt(cents/100)), rows navigate to the quote; assertRpcResult + hasRpcCode(INSUFFICIENT_ROLE) + Sentry. compliance-reviewer CLEAN; tsc+lint+assertRpcCoverage green. No migration. **#6 COMPLETE.**
 - **Done when:** prepay earmarks to a booking; a draw invoice auto-applies the booking's prepay first (Mechanism A, reversible); settlement view + rollover report; smoke chain passes (apply + void both honor the two fin-prepay identities).
 
-### #7 — Credit WARNING (non-blocking) — `TODO`  [dep: gate G4 ANSWERED → warn-but-allow]
+### #7 — Credit WARNING (non-blocking) — `DONE`  [dep: gate G4 ANSWERED → warn-but-allow]
+> ✅ **SHIPPED (iteration 23, frontend-only):** Grounding found the warn-but-allow mechanism ALREADY EXISTS and is G4-compliant on the main paths: `useCreditLimitCheck` (computes projected exposure = SUM(open invoices.balance_cents) + new amount vs `customers.credit_limit_cents` → non-blocking `danger` banner, dismiss available to ALL roles) + a post-create `check_customer_credit_limit` warn-toast + `notifyCreditLimitExceeded` admin fan-out. Confirmed live on **NewOrder.tsx** (direct + rush; lines ~343-349 pre-submit banner, ~437-452 post-create "warn (not block)") and **QuoteBuilder.tsx** (~1679-1686). NOTHING blocks anywhere (G4 satisfied — nothing to relax). **Delta this slice:** closed the one gap — added the identical non-blocking post-create credit warning + admin notify to **QuickDeliveryModal.tsx** (the atomic order+invoice path that had none). compliance-reviewer CLEAN; tsc+lint+QuickDeliveryModal.test(13/13)+assertRpcCoverage green. No migration; NO order RPC touched (none blocked). G1 re-confirmed untriggered (credit warning is read+notify, no commission change). check_customer_credit_limit returns DOLLARS (cents/100.0) — formatting verified.
 > G4 = WARN-BUT-ALLOW (all roles). #7 is NOT enforce-with-override — it never blocks. Redesign:
 - Compute projected exposure (open AR `invoices.balance_cents` + the new order's value) vs `customers.credit_limit_cents` at order-creating paths (create_direct_order, create_rush_order, draw_down_quote, convert_quote_to_order, create_quick_delivery). When over limit: the order STILL succeeds for every role; the RPC returns a non-blocking `credit_warning` payload (projected_exposure_cents, credit_limit_cents, over_by_cents) AND writes a record for admin visibility (a `notifications` row to admins and/or a `financial_audit_log`/activity row — pick at build, no new CHECK value if reused). NO CREDIT_LIMIT_EXCEEDED block; NO p_credit_override param.
 - UI: a non-blocking banner/toast on the order-creating screens showing the numbers when `credit_warning` is present (NOT a ConfirmModal gate). Optionally an admin "over-limit orders" surfacing.
@@ -121,6 +122,7 @@
 - **Iter 11 (2026-06-13):** #3 Stage A — Email to Grower. `QuoteBuilder.tsx` dead button → `handleEmailToGrower` (generateQuotePdf → pdfToBase64 → sendEmail, email_type 'quote', PDF attachment; Edge Function logs email_log + dedupes; logActivity quote_emailed). Frontend-only (no migration). compliance-reviewer CLEAN; tsc + lint + QuoteBuilder.test (7/7) green. **#3 Stage A DONE; B/C DEFERRED:portal-scope.** Live email send = manual at go-live. Committed `feb83f7` + pushed.
 - **Iter 12 (2026-06-13):** #4(a) W5 guard. Migration `20260613210000_invoice_from_order_delivery_guard.sql` (FILE-ONLY): `create_invoice_from_order` verbatim + delivery guard (block when any non-cancelled/voided delivery exists). In-house gate CLEAN (rls 0/0/0/0; drift 0/0/0). Doc counts 445→446 (RPC unchanged — replace, not new); AGENTS.md regen. Smoke `04a-invoice-delivery-guard.sql`. codex=PENDING. Drift-reviewer flagged a management-API pg_get_functiondef-by-oid caching quirk (use name-joined query at G5 re-verify). Next #4(b): consolidate_draft_invoices RPC. Committed `6714302` + pushed.
 - **Iter 13 (2026-06-13):** #4(b) consolidate. Migration `20260613220000_consolidate_draft_invoices.sql` (FILE-ONLY): NEW SECDEF `consolidate_draft_invoices` (merge order's draft invoices into one; draft-only; idempotent; strict-actor). In-house gate CLEAN (rls 0/0/0/0+1 NIT applied [survivor ORDER BY created_at]; drift 0/0 +1 MED doc-row fixed +2 benign info NITs). Doc counts 446→447 (+RPC 222→223); AGENTS.md regen. Smoke `04b-consolidate-draft-invoices.sql`. codex=PENDING. Next #4(c): OrderDetail billing panel (Post-all + Consolidate buttons) + W5 UI follow-up. NOT applied/pushed-to-main.
+- **Iter 23 (2026-06-13):** #7 non-blocking credit warning — completes the ROADMAP. Grounding found the warn-but-allow mechanism already live on NewOrder + QuoteBuilder (nothing blocks → G4 already satisfied). Closed the one gap: added the identical post-create credit warn + admin-notify to `QuickDeliveryModal.tsx`. Frontend-only; no order RPC touched. compliance-reviewer CLEAN; tsc+lint+QuickDeliveryModal.test(13/13)+assertRpcCoverage green. **#7 DONE → PROGRAM STATUS = ROADMAP-COMPLETE.** Go-live checklist filled; Mason notified for G5.
 - **Iter 22 (2026-06-13):** #6(d-UI) rollover list — completes #6. `Quotes.tsx`: collapsible admin/sales_rep "Open booking rollover" Card (lazy-load) → get_open_booking_rollover table (customer/booking#/booked/drawn/remaining/prepaid-left, rows → quote). assertRpcResult + hasRpcCode + Sentry. Frontend-only. compliance-reviewer CLEAN; tsc+lint+assertRpcCoverage green. **#6 PREPAY-BACKED BOOKINGS COMPLETE.** Next + LAST: #7 non-blocking credit warning (G4=warn-but-allow).
 - **Iter 21 (2026-06-13):** #6(d-RPC) open-booking rollover. Migration `20260613260000_open_booking_rollover.sql` (FILE-ONLY): NEW read-only SECDEF `get_open_booking_rollover(uuid,int)` — per-open-booking roll-up (booked/drawn/remaining + prepay), reuses get_booking_settlement math. Type `BookingRolloverRow`. 3 reviewers CLEAN (rls 0/0/0/0+2 NITs; drift 0/0+1 MED fixed; types CLEAN); tsc green. Doc counts 450→451 (+RPC 226→227); AGENTS.md regen. Smoke `06d-open-booking-rollover.sql`. codex=PENDING. Next: #6(d-UI) rollover list, then #7 credit warning.
 - **Iter 20 (2026-06-13):** #6(b-B) auto-apply-on-post (migration). Mason picked Option 1 (best-effort trigger, not a verbatim post_invoice rewrite). `20260613250000`: SECDEF trigger fn + AFTER UPDATE OF status trigger calling apply_booking_prepay when an invoice posts; BEGIN/EXCEPTION→RAISE WARNING so posting is never blocked; recursion/reentrancy/actor reviewed safe. Reviewers CLEAN (rls 0/0/0/0+1 NIT applied; drift 0/0+1 MED fixed). Doc counts 449→450 (RPC unchanged — trigger fn, not an RPC); AGENTS.md regen. Smoke `06bB-auto-apply-on-post.sql`. codex=PENDING. **#6(b) complete.** Next: #6(d) season-end rollover report.
@@ -138,5 +140,43 @@
 ## Environment notes (this build session)
 - **Supabase MCP is READ-ONLY here.** `execute_sql` cannot run write transactions (`25006: read-only transaction`) — even rolled-back ones. No local Postgres/Supabase (CLI shim broken, no psql). Consequence: migrations in later iterations will be WRITTEN + reviewed + `/codex-review`'d + have a rolled-back smoke SCRIPT saved under `docs/roadmap/smoke/`, but the live rolled-back smoke RUN is deferred to a write-capable session / the G5 apply step. Live function/constraint/trigger DEFINITIONS are still fully inspectable (read path), so verify-before-asserting still holds.
 
-## GO-LIVE CHECKLIST (loop fills this in only when PROGRAM STATUS = ROADMAP-COMPLETE)
-- (pending)
+## GO-LIVE CHECKLIST (ROADMAP-COMPLETE 2026-06-13 — Mason-only G5 actions)
+
+> Everything below is FILE-ONLY on `origin/chore/sell-side-roadmap`. NONE is applied/merged/deployed. Do these in order in a WRITE-capable session (this build session's Supabase MCP was read-only).
+
+### Step 0 — Pre-flight
+- [ ] `git fetch && git checkout chore/sell-side-roadmap` (it is based on `recovery/overlapping-sessions-2026-06-13`); confirm HEAD = latest pushed commit.
+- [ ] Confirm the recovery base is itself resolved/merged as intended (the `20260613150000_planned_holds_drawn_sync` re-home supersedes the unapplied `20260611132115`; **never apply `132115`**).
+
+### Step 1 — Pre-G5 Codex batch (the deferred review)
+- [ ] Run ONE `codex review --base main` (or `/codex-review --base main`) over the whole branch diff. Fix any BLOCKER/HIGH through the normal gate, re-review until SHIP / SHIP-WITH-FOLLOWUPS. Each migration is currently `codex=PENDING`; this clears them.
+
+### Step 2 — Apply the 12 pending migrations IN STAMP ORDER (each: re-run rls+drift reviewers <30min → proof file → MCP apply → B7-rename disk file to the MCP stamp → run its smoke rolled-back → confirm SMOKE_PASS_ROLLBACK)
+1. [ ] `20260613150000_planned_holds_drawn_sync` (recovery base; planned-holds = GREATEST(booked−drawn,0))
+2. [ ] `20260613160000_auto_expire_quotes_skip_planned_and_schedule` — smoke `05b` (+ `05` UI contract)
+3. [ ] `20260613170000_pricing_status_columns_and_post_gate` — smoke `02a`
+4. [ ] `20260613180000_create_rush_order` (AFTER 170000) — smoke `02b`
+5. [ ] `20260613190000_price_order` (AFTER 170000+180000) — smoke `02c`
+6. [ ] `20260613200000_check_unpriced_orders_cron` (AFTER 170000) — smoke `02d`
+7. [ ] `20260613210000_invoice_from_order_delivery_guard` — smoke `04a`
+8. [ ] `20260613220000_consolidate_draft_invoices` — smoke `04b`
+9. [ ] `20260613230000_prepay_booking_link_and_settlement` — smoke `06a`
+10. [ ] `20260613240000_booking_prepay_earmark_and_apply` (AFTER 230000) — smoke `06b`
+11. [ ] `20260613250000_auto_apply_booking_prepay_on_post` (AFTER 240000) — smoke `06bB`
+12. [ ] `20260613260000_open_booking_rollover` (AFTER 230000) — smoke `06d`
+   - All smoke scripts live in `docs/roadmap/smoke/`. They require an OPEN accounting period (the prepay/post ones call check_period_open).
+
+### Step 3 — Post-apply verification
+- [ ] `node scripts/regenerate-schema-registry.mjs` (or MCP introspection refresh) — new columns/RPCs/trigger.
+- [ ] `npm run db-sweeps` → execute each predicate via MCP `execute_sql`; expect ZERO un-allowlisted rows (esp. fin-prepay-balance, secdef-searchpath, anon-exec-secdef, overloads, plpgsql-check, auth-bound-role-ungated).
+- [ ] Spot-check the 5 cron jobs (auto-expire 06:05, check-unpriced 06:10) registered.
+
+### Step 4 — Ship to production (the prod-push gate — Mason approves)
+- [ ] Merge `chore/sell-side-roadmap` → `main` (the recovery base merges too — confirm the migration-history is 1:1 with live after Step 2).
+- [ ] Push `main` → Vercel auto-deploys to croprxsolutions.app. Confirm the deploy READY.
+- [ ] Smoke the live app: create a rush order → price it; draw a booking → invoice → post (auto-applies prepay); earmark a prepay; view the rollover; over-limit order shows a warning but proceeds.
+
+### Deferred / follow-ups (not blockers)
+- #3 Stages B/C (grower portal) — DEFERRED:portal-scope.
+- #6 nav badge / projected-credit-from-suggested_price — deferred-optional.
+- The PrepayWorkspace `deleted_at` fix is included in this branch (bundles with G5 per Mason).

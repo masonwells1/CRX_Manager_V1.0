@@ -15,6 +15,7 @@ import { useToast } from '../ui/Toast';
 import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
+import { notifyCreditLimitExceeded } from '../../lib/notificationTriggers';
 import { formatCents as fmtCurrency } from '../../lib/money';
 import type { Product, Profile } from '../../types';
 
@@ -253,6 +254,22 @@ export default function QuickDeliveryModal({
         ? ` with draft invoice ${result.invoice_number}`
         : ' (no invoice created)';
       toast('success', `Quick delivery ${result.delivery_number} created${invoiceMsg}`);
+
+      // #7 (G4 = warn-but-allow): a quick delivery creates an order + draft
+      // invoice immediately, so surface over-limit credit exposure + notify
+      // admins — non-blocking, never affects the already-created delivery.
+      const creditCustomerId = selectedCustomer.id;
+      try {
+        const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', { p_customer_id: creditCustomerId });
+        const cl = assertRpcResult<{ exceeded?: boolean; farm_name?: string; outstanding_ar?: number; credit_limit?: number } | null>(creditCheck, 'check_customer_credit_limit');
+        if (cl && cl.exceeded) {
+          const fmtUsd = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+          toast('warning', `Credit limit warning: ${cl.farm_name} outstanding AR ${fmtUsd(cl.outstanding_ar ?? 0)} exceeds limit ${fmtUsd(cl.credit_limit ?? 0)}`);
+          notifyCreditLimitExceeded(cl.farm_name ?? 'Unknown', cl.outstanding_ar ?? 0, cl.credit_limit ?? 0, creditCustomerId);
+        }
+      } catch {
+        // Non-blocking — a credit-check failure must not affect the delivery.
+      }
 
       // Reset form
       setSelectedCustomer(null);
