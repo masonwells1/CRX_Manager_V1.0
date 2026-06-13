@@ -59,6 +59,7 @@ export default function OrderDetail() {
   const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
   const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
   const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
+  const applyBookingPrepayIdem = useIdempotencyKey('apply_booking_prepay', profile?.id || '');
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -122,6 +123,8 @@ export default function OrderDetail() {
   // #4 billing cockpit: post-all-drafts / consolidate-drafts actions.
   const [postingAll, setPostingAll] = useState(false);
   const [consolidating, setConsolidating] = useState(false);
+  // #6c-3: per-invoice "Apply booking prepay" (booking-draw orders only).
+  const [applyingPrepay, setApplyingPrepay] = useState<string | null>(null);
 
   const isAdmin = role === 'admin';
   // Draw-created orders (booking_draw) mirror their booking's draw ledger —
@@ -791,6 +794,30 @@ export default function OrderDetail() {
     }
   };
 
+  // #6c-3 booking cockpit: apply this booking's earmarked prepay to a posted draw
+  // invoice (Mechanism A, reversible). Server no-ops safely if nothing applies.
+  const handleApplyBookingPrepay = async (invoiceId: string) => {
+    if (!order || !profile) return;
+    setApplyingPrepay(invoiceId);
+    try {
+      const idem = applyBookingPrepayIdem.getKey();
+      const { data, error } = await supabase.rpc('apply_booking_prepay', { p_invoice_id: invoiceId, p_performed_by: profile.id, p_idempotency_key: idem });
+      if (error) throw error;
+      const result = assertRpcResult<{ success: boolean; applied_cents?: number; applied_count?: number; no_op?: boolean; reason?: string }>(data, 'apply_booking_prepay');
+      applyBookingPrepayIdem.resetKey();
+      if (result.no_op) toast('info', `No booking prepay applied${result.reason ? ` (${result.reason.replace(/_/g, ' ')})` : ''}.`);
+      else if ((result.applied_cents ?? 0) > 0) toast('success', `Applied ${fmt((result.applied_cents ?? 0) / 100)} booking prepay across ${result.applied_count ?? 0} credit(s).`);
+      else toast('info', 'No earmarked booking prepay available to apply.');
+      await fetchOrder();
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'apply_booking_prepay' } });
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can apply booking prepay.');
+      else toast('error', err instanceof Error ? err.message : 'Failed to apply booking prepay.');
+    } finally {
+      setApplyingPrepay(null);
+    }
+  };
+
   // Ship-now/price-later (#2 v2): finalize a needs_pricing rush order via price_order.
   const handlePriceOrder = async () => {
     if (!order || !profile) return;
@@ -1243,6 +1270,9 @@ export default function OrderDetail() {
                   <th className="px-4 py-2 text-right font-medium text-secondary">Total</th>
                   <th className="px-4 py-2 text-right font-medium text-secondary">Paid</th>
                   <th className="px-4 py-2 text-right font-medium text-secondary">Balance</th>
+                  {order?.booking_draw && (role === 'admin' || role === 'sales_rep') && (
+                    <th className="px-4 py-2 text-right font-medium text-secondary">Prepay</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -1271,6 +1301,21 @@ export default function OrderDetail() {
                     <td className={`px-4 py-2 text-right font-mono font-semibold ${inv.balance_cents > 0 ? 'text-red-600' : 'text-crx-green'}`}>
                       {fmt(inv.balance_cents / 100)}
                     </td>
+                    {order?.booking_draw && (role === 'admin' || role === 'sales_rep') && (
+                      <td className="px-4 py-2 text-right">
+                        {['posted', 'overdue'].includes(inv.status) && inv.balance_cents > 0 && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            showChevron={false}
+                            loading={applyingPrepay === inv.id}
+                            onClick={() => handleApplyBookingPrepay(inv.id)}
+                          >
+                            Apply booking prepay
+                          </Button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
