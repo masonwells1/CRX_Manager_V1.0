@@ -170,14 +170,39 @@ export default function InvoiceDetail() {
     // The RUP check must NEVER block posting — any failure falls through to the
     // plain confirm (warn+confirm by design, not a gate).
     try {
-      const productIds = items.map((it) => it.product_id).filter((p): p is string => Boolean(p));
-      if (invoice?.customer_id && productIds.length > 0) {
-        const res = await checkRUPCompliance(invoice.customer_id, productIds);
-        if (res.hasRUPProducts && !res.hasValidLicense) {
-          // #6: align the warning's stated disposition with what the DB actually
-          // records — missing license = NON-COMPLIANT, expired = WARNING (flagged).
-          const disp = rupRegisterDisposition(res);
-          warning = `This invoice includes restricted-use products (${res.rupProductNames.join(', ')}) and the customer has ${res.missingLicense ? 'NO applicator license' : 'only EXPIRED applicator licenses'} on file — it will be recorded as ${disp.label} in the RUP sales register.`;
+      if (invoice?.invoice_group_id) {
+        // Posting a grouped invoice posts EVERY sibling atomically via
+        // post_invoice_group (see handlePost), so the RUP advisory must cover the
+        // WHOLE group, not just the displayed invoice — a non-RUP sibling could
+        // otherwise post a RUP sibling with no warning. Check each sibling's own
+        // (customer, products) and aggregate. Still advisory, never a gate.
+        const { data: grp } = await supabase
+          .from('invoices')
+          .select('id, invoice_number, customer_id, invoice_items(product_id)')
+          .eq('invoice_group_id', invoice.invoice_group_id);
+        const parts: string[] = [];
+        for (const inv of (grp || []) as Array<{ invoice_number: string; customer_id: string | null; invoice_items: { product_id: string | null }[] | null }>) {
+          const pids = (inv.invoice_items || []).map((x) => x.product_id).filter((p): p is string => Boolean(p));
+          if (!inv.customer_id || pids.length === 0) continue;
+          const res = await checkRUPCompliance(inv.customer_id, pids);
+          if (res.hasRUPProducts && !res.hasValidLicense) {
+            const disp = rupRegisterDisposition(res);
+            parts.push(`${inv.invoice_number}: ${res.rupProductNames.join(', ')} — ${res.missingLicense ? 'NO applicator license' : 'EXPIRED license'} (${disp.label})`);
+          }
+        }
+        if (parts.length > 0) {
+          warning = `Posting this invoice group posts every invoice in it. Restricted-use products without a valid license — ${parts.join('; ')}. These will be recorded in the RUP sales register.`;
+        }
+      } else {
+        const productIds = items.map((it) => it.product_id).filter((p): p is string => Boolean(p));
+        if (invoice?.customer_id && productIds.length > 0) {
+          const res = await checkRUPCompliance(invoice.customer_id, productIds);
+          if (res.hasRUPProducts && !res.hasValidLicense) {
+            // #6: align the warning's stated disposition with what the DB actually
+            // records — missing license = NON-COMPLIANT, expired = WARNING (flagged).
+            const disp = rupRegisterDisposition(res);
+            warning = `This invoice includes restricted-use products (${res.rupProductNames.join(', ')}) and the customer has ${res.missingLicense ? 'NO applicator license' : 'only EXPIRED applicator licenses'} on file — it will be recorded as ${disp.label} in the RUP sales register.`;
+          }
         }
       }
     } catch (err) {

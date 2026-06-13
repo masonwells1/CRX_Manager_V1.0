@@ -191,6 +191,7 @@ export default function JobDetail() {
               epa_registration: p?.epa_registration || null,
               signal_word: p?.signal_word || null,
               rei_hours: p?.rei_hours ?? null,
+              phi_days: p?.phi_days ?? null,
               rate_per_acre: parseFloat(c.rate_per_acre) || null,
               rate_unit: c.rate_unit || null,
             };

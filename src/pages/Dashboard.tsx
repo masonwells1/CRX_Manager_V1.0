@@ -237,6 +237,25 @@ export default function Dashboard() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<OperationalData>(defaultData);
+  // Daily brief "open action items" count: operational_dashboard_summary returns
+  // team_action_items as a FILTERED, LIMIT-10 list, so its length underreports the
+  // true open count. Count all open (incomplete, non-deleted) team_notes directly
+  // for the admin brief (team_notes RLS = SELECT to all; this is admin-only). Codex
+  // 2026-06-13 finding 3. Falls back to the capped list length if the count errors.
+  const [openActionItemsCount, setOpenActionItemsCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (role !== 'admin') return;
+    let cancelled = false;
+    (async () => {
+      const { count, error } = await supabase
+        .from('team_notes')
+        .select('id', { count: 'exact', head: true })
+        .eq('is_completed', false)
+        .is('deleted_at', null);
+      if (!cancelled && !error) setOpenActionItemsCount(count ?? 0);
+    })();
+    return () => { cancelled = true; };
+  }, [role]);
 
   const fetchDashboard = useCallback(async () => {
     setLoading(true);
@@ -368,7 +387,7 @@ export default function Dashboard() {
           deliveriesToday={data.deliveryToday}
           deliveryUnassigned={data.deliveryUnassigned}
           activeOrders={data.activeOrdersCount}
-          actionItemsCount={data.teamActionItems.length}
+          actionItemsCount={openActionItemsCount ?? data.teamActionItems.length}
         />
       )}
 

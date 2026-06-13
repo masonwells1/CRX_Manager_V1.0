@@ -5,9 +5,11 @@
  * operator, before or at application, with: location/description of the treated
  * area, date and time of application, product name, EPA registration number,
  * active ingredients, REI, and whether posting/oral notification is required.
- * This generates that notice from a CRX job. Fields CRX doesn't store (active
- * ingredients) print as "see product label". REI prints from products.rei_hours
- * when entered, otherwise "see product label".
+ * This generates that notice from a CRX job. REI and PHI print from
+ * products.rei_hours / phi_days when entered (else "see product label"). Data
+ * CRX does NOT store — active ingredient(s) and the specific oral/posting
+ * requirement — is directed to each product label by an explicit callout, so the
+ * document does not present itself as a complete standalone notice (Codex 2026-06-13).
  *
  * Follows the dynamic-import + pdfTheme pattern of loadSheetPdf.ts.
  */
@@ -38,6 +40,7 @@ export interface WpsNoticeProduct {
   epa_registration: string | null;
   signal_word: string | null;
   rei_hours: number | null;
+  phi_days: number | null;
   rate_per_acre: number | null;
   rate_unit: string | null;
 }
@@ -133,20 +136,46 @@ export async function generateWpsNoticePdf(data: WpsNoticeData, filename?: strin
   autoTable(doc, {
     startY: y,
     margin: { left: margin, right: margin },
-    head: [['Product', 'EPA Reg. No.', 'Signal Word', 'Rate', 'REI', 'Active Ingredients']],
+    head: [['Product', 'EPA Reg. No.', 'Signal Word', 'Rate', 'REI', 'PHI']],
     body: data.products.map((p) => [
       p.product_name,
       p.epa_registration || 'see label',
       p.signal_word || '—',
       p.rate_per_acre ? `${p.rate_per_acre} ${p.rate_unit || ''}/ac`.trim() : '—',
       p.rei_hours != null ? `${p.rei_hours} hours` : 'see product label',
-      'see product label',
+      p.phi_days != null ? `${p.phi_days} days` : 'see product label',
     ]),
     styles: { fontSize: 9, cellPadding: 4 },
     headStyles: { fillColor: CRX_GREEN, textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: ALT_ROW_BG },
   });
-  y = doc.lastAutoTable.finalY + 22;
+  y = doc.lastAutoTable.finalY + 16;
+
+  // ── Active ingredients & posting requirement (mandatory content on the label) ──
+  // CRX does not store per-product active ingredients or the specific oral/posting
+  // requirement, so the notice cannot reproduce them — direct the reader to the
+  // label explicitly rather than implying completeness (Codex 2026-06-13 finding 1).
+  ensureRoom(56);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(...CHARCOAL);
+  doc.text('Active ingredients & posting requirement — on each product label', margin, y);
+  y += 14;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(...GRAY);
+  const labelNote =
+    'The active ingredient(s) for each product, and whether oral notification, posting of the treated ' +
+    'area, or both is required, are specified on the product label. Display this notice together with — ' +
+    'or with reference to — the labeling for every product applied (40 CFR 170.409). This notice does not ' +
+    'reproduce the full label and is not a substitute for it.';
+  const labelLines = doc.splitTextToSize(labelNote, pageW - margin * 2);
+  if (y + labelLines.length * 11 > doc.internal.pageSize.getHeight() - 60) {
+    doc.addPage();
+    y = margin;
+  }
+  doc.text(labelLines, margin, y);
+  y += labelLines.length * 11 + 18;
 
   // ── Required notices ───────────────────────────────────────────────────────
   const notices = [
