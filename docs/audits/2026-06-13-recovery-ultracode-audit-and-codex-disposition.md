@@ -14,6 +14,22 @@
 
 ---
 
+> ## ✅ EXECUTED 2026-06-13 (Mason authorized finishing all steps)
+> The push sequence (§8) was carried out:
+> 1. **Reconciled** with the updated `main` — PR #79 (`chore/ci-coverage-typecheck`) had merged during the
+>    session; merged it into recovery cleanly (auto-merge, no conflicts), so the push is a fast-forward.
+> 2. **All 3 migrations APPLIED LIVE + verified** (rolled-back behavioral proof: AFTER_CANCEL netfree=900;
+>    structural sweeps clean; 5 functions call `_sync_planned_holds`, helper not anon/auth-executable):
+>    `20260613191120` (planned-holds) → `20260613191323` (cancel_order) → `20260613191516` (void_order).
+>    Disk files **B7-renamed** to these MCP stamps; registry high-water bumped (the applies are function-only,
+>    no schema delta).
+> 3. Remaining: push recovery→main (deploy) → retire the two source branches.
+>
+> The body below is the pre-execution audit record — references to the migrations as "pending" / stamps
+> `20260613150000/150100/150200` describe their state at audit time; they are now applied as the `1911xx/1913xx/1915xx` stamps above.
+
+---
+
 ## 1. Verdict
 
 **SAFE TO REVIEW → SAFE TO PUSH** (after the gated apply of the one pending migration). One real HIGH

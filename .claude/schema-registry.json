@@ -6,7 +6,8 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260611211058"
+    "migrations_high_water": "20260613191516",
+    "high_water_note": "Bumped to the 20260613191516 hold-resync apply. The 3 migrations 20260613191120/191323/191516 are function-only (re-emit save_quote/create_planned_holds/restore_quote_version/cancel_order/void_order + add the _sync_planned_holds helper) — NO new tables/columns/CHECK constraints/sequences/generated columns, so the schema-tracked content below is unchanged from the 20260611211058 introspection."
   },
   "generated_columns": [
     {
