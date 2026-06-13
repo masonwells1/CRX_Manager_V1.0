@@ -1,4 +1,4 @@
-# Migration History (440 migrations)
+# Migration History (441 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -57,6 +57,7 @@ Eight migrations from the 2026-06-10 error-prevention follow-up queue (execution
 | Version | File | Status |
 |---------|------|--------|
 | 20260611132115 | `planned_holds_drawn_sync` | **On disk but NOT in live `schema_migrations` (verified 2026-06-11 final-verify run).** Codex round-2 #3: rebuild planned holds as GREATEST(booked − drawn, 0) on every save path (Revise/Mark-Presented included) instead of full `total_units_needed` (double-reservation vs `quote_product_draws`). Also carries 2 of the 22 idempotency operation-scope fixes (its `create_planned_holds` + `save_quote` rebuilds scope their lookups). Apply via the APPLY role + review gate before relying on it; the live idempotency probe still counts its 2 functions as unscoped. |
+| 20260613160000 | `auto_expire_quotes_skip_planned_and_schedule` | **FILE-ONLY — NOT in live `schema_migrations` (sell-side roadmap #5, owner gate G-AE = Option 1).** `CREATE OR REPLACE auto_expire_quotes()` = live body verbatim + one filter line `AND q.is_planned = false` (never auto-expire Planned Programs; drawn bookings already skipped), then idempotent `cron.schedule('auto-expire-quotes','5 6 * * *',…)` (slots between mark-overdue 06:00 and release-expired-quote-holds 06:15). No grants touched (CREATE OR REPLACE preserves the post-`20260609203541` REVOKE). Reviewers CLEAN (rls 0/0/0 +1 NIT cleared; drift 0/0/0); Codex iterated 3× — doc-drift, smoke `hold_type` ('planned'→'crop_program'), and ledger placement all fixed. Smoke `docs/roadmap/smoke/05b-auto-expire-skip-planned.sql` (live-run deferred — read-only MCP this session). Apply at G5 go-live. |
 
 ## Applied 2026-06-11 (Codex round-2 remediation — draw-order lock + restore guard)
 

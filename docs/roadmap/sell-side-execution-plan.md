@@ -28,13 +28,13 @@
 - **G3** — #2 revenue policy: rush orders post into ship-month or price-month? `OPEN`
 - **G4** — #7 driver-role credit behavior: warn vs block-with-override. `OPEN`
 - **G5** — FINAL GO-LIVE (apply migrations + merge recovery+roadmap → main + deploy). Loop NEVER does this. `OPEN`
-- **G-AE** (#5 auto-expire) — schedule `auto_expire_quotes` on a daily pg_cron (sent/revised past `expires_at` → expired + release holds; skips drawn bookings) **OR** retire the function (quotes never auto-expire; rely on the new manual Decline/Cancel buttons). `OPEN — ASKED 2026-06-13` (loop paused here at end of iteration 1).
+- **G-AE** (#5 auto-expire) — `ANSWERED 2026-06-13 → Option 1`: auto-expire ad-hoc sent/revised quotes past `expires_at` (release holds), but SKIP Planned Programs and drawn bookings. Implemented file-only in `20260613160000_auto_expire_quotes_skip_planned_and_schedule.sql`. RESOLVED.
 
 ---
 
 ## Roadmap items
 
-### #5 — Unstick quote lifecycle — `IN_PROGRESS`  [dep: none]
+### #5 — Unstick quote lifecycle — `DONE`  [dep: none]
 - ✅ **UI slice SHIPPED (iteration 1, commit on `chore/sell-side-roadmap`):**
   - Decline + Cancel Quote buttons in `QuoteBuilder.tsx` (direct `quotes.status` UPDATE under RLS; the live `release_holds_on_quote_status_change` trigger releases holds on every terminal path). Guarded against abandoning an open booking's holds (skips when `quote_product_draws.quantity_drawn > 0`, parity with the Quotes bulk-delete skip).
   - Admin-only **Un-accept / Reopen** button wired to the hardened `revert_quote_status` RPC (idempotency + `assertRpcResult` + `hasRpcCode`; reason required; blocks accepted-with-order).
@@ -42,8 +42,8 @@
   - Verified vs LIVE DB: status CHECK has all 7 statuses; transition trigger allows sent/revised→declined/cancelled and accepted→sent; hold-release trigger covers all terminal paths.
   - Gate: lint 0, build clean, full suite 1997 passed/70 skipped, `compliance-reviewer` CLEAN. No migration in this slice → per-migration reviewers + `/codex-review` N/A.
   - Smoke chain WRITTEN as `docs/roadmap/smoke/05-quote-lifecycle.sql` (P1 decline / P2 expire-sim / P3 un-accept / P4 order-block). Could NOT run live: this session's Supabase MCP is **read-only** (see Environment notes). All four contracts verified by direct inspection of the live trigger/RPC bodies instead.
-- ⏸ **BLOCKED-GATE: auto-expire decision (Mason's call — see Owner gates).** WITHOUT it, nothing ever auto-expires a quote: the 6:15 `release_expired_quote_holds` cron only mops up holds on quotes *already* declined/expired; it never reads `expires_at`. So `expires_at` is cosmetic today. Decision: schedule `auto_expire_quotes` daily (sent/revised past-expiry → expired + release holds, skips drawn bookings) vs retire it. Either way it's a FILE-ONLY migration applied at go-live.
-- **Done when:** decline/cancel/un-accept reachable in UI ✅; expiry decision implemented (BLOCKED); smoke chain green (script ready; live-run pending write-capable session).
+- ✅ **Auto-expire decision RESOLVED (gate G-AE = Option 1, iteration 2):** migration `20260613160000_auto_expire_quotes_skip_planned_and_schedule.sql` (FILE-ONLY) adds `AND q.is_planned = false` to `auto_expire_quotes` (skip Planned Programs; drawn bookings already skipped) and schedules it on pg_cron at 06:05 daily. Reviewers CLEAN (rls + drift); Codex iterated 3× (doc-drift, smoke `hold_type`, ledger placement) → SHIP. Context: WITHOUT this nothing auto-expired quotes — the 6:15 `release_expired_quote_holds` cron only mops up holds on quotes *already* declined/expired; it never read `expires_at`.
+- **Done:** decline/cancel/un-accept reachable in UI ✅; expiry decision implemented ✅ (file-only migration, applies at G5); smoke scripts `05-quote-lifecycle.sql` + `05b-auto-expire-skip-planned.sql` written + reviewer/Codex-verified (live-run deferred — read-only MCP this session).
 
 ### #2 — Ship-now / price-later — `TODO`  [dep: #5 DONE; gate G3]
 - Migration: `orders.pricing_status` text NOT NULL DEFAULT 'priced' CHECK in ('priced','needs_pricing'); `order_items.pricing_pending` bool default false; `invoices.pricing_pending` bool default false. (Verify W1's `create_direct_order` role gate is live — CLAUDE.md says fixed `20260610142204`; confirm, don't re-fix blindly.)
@@ -77,7 +77,8 @@
 ---
 
 ## Iteration log (loop appends one line per iteration)
-- **Iter 1 (2026-06-13):** #5 UI slice — Decline/Cancel/Un-accept(Reopen) buttons + Cancelled filter (`QuoteBuilder.tsx`, `Quotes.tsx`). Frontend-only (no migration; DB triggers/RPC already live). lint 0 / build clean / 1997 tests pass / compliance-reviewer CLEAN. Smoke script `docs/roadmap/smoke/05-quote-lifecycle.sql` (verified by live-def inspection; live-run blocked by read-only MCP). PAUSED for gate G-AE (auto-expire schedule-vs-retire).
+- **Iter 1 (2026-06-13):** #5 UI slice — Decline/Cancel/Un-accept(Reopen) buttons + Cancelled filter (`QuoteBuilder.tsx`, `Quotes.tsx`). Frontend-only (no migration; DB triggers/RPC already live). lint 0 / build clean / 1997 tests pass / compliance-reviewer CLEAN. Smoke script `docs/roadmap/smoke/05-quote-lifecycle.sql` (verified by live-def inspection; live-run blocked by read-only MCP). PAUSED for gate G-AE (auto-expire schedule-vs-retire). Commit `ee3b4a2`.
+- **Iter 2 (2026-06-13):** #5 → DONE. Gate G-AE answered (Option 1). Migration `20260613160000_auto_expire_quotes_skip_planned_and_schedule.sql` (FILE-ONLY): `auto_expire_quotes` += `is_planned=false` skip + pg_cron 06:05. Review gate: rls-security + migration-drift CLEAN (byte-fidelity confirmed vs live); Codex 3 rounds → SHIP (caught: doc-drift, smoke `hold_type` 'planned'→'crop_program' invalid-CHECK, ledger placement — all fixed). Doc counts 440→441; AGENTS.md regen. Smoke `05b-auto-expire-skip-planned.sql`. NOT applied/pushed.
 
 ## Follow-ups / deferred
 - **#5 hardening (LOW, optional):** the Decline/Cancel drawn-booking guard is frontend-only (small TOCTOU window; worst case = orphaned holds, not financial corruption) — same convention as the existing bulk-delete skip. A belt-and-suspenders fix would be a DB-side trigger blocking sent/revised→declined/cancelled when `quote_product_draws.quantity_drawn > 0`. Bundle into a later #5/#6 migration if this protection class is ever hardened.

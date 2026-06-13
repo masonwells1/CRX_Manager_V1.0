@@ -38,7 +38,7 @@ BEGIN
     VALUES ('SMOKE-DECL', v_cust, v_admin, 'draft') RETURNING id INTO q1;
   UPDATE quotes SET status='sent' WHERE id=q1;
   INSERT INTO inventory_holds (product_id, quantity, hold_type, created_by, is_active, source_id)
-    VALUES (v_prod, 10, 'planned', v_admin, true, q1);
+    VALUES (v_prod, 10, 'crop_program', v_admin, true, q1);
   UPDATE quotes SET status='declined' WHERE id=q1;
   SELECT bool_or(is_active) INTO v_hold_active FROM inventory_holds WHERE source_id=q1;
   SELECT status INTO v_status FROM quotes WHERE id=q1;
@@ -50,7 +50,7 @@ BEGIN
     VALUES ('SMOKE-EXP', v_cust, v_admin, 'draft', CURRENT_DATE - 5) RETURNING id INTO q2;
   UPDATE quotes SET status='sent' WHERE id=q2;
   INSERT INTO inventory_holds (product_id, quantity, hold_type, created_by, is_active, source_id)
-    VALUES (v_prod, 7, 'planned', v_admin, true, q2);
+    VALUES (v_prod, 7, 'crop_program', v_admin, true, q2);
   PERFORM auto_expire_quotes();
   SELECT status INTO v_status FROM quotes WHERE id=q2;
   SELECT bool_or(is_active) INTO v_hold_active FROM inventory_holds WHERE source_id=q2;
