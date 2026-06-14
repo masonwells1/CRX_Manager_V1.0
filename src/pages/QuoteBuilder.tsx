@@ -261,7 +261,11 @@ export default function QuoteBuilder() {
   // Status-based guards
   const currentStatus = status || 'draft';
   const canEdit = ['draft', 'revised'].includes(currentStatus);
-  const canSend = ['draft', 'revised'].includes(currentStatus);
+  // Codex round-7 P2: include 'sent' so a frozen sent quote can still be re-emailed —
+  // "Preview Quote" is the only route to the Email-to-Grower button, and
+  // handleEmailToGrower explicitly supports re-sending an already-sent quote (it only
+  // freezes a version on the FIRST send from draft/revised).
+  const canSend = ['draft', 'revised', 'sent'].includes(currentStatus);
   const canConvert = currentStatus === 'sent';
   // draw_down_quote accepts BOTH 'sent' and 'revised' bookings — keep the
   // Partial Order button in parity with the RPC (whole-convert stays

@@ -106,12 +106,22 @@ BEGIN
 
   v_order_number := generate_order_number();
 
+  -- Codex round-7 P1: SNAPSHOT the customer's commission split onto the order NOW,
+  -- because rush-order commissions are DEFERRED to price_order (v2). If price_order
+  -- re-read customers.default_commission_split at pricing time, a split change between
+  -- ship and pricing would mis-attribute this sale. price_order uses orders.commission_split.
+  -- (draw_down_quote snapshots the same way from the quote; create_direct_order doesn't
+  -- need to — it computes commissions immediately at creation.)
+  -- sql-safety: exempt-registry — orders.pricing_status is added by the sibling file-only
+  -- migration 20260613170000 (see file header); commission_split is a live column.
   INSERT INTO orders (
     order_number, customer_id, status, pricing_status,
+    commission_split,
     total_price, total_cost, total_profit, total_margin_pct,
     order_date, notes
   ) VALUES (
     v_order_number, p_customer_id, 'confirmed', 'needs_pricing',
+    v_customer.default_commission_split,
     0, 0, 0, 0,
     CURRENT_DATE,
     NULLIF(TRIM(COALESCE(p_notes, '')), '')

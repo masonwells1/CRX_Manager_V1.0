@@ -127,7 +127,9 @@ export default function NewOrder() {
 
   // Draft persistence: auto-saves form to sessionStorage so data survives
   // a PWA reload when the user switches away on mobile (e.g. to the calculator).
-  const draftState = { customerId, orderName, orderDate, customerPoNumber, notes, items };
+  // Codex round-7 P2: include priceLater so a reload doesn't silently downgrade a
+  // rush (price-later) order back to a normal priced order on submit.
+  const draftState = { customerId, orderName, orderDate, customerPoNumber, notes, items, priceLater };
   const { draft, clearDraft } = useFormDraft<typeof draftState>('new-order', draftState);
 
   // Restore draft on mount (runs once after loading completes)
@@ -139,6 +141,7 @@ export default function NewOrder() {
       setOrderDate(draft.orderDate || localToday());
       setCustomerPoNumber(draft.customerPoNumber || '');
       setNotes(draft.notes || '');
+      if (draft.priceLater) setPriceLater(true);
       if (draft.items && draft.items.length > 0) {
         // Re-key items to avoid stale React keys
         setItems(draft.items.map((item) => ({ ...item, _key: nextKey() })));

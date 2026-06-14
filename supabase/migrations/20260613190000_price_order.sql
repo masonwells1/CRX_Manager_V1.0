@@ -54,7 +54,6 @@ DECLARE
   v_remaining   int;
   v_was_pending boolean;
   v_total_profit numeric;
-  v_customer    record;
   v_inv         record;
   v_swept       int := 0;
 BEGIN
@@ -125,11 +124,14 @@ BEGIN
     -- deferred commissions on the FINAL profit, only on the needs_pricing→priced
     -- transition (re-read total_profit after trg_recalc_order_totals ran).
     IF v_was_pending THEN
-      SELECT * INTO v_customer FROM customers WHERE id = v_order.customer_id;
       SELECT total_profit INTO v_total_profit FROM orders WHERE id = p_order_id;
+      -- Codex round-7 P1: use the split SNAPSHOTTED onto the order at rush-order
+      -- creation (create_rush_order stores customers.default_commission_split into
+      -- orders.commission_split), NOT the customer's CURRENT default — a split change
+      -- between ship and pricing must not re-attribute this sale's commissions.
       PERFORM _insert_commissions_for_order(
         p_order_id, v_order.customer_id, v_total_profit,
-        v_customer.default_commission_split, v_order.order_date
+        v_order.commission_split, v_order.order_date
       );
 
       -- sweep linked DRAFT/UNPOSTED invoices to the now-known prices — gated on
