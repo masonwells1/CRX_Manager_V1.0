@@ -796,7 +796,10 @@ export default function DeliveryDetail() {
       completeIdem.resetKey();
       assertRpcResult(completeResult, 'complete_delivery');
 
-      // Upload signature image if provided
+      // Upload signature image if provided. The delivery has ALREADY completed
+      // (complete_delivery succeeded above), so a failed upload must NOT abort
+      // the success flow — track it and warn accurately instead.
+      let signatureUploadFailed = false;
       if (signatureDataUrl) {
         try {
           const base64Data = signatureDataUrl.split(',')[1];
@@ -823,9 +826,14 @@ export default function DeliveryDetail() {
             .select();
           checkMutationResult(sigResult, 'Update delivery signature');
         } catch (sigErr) {
+          // complete_delivery already succeeded, so the delivery IS completed —
+          // do NOT return (that would skip the invoice/notification/refresh flow)
+          // and do NOT tell the driver to "complete it again" (the completed
+          // status makes that retry unreliable). Warn accurately and let the
+          // completion flow finish; the signature can be re-captured. (Codex P2.)
+          signatureUploadFailed = true;
           Sentry.captureException(sigErr instanceof Error ? sigErr : new Error(String(sigErr)), { extra: { context: 'Signature upload failed during delivery completion' } });
-          toast('error', 'Signature could not be saved. Please try completing the delivery again.');
-          return;
+          toast('error', 'Delivery completed, but the signature could not be saved. Re-capture it from this delivery.');
         }
       }
 
@@ -839,7 +847,9 @@ export default function DeliveryDetail() {
         toast('success', isPartialDelivery
           ? `Delivery completed (partial). Draft invoice ${invoiceNum} created.`
           : `Delivery completed. Draft invoice ${invoiceNum} created.`);
-      } else {
+      } else if (!signatureUploadFailed) {
+        // When the signature failed we already showed an accurate warning toast
+        // that says the delivery completed — skip the redundant success toast.
         toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
       }
       logActivity({ event: 'delivery_completed', description: `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, performedBy: profile.id, entityType: 'delivery', entityId: delivery.id, customerId: delivery.customer_id });
