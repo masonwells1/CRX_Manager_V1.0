@@ -1,10 +1,18 @@
-# Migration History (442 migrations)
+# Migration History (443 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/audits/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-14 (create_direct_order customer-PO param — 1 migration)
+
+`/ship` gate (rls-security + migration-drift + compliance reviewers all CLEAN; rolled-back `SMOKE_PASS_ROLLBACK` via `scripts/smoke/smoke-create-direct-order-po.sql`; db-invariant sweeps clean for the changed fn — plpgsql_check 0 errors, overload=1, anon no-EXECUTE; disk file B7-renamed to the MCP stamp).
+
+| Version | File | Description |
+|---------|------|-------------|
+| 20260614142939 | `create_direct_order_customer_po_param` | **Money-adjacent `sales_rep` bug.** `create_direct_order` gained `p_customer_po_number text DEFAULT NULL` and sets `orders.customer_po_number` inside the SECDEF RPC. Before, `NewOrder.tsx` set the PO via a post-create `supabase.from('orders').update({customer_po_number})`, which the admin-only `orders_update` RLS (USING/CHECK = `is_admin()`) DENIED for a `sales_rep` → the UI reported FAILURE on a real order and the PO was silently lost (not retryable — the idempotency key replays the create, which never set the PO). DROP 7-arg + CREATE 8-arg (adding a param changes the identity signature); grants restated (REVOKE PUBLIC/anon, GRANT authenticated/service_role — a fresh CREATE resets the ACL to PUBLIC); body byte-verbatim from live (baseline md5 `d7ff336715075fc84426b81e772f492e`) except DELTA-1 (the new param) and DELTA-2 (the orders INSERT column + `NULLIF(TRIM(COALESCE(p_customer_po_number,'')),'')` value, the same empty→NULL normalization used for `p_notes`). Self-verify asserts overload=1, SECDEF+`search_path`, role gate (`INSUFFICIENT_ROLE`) intact, anon/PUBLIC no-EXECUTE. Frontend (`NewOrder.tsx`) now passes `p_customer_po_number` and drops the follow-up update + its `checkMutationResult`. |
 
 ## Applied 2026-06-10 (foundation-ultra-review remediation — 7 migrations)
 

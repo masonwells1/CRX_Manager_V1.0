@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-14 — create_direct_order customer-PO param (sales_rep money-adjacent fix), applied live
+
+Branch `ship/create-direct-order-customer-po` (isolated worktree off `origin/main`), one migration applied live through the `/ship` gate (rls-security + migration-drift + compliance reviewers all CLEAN; rolled-back `SMOKE_PASS_ROLLBACK`; db-invariant sweeps clean; B7 rename).
+
+- **`20260614142939_create_direct_order_customer_po_param`** — `create_direct_order` gained `p_customer_po_number text DEFAULT NULL` and now sets `orders.customer_po_number` inside the SECURITY DEFINER RPC. Before, `NewOrder.tsx` set the PO with a post-create `supabase.from('orders').update({customer_po_number})`; the live `orders_update` RLS is `is_admin()` for both USING and WITH CHECK, so for a **sales_rep** that follow-up UPDATE was denied → `checkMutationResult` threw → the UI reported failure on a successfully-created order and the PO was silently dropped (not retryable; the idempotency key just replays the create). DROP 7-arg + CREATE 8-arg (a new param changes the identity signature; grants restated since a fresh CREATE resets the ACL to PUBLIC); body byte-verbatim from live except the param + the orders INSERT column/value. Frontend (`NewOrder.tsx`) now passes `p_customer_po_number` and removes the follow-up update + its now-unused `checkMutationResult` import. New smoke chain `scripts/smoke/smoke-create-direct-order-po.sql` proves a real sales_rep persists the PO, empty PO normalizes to NULL, idempotency replay returns the same order, and the auth gates fire. NOT pushed (prod-push gate).
+
 ## 2026-06-10 (deep-dive H1 B5) — applicator license-expiry gates + RUP time-bomb fix, applied live
 
 First `/ship` off the deep-dive roadmap, on branch `feat/h1-quick-wins-2026-06-10`. Two migrations applied live through the full review gate (4 reviewers clean, rolled-back smoke tests, B7 renames):

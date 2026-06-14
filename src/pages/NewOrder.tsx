@@ -16,7 +16,7 @@ import Modal from '../components/ui/Modal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -371,6 +371,7 @@ export default function NewOrder() {
           p_items: rpcItems,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
+          p_customer_po_number: customerPoNumber.trim() || null,
         });
 
         if (error) throw error;
@@ -378,12 +379,6 @@ export default function NewOrder() {
         createOrderIdem.resetKey();
         const result = assertRpcResult<{ order_id: string; warnings?: string[] }>(data, 'create_direct_order');
         const orderId = result.order_id;
-
-        // Save customer PO# if provided
-        if (customerPoNumber.trim() && orderId) {
-          const poResult = await supabase.from('orders').update({ customer_po_number: customerPoNumber.trim() }).eq('id', orderId).select();
-          checkMutationResult(poResult, 'Update customer PO number');
-        }
 
         clearDraft();
 
