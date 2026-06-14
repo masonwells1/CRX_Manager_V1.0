@@ -91,3 +91,25 @@ Built end-to-end by the overnight `/loop` session. **6 commits on `claude/recurs
 - Switching `DeliveryDetail` to the shared `deliveryCompletionEmail.ts` (would touch the frozen file) — left as a future cleanup; the two copies are intentionally duplicated for now.
 
 **Next:** Mason reviews → final on-device pass → merge to `main` (= deploy to croprxsolutions.app) when satisfied.
+
+---
+
+## Red-team review + remediation (2026-06-14)
+
+A second, aggressive red-team review (4 hunters, grounded against the **live** RPC/RLS catalog) ran after the first clean swarm. It found what the first missed:
+
+**Fixed (commits `a8c883a`, `2b97739`):**
+- **HIGH (real bug):** `FieldStop` read `customer_addresses.street` — a column that doesn't exist (it's `address_line`); the street line silently dropped from the stop address. Fixed + switched to explicit-column select so the type checker catches field drift.
+- **MED:** signature-image upload failure was swallowed (Sentry only) → added a non-blocking toast (delivery still completes; failed capture is now visible).
+- **LOW:** `handleArrive` race-recovery now syncs local status to `in_progress`.
+- **LOW (offline data-loss):** offline `complete_delivery` now carries `entityTable/entityId/snapshotAt` so `offlineSync`'s stale-write guard surfaces a `Conflict:` instead of silently dropping a queued completion if the stop is completed/cancelled elsewhere while offline.
+
+**Owner decision (2026-06-14): dispatcher-assign model.** The red-team proved (live) that `del_select` RLS hides unassigned stops from drivers, so the driver self-claim flow was non-functional for the target role. Mason chose: drivers run **pre-assigned** routes; dispatchers assign via the existing desktop flow. The driver-facing **Claim button was removed** (commit `2b97739`), which also moots the `reassign_delivery` self-claim tightening. Field Mode works for admin/sales-rep now, and for drivers once a stop is assigned to them.
+
+**Verified faithful (no change needed):** completion `rpcParams`, inventory deduction, draft-invoice creation, `auto_invoice.invoice_number` return shape, and the receipt email are all identical to the production `DeliveryDetail` handler / live RPC.
+
+**Known limitation (documented, NOT fixed — would need a migration the owner declined for now):**
+- `customers_select` driver branch date-gates on `scheduled_date >= CURRENT_DATE - 1`, so a driver completing an assigned stop with a null/old `scheduled_date` gets a NULL customer embed → the receipt email silently skips and the name shows "Unknown customer". **Latent** (0 such stops today). Revisit with the customers_select widening (or a SECDEF receipt-fetch RPC) if it ever bites.
+- `customer_addresses` RLS is `USING (true)` (world-readable to authenticated) — pre-existing, not introduced here; FieldStop now selects only `address_line, city, state, zip`.
+
+Note: the Codex packet (`docs/audits/2026-06-14-codex-field-mode-prompt.md`) predates this round — it still describes the Claim flow and the address bug. Re-running real Codex is still worthwhile for independent-model coverage; the code it reviews now has Claim removed and the address bug fixed.
