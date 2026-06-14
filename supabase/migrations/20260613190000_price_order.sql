@@ -68,13 +68,20 @@ BEGIN
     RAISE EXCEPTION 'INSUFFICIENT_ROLE';
   END IF;
 
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND'; END IF;
+
+  -- Codex round-11 P2: idempotency check AFTER the order FOR UPDATE (TOCTOU). A pre-lock
+  -- check_idempotency let two same-key calls both miss the cache; the 1st prices the order
+  -- (pricing_status→priced) and saves its result, then the 2nd — which was waiting on the
+  -- FOR UPDATE — resumes and would hit the ALREADY_PRICED guard below, returning a FALSE
+  -- failure even though the order was priced. Re-checking here (the order row lock
+  -- serializes same-order/same-key calls) returns the 1st call's saved result instead.
+  -- Canonical pattern from draw_down_quote (20260610181726).
   IF p_idempotency_key IS NOT NULL THEN
     v_cached := check_idempotency(p_idempotency_key, 'price_order');
     IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
   END IF;
-
-  SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
-  IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND'; END IF;
   -- Terminal-order guard (Codex round 2 P1): a cancelled/voided/deleted rush order
   -- still carries pricing_status='needs_pricing' (the cancel/void RPCs don't clear
   -- it), so without this check price_order would price it and create commissions

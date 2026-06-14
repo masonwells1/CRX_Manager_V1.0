@@ -50,11 +50,6 @@ BEGIN
     RAISE EXCEPTION 'INSUFFICIENT_ROLE';
   END IF;
 
-  IF p_idempotency_key IS NOT NULL THEN
-    v_cached := check_idempotency(p_idempotency_key, 'consolidate_draft_invoices');
-    IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
-  END IF;
-
   SELECT * INTO v_order FROM orders WHERE id = p_order_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND'; END IF;
 
@@ -67,6 +62,17 @@ BEGIN
   -- drafts are intentionally left untouched.
   PERFORM 1 FROM invoices
     WHERE order_id = p_order_id AND status = 'draft' AND customer_id = v_order.customer_id FOR UPDATE;
+
+  -- Codex round-11-class hardening: idempotency check AFTER the draft FOR UPDATE (TOCTOU).
+  -- A pre-lock check_idempotency let two same-key calls both miss the cache; the lock
+  -- serializes them, so the 2nd resumes here after the 1st committed and returns the 1st
+  -- call's saved result instead of re-evaluating (which would report 'fewer than 2 drafts'
+  -- after the 1st already merged). Canonical post-lock pattern (draw_down_quote 20260610181726).
+  IF p_idempotency_key IS NOT NULL THEN
+    v_cached := check_idempotency(p_idempotency_key, 'consolidate_draft_invoices');
+    IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
+  END IF;
+
   SELECT array_agg(id ORDER BY created_at, invoice_number) INTO v_source_ids
     FROM invoices
     WHERE order_id = p_order_id AND status = 'draft' AND customer_id = v_order.customer_id;
