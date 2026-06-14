@@ -308,9 +308,13 @@ export default function PrepaymentManager() {
   const handleSaveBooking = async () => {
     if (!bookingCredit) return;
     const credit = bookingCredit;
+    // Codex P2: scope the idem key to BOTH the credit AND the selected target —
+    // keyed by credit.id alone, a lost response + changing the target + retry would
+    // replay the prior assignment's cached success against the new target.
+    const keyScope = `${credit.id}:${selectedBookingId || 'none'}`;
     await runCriticalAction({
       action: async () => {
-        const bookingKey = getScopedKey(bookingKeysRef.current, 'set_prepay_credit_booking', credit.id);
+        const bookingKey = getScopedKey(bookingKeysRef.current, 'set_prepay_credit_booking', keyScope);
         const { data, error } = await supabase.rpc('set_prepay_credit_booking', {
           p_credit_id: credit.id,
           p_quote_id: selectedBookingId || null,
@@ -325,7 +329,7 @@ export default function PrepaymentManager() {
         }
         const result = assertRpcResult<{ success: boolean }>(data, 'set_prepay_credit_booking');
         if (!result?.success) throw new Error('Assignment failed');
-        resetScopedKey(bookingKeysRef.current, credit.id);
+        resetScopedKey(bookingKeysRef.current, keyScope);
       },
       toast,
       setLoading: setSavingBooking,

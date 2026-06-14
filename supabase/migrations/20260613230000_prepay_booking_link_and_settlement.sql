@@ -145,12 +145,15 @@ BEGIN
     INTO v_prepay_remaining_cents
     FROM prepay_credits pc
     WHERE pc.quote_id = p_quote_id;
+  -- Codex P2 (round 3): count only applications of credits EARMARKED to this
+  -- booking (join through prepay_credits.quote_id), NOT every application landing
+  -- on this booking's invoices — a generic/other-booking credit manually applied
+  -- to one of this order's invoices must not inflate this booking's prepay.
   SELECT COALESCE(SUM(pa.applied_amount_cents), 0)
     INTO v_prepay_applied_cents
     FROM prepay_applications pa
-    JOIN invoices i ON i.id = pa.invoice_id
-    JOIN orders o ON o.id = i.order_id
-    WHERE o.quote_id = p_quote_id;
+    JOIN prepay_credits pc ON pc.id = pa.prepay_credit_id
+    WHERE pc.quote_id = p_quote_id;
   v_prepay_earmarked_cents := v_prepay_applied_cents + v_prepay_remaining_cents;
 
   RETURN jsonb_build_object(

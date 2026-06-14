@@ -89,9 +89,12 @@ export default function NewOrder() {
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);
   // Ship-now/price-later (#2): when on, submit via create_rush_order (unpriced).
   const [priceLater, setPriceLater] = useState(false);
-  // #2 (Codex round 2): field staff (driver/applicator) may create rush orders but
-  // must never see/enter pricing — force them into ship-now/price-later mode (which
-  // creates an UNPRICED $0 order; an admin prices it later), so no margin is exposed.
+  // DORMANT (Mason 2026-06-13: field-staff rush ordering deferred — routes +
+  // create_rush_order are admin/sales only). These guards stay as forward-prep for
+  // the future field-staff feature; isFieldStaff is currently always false here, so
+  // admin/sales see the full pricing UI unchanged. When the feature is built (with
+  // scoped RLS on orders/order_items + PAGE_PERMISSIONS), re-open the routes and
+  // these guards already hide all cost/profit/margin from field staff.
   const isFieldStaff = profile?.role === 'driver' || profile?.role === 'applicator';
   useEffect(() => {
     if (isFieldStaff) setPriceLater(true);
@@ -386,13 +389,17 @@ export default function NewOrder() {
             p_idempotency_key: rushKey,
           });
           if (error) throw error;
-          rushOrderIdem.resetKey();
           const rushResult = assertRpcResult<{ order_id: string; order_number: string; warnings?: string[] }>(data, 'create_rush_order');
           const rushOrderId = rushResult.order_id;
           if (customerPoNumber.trim() && rushOrderId) {
             const poResult = await supabase.from('orders').update({ customer_po_number: customerPoNumber.trim() }).eq('id', rushOrderId).select();
             checkMutationResult(poResult, 'Update customer PO number');
           }
+          // Codex P1: reset the idempotency key ONLY after all follow-up work (the
+          // PO-number update) succeeds. Resetting right after the RPC meant a failed
+          // PO update + retry would re-run create_rush_order with a fresh key and
+          // duplicate the order + re-prebook inventory.
+          rushOrderIdem.resetKey();
           clearDraft();
           if (rushResult.warnings && rushResult.warnings.length > 0) {
             for (const w of rushResult.warnings) toast('warning', 'Inventory: ' + w);

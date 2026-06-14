@@ -15,8 +15,10 @@
 --
 -- Behavior (modeled on create_direct_order, with the rush deltas):
 --   • canonical strict-actor (AUTH_REQUIRED / ACTOR_MISMATCH via IS DISTINCT FROM)
---   • roles admin/sales_rep/driver/applicator (BROADER than create_direct_order's
---     admin/sales_rep — field staff create rush orders) → INSUFFICIENT_ROLE else
+--   • roles admin/sales_rep (mirrors create_direct_order) → INSUFFICIENT_ROLE else.
+--     (Codex round 3 / Mason 2026-06-13: field-staff driver/applicator rush
+--     ordering was considered but NARROWED back — it needs scoped RLS read policies
+--     + a PAGE_PERMISSIONS change, so it is deferred to a proper future feature.)
 --   • order: status='confirmed', pricing_status='needs_pricing', all $ totals 0,
 --     order_date = CURRENT_DATE (the ship date; G3=price-month means the INVOICE
 --     date is set later by price_order, not here)
@@ -79,7 +81,11 @@ BEGIN
     RAISE EXCEPTION 'ACTOR_MISMATCH';
   END IF;
   SELECT role INTO v_actor_role FROM profiles WHERE id = v_actor AND is_active = true;
-  IF v_actor_role IS NULL OR v_actor_role NOT IN ('admin','sales_rep','driver','applicator') THEN
+  -- Codex round 3 / Mason 2026-06-13: NARROWED to admin/sales_rep. Field-staff
+  -- (driver/applicator) rush ordering is deferred — it needs scoped RLS read
+  -- policies on orders/order_items + a PAGE_PERMISSIONS change (a security-model
+  -- decision), so it becomes a proper future feature rather than a partial one.
+  IF v_actor_role IS NULL OR v_actor_role NOT IN ('admin','sales_rep') THEN
     RAISE EXCEPTION 'INSUFFICIENT_ROLE';
   END IF;
 
@@ -191,10 +197,9 @@ BEGIN
 
   -- #4 (Codex P2): notify admins server-side that this rush order needs pricing.
   -- create_rush_order is SECDEF (owner), so this bypasses the notifications RLS
-  -- with_check (is_admin() OR user_id = auth.uid()). The frontend CANNOT insert
-  -- notifications for other users when the creator is a sales_rep/driver/applicator
-  -- (now a real case — field staff create rush orders), so the immediate alert
-  -- must come from here; the check_unpriced_orders cron is the longer-term backstop.
+  -- with_check (is_admin() OR user_id = auth.uid()). A sales_rep creator CANNOT
+  -- insert notifications for other (admin) users from the frontend, so the immediate
+  -- alert must come from here; the check_unpriced_orders cron is the longer-term backstop.
   INSERT INTO notifications (user_id, title, message, notification_type, related_entity_type, related_entity_id)
   SELECT p.id, 'Order needs pricing',
     'Rush order ' || v_order_number || ' for ' || COALESCE(v_customer.farm_name, 'customer') ||
@@ -216,7 +221,7 @@ END;
 $function$;
 
 -- ACL mirrors create_direct_order (authenticated + service_role; no anon/PUBLIC).
--- caller-analysis: create_rush_order :: new RPC; authenticated callers (admin/sales_rep/driver/applicator) are gated in-body via INSUFFICIENT_ROLE; REVOKE anon/PUBLIC + GRANT authenticated/service_role exactly mirrors the live create_direct_order ACL; UI caller lands in v1c
+-- caller-analysis: create_rush_order :: new RPC; authenticated callers (admin/sales_rep) are gated in-body via INSUFFICIENT_ROLE; REVOKE anon/PUBLIC + GRANT authenticated/service_role exactly mirrors the live create_direct_order ACL; UI caller lands in v1c
 REVOKE EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, uuid, text) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, uuid, text) FROM anon;
 GRANT EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, uuid, text) TO authenticated;

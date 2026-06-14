@@ -1261,6 +1261,25 @@ export default function QuoteBuilder() {
     if (!selectedCustomer?.email) { toast('error', 'This customer has no email address on file.'); return; }
     setEmailingGrower(true);
     try {
+      // #2 (Codex P1): FREEZE the quote before sending so the grower's PDF is a
+      // permanent, reproducible record. On the FIRST email of an open quote
+      // (draft/revised) snapshot a version + move it to 'sent'; re-emailing a 'sent'
+      // quote just re-sends (already frozen). Snapshotting only changes status, not
+      // line items, so the PDF generated below is identical.
+      if (status === 'draft' || status === 'revised') {
+        const freezeVerKey = createVersionIdem.getKey();
+        const { data: freezeVer, error: freezeErr } = await supabase.rpc('create_quote_version', {
+          p_quote_id: quoteId,
+          p_performed_by: profile?.id,
+          p_method: 'emailed',
+          p_idempotency_key: freezeVerKey,
+        });
+        if (freezeErr) throw freezeErr;
+        assertRpcResult<{ version_number: number }>(freezeVer, 'create_quote_version');
+        createVersionIdem.resetKey();
+        const sentId = await saveQuote('sent');
+        if (sentId) { setStatus('sent'); fetchVersions(); }
+      }
       // Same rich (download) PDF the customer would receive.
       const pdfData = {
         quote_number: quoteNumber,

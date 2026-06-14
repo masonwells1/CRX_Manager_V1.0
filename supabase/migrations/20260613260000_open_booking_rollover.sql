@@ -91,16 +91,17 @@ BEGIN
       GROUP BY pc.quote_id
   ),
   booking_applied AS (
-    -- Codex P2: prepay APPLIED to this booking = the application ledger joined
-    -- invoice→order→quote, NOT original−balance (which misattributes a reassigned
-    -- credit's other-booking history). earmarked = applied + remaining.
-    SELECT o.quote_id,
+    -- Codex P2 (round 3): prepay APPLIED to this booking = applications of credits
+    -- EARMARKED to the booking (join through prepay_credits.quote_id), NOT every
+    -- application on the booking's invoices (a generic/other-booking credit applied
+    -- to one of this order's invoices must not inflate this booking's prepay).
+    -- earmarked = applied + remaining stays internally consistent.
+    SELECT pc.quote_id,
            COALESCE(SUM(pa.applied_amount_cents), 0) AS applied_cents
       FROM prepay_applications pa
-      JOIN invoices i ON i.id = pa.invoice_id
-      JOIN orders o ON o.id = i.order_id
-      WHERE o.quote_id IN (SELECT id FROM open_bookings)
-      GROUP BY o.quote_id
+      JOIN prepay_credits pc ON pc.id = pa.prepay_credit_id
+      WHERE pc.quote_id IN (SELECT id FROM open_bookings)
+      GROUP BY pc.quote_id
   )
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
     'quote_id', ob.id,
