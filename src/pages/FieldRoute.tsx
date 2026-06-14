@@ -1,24 +1,22 @@
 /**
  * Field Mode — driver mobile workspace ("My Route").
  *
- * A phone-first, task-first surface for delivery drivers. This is an ADDITIVE
- * surface that REUSES the existing delivery RPCs/components; it never edits
- * DeliveryDetail.tsx (which remains the desktop view + deep-link fallback).
- *
- * Slice 1 (this file): the "My Stops" list — open deliveries the logged-in
- * user can see (RLS-scoped: admins/reps see all, a driver sees their own),
- * with an online/offline indicator and pending-sync count. Tapping a stop
- * deep-links into the existing /deliveries/:id detail for now; the guided
- * per-stop runner (Arrive → Verify → Sign → Photo → Complete), Claim, and
- * the offline path are added in later slices per
- * docs/roadmap/field-mode-build-plan.md.
+ * Phone-first list of open delivery stops the logged-in user can see (RLS-scoped:
+ * admins/reps see all, a driver sees their own). Additive surface — never edits
+ * DeliveryDetail.tsx. Tapping a stop opens the per-stop runner (/my-route/:id).
+ * Unassigned stops show a "Claim" action (reassign_delivery) so a driver can
+ * self-assign. See docs/roadmap/field-mode-build-plan.md.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Truck, Wifi, WifiOff, ChevronRight, RefreshCw, PackageCheck } from 'lucide-react';
+import { Truck, Wifi, WifiOff, ChevronRight, RefreshCw, PackageCheck, UserPlus } from 'lucide-react';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
-import { supabase } from '../lib/db';
+import ConfirmModal from '../components/ui/ConfirmModal';
+import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
+import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../components/ui/Toast';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getPendingCount } from '../lib/offlineQueue';
 import { parseLocalDate } from '../lib/dateUtils';
 import { Sentry } from '../lib/sentry';
@@ -37,7 +35,6 @@ interface StopRow {
 
 const OPEN_STATUSES = ['scheduled', 'in_progress'];
 
-// in_progress (half-done work) surfaces first, then scheduled.
 function statusRank(status: string): number {
   return status === 'in_progress' ? 0 : 1;
 }
@@ -51,17 +48,21 @@ function formatStopDate(dateStr: string | null): string {
 
 export default function FieldRoute() {
   const navigate = useNavigate();
+  const { profile } = useAuth();
+  const { toast } = useToast();
   const isOnline = useOnlineStatus();
+  const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
 
   const [stops, setStops] = useState<StopRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [pendingCount, setPendingCount] = useState(0);
+  const [claimTarget, setClaimTarget] = useState<StopRow | null>(null);
+  const [claiming, setClaiming] = useState(false);
 
   const fetchStops = useCallback(async () => {
     setLoading(true);
     // No app-side driver/date filter: del_select RLS scopes a driver to their
-    // own rows (admins/reps see all). Ordering: in_progress first, then date,
-    // then scheduled_time (null on most rows today) as a stable tiebreak.
+    // own rows (admins/reps see all). Ordering: in_progress first, then date.
     const { data, error } = await supabase
       .from('deliveries')
       .select('id, delivery_number, status, scheduled_date, scheduled_time, priority, assigned_driver, delivery_notes, customer:customers(farm_name)')
@@ -97,6 +98,31 @@ export default function FieldRoute() {
       .catch(() => { /* IndexedDB unavailable — ignore */ });
     return () => { active = false; };
   }, [isOnline, stops]);
+
+  const handleClaim = async () => {
+    if (!claimTarget || !profile) return;
+    setClaiming(true);
+    try {
+      const { data, error } = await supabase.rpc('reassign_delivery', {
+        p_delivery_id: claimTarget.id,
+        p_new_driver: profile.id,
+        p_performed_by: profile.id,
+        p_idempotency_key: reassignIdem.getKey(),
+      });
+      if (error) {
+        toast('error', sanitizeError(error));
+      } else {
+        assertRpcResult(data, 'reassign_delivery');
+        reassignIdem.resetKey();
+        toast('success', 'Stop claimed — assigned to you');
+        setClaimTarget(null);
+        await fetchStops();
+      }
+    } catch (err: unknown) {
+      toast('error', sanitizeError(err));
+    }
+    setClaiming(false);
+  };
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-4">
@@ -154,11 +180,11 @@ export default function FieldRoute() {
           {stops.map((stop) => {
             const dateLabel = formatStopDate(stop.scheduled_date);
             return (
-              <li key={stop.id}>
+              <li key={stop.id} className="bg-white border border-gray-200 rounded-xl flex items-stretch overflow-hidden">
                 <button
                   type="button"
                   onClick={() => navigate(`/my-route/${stop.id}`)}
-                  className="w-full text-left bg-white border border-gray-200 rounded-xl px-4 py-3 min-h-[80px] flex items-center gap-3 hover:border-crx-green active:scale-[0.99] transition"
+                  className="flex-1 min-w-0 text-left px-4 py-3 min-h-[80px] flex items-center gap-3 hover:bg-gray-50 active:scale-[0.99] transition"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
@@ -173,6 +199,7 @@ export default function FieldRoute() {
                       {stop.delivery_number && <span>{stop.delivery_number}</span>}
                       {dateLabel && <span>{dateLabel}</span>}
                       {stop.scheduled_time && <span>{stop.scheduled_time}</span>}
+                      {!stop.assigned_driver && <span className="text-amber-600">Unassigned</span>}
                     </div>
                     {stop.delivery_notes && (
                       <p className="text-xs text-gray-400 mt-1 truncate">{stop.delivery_notes}</p>
@@ -180,11 +207,33 @@ export default function FieldRoute() {
                   </div>
                   <ChevronRight className="w-5 h-5 text-gray-400 shrink-0" />
                 </button>
+                {!stop.assigned_driver && (
+                  <button
+                    type="button"
+                    onClick={() => setClaimTarget(stop)}
+                    className="px-3 border-l border-gray-200 text-crx-green flex flex-col items-center justify-center gap-0.5 hover:bg-green-50 active:scale-95"
+                    aria-label={`Claim ${stop.customer?.farm_name || 'this stop'}`}
+                  >
+                    <UserPlus className="w-5 h-5" />
+                    <span className="text-[10px] font-medium">Claim</span>
+                  </button>
+                )}
               </li>
             );
           })}
         </ul>
       )}
+
+      <ConfirmModal
+        open={claimTarget !== null}
+        onClose={() => setClaimTarget(null)}
+        onConfirm={handleClaim}
+        title="Claim this stop?"
+        message={`Assign ${claimTarget?.customer?.farm_name || 'this delivery'} to you?`}
+        confirmLabel="Claim"
+        variant="info"
+        loading={claiming}
+      />
     </div>
   );
 }
