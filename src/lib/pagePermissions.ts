@@ -40,6 +40,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   // Operations
   { key: 'jobs', label: 'Job Schedule', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },
   { key: 'deliveries', label: 'Deliveries', category: 'Operations', roles: ['admin', 'sales_rep', 'driver'] },
+  { key: 'my-route', label: 'My Route', category: 'Operations', roles: ['admin', 'sales_rep', 'driver'] },
   { key: 'delivery-remainders', label: 'Remainders', category: 'Operations', roles: ['admin', 'sales_rep'] },
   { key: 'vehicles', label: 'Vehicles', category: 'Operations', roles: ['admin'] },
   { key: 'blend-tickets', label: 'Blend Tickets', category: 'Operations', roles: ['admin', 'sales_rep'] },

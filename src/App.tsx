@@ -27,6 +27,7 @@ const InventoryPage = lazy(() => import('./pages/InventoryPage'));
 const Deliveries = lazy(() => import('./pages/Deliveries'));
 const NewDelivery = lazy(() => import('./pages/NewDelivery'));
 const DeliveryDetail = lazy(() => import('./pages/DeliveryDetail'));
+const FieldRoute = lazy(() => import('./pages/FieldRoute'));
 const PurchaseOrders = lazy(() => import('./pages/PurchaseOrders'));
 const NewPurchaseOrder = lazy(() => import('./pages/NewPurchaseOrder'));
 const PurchaseOrderDetail = lazy(() => import('./pages/PurchaseOrderDetail'));
@@ -213,6 +214,7 @@ const router = createBrowserRouter([
           { path: 'deliveries', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'driver']}><Deliveries /></ProtectedRoute> },
           { path: 'deliveries/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><NewDelivery /></ProtectedRoute> },
           { path: 'deliveries/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'driver']}><DeliveryDetail /></ProtectedRoute> },
+          { path: 'my-route', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'driver']}><FieldRoute /></ProtectedRoute> },
 
           // Admin + Sales Rep + Applicator (applicators need job access)
           { path: 'jobs', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep', 'applicator']}><Jobs /></ProtectedRoute> },
