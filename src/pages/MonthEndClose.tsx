@@ -77,6 +77,10 @@ export default function MonthEndClose() {
   // M1/M2: explicit review confirmation for payments and commissions
   const [reviewedPayments, setReviewedPayments] = useState(false);
   const [reviewedCommissions, setReviewedCommissions] = useState(false);
+  // Ship-now/price-later (#2 v3): unpriced rush orders are unbilled revenue.
+  const [reviewedNeedsPricing, setReviewedNeedsPricing] = useState(false);
+  const [needsPricingCount, setNeedsPricingCount] = useState(0);
+  const [needsPricingError, setNeedsPricingError] = useState(false);
   const [yeLoading, setYeLoading] = useState(false);
 
   const current = getCurrentPeriod();
@@ -103,6 +107,28 @@ export default function MonthEndClose() {
     if (!error && summaryData) {
       setSummary(assertRpcResult<MonthlySummary>(summaryData, 'get_monthly_summary'));
     }
+
+    // Ship-now/price-later (#2 v3): count unpriced rush orders dated on/before this
+    // period's end — they're unbilled revenue and surface as a pre-close review item.
+    const { count: npCount, error: npError } = await supabase
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('pricing_status', 'needs_pricing')
+      .not('status', 'in', '("cancelled","voided")')  // Codex P2: terminal orders aren't unbilled revenue
+      .is('deleted_at', null)
+      .lte('order_date', current.end);
+    // Codex round-4 P1: FAIL CLOSED. If this query fails (permissions, connectivity,
+    // migration/deploy mismatch), a `npCount || 0` would mark the checklist "no
+    // unpriced orders" and let the period be closed over unbilled revenue. Surface
+    // the error and flag it so the checklist item can only be satisfied by an
+    // explicit manual review, never silently.
+    if (npError) {
+      setNeedsPricingError(true);
+      toast('error', 'Could not verify unpriced rush orders — review manually before closing.');
+    } else {
+      setNeedsPricingError(false);
+    }
+    setNeedsPricingCount(npCount || 0);
 
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -149,6 +175,21 @@ export default function MonthEndClose() {
             ? 'No commissions this period'
             : `${fmt(summary.commissions.earned_cents)} earned, ${summary.commissions.paid_count} paid — verify and check box to confirm`,
           reviewKey: summary.commissions.earned_cents > 0 ? 'commissions' : undefined,
+        },
+        {
+          label: 'Rush orders priced',
+          // Codex round-4 P1: when the count query failed, the item is NOT done
+          // unless an admin explicitly confirms — never auto-satisfied on a 0 that
+          // really means "couldn't check".
+          done: needsPricingError
+            ? reviewedNeedsPricing
+            : needsPricingCount === 0 || reviewedNeedsPricing,
+          detail: needsPricingError
+            ? 'Could not verify unpriced rush orders (query failed) — review manually and check the box to confirm'
+            : needsPricingCount === 0
+              ? 'No unpriced rush orders'
+              : `${needsPricingCount} order(s) still need pricing (unbilled revenue) — price them or verify and check the box`,
+          reviewKey: needsPricingError || needsPricingCount > 0 ? 'needs_pricing' : undefined,
         },
         {
           label: 'Finance charges generated (optional)',
@@ -429,13 +470,14 @@ export default function MonthEndClose() {
                       <input
                         type="checkbox"
                         className="accent-crx-green"
-                        checked={item.reviewKey === 'payments' ? reviewedPayments : reviewedCommissions}
+                        checked={item.reviewKey === 'payments' ? reviewedPayments : item.reviewKey === 'commissions' ? reviewedCommissions : reviewedNeedsPricing}
                         onChange={(e) => {
                           if (item.reviewKey === 'payments') setReviewedPayments(e.target.checked);
-                          else setReviewedCommissions(e.target.checked);
+                          else if (item.reviewKey === 'commissions') setReviewedCommissions(e.target.checked);
+                          else setReviewedNeedsPricing(e.target.checked);
                         }}
                       />
-                      <span className="text-xs text-nav-dark">I have verified these {item.reviewKey} and they are correct</span>
+                      <span className="text-xs text-nav-dark">I have reviewed this and confirm it is correct</span>
                     </label>
                   )}
                 </div>

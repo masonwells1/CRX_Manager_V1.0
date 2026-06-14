@@ -105,6 +105,15 @@ export const RpcErrorCodes = {
   BOOKING_FULLY_DRAWN: 'BOOKING_FULLY_DRAWN',
   BOOKING_DRAW_ORDER_LOCKED: 'BOOKING_DRAW_ORDER_LOCKED',
   EMPTY_DRAW: 'EMPTY_DRAW',
+  // post_invoice / post_invoice_group ship-now-price-later gate (sell-side roadmap #2)
+  PRICING_INCOMPLETE: 'PRICING_INCOMPLETE',
+  // price_order (sell-side roadmap #2 v2)
+  INVALID_PRICE: 'INVALID_PRICE',
+  ALREADY_PRICED: 'ALREADY_PRICED',
+  ORDER_NOT_ACTIVE: 'ORDER_NOT_ACTIVE',
+  // (booking-prepay earmark tokens PREPAY_CREDIT_NOT_FOUND / BOOKING_NOT_FOUND /
+  // PREPAY_BOOKING_CUSTOMER_MISMATCH / PREPAY_CREDIT_IN_USE removed 2026-06-14 — the
+  // earmark engine is shelved: docs/roadmap/shelved-earmark-engine/. They return with it.)
   // create_rebate_claim / transition_rebate_claim (audit #33)
   PROGRAM_REQUIRED: 'PROGRAM_REQUIRED',
   QUANTITY_INVALID: 'QUANTITY_INVALID',

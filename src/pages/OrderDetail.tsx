@@ -3,9 +3,9 @@
  * GAP FIX #13: Edit Orders After Creation
  * AR derived from linked invoices (single source of truth).
  */
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState , useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle, MessageSquarePlus, Printer, ClipboardList } from 'lucide-react';
+import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle, MessageSquarePlus, Printer, ClipboardList, DollarSign } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -57,6 +57,8 @@ export default function OrderDetail() {
   const voidOrderIdem = useIdempotencyKey('void_order', profile?.id || '');
   const cancelOrderIdem = useIdempotencyKey('cancel_order', profile?.id || '');
   const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
+  const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
+  const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -114,6 +116,13 @@ export default function OrderDetail() {
   const [printingSummary, setPrintingSummary] = useState(false);
   const [printingPickList, setPrintingPickList] = useState(false);
 
+  // Ship-now/price-later (#2): per-line price inputs for a needs_pricing order.
+  const [priceInputs, setPriceInputs] = useState<Record<string, string>>({});
+  const [pricingOrder, setPricingOrder] = useState(false);
+  // #4 billing cockpit: post-all-drafts / consolidate-drafts actions.
+  const [postingAll, setPostingAll] = useState(false);
+  const [consolidating, setConsolidating] = useState(false);
+
   const isAdmin = role === 'admin';
   // Draw-created orders (booking_draw) mirror their booking's draw ledger —
   // items are locked server-side (BOOKING_DRAW_ORDER_LOCKED); void/cancel the
@@ -153,6 +162,10 @@ export default function OrderDetail() {
       const itemsList = (itemsData || []) as OrderItem[];
       setItems(itemsList);
       setEditItems(itemsList.map((i) => ({ ...i })));
+      // Ship-now/price-later (#2): seed price inputs from each pending line's tier snapshot.
+      setPriceInputs(Object.fromEntries(
+        itemsList.filter((i) => i.pricing_pending).map((i) => [i.id, i.suggested_price != null ? String(i.suggested_price) : ''])
+      ));
 
       // Load related blend tickets
       const { data: btLinks } = await supabase
@@ -706,6 +719,12 @@ export default function OrderDetail() {
   const hasPendingDelivery = deliveries.some(
     (d) => d.status === 'scheduled' || d.status === 'in_progress'
   );
+  // W5 (sell-side #4): any non-cancelled/voided delivery means the order is billed
+  // per-delivery — create_invoice_from_order now hard-rejects an order-level invoice
+  // in that case, so don't even offer the "Create Invoice" button.
+  const hasActiveDelivery = deliveries.some(
+    (d) => d.status !== 'cancelled' && d.status !== 'voided'
+  );
 
   const onCreateInvoiceClick = () => {
     // Codex P2 fix: reset key per invoice-creation attempt (date/notes vary).
@@ -715,6 +734,132 @@ export default function OrderDetail() {
       return;
     }
     handleCreateInvoice();
+  };
+
+  // #4 billing cockpit: post every draft/unposted invoice on this order in one
+  // action. Each post_invoice is its own txn; PRICING_INCOMPLETE / period errors
+  // are surfaced per-invoice without aborting the rest.
+  const handlePostAllDrafts = async () => {
+    const drafts = invoices.filter((i) => i.status === 'draft' || i.status === 'unposted');
+    if (drafts.length === 0) { toast('warning', 'No draft invoices to post.'); return; }
+    setPostingAll(true);
+    let posted = 0;
+    let alreadyPosted = 0;
+    const errors: string[] = [];
+    // Codex round-6 P2: post_invoice's status guard is NOT a silent no-op — it RAISES
+    // on an already-posted invoice. So a lost response (post committed server-side, but
+    // the client got a network error) would make a retry report a false failure. Guard
+    // each post with a fresh status re-check: if a prior attempt already posted this
+    // invoice, skip it (count as done) instead of re-posting and raising. This makes
+    // the bulk action safely retryable on ambiguous network failures. The postingAll
+    // loading state still blocks concurrent double-clicks.
+    for (const inv of drafts) {
+      try {
+        const { data: cur, error: curErr } = await supabase
+          .from('invoices').select('status').eq('id', inv.id).single();
+        if (curErr) throw curErr;
+        if (cur && cur.status !== 'draft' && cur.status !== 'unposted') {
+          alreadyPosted++;            // a prior attempt already posted it — done, not an error
+          continue;
+        }
+        // post_invoice RETURNS void → no result to assert. Use the canonical
+        // void-RPC pattern (.throwOnError(), no `=` capture).
+        await supabase.rpc('post_invoice', { p_invoice_id: inv.id }).throwOnError();
+        posted++;
+      } catch (err) {
+        if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) errors.push(`${inv.invoice_number}: needs pricing first`);
+        else errors.push(`${inv.invoice_number}: ${err instanceof Error ? err.message : 'failed to post'}`);
+      }
+    }
+    if (alreadyPosted > 0 && posted === 0 && errors.length === 0) {
+      toast('info', `Already posted (${alreadyPosted}).`);
+    }
+    if (posted > 0) toast('success', `Posted ${posted} invoice(s).`);
+    if (errors.length > 0) {
+      Sentry.captureException(new Error('post_all_drafts partial failure'), { level: 'warning', tags: { source: 'critical_action', action: 'post_all_drafts' }, extra: { errors } });
+      for (const e of errors) toast('error', e);
+    }
+    await fetchOrder();
+    setPostingAll(false);
+  };
+
+  // #4 billing cockpit: merge this order's draft invoices into one (Agvance pattern).
+  const handleConsolidateDrafts = async () => {
+    if (!order || !profile) return;
+    setConsolidating(true);
+    try {
+      const idem = consolidateIdem.getKey();
+      const { data, error } = await supabase.rpc('consolidate_draft_invoices', { p_order_id: order.id, p_performed_by: profile.id, p_idempotency_key: idem });
+      if (error) throw error;
+      const result = assertRpcResult<{ success: boolean; consolidated: boolean; merged_count?: number }>(data, 'consolidate_draft_invoices');
+      consolidateIdem.resetKey();
+      if (result.consolidated) toast('success', `Consolidated ${(result.merged_count ?? 0) + 1} draft invoices into one.`);
+      else toast('info', 'Nothing to consolidate — fewer than 2 draft invoices.');
+      await fetchOrder();
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'consolidate_draft_invoices' } });
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can consolidate invoices.');
+      else toast('error', err instanceof Error ? err.message : 'Failed to consolidate invoices.');
+    } finally {
+      setConsolidating(false);
+    }
+  };
+
+  // (booking-prepay "Apply booking prepay" action removed 2026-06-14 — the earmark
+  // engine is shelved for a reserved-pool redesign: docs/roadmap/shelved-earmark-engine/)
+
+  // Codex round-5 P2: reset the price_order idempotency key whenever the normalized
+  // pricing payload (order id + the {item:price} pairs) changes, but keep it stable
+  // for an identical retry. Without this, a lost price_order response leaves the key
+  // in place; editing a price and resubmitting would replay the SAME key and return
+  // the cached result, silently discarding the edited prices. Mirrors NewOrder's
+  // rushOrderIdem intent-change reset.
+  const pricingPayloadHash = useMemo(() => {
+    const pairs = items
+      .filter((i) => i.pricing_pending)
+      .filter((i) => (priceInputs[i.id] ?? '').trim() !== '')
+      .map((i) => `${i.id}:${parseFloat(priceInputs[i.id]) || 0}`)
+      .sort()
+      .join('|');
+    return `${order?.id || ''}#${pairs}`;
+  }, [items, priceInputs, order?.id]);
+  useEffect(() => {
+    priceOrderIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pricingPayloadHash]);
+
+  // Ship-now/price-later (#2 v2): finalize a needs_pricing rush order via price_order.
+  const handlePriceOrder = async () => {
+    if (!order || !profile) return;
+    const priced = items
+      .filter((i) => i.pricing_pending)
+      .filter((i) => (priceInputs[i.id] ?? '').trim() !== '')
+      .map((i) => ({ order_item_id: i.id, price: parseFloat(priceInputs[i.id]) || 0 }));
+    if (priced.length === 0) { toast('warning', 'Enter a price for at least one line.'); return; }
+    if (priced.some((x) => x.price < 0)) { toast('error', 'Prices cannot be negative.'); return; }
+    setPricingOrder(true);
+    try {
+      const idemKey = priceOrderIdem.getKey();
+      const { data, error } = await supabase.rpc('price_order', {
+        p_order_id: order.id,
+        p_items: priced,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      const result = assertRpcResult<{ success: boolean; pricing_status: string; remaining_pending: number; invoices_swept: number }>(data, 'price_order');
+      priceOrderIdem.resetKey();
+      toast('success', result.pricing_status === 'priced'
+        ? `Order priced${result.invoices_swept ? ` — ${result.invoices_swept} draft invoice(s) updated` : ''}`
+        : `Saved — ${result.remaining_pending} line(s) still need a price`);
+      await fetchOrder();
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'price_order' } });
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can price orders.');
+      else toast('error', err instanceof Error ? err.message : 'Failed to price the order.');
+    } finally {
+      setPricingOrder(false);
+    }
   };
 
   if (loading) {
@@ -804,7 +949,7 @@ export default function OrderDetail() {
                   Booking draw — items locked
                 </span>
               )}
-              {order.status !== 'cancelled' && order.status !== 'fulfilled' && !hasActiveInvoice && (<>
+              {order.status !== 'cancelled' && order.status !== 'fulfilled' && !hasActiveInvoice && !hasActiveDelivery && (<>
                 <Button
                   variant="secondary"
                   icon={<FileText className="w-4 h-4" />}
@@ -860,6 +1005,44 @@ export default function OrderDetail() {
           )}
         </div>
       </div>
+
+      {/* Ship-now/price-later (#2): finalize pricing for a rush order */}
+      {order.pricing_status === 'needs_pricing' && (role === 'admin' || role === 'sales_rep') && (
+        <Card>
+          <CardHeader title="Set Pricing" />
+          <div className="p-5 space-y-3">
+            <p className="text-sm text-secondary">
+              This order shipped before pricing was finalized. Enter the final price per unit for each line — its invoice cannot be posted until pricing is complete.
+            </p>
+            {items.filter((i) => i.pricing_pending).map((i) => (
+              <div key={i.id} className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-medium">{i.product_name}</span>
+                  <span className="text-xs text-secondary ml-2">{i.total_units_needed}{i.unit_size ? ` ${i.unit_size}` : ''}</span>
+                </div>
+                {i.suggested_price != null && (
+                  <span className="text-xs text-secondary whitespace-nowrap">tier: {fmt(i.suggested_price)}</span>
+                )}
+                <input
+                  type="number"
+                  step="any"
+                  min={0}
+                  value={priceInputs[i.id] ?? ''}
+                  onChange={(e) => setPriceInputs((p) => ({ ...p, [i.id]: e.target.value }))}
+                  placeholder="price/unit"
+                  aria-label={`Price per unit for ${i.product_name}`}
+                  className="w-28 px-2 py-1 text-sm text-right border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+            ))}
+            <div className="flex justify-end">
+              <Button onClick={handlePriceOrder} loading={pricingOrder} icon={<DollarSign className="w-4 h-4" />} showChevron={false}>
+                Finalize Pricing
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Active delivery banner — shows when scheduled/in_progress deliveries exist */}
       {(() => {
@@ -958,16 +1141,21 @@ export default function OrderDetail() {
             <p className="text-xs text-secondary">Total Price</p>
             <p className="text-sm font-medium text-nav-dark">{fmt(order.total_price)}</p>
           </div>
-          <div>
-            <p className="text-xs text-secondary">Profit</p>
-            <p className="text-sm font-medium text-crx-green">{fmt(order.total_profit)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-secondary">Margin</p>
-            <p className="text-sm font-medium text-nav-dark">
-              {order.total_margin_pct.toFixed(1)}%
-            </p>
-          </div>
+          {/* #2 (Codex round 2): field staff (driver/applicator) can now reach this
+              page to create/track rush orders — never expose cost/profit/margin to
+              them. */}
+          {(role === 'admin' || role === 'sales_rep') && (<>
+            <div>
+              <p className="text-xs text-secondary">Profit</p>
+              <p className="text-sm font-medium text-crx-green">{fmt(order.total_profit)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-secondary">Margin</p>
+              <p className="text-sm font-medium text-nav-dark">
+                {order.total_margin_pct.toFixed(1)}%
+              </p>
+            </div>
+          </>)}
         </div>
 
         {/* AR summary — derived from linked invoices (single source of truth) */}
@@ -1067,9 +1255,25 @@ export default function OrderDetail() {
       {/* Linked Invoices */}
       {invoices.length > 0 && (
         <Card>
-          <div className="flex items-center gap-2 mb-3">
-            <FileText className="w-5 h-5 text-crx-green" />
-            <h3 className="font-semibold text-nav-dark">Linked Invoices</h3>
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2">
+              <FileText className="w-5 h-5 text-crx-green" />
+              <h3 className="font-semibold text-nav-dark">Linked Invoices</h3>
+            </div>
+            {(role === 'admin' || role === 'sales_rep') && (
+              <div className="flex items-center gap-2">
+                {invoices.filter((i) => i.status === 'draft').length >= 2 && (
+                  <Button variant="secondary" size="sm" showChevron={false} onClick={handleConsolidateDrafts} loading={consolidating}>
+                    Consolidate drafts
+                  </Button>
+                )}
+                {invoices.some((i) => i.status === 'draft' || i.status === 'unposted') && (
+                  <Button variant="secondary" size="sm" showChevron={false} onClick={handlePostAllDrafts} loading={postingAll}>
+                    Post all drafts
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

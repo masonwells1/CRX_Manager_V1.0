@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { parseLocalDate } from '../lib/dateUtils';
-import { Plus, Upload, Copy, Download, FileText, Trash2 } from 'lucide-react';
+import { Plus, Upload, Copy, Download, FileText, Trash2, Layers, ChevronDown, ChevronUp } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -11,7 +11,7 @@ import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, checkMutationResult } from '../lib/db';
+import { supabase, assertRpcResult, checkMutationResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { exportToCSV, fmtCSV, fmtDateCSV } from '../lib/csvExport';
@@ -21,7 +21,7 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
-import type { Quote } from '../types';
+import type { Quote, BookingRolloverRow } from '../types';
 
 const DELETABLE = ['draft', 'sent', 'revised'];
 
@@ -41,6 +41,35 @@ export default function Quotes() {
   const [exporting, setExporting] = useState(false);
 
   const canBulkAction = profile?.role === 'admin' || profile?.role === 'sales_rep';
+
+  // #6(d-UI): open-booking rollover (season-end roll-up). Lazy-loaded on expand.
+  const [showRollover, setShowRollover] = useState(false);
+  const [rolloverRows, setRolloverRows] = useState<BookingRolloverRow[]>([]);
+  const [rolloverLoading, setRolloverLoading] = useState(false);
+  const [rolloverLoaded, setRolloverLoaded] = useState(false);
+
+  const loadRollover = useCallback(async () => {
+    setRolloverLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('get_open_booking_rollover', { p_customer_id: null, p_season: null });
+      if (error) throw error;
+      const result = assertRpcResult<{ success: boolean; bookings: BookingRolloverRow[] }>(data, 'get_open_booking_rollover');
+      setRolloverRows(result.bookings || []);
+      setRolloverLoaded(true);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'get_open_booking_rollover' } });
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can view the booking rollover.');
+      else toast('error', sanitizeError(err));
+    } finally {
+      setRolloverLoading(false);
+    }
+  }, [toast]);
+
+  const toggleRollover = () => {
+    const next = !showRollover;
+    setShowRollover(next);
+    if (next && !rolloverLoaded) loadRollover();
+  };
 
   // === GAP FIX #7: Duplicate a quote ===
   const handleDuplicate = async (quoteId: string, e: React.MouseEvent) => {
@@ -309,6 +338,66 @@ export default function Quotes() {
         onSuccess={fetchQuotes}
       />
 
+      {canBulkAction && (
+        <Card padding={false}>
+          <div className="p-5">
+            <button onClick={toggleRollover} className="w-full flex items-center justify-between text-left">
+              <div className="flex items-center gap-2">
+                <Layers className="w-5 h-5 text-crx-green" />
+                <h3 className="font-semibold text-nav-dark">Open booking rollover</h3>
+                <HelpTip text="Every open booking (sent/revised quote) with its booked / drawn / remaining value. Use it at season-end to see what's still outstanding. (Prepay-earmarked columns return when the booking-prepay engine ships.)" className="ml-1" />
+              </div>
+              {showRollover ? <ChevronUp className="w-4 h-4 text-secondary" /> : <ChevronDown className="w-4 h-4 text-secondary" />}
+            </button>
+            {showRollover && (
+              <div className="mt-4 overflow-x-auto">
+                {rolloverLoading ? (
+                  <p className="text-sm text-secondary">Loading…</p>
+                ) : rolloverRows.length === 0 ? (
+                  <p className="text-sm text-secondary">No open bookings.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-100 text-secondary">
+                        <th className="px-3 py-2 text-left font-medium">Customer</th>
+                        <th className="px-3 py-2 text-left font-medium">Booking</th>
+                        <th className="px-3 py-2 text-right font-medium">Booked</th>
+                        <th className="px-3 py-2 text-right font-medium">Drawn</th>
+                        <th className="px-3 py-2 text-right font-medium">Remaining</th>
+                        {/* Prepaid column hidden while no booking has earmarked prepay — the
+                            earmark engine is shelved (docs/roadmap/shelved-earmark-engine/),
+                            so this is 0 for now and returns automatically when the engine ships. */}
+                        {rolloverRows.some((b) => (b.prepay_remaining_cents ?? 0) > 0 || (b.prepay_earmarked_cents ?? 0) > 0) && (
+                          <th className="px-3 py-2 text-right font-medium">Prepaid left</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rolloverRows.map((b) => (
+                        <tr
+                          key={b.quote_id}
+                          className="border-b border-gray-50 hover:bg-gray-50/50 cursor-pointer"
+                          onClick={() => navigate(`/quotes/${b.quote_id}`)}
+                        >
+                          <td className="px-3 py-2">{b.customer_name || '—'}</td>
+                          <td className="px-3 py-2 font-medium text-crx-green">{b.quote_number}</td>
+                          <td className="px-3 py-2 text-right font-mono">{fmt(b.booked_cents / 100)}</td>
+                          <td className="px-3 py-2 text-right font-mono">{fmt(b.drawn_cents / 100)}</td>
+                          <td className="px-3 py-2 text-right font-mono">{fmt(b.remaining_cents / 100)}</td>
+                          {rolloverRows.some((r) => (r.prepay_remaining_cents ?? 0) > 0 || (r.prepay_earmarked_cents ?? 0) > 0) && (
+                            <td className="px-3 py-2 text-right font-mono text-crx-green">{fmt(b.prepay_remaining_cents / 100)}</td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
       <Card padding={false}>
         <div className="p-5">
           <DataTable<Quote>
@@ -341,6 +430,7 @@ export default function Quotes() {
                   <option value="accepted">Accepted</option>
                   <option value="declined">Declined</option>
                   <option value="expired">Expired</option>
+                  <option value="cancelled">Cancelled</option>
                 </select>
                 <button
                   onClick={() => setPlannedFilter(!plannedFilter)}

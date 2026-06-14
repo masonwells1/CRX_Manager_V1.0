@@ -20,6 +20,9 @@ import {
   Copy,
   CalendarClock,
   PackageOpen,
+  XCircle,
+  Ban,
+  Undo2,
 } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -36,12 +39,13 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
-import { formatUSD } from '../lib/money';
+import { formatUSD, formatCents } from '../lib/money';
 import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { trackBusinessEvent } from '../lib/metrics';
 import { localDatePlusDays } from '../lib/dateUtils';
 import { downloadQuotePdf, generateQuotePdf } from '../lib/quotePdf';
+import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import HelpTip from '../components/ui/HelpTip';
@@ -61,6 +65,7 @@ import type {
   UnitConversion,
   CommissionSplit,
   QuoteStatus,
+  BookingSettlement,
 } from '../types';
 
 interface LocalSection {
@@ -161,6 +166,8 @@ export default function QuoteBuilder() {
   const restoreVersionIdem = useIdempotencyKey('restore_quote_version', profile?.id || '');
   const scheduleJobIdem = useIdempotencyKey('create_job_from_quote_section', profile?.id || '');
   const drawDownIdem = useIdempotencyKey('draw_down_quote', profile?.id || '');
+  const revertStatusIdem = useIdempotencyKey('revert_quote_status', profile?.id || '');
+  const emailQuoteIdem = useIdempotencyKey('send_email_quote', profile?.id || '');
 
   // Partial booking draw-down (sell-side roadmap #1): pull part of the booked
   // quantities into an order; the quote stays open with the remaining balance.
@@ -168,6 +175,9 @@ export default function QuoteBuilder() {
   const [drawRows, setDrawRows] = useState<Array<{ product_id: string; product_name: string; booked: number; drawn: number; remaining: number; qty: string }>>([]);
   const [drawLoading, setDrawLoading] = useState(false);
   const [drawing, setDrawing] = useState(false);
+  // Booking settlement (roadmap #6c): read-only booked/drawn/remaining + prepay
+  // position for an open booking (sent/revised quote), via get_booking_settlement.
+  const [bookingSettlement, setBookingSettlement] = useState<BookingSettlement | null>(null);
   const { warning: staleWarning, check: checkStaleQuote, dismiss: dismissStaleWarning } = useStaleQuoteCheck();
   const isEditing = Boolean(id);
 
@@ -213,6 +223,17 @@ export default function QuoteBuilder() {
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState<string | null>(null);
   const [revising, setRevising] = useState(false);
+  // Quote lifecycle terminal actions (sell-side roadmap #5 — unstick lifecycle):
+  // decline/cancel set a terminal status (triggers release holds); un-accept/
+  // reopen routes through the hardened admin-only revert_quote_status RPC.
+  const [confirmDeclineOpen, setConfirmDeclineOpen] = useState(false);
+  const [confirmCancelOpen, setConfirmCancelOpen] = useState(false);
+  const [statusActionLoading, setStatusActionLoading] = useState(false);
+  const [showRevertModal, setShowRevertModal] = useState(false);
+  const [revertReason, setRevertReason] = useState('');
+  const [reverting, setReverting] = useState(false);
+  // #3 Stage A: email the quote PDF to the grower via the send-email Edge Function.
+  const [emailingGrower, setEmailingGrower] = useState(false);
   const [customerView, setCustomerView] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
 
@@ -240,18 +261,51 @@ export default function QuoteBuilder() {
   // Status-based guards
   const currentStatus = status || 'draft';
   const canEdit = ['draft', 'revised'].includes(currentStatus);
-  const canSend = ['draft', 'revised'].includes(currentStatus);
+  // Codex round-7 P2: include 'sent' so a frozen sent quote can still be re-emailed —
+  // "Preview Quote" is the only route to the Email-to-Grower button, and
+  // handleEmailToGrower explicitly supports re-sending an already-sent quote (it only
+  // freezes a version on the FIRST send from draft/revised).
+  const canSend = ['draft', 'revised', 'sent'].includes(currentStatus);
   const canConvert = currentStatus === 'sent';
   // draw_down_quote accepts BOTH 'sent' and 'revised' bookings — keep the
   // Partial Order button in parity with the RPC (whole-convert stays
   // sent-only by design). 2026-06-10 error-prevention review §3 LOW.
   const canDraw = currentStatus === 'sent' || currentStatus === 'revised';
 
+  // Quote lifecycle terminal/reopen actions (roadmap #5). The status-transition
+  // trigger allows: draft/sent/revised → cancelled; sent/revised → declined;
+  // accepted/declined/expired/cancelled → sent (admin revert RPC only).
+  const isAdmin = profile?.role === 'admin';
+  const canCancel = isEditing && ['draft', 'sent', 'revised'].includes(currentStatus);
+  const canDecline = isEditing && ['sent', 'revised'].includes(currentStatus);
+  const canRevert = isEditing && isAdmin && ['accepted', 'declined', 'expired', 'cancelled'].includes(currentStatus);
+  const revertLabel = currentStatus === 'accepted' ? 'Un-accept' : 'Reopen';
+
   // Mark dirty whenever user changes form data (after initial load)
   useEffect(() => {
     if (!initialLoadDone.current) return;
     setIsDirty(true);
   }, [customerId, tier, validDays, headerNotes, footerNotes, sections, commissionSplit]);
+
+  // Booking settlement (roadmap #6c): for an open booking (saved sent/revised
+  // quote), load booked/drawn/remaining + prepay position. Re-runs when the
+  // status changes (e.g. after a draw flips it). Read-only; clears otherwise.
+  useEffect(() => {
+    const isOpenBooking = isEditing && quoteId && (currentStatus === 'sent' || currentStatus === 'revised');
+    if (!isOpenBooking) { setBookingSettlement(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('get_booking_settlement', { p_quote_id: quoteId });
+        if (error) throw error;
+        const s = assertRpcResult<BookingSettlement>(data, 'get_booking_settlement');
+        if (!cancelled) setBookingSettlement(s && s.found ? s : null);
+      } catch {
+        if (!cancelled) setBookingSettlement(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isEditing, quoteId, currentStatus]);
 
   // RUP compliance check when the customer or the PRODUCT SET changes. Keyed by a
   // stable product-set string (NOT `sections`) so editing quantities/prices/notes
@@ -1068,6 +1122,95 @@ export default function QuoteBuilder() {
     setRevising(false);
   };
 
+  // Decline / Cancel a quote (roadmap #5). The status-transition + hold-release
+  // triggers do the DB work; we only flip the status under RLS. Guardrail: never
+  // abandon an open booking's holds from here — a partially-drawn booking must be
+  // closed via its orders first (parity with the Quotes list bulk-delete skip).
+  const setTerminalStatus = async (newStatus: 'declined' | 'cancelled') => {
+    if (!id) return;
+    const verb = newStatus === 'declined' ? 'decline' : 'cancel';
+    setStatusActionLoading(true);
+    try {
+      const { data: draws, error: drawErr } = await supabase
+        .from('quote_product_draws')
+        .select('quantity_drawn')
+        .eq('quote_id', id)
+        .gt('quantity_drawn', 0)
+        .limit(1);
+      if (drawErr) throw drawErr;
+      if (draws && draws.length > 0) {
+        toast('warning', `This booking has partial draw-downs — close it from its orders (draw or cancel the remaining balance) before you ${verb} the quote.`);
+        return;
+      }
+      const result = await supabase
+        .from('quotes')
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select();
+      checkMutationResult(result, `${verb === 'decline' ? 'Decline' : 'Cancel'} quote`);
+      setStatus(newStatus);
+      setIsDirty(false);
+      await logActivity({
+        event: newStatus === 'declined' ? 'quote_declined' : 'quote_cancelled',
+        description: `Quote ${quoteNumber} ${newStatus}`,
+        performedBy: profile?.id || '',
+        entityType: 'quote',
+        entityId: id,
+      });
+      toast('success', `Quote ${newStatus} — any inventory holds were released.`);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'mutation', action: `quote_${newStatus}` } });
+      toast('error', err instanceof Error ? err.message : `Failed to ${verb} the quote`);
+    } finally {
+      setStatusActionLoading(false);
+      setConfirmDeclineOpen(false);
+      setConfirmCancelOpen(false);
+    }
+  };
+
+  // Un-accept / Reopen a quote back to 'sent' (roadmap #5, fixes W4). Routes
+  // through the admin-only hardened revert_quote_status RPC, which blocks
+  // reverting an accepted quote that already has an order.
+  const handleRevertStatus = async () => {
+    if (!id) return;
+    if (!revertReason.trim()) {
+      toast('warning', 'Please enter a reason for reopening this quote.');
+      return;
+    }
+    setReverting(true);
+    try {
+      const idemKey = revertStatusIdem.getKey();
+      const { data, error } = await supabase.rpc('revert_quote_status', {
+        p_quote_id: id,
+        p_reason: revertReason.trim(),
+        p_performed_by: profile?.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      const result = assertRpcResult<{ success: boolean; old_status: string; new_status: string }>(data, 'revert_quote_status');
+      revertStatusIdem.resetKey();
+      setStatus((result.new_status as QuoteStatus) || 'sent');
+      // Codex round-9 P2: a PLANNED quote's holds are now rebuilt ATOMICALLY inside
+      // revert_quote_status (20260613290000) — same transaction as the status flip, so
+      // there is no sent-without-holds window. The previous client-side recreate-after-
+      // revert was non-atomic and is removed.
+      setShowRevertModal(false);
+      setRevertReason('');
+      toast('success', `Quote reopened to ${result.new_status}.`);
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'revert_quote_status' } });
+      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) {
+        toast('error', 'Only an admin can reopen a quote.');
+      } else {
+        // Server messages here are plain-English and actionable (e.g. "an order
+        // has already been created from it") — surface them as-is.
+        toast('error', err instanceof Error ? err.message : 'Failed to reopen the quote');
+      }
+    } finally {
+      setReverting(false);
+    }
+  };
+
   const handlePreviewQuote = async () => {
     await runCriticalAction({
       action: async () => {
@@ -1117,6 +1260,141 @@ export default function QuoteBuilder() {
       toast,
       sentryTag: 'preview_quote_pdf',
     });
+  };
+
+  // #3 Stage A: email the quote PDF to the grower via the send-email Edge Function.
+  // The Edge Function records the send in email_log and dedupes on the idempotency key.
+  const handleEmailToGrower = async () => {
+    if (!quoteId) { toast('warning', 'Save the quote before emailing it.'); return; }
+    // Codex P1: an existing quote with unsaved edits still has quoteId, so the
+    // emailed PDF would render local edits the DB + version history don't have —
+    // the grower would get an unreproducible quote. Block until saved.
+    if (isDirty) { toast('warning', 'You have unsaved changes — save the quote before emailing it.'); return; }
+    if (!selectedCustomer?.email) { toast('error', 'This customer has no email address on file.'); return; }
+    setEmailingGrower(true);
+    try {
+      // #2 (Codex P1): FREEZE the quote before sending so the grower's PDF is a
+      // permanent, reproducible record. On the FIRST email of an open quote
+      // (draft/revised) snapshot a version + move it to 'sent'; re-emailing a 'sent'
+      // quote just re-sends (already frozen). Snapshotting only changes status, not
+      // line items, so the PDF generated below is identical.
+      if (status === 'draft' || status === 'revised') {
+        // create_quote_version snapshots the version AND atomically sets
+        // quotes.status='sent' (single RPC). Codex round-8 P2: NO separate
+        // saveQuote('sent') — that was redundant (the isDirty guard above already
+        // ensured no unsaved edits) and, if it failed after the version was created,
+        // left an orphan version + retried into a second one. Keep the version idem
+        // key UNRESET until the whole send succeeds so a retry after an email failure
+        // replays the SAME key (create_quote_version returns 'duplicate'), never a dup.
+        // If create_quote_version itself fails, freezeErr throws → catch aborts the
+        // send, preserving the frozen-record guarantee (round-4 P1).
+        const freezeVerKey = createVersionIdem.getKey();
+        const { data: freezeVer, error: freezeErr } = await supabase.rpc('create_quote_version', {
+          p_quote_id: quoteId,
+          p_performed_by: profile?.id,
+          p_method: 'emailed',
+          p_idempotency_key: freezeVerKey,
+        });
+        if (freezeErr) throw freezeErr;
+        assertRpcResult(freezeVer, 'create_quote_version');
+        setStatus('sent');
+        fetchVersions();
+      }
+      // Same rich (download) PDF the customer would receive.
+      const pdfData = {
+        quote_number: quoteNumber,
+        customer_name: selectedCustomer?.farm_name || 'Customer',
+        customer_email: selectedCustomer?.email || undefined,
+        customer_phone: selectedCustomer?.phone || undefined,
+        customer_address: selectedCustomer?.billing_address || undefined,
+        sales_rep_name: profile?.full_name || 'Sales Rep',
+        // Codex round-8 P2: a frozen/sent quote re-emailed later must show its ORIGINAL
+        // issue + expiry dates, not today's — otherwise the grower gets a document that
+        // looks newly issued with a fresh validity window even though the DB quote is
+        // frozen (and may already be expired). Use the persisted created_at + its
+        // valid_days window; fall back to now only for an unsaved quote (which the
+        // isDirty/quoteId guards above already prevent from emailing).
+        created_at: quoteCreatedAt || new Date().toISOString(),
+        expires_at: quoteCreatedAt
+          ? new Date(new Date(quoteCreatedAt).getTime() + validDays * 24 * 60 * 60 * 1000).toISOString()
+          : undefined,
+        valid_days: validDays,
+        tier,
+        header_notes: headerNotes || undefined,
+        footer_notes: footerNotes || undefined,
+        sections: sections.map((sec) => ({
+          section_name: sec.section_name,
+          section_notes: sec.section_notes || undefined,
+          section_header_notes: sec.section_header_notes || undefined,
+          items: sec.items
+            .filter((i) => i.product_id)
+            .map((i) => ({
+              product_name: i.product?.product_name || '',
+              category: i.product?.category || '',
+              notes: i.notes || undefined,
+              suggested_rate: i.product?.suggested_rate || undefined,
+              actual_rate: i.actual_rate || 0,
+              rate_unit: i.rate_unit || '',
+              acres: i.acres || 0,
+              total_units_needed: i.total_units_needed || 0,
+              inventory_unit: i.product?.inventory_unit || undefined,
+              unit_size: i.product?.unit_size || undefined,
+              price_per_unit: i.price_per_unit,
+              price_unit: i.price_unit || undefined,
+              price_per_acre: i.price_per_acre || undefined,
+              total_price: i.total_price,
+            })),
+        })),
+        totals: {
+          totalPrice: totals.totalPrice,
+          totalCost: totals.totalCost,
+          totalProfit: totals.totalProfit,
+          avgMargin: totals.totalMarginPct,
+        },
+      };
+      const doc = await generateQuotePdf(pdfData, customColumns || getTemplateColumns(selectedTemplateId));
+      const base64 = pdfToBase64(doc);
+      const idemKey = emailQuoteIdem.getKey();
+      const result = await sendEmail({
+        to: selectedCustomer.email,
+        subject: `Quote ${quoteNumber} from Crop Rx Solutions`,
+        html: buildEmailHtml(
+          `<p>Hi ${selectedCustomer.contact_name || selectedCustomer.farm_name || 'there'},</p>` +
+          `<p>Please find your quote <strong>${quoteNumber}</strong> attached as a PDF. ` +
+          `Let us know if you have any questions or would like to proceed.</p>` +
+          `<p>Thank you,<br/>Crop Rx Solutions</p>`
+        ),
+        email_type: 'quote',
+        customer_id: customerId,
+        resource_type: 'quote',
+        resource_id: quoteId,
+        idempotency_key: idemKey,
+        attachments: [{ filename: `Quote-${quoteNumber}.pdf`, content: base64 }],
+      });
+      emailQuoteIdem.resetKey();
+      // Codex round-8 P2: reset the version idem key only now that the whole send
+      // succeeded — a failure before this point keeps the key so a retry replays the
+      // same create_quote_version (returns 'duplicate') instead of snapshotting again.
+      createVersionIdem.resetKey();
+      if (result.deduplicated) {
+        toast('info', 'This quote was already emailed (duplicate send skipped).');
+      } else {
+        toast('success', `Quote emailed to ${selectedCustomer.email}`);
+      }
+      await logActivity({
+        event: 'quote_emailed',
+        description: `Quote ${quoteNumber} emailed to ${selectedCustomer.email}`,
+        performedBy: profile?.id || '',
+        entityType: 'quote',
+        entityId: quoteId,
+        customerId,
+      });
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'email_quote_to_grower' } });
+      toast('error', err instanceof Error ? err.message : 'Failed to email the quote');
+    } finally {
+      setEmailingGrower(false);
+    }
   };
 
   const handleMarkPresented = async () => {
@@ -1675,6 +1953,42 @@ export default function QuoteBuilder() {
               Revise Quote
             </Button>
           )}
+          {canDecline && (
+            <Button
+              variant="secondary"
+              icon={<XCircle className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setConfirmDeclineOpen(true)}
+              loading={statusActionLoading}
+            >
+              Decline
+            </Button>
+          )}
+          {canCancel && (
+            <Button
+              variant="ghost"
+              icon={<Ban className="w-4 h-4" />}
+              showChevron={false}
+              onClick={() => setConfirmCancelOpen(true)}
+              loading={statusActionLoading}
+            >
+              Cancel Quote
+            </Button>
+          )}
+          {canRevert && (
+            <>
+              <Button
+                variant="secondary"
+                icon={<Undo2 className="w-4 h-4" />}
+                showChevron={false}
+                onClick={() => { setRevertReason(''); setShowRevertModal(true); }}
+                loading={reverting}
+              >
+                {revertLabel}
+              </Button>
+              <HelpTip text="Reopens this quote to “sent” so it can be edited, re-sent, or converted again. Admin only. Blocked if an order was already created from an accepted quote." className="ml-1" />
+            </>
+          )}
           {isEditing && quoteVersions.length > 0 && (
             <>
               <Button
@@ -1716,6 +2030,65 @@ export default function QuoteBuilder() {
           <EyeOff className="w-4 h-4" />
           Customer View — cost, profit, and margin columns hidden
         </div>
+      )}
+
+      {/* Booking settlement (roadmap #6c): open-booking position. Read-only. */}
+      {isEditing && canDraw && bookingSettlement?.found && (
+        <Card>
+          <CardHeader title="Booking" accent="Settlement" />
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+            <div>
+              <div className="text-secondary">Booked</div>
+              <div className="font-semibold text-nav-dark">{formatCents(bookingSettlement.booked_cents ?? 0)}</div>
+            </div>
+            <div>
+              <div className="text-secondary">Drawn</div>
+              <div className="font-semibold text-nav-dark">{formatCents(bookingSettlement.drawn_cents ?? 0)}</div>
+            </div>
+            <div>
+              <div className="text-secondary">Remaining to draw</div>
+              <div className="font-semibold text-nav-dark">{formatCents(bookingSettlement.remaining_cents ?? 0)}</div>
+            </div>
+            {/* Prepaid cell hidden while there is no earmarked prepay — the booking-prepay
+                earmark engine is shelved (docs/roadmap/shelved-earmark-engine/), so this
+                reads 0 for now and lights up automatically when the engine returns. */}
+            {((bookingSettlement.prepay_remaining_cents ?? 0) > 0 || (bookingSettlement.prepay_earmarked_cents ?? 0) > 0) && (
+              <div>
+                <div className="text-secondary">Prepaid (remaining)</div>
+                <div className="font-semibold text-crx-green">{formatCents(bookingSettlement.prepay_remaining_cents ?? 0)}</div>
+              </div>
+            )}
+          </div>
+          {(bookingSettlement.prepay_earmarked_cents ?? 0) > 0 && (
+            <div className="mt-2 text-xs text-secondary">
+              Prepay earmarked {formatCents(bookingSettlement.prepay_earmarked_cents ?? 0)} · applied {formatCents(bookingSettlement.prepay_applied_cents ?? 0)}
+            </div>
+          )}
+          {bookingSettlement.lines && bookingSettlement.lines.length > 0 && (
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-gray-100 text-secondary">
+                    <th className="px-2 py-1 text-left font-medium">Product</th>
+                    <th className="px-2 py-1 text-right font-medium">Booked</th>
+                    <th className="px-2 py-1 text-right font-medium">Drawn</th>
+                    <th className="px-2 py-1 text-right font-medium">Remaining</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bookingSettlement.lines.map((ln) => (
+                    <tr key={ln.product_id} className="border-b border-gray-50">
+                      <td className="px-2 py-1">{ln.product_name ?? '—'}</td>
+                      <td className="px-2 py-1 text-right">{ln.booked_qty}</td>
+                      <td className="px-2 py-1 text-right">{ln.drawn_qty}</td>
+                      <td className="px-2 py-1 text-right">{ln.remaining_qty}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
       )}
 
       {showVersionHistory && quoteVersions.length > 0 && (
@@ -2708,14 +3081,15 @@ export default function QuoteBuilder() {
             Mark as Presented
           </Button>
           <HelpTip text="Sends the quote PDF to the customer's email and locks it as 'Sent'. A version snapshot is saved automatically so you can always see what the customer received." className="ml-1" />
-          <button
-            disabled
-            title="Coming Soon"
-            className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-400 rounded-lg cursor-not-allowed text-sm"
+          <Button
+            variant="secondary"
+            icon={<Send className="w-4 h-4" />}
+            showChevron={false}
+            onClick={handleEmailToGrower}
+            loading={emailingGrower}
           >
-            <Send className="w-4 h-4" />
             Email to Grower
-          </button>
+          </Button>
         </div>
       </Modal>
 
@@ -2864,6 +3238,70 @@ export default function QuoteBuilder() {
                 className="px-4 py-2 text-sm bg-crx-green text-white rounded-lg"
               >
                 Roll Over
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      <ConfirmModal
+        open={confirmDeclineOpen}
+        onClose={() => setConfirmDeclineOpen(false)}
+        onConfirm={() => setTerminalStatus('declined')}
+        title="Decline Quote"
+        message={`Mark quote ${quoteNumber} as declined? This releases any inventory holds and is terminal — an admin can reopen it later if needed.`}
+        confirmLabel="Decline Quote"
+        variant="danger"
+        icon={XCircle}
+        loading={statusActionLoading}
+      />
+
+      <ConfirmModal
+        open={confirmCancelOpen}
+        onClose={() => setConfirmCancelOpen(false)}
+        onConfirm={() => setTerminalStatus('cancelled')}
+        title="Cancel Quote"
+        message={`Cancel quote ${quoteNumber}? This releases any inventory holds and is terminal — an admin can reopen it later if needed.`}
+        confirmLabel="Cancel Quote"
+        variant="danger"
+        icon={Ban}
+        loading={statusActionLoading}
+      />
+
+      {showRevertModal && (
+        <Modal open={showRevertModal} onClose={() => { if (!reverting) { setShowRevertModal(false); setRevertReason(''); } }} title={`${revertLabel} Quote`}>
+          <div className="space-y-4">
+            <p className="text-sm text-secondary">
+              Reopens quote {quoteNumber} back to <strong>sent</strong> so it can be edited,
+              re-sent, or converted again.{' '}
+              {currentStatus === 'accepted'
+                ? 'Blocked if an order has already been created from this quote.'
+                : 'The quote re-enters the active pipeline.'}
+            </p>
+            <div>
+              <label className="block text-sm font-medium mb-1">Reason <span className="text-red-600">*</span></label>
+              <textarea
+                value={revertReason}
+                onChange={(e) => setRevertReason(e.target.value)}
+                rows={3}
+                placeholder="Why is this quote being reopened?"
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => { setShowRevertModal(false); setRevertReason(''); }}
+                disabled={reverting}
+                className="px-4 py-2 text-sm border rounded-lg disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRevertStatus}
+                disabled={reverting || !revertReason.trim()}
+                className="px-4 py-2 text-sm bg-crx-green text-white rounded-lg disabled:opacity-50"
+              >
+                {reverting ? 'Reopening…' : revertLabel}
               </button>
             </div>
           </div>

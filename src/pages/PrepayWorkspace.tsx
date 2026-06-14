@@ -95,7 +95,6 @@ export default function PrepayWorkspace() {
         .select('id, customer_id, reference_number, bucket_label, original_amount_cents, balance_cents, created_at')
         .eq('customer_id', selectedCustomerId)
         .gt('balance_cents', 0)
-        .is('deleted_at', null)
         .order('created_at', { ascending: true }),
       supabase
         .from('invoices')
