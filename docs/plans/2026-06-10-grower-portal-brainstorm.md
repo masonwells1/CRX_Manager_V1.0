@@ -418,6 +418,12 @@ product+customer linkage. The unit/inventory scaffolding is populated (~95%+) so
 shed *math* can run — but per §6.6 the compliance label data is currently empty, so the
 spray-compliance bet's true prerequisite is the label-data lift, not this engine.
 
+**→ Concrete data-model design for the first build:** see
+[`2026-06-14-spray-compliance-data-model.md`](2026-06-14-spray-compliance-data-model.md)
+— tables/columns/relationships/lifecycles for G1–G3, grounded in what's already live
+(reuse map, the new spray_plans/spray_passes layer, the shed ledger, the reminder rows,
+and the jobs↔spray_passes link that makes G3 the least-greenfield first slice).
+
 ---
 
 ## 6b. Rough build order (sketch only — sequencing logic, not a commitment)
