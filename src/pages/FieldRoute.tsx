@@ -157,7 +157,7 @@ export default function FieldRoute() {
               <li key={stop.id}>
                 <button
                   type="button"
-                  onClick={() => navigate(`/deliveries/${stop.id}`)}
+                  onClick={() => navigate(`/my-route/${stop.id}`)}
                   className="w-full text-left bg-white border border-gray-200 rounded-xl px-4 py-3 min-h-[80px] flex items-center gap-3 hover:border-crx-green active:scale-[0.99] transition"
                 >
                   <div className="flex-1 min-w-0">

@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">72 routes · 167 RPC calls · 0 issues · Updated Jun 13, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">73 routes · 167 RPC calls · 0 issues · Updated Jun 13, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -857,6 +857,14 @@ const NODES = [
       "problem": false
     },
     {
+      "id": "field-stop",
+      "label": "FieldStop",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/my-route/:id",
+      "problem": false
+    },
+    {
       "id": "jobs",
       "label": "Jobs",
       "type": "page-sales",
@@ -1396,7 +1404,7 @@ const EDGES = [
     },
     {
       "s": "field-route",
-      "t": "delivery-detail",
+      "t": "field-stop",
       "type": "nav"
     },
     {
@@ -1422,6 +1430,16 @@ const EDGES = [
     {
       "s": "field-setup",
       "t": "field-dashboard",
+      "type": "nav"
+    },
+    {
+      "s": "field-stop",
+      "t": "field-route",
+      "type": "nav"
+    },
+    {
+      "s": "field-stop",
+      "t": "delivery-detail",
       "type": "nav"
     },
     {
@@ -1767,6 +1785,11 @@ const EDGES = [
     {
       "s": "field-application-invoice",
       "t": "r-invoice",
+      "type": "rpc"
+    },
+    {
+      "s": "field-stop",
+      "t": "r-delivery",
       "type": "rpc"
     },
     {
