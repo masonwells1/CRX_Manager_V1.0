@@ -161,10 +161,18 @@ export default function FieldStop() {
   // Arrive as a conflicting external edit and silently drop the queued
   // completion on reconnect.
   const syncAfterArrive = async () => {
-    const { data: refreshed } = await supabase
+    const { data: refreshed, error } = await supabase
       .from('deliveries').select('updated_at').eq('id', id!).maybeSingle();
     const ua = (refreshed as { updated_at?: string | null } | null)?.updated_at ?? null;
-    setDelivery((prev) => (prev ? { ...prev, status: 'in_progress', updated_at: ua ?? prev.updated_at } : prev));
+    if (error || !ua) {
+      // Couldn't confirm the post-Arrive updated_at. Don't leave a STALE
+      // (pre-Arrive) timestamp on the row — an offline completion would then
+      // snapshot it and self-conflict on replay. Reload fully instead.
+      if (error) Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-stop-arrive-resync' } });
+      await fetchStop();
+      return;
+    }
+    setDelivery((prev) => (prev ? { ...prev, status: 'in_progress', updated_at: ua } : prev));
     setStep('verify');
   };
 
