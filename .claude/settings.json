@@ -108,6 +108,11 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/dangerous-phrase-warning.mjs\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-gauntlet-reminder.mjs\"",
+            "timeout": 5
           }
         ]
       }
