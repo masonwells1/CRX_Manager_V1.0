@@ -54,6 +54,8 @@ Eight migrations from the 2026-06-10 error-prevention follow-up queue (execution
 
 ## Staged 2026-06-11 — NOT YET APPLIED LIVE (do not assume live)
 
+> ✅ **Pre-G5 Codex batch CLEAN (2026-06-14, round 12).** The entire `chore/sell-side-roadmap` file-only batch below (12 pending migrations + frontend) passed `codex review --base main` with a no-findings SHIP verdict after a 12-round convergence. The per-row `codex=PENDING` notes are SUPERSEDED — `codex=CLEAN` now applies to the whole batch. Only Mason's G5 go-live (apply in stamp order → merge → deploy) remains. The #6b earmark engine was shelved (see the SHELVED banner below).
+
 | Version | File | Status |
 |---------|------|--------|
 | 20260611132115 | `planned_holds_drawn_sync` | **On disk but NOT in live `schema_migrations` (verified 2026-06-11 final-verify run).** Codex round-2 #3: rebuild planned holds as GREATEST(booked − drawn, 0) on every save path (Revise/Mark-Presented included) instead of full `total_units_needed` (double-reservation vs `quote_product_draws`). Also carries 2 of the 22 idempotency operation-scope fixes (its `create_planned_holds` + `save_quote` rebuilds scope their lookups). Apply via the APPLY role + review gate before relying on it; the live idempotency probe still counts its 2 functions as unscoped. |
