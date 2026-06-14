@@ -128,9 +128,10 @@ describe('getPagesForRole', () => {
 
   it('driver gets very few pages', () => {
     const pages = getPagesForRole('driver');
-    expect(pages.length).toBeLessThanOrEqual(2);
+    expect(pages.length).toBeLessThanOrEqual(3);
     const keys = pages.map((p) => p.key);
     expect(keys).toContain('deliveries');
+    expect(keys).toContain('my-route');
   });
 
   it('applicator gets jobs and application records', () => {
