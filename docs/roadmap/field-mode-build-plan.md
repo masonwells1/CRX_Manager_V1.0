@@ -1,6 +1,6 @@
 # Field Mode (driver mobile workspace) — overnight build plan
 
-> **Status:** STAGED — not started. Built by an unattended `/loop` session on branch `claude/recursing-cerf-6ae05f` (worktree `recursing-cerf-6ae05f`). Source: 5-agent brainstorm swarm 2026-06-13 (reuse map + 2 competing designs + adversarial scope). Owner-approved decisions baked in below.
+> **Status:** ✅ BUILT 2026-06-14 on branch `claude/recursing-cerf-6ae05f` — committed, **NOT pushed**. See "Build complete — handoff" at the bottom. Source: 5-agent brainstorm swarm 2026-06-13 (reuse map + 2 competing designs + adversarial scope). Owner-approved decisions baked in below.
 
 ## What it is
 A new phone-first, task-first **`/my-route`** surface for delivery drivers: a "my open stops" list → a guided per-stop flow (**Arrive → Verify/short items → Signature → Photo → Review/Complete → Next stop**), working offline. It REUSES the existing delivery RPCs/components and leaves the 2,430-line `src/pages/DeliveryDetail.tsx` (desktop view) byte-for-byte untouched.
@@ -59,3 +59,35 @@ Anchor on the **one-thing-per-screen Guided Wizard** because the DB already enfo
 
 ## Hard safety rails (unattended)
 NEVER edit `DeliveryDetail.tsx` or clean-zone files (QuoteBuilder/Order*/Prepay*/MonthEndClose/Quotes/notificationTriggers/db.ts/types heavy edits) · apply no migrations (none exist) · NEVER `git push` or deploy · verify ONLY against disposable `[E2E]` data, never a real customer's delivery · stop at definition-of-done and leave a handoff; escalate (don't guess) if a genuinely new owner decision appears.
+
+---
+
+## Build complete — handoff (2026-06-14)
+
+Built end-to-end by the overnight `/loop` session. **6 commits on `claude/recursing-cerf-6ae05f`, NOT pushed:**
+
+| Commit | What |
+|---|---|
+| `c133bfd` | docs: staged build plan |
+| `e39e742` | slice 1 — `FieldRoute.tsx` "My Stops" list (RLS-scoped open stops, online/offline pill + pending-sync count) + wire-up (App route, Sidebar nav, pagePermissions) |
+| `3a98eed` | slice 2 — `FieldStop.tsx` per-stop runner: status-driven entry, Arrive (`confirm_delivery`, online-only), Verify (clamped full/short stepper) |
+| `d285736` | slice 3 — Sign → Photo → Review → Complete (`complete_delivery` mirroring desktop exactly; offline queue for in_progress stops; signature upload; invoice surfacing; notifications) + new `src/lib/deliveryCompletionEmail.ts` (faithful copy of the desktop receipt) |
+| `25ec53b` | slice 4 — Claim unassigned stops (`reassign_delivery` behind ConfirmModal) |
+| `36fc16e` | slice 5 — per-stop idempotency test (route-per-stop ⇒ fresh key per stop) |
+
+**New surface:** `/my-route` (list) + `/my-route/:id` (runner), roles admin/sales_rep/driver. **Zero migrations.** `DeliveryDetail.tsx` and all clean-zone files byte-unchanged (additive wire-up only).
+
+**Verified:**
+- Per-commit gate green every time: `lint` 0 · `build` clean (vite 7) · **2,000 tests** pass · workflow-map regen.
+- **Adversarial-review swarm CLEAN** — 4 reviewers (correctness/idempotency, offline-semantics, regression/clean-zone, compliance), **0 blocker/high/med**. Confirmed: rpcParams identical to desktop, fresh idempotency key per stop, offline path only for in_progress (confirm never queued), no direct `delivery_items` writes, all CRX red lines clean, email lib a faithful copy.
+- Completion correctness rests on the green gate + clean review + line-by-line mirroring of the production-tested `DeliveryDetail.handleComplete`.
+
+**Verification NOT done (needs Mason):** an authenticated end-to-end browser run. The worktree dev server boots the app cleanly (React mounts, bundle + new lazy routes load, **0 console errors**) but lacks Supabase env config + login credentials, so `/my-route` couldn't be driven autonomously. **→ Do a final on-device click-through** (Arrive→Verify→Sign→Complete on a real or `[E2E]` stop) before merge.
+
+**Deferred (documented, intentional):**
+- Optional short-reason capture (`p_issue_type`/`p_issue_notes`) on partial deliveries — RPC defaults to NULL, completes fine without it.
+- Offline image-blob queue — signature/photo images still upload online-only (inherited from desktop); offline-complete saves the RPC but warns images save on reconnect.
+- True "Next Stop" auto-advance — currently returns to the list (completed stop drops off).
+- Switching `DeliveryDetail` to the shared `deliveryCompletionEmail.ts` (would touch the frozen file) — left as a future cleanup; the two copies are intentionally duplicated for now.
+
+**Next:** Mason reviews → final on-device pass → merge to `main` (= deploy to croprxsolutions.app) when satisfied.
