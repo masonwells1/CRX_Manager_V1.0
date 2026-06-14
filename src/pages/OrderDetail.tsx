@@ -3,7 +3,7 @@
  * GAP FIX #13: Edit Orders After Creation
  * AR derived from linked invoices (single source of truth).
  */
-import { useEffect, useState , useCallback } from 'react';
+import { useEffect, useState , useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle, MessageSquarePlus, Printer, ClipboardList, DollarSign } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -819,6 +819,26 @@ export default function OrderDetail() {
       setApplyingPrepay(null);
     }
   };
+
+  // Codex round-5 P2: reset the price_order idempotency key whenever the normalized
+  // pricing payload (order id + the {item:price} pairs) changes, but keep it stable
+  // for an identical retry. Without this, a lost price_order response leaves the key
+  // in place; editing a price and resubmitting would replay the SAME key and return
+  // the cached result, silently discarding the edited prices. Mirrors NewOrder's
+  // rushOrderIdem intent-change reset.
+  const pricingPayloadHash = useMemo(() => {
+    const pairs = items
+      .filter((i) => i.pricing_pending)
+      .filter((i) => (priceInputs[i.id] ?? '').trim() !== '')
+      .map((i) => `${i.id}:${parseFloat(priceInputs[i.id]) || 0}`)
+      .sort()
+      .join('|');
+    return `${order?.id || ''}#${pairs}`;
+  }, [items, priceInputs, order?.id]);
+  useEffect(() => {
+    priceOrderIdem.resetKey();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pricingPayloadHash]);
 
   // Ship-now/price-later (#2 v2): finalize a needs_pricing rush order via price_order.
   const handlePriceOrder = async () => {

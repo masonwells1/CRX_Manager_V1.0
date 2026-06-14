@@ -85,8 +85,8 @@ BEGIN
 
   -- Per-product booking position. total_units_needed is NULLABLE -> COALESCE 0.
   -- A product can appear on multiple quote_items (sections) -> aggregate by
-  -- product_id with a booked-weighted-average locked price (same model the draw
-  -- path uses, so settlement $ matches what draws actually charge).
+  -- product_id with a booked-weighted-average CURRENT price (the price the UNDRAWN
+  -- remainder would draw at now).
   WITH booked AS (
     SELECT qi.product_id,
            SUM(COALESCE(qi.total_units_needed, 0)) AS booked_qty,
@@ -103,18 +103,39 @@ BEGIN
       FROM quote_product_draws d
       WHERE d.quote_id = p_quote_id
   ),
+  -- Codex round-5 P2: drawn $ must use the LOCKED price each draw was made at, NOT
+  -- the quote's current price — otherwise revising a partially-drawn quote's prices
+  -- retroactively reprices completed draws. draw_down_quote stamps the locked price
+  -- into the draw ORDER's order_items (quote_product_draws carries only quantity), so
+  -- derive the locked unit price per product from this booking's draw orders
+  -- (orders.booking_draw = true, any status — cancellation never changes the price a
+  -- draw was made at; quantity_drawn from the ledger remains the authoritative qty).
+  locked AS (
+    SELECT oi.product_id,
+           CASE WHEN SUM(COALESCE(oi.total_units_needed, 0)) > 0
+                THEN SUM(oi.total_price) / SUM(COALESCE(oi.total_units_needed, 0))
+                ELSE NULL END AS locked_price
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.quote_id = p_quote_id AND o.booking_draw = true
+      GROUP BY oi.product_id
+  ),
   line_rows AS (
     SELECT b.product_id,
            p.product_name,
            b.booked_qty,
            COALESCE(d.quantity_drawn, 0) AS drawn_qty,
            GREATEST(b.booked_qty - COALESCE(d.quantity_drawn, 0), 0) AS remaining_qty,
-           b.wavg_price,
-           ROUND(b.booked_qty * b.wavg_price * 100)::bigint AS booked_cents,
-           ROUND(COALESCE(d.quantity_drawn, 0) * b.wavg_price * 100)::bigint AS drawn_cents,
+           -- locked draw price (falls back to current if no draw order found)
+           COALESCE(l.locked_price, b.wavg_price) AS locked_price,
+           b.wavg_price AS current_price,
+           -- drawn at the LOCKED price; remaining at the CURRENT price;
+           -- booked = drawn + remaining (identity holds, no retroactive repricing).
+           ROUND(COALESCE(d.quantity_drawn, 0) * COALESCE(l.locked_price, b.wavg_price) * 100)::bigint AS drawn_cents,
            ROUND(GREATEST(b.booked_qty - COALESCE(d.quantity_drawn, 0), 0) * b.wavg_price * 100)::bigint AS remaining_cents
       FROM booked b
       LEFT JOIN drawn d ON d.product_id = b.product_id
+      LEFT JOIN locked l ON l.product_id = b.product_id
       LEFT JOIN products p ON p.id = b.product_id
   )
   SELECT
@@ -124,12 +145,13 @@ BEGIN
       'booked_qty', booked_qty,
       'drawn_qty', drawn_qty,
       'remaining_qty', remaining_qty,
-      'locked_price', wavg_price,
-      'booked_cents', booked_cents,
+      'locked_price', locked_price,
+      'current_price', current_price,
+      'booked_cents', drawn_cents + remaining_cents,
       'drawn_cents', drawn_cents,
       'remaining_cents', remaining_cents
     ) ORDER BY product_name), '[]'::jsonb),
-    COALESCE(SUM(booked_cents), 0),
+    COALESCE(SUM(drawn_cents + remaining_cents), 0),
     COALESCE(SUM(drawn_cents), 0),
     COALESCE(SUM(remaining_cents), 0)
   INTO v_lines, v_booked_cents, v_drawn_cents, v_remaining_cents

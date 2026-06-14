@@ -67,17 +67,33 @@ BEGIN
       WHERE qi.quote_id IN (SELECT id FROM open_bookings)
       GROUP BY qi.quote_id, qi.product_id
   ),
+  -- Codex round-5 P2: drawn $ uses the LOCKED price each draw was made at (from the
+  -- booking's draw orders), NOT the quote's current price — so revising a partially-
+  -- drawn quote's prices can't retroactively reprice completed draws. Mirrors the fix
+  -- in get_booking_settlement (20260613230000). quantity_drawn (ledger) stays the
+  -- authoritative drawn quantity; remaining uses the current price; booked = drawn +
+  -- remaining.
+  locked AS (
+    SELECT o.quote_id, oi.product_id,
+           CASE WHEN SUM(COALESCE(oi.total_units_needed, 0)) > 0
+                THEN SUM(oi.total_price) / SUM(COALESCE(oi.total_units_needed, 0))
+                ELSE NULL END AS locked_price
+      FROM orders o
+      JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.booking_draw = true AND o.quote_id IN (SELECT id FROM open_bookings)
+      GROUP BY o.quote_id, oi.product_id
+  ),
   per_product AS (
     SELECT b.quote_id,
-           ROUND(b.booked_qty * b.wavg_price * 100)::bigint AS booked_cents,
-           ROUND(COALESCE(d.quantity_drawn, 0) * b.wavg_price * 100)::bigint AS drawn_cents,
+           ROUND(COALESCE(d.quantity_drawn, 0) * COALESCE(l.locked_price, b.wavg_price) * 100)::bigint AS drawn_cents,
            ROUND(GREATEST(b.booked_qty - COALESCE(d.quantity_drawn, 0), 0) * b.wavg_price * 100)::bigint AS remaining_cents
       FROM booked b
       LEFT JOIN quote_product_draws d ON d.quote_id = b.quote_id AND d.product_id = b.product_id
+      LEFT JOIN locked l ON l.quote_id = b.quote_id AND l.product_id = b.product_id
   ),
   booking_money AS (
     SELECT quote_id,
-           COALESCE(SUM(booked_cents), 0) AS booked_cents,
+           COALESCE(SUM(drawn_cents + remaining_cents), 0) AS booked_cents,
            COALESCE(SUM(drawn_cents), 0) AS drawn_cents,
            COALESCE(SUM(remaining_cents), 0) AS remaining_cents
       FROM per_product

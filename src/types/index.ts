@@ -1241,6 +1241,7 @@ export interface BookingSettlementLine {
   drawn_qty: number;
   remaining_qty: number;
   locked_price: number;
+  current_price?: number;
   booked_cents: number;
   drawn_cents: number;
   remaining_cents: number;
