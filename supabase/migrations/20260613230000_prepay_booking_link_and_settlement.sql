@@ -103,26 +103,34 @@ BEGIN
       FROM quote_product_draws d
       WHERE d.quote_id = p_quote_id
   ),
-  -- Codex round-5 P2: drawn $ must use the LOCKED price each draw was made at, NOT
-  -- the quote's current price — otherwise revising a partially-drawn quote's prices
-  -- retroactively reprices completed draws. draw_down_quote stamps the locked price
-  -- into the draw ORDER's order_items (quote_product_draws carries only quantity), so
-  -- derive the locked unit price per product from this booking's ACTIVE draw orders.
-  -- Codex round-6 P1: EXCLUDE cancelled/voided draw orders — their reversal subtracts
-  -- the quantity from quote_product_draws but leaves the order_items behind, so
-  -- including them would skew the weighted-average locked price (valuing the remaining
-  -- drawn quantity at a contaminated price). quantity_drawn (ledger, reversal-aware)
-  -- stays the authoritative quantity; we only need the price of the draws that still stand.
+  -- Codex round-5 P2 / round-6 P1 / round-8 P2: drawn $ must use the LOCKED price each
+  -- draw was made at, NOT the quote's current price (which would retroactively reprice
+  -- completed draws when the quote is revised). draw_down_quote stamps the locked unit
+  -- price into the draw ORDER's order_items (quote_product_draws carries only quantity).
+  -- Weight each draw order's locked unit price by its EFFECTIVE REMAINING quantity — the
+  -- exact amount it still contributes to quote_product_draws.quantity_drawn after any
+  -- reversal (per 20260610185806): voided orders are fully reversed (0), cancelled orders
+  -- keep only their DELIVERED quantity (the undelivered remainder was released), and
+  -- active orders keep their full drawn quantity. This reconciles SUM(eff_qty) with the
+  -- ledger's quantity_drawn, so drawn_cents = quantity_drawn × this weighted price equals
+  -- the true sum of locked extended prices — correct whether the booking was fully drawn,
+  -- partially drawn, partially delivered then cancelled, or voided.
   locked AS (
-    SELECT oi.product_id,
-           CASE WHEN SUM(COALESCE(oi.total_units_needed, 0)) > 0
-                THEN SUM(oi.total_price) / SUM(COALESCE(oi.total_units_needed, 0))
+    SELECT dle.product_id,
+           CASE WHEN SUM(dle.eff_qty) > 0
+                THEN SUM(dle.unit_price * dle.eff_qty) / SUM(dle.eff_qty)
                 ELSE NULL END AS locked_price
-      FROM orders o
-      JOIN order_items oi ON oi.order_id = o.id
-      WHERE o.quote_id = p_quote_id AND o.booking_draw = true
-        AND o.status NOT IN ('cancelled', 'voided')
-      GROUP BY oi.product_id
+      FROM (
+        SELECT oi.product_id,
+               oi.total_price / NULLIF(oi.total_units_needed, 0) AS unit_price,
+               CASE WHEN o.status = 'voided'    THEN 0
+                    WHEN o.status = 'cancelled' THEN COALESCE(oi.quantity_delivered, 0)
+                    ELSE COALESCE(oi.total_units_needed, 0) END AS eff_qty
+          FROM orders o
+          JOIN order_items oi ON oi.order_id = o.id
+          WHERE o.quote_id = p_quote_id AND o.booking_draw = true
+      ) dle
+      GROUP BY dle.product_id
   ),
   line_rows AS (
     SELECT b.product_id,
@@ -130,7 +138,14 @@ BEGIN
            b.booked_qty,
            COALESCE(d.quantity_drawn, 0) AS drawn_qty,
            GREATEST(b.booked_qty - COALESCE(d.quantity_drawn, 0), 0) AS remaining_qty,
-           -- locked draw price (falls back to current if no draw order found)
+           -- Locked draw price. The COALESCE fallback to the current price only
+           -- triggers when a quote has quantity_drawn but NO booking_draw order — i.e.
+           -- a WHOLE-conversion (convert_quote_to_order writes quantity_drawn=full but
+           -- does not mark its order booking_draw). Such quotes are 'accepted' WITH an
+           -- order, so revert_quote_status can't reopen them to 'sent'; this RPC (and the
+           -- rollover, which filters sent/revised) only run on OPEN bookings, so the
+           -- fallback is unreachable in practice and the "locked, revision-immune" drawn
+           -- value holds for every reachable booking. (Codex round-8 verify note.)
            COALESCE(l.locked_price, b.wavg_price) AS locked_price,
            b.wavg_price AS current_price,
            -- drawn at the LOCKED price; remaining at the CURRENT price;

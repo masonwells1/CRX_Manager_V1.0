@@ -1186,6 +1186,25 @@ export default function QuoteBuilder() {
       const result = assertRpcResult<{ success: boolean; old_status: string; new_status: string }>(data, 'revert_quote_status');
       revertStatusIdem.resetKey();
       setStatus((result.new_status as QuoteStatus) || 'sent');
+      // Codex round-8 P1: a PLANNED quote's inventory holds were released when it went
+      // terminal (declined/expired/cancelled/accepted). Reopening to 'sent' makes it
+      // drawable/convertible again, so its holds MUST be recreated or the booking would
+      // reserve no inventory (overselling risk). create_planned_holds rebuilds the holds
+      // for the undrawn remainder (GREATEST(booked − drawn, 0)). Mirrors the save path.
+      if (isPlanned) {
+        const holdIdemKey = plannedHoldsIdem.getKey();
+        const { data: holdData, error: holdError } = await supabase.rpc('create_planned_holds', {
+          p_quote_id: id,
+          p_performed_by: profile?.id,
+          p_idempotency_key: holdIdemKey,
+        });
+        if (holdError) {
+          toast('error', 'Quote reopened, but failed to recreate its inventory holds — recreate them before drawing or converting this booking.');
+        } else {
+          assertRpcResult(holdData, 'create_planned_holds');
+          plannedHoldsIdem.resetKey();
+        }
+      }
       setShowRevertModal(false);
       setRevertReason('');
       toast('success', `Quote reopened to ${result.new_status}.`);
@@ -1271,6 +1290,15 @@ export default function QuoteBuilder() {
       // quote just re-sends (already frozen). Snapshotting only changes status, not
       // line items, so the PDF generated below is identical.
       if (status === 'draft' || status === 'revised') {
+        // create_quote_version snapshots the version AND atomically sets
+        // quotes.status='sent' (single RPC). Codex round-8 P2: NO separate
+        // saveQuote('sent') — that was redundant (the isDirty guard above already
+        // ensured no unsaved edits) and, if it failed after the version was created,
+        // left an orphan version + retried into a second one. Keep the version idem
+        // key UNRESET until the whole send succeeds so a retry after an email failure
+        // replays the SAME key (create_quote_version returns 'duplicate'), never a dup.
+        // If create_quote_version itself fails, freezeErr throws → catch aborts the
+        // send, preserving the frozen-record guarantee (round-4 P1).
         const freezeVerKey = createVersionIdem.getKey();
         const { data: freezeVer, error: freezeErr } = await supabase.rpc('create_quote_version', {
           p_quote_id: quoteId,
@@ -1279,16 +1307,7 @@ export default function QuoteBuilder() {
           p_idempotency_key: freezeVerKey,
         });
         if (freezeErr) throw freezeErr;
-        assertRpcResult<{ version_number: number }>(freezeVer, 'create_quote_version');
-        createVersionIdem.resetKey();
-        const sentId = await saveQuote('sent');
-        // Codex round-4 P1: if the sent-state save fails (RPC/network), DO NOT
-        // email. Otherwise the grower receives a PDF for a quote that's still
-        // draft/revised and editable, defeating the frozen-sent-record guarantee.
-        // Throw → the catch below toasts the error and aborts the send.
-        if (!sentId) {
-          throw new Error('Could not save the quote as sent — not emailing. Please try again.');
-        }
+        assertRpcResult(freezeVer, 'create_quote_version');
         setStatus('sent');
         fetchVersions();
       }
@@ -1300,8 +1319,16 @@ export default function QuoteBuilder() {
         customer_phone: selectedCustomer?.phone || undefined,
         customer_address: selectedCustomer?.billing_address || undefined,
         sales_rep_name: profile?.full_name || 'Sales Rep',
-        created_at: new Date().toISOString(),
-        expires_at: undefined,
+        // Codex round-8 P2: a frozen/sent quote re-emailed later must show its ORIGINAL
+        // issue + expiry dates, not today's — otherwise the grower gets a document that
+        // looks newly issued with a fresh validity window even though the DB quote is
+        // frozen (and may already be expired). Use the persisted created_at + its
+        // valid_days window; fall back to now only for an unsaved quote (which the
+        // isDirty/quoteId guards above already prevent from emailing).
+        created_at: quoteCreatedAt || new Date().toISOString(),
+        expires_at: quoteCreatedAt
+          ? new Date(new Date(quoteCreatedAt).getTime() + validDays * 24 * 60 * 60 * 1000).toISOString()
+          : undefined,
         valid_days: validDays,
         tier,
         header_notes: headerNotes || undefined,
@@ -1356,6 +1383,10 @@ export default function QuoteBuilder() {
         attachments: [{ filename: `Quote-${quoteNumber}.pdf`, content: base64 }],
       });
       emailQuoteIdem.resetKey();
+      // Codex round-8 P2: reset the version idem key only now that the whole send
+      // succeeded — a failure before this point keeps the key so a retry replays the
+      // same create_quote_version (returns 'duplicate') instead of snapshotting again.
+      createVersionIdem.resetKey();
       if (result.deduplicated) {
         toast('info', 'This quote was already emailed (duplicate send skipped).');
       } else {

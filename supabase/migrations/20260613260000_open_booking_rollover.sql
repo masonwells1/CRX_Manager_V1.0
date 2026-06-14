@@ -73,19 +73,30 @@ BEGIN
   -- in get_booking_settlement (20260613230000). quantity_drawn (ledger) stays the
   -- authoritative drawn quantity; remaining uses the current price; booked = drawn +
   -- remaining.
-  -- Codex round-6 P1: exclude cancelled/voided draw orders from the locked-price
-  -- average (their reversal subtracts qty from quote_product_draws but leaves the
-  -- order_items, which would otherwise skew the price). Mirrors get_booking_settlement.
+  -- Codex round-5 P2 / round-6 P1 / round-8 P2: weight each draw order's LOCKED unit
+  -- price by its EFFECTIVE REMAINING quantity (its current contribution to
+  -- quote_product_draws.quantity_drawn after any reversal per 20260610185806): voided
+  -- → 0 (fully reversed), cancelled → delivered qty (undelivered remainder released),
+  -- active → full drawn qty. drawn_cents = quantity_drawn × this weighted price = the
+  -- true sum of locked extended prices, immune to quote price revisions and correct
+  -- across full/partial draws, partial-delivery cancels, and voids. Mirrors
+  -- get_booking_settlement (20260613230000).
   locked AS (
-    SELECT o.quote_id, oi.product_id,
-           CASE WHEN SUM(COALESCE(oi.total_units_needed, 0)) > 0
-                THEN SUM(oi.total_price) / SUM(COALESCE(oi.total_units_needed, 0))
+    SELECT dle.quote_id, dle.product_id,
+           CASE WHEN SUM(dle.eff_qty) > 0
+                THEN SUM(dle.unit_price * dle.eff_qty) / SUM(dle.eff_qty)
                 ELSE NULL END AS locked_price
-      FROM orders o
-      JOIN order_items oi ON oi.order_id = o.id
-      WHERE o.booking_draw = true AND o.quote_id IN (SELECT id FROM open_bookings)
-        AND o.status NOT IN ('cancelled', 'voided')
-      GROUP BY o.quote_id, oi.product_id
+      FROM (
+        SELECT o.quote_id, oi.product_id,
+               oi.total_price / NULLIF(oi.total_units_needed, 0) AS unit_price,
+               CASE WHEN o.status = 'voided'    THEN 0
+                    WHEN o.status = 'cancelled' THEN COALESCE(oi.quantity_delivered, 0)
+                    ELSE COALESCE(oi.total_units_needed, 0) END AS eff_qty
+          FROM orders o
+          JOIN order_items oi ON oi.order_id = o.id
+          WHERE o.booking_draw = true AND o.quote_id IN (SELECT id FROM open_bookings)
+      ) dle
+      GROUP BY dle.quote_id, dle.product_id
   ),
   per_product AS (
     SELECT b.quote_id,
