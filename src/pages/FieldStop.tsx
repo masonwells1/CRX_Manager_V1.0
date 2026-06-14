@@ -135,12 +135,12 @@ export default function FieldStop() {
     if (del.delivery_address_id) {
       const { data: addr } = await supabase
         .from('customer_addresses')
-        .select('*')
+        .select('address_line, city, state, zip')
         .eq('id', del.delivery_address_id)
         .maybeSingle();
       if (addr) {
-        const a = addr as { street?: string; city?: string; state?: string; zip?: string };
-        setAddressLine([a.street, a.city, a.state, a.zip].filter(Boolean).join(', '));
+        const a = addr as { address_line?: string | null; city?: string | null; state?: string | null; zip?: string | null };
+        setAddressLine([a.address_line, a.city, a.state, a.zip].filter(Boolean).join(', '));
       }
     }
     await fetchPhotos();
@@ -172,7 +172,8 @@ export default function FieldStop() {
       toast('success', 'Delivery started');
     } catch (err: unknown) {
       const msg = sanitizeError(err);
-      if (/in_progress|already/i.test(msg)) setStep('verify');
+      // Stale screen: stop was already started elsewhere — sync local status and resume at Verify.
+      if (/in_progress|already/i.test(msg)) { setDelivery({ ...delivery, status: 'in_progress' }); setStep('verify'); }
       else toast('error', msg);
     }
     setConfirming(false);
@@ -301,6 +302,9 @@ export default function FieldStop() {
           }
         } catch (sigErr) {
           Sentry.captureException(sigErr instanceof Error ? sigErr : new Error(String(sigErr)), { extra: { context: 'Field Mode signature upload failed' } });
+          // The delivery already committed; keep going (don't strand the receipt)
+          // but surface the failed image capture so it isn't silently lost.
+          toast('error', 'Signature image could not be saved — the delivery is recorded; re-capture the signature if needed');
         }
       }
 
