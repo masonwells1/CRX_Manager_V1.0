@@ -384,24 +384,21 @@ export default function NewOrder() {
         // prices are finalized later via the order's Set Pricing panel → price_order.
         if (priceLater) {
           const rushKey = rushOrderIdem.getKey();
+          // Codex round-9 P2: pass the customer PO INTO the SECDEF RPC (it sets it on the
+          // INSERT as owner). The old follow-up `orders.update({customer_po_number})` hit
+          // the is_admin()-only orders UPDATE RLS, so a sales_rep got a false failure
+          // (order already created, PO lost, not retryable) — no direct order UPDATE here.
           const { data, error } = await supabase.rpc('create_rush_order', {
             p_customer_id: customerId,
             p_items: validItems.map((item) => ({ product_id: item.product_id, qty: item.quantity })),
             p_notes: notes || null,
+            p_customer_po_number: customerPoNumber.trim() || null,
             p_performed_by: profile.id,
             p_idempotency_key: rushKey,
           });
           if (error) throw error;
           const rushResult = assertRpcResult<{ order_id: string; order_number: string; warnings?: string[] }>(data, 'create_rush_order');
           const rushOrderId = rushResult.order_id;
-          if (customerPoNumber.trim() && rushOrderId) {
-            const poResult = await supabase.from('orders').update({ customer_po_number: customerPoNumber.trim() }).eq('id', rushOrderId).select();
-            checkMutationResult(poResult, 'Update customer PO number');
-          }
-          // Codex P1: reset the idempotency key ONLY after all follow-up work (the
-          // PO-number update) succeeds. Resetting right after the RPC meant a failed
-          // PO update + retry would re-run create_rush_order with a fresh key and
-          // duplicate the order + re-prebook inventory.
           rushOrderIdem.resetKey();
           clearDraft();
           if (rushResult.warnings && rushResult.warnings.length > 0) {

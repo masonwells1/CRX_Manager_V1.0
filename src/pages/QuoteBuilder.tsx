@@ -1186,25 +1186,10 @@ export default function QuoteBuilder() {
       const result = assertRpcResult<{ success: boolean; old_status: string; new_status: string }>(data, 'revert_quote_status');
       revertStatusIdem.resetKey();
       setStatus((result.new_status as QuoteStatus) || 'sent');
-      // Codex round-8 P1: a PLANNED quote's inventory holds were released when it went
-      // terminal (declined/expired/cancelled/accepted). Reopening to 'sent' makes it
-      // drawable/convertible again, so its holds MUST be recreated or the booking would
-      // reserve no inventory (overselling risk). create_planned_holds rebuilds the holds
-      // for the undrawn remainder (GREATEST(booked − drawn, 0)). Mirrors the save path.
-      if (isPlanned) {
-        const holdIdemKey = plannedHoldsIdem.getKey();
-        const { data: holdData, error: holdError } = await supabase.rpc('create_planned_holds', {
-          p_quote_id: id,
-          p_performed_by: profile?.id,
-          p_idempotency_key: holdIdemKey,
-        });
-        if (holdError) {
-          toast('error', 'Quote reopened, but failed to recreate its inventory holds — recreate them before drawing or converting this booking.');
-        } else {
-          assertRpcResult(holdData, 'create_planned_holds');
-          plannedHoldsIdem.resetKey();
-        }
-      }
+      // Codex round-9 P2: a PLANNED quote's holds are now rebuilt ATOMICALLY inside
+      // revert_quote_status (20260613290000) — same transaction as the status flip, so
+      // there is no sent-without-holds window. The previous client-side recreate-after-
+      // revert was non-atomic and is removed.
       setShowRevertModal(false);
       setRevertReason('');
       toast('success', `Quote reopened to ${result.new_status}.`);

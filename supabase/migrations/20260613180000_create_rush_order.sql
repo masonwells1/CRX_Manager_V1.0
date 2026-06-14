@@ -49,6 +49,7 @@ CREATE OR REPLACE FUNCTION public.create_rush_order(
   p_customer_id uuid,
   p_items jsonb DEFAULT '[]'::jsonb,
   p_notes text DEFAULT NULL::text,
+  p_customer_po_number text DEFAULT NULL::text,
   p_performed_by uuid DEFAULT NULL::uuid,
   p_idempotency_key text DEFAULT NULL::text
 )
@@ -114,14 +115,20 @@ BEGIN
   -- need to — it computes commissions immediately at creation.)
   -- sql-safety: exempt-registry — orders.pricing_status is added by the sibling file-only
   -- migration 20260613170000 (see file header); commission_split is a live column.
+  -- Codex round-9 P2: set customer_po_number INSIDE this SECDEF RPC. The orders UPDATE
+  -- RLS is is_admin()-only, so the old frontend follow-up `orders.update({customer_po_number})`
+  -- failed for a sales_rep AFTER the order was already created (false error + lost PO, not
+  -- retryable). Setting it here (owner-privileged INSERT) makes it atomic and role-safe.
+  -- sql-safety: exempt-registry — orders.pricing_status is added by the sibling file-only
+  -- migration 20260613170000 (see file header); commission_split + customer_po_number are live.
   INSERT INTO orders (
     order_number, customer_id, status, pricing_status,
-    commission_split,
+    commission_split, customer_po_number,
     total_price, total_cost, total_profit, total_margin_pct,
     order_date, notes
   ) VALUES (
     v_order_number, p_customer_id, 'confirmed', 'needs_pricing',
-    v_customer.default_commission_split,
+    v_customer.default_commission_split, NULLIF(TRIM(COALESCE(p_customer_po_number, '')), ''),
     0, 0, 0, 0,
     CURRENT_DATE,
     NULLIF(TRIM(COALESCE(p_notes, '')), '')
@@ -232,7 +239,7 @@ $function$;
 
 -- ACL mirrors create_direct_order (authenticated + service_role; no anon/PUBLIC).
 -- caller-analysis: create_rush_order :: new RPC; authenticated callers (admin/sales_rep) are gated in-body via INSUFFICIENT_ROLE; REVOKE anon/PUBLIC + GRANT authenticated/service_role exactly mirrors the live create_direct_order ACL; UI caller lands in v1c
-REVOKE EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, uuid, text) FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, uuid, text) FROM anon;
-GRANT EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, uuid, text) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, uuid, text) TO service_role;
+REVOKE EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, text, uuid, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, text, uuid, text) FROM anon;
+GRANT EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, text, uuid, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.create_rush_order(uuid, jsonb, text, text, uuid, text) TO service_role;
