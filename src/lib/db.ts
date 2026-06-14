@@ -110,6 +110,7 @@ export const RpcErrorCodes = {
   // price_order (sell-side roadmap #2 v2)
   INVALID_PRICE: 'INVALID_PRICE',
   ALREADY_PRICED: 'ALREADY_PRICED',
+  ORDER_NOT_ACTIVE: 'ORDER_NOT_ACTIVE',
   // booking prepay earmark / auto-apply (sell-side roadmap #6b)
   PREPAY_CREDIT_NOT_FOUND: 'PREPAY_CREDIT_NOT_FOUND',
   BOOKING_NOT_FOUND: 'BOOKING_NOT_FOUND',

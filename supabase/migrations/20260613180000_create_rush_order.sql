@@ -189,6 +189,19 @@ BEGIN
     v_actor, 'order', v_order_id, p_customer_id
   );
 
+  -- #4 (Codex P2): notify admins server-side that this rush order needs pricing.
+  -- create_rush_order is SECDEF (owner), so this bypasses the notifications RLS
+  -- with_check (is_admin() OR user_id = auth.uid()). The frontend CANNOT insert
+  -- notifications for other users when the creator is a sales_rep/driver/applicator
+  -- (now a real case — field staff create rush orders), so the immediate alert
+  -- must come from here; the check_unpriced_orders cron is the longer-term backstop.
+  INSERT INTO notifications (user_id, title, message, notification_type, related_entity_type, related_entity_id)
+  SELECT p.id, 'Order needs pricing',
+    'Rush order ' || v_order_number || ' for ' || COALESCE(v_customer.farm_name, 'customer') ||
+    ' shipped without pricing — set its prices so it can be invoiced.',
+    'needs_pricing', 'order', v_order_id
+  FROM profiles p WHERE p.role = 'admin' AND p.is_active = true;
+
   v_result := jsonb_build_object(
     'status', 'created', 'order_id', v_order_id, 'order_number', v_order_number,
     'pricing_status', 'needs_pricing', 'warnings', to_jsonb(v_warnings)

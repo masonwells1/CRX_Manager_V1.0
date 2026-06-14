@@ -113,6 +113,8 @@ export default function MonthEndClose() {
       .from('orders')
       .select('id', { count: 'exact', head: true })
       .eq('pricing_status', 'needs_pricing')
+      .not('status', 'in', '("cancelled","voided")')  // Codex P2: terminal orders aren't unbilled revenue
+      .is('deleted_at', null)
       .lte('order_date', current.end);
     setNeedsPricingCount(npCount || 0);
 

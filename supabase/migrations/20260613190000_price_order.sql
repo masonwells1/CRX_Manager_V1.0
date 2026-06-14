@@ -76,6 +76,13 @@ BEGIN
 
   SELECT * INTO v_order FROM orders WHERE id = p_order_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND'; END IF;
+  -- Terminal-order guard (Codex round 2 P1): a cancelled/voided/deleted rush order
+  -- still carries pricing_status='needs_pricing' (the cancel/void RPCs don't clear
+  -- it), so without this check price_order would price it and create commissions
+  -- for a dead order. Reject terminal orders before any mutation.
+  IF v_order.status IN ('cancelled', 'voided') OR v_order.deleted_at IS NOT NULL THEN
+    RAISE EXCEPTION 'ORDER_NOT_ACTIVE';
+  END IF;
   -- State guard (Codex P1): only an unpriced order may be priced. Once an order
   -- is finalized to 'priced', reject re-pricing — a stale second tab would
   -- otherwise update prices/totals while the v_was_pending-gated invoice +

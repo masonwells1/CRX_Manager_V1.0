@@ -23,7 +23,7 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useFormDraft } from '../hooks/useFormDraft';
 import { useCreditLimitCheck } from '../hooks/useGuardrails';
 import GuardrailBanner from '../components/ui/GuardrailBanner';
-import { notifyCreditLimitExceeded, notifyOrderNeedsPricing } from '../lib/notificationTriggers';
+import { notifyCreditLimitExceeded } from '../lib/notificationTriggers';
 import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
 import { checkRUPCompliance } from '../lib/rupCompliance';
 import { logActivity } from '../lib/activityLogger';
@@ -89,6 +89,13 @@ export default function NewOrder() {
   const [items, setItems] = useState<LocalItem[]>([makeEmptyItem()]);
   // Ship-now/price-later (#2): when on, submit via create_rush_order (unpriced).
   const [priceLater, setPriceLater] = useState(false);
+  // #2 (Codex round 2): field staff (driver/applicator) may create rush orders but
+  // must never see/enter pricing — force them into ship-now/price-later mode (which
+  // creates an UNPRICED $0 order; an admin prices it later), so no margin is exposed.
+  const isFieldStaff = profile?.role === 'driver' || profile?.role === 'applicator';
+  useEffect(() => {
+    if (isFieldStaff) setPriceLater(true);
+  }, [isFieldStaff]);
   // B1 (deep-dive H1): RUP point-of-sale warning — same pattern as QuoteBuilder
   const [rupWarnings, setRupWarnings] = useState<string[]>([]);
 
@@ -344,11 +351,18 @@ export default function NewOrder() {
       }
     } catch { /* ignore — don't block order creation if check fails */ }
 
-    // Guardrail: check credit limit before creating order
-    const totalCents = items.filter(i => i.product_id && i.quantity > 0)
-      .reduce((sum, i) => sum + Math.round(i.total_price * 100), 0);
-    const creditOk = await checkCreditLimit({ customerId, newAmountCents: totalCents });
-    if (!creditOk && !creditWarning?.dismissed) return;
+    // Guardrail: check credit limit before creating order. SKIP for field staff
+    // (#2 Codex round 2 HIGH): their order is an UNPRICED rush order ($0), so the
+    // check is meaningless — and the GuardrailBanner it raises would leak the
+    // customer's credit limit + over-by $ (computed from the in-state tier price)
+    // to a driver/applicator. The real credit exposure is assessed when an admin
+    // prices the order (price_order) and at post time.
+    if (!isFieldStaff) {
+      const totalCents = items.filter(i => i.product_id && i.quantity > 0)
+        .reduce((sum, i) => sum + Math.round(i.total_price * 100), 0);
+      const creditOk = await checkCreditLimit({ customerId, newAmountCents: totalCents });
+      if (!creditOk && !creditWarning?.dismissed) return;
+    }
 
     await submitOrder();
   };
@@ -387,8 +401,9 @@ export default function NewOrder() {
             message: `Rush order ${rushResult.order_number} created — needs pricing`,
             data: { orderId: rushOrderId, orderNumber: rushResult.order_number, itemCount: validItems.length, priceLater: true },
           });
-          // Alert admins/sales that this rush order needs pricing (fire-and-forget).
-          notifyOrderNeedsPricing(rushOrderId, rushResult.order_number, customers.find((c) => c.id === customerId)?.farm_name ?? 'customer');
+          // Admin pricing alert is emitted server-side by create_rush_order (SECDEF,
+          // RLS-bypassing) — Codex P2: the frontend insert failed the notifications
+          // RLS for sales_rep/driver/applicator creators (now a real case).
           navigate(`/orders/${rushOrderId}`);
           return;
         }
@@ -534,9 +549,11 @@ export default function NewOrder() {
               type="checkbox"
               checked={priceLater}
               onChange={(e) => setPriceLater(e.target.checked)}
-              className="rounded border-gray-300 text-crx-green focus:ring-crx-green"
+              disabled={isFieldStaff}
+              className="rounded border-gray-300 text-crx-green focus:ring-crx-green disabled:opacity-50"
             />
             <span className="font-medium">Ship now, price later (rush order)</span>
+            {isFieldStaff && <span className="text-xs text-secondary">(required for your role — pricing is set by an admin later)</span>}
           </label>
           {priceLater && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-800 text-sm">
@@ -674,6 +691,10 @@ export default function NewOrder() {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    {/* #2 (Codex round 2 BLOCKER): HIDE price/cost inputs from field
+                        staff — a disabled input still renders its value (raw cost +
+                        tier sell price) as legible greyed text. */}
+                    {!isFieldStaff && (<>
                     <div>
                       <label className="block text-xs font-medium text-secondary mb-1">
                         Price per Unit
@@ -734,6 +755,7 @@ export default function NewOrder() {
                         }
                       />
                     </div>
+                    </>)}
 
                     <div>
                       <label className="block text-xs font-medium text-secondary mb-1">
@@ -758,7 +780,7 @@ export default function NewOrder() {
                     </div>
                   </div>
 
-                  {item.product_id && item.quantity > 0 && (
+                  {!isFieldStaff && item.product_id && item.quantity > 0 && (
                     <div className="bg-gray-50 rounded-lg p-3 text-sm">
                       <div className="flex flex-wrap gap-x-6 gap-y-1">
                         <div className="flex items-center gap-2">
@@ -767,6 +789,10 @@ export default function NewOrder() {
                             {fmtUsd(item.total_price)}
                           </span>
                         </div>
+                        {/* #2 (Codex round 2 BLOCKER): never show cost/profit/margin
+                            to field staff (driver/applicator) — recalcItem computes
+                            real values from product cost/tier price even in rush mode. */}
+                        {!isFieldStaff && (<>
                         <div className="flex items-center gap-2">
                           <span className="text-secondary">Profit:</span>
                           <span className={`font-medium font-mono ${item.profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -781,7 +807,8 @@ export default function NewOrder() {
                             {item.net_margin.toFixed(1)}%
                           </span>
                         </div>
-                        {item.price_override != null && (
+                        </>)}
+                        {!isFieldStaff && item.price_override != null && (
                           <span className="text-xs text-amber-600 italic">price overridden</span>
                         )}
                       </div>
@@ -802,8 +829,8 @@ export default function NewOrder() {
         </div>
       </Card>
 
-      {/* Order Totals Summary */}
-      {validItems.length > 0 && (
+      {/* Order Totals Summary — hidden for field staff (#2 Codex round 2: no pricing/margin) */}
+      {!isFieldStaff && validItems.length > 0 && (
         <Card>
           <div className="p-5">
             <div className="flex flex-wrap items-center justify-between gap-4">
@@ -813,6 +840,7 @@ export default function NewOrder() {
                   <span className="text-secondary mr-2">Total:</span>
                   <span className="font-semibold font-mono text-nav-dark">{fmtUsd(orderTotal)}</span>
                 </div>
+                {!isFieldStaff && (<>
                 <div>
                   <span className="text-secondary mr-2">Profit:</span>
                   <span className={`font-semibold font-mono ${orderProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -827,6 +855,7 @@ export default function NewOrder() {
                     {orderMargin.toFixed(1)}%
                   </span>
                 </div>
+                </>)}
               </div>
             </div>
           </div>
@@ -878,7 +907,7 @@ export default function NewOrder() {
                 )}
                 <div className="flex items-center gap-4 mt-2 text-xs text-secondary">
                   {product.unit_size && <span>Size: {product.unit_size}</span>}
-                  {tierPrice > 0 && (
+                  {!isFieldStaff && tierPrice > 0 && (
                     <span className="text-crx-green font-medium">
                       Price:{' '}
                       {new Intl.NumberFormat('en-US', {

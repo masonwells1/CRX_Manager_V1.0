@@ -52,6 +52,8 @@ BEGIN
     FROM orders o
     JOIN customers c ON c.id = o.customer_id
     WHERE o.pricing_status = 'needs_pricing'
+      AND o.status NOT IN ('cancelled', 'voided')  -- Codex P2: don't remind on terminal orders
+      AND o.deleted_at IS NULL
       AND o.created_at < NOW() - INTERVAL '48 hours'
       AND o.pricing_reminder_sent_at IS NULL
     FOR UPDATE OF o SKIP LOCKED
@@ -83,6 +85,8 @@ BEGIN
     FROM orders o
     JOIN customers c ON c.id = o.customer_id
     WHERE o.pricing_status = 'needs_pricing'
+      AND o.status NOT IN ('cancelled', 'voided')  -- Codex P2: don't escalate terminal orders
+      AND o.deleted_at IS NULL
       AND o.created_at < NOW() - INTERVAL '7 days'
       AND o.pricing_reminder_sent_at IS NOT NULL
       AND o.pricing_escalation_sent_at IS NULL

@@ -1133,16 +1133,21 @@ export default function OrderDetail() {
             <p className="text-xs text-secondary">Total Price</p>
             <p className="text-sm font-medium text-nav-dark">{fmt(order.total_price)}</p>
           </div>
-          <div>
-            <p className="text-xs text-secondary">Profit</p>
-            <p className="text-sm font-medium text-crx-green">{fmt(order.total_profit)}</p>
-          </div>
-          <div>
-            <p className="text-xs text-secondary">Margin</p>
-            <p className="text-sm font-medium text-nav-dark">
-              {order.total_margin_pct.toFixed(1)}%
-            </p>
-          </div>
+          {/* #2 (Codex round 2): field staff (driver/applicator) can now reach this
+              page to create/track rush orders — never expose cost/profit/margin to
+              them. */}
+          {(role === 'admin' || role === 'sales_rep') && (<>
+            <div>
+              <p className="text-xs text-secondary">Profit</p>
+              <p className="text-sm font-medium text-crx-green">{fmt(order.total_profit)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-secondary">Margin</p>
+              <p className="text-sm font-medium text-nav-dark">
+                {order.total_margin_pct.toFixed(1)}%
+              </p>
+            </div>
+          </>)}
         </div>
 
         {/* AR summary — derived from linked invoices (single source of truth) */}

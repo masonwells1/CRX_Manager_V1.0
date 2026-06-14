@@ -900,12 +900,16 @@ export default function PrepaymentManager() {
             </p>
             {loadingBookings ? (
               <p className="text-sm text-secondary">Loading bookings…</p>
-            ) : bookingOptions.length === 0 ? (
-              <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
-                This customer has no open bookings (sent or revised quotes).{bookingCredit.quote_id ? ' You can still remove the current booking link below.' : ''}
-              </p>
             ) : (
               <div>
+                {/* Codex P2: always render the select (with the "remove earmark"
+                    option) so a stale earmark to a now-closed booking can still be
+                    cleared even when the customer has no other open bookings. */}
+                {bookingOptions.length === 0 && (
+                  <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-2">
+                    This customer has no open bookings (sent or revised quotes).{bookingCredit.quote_id ? ' You can still remove the current earmark below.' : ' Nothing to assign.'}
+                  </p>
+                )}
                 <label className="block text-sm font-medium text-nav-dark mb-1">Booking</label>
                 <select
                   value={selectedBookingId}
@@ -913,6 +917,10 @@ export default function PrepaymentManager() {
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="">— No booking (remove earmark) —</option>
+                  {/* show the current earmark even if its booking has since closed */}
+                  {bookingCredit.quote_id && !bookingOptions.some((b) => b.id === bookingCredit.quote_id) && (
+                    <option value={bookingCredit.quote_id}>Current booking (closed)</option>
+                  )}
                   {bookingOptions.map((b) => (
                     <option key={b.id} value={b.id}>{b.quote_number} ({b.status})</option>
                   ))}
