@@ -73,6 +73,7 @@ export default function FieldStop() {
 
   const [delivery, setDelivery] = useState<StopDelivery | null>(null);
   const [items, setItems] = useState<StopItem[]>([]);
+  const [itemsError, setItemsError] = useState(false);
   const [photos, setPhotos] = useState<StopPhoto[]>([]);
   const [deliveryQtys, setDeliveryQtys] = useState<Record<string, number>>({});
   const [addressLine, setAddressLine] = useState<string>('');
@@ -127,8 +128,9 @@ export default function FieldStop() {
       .from('delivery_items')
       .select('id, quantity, product_id, product:products(product_name)')
       .eq('delivery_id', id);
+    // Don't let a failed items query masquerade as "No items on this delivery".
+    setItemsError(!!itemErr);
     if (itemErr) {
-      // Don't let a failed items query masquerade as "No items on this delivery".
       Sentry.captureException(itemErr, { tags: { source: 'fetch', page: 'field-stop-items' } });
       toast('error', 'Could not load delivery items — refresh before completing');
     }
@@ -497,7 +499,13 @@ export default function FieldStop() {
                 </li>
               );
             })}
-            {items.length === 0 && <li className="text-sm text-gray-500 text-center py-6">No items on this delivery.</li>}
+            {items.length === 0 && (
+              <li className="text-sm text-center py-6">
+                {itemsError
+                  ? <span className="text-amber-700">Could not load items — refresh before completing.</span>
+                  : <span className="text-gray-500">No items on this delivery.</span>}
+              </li>
+            )}
           </ul>
           <button type="button" disabled={!hasAnyQty} onClick={() => setStep('sign')} className="w-full mt-4 flex items-center justify-center gap-2 bg-crx-green text-white font-semibold rounded-xl py-4 text-lg active:scale-[0.99] disabled:opacity-50">
             {isPartial ? 'Continue with Partial' : 'All Full — Continue'}
@@ -542,7 +550,7 @@ export default function FieldStop() {
               <Camera className="w-5 h-5" /> {uploadingPhoto ? 'Uploading…' : 'Take Photo'}
             </button>
           ) : (
-            <p className="flex items-center gap-2 text-sm text-amber-700 mb-3"><WifiOff className="w-4 h-4" /> Photos save when you're back online.</p>
+            <p className="flex items-center gap-2 text-sm text-amber-700 mb-3"><WifiOff className="w-4 h-4" /> Photos can only be uploaded while online — reconnect to add photos.</p>
           )}
           <button type="button" onClick={() => setStep('review')} className="w-full flex items-center justify-center gap-2 bg-crx-green text-white font-semibold rounded-xl py-4 text-lg active:scale-[0.99]">
             {photos.length > 0 ? 'Continue to Finish' : 'Skip — No Photo'}
