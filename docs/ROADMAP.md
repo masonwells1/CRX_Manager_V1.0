@@ -75,6 +75,10 @@ Detailed living vision doc: **`docs/plans/2026-06-10-grower-portal-brainstorm.md
 `portal_*` RPCs and a new `customer` role. Nothing below is scheduled yet — when
 the vision settles, each item gets its own `/ship`-grade implementation plan.
 
+**Design/grounding docs (2026-06-14, verified live):**
+[`spray-compliance-data-model.md`](plans/2026-06-14-spray-compliance-data-model.md) (G1–G3 first-build data model) ·
+[`portal-roadmap-build-vs-reuse-audit.md`](plans/2026-06-14-portal-roadmap-build-vs-reuse-audit.md) (what's already built vs greenfield across G4–G15 — PostGIS/pg_cron already on, but `orders`/`invoices` lack `field_id` and the `customer` role + `portal_*` RPCs are all greenfield).
+
 | # | Feature | Where | Status |
 |---|---------|-------|--------|
 | G1 | ⭐ **Chemical tracking & spray compliance** — chemical-shed inventory auto-fed from CRX deliveries, per-field spray checklist (sprayed/not + dates), compliance-grade RUP application log (auto-filled EPA reg #s, append-only), exports | Portal + CRX | VISION (Mason priority — candidate first portal feature) |
