@@ -136,11 +136,10 @@ BEGIN
   FROM line_rows;
 
   -- Prepay position for THIS booking. remaining = current available balance of
-  -- credits earmarked to this booking. applied = prepay actually applied to this
-  -- booking's draw invoices, derived from the prepay_applications ledger joined
-  -- invoice→order→quote (Codex P2: NOT original−balance, which would misattribute
-  -- a reassigned/pre-used credit's other-booking history to this quote). earmarked
-  -- = applied + remaining (internally consistent; excludes other-booking usage).
+  -- credits earmarked to this booking. applied = prepay applied via credits
+  -- earmarked to this booking (prepay_applications joined through
+  -- prepay_credits.quote_id). earmarked = applied + remaining (internally
+  -- consistent; excludes other-booking usage).
   SELECT COALESCE(SUM(pc.balance_cents), 0)
     INTO v_prepay_remaining_cents
     FROM prepay_credits pc
@@ -149,6 +148,11 @@ BEGIN
   -- booking (join through prepay_credits.quote_id), NOT every application landing
   -- on this booking's invoices — a generic/other-booking credit manually applied
   -- to one of this order's invoices must not inflate this booking's prepay.
+  -- Codex P2 (round 4): this credit.quote_id attribution is SOUND because
+  -- set_prepay_credit_booking (20260613240000) freezes quote_id once a credit has
+  -- any applications (PREPAY_CREDIT_IN_USE) — so a credit can never be re-earmarked
+  -- after it has been applied, i.e. every application's credit.quote_id equals the
+  -- booking it was actually applied under. No reassignment-history drift possible.
   SELECT COALESCE(SUM(pa.applied_amount_cents), 0)
     INTO v_prepay_applied_cents
     FROM prepay_applications pa

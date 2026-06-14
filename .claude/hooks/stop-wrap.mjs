@@ -15,6 +15,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import os from "node:os";
 
@@ -61,7 +62,32 @@ const meaningful = lines.filter(l => {
 // when the main checkout legitimately holds a PARALLEL session's WIP that the
 // current (worktree) session must not touch.
 // See memory: project_worktree-stop-hook-reports-main.
-const ackSignature = meaningful.map(l => l.trim()).sort().join("\n");
+//
+// Codex round-4 P2: the signature folds in a CONTENT HASH per file, not just
+// the porcelain status line. A file that is already modified keeps the same
+// `M path` status line, so a line-only signature would NOT change when the file
+// is edited again — meaning once a set was acknowledged, any further edits to
+// those same files stayed silently acknowledged and the hook never re-armed.
+// Hashing the working-tree bytes makes every content change shift the signature.
+// (Untracked directories git collapses to one entry can't be cheaply hashed →
+// "dir" sentinel; deleted/unreadable → "na". The primary case — re-editing a
+// tracked modified file — is fully covered.)
+function fileContentHash(statusLine) {
+  // Porcelain is "XY PATH"; renames render as "old -> new" (hash falls back to "na").
+  const rel = statusLine.slice(3);
+  try {
+    const abs = path.join(projectDir, rel);
+    const st = statSync(abs);
+    if (!st.isFile()) return "dir";
+    return createHash("sha1").update(readFileSync(abs)).digest("hex").slice(0, 12);
+  } catch {
+    return "na";
+  }
+}
+const ackSignature = meaningful
+  .map(l => l.trim() + "\t" + fileContentHash(l))
+  .sort()
+  .join("\n");
 try {
   const ack = JSON.parse(
     readFileSync(path.join(projectDir, ".claude", "session-state", "stop-wrap-ack.json"), "utf8")
@@ -217,6 +243,13 @@ const reason =
   `  • Apply any pending migration via Supabase MCP\n` +
   `  • Run /deploy-edge-function on each modified function\n` +
   `  • Capture a learning to memory\n` +
-  `\nIf Mason confirms each item is intentional or already done, you can stop.`;
+  `\nIf Mason confirms each item is intentional or already done, you can stop.\n` +
+  // Codex round-4 P2: emit the EXACT current signature so the acknowledgment is
+  // written by copying this value (not by re-deriving the algorithm) — eliminates
+  // drift between how the hook computes it and how the ack is recorded. To
+  // acknowledge: write {"signature": "<below>"} to
+  // .claude/session-state/stop-wrap-ack.json. Any later content change re-arms it.
+  `\n──\nAck signature (copy verbatim into .claude/session-state/stop-wrap-ack.json as {"signature": ...}):\n` +
+  JSON.stringify(ackSignature);
 
 process.stdout.write(JSON.stringify({ decision: "block", reason }));

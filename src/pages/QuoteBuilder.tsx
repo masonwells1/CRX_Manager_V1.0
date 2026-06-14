@@ -1278,7 +1278,15 @@ export default function QuoteBuilder() {
         assertRpcResult<{ version_number: number }>(freezeVer, 'create_quote_version');
         createVersionIdem.resetKey();
         const sentId = await saveQuote('sent');
-        if (sentId) { setStatus('sent'); fetchVersions(); }
+        // Codex round-4 P1: if the sent-state save fails (RPC/network), DO NOT
+        // email. Otherwise the grower receives a PDF for a quote that's still
+        // draft/revised and editable, defeating the frozen-sent-record guarantee.
+        // Throw → the catch below toasts the error and aborts the send.
+        if (!sentId) {
+          throw new Error('Could not save the quote as sent — not emailing. Please try again.');
+        }
+        setStatus('sent');
+        fetchVersions();
       }
       // Same rich (download) PDF the customer would receive.
       const pdfData = {

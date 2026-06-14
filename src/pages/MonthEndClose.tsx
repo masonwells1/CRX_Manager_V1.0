@@ -80,6 +80,7 @@ export default function MonthEndClose() {
   // Ship-now/price-later (#2 v3): unpriced rush orders are unbilled revenue.
   const [reviewedNeedsPricing, setReviewedNeedsPricing] = useState(false);
   const [needsPricingCount, setNeedsPricingCount] = useState(0);
+  const [needsPricingError, setNeedsPricingError] = useState(false);
   const [yeLoading, setYeLoading] = useState(false);
 
   const current = getCurrentPeriod();
@@ -109,13 +110,24 @@ export default function MonthEndClose() {
 
     // Ship-now/price-later (#2 v3): count unpriced rush orders dated on/before this
     // period's end — they're unbilled revenue and surface as a pre-close review item.
-    const { count: npCount } = await supabase
+    const { count: npCount, error: npError } = await supabase
       .from('orders')
       .select('id', { count: 'exact', head: true })
       .eq('pricing_status', 'needs_pricing')
       .not('status', 'in', '("cancelled","voided")')  // Codex P2: terminal orders aren't unbilled revenue
       .is('deleted_at', null)
       .lte('order_date', current.end);
+    // Codex round-4 P1: FAIL CLOSED. If this query fails (permissions, connectivity,
+    // migration/deploy mismatch), a `npCount || 0` would mark the checklist "no
+    // unpriced orders" and let the period be closed over unbilled revenue. Surface
+    // the error and flag it so the checklist item can only be satisfied by an
+    // explicit manual review, never silently.
+    if (npError) {
+      setNeedsPricingError(true);
+      toast('error', 'Could not verify unpriced rush orders — review manually before closing.');
+    } else {
+      setNeedsPricingError(false);
+    }
     setNeedsPricingCount(npCount || 0);
 
     setLoading(false);
@@ -166,11 +178,18 @@ export default function MonthEndClose() {
         },
         {
           label: 'Rush orders priced',
-          done: needsPricingCount === 0 || reviewedNeedsPricing,
-          detail: needsPricingCount === 0
-            ? 'No unpriced rush orders'
-            : `${needsPricingCount} order(s) still need pricing (unbilled revenue) — price them or verify and check the box`,
-          reviewKey: needsPricingCount > 0 ? 'needs_pricing' : undefined,
+          // Codex round-4 P1: when the count query failed, the item is NOT done
+          // unless an admin explicitly confirms — never auto-satisfied on a 0 that
+          // really means "couldn't check".
+          done: needsPricingError
+            ? reviewedNeedsPricing
+            : needsPricingCount === 0 || reviewedNeedsPricing,
+          detail: needsPricingError
+            ? 'Could not verify unpriced rush orders (query failed) — review manually and check the box to confirm'
+            : needsPricingCount === 0
+              ? 'No unpriced rush orders'
+              : `${needsPricingCount} order(s) still need pricing (unbilled revenue) — price them or verify and check the box`,
+          reviewKey: needsPricingError || needsPricingCount > 0 ? 'needs_pricing' : undefined,
         },
         {
           label: 'Finance charges generated (optional)',

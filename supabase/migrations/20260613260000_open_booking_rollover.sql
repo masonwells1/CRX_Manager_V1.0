@@ -96,6 +96,10 @@ BEGIN
     -- application on the booking's invoices (a generic/other-booking credit applied
     -- to one of this order's invoices must not inflate this booking's prepay).
     -- earmarked = applied + remaining stays internally consistent.
+    -- Codex P2 (round 4): sound because set_prepay_credit_booking freezes quote_id
+    -- once a credit has applications (PREPAY_CREDIT_IN_USE) — a credit can't be
+    -- re-earmarked after use, so each application's credit.quote_id == the booking
+    -- it was applied under (no reassignment-history drift).
     SELECT pc.quote_id,
            COALESCE(SUM(pa.applied_amount_cents), 0) AS applied_cents
       FROM prepay_applications pa

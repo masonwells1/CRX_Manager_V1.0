@@ -101,9 +101,19 @@ BEGIN
     updated_at         = now()
    WHERE id = v_survivor;
 
-  -- Cancel the now-empty source drafts (draft→cancelled allowed by the enforcer;
-  -- never posted, so period + financial_audit_log are untouched).
-  UPDATE invoices SET status = 'cancelled', updated_at = now()
+  -- Cancel the now-empty source drafts AND zero their money columns (Codex P2:
+  -- after moving all items to the survivor, the sources keep their original
+  -- total_amount_cents/total_cost_cents — and balance_cents is GENERATED from
+  -- total_amount_cents, so a cancelled, item-less invoice would still report a
+  -- nonzero total/balance and could be double-counted by any consumer that
+  -- doesn't exclude cancelled rows). Zero both stored columns; balance_cents
+  -- (GENERATED) follows total_amount_cents → 0. draft→cancelled is allowed by the
+  -- enforcer; never posted, so period + financial_audit_log are untouched.
+  UPDATE invoices SET
+    status = 'cancelled',
+    total_amount_cents = 0,
+    total_cost_cents = 0,
+    updated_at = now()
    WHERE id = ANY(v_others);
 
   INSERT INTO activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id, customer_id)

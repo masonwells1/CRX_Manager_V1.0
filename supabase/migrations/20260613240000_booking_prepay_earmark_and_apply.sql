@@ -72,7 +72,7 @@ BEGIN
     RAISE EXCEPTION 'INSUFFICIENT_ROLE';
   END IF;
 
-  SELECT id, customer_id, balance_cents INTO v_credit
+  SELECT id, customer_id, balance_cents, quote_id INTO v_credit
     FROM prepay_credits WHERE id = p_credit_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'PREPAY_CREDIT_NOT_FOUND';
@@ -81,6 +81,22 @@ BEGIN
   IF p_idempotency_key IS NOT NULL THEN
     v_existing := check_idempotency(p_idempotency_key, 'set_prepay_credit_booking');
     IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
+  END IF;
+
+  -- Codex round-4 P2: FREEZE quote_id once the credit has any applications.
+  -- get_booking_settlement / get_open_booking_rollover attribute applied prepay
+  -- by the credit's CURRENT quote_id (join prepay_applications → prepay_credits).
+  -- If the earmark could change after a credit was partially applied, those
+  -- historical applications (which settled the OLD booking's invoices) would be
+  -- re-attributed to — or erased from — the new booking, silently moving applied
+  -- money in both reports. Blocking any change once applications exist makes
+  -- "credit.quote_id == the booking each of its applications was applied under"
+  -- an invariant, so the report attribution is sound. (A no-op re-set to the same
+  -- quote_id is still allowed.) Remaining balance of an already-used generic
+  -- credit can't be earmarked to a booking — use a fresh credit; documented limit.
+  IF p_quote_id IS DISTINCT FROM v_credit.quote_id
+     AND EXISTS (SELECT 1 FROM prepay_applications WHERE prepay_credit_id = p_credit_id) THEN
+    RAISE EXCEPTION 'PREPAY_CREDIT_IN_USE';
   END IF;
 
   IF p_quote_id IS NOT NULL THEN

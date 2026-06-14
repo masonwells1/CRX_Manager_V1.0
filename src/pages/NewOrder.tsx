@@ -594,28 +594,37 @@ export default function NewOrder() {
               </select>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-nav-dark mb-1">
-                Order Name
-              </label>
-              <Input
-                value={orderName}
-                onChange={(e) => setOrderName(e.target.value)}
-                placeholder="e.g., Corn Burndown"
-              />
-              <p className="text-xs text-secondary mt-1">Optional — order number is auto-generated</p>
-            </div>
+            {/* Codex round-4 P2: hide Order Name + Order Date in rush/price-later
+                mode — create_rush_order persists neither (it ships at CURRENT_DATE
+                with an auto-generated number), so showing them would silently
+                discard whatever the user typed. (Order-level Notes IS persisted
+                via p_notes, so it stays visible below.) */}
+            {!priceLater && (
+              <div>
+                <label className="block text-sm font-medium text-nav-dark mb-1">
+                  Order Name
+                </label>
+                <Input
+                  value={orderName}
+                  onChange={(e) => setOrderName(e.target.value)}
+                  placeholder="e.g., Corn Burndown"
+                />
+                <p className="text-xs text-secondary mt-1">Optional — order number is auto-generated</p>
+              </div>
+            )}
 
-            <div>
-              <label className="block text-sm font-medium text-nav-dark mb-1">
-                Order Date
-              </label>
-              <Input
-                type="date"
-                value={orderDate}
-                onChange={(e) => setOrderDate(e.target.value)}
-              />
-            </div>
+            {!priceLater && (
+              <div>
+                <label className="block text-sm font-medium text-nav-dark mb-1">
+                  Order Date
+                </label>
+                <Input
+                  type="date"
+                  value={orderDate}
+                  onChange={(e) => setOrderDate(e.target.value)}
+                />
+              </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-nav-dark mb-1">
@@ -775,16 +784,22 @@ export default function NewOrder() {
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-medium text-secondary mb-1">
-                        Notes
-                      </label>
-                      <Input
-                        value={item.notes || ''}
-                        onChange={(e) => updateItem(item._key, 'notes', e.target.value)}
-                        placeholder="Item notes..."
-                      />
-                    </div>
+                    {/* Codex round-4 P2: hide per-item Notes in rush/price-later
+                        mode — create_rush_order takes only {product_id, qty} per
+                        line and never stores item notes, so the field would be
+                        silently discarded. */}
+                    {!priceLater && (
+                      <div>
+                        <label className="block text-xs font-medium text-secondary mb-1">
+                          Notes
+                        </label>
+                        <Input
+                          value={item.notes || ''}
+                          onChange={(e) => updateItem(item._key, 'notes', e.target.value)}
+                          placeholder="Item notes..."
+                        />
+                      </div>
+                    )}
                   </div>
 
                   {!isFieldStaff && item.product_id && item.quantity > 0 && (

@@ -324,6 +324,8 @@ export default function PrepaymentManager() {
         if (error) {
           if (hasRpcCode(error, RpcErrorCodes.PREPAY_BOOKING_CUSTOMER_MISMATCH)) throw new Error('That booking belongs to a different customer.');
           if (hasRpcCode(error, RpcErrorCodes.BOOKING_NOT_FOUND)) throw new Error('That booking no longer exists.');
+          if (hasRpcCode(error, RpcErrorCodes.BOOKING_CLOSED)) throw new Error('That booking is closed — only an open (sent/revised) booking can hold prepay.');
+          if (hasRpcCode(error, RpcErrorCodes.PREPAY_CREDIT_IN_USE)) throw new Error('This credit has already been applied to invoices, so its booking can no longer be changed. Use a fresh prepay credit for a different booking.');
           if (hasRpcCode(error, RpcErrorCodes.INSUFFICIENT_ROLE)) throw new Error('Only an admin can assign prepay to a booking.');
           throw error;
         }
