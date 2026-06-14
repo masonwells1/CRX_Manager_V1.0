@@ -55,6 +55,11 @@
       "chain": "smoke-auth-probe-template.sql",
       "description": "Standard 4-probe auth set, worked example against draw_down_quote: no-auth -> AUTH_REQUIRED; anon-key -> AUTH_REQUIRED with zero rows written; wrong-role (driver/applicator) -> INSUFFICIENT_ROLE; forged p_performed_by -> ACTOR_MISMATCH; plus a positive admin control draw proving the probes failed for the right reason. File header documents the placeholders for adapting it to any new RPC.",
       "covers": ["draw_down_quote"]
+    },
+    "create_direct_order": {
+      "chain": "smoke-create-direct-order-po.sql",
+      "description": "Customer-PO param (migration 20260614130000): a REAL active sales_rep creates a direct order WITH p_customer_po_number and the PO persists on orders (the bug: the old frontend post-create orders.update() hit the admin-only orders_update RLS and failed for sales_rep). Asserts order/order_items/inventory-prebook created, status confirmed; whitespace PO normalizes to NULL; idempotency replay returns the same order with no duplicate; plus the auth probes (no-auth -> Authentication required, driver -> INSUFFICIENT_ROLE, forged actor -> Actor mismatch).",
+      "covers": ["create_direct_order"]
     }
   }
 }
