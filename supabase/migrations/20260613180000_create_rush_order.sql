@@ -91,6 +91,16 @@ BEGIN
   END IF;
 
   IF p_idempotency_key IS NOT NULL THEN
+    -- Codex round-10 P1: serialize same-key calls BEFORE the cache check. check_idempotency
+    -- (read) → save_idempotency (write at end) is a TOCTOU: two concurrent same-key calls
+    -- could both miss the cache and both create the order + prebook inventory + notify, with
+    -- only the 2nd save_idempotency lost to the unique index (the duplicate business rows
+    -- already committed). A transaction-scoped advisory lock keyed on the idempotency key
+    -- makes the 2nd caller block until the 1st commits, after which check_idempotency below
+    -- finds the saved result and returns it — no duplicate order/prebook/notification.
+    -- Targeted (only same-key calls serialize; auto-released at txn end; placed after the
+    -- auth/role gate so only authorized callers take it).
+    PERFORM pg_advisory_xact_lock(hashtext('create_rush_order:' || p_idempotency_key));
     v_cached := check_idempotency(p_idempotency_key, 'create_rush_order');
     IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
   END IF;
