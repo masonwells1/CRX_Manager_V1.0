@@ -48,6 +48,7 @@ interface StopDelivery {
   id: string;
   delivery_number: string | null;
   status: string;
+  updated_at: string | null;
   customer_id: string;
   order_id: string | null;
   created_by: string | null;
@@ -101,7 +102,7 @@ export default function FieldStop() {
     setLoading(true);
     const { data, error } = await supabase
       .from('deliveries')
-      .select('id, delivery_number, status, customer_id, order_id, created_by, delivery_address_id, delivery_notes, assigned_driver, customer:customers(farm_name, email, contact_name)')
+      .select('id, delivery_number, status, updated_at, customer_id, order_id, created_by, delivery_address_id, delivery_notes, assigned_driver, customer:customers(farm_name, email, contact_name)')
       .eq('id', id)
       .maybeSingle();
 
@@ -267,6 +268,12 @@ export default function FieldStop() {
           params: rpcParams,
           createdAt: new Date().toISOString(),
           retryCount: 0,
+          // Engage offlineSync's stale-write guard: if this delivery is
+          // completed/cancelled elsewhere while we're offline, replay surfaces
+          // a Conflict instead of silently dropping the queued completion.
+          entityTable: 'deliveries',
+          entityId: id,
+          snapshotAt: delivery.updated_at ?? undefined,
         });
         completeIdem.resetKey();
         toast('success', 'Delivery saved offline — will sync when you reconnect');
