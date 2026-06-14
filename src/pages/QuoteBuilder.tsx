@@ -2025,10 +2025,15 @@ export default function QuoteBuilder() {
               <div className="text-secondary">Remaining to draw</div>
               <div className="font-semibold text-nav-dark">{formatCents(bookingSettlement.remaining_cents ?? 0)}</div>
             </div>
-            <div>
-              <div className="text-secondary">Prepaid (remaining)</div>
-              <div className="font-semibold text-crx-green">{formatCents(bookingSettlement.prepay_remaining_cents ?? 0)}</div>
-            </div>
+            {/* Prepaid cell hidden while there is no earmarked prepay — the booking-prepay
+                earmark engine is shelved (docs/roadmap/shelved-earmark-engine/), so this
+                reads 0 for now and lights up automatically when the engine returns. */}
+            {((bookingSettlement.prepay_remaining_cents ?? 0) > 0 || (bookingSettlement.prepay_earmarked_cents ?? 0) > 0) && (
+              <div>
+                <div className="text-secondary">Prepaid (remaining)</div>
+                <div className="font-semibold text-crx-green">{formatCents(bookingSettlement.prepay_remaining_cents ?? 0)}</div>
+              </div>
+            )}
           </div>
           {(bookingSettlement.prepay_earmarked_cents ?? 0) > 0 && (
             <div className="mt-2 text-xs text-secondary">

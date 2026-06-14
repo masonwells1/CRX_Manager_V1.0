@@ -345,7 +345,7 @@ export default function Quotes() {
               <div className="flex items-center gap-2">
                 <Layers className="w-5 h-5 text-crx-green" />
                 <h3 className="font-semibold text-nav-dark">Open booking rollover</h3>
-                <HelpTip text="Every open booking (sent/revised quote) with its booked / drawn / remaining value and how much prepay is earmarked and still available. Use it at season-end to see what's still outstanding." className="ml-1" />
+                <HelpTip text="Every open booking (sent/revised quote) with its booked / drawn / remaining value. Use it at season-end to see what's still outstanding. (Prepay-earmarked columns return when the booking-prepay engine ships.)" className="ml-1" />
               </div>
               {showRollover ? <ChevronUp className="w-4 h-4 text-secondary" /> : <ChevronDown className="w-4 h-4 text-secondary" />}
             </button>
@@ -364,7 +364,12 @@ export default function Quotes() {
                         <th className="px-3 py-2 text-right font-medium">Booked</th>
                         <th className="px-3 py-2 text-right font-medium">Drawn</th>
                         <th className="px-3 py-2 text-right font-medium">Remaining</th>
-                        <th className="px-3 py-2 text-right font-medium">Prepaid left</th>
+                        {/* Prepaid column hidden while no booking has earmarked prepay — the
+                            earmark engine is shelved (docs/roadmap/shelved-earmark-engine/),
+                            so this is 0 for now and returns automatically when the engine ships. */}
+                        {rolloverRows.some((b) => (b.prepay_remaining_cents ?? 0) > 0 || (b.prepay_earmarked_cents ?? 0) > 0) && (
+                          <th className="px-3 py-2 text-right font-medium">Prepaid left</th>
+                        )}
                       </tr>
                     </thead>
                     <tbody>
@@ -379,7 +384,9 @@ export default function Quotes() {
                           <td className="px-3 py-2 text-right font-mono">{fmt(b.booked_cents / 100)}</td>
                           <td className="px-3 py-2 text-right font-mono">{fmt(b.drawn_cents / 100)}</td>
                           <td className="px-3 py-2 text-right font-mono">{fmt(b.remaining_cents / 100)}</td>
-                          <td className="px-3 py-2 text-right font-mono text-crx-green">{fmt(b.prepay_remaining_cents / 100)}</td>
+                          {rolloverRows.some((r) => (r.prepay_remaining_cents ?? 0) > 0 || (r.prepay_earmarked_cents ?? 0) > 0) && (
+                            <td className="px-3 py-2 text-right font-mono text-crx-green">{fmt(b.prepay_remaining_cents / 100)}</td>
+                          )}
                         </tr>
                       ))}
                     </tbody>

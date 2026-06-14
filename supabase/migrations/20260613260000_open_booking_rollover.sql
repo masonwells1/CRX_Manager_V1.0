@@ -73,6 +73,9 @@ BEGIN
   -- in get_booking_settlement (20260613230000). quantity_drawn (ledger) stays the
   -- authoritative drawn quantity; remaining uses the current price; booked = drawn +
   -- remaining.
+  -- Codex round-6 P1: exclude cancelled/voided draw orders from the locked-price
+  -- average (their reversal subtracts qty from quote_product_draws but leaves the
+  -- order_items, which would otherwise skew the price). Mirrors get_booking_settlement.
   locked AS (
     SELECT o.quote_id, oi.product_id,
            CASE WHEN SUM(COALESCE(oi.total_units_needed, 0)) > 0
@@ -81,6 +84,7 @@ BEGIN
       FROM orders o
       JOIN order_items oi ON oi.order_id = o.id
       WHERE o.booking_draw = true AND o.quote_id IN (SELECT id FROM open_bookings)
+        AND o.status NOT IN ('cancelled', 'voided')
       GROUP BY o.quote_id, oi.product_id
   ),
   per_product AS (
@@ -107,15 +111,11 @@ BEGIN
       GROUP BY pc.quote_id
   ),
   booking_applied AS (
-    -- Codex P2 (round 3): prepay APPLIED to this booking = applications of credits
-    -- EARMARKED to the booking (join through prepay_credits.quote_id), NOT every
-    -- application on the booking's invoices (a generic/other-booking credit applied
-    -- to one of this order's invoices must not inflate this booking's prepay).
-    -- earmarked = applied + remaining stays internally consistent.
-    -- Codex P2 (round 4): sound because set_prepay_credit_booking freezes quote_id
-    -- once a credit has applications (PREPAY_CREDIT_IN_USE) — a credit can't be
-    -- re-earmarked after use, so each application's credit.quote_id == the booking
-    -- it was applied under (no reassignment-history drift).
+    -- prepay APPLIED to this booking = applications of credits EARMARKED to it
+    -- (join through prepay_credits.quote_id). NOTE (2026-06-14): the earmark engine
+    -- is SHELVED (docs/roadmap/shelved-earmark-engine/), so nothing sets quote_id and
+    -- this reads 0 for every booking until the engine returns; the UI auto-hides the
+    -- prepaid column while it is 0. Forward-compatible read math, left in place.
     SELECT pc.quote_id,
            COALESCE(SUM(pa.applied_amount_cents), 0) AS applied_cents
       FROM prepay_applications pa

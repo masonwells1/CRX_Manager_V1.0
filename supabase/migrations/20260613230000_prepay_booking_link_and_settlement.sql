@@ -107,9 +107,12 @@ BEGIN
   -- the quote's current price — otherwise revising a partially-drawn quote's prices
   -- retroactively reprices completed draws. draw_down_quote stamps the locked price
   -- into the draw ORDER's order_items (quote_product_draws carries only quantity), so
-  -- derive the locked unit price per product from this booking's draw orders
-  -- (orders.booking_draw = true, any status — cancellation never changes the price a
-  -- draw was made at; quantity_drawn from the ledger remains the authoritative qty).
+  -- derive the locked unit price per product from this booking's ACTIVE draw orders.
+  -- Codex round-6 P1: EXCLUDE cancelled/voided draw orders — their reversal subtracts
+  -- the quantity from quote_product_draws but leaves the order_items behind, so
+  -- including them would skew the weighted-average locked price (valuing the remaining
+  -- drawn quantity at a contaminated price). quantity_drawn (ledger, reversal-aware)
+  -- stays the authoritative quantity; we only need the price of the draws that still stand.
   locked AS (
     SELECT oi.product_id,
            CASE WHEN SUM(COALESCE(oi.total_units_needed, 0)) > 0
@@ -118,6 +121,7 @@ BEGIN
       FROM orders o
       JOIN order_items oi ON oi.order_id = o.id
       WHERE o.quote_id = p_quote_id AND o.booking_draw = true
+        AND o.status NOT IN ('cancelled', 'voided')
       GROUP BY oi.product_id
   ),
   line_rows AS (
@@ -157,24 +161,24 @@ BEGIN
   INTO v_lines, v_booked_cents, v_drawn_cents, v_remaining_cents
   FROM line_rows;
 
-  -- Prepay position for THIS booking. remaining = current available balance of
-  -- credits earmarked to this booking. applied = prepay applied via credits
-  -- earmarked to this booking (prepay_applications joined through
-  -- prepay_credits.quote_id). earmarked = applied + remaining (internally
-  -- consistent; excludes other-booking usage).
+  -- Prepay position for THIS booking, derived from credits earmarked to it
+  -- (prepay_credits.quote_id). earmarked = applied + remaining.
+  --
+  -- NOTE (2026-06-14, engine shelved): the booking-prepay EARMARK ENGINE
+  -- (set_prepay_credit_booking / apply_booking_prepay / auto-apply) is SHELVED
+  -- for a reserved-pool redesign (see docs/roadmap/shelved-earmark-engine/). While
+  -- it is shelved NOTHING sets prepay_credits.quote_id, so quote_id is always NULL
+  -- and these three prepay fields read 0 for every booking — the UI auto-hides them
+  -- until the engine returns. This read math is left in place and forward-compatible:
+  -- when the engine ships (with the reserved-pool guarantees that make earmarked
+  -- credits exclusive to their booking), these fields light up automatically.
   SELECT COALESCE(SUM(pc.balance_cents), 0)
     INTO v_prepay_remaining_cents
     FROM prepay_credits pc
     WHERE pc.quote_id = p_quote_id;
-  -- Codex P2 (round 3): count only applications of credits EARMARKED to this
-  -- booking (join through prepay_credits.quote_id), NOT every application landing
-  -- on this booking's invoices — a generic/other-booking credit manually applied
-  -- to one of this order's invoices must not inflate this booking's prepay.
-  -- Codex P2 (round 4): this credit.quote_id attribution is SOUND because
-  -- set_prepay_credit_booking (20260613240000) freezes quote_id once a credit has
-  -- any applications (PREPAY_CREDIT_IN_USE) — so a credit can never be re-earmarked
-  -- after it has been applied, i.e. every application's credit.quote_id equals the
-  -- booking it was actually applied under. No reassignment-history drift possible.
+  -- Count only applications of credits EARMARKED to this booking (join through
+  -- prepay_credits.quote_id), not every application landing on this booking's
+  -- invoices. (0 while the engine is shelved.)
   SELECT COALESCE(SUM(pa.applied_amount_cents), 0)
     INTO v_prepay_applied_cents
     FROM prepay_applications pa

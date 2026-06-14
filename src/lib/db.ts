@@ -111,11 +111,9 @@ export const RpcErrorCodes = {
   INVALID_PRICE: 'INVALID_PRICE',
   ALREADY_PRICED: 'ALREADY_PRICED',
   ORDER_NOT_ACTIVE: 'ORDER_NOT_ACTIVE',
-  // booking prepay earmark / auto-apply (sell-side roadmap #6b)
-  PREPAY_CREDIT_NOT_FOUND: 'PREPAY_CREDIT_NOT_FOUND',
-  BOOKING_NOT_FOUND: 'BOOKING_NOT_FOUND',
-  PREPAY_BOOKING_CUSTOMER_MISMATCH: 'PREPAY_BOOKING_CUSTOMER_MISMATCH',
-  PREPAY_CREDIT_IN_USE: 'PREPAY_CREDIT_IN_USE',
+  // (booking-prepay earmark tokens PREPAY_CREDIT_NOT_FOUND / BOOKING_NOT_FOUND /
+  // PREPAY_BOOKING_CUSTOMER_MISMATCH / PREPAY_CREDIT_IN_USE removed 2026-06-14 — the
+  // earmark engine is shelved: docs/roadmap/shelved-earmark-engine/. They return with it.)
   // create_rebate_claim / transition_rebate_claim (audit #33)
   PROGRAM_REQUIRED: 'PROGRAM_REQUIRED',
   QUANTITY_INVALID: 'QUANTITY_INVALID',

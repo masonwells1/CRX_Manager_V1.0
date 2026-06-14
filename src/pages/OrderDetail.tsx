@@ -59,7 +59,6 @@ export default function OrderDetail() {
   const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
   const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
   const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
-  const applyBookingPrepayIdem = useIdempotencyKey('apply_booking_prepay', profile?.id || '');
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -123,8 +122,6 @@ export default function OrderDetail() {
   // #4 billing cockpit: post-all-drafts / consolidate-drafts actions.
   const [postingAll, setPostingAll] = useState(false);
   const [consolidating, setConsolidating] = useState(false);
-  // #6c-3: per-invoice "Apply booking prepay" (booking-draw orders only).
-  const [applyingPrepay, setApplyingPrepay] = useState<string | null>(null);
 
   const isAdmin = role === 'admin';
   // Draw-created orders (booking_draw) mirror their booking's draw ledger —
@@ -747,23 +744,35 @@ export default function OrderDetail() {
     if (drafts.length === 0) { toast('warning', 'No draft invoices to post.'); return; }
     setPostingAll(true);
     let posted = 0;
+    let alreadyPosted = 0;
     const errors: string[] = [];
-    // No per-invoice idempotency key: post_invoice's own status guard makes a
-    // re-post a no-op (draft→posted; a posted invoice cannot post again), and the
-    // postingAll loading state blocks double-clicks — the same pattern
-    // post_invoice_group uses (it calls post_invoice(..., NULL) in its loop).
+    // Codex round-6 P2: post_invoice's status guard is NOT a silent no-op — it RAISES
+    // on an already-posted invoice. So a lost response (post committed server-side, but
+    // the client got a network error) would make a retry report a false failure. Guard
+    // each post with a fresh status re-check: if a prior attempt already posted this
+    // invoice, skip it (count as done) instead of re-posting and raising. This makes
+    // the bulk action safely retryable on ambiguous network failures. The postingAll
+    // loading state still blocks concurrent double-clicks.
     for (const inv of drafts) {
       try {
+        const { data: cur, error: curErr } = await supabase
+          .from('invoices').select('status').eq('id', inv.id).single();
+        if (curErr) throw curErr;
+        if (cur && cur.status !== 'draft' && cur.status !== 'unposted') {
+          alreadyPosted++;            // a prior attempt already posted it — done, not an error
+          continue;
+        }
         // post_invoice RETURNS void → no result to assert. Use the canonical
-        // void-RPC pattern (.throwOnError(), no `=` capture) — Codex P1: a prior
-        // assertRpcResult here threw on every successful post (null data), so the
-        // loop reported failure even though invoices posted.
+        // void-RPC pattern (.throwOnError(), no `=` capture).
         await supabase.rpc('post_invoice', { p_invoice_id: inv.id }).throwOnError();
         posted++;
       } catch (err) {
         if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) errors.push(`${inv.invoice_number}: needs pricing first`);
         else errors.push(`${inv.invoice_number}: ${err instanceof Error ? err.message : 'failed to post'}`);
       }
+    }
+    if (alreadyPosted > 0 && posted === 0 && errors.length === 0) {
+      toast('info', `Already posted (${alreadyPosted}).`);
     }
     if (posted > 0) toast('success', `Posted ${posted} invoice(s).`);
     if (errors.length > 0) {
@@ -796,29 +805,8 @@ export default function OrderDetail() {
     }
   };
 
-  // #6c-3 booking cockpit: apply this booking's earmarked prepay to a posted draw
-  // invoice (Mechanism A, reversible). Server no-ops safely if nothing applies.
-  const handleApplyBookingPrepay = async (invoiceId: string) => {
-    if (!order || !profile) return;
-    setApplyingPrepay(invoiceId);
-    try {
-      const idem = applyBookingPrepayIdem.getKey();
-      const { data, error } = await supabase.rpc('apply_booking_prepay', { p_invoice_id: invoiceId, p_performed_by: profile.id, p_idempotency_key: idem });
-      if (error) throw error;
-      const result = assertRpcResult<{ success: boolean; applied_cents?: number; applied_count?: number; no_op?: boolean; reason?: string }>(data, 'apply_booking_prepay');
-      applyBookingPrepayIdem.resetKey();
-      if (result.no_op) toast('info', `No booking prepay applied${result.reason ? ` (${result.reason.replace(/_/g, ' ')})` : ''}.`);
-      else if ((result.applied_cents ?? 0) > 0) toast('success', `Applied ${fmt((result.applied_cents ?? 0) / 100)} booking prepay across ${result.applied_count ?? 0} credit(s).`);
-      else toast('info', 'No earmarked booking prepay available to apply.');
-      await fetchOrder();
-    } catch (err) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'apply_booking_prepay' } });
-      if (hasRpcCode(err, RpcErrorCodes.INSUFFICIENT_ROLE)) toast('error', 'Only admin or sales can apply booking prepay.');
-      else toast('error', err instanceof Error ? err.message : 'Failed to apply booking prepay.');
-    } finally {
-      setApplyingPrepay(null);
-    }
-  };
+  // (booking-prepay "Apply booking prepay" action removed 2026-06-14 — the earmark
+  // engine is shelved for a reserved-pool redesign: docs/roadmap/shelved-earmark-engine/)
 
   // Codex round-5 P2: reset the price_order idempotency key whenever the normalized
   // pricing payload (order id + the {item:price} pairs) changes, but keep it stable
@@ -1297,9 +1285,6 @@ export default function OrderDetail() {
                   <th className="px-4 py-2 text-right font-medium text-secondary">Total</th>
                   <th className="px-4 py-2 text-right font-medium text-secondary">Paid</th>
                   <th className="px-4 py-2 text-right font-medium text-secondary">Balance</th>
-                  {order?.booking_draw && (role === 'admin' || role === 'sales_rep') && (
-                    <th className="px-4 py-2 text-right font-medium text-secondary">Prepay</th>
-                  )}
                 </tr>
               </thead>
               <tbody>
@@ -1328,21 +1313,6 @@ export default function OrderDetail() {
                     <td className={`px-4 py-2 text-right font-mono font-semibold ${inv.balance_cents > 0 ? 'text-red-600' : 'text-crx-green'}`}>
                       {fmt(inv.balance_cents / 100)}
                     </td>
-                    {order?.booking_draw && (role === 'admin' || role === 'sales_rep') && (
-                      <td className="px-4 py-2 text-right">
-                        {['posted', 'overdue'].includes(inv.status) && inv.balance_cents > 0 && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            showChevron={false}
-                            loading={applyingPrepay === inv.id}
-                            onClick={() => handleApplyBookingPrepay(inv.id)}
-                          >
-                            Apply booking prepay
-                          </Button>
-                        )}
-                      </td>
-                    )}
                   </tr>
                 ))}
               </tbody>

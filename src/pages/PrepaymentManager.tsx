@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, X, ChevronDown, ChevronUp, Pencil, Trash2, Link2 } from 'lucide-react';
+import { DollarSign, Zap, RefreshCw, Plus, ArrowRight, X, ChevronDown, ChevronUp, Pencil, Trash2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -14,7 +14,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
+import { supabase, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { exportToCSV, fmtCSV } from '../lib/csvExport';
 import { runCriticalAction } from '../lib/criticalAction';
@@ -43,8 +43,6 @@ interface PrepayCredit {
   payment_method: string | null;
   source_type: string | null;
   created_at: string;
-  quote_id: string | null; // roadmap #6: booking this credit is earmarked to
-  quote?: { quote_number: string } | null;
 }
 
 interface BucketSplit {
@@ -71,7 +69,6 @@ export default function PrepaymentManager() {
   // single-entity intents per click.
   const editKeysRef = useRef<Map<string, string>>(new Map());
   const deleteKeysRef = useRef<Map<string, string>>(new Map());
-  const bookingKeysRef = useRef<Map<string, string>>(new Map());
   const getScopedKey = useCallback((map: Map<string, string>, operation: string, creditId: string): string => {
     let key = map.get(creditId);
     if (!key) {
@@ -107,12 +104,8 @@ export default function PrepaymentManager() {
   const [deleteReason, setDeleteReason] = useState('');
   const [savingDelete, setSavingDelete] = useState(false);
 
-  // Assign-to-booking modal (roadmap #6c-2)
-  const [bookingCredit, setBookingCredit] = useState<PrepayCredit | null>(null);
-  const [bookingOptions, setBookingOptions] = useState<{ id: string; quote_number: string; status: string }[]>([]);
-  const [selectedBookingId, setSelectedBookingId] = useState<string>('');
-  const [loadingBookings, setLoadingBookings] = useState(false);
-  const [savingBooking, setSavingBooking] = useState(false);
+  // (Assign-to-booking earmark modal removed 2026-06-14 — earmark engine shelved:
+  // docs/roadmap/shelved-earmark-engine/)
 
   // Split Check modal state
   const [showNewCheck, setShowNewCheck] = useState(false);
@@ -173,16 +166,13 @@ export default function PrepaymentManager() {
     setLoadingCredits(true);
     const { data, error } = await supabase
       .from('prepay_credits')
-      .select('id, customer_id, original_amount_cents, balance_cents, reference_number, bucket_label, notes, payment_method, source_type, created_at, quote_id, quote:quotes(quote_number)')
+      .select('id, customer_id, original_amount_cents, balance_cents, reference_number, bucket_label, notes, payment_method, source_type, created_at')
       .eq('customer_id', customerId)
       .order('created_at', { ascending: false });
     if (error) {
       toast('error', 'Failed to load credits');
     } else {
-      // Supabase types a to-one FK embed (quote:quotes(...)) as an array, but at
-      // runtime PostgREST returns a single object/null for a many-to-one — hence
-      // the unknown cast to our object-shaped quote field.
-      setCustomerCredits((data || []) as unknown as PrepayCredit[]);
+      setCustomerCredits((data || []) as PrepayCredit[]);
     }
     setLoadingCredits(false);
   }, [toast]);
@@ -283,68 +273,8 @@ export default function PrepaymentManager() {
     });
   };
 
-  // Assign-to-booking (roadmap #6c-2): earmark a prepay credit to one of the
-  // customer's OPEN bookings (sent/revised quotes), or clear it.
-  const openBooking = async (credit: PrepayCredit) => {
-    setBookingCredit(credit);
-    setSelectedBookingId(credit.quote_id || '');
-    setBookingOptions([]);
-    setLoadingBookings(true);
-    const { data, error } = await supabase
-      .from('quotes')
-      .select('id, quote_number, status')
-      .eq('customer_id', credit.customer_id)
-      .in('status', ['sent', 'revised'])
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false });
-    if (error) {
-      toast('error', "Failed to load the customer's open bookings");
-    } else {
-      setBookingOptions((data || []) as { id: string; quote_number: string; status: string }[]);
-    }
-    setLoadingBookings(false);
-  };
-
-  const handleSaveBooking = async () => {
-    if (!bookingCredit) return;
-    const credit = bookingCredit;
-    // Codex P2: scope the idem key to BOTH the credit AND the selected target —
-    // keyed by credit.id alone, a lost response + changing the target + retry would
-    // replay the prior assignment's cached success against the new target.
-    const keyScope = `${credit.id}:${selectedBookingId || 'none'}`;
-    await runCriticalAction({
-      action: async () => {
-        const bookingKey = getScopedKey(bookingKeysRef.current, 'set_prepay_credit_booking', keyScope);
-        const { data, error } = await supabase.rpc('set_prepay_credit_booking', {
-          p_credit_id: credit.id,
-          p_quote_id: selectedBookingId || null,
-          p_performed_by: profile?.id,
-          p_idempotency_key: bookingKey,
-        });
-        if (error) {
-          if (hasRpcCode(error, RpcErrorCodes.PREPAY_BOOKING_CUSTOMER_MISMATCH)) throw new Error('That booking belongs to a different customer.');
-          if (hasRpcCode(error, RpcErrorCodes.BOOKING_NOT_FOUND)) throw new Error('That booking no longer exists.');
-          if (hasRpcCode(error, RpcErrorCodes.BOOKING_CLOSED)) throw new Error('That booking is closed — only an open (sent/revised) booking can hold prepay.');
-          if (hasRpcCode(error, RpcErrorCodes.PREPAY_CREDIT_IN_USE)) throw new Error('This credit has already been applied to invoices, so its booking can no longer be changed. Use a fresh prepay credit for a different booking.');
-          if (hasRpcCode(error, RpcErrorCodes.INSUFFICIENT_ROLE)) throw new Error('Only an admin can assign prepay to a booking.');
-          throw error;
-        }
-        const result = assertRpcResult<{ success: boolean }>(data, 'set_prepay_credit_booking');
-        if (!result?.success) throw new Error('Assignment failed');
-        resetScopedKey(bookingKeysRef.current, keyScope);
-      },
-      toast,
-      setLoading: setSavingBooking,
-      successMessage: selectedBookingId
-        ? `Earmarked credit ${credit.reference_number || credit.id.slice(0, 8)} to a booking`
-        : `Removed credit ${credit.reference_number || credit.id.slice(0, 8)} from its booking`,
-      sentryTag: 'set_prepay_credit_booking',
-      onSuccess: () => {
-        setBookingCredit(null);
-        fetchCredits(credit.customer_id);
-      },
-    });
-  };
+  // (openBooking / handleSaveBooking earmark handlers removed 2026-06-14 — the
+  // booking-prepay earmark engine is shelved: docs/roadmap/shelved-earmark-engine/)
 
   // Fetch bucket labels + all customers for the New Check modal
   useEffect(() => {
@@ -745,8 +675,7 @@ export default function PrepaymentManager() {
                           <td className="py-2 px-3">
                             <div className="flex flex-wrap items-center gap-1">
                               {cr.bucket_label && <Badge variant="default">{cr.bucket_label}</Badge>}
-                              {cr.quote_id && <Badge variant="success">{cr.quote?.quote_number || 'Booking'}</Badge>}
-                              {!cr.bucket_label && !cr.quote_id && '—'}
+                              {!cr.bucket_label && '—'}
                             </div>
                           </td>
                           <td className="py-2 px-3 text-right">{fmt(cr.original_amount_cents)}</td>
@@ -764,13 +693,6 @@ export default function PrepaymentManager() {
                                   title="Edit credit"
                                 >
                                   <Pencil className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => openBooking(cr)}
-                                  className="p-1.5 text-crx-green hover:bg-green-50 rounded-lg transition-colors"
-                                  title={cr.quote_id ? 'Change / remove booking' : 'Assign to booking'}
-                                >
-                                  <Link2 className="w-3.5 h-3.5" />
                                 </button>
                                 {cr.balance_cents > 0 && (
                                   <button
@@ -895,58 +817,8 @@ export default function PrepaymentManager() {
         )}
       </Modal>
 
-      {/* Assign to Booking (roadmap #6c-2) */}
-      <Modal open={!!bookingCredit} onClose={() => setBookingCredit(null)} title="Assign Prepay to Booking">
-        {bookingCredit && (
-          <div className="space-y-4">
-            <p className="text-sm text-secondary">
-              Earmark credit{' '}
-              <span className="font-medium text-nav-dark">{bookingCredit.reference_number || bookingCredit.id.slice(0, 8)}</span>{' '}
-              ({fmt(bookingCredit.balance_cents)} remaining) to one of this customer's open bookings, so its prepay auto-applies when that booking is drawn and invoiced.
-            </p>
-            {loadingBookings ? (
-              <p className="text-sm text-secondary">Loading bookings…</p>
-            ) : (
-              <div>
-                {/* Codex P2: always render the select (with the "remove earmark"
-                    option) so a stale earmark to a now-closed booking can still be
-                    cleared even when the customer has no other open bookings. */}
-                {bookingOptions.length === 0 && (
-                  <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-2">
-                    This customer has no open bookings (sent or revised quotes).{bookingCredit.quote_id ? ' You can still remove the current earmark below.' : ' Nothing to assign.'}
-                  </p>
-                )}
-                <label className="block text-sm font-medium text-nav-dark mb-1">Booking</label>
-                <select
-                  value={selectedBookingId}
-                  onChange={(e) => setSelectedBookingId(e.target.value)}
-                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                >
-                  <option value="">— No booking (remove earmark) —</option>
-                  {/* show the current earmark even if its booking has since closed */}
-                  {bookingCredit.quote_id && !bookingOptions.some((b) => b.id === bookingCredit.quote_id) && (
-                    <option value={bookingCredit.quote_id}>Current booking (closed)</option>
-                  )}
-                  {bookingOptions.map((b) => (
-                    <option key={b.id} value={b.id}>{b.quote_number} ({b.status})</option>
-                  ))}
-                </select>
-              </div>
-            )}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="secondary" showChevron={false} onClick={() => setBookingCredit(null)}>Cancel</Button>
-              <Button
-                showChevron={false}
-                onClick={handleSaveBooking}
-                loading={savingBooking}
-                disabled={loadingBookings || selectedBookingId === (bookingCredit.quote_id || '')}
-              >
-                Save
-              </Button>
-            </div>
-          </div>
-        )}
-      </Modal>
+      {/* (Assign-to-Booking earmark modal removed 2026-06-14 — earmark engine shelved
+          for a reserved-pool redesign: docs/roadmap/shelved-earmark-engine/) */}
 
       {/* Batch Apply All Confirmation */}
       <Modal open={showBatchConfirm} onClose={() => setShowBatchConfirm(false)} title="Apply All Prepayments">
