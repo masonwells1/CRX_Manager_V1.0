@@ -123,10 +123,15 @@ export default function FieldStop() {
       return;
     }
 
-    const { data: itemData } = await supabase
+    const { data: itemData, error: itemErr } = await supabase
       .from('delivery_items')
       .select('id, quantity, product_id, product:products(product_name)')
       .eq('delivery_id', id);
+    if (itemErr) {
+      // Don't let a failed items query masquerade as "No items on this delivery".
+      Sentry.captureException(itemErr, { tags: { source: 'fetch', page: 'field-stop-items' } });
+      toast('error', 'Could not load delivery items — refresh before completing');
+    }
     const loaded = ((itemData || []) as unknown as StopItem[]);
     setItems(loaded);
     const initQtys: Record<string, number> = {};
@@ -150,6 +155,19 @@ export default function FieldStop() {
 
   useEffect(() => { fetchStop(); }, [fetchStop]);
 
+  // After a successful Arrive, re-read deliveries.updated_at so an offline
+  // completion snapshots the POST-arrive value. confirm_delivery bumps
+  // updated_at; without this refresh, offlineSync would flag the driver's OWN
+  // Arrive as a conflicting external edit and silently drop the queued
+  // completion on reconnect.
+  const syncAfterArrive = async () => {
+    const { data: refreshed } = await supabase
+      .from('deliveries').select('updated_at').eq('id', id!).maybeSingle();
+    const ua = (refreshed as { updated_at?: string | null } | null)?.updated_at ?? null;
+    setDelivery((prev) => (prev ? { ...prev, status: 'in_progress', updated_at: ua ?? prev.updated_at } : prev));
+    setStep('verify');
+  };
+
   // ── Arrive (confirm_delivery: scheduled → in_progress) ──────────────────
   const handleArrive = async () => {
     if (!delivery || !profile || !id) return;
@@ -168,13 +186,12 @@ export default function FieldStop() {
       if (error) throw error;
       assertRpcResult(data, 'confirm_delivery');
       confirmIdem.resetKey();
-      setDelivery({ ...delivery, status: 'in_progress' });
-      setStep('verify');
       toast('success', 'Delivery started');
+      await syncAfterArrive();
     } catch (err: unknown) {
       const msg = sanitizeError(err);
-      // Stale screen: stop was already started elsewhere — sync local status and resume at Verify.
-      if (/in_progress|already/i.test(msg)) { setDelivery({ ...delivery, status: 'in_progress' }); setStep('verify'); }
+      // Stale screen: stop was already started elsewhere — re-read + resume at Verify.
+      if (/in_progress|already/i.test(msg)) await syncAfterArrive();
       else toast('error', msg);
     }
     setConfirming(false);
@@ -306,6 +323,12 @@ export default function FieldStop() {
           if (!uploadError) {
             const sigResult = await supabase.from('deliveries').update({ signature_url: filePath }).eq('id', id).select();
             checkMutationResult(sigResult, 'Update delivery signature');
+          } else {
+            // Supabase Storage reports failures via the RETURNED error (not a throw),
+            // so surface it explicitly — otherwise the signature image is silently
+            // lost after the delivery has already committed.
+            Sentry.captureException(new Error(`Signature upload failed: ${uploadError.message}`), { extra: { context: 'Field Mode signature upload returned error' } });
+            toast('error', 'Signature image could not be saved — the delivery is recorded; re-capture the signature if needed');
           }
         } catch (sigErr) {
           Sentry.captureException(sigErr instanceof Error ? sigErr : new Error(String(sigErr)), { extra: { context: 'Field Mode signature upload failed' } });
@@ -444,7 +467,17 @@ export default function FieldStop() {
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <button type="button" aria-label="Decrease quantity" onClick={() => updateQty(it.id, delivered - 1, it.quantity)} className="w-9 h-9 rounded-lg border border-gray-300 flex items-center justify-center active:scale-95"><Minus className="w-4 h-4" /></button>
-                      <span className="w-8 text-center font-semibold tabular-nums">{delivered}</span>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="any"
+                        min={0}
+                        max={it.quantity}
+                        value={delivered}
+                        onChange={(e) => updateQty(it.id, parseFloat(e.target.value) || 0, it.quantity)}
+                        aria-label={`Delivered quantity for ${it.product?.product_name || 'item'}`}
+                        className="w-16 text-center font-semibold tabular-nums border border-gray-300 rounded-lg py-1.5"
+                      />
                       <button type="button" aria-label="Increase quantity" onClick={() => updateQty(it.id, delivered + 1, it.quantity)} className="w-9 h-9 rounded-lg border border-gray-300 flex items-center justify-center active:scale-95"><Plus className="w-4 h-4" /></button>
                     </div>
                   </div>
@@ -527,7 +560,7 @@ export default function FieldStop() {
 
           {!isOnline && (
             <div className="bg-amber-50 text-amber-800 text-xs rounded-lg px-3 py-2 mb-4">
-              You're offline — this saves and syncs when you reconnect. The signature image and any photos will not be saved until you're back online.
+              You're offline — the delivery saves now and the completion syncs when you reconnect. The signature image, photos, customer receipt, and notifications are <strong>not sent for an offline completion</strong>. Complete online if the customer needs a receipt.
             </div>
           )}
 

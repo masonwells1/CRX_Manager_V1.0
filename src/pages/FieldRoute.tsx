@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Truck, Wifi, WifiOff, ChevronRight, RefreshCw, PackageCheck } from 'lucide-react';
+import { Truck, Wifi, WifiOff, ChevronRight, RefreshCw, PackageCheck, AlertTriangle } from 'lucide-react';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import { supabase } from '../lib/db';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
@@ -51,10 +51,12 @@ export default function FieldRoute() {
 
   const [stops, setStops] = useState<StopRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
 
   const fetchStops = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     // No app-side filter: del_select RLS scopes a driver to their assigned rows
     // (admins/reps see all). Ordering: in_progress first, then date.
     const { data, error } = await supabase
@@ -68,6 +70,7 @@ export default function FieldRoute() {
     if (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-route' } });
       setStops([]);
+      setLoadError(true);
       setLoading(false);
       return;
     }
@@ -132,6 +135,18 @@ export default function FieldRoute() {
             <div key={i} className="h-20 rounded-xl bg-gray-100 animate-pulse" />
           ))}
         </div>
+      ) : loadError ? (
+        <div className="text-center py-12">
+          <AlertTriangle className="w-10 h-10 text-amber-400 mx-auto mb-3" />
+          <p className="text-gray-700 font-medium">Couldn't load your stops</p>
+          <button
+            type="button"
+            onClick={fetchStops}
+            className="mt-3 text-sm text-crx-green font-medium underline"
+          >
+            Try again
+          </button>
+        </div>
       ) : stops.length === 0 ? (
         <div className="text-center py-12">
           <Truck className="w-10 h-10 text-gray-300 mx-auto mb-3" />
@@ -160,7 +175,7 @@ export default function FieldRoute() {
                       <span className="font-semibold text-gray-900 truncate">
                         {stop.customer?.farm_name || 'Unknown customer'}
                       </span>
-                      <Badge variant={statusToBadgeVariant(stop.status)}>
+                      <Badge variant={statusToBadgeVariant[stop.status] || 'default'}>
                         {stop.status === 'in_progress' ? 'In progress' : 'Not started'}
                       </Badge>
                     </div>
