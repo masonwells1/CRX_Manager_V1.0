@@ -481,6 +481,7 @@ export default function ARaging() {
 
         let sent = 0;
         let skipped = 0;
+        let failed = 0;
 
         for (const cust of candidates) {
           const reminderLevel = cust.max_days_past_due >= 90 ? 90 : cust.max_days_past_due >= 60 ? 60 : 30;
@@ -553,25 +554,46 @@ export default function ARaging() {
             });
 
             if (emailResult.success) {
-              // Track in ar_reminder_tracking for dedup
-              const trackResult = await supabase.from('ar_reminder_tracking').insert({
-                customer_id: cust.customer_id,
-                reminder_level: reminderLevel,
-                sent_date: localToday(),
-                email_log_id: emailResult.email_log_id || null,
-              }).select();
-              if (trackResult.error) Sentry.captureException(trackResult.error, { tags: { source: 'mutation', action: 'ar_reminder_tracking_insert' } });
-              checkMutationResult(trackResult, 'Insert AR reminder tracking');
-              sent++;
+              // The edge function dedupes via idempotency key — a replay means no
+              // new email went out, so count it as skipped, not sent (but still
+              // backfill the tracking row below so the pre-check works next run).
+              if (emailResult.deduplicated) {
+                skipped++;
+              } else {
+                // A genuine send happened — count it even if dedup tracking fails below.
+                sent++;
+              }
+              // Track in ar_reminder_tracking for dedup. A tracking failure must NOT
+              // recount the customer as skipped/failed (the email went out) — but it
+              // does mean tomorrow's run may re-send, so capture it loudly.
+              try {
+                const trackResult = await supabase.from('ar_reminder_tracking').insert({
+                  customer_id: cust.customer_id,
+                  reminder_level: reminderLevel,
+                  sent_date: localToday(),
+                  email_log_id: emailResult.email_log_id || null,
+                }).select();
+                checkMutationResult(trackResult, 'Insert AR reminder tracking');
+              } catch (trackErr) {
+                Sentry.captureException(trackErr, { tags: { source: 'mutation', action: 'ar_reminder_tracking_insert' } });
+              }
+            } else {
+              failed++;
+              Sentry.captureMessage(`AR reminder send returned failure for customer ${cust.customer_id}`, { level: 'error', tags: { action: 'send_ar_reminders' } });
             }
-          } catch {
-            // Skip individual failures, continue with next
-            skipped++;
+          } catch (sendErr) {
+            // A real send failure is NOT a dedup skip — count and report it distinctly.
+            failed++;
+            Sentry.captureException(sendErr, { tags: { action: 'send_ar_reminders' } });
           }
         }
 
-        logActivity({ event: 'ar_reminders_sent', description: `Sent ${sent} AR reminder(s) to overdue customers (${skipped} skipped/deduped)`, performedBy: profile.id, entityType: 'system' });
-        toast('success', `Sent ${sent} AR reminder(s)${skipped > 0 ? `, ${skipped} skipped (already sent today)` : ''}`);
+        logActivity({ event: 'ar_reminders_sent', description: `Sent ${sent} AR reminder(s) to overdue customers (${skipped} skipped/deduped, ${failed} failed)`, performedBy: profile.id, entityType: 'system' });
+        if (failed > 0) {
+          toast('error', `Sent ${sent} AR reminder(s) — ${failed} FAILED to send${skipped > 0 ? `, ${skipped} skipped (already sent today)` : ''}`);
+        } else {
+          toast('success', `Sent ${sent} AR reminder(s)${skipped > 0 ? `, ${skipped} skipped (already sent today)` : ''}`);
+        }
       },
       toast,
       setLoading: setSendingReminders,
@@ -586,6 +608,8 @@ export default function ARaging() {
       action: async () => {
         let sent = 0;
         let noEmail = 0;
+        let emailFailed = 0;
+        let statementsDeduped = 0;
 
         for (const custId of selectedCustomers) {
           const { data, error } = await supabase.rpc('get_detailed_statement_data', {
@@ -658,16 +682,33 @@ export default function ARaging() {
                 content: base64,
               }],
             });
-            if (emailResult.success) sent++;
-          } catch {
-            // Skip individual failures
+            if (emailResult.success) {
+              // Idempotency replay = no new email — don't inflate the sent count.
+              if (emailResult.deduplicated) {
+                statementsDeduped++;
+              } else {
+                sent++;
+              }
+            } else {
+              emailFailed++;
+              Sentry.captureMessage(`Statement email send returned failure for customer ${custId}`, { level: 'error', tags: { action: 'email_batch_statements' } });
+            }
+          } catch (sendErr) {
+            // A failed statement email must be counted and reported — a customer
+            // who never received their statement was previously undetectable.
+            emailFailed++;
+            Sentry.captureException(sendErr, { tags: { action: 'email_batch_statements', customer_id: custId } });
           }
         }
 
         if (profile) {
-          logActivity({ event: 'batch_statements_emailed', description: `Emailed ${sent} statement(s)${noEmail > 0 ? ` (${noEmail} had no email)` : ''}`, performedBy: profile.id, entityType: 'system' });
+          logActivity({ event: 'batch_statements_emailed', description: `Emailed ${sent} statement(s)${statementsDeduped > 0 ? ` (${statementsDeduped} already sent — deduped)` : ''}${noEmail > 0 ? ` (${noEmail} had no email)` : ''}${emailFailed > 0 ? ` (${emailFailed} FAILED)` : ''}`, performedBy: profile.id, entityType: 'system' });
         }
-        toast('success', `Emailed ${sent} statement(s)${noEmail > 0 ? ` — ${noEmail} customer(s) had no email on file` : ''}`);
+        if (emailFailed > 0) {
+          toast('error', `Emailed ${sent} statement(s) — ${emailFailed} FAILED to send${statementsDeduped > 0 ? `, ${statementsDeduped} already sent` : ''}${noEmail > 0 ? `, ${noEmail} had no email on file` : ''}`);
+        } else {
+          toast('success', `Emailed ${sent} statement(s)${statementsDeduped > 0 ? ` — ${statementsDeduped} already sent (deduped)` : ''}${noEmail > 0 ? ` — ${noEmail} customer(s) had no email on file` : ''}`);
+        }
       },
       toast,
       setLoading: setEmailingStatements,

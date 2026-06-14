@@ -1,0 +1,2517 @@
+{
+  "_meta": {
+    "generated_at": "2026-06-13T18:52:06.647Z",
+    "generator": "node scripts/generate-caller-graph.mjs",
+    "purpose": "C5 control — caller graph consumed by .claude/hooks/grant-change-guard.mjs to force per-function caller analysis on GRANT/REVOKE migrations (B10) and branch-accurate Edge guards (B8).",
+    "scanned_dirs": [
+      "src/",
+      "supabase/functions/"
+    ],
+    "excluded": [
+      "*.test.*",
+      "*.spec.*",
+      "__tests__/",
+      "__mocks__/",
+      "node_modules/"
+    ],
+    "files_scanned": 230,
+    "live_queried_at": "2026-06-10T18:57:18.713Z",
+    "live_data_reused": true,
+    "counts": {
+      "rpc_functions_called": 161,
+      "rpc_callsites": 205,
+      "edge_caller_keys": 5,
+      "edge_action_branch_keys": 1,
+      "edge_callsites": 7,
+      "cron_jobs": 3,
+      "cron_functions_called": 3,
+      "secdef_executable_functions": 213,
+      "zero_caller_authenticated": 62,
+      "dynamic_rpc_warnings": 0
+    }
+  },
+  "rpc_callers": {
+    "adjust_inventory": [
+      "src/components/inventory/BatchAdjustModal.tsx:92",
+      "src/pages/InventoryPage.tsx:588"
+    ],
+    "admin_update_profile": [
+      "src/pages/SettingsPage.tsx:337"
+    ],
+    "allocate_payment": [
+      "src/lib/offlineSync.ts:149",
+      "src/pages/InvoiceDetail.tsx:613",
+      "src/pages/PaymentAllocation.tsx:272"
+    ],
+    "apply_remaining_prepayments": [
+      "src/pages/PrepaymentManager.tsx:382"
+    ],
+    "apply_write_off": [
+      "src/components/invoices/WriteOffModal.tsx:66"
+    ],
+    "approve_return": [
+      "src/pages/Returns.tsx:296"
+    ],
+    "assign_job_applicator": [
+      "src/pages/DispatchBoard.tsx:155",
+      "src/pages/JobDetail.tsx:499"
+    ],
+    "batch_apply_all_prepayments": [
+      "src/pages/PrepaymentManager.tsx:418"
+    ],
+    "batch_apply_prepayments": [
+      "src/pages/PrepayWorkspace.tsx:196"
+    ],
+    "batch_approve_blend_tickets": [
+      "src/pages/BlendTickets.tsx:251"
+    ],
+    "batch_cancel_deliveries": [
+      "src/pages/Deliveries.tsx:461"
+    ],
+    "batch_post_invoices": [
+      "src/pages/Invoices.tsx:191"
+    ],
+    "batch_reject_blend_tickets": [
+      "src/pages/BlendTickets.tsx:282"
+    ],
+    "batch_reschedule_deliveries": [
+      "src/pages/Deliveries.tsx:614"
+    ],
+    "batch_void_invoices": [
+      "src/pages/Invoices.tsx:221"
+    ],
+    "bulk_import_order": [
+      "src/components/orders/BulkOrderImport.tsx:377"
+    ],
+    "cancel_cycle_count": [
+      "src/pages/CycleCounts.tsx:340"
+    ],
+    "cancel_delivery": [
+      "src/lib/offlineSync.ts:173",
+      "src/pages/DeliveryDetail.tsx:535"
+    ],
+    "cancel_order": [
+      "src/lib/offlineSync.ts:179",
+      "src/pages/OrderDetail.tsx:498"
+    ],
+    "cancel_purchase_order": [
+      "src/pages/PurchaseOrderDetail.tsx:512",
+      "src/pages/PurchaseOrders.tsx:414"
+    ],
+    "cancel_return": [
+      "src/pages/Returns.tsx:355"
+    ],
+    "check_customer_credit_limit": [
+      "src/pages/NewOrder.tsx:405",
+      "src/pages/QuoteBuilder.tsx:1456"
+    ],
+    "check_duplicate_blend_ticket": [
+      "src/pages/BlendTicketDetail.tsx:245"
+    ],
+    "check_remainder_reminders": [
+      "src/pages/Dashboard.tsx:331"
+    ],
+    "close_accounting_period": [
+      "src/pages/MonthEndClose.tsx:171"
+    ],
+    "complete_cycle_count": [
+      "src/pages/CycleCounts.tsx:305"
+    ],
+    "complete_delivery": [
+      "src/lib/offlineSync.ts:143",
+      "src/pages/DeliveryDetail.tsx:780"
+    ],
+    "complete_job": [
+      "src/lib/offlineSync.ts:167",
+      "src/pages/JobDetail.tsx:643"
+    ],
+    "confirm_delivery": [
+      "src/lib/offlineSync.ts:185",
+      "src/pages/DeliveryDetail.tsx:711"
+    ],
+    "convert_quote_to_order": [
+      "src/pages/QuoteBuilder.tsx:1427"
+    ],
+    "create_application_record_from_blend_ticket": [
+      "src/pages/BlendTicketDetail.tsx:681"
+    ],
+    "create_commission_payment": [
+      "src/pages/CommissionPayments.tsx:224",
+      "src/pages/Reports.tsx:468"
+    ],
+    "create_delivery_with_items": [
+      "src/pages/NewDelivery.tsx:391"
+    ],
+    "create_direct_order": [
+      "src/pages/NewOrder.tsx:366"
+    ],
+    "create_followup_delivery": [
+      "src/pages/DeliveryDetail.tsx:687",
+      "src/pages/DeliveryRemainders.tsx:112"
+    ],
+    "create_inventory_hold": [
+      "src/pages/InventoryPage.tsx:345"
+    ],
+    "create_invoice_for_unbilled_delivery": [
+      "src/pages/IntegrityCleanup.tsx:316"
+    ],
+    "create_invoice_from_blend_ticket": [
+      "src/pages/BlendTicketDetail.tsx:608"
+    ],
+    "create_invoice_from_order": [
+      "src/pages/OrderDetail.tsx:680"
+    ],
+    "create_job_from_quote_section": [
+      "src/pages/QuoteBuilder.tsx:1217"
+    ],
+    "create_order_from_blend_ticket": [
+      "src/pages/BlendTicketDetail.tsx:644"
+    ],
+    "create_planned_holds": [
+      "src/pages/QuoteBuilder.tsx:915"
+    ],
+    "create_prepay_check_splits": [
+      "src/pages/PrepaymentManager.tsx:337"
+    ],
+    "create_quick_delivery": [
+      "src/components/deliveries/QuickDeliveryModal.tsx:232"
+    ],
+    "create_quote_from_template": [
+      "src/pages/QuoteBuilder.tsx:969"
+    ],
+    "create_quote_version": [
+      "src/pages/QuoteBuilder.tsx:1129"
+    ],
+    "create_rebate_claim": [
+      "src/pages/Rebates.tsx:297"
+    ],
+    "create_vendor_bill": [
+      "src/pages/NewVendorBill.tsx:146"
+    ],
+    "delete_prepay_credit": [
+      "src/pages/PrepaymentManager.tsx:250"
+    ],
+    "delete_vendor": [
+      "src/pages/Vendors.tsx:152"
+    ],
+    "derive_customer_shares_from_fields": [
+      "src/pages/FieldApplicationInvoice.tsx:252"
+    ],
+    "draw_down_quote": [
+      "src/pages/QuoteBuilder.tsx:1306"
+    ],
+    "duplicate_quote": [
+      "src/pages/CustomerDetail.tsx:978",
+      "src/pages/Quotes.tsx:50"
+    ],
+    "edit_delivery": [
+      "src/pages/DeliveryDetail.tsx:502"
+    ],
+    "edit_prepay_credit": [
+      "src/pages/PrepaymentManager.tsx:209"
+    ],
+    "financial_dashboard_summary": [
+      "src/components/dashboard/DailyBrief.tsx:48",
+      "src/pages/FinancialDashboard.tsx:184"
+    ],
+    "generate_batch_statements": [
+      "src/pages/MonthEndClose.tsx:224"
+    ],
+    "generate_finance_charges": [
+      "src/components/invoices/FinanceChargePreviewModal.tsx:114"
+    ],
+    "generate_quote_number": [
+      "src/pages/QuoteBuilder.tsx:335"
+    ],
+    "generate_ticket_number": [
+      "src/components/blendtickets/BulkTicketUpload.tsx:118",
+      "src/components/blendtickets/ManualTicketCreate.tsx:159"
+    ],
+    "get_ap_aging": [
+      "src/pages/AccountsPayable.tsx:43"
+    ],
+    "get_ap_dashboard_summary": [
+      "src/pages/AccountsPayable.tsx:33"
+    ],
+    "get_ar_aging": [
+      "src/components/team/CustomerContextCard.tsx:44",
+      "src/pages/ARaging.tsx:90",
+      "src/pages/CustomerDetail.tsx:281"
+    ],
+    "get_ar_reminder_candidates": [
+      "src/pages/ARaging.tsx:463"
+    ],
+    "get_batch_year_end_summaries": [
+      "src/pages/MonthEndClose.tsx:270",
+      "src/pages/Reports.tsx:414"
+    ],
+    "get_bottom_line_pnl": [
+      "src/pages/Reports.tsx:253"
+    ],
+    "get_chemical_history": [
+      "src/pages/Reports.tsx:296"
+    ],
+    "get_commission_balance_report": [
+      "src/pages/Reports.tsx:278"
+    ],
+    "get_customer_balance_listing": [
+      "src/pages/Reports.tsx:271"
+    ],
+    "get_customer_farm_group": [
+      "src/pages/SalesReports.tsx:132"
+    ],
+    "get_customer_statement": [
+      "src/pages/ARaging.tsx:138",
+      "src/pages/ARaging.tsx:352",
+      "src/pages/CustomerDetail.tsx:287"
+    ],
+    "get_customer_summary": [
+      "src/components/customers/CustomerSummaryBar.tsx:44"
+    ],
+    "get_customer_transaction_review": [
+      "src/pages/CustomerTransactionReview.tsx:43"
+    ],
+    "get_customer_year_end_summary": [
+      "src/pages/CustomerDetail.tsx:533",
+      "src/pages/Reports.tsx:429"
+    ],
+    "get_dashboard_action_items": [
+      "src/components/dashboard/ActionQueue.tsx:143"
+    ],
+    "get_detailed_statement_data": [
+      "src/pages/ARaging.tsx:382",
+      "src/pages/ARaging.tsx:428",
+      "src/pages/ARaging.tsx:615"
+    ],
+    "get_field_dashboard": [
+      "src/pages/FieldDashboard.tsx:65"
+    ],
+    "get_field_geojson": [
+      "src/pages/FieldSetup.tsx:131",
+      "src/pages/JobDetail.tsx:434"
+    ],
+    "get_field_polygons": [
+      "src/pages/FieldSetup.tsx:163"
+    ],
+    "get_fields_with_geojson": [
+      "src/pages/CustomerDetail.tsx:178",
+      "src/pages/FieldDashboard.tsx:81",
+      "src/pages/Fields.tsx:61"
+    ],
+    "get_gross_sales_report": [
+      "src/pages/Reports.tsx:260"
+    ],
+    "get_inventory_cost_report": [
+      "src/pages/Reports.tsx:306"
+    ],
+    "get_inventory_forecast": [
+      "src/pages/InventoryPage.tsx:265"
+    ],
+    "get_inventory_position": [
+      "src/pages/InventoryPage.tsx:168"
+    ],
+    "get_logbook_by_applicator": [
+      "src/components/reports/LogbookReport.tsx:93"
+    ],
+    "get_logbook_by_customer": [
+      "src/components/reports/LogbookReport.tsx:86"
+    ],
+    "get_logbook_by_field": [
+      "src/components/reports/LogbookReport.tsx:100"
+    ],
+    "get_logbook_faa": [
+      "src/components/reports/LogbookReport.tsx:112"
+    ],
+    "get_monthly_summary": [
+      "src/pages/MonthEndClose.tsx:99"
+    ],
+    "get_notes_for_entity": [
+      "src/components/team/RelatedNotes.tsx:38"
+    ],
+    "get_program_completion": [
+      "src/pages/Dashboard.tsx:314",
+      "src/pages/ProgramTracker.tsx:53"
+    ],
+    "get_receiving_log": [
+      "src/pages/ReceivingLog.tsx:100"
+    ],
+    "get_receiving_summary": [
+      "src/pages/ReceivingLog.tsx:80"
+    ],
+    "get_rup_sales_register": [
+      "src/pages/Compliance.tsx:165"
+    ],
+    "get_sales_detail_report": [
+      "src/pages/SalesReports.tsx:162"
+    ],
+    "get_sales_summary_report": [
+      "src/pages/SalesReports.tsx:170"
+    ],
+    "get_season_comparison": [
+      "src/pages/ARaging.tsx:105"
+    ],
+    "get_team_board_deliveries": [
+      "src/components/team/TodaysDeliveries.tsx:104"
+    ],
+    "get_team_workload": [
+      "src/components/team/WorkloadView.tsx:47"
+    ],
+    "get_yesterday_delivery_recap": [
+      "src/components/team/YesterdayRecap.tsx:20"
+    ],
+    "global_search": [
+      "src/components/ui/CommandPalette.tsx:243"
+    ],
+    "issue_return_credit": [
+      "src/pages/Returns.tsx:417"
+    ],
+    "link_blend_ticket_to_order": [
+      "src/pages/BlendTicketDetail.tsx:1340",
+      "src/pages/BlendTicketDetail.tsx:559"
+    ],
+    "link_fields_to_parent": [
+      "src/pages/Fields.tsx:223"
+    ],
+    "load_recipe_into_job": [
+      "src/pages/JobDetail.tsx:717"
+    ],
+    "log_failed_notification": [
+      "src/lib/notificationTriggers.ts:37",
+      "src/pages/Dashboard.tsx:336",
+      "src/pages/Dashboard.tsx:348"
+    ],
+    "manual_inventory_add": [
+      "src/pages/InventoryPage.tsx:469"
+    ],
+    "mark_inventory_row_verified": [
+      "src/pages/IntegrityCleanup.tsx:281"
+    ],
+    "match_quick_receive_items": [
+      "src/lib/offlineSync.ts:191",
+      "src/pages/QuickReceive.tsx:191"
+    ],
+    "next_cycle_count_number": [
+      "src/pages/CycleCounts.tsx:155"
+    ],
+    "next_po_number": [
+      "src/components/purchase-orders/BulkPOImport.tsx:339",
+      "src/pages/NewPurchaseOrder.tsx:165"
+    ],
+    "next_return_number": [
+      "src/pages/Returns.tsx:222"
+    ],
+    "notify_damaged_receiving": [
+      "src/lib/notificationTriggers.ts:278"
+    ],
+    "operational_dashboard_summary": [
+      "src/pages/Dashboard.tsx:267"
+    ],
+    "post_commission_payment": [
+      "src/pages/CommissionPayments.tsx:262"
+    ],
+    "post_invoice": [
+      "src/pages/FieldApplicationInvoice.tsx:487",
+      "src/pages/InvoiceDetail.tsx:551"
+    ],
+    "post_invoice_group": [
+      "src/pages/FieldApplicationInvoice.tsx:478",
+      "src/pages/InvoiceDetail.tsx:542"
+    ],
+    "preview_field_app_invoice_split": [
+      "src/pages/FieldApplicationInvoice.tsx:328"
+    ],
+    "preview_finance_charges": [
+      "src/components/invoices/FinanceChargePreviewModal.tsx:50"
+    ],
+    "reassign_delivery": [
+      "src/pages/Deliveries.tsx:697",
+      "src/pages/DeliveryDetail.tsx:598"
+    ],
+    "receive_po_items": [
+      "src/lib/offlineSync.ts:155",
+      "src/pages/InventoryPage.tsx:556",
+      "src/pages/PurchaseOrderDetail.tsx:248",
+      "src/pages/QuickReceive.tsx:314"
+    ],
+    "receive_return": [
+      "src/pages/Returns.tsx:391"
+    ],
+    "reconcile_negative_inventory": [
+      "src/pages/IntegrityCleanup.tsx:256"
+    ],
+    "record_vendor_payment": [
+      "src/pages/VendorBillDetail.tsx:151"
+    ],
+    "release_expired_quote_holds": [
+      "src/pages/Dashboard.tsx:343"
+    ],
+    "release_inventory_hold": [
+      "src/pages/InventoryPage.tsx:437"
+    ],
+    "reopen_accounting_period": [
+      "src/pages/MonthEndClose.tsx:198"
+    ],
+    "restore_quote_version": [
+      "src/pages/QuoteBuilder.tsx:1181"
+    ],
+    "retire_inventory_item": [
+      "src/pages/InventoryPage.tsx:628"
+    ],
+    "reverse_completed_cycle_count": [
+      "src/pages/CycleCounts.tsx:373"
+    ],
+    "reverse_receiving_record": [
+      "src/pages/PurchaseOrderDetail.tsx:377",
+      "src/pages/ReceivingLog.tsx:190"
+    ],
+    "reverse_write_off": [
+      "src/pages/InvoiceDetail.tsx:653"
+    ],
+    "rollover_quote_to_season": [
+      "src/pages/QuoteBuilder.tsx:985"
+    ],
+    "save_blend_recipe": [
+      "src/pages/BlendRecipes.tsx:202"
+    ],
+    "save_blend_ticket": [
+      "src/pages/BlendTicketDetail.tsx:357"
+    ],
+    "save_blend_ticket_fields": [
+      "src/pages/BlendTicketDetail.tsx:434"
+    ],
+    "save_customer": [
+      "src/pages/CustomerDetail.tsx:483"
+    ],
+    "save_field": [
+      "src/components/fields/BulkFieldImport.tsx:346",
+      "src/pages/FieldSetup.tsx:320"
+    ],
+    "save_field_app_invoice": [
+      "src/pages/FieldApplicationInvoice.tsx:370"
+    ],
+    "save_field_geometry": [
+      "src/components/fields/BulkFieldImport.tsx:362",
+      "src/pages/FieldSetup.tsx:366"
+    ],
+    "save_field_polygons": [
+      "src/pages/FieldSetup.tsx:346"
+    ],
+    "save_invoice": [
+      "src/pages/InvoiceDetail.tsx:507"
+    ],
+    "save_job": [
+      "src/pages/JobDetail.tsx:552"
+    ],
+    "save_purchase_order": [
+      "src/pages/NewPurchaseOrder.tsx:191",
+      "src/pages/PurchaseOrderDetail.tsx:456"
+    ],
+    "save_quote": [
+      "src/pages/QuoteBuilder.tsx:873"
+    ],
+    "save_quote_template": [
+      "src/pages/QuoteBuilder.tsx:948"
+    ],
+    "save_vendor": [
+      "src/pages/Vendors.tsx:130"
+    ],
+    "start_job": [
+      "src/pages/JobDetail.tsx:621"
+    ],
+    "transfer_job_to_invoice": [
+      "src/pages/JobDetail.tsx:693"
+    ],
+    "transition_rebate_claim": [
+      "src/pages/Rebates.tsx:336"
+    ],
+    "unlink_blend_ticket_from_order": [
+      "src/pages/BlendTicketDetail.tsx:585"
+    ],
+    "update_cycle_count_item": [
+      "src/pages/CycleCounts.tsx:252"
+    ],
+    "update_order_items": [
+      "src/lib/offlineSync.ts:161",
+      "src/pages/OrderDetail.tsx:428"
+    ],
+    "update_vendor_bill": [
+      "src/pages/VendorBillDetail.tsx:211"
+    ],
+    "void_commission_payment": [
+      "src/pages/CommissionPayments.tsx:294"
+    ],
+    "void_delivery": [
+      "src/pages/DeliveryDetail.tsx:565"
+    ],
+    "void_invoice": [
+      "src/pages/InvoiceDetail.tsx:571"
+    ],
+    "void_order": [
+      "src/pages/OrderDetail.tsx:565"
+    ],
+    "void_payment": [
+      "src/pages/PaymentHistory.tsx:151"
+    ],
+    "void_vendor_bill": [
+      "src/pages/VendorBillDetail.tsx:272"
+    ],
+    "void_vendor_payment": [
+      "src/pages/VendorBillDetail.tsx:241"
+    ]
+  },
+  "edge_callers": {
+    "create-user": [
+      "src/pages/SettingsPage.tsx:261"
+    ],
+    "create-user?action=reset_password": [
+      "src/pages/SettingsPage.tsx:394"
+    ],
+    "process-blend-ticket": [
+      "src/components/blendtickets/BulkTicketUpload.tsx:204",
+      "src/hooks/useOCRProcessor.ts:60",
+      "src/pages/BlendTicketDetail.tsx:459"
+    ],
+    "process-document": [
+      "src/lib/documentOCR.ts:179"
+    ],
+    "send-email": [
+      "src/lib/emailService.ts:49"
+    ]
+  },
+  "cron_callers": {
+    "check_remainder_reminders": [
+      "cron.job \"check-remainder-reminders\" (schedule: 30 6 * * *, active: true)"
+    ],
+    "mark_overdue_invoices": [
+      "cron.job \"mark-overdue-invoices\" (schedule: 0 6 * * *, active: true)"
+    ],
+    "release_expired_quote_holds": [
+      "cron.job \"release-expired-quote-holds\" (schedule: 15 6 * * *, active: true)"
+    ]
+  },
+  "dynamic_rpc_warnings": [],
+  "zero_caller_authenticated": [
+    {
+      "name": "_check_credit_limit",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "_guard_inventory_transactions_immutable",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "_guard_prepay_applications_immutable",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "_guard_profile_role_lock",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "_prebook_quick_delivery_inventory",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "_receiving_records_before_delete",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "_recompute_prepay_credit_balance",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "_require_auth",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "apply_prepay_to_invoice",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "calculate_billing_splits",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "calculate_prices_from_margin",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "check_duplicate_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "check_period_open",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "compute_application_service_fee",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "create_invoice_from_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "create_prepay_credit",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "create_split_invoices_from_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "dashboard_summary",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "delete_purchase_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "enforce_quote_accepted_fully_drawn",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "execute_sql_readonly",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "generate_rup_sales_records",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "get_customer_delivery_remainders",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "get_expiring_planned_holds",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "get_field_billing_splits_for_blend_ticket",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "get_field_billing_splits_for_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "handle_new_user",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "is_admin",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": true,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "is_applicator",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": true,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "is_driver",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": true,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "is_sales_rep",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": true,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "log_comment_activity",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "log_note_activity",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "next_application_record_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "next_commission_payment_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "next_delivery_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "next_invoice_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "next_job_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "notify_mentioned_users_in_comment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "prevent_order_shares_edit_after_post",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "reconcile_prepay_balances",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "record_invoice_payment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "release_holds_on_quote_status_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "require_admin",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "require_admin_or_sales_rep",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": true,
+      "revoke_risk": "caution — called internally by other SQL functions (owner-executed; REVOKE usually safe, verify)"
+    },
+    {
+      "name": "restore_cancelled_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "restore_cancelled_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "reverse_blend_ticket_approval",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "revert_quote_status",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "snapshot_field_crop_history",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "sync_blend_ticket_payment_status",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "trg_delivery_status_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "trg_inventory_significant_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "trg_order_status_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "trg_po_status_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "trg_po_submitted_update_on_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "trg_recalc_order_totals",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    },
+    {
+      "name": "unapply_credit_memo",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "unlink_field_from_parent",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "update_allocation_set",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "update_blend_ticket_billing_status",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false,
+      "in_rls_policy": false,
+      "is_trigger_function": false,
+      "called_by_other_function": false,
+      "revoke_risk": "candidate — zero callers found anywhere"
+    },
+    {
+      "name": "vendor_bills_positive_subtotal_trigger",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true,
+      "in_rls_policy": false,
+      "is_trigger_function": true,
+      "called_by_other_function": false,
+      "revoke_risk": "DO-NOT-REVOKE-BLINDLY — load-bearing for triggers/RLS evaluation"
+    }
+  ],
+  "secdef_executable": [
+    {
+      "name": "_check_credit_limit",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "_guard_inventory_transactions_immutable",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "_guard_prepay_applications_immutable",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "_guard_profile_role_lock",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "_prebook_quick_delivery_inventory",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "_receiving_records_before_delete",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "_recompute_prepay_credit_balance",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "_require_auth",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "adjust_inventory",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "admin_update_profile",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "allocate_payment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "apply_prepay_to_invoice",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "apply_remaining_prepayments",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "apply_write_off",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "approve_return",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "batch_apply_all_prepayments",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "batch_apply_prepayments",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "batch_approve_blend_tickets",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "batch_cancel_deliveries",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "batch_post_invoices",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "batch_reject_blend_tickets",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "batch_reschedule_deliveries",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "batch_void_invoices",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "bulk_import_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "calculate_billing_splits",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "calculate_prices_from_margin",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "cancel_cycle_count",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "cancel_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "cancel_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "cancel_purchase_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "cancel_return",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "check_customer_credit_limit",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "check_duplicate_blend_ticket",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "check_duplicate_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "check_period_open",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "check_remainder_reminders",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "close_accounting_period",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "complete_cycle_count",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "complete_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "complete_job",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "compute_application_service_fee",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "confirm_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "convert_quote_to_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_application_record_from_blend_ticket",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_commission_payment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_delivery_with_items",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_direct_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_followup_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_inventory_hold",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_invoice_for_unbilled_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_invoice_from_blend_ticket",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_invoice_from_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_invoice_from_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_job_from_quote_section",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_order_from_blend_ticket",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_planned_holds",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_prepay_check_splits",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_prepay_credit",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_quick_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_quote_from_template",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_quote_version",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_rebate_claim",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_split_invoices_from_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "create_vendor_bill",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "dashboard_summary",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "delete_prepay_credit",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "delete_purchase_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "delete_vendor",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "derive_customer_shares_from_fields",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "draw_down_quote",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "duplicate_quote",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "edit_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "edit_prepay_credit",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "enforce_quote_accepted_fully_drawn",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "execute_sql_readonly",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "financial_dashboard_summary",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "generate_batch_statements",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "generate_finance_charges",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "generate_rup_sales_records",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "generate_ticket_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_ap_aging",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_ap_dashboard_summary",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_ar_aging",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "get_ar_reminder_candidates",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "get_batch_year_end_summaries",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_commission_balance_report",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "get_customer_delivery_remainders",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_customer_farm_group",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_customer_statement",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "get_customer_summary",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_customer_transaction_review",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_customer_year_end_summary",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_dashboard_action_items",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_detailed_statement_data",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_expiring_planned_holds",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_field_billing_splits_for_blend_ticket",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_field_billing_splits_for_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_field_dashboard",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_field_geojson",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_field_polygons",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_fields_with_geojson",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_inventory_cost_report",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "get_inventory_forecast",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_inventory_position",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_monthly_summary",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_notes_for_entity",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_program_completion",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_receiving_log",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "get_receiving_summary",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "get_rup_sales_register",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_sales_detail_report",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "get_sales_summary_report",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "get_season_comparison",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_team_board_deliveries",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_team_workload",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "get_yesterday_delivery_recap",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "global_search",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "handle_new_user",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "is_admin",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "is_applicator",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "is_driver",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "is_sales_rep",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "issue_return_credit",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "link_blend_ticket_to_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "link_fields_to_parent",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "load_recipe_into_job",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "log_comment_activity",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "log_failed_notification",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "log_note_activity",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "manual_inventory_add",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "mark_inventory_row_verified",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "match_quick_receive_items",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "next_application_record_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "next_commission_payment_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "next_cycle_count_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "next_delivery_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "next_invoice_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "next_job_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "next_po_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "next_return_number",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "notify_damaged_receiving",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "notify_mentioned_users_in_comment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "operational_dashboard_summary",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "post_commission_payment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "post_invoice",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "post_invoice_group",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "prevent_order_shares_edit_after_post",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "preview_field_app_invoice_split",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "preview_finance_charges",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "reassign_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "receive_po_items",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "receive_return",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "reconcile_negative_inventory",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "reconcile_prepay_balances",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "record_invoice_payment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "record_vendor_payment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "release_expired_quote_holds",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "release_holds_on_quote_status_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "release_inventory_hold",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "reopen_accounting_period",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "require_admin",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "require_admin_or_sales_rep",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "restore_cancelled_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "restore_cancelled_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "restore_quote_version",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "retire_inventory_item",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "reverse_blend_ticket_approval",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "reverse_completed_cycle_count",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "reverse_receiving_record",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "reverse_write_off",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "revert_quote_status",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "rollover_quote_to_season",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_blend_recipe",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_blend_ticket",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_blend_ticket_fields",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_customer",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_field",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_field_app_invoice",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_field_geometry",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_field_polygons",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_invoice",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_job",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_purchase_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_quote",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_quote_template",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "save_vendor",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "snapshot_field_crop_history",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "start_job",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "sync_blend_ticket_payment_status",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "transfer_job_to_invoice",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "transition_rebate_claim",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "trg_delivery_status_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "trg_inventory_significant_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "trg_order_status_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "trg_po_status_change",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "trg_po_submitted_update_on_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "trg_recalc_order_totals",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "unapply_credit_memo",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "unlink_blend_ticket_from_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "unlink_field_from_parent",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "update_allocation_set",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "update_blend_ticket_billing_status",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "update_cycle_count_item",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "update_order_items",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "update_vendor_bill",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "vendor_bills_positive_subtotal_trigger",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": true
+    },
+    {
+      "name": "void_commission_payment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "void_delivery",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "void_invoice",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "void_order",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "void_payment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "void_vendor_bill",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    },
+    {
+      "name": "void_vendor_payment",
+      "args": null,
+      "auth_exec": true,
+      "anon_exec": false
+    }
+  ],
+  "_live_raw": {
+    "cron_jobs": [
+      {
+        "jobname": "check-remainder-reminders",
+        "command": "SELECT public.check_remainder_reminders()",
+        "schedule": "30 6 * * *",
+        "active": true
+      },
+      {
+        "jobname": "mark-overdue-invoices",
+        "command": "SELECT public.mark_overdue_invoices()",
+        "schedule": "0 6 * * *",
+        "active": true
+      },
+      {
+        "jobname": "release-expired-quote-holds",
+        "command": "SELECT public.release_expired_quote_holds()",
+        "schedule": "15 6 * * *",
+        "active": true
+      }
+    ]
+  }
+}

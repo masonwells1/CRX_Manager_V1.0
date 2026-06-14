@@ -33,6 +33,17 @@ if [ $LINT_EXIT -ne 0 ]; then
 fi
 
 echo ""
+echo "🔎 Running TypeScript typecheck..."
+npm run typecheck 2>&1
+TYPECHECK_EXIT=$?
+
+if [ $TYPECHECK_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ TYPECHECK FAILED — commit blocked. Fix type errors first."
+  exit 1
+fi
+
+echo ""
 echo "🔨 Running build check..."
 npm run build 2>&1
 BUILD_EXIT=$?
@@ -53,6 +64,26 @@ if [ $TEST_EXIT -ne 0 ]; then
   echo "❌ TESTS FAILED — commit blocked. Fix failing tests first."
   exit 1
 fi
+
+echo ""
+echo "📋 Checking doc drift (counts in CLAUDE.md / migration-history.md vs disk)..."
+# husky runs this script under `sh -e`, so a bare failing command aborts the
+# whole hook before any $? check — the || branch is what makes this step
+# genuinely non-blocking (2026-06-11: five commit attempts died here silently).
+node scripts/check-doc-drift.mjs || {
+  echo ""
+  echo "⚠️  DOC DRIFT DETECTED (non-blocking) — update migration-history.md / CLAUDE.md counts before next session."
+}
+
+echo ""
+echo "🔗 Verifying dependency integrity (vitest/vite peer ranges)..."
+# Same sh -e note as above: the || branch guarantees the friendly message
+# prints before the (intentional) block.
+node scripts/verify-deps.mjs || {
+  echo ""
+  echo "❌ DEPENDENCY PROBLEMS — commit blocked. Run \`npm ci\` or fix peer ranges first."
+  exit 1
+}
 
 echo ""
 echo "🗺  Regenerating workflow map..."

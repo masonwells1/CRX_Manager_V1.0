@@ -31,6 +31,8 @@ import { supabase, assertRpcResult } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
 import ActionQueue from '../components/dashboard/ActionQueue';
+import DailyBrief from '../components/dashboard/DailyBrief';
+import ExpiringLicensesCard from '../components/compliance/ExpiringLicensesCard';
 
 // --- Types ---
 
@@ -235,6 +237,29 @@ export default function Dashboard() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<OperationalData>(defaultData);
+  // Daily-brief "open to-dos" count — a DISTINCT metric from the dashboard's
+  // attention-filtered action-items widget (operational_dashboard_summary's
+  // team_action_items, which is pinned/urgent/overdue/assigned + LIMIT 10). The
+  // brief reports the actionable backlog: open (incomplete, non-deleted) team_notes
+  // of type 'todo' ('note'/'announcement' are informational). team_notes RLS =
+  // SELECT-to-all; this card is admin-only. (Codex 2026-06-13 finding 3 + self-review
+  // DASH-1: relabeled "to-dos" so the count matches its own population.) Best-effort
+  // fallback to the widget list length only if the count query errors.
+  const [openActionItemsCount, setOpenActionItemsCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (role !== 'admin') return;
+    let cancelled = false;
+    (async () => {
+      const { count, error } = await supabase
+        .from('team_notes')
+        .select('id', { count: 'exact', head: true })
+        .eq('is_completed', false)
+        .eq('note_type', 'todo')
+        .is('deleted_at', null);
+      if (!cancelled && !error) setOpenActionItemsCount(count ?? 0);
+    })();
+    return () => { cancelled = true; };
+  }, [role]);
 
   const fetchDashboard = useCallback(async () => {
     setLoading(true);
@@ -360,6 +385,16 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* Owner's daily brief (admin only; E3 deep-dive H1) */}
+      {isAdmin && (
+        <DailyBrief
+          deliveriesToday={data.deliveryToday}
+          deliveryUnassigned={data.deliveryUnassigned}
+          activeOrders={data.activeOrdersCount}
+          actionItemsCount={openActionItemsCount ?? data.teamActionItems.length}
+        />
+      )}
+
       {/* ═══════════════════════════════════════════════════════════ */}
       {/* Quick Actions (hidden from drivers)                       */}
       {/* ═══════════════════════════════════════════════════════════ */}
@@ -415,6 +450,9 @@ export default function Dashboard() {
           </div>
         </Card>
       )}
+
+      {/* License renewal reminders (admin + sales; B5 license gates) */}
+      {(isAdmin || role === 'sales_rep') && <ExpiringLicensesCard />}
 
       {/* ═══════════════════════════════════════════════════════════ */}
       {/* Section 1: Top KPI Row (hidden from drivers)              */}

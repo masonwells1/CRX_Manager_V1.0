@@ -34,6 +34,8 @@ export default function ProductDetail() {
     epa_registration: '',
     is_rup: false,
     signal_word: null,
+    rei_hours: null,
+    phi_days: null,
     product_form: null,
     inventory_unit: null,
     container_unit: null,
@@ -147,6 +149,16 @@ export default function ProductDetail() {
     // Container size must be positive if set
     if (product.container_size != null && product.container_size <= 0) {
       toast('error', 'Container size must be greater than 0');
+      return;
+    }
+
+    // Label intervals must be non-negative (printed on WPS compliance notices)
+    if (product.rei_hours != null && product.rei_hours < 0) {
+      toast('error', 'REI (hours) cannot be negative');
+      return;
+    }
+    if (product.phi_days != null && product.phi_days < 0) {
+      toast('error', 'PHI (days) cannot be negative');
       return;
     }
 
@@ -330,6 +342,24 @@ export default function ProductDetail() {
                   <option value="Caution">Caution</option>
                 </select>
               </div>
+              <Input
+                label="REI (hours)"
+                type="number"
+                min={0}
+                value={product.rei_hours ?? ''}
+                onChange={(e) => update('rei_hours', e.target.value === '' ? null : parseInt(e.target.value, 10))}
+                disabled={!isAdmin}
+                placeholder="From label, e.g. 12"
+              />
+              <Input
+                label="PHI (days)"
+                type="number"
+                min={0}
+                value={product.phi_days ?? ''}
+                onChange={(e) => update('phi_days', e.target.value === '' ? null : parseInt(e.target.value, 10))}
+                disabled={!isAdmin}
+                placeholder="From label, e.g. 30"
+              />
             </div>
 
             {/* Product Form */}

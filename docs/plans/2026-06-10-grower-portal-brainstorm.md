@@ -186,9 +186,17 @@ uniquely powered by CRX data.
   that customer already exists in the DB. Their on-hand inventory starts itself;
   zero data entry. *This is the moat — FieldView/Deere can't see what's in the shed.*
 - Manual add for product bought elsewhere (keep it honest/complete).
-- Depleted by application logs (below): `delivered − applied = on hand`.
+- Depleted by application logs (below): `delivered − applied = on hand`. **Not as
+  simple as it reads — see §6.9** (deplete per *product line*, not tank volume;
+  liquid↔dry needs a density factor).
 - Side effects for CRX: low-stock nudges → reorder button → a quote/order lead in
   CRX Manager. The compliance tool quietly becomes a sales channel.
+- **Verified live 2026-06-14 — this is mostly a *reuse* job, not a new build:**
+  `products` already carry `inventory_unit` (604/604), `rate_unit`/`rate_per_acre`
+  (~95%), `container_size`, `product_form`; a `unit_conversions` table exists; and
+  `inventory_transactions` + `create_application_record_from_blend_ticket` already
+  deduct inventory on an application. The shed is the customer-scoped, read-only
+  mirror of an engine that already runs internally. The remaining gaps are in §6.9.
 
 ### 6.2 Spray plan checklist ("what's sprayed, what's not")
 - Per field per season: the planned passes — burndown, pre-emerge, post-emerge,
@@ -255,14 +263,37 @@ Mason: CRX's own crew should use this too, for custom-applied acres and to
   existing `transfer_job_to_invoice` path), so the compliance tool also tightens
   the custom-app revenue loop.
 
-### 6.6 What CRX needs to add to make this work
-- Label data on the product catalog: EPA reg #, REI hours, PHI days by crop,
-  RUP yes/no, max rate/season, **default residual/follow-up interval days** (one-time
-  data lift per product CRX sells; start with the top 20 movers, not the whole catalog).
-- Notification delivery — email exists (`send-email` Edge Function); SMS is new
-  (**OPEN QUESTION:** SMS provider, or email-only v1?).
-- A `customer_chemical_inventory` ledger + `spray_plans` / `spray_passes` /
-  `application_logs` tables (portal-scoped RLS; design when we plan).
+### 6.6 What CRX needs to add — and what's already built (verified live 2026-06-14)
+Much of the original §6.6 list shipped in the weeks *after* this doc was written
+(2026-06-10). Status re-checked against the live DB on 2026-06-14:
+
+**✅ Already built (columns/machinery exist):**
+- `products`: `epa_registration`, `is_rup`, `signal_word`, `rei_hours`, `phi_days`
+  (the REI/PHI/RUP columns — B3 work). Plus the unit/inventory machinery in §6.9.
+- `applicator_licenses`: supports **both** grower-held (`customer_id`) and staff-held
+  (`profile_id`) licenses, with `expiry_date`, `certification_categories`, `state`,
+  `license_number`. A job-level expiry **gate** already blocks assigning an applicator
+  whose licenses are all expired (B5). → This largely answers open question #3.
+- `application_records` (21 cols) is already ~70% of the §6.3 compliance log — see §6.8.
+- Weather auto-capture from the field centroid (C4) lands in
+  `application_records.weather_conditions`.
+
+**⚠️ Built but EMPTY — the real gate for G1/G2 is a data lift, not code:**
+- Of 604 products: **0 flagged RUP, 0 with REI hours, 0 with PHI days**, and only
+  ~50% (299) with an EPA reg #. The compliance columns exist; the *values* don't. So
+  G1's EPA auto-fill is half-there and **G2's REI/PHI/RUP timers have zero data to run
+  on today.** The top-20-movers label lift (§10.7) is the true prerequisite — and it's
+  currently at 0% for the timer-driving fields. Strong vote for **internal-first**.
+
+**❌ Still genuinely to add:**
+- **Default residual/follow-up interval days** on the catalog (drives G2) — not yet a
+  column. Per-crop PHI (today `phi_days` is a single integer; labels set PHI *per crop*).
+  Max rate/season.
+- SMS delivery — email exists (`send-email`); SMS is new (**OPEN:** provider, or
+  email-only v1?).
+- New portal-scoped tables: `customer_chemical_inventory` ledger + `spray_plans` /
+  `spray_passes`, and a new `spray_pass` value on `application_records.source_type`
+  (§6.8). Portal-scoped RLS; design when we plan.
 
 ### 6.7 Open questions on this piece (Mason)
 1. ~~"Post spray" meaning~~ — **ANSWERED 2026-06-10:** follow-up trip timers —
@@ -270,13 +301,122 @@ Mason: CRX's own crew should use this too, for custom-applied acres and to
    due. (REI/PHI timers kept as well — they're cheap once the log exists.)
 2. ~~Internal crew use?~~ — **ANSWERED 2026-06-10: yes** — crew uses it for custom
    acres and for planning/scheduling future work (see 6.5).
-3. Do your growers hold applicator licenses we should track (private applicator
-   cert numbers), incl. expiry-date reminders?
-4. Should checking off a pass *require* the compliance fields, or allow "quick
-   check now, fill details later" (with the 14-day nudge chasing them)?
-5. Where do the residual/follow-up intervals come from — a default per product
-   that you maintain (e.g. "26 days"), set per customer program, or both
-   (product default + per-plan override)? Doc assumes both.
+3. ~~Do your growers hold applicator licenses we should track?~~ — **DIRECTION
+   2026-06-14: yes, and the model already exists.** `applicator_licenses` supports
+   customer-held certs with `expiry_date` + `certification_categories`; G2's reminder
+   engine gives the expiry nudge for free; snapshot the cert # onto the record at log
+   time (§6.8). Bonus: an expired private cert is also a CRX *sales* gate — don't sell
+   an RUP to a lapsed grower.
+4. ~~Require compliance fields vs "quick check now, fill later"?~~ — **DIRECTION
+   2026-06-14: neither — a two-state record** (designed in §6.8). One-tap check-off
+   creates a *draft* (date/field/product-from-plan); the record stays incomplete and
+   freely editable until the legally-required fields are in, with the 14-day nudge
+   chasing it. Only the *completed* state is export-eligible + append-only. Same
+   lifecycle pattern as invoice `draft → posted`.
+5. ~~Where do the residual/follow-up intervals come from?~~ — **DIRECTION 2026-06-14:
+   both, product-default as the backbone.** Ship v1 as one nullable
+   `products.followup_interval_days` + a per-pass override; promote to a
+   `product_application_intervals` table later (residual depends on rate + target, and
+   plant-back intervals can reuse the same structure). Column now, table later.
+
+### 6.8 Compliance-record regimes: private vs commercial (deep-dive 2026-06-14)
+**Verified live:** `application_records.source_type` is constrained today to `'job'`
+or `'blend_ticket'` — both **CRX-applied**. So *every* application record the system
+can produce today is already a **commercial-applicator** record. Grower self-spray (G1)
+doesn't extend that — it adds a *second, lighter* regime (private applicator) as a new
+`source_type='spray_pass'`. "One data model, two front doors" (§6.5) is structurally
+true, but the two doors carry different legal weight that must be **enforced**, not
+just stored:
+
+| | Private (grower sprays own crop) | Commercial (CRX crew sprays for hire) |
+|---|---|---|
+| Record owner / regulated party | The grower | **CRX — our license is on the line** |
+| Who must keep it | Grower | **CRX** |
+| Required fields | Federal RUP minimum (smaller) | Usually a **superset** (often wind/temp/time, target, equipment, certified applicator's license #) |
+| Timeliness | Federal ~14 days | Often faster (state) **+ duty to furnish the customer a copy** |
+| Retention | ~2 yrs | ~2 yrs, sometimes longer by state |
+
+*(Legal **shape** only — commercial is stricter + a customer-copy duty. The exact IL
+field list / windows = confirm against the IL Dept of Ag rule + attorney/insurer per
+§10.5. Do not hard-code IL specifics from this doc.)*
+
+**Design implications:**
+1. **Derive the regime — never ask.** CRX staff (profile-held license +
+   `source_type='job'`) → commercial; grower (customer-held license +
+   `source_type='spray_pass'`) → private. One derived `regime` field drives every rule
+   below.
+2. **Regime-aware "complete" gate** (= the two-state record from Q4). The commercial
+   required-field set is the superset; a CRX-crew record can't be marked complete /
+   exported until that fuller set is filled. The grower record uses the lighter set.
+3. **Customer-copy duty = a feature, not a chore.** Completing a CRX custom application
+   auto-generates the grower's copy PDF, **delivers it (`send-email`) and logs the send
+   timestamp** — "provided within N days" is itself a requirement, so logging the send
+   *proves* compliance. When the portal exists, the copy just appears in the documents
+   hub. Same code closes the duty and feeds the portal.
+4. **Snapshot, don't reference.** Copy EPA reg #, applicator license # + expiry, RUP
+   flag, and label values **onto the record at completion** — products/licenses change;
+   the record must show what was true that day (extends the existing `product_data`
+   jsonb discipline). A license expiring later shouldn't void a record made while it
+   was valid — snapshotting fixes that automatically.
+5. **Capture rate/product provenance.** A "rate source: CRX-recommended | grower-chosen"
+   marker matters if there's ever a crop-damage/residue claim — if CRX *seeded* the plan
+   *and* CRX *applied* it, that's the highest-exposure case. One field, big value in a
+   dispute.
+6. **Config-drive the regime rules** (required fields, windows, retention, copy duty)
+   as table data, not hard-coded — adding WI/IN later (B6 multi-state caution) is then a
+   config row, not a rewrite. v1 = IL + federal.
+
+**Leverage:** the `source_type='job'` path means completing a job can *already* write an
+application record. So the **commercial-regime log is largely wired** — the remaining
+work is the regime-aware completeness gate + the snapshots + generate-deliver-log of the
+customer copy. Another reason to **lead with G3**.
+
+### 6.9 Chemical-shed unit engine: reuse + the three gaps (deep-dive 2026-06-14)
+**Verified live — the shed is ~90% an existing engine, not a new build:**
+- `products`: `inventory_unit` 604/604, `rate_unit` 574, `rate_per_acre` 573,
+  `container_size` 592, `container_unit`, `product_form`.
+- A `unit_conversions` table (14 rows).
+- `inventory_transactions` already deducts (`quantity` + `job_id`/`delivery_id`), and
+  `create_application_record_from_blend_ticket` already deducts inventory on an
+  application.
+
+→ The chemical shed = the customer-scoped, read-only **mirror** of a deduction engine
+that already runs internally. Three gaps remain, and the first quietly produces *wrong*
+numbers:
+
+1. **No liquid↔dry bridge (no density).** `unit_conversions` pivots *within* a
+   dimension (liquids → fluid oz: Gal=128/Qt=32/Pt=16; dry → dry oz: Lb=16/g=0.035…),
+   with **no factor between them**. Clean when a product's `rate_unit` and
+   `inventory_unit` are the same dimension; breaks when rate is a weight (lb ai/ac) but
+   inventory is a volume (gal) — needs `density_lb_per_gal` (and, if rating by active
+   ingredient, `ai_lb_per_gal`). That's the one product-specific number unit math can't
+   derive. **Fix:** an optional density field; products where rate-dimension ≠
+   inventory-dimension *and* density is missing → flag "shed estimate approximate."
+   Most products need nothing new.
+2. **`rate_unit` is free text and already messy.** The conversion table itself carries
+   case/spelling aliases (`oz`/`Oz`, `Lb`/`LB`, `fl oz`) — evidence the unit fields are
+   uncontrolled. A typo'd / unlisted unit silently fails to convert (or converts wrong)
+   and the shed drifts unnoticed. **Fix:** normalize to a controlled vocabulary (FK to
+   `unit_conversions.unit`) and surface "couldn't convert product X" **loudly** — same
+   lesson as internal short-stock flagging.
+3. **Deplete from the product line, not `total_volume`.** `total_volume` is the *tank*
+   volume (product + carrier water). The shed must deplete by the per-*product* amount
+   = `rate × acres` per line in `product_data`. Subtle; looks right in a demo, wrong in
+   the field.
+
+**Ledger drift is guaranteed — design reconciliation in from day one.** Tank rinse,
+partial jugs, the approximations above → `delivered − applied` *will* diverge from the
+physical shed (we lived this internally: 17 negative products needing recounts). The
+shed needs a **"count my shed" reconcile action** that writes an adjustment (mirror the
+cycle-count machinery), and the UI should present on-hand as **"estimated," showing the
+math** (delivered X − applied Y across N passes ± adjustments Z). Trust beats false
+precision: a grower who can see and correct the arithmetic trusts it; a confidently-wrong
+number burns the moat.
+
+**Contingency:** auto-credit only works if deliveries are captured in CRX with
+product+customer linkage. The unit/inventory scaffolding is populated (~95%+) so the
+shed *math* can run — but per §6.6 the compliance label data is currently empty, so the
+spray-compliance bet's true prerequisite is the label-data lift, not this engine.
 
 ---
 
@@ -495,3 +635,4 @@ eventually; none block idea-collection now.
 | 2026-06-10 | ⭐ Added §6 chemical tracking & spray compliance as Mason's priority focus (shed inventory auto-fed by CRX deliveries, spray checklist, compliance-grade log, REI/PHI + post-spray reminders); flagged it as candidate first portal feature |
 | 2026-06-10 | §6 iterated per Mason: "post spray" = follow-up trip timers (pre applied → ~26-day residual → 2nd-trip reminder; product-default interval + per-plan override); internal crew use confirmed (custom acres + work planning — new 6.5, likely `spray_passes ↔ jobs`/DispatchBoard link, job completion writes the compliance record, flows to invoicing) |
 | 2026-06-10 | Added §10 implementation realities & blind spots: adoption/empty-portal rule, offline PWA queue, multi-user farms, data-ownership policy as selling point, label-data liability + LLM guardrails, reminder-engine plumbing (pg_cron), label maintenance chore, seasonal launch windows (spray tool live by ~Feb), success metrics, competitive positioning, internal-first stepping-stone option |
+| 2026-06-14 | §6 re-verified against the **live DB** + two deep-dives folded in. **§6.8** private-vs-commercial compliance regimes (#4): `application_records` is commercial-only today (`source_type` job/blend_ticket); grower self-spray adds a lighter private regime via a new `spray_pass` source; derive-the-regime, regime-aware completeness gate, customer-copy duty as a feature, snapshot label/license values, capture rate provenance, config-drive multi-state. **§6.9** chemical-shed unit engine (#5): shed is ~90% an existing engine (inventory_unit 604/604, rate_unit ~95%, `unit_conversions`, existing deduction RPCs) — 3 gaps: no liquid↔dry density bridge, free-text `rate_unit`, deplete-per-line-not-tank-volume; reconciliation required. Rewrote §6.6 to **built / empty / to-add** (REI/PHI/RUP columns exist but **0% populated** — the top-20 label lift is the real G1/G2 gate). Resolved open Qs #3 (license model exists), #4 (two-state record), #5 (column now, table later). |

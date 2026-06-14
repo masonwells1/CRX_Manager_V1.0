@@ -4,6 +4,82 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-14 — create_direct_order customer-PO param (sales_rep money-adjacent fix), applied live
+
+Branch `ship/create-direct-order-customer-po` (isolated worktree off `origin/main`), one migration applied live through the `/ship` gate (rls-security + migration-drift + compliance reviewers all CLEAN; rolled-back `SMOKE_PASS_ROLLBACK`; db-invariant sweeps clean; B7 rename).
+
+- **`20260614142939_create_direct_order_customer_po_param`** — `create_direct_order` gained `p_customer_po_number text DEFAULT NULL` and now sets `orders.customer_po_number` inside the SECURITY DEFINER RPC. Before, `NewOrder.tsx` set the PO with a post-create `supabase.from('orders').update({customer_po_number})`; the live `orders_update` RLS is `is_admin()` for both USING and WITH CHECK, so for a **sales_rep** that follow-up UPDATE was denied → `checkMutationResult` threw → the UI reported failure on a successfully-created order and the PO was silently dropped (not retryable; the idempotency key just replays the create). DROP 7-arg + CREATE 8-arg (a new param changes the identity signature; grants restated since a fresh CREATE resets the ACL to PUBLIC); body byte-verbatim from live except the param + the orders INSERT column/value. Frontend (`NewOrder.tsx`) now passes `p_customer_po_number` and removes the follow-up update + its now-unused `checkMutationResult` import. New smoke chain `scripts/smoke/smoke-create-direct-order-po.sql` proves a real sales_rep persists the PO, empty PO normalizes to NULL, idempotency replay returns the same order, and the auth gates fire. NOT pushed (prod-push gate).
+
+## 2026-06-10 (deep-dive H1 B5) — applicator license-expiry gates + RUP time-bomb fix, applied live
+
+First `/ship` off the deep-dive roadmap, on branch `feat/h1-quick-wins-2026-06-10`. Two migrations applied live through the full review gate (4 reviewers clean, rolled-back smoke tests, B7 renames):
+
+- **`20260610185714_applicator_license_gates`** — staff-held licenses on `applicator_licenses` (`profile_id`, nullable `customer_id`, holder CHECK); `jobs` trigger blocks assigning an applicator whose active licenses are ALL expired (`LICENSE_EXPIRED`, `app.admin_override` hatch); new `assign_job_applicator` RPC (strict-actor, admin-only override) now used by DispatchBoard instead of a raw table UPDATE. UI: license badges + admin override ConfirmModal (JobDetail/DispatchBoard), Customer↔Staff toggle on Compliance, expiring-licenses Dashboard card, `src/lib/licenseStatus.ts` + 10 tests (suite 1,934).
+- **`20260610185741_fix_generate_rup_sales_records_phantom_column`** — review gate found the live fn filtering a nonexistent `al.deleted_at` (42703) while `post_invoice` calls it unguarded: the first posted RUP invoice would have crashed billing. One-predicate fix (verbatim live body, md5-verified) + `rupCompliance.ts` twin fix.
+
+Deferred (LOW/pre-existing, reviewer-noted): authenticated-callable `generate_rup_sales_records` attribution-only gate; trigger's RLS fail-open dependency. Branch NOT pushed (prod-push gate).
+
+**Same branch, same session — 4 more H1 items shipped:**
+- **B1** RUP point-of-sale warnings: NewOrder banner (stable product-set key, once-per-set activity log) + InvoiceDetail post-confirm folds a NON-COMPLIANT warning into the modal (danger variant; check failure can never block posting). Frontend-only.
+- **B3** WPS pre-application notice: migration `20260610193241` adds `products.rei_hours`/`phi_days` (label data, applied live); new `wpsNoticePdf.ts` (40 CFR 170 notice from a job: treated areas, products w/ EPA reg + REI, required-notice bullets, per-page footer, page-break guards); JobDetail "WPS Notice" button; ProductDetail REI/PHI inputs.
+- **E3** Owner's daily brief: admin Dashboard card composing AR position (past-60 callout, over-credit count), prepay/commissions owed, period-close countdown, and today's workload from `financial_dashboard_summary` (dollars, formatUSD) + already-fetched operational data.
+- **C4** Weather auto-capture: `weatherCapture.ts` (Open-Meteo, keyless; CSP `connect-src` += api.open-meteo.com) — "Use current weather" in the Complete Job modal prefills wind/temp/humidity from the first field's centroid; failure falls back to manual entry. 18 new unit tests across the batch (suite 1,942).
+
+**Blocked on owner inputs (next H1 items):** A1 pay-now links (Stripe account/keys), D1 vendor-bill AI pilot (10 real bills for the accuracy gate), B6 state report pack (which states + the WI DATCP template if applicable — IL's on-demand RUP register + CSV export already exist on /compliance).
+
+---
+
+## 2026-06-10 (foundation ultra review + full remediation) — 7 migrations live, 4 latent crashes fixed, anon exposure closed
+
+Built the reusable **`/foundation-ultra-review`** dynamic multi-agent audit (6 layers: live-data integrity, disk-vs-live drift, edge bundles, deferred ledger, frontend runtime safety, + authorization/exposure surface added after the Codex round). First run: **SOLID-WITH-FOLLOWUPS, 0 BLOCKER** — money/AR data fully consistent (vacuously; mandatory re-run gate after the first real billing cycle), 2026-06 security state intact live, edge bundles in sync, route guards clean. Codex cross-review (NEEDS-WORK, all 8 points accepted after independent live re-verification) upgraded the clamp finding to HIGH, refuted the prebooked-formula finding (measurement artifact), and contributed 2 new MEDs. Reports: `docs/audits/2026-06-10-foundation-ultra-review.md` + disposition.
+
+Remediation (each through the full `/ship` gate — reviewers clean + rolled-back smoke tests):
+
+- **`20260610131048_reverse_receiving_remove_available_clamp`** — receiving reversals no longer clamp at 0 (ledger ≡ snapshot; the clamp had silently swallowed 1,325 units).
+- **`20260610131129` + `20260610132244`** — `create_application_record_from_blend_ticket` had **four** stacked latent breaks (no short-stock flag; nonexistent column → 42703; string-into-jsonb → 22P02; text-into-time → 42804). All fixed; warn+flag matches `complete_job`; the 4th crash was caught by the e2e smoke test AFTER both reviewers passed the migration — never-exercised RPCs strike again.
+- **`20260610131144_revoke_anon_profile_public_view`** — closed the anonymous employee-directory read (Codex finding, verified via `SET ROLE anon`).
+- **`20260610132136_attach_receiving_records_delete_trigger`** — smoke test discovered the delete-compensation trigger was never attached live (pre-B7 drift); attached.
+- **`20260610133241_data_fix_commissions_test_quote_split_hygiene`** — 4 stale pending commissions recalced (ORD-2026-0189 $50→$2,455.37 — flagged for Mason); A1 TEST FARM quote cancelled; 15 JSONB-null splits normalized.
+- **`20260610133256_prebook_reconciliation_transaction_type`** — dedicated ledger type for prebooked-only corrections (12-value CHECK superset) + frontend enumerations + INVENTORY_RULES.md recompute caveats.
+
+Frontend: ARaging AR-reminder + batch-statement loops now count/Sentry/toast FAILED sends distinctly (were mislabeled "skipped"); QuoteBuilder surfaces a failed status-revert; InvoiceDetail stale-fetch guard. Docs: CLAUDE.md ledger fixes (PR #70 merged note, 217 RPCs, scoped version-parity claim, remit-to confirmed), INVENTORY_RULES 12-type table + caveats.
+
+Still open: H1 inventory re-base (needs Mason's physical counts — 17 products currently undeliverable), H2 squashed baseline (scheduled deliberately), L1 `process-blend-ticket` deploy, owner items M4/L4.
+
+---
+
+## 2026-06-10 (world-class product deep dive) — strategic review, docs only
+
+Ran the first unconstrained product + design + architecture deep dive (5 parallel investigations: codebase reality scan, architecture readiness, competitor research, precision-ag/compliance research, payments/AI research, plus an adversarial filter). **Docs-only — no code, DB, or deploy changes.**
+
+- **`docs/research/2026-06-10-world-class-product-deep-dive-prompt.md`** — the reusable commissioning prompt (5-phase methodology).
+- **`docs/research/2026-06-10-world-class-deep-dive-report.md`** — the report: honest area scorecard (Comply weakest at 2.5/5), market map (grower portal + online pay is now table stakes; Agvance/FieldAlytics/AgWorks openings identified), 30-item scored opportunity backlog, three-horizon roadmap (H1: ACH pay-now links + compliance quick wins; H2: grower portal + ISOXML machine-data billing; H3: Leaf integration + label-rate validation), keep/change/kill verdicts (kill checks-only and no-portal; keep single-tenant and CRX-as-ledger for now), 5 architecture prework items (customer-org model, payment webhook, server-side PDFs, integration framework, materialized views), and an explicit what-NOT-to-build list (native apps, multi-tenancy now, ML forecasting, autonomous financial agents, QuickBooks two-way sync).
+- Notable correction to project lore: the app IS a PWA (VitePWA + Workbox + IndexedDB offline write-queue, `vite.config.ts:23-85`) — the gap is offline *reads* and mobile UI shape, not missing offline support.
+
+---
+## 2026-06-11 (get_customer_statement — 4 AR blind spots closed, applied live)
+
+CHIP task_25d25699 (spawned from the 2026-06-10 error-prevention review's financial-predicate findings, FIN-README Findings item 2). The customer statement RPC had four blind spots that would have made statements wrong the moment AR activity started:
+
+- **`20260611131549_customer_statement_blind_spots` (production money bug, applied live)** — (1) `allocate_payment`-path payments were invisible (they write `allocation_sets`, never `payments`; the statement read only `payments INNER JOIN orders`); (2) the invoice branch filtered `status='posted'` only, so a `paid` invoice lost its charge line while keeping its payment lines (running balance went negative) and `overdue` invoices vanished entirely; (3) soft-deleted payments still counted (no `deleted_at` filter); (4) NULL-`order_id` payments (the `transfer_job_to_invoice` invoice shape) were dropped by the INNER JOIN. Fix = live-verbatim body (md5-anchored, re-asserted in-transaction at apply) + 4 sentinel-bracketed deltas: invoice branch widened to `('posted','paid','overdue')`; `LEFT JOIN orders` with `COALESCE(o.customer_id, p.customer_id)` attribution; `payments.deleted_at IS NULL`; new `allocation_sets` UNION branch counting `total_allocated_cents` only (the overpayment remainder surfaces once, via the prepay branch on application — the DEDUP RULE). Return shape and the 42804 `::bigint` window cast retained; grants restate the live ACL (no posture change). Both reviewers clean; rolled-back smoke chain PASS (all 4 blind spots + dedup + idempotent replay + overdue survival + auth probe); post-fix `fin-ar-statement-balance` predicate run = **0 rows** with its transcription updated in the same work unit. Smoke spec registered as `get_customer_statement` in `smoke-specs.json`.
+- Note: this work unit was applied from a chip session via the Supabase Management API (the in-session MCP path wasn't available); the review gate, proof file, smoke, and B7 stamp-naming conventions were all honored. Applied concurrently with (and disjoint from) the Codex round-2 remediation batch below.
+
+## 2026-06-11 (Codex round-2 remediation — draw-order lock + restore-version guard, applied live)
+
+Codex's round-2 review of the partial-draw-down batch returned NEEDS-WORK with 1 HIGH + 1 MED + 1 LOW; all three closed.
+
+- **`20260611130855_update_order_items_draw_order_lock` (HIGH, applied live)** — draw-created orders (`booking_draw=true`) could be item-edited via `update_order_items`, desyncing order vs `quote_product_draws` (draw 200, edit to 300 → the ledger still says 200 and the same 100 could be drawn again). Server-side lock: `BOOKING_DRAW_ORDER_LOCKED` raised before any mutation; void/cancel (which reverse the ledger) remain the sanctioned correction paths. Bonus closure from the review gate: a second sentinel guard adds the missing `is_active` check (deactivated admin/sales_rep → `INSUFFICIENT_ROLE`). OrderDetail hides Edit for draw orders, shows a "Booking draw — items locked" hint, and maps the token as a direct-RPC backstop.
+- **`20260611131000_restore_quote_version_drawn_guard` (MED, applied live)** — `restore_quote_version` could restore a snapshot that removes a drawn product or under-books below `quantity_drawn`, bypassing save_quote's drawn-product guard. The identical guard block now validates the restored items; a violation rolls the whole restore back atomically (`BOOKING_OVERDRAWN`, mapped in QuoteBuilder's restore handler).
+- **Backfill replay-safety (LOW, assessed — no mutation)** — the `20260610184551` backfill's only live effect (Q-2026-1811, cancelled, drawn=booked=247, 1 order) verified exactly correct; the theoretical partial-ledger multi-product scenario does not exist in production, migrations never re-run, and no safe derivation of historical per-product draws exists (per Codex's own instruction not to manufacture quantities). Disposition documented; the save_quote/restore/rollover guards now bound any future ledger error.
+- Both migrations byte-verbatim from live (md5-strip self-verified at apply), both reviewers + types-drift + compliance clean, smoke chains `SMOKE_PASS_ROLLBACK` (9 scenarios incl. deactivated-admin probe + full draw-to-closure), post-apply db-invariant sweeps clean (overloads predicate now excludes extension-owned functions; `transfer_job_to_invoice` actor-forgery hit allowlisted with catalog-corroborated justification).
+
+## 2026-06-10 (sell-side excellence audit + W1 fix applied live)
+
+Read-only sell-side audit (quote → order → delivery → invoice → payment) benchmarked against the ag-retail field — Agvance, AgVantage EDGE, Merchant Ag, AgWorks, Levridge/AGRIS — with every competitor claim adversarially source-verified, and every core sell-side RPC verified against the live DB. Report: `docs/audits/2026-06-10-sell-side-excellence-audit.md`. Verdict: pipeline operationally strong; the two defining ag-retail constructs are missing — season-booking partial draw-down and ship-now/price-later — and form the top of a 7-item ranked roadmap (deep spec sketches included, ready for `/ship`).
+
+- **`20260610145253_partial_quote_draw_down` (roadmap #1 v1, applied live)** — quotes are now season bookings with partial draw-down: "send 200 of my 500 gallons" is a 30-second modal action. New `quote_product_draws` ledger (per-quote-per-product — survives save_quote's delete/recreate of quote_items), new `draw_down_quote` RPC (strict-actor admin/sales_rep, idempotent, FOR UPDATE serialized, overdraw-blocked, booking-weighted locked price, FIFO hold→prebooked decrement keeping Net Free invariant, full drain → `accepted`), `convert_quote_to_order` reproduced verbatim-from-live + status guard (audit W7) + partially-drawn guard + fully-drawn ledger upsert (md5-fidelity verified post-apply). QuoteBuilder gains a "Partial Order" button + "Create Order from Booking" modal. 4 reviewers clean; rolled-back 9-path e2e smoke all PASS. New RpcErrorCodes: BOOKING_CLOSED/BOOKING_OVERDRAWN/BOOKING_PARTIALLY_DRAWN/EMPTY_DRAW.
+- **`20260610142204_create_direct_order_role_gate` (audit W1, applied live)** — the live `create_direct_order` had NO role gate (auth.uid() + actor-mismatch only): any authenticated user (driver/applicator) could create confirmed orders + inventory prebooks + commission rows via direct RPC, and missing prices COALESCE'd silently to $0. Prior forgery sweeps skipped it because it *does* reference `auth.uid()` — auth-only ≠ role-gated. Added the canonical `admin`/`sales_rep` `INSUFFICIENT_ROLE` gate (before idempotency); body otherwise byte-verbatim from live (md5-verified post-apply). 3 reviewers clean; rolled-back 4-path smoke all-correct. UI route already admin/sales_rep → zero legit-user impact.
+
 ## 2026-05-29 (workflow review + Codex cross-review) — 3 BLOCKER fixes applied live
 
 The new `/review-workflow` audit (full graph/lifecycle/cross-entity/invariant review, verified against live DB) surfaced BLOCKERs; Codex independently cross-reviewed them; every Codex claim was then re-verified against the live database (Codex itself had no Supabase MCP) before any fix. Three migrations applied live via MCP:

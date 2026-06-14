@@ -1,0 +1,148 @@
+-- Roadmap #4 (sell-side) — order billing cockpit — (b) consolidate_draft_invoices
+-- ============================================================================
+-- FILE-ONLY (NOT applied — apply at G5). Agvance-pattern: merge an order's
+-- multiple DRAFT per-delivery invoices into ONE draft so the order is billed on a
+-- single invoice. Draft-only — never touches posted/paid invoices, the accounting
+-- period, or financial_audit_log (drafts carry no posted financial impact).
+--
+-- Mechanics: lock the order's draft invoices (post_invoice_group pattern), keep
+-- the OLDEST (by invoice_number) as the survivor, move every other draft's
+-- invoice_items onto it, recompute the survivor's total_amount_cents from its
+-- merged items, then cancel the now-empty source drafts (draft→cancelled is
+-- allowed by _enforce_invoice_status_transition — no override needed). The
+-- survivor keeps its delivery_id (intentional: it stays a valid invoice; we
+-- don't null it, which would risk the delivery→invoice linkage / re-invoicing).
+-- Idempotent (≥2 drafts required; 0/1 → no-op success), strict-actor, audited.
+--
+-- SECDEF + search_path; admin/sales_rep gate; tokens already in RpcErrorCodes
+-- (AUTH_REQUIRED/ACTOR_MISMATCH/INSUFFICIENT_ROLE/ORDER_NOT_FOUND). ACL mirrors
+-- create_invoice_from_order (authenticated + service_role; no anon). Reviewed:
+-- rls + drift (codex=PENDING → pre-G5 batch). Smoke:
+-- docs/roadmap/smoke/04b-consolidate-draft-invoices.sql.
+
+CREATE OR REPLACE FUNCTION public.consolidate_draft_invoices(
+  p_order_id uuid,
+  p_performed_by uuid DEFAULT NULL::uuid,
+  p_idempotency_key text DEFAULT NULL::text
+)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_actor      uuid;
+  v_cached     jsonb;
+  v_order      record;
+  v_source_ids uuid[];
+  v_others     uuid[];
+  v_survivor   uuid;
+  v_total      bigint;
+  v_merged     int;
+  v_result     jsonb;
+BEGIN
+  v_actor := auth.uid();
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'AUTH_REQUIRED'; END IF;
+  IF p_performed_by IS NOT NULL AND p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'ACTOR_MISMATCH';
+  END IF;
+  IF NOT (is_admin() OR is_sales_rep()) THEN
+    RAISE EXCEPTION 'INSUFFICIENT_ROLE';
+  END IF;
+
+  SELECT * INTO v_order FROM orders WHERE id = p_order_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'ORDER_NOT_FOUND'; END IF;
+
+  -- Lock + collect the order's draft invoices FOR THE ORDER'S OWN CUSTOMER only
+  -- (oldest first — created_at then invoice_number → deterministic survivor).
+  -- Codex P1: create_split_invoices_from_order makes same-order drafts for
+  -- DIFFERENT customers (field-billing splits); scoping to v_order.customer_id
+  -- guarantees we never merge one customer's lines onto another's invoice (which
+  -- would bill the wrong farm and cancel the others' invoices). Split-customer
+  -- drafts are intentionally left untouched.
+  PERFORM 1 FROM invoices
+    WHERE order_id = p_order_id AND status = 'draft' AND customer_id = v_order.customer_id FOR UPDATE;
+
+  -- Codex round-11-class hardening: idempotency check AFTER the draft FOR UPDATE (TOCTOU).
+  -- A pre-lock check_idempotency let two same-key calls both miss the cache; the lock
+  -- serializes them, so the 2nd resumes here after the 1st committed and returns the 1st
+  -- call's saved result instead of re-evaluating (which would report 'fewer than 2 drafts'
+  -- after the 1st already merged). Canonical post-lock pattern (draw_down_quote 20260610181726).
+  IF p_idempotency_key IS NOT NULL THEN
+    v_cached := check_idempotency(p_idempotency_key, 'consolidate_draft_invoices');
+    IF v_cached IS NOT NULL THEN RETURN v_cached; END IF;
+  END IF;
+
+  SELECT array_agg(id ORDER BY created_at, invoice_number) INTO v_source_ids
+    FROM invoices
+    WHERE order_id = p_order_id AND status = 'draft' AND customer_id = v_order.customer_id;
+
+  IF v_source_ids IS NULL OR array_length(v_source_ids, 1) < 2 THEN
+    -- 0 or 1 draft — nothing to merge. Idempotent no-op.
+    v_result := jsonb_build_object('success', true, 'consolidated', false,
+      'reason', 'fewer than 2 draft invoices', 'order_number', v_order.order_number);
+    IF p_idempotency_key IS NOT NULL THEN
+      PERFORM save_idempotency(p_idempotency_key, 'consolidate_draft_invoices', v_result);
+    END IF;
+    RETURN v_result;
+  END IF;
+
+  v_survivor := v_source_ids[1];
+  v_others   := v_source_ids[2:array_length(v_source_ids, 1)];
+  v_merged   := array_length(v_others, 1);
+
+  -- Move every other draft's items onto the survivor.
+  UPDATE invoice_items SET invoice_id = v_survivor
+   WHERE invoice_id = ANY(v_others);
+
+  -- Recompute BOTH money columns of the survivor from its now-merged items
+  -- (Codex P1: total_cost_cents was left at the original delivery's cost →
+  -- overstated gross profit. total_cost_cents = SUM(cost_cents * quantity), the
+  -- create_invoice_from_delivery convention; cost_cents is per-unit).
+  SELECT COALESCE(sum(extended_cents), 0) INTO v_total
+    FROM invoice_items WHERE invoice_id = v_survivor;
+  UPDATE invoices SET
+    total_amount_cents = v_total,
+    total_cost_cents   = COALESCE((SELECT round(sum(cost_cents * quantity))::bigint FROM invoice_items WHERE invoice_id = v_survivor), 0),
+    updated_at         = now()
+   WHERE id = v_survivor;
+
+  -- Cancel the now-empty source drafts AND zero their money columns (Codex P2:
+  -- after moving all items to the survivor, the sources keep their original
+  -- total_amount_cents/total_cost_cents — and balance_cents is GENERATED from
+  -- total_amount_cents, so a cancelled, item-less invoice would still report a
+  -- nonzero total/balance and could be double-counted by any consumer that
+  -- doesn't exclude cancelled rows). Zero both stored columns; balance_cents
+  -- (GENERATED) follows total_amount_cents → 0. draft→cancelled is allowed by the
+  -- enforcer; never posted, so period + financial_audit_log are untouched.
+  UPDATE invoices SET
+    status = 'cancelled',
+    total_amount_cents = 0,
+    total_cost_cents = 0,
+    updated_at = now()
+   WHERE id = ANY(v_others);
+
+  INSERT INTO activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id, customer_id)
+  VALUES ('invoices_consolidated',
+    'Consolidated ' || (v_merged + 1) || ' draft invoice(s) into one for order ' || v_order.order_number,
+    v_actor, 'invoice', v_survivor, v_order.customer_id);
+
+  v_result := jsonb_build_object(
+    'success', true, 'consolidated', true,
+    'surviving_invoice_id', v_survivor, 'merged_count', v_merged,
+    'total_cents', v_total, 'order_number', v_order.order_number
+  );
+
+  IF p_idempotency_key IS NOT NULL THEN
+    PERFORM save_idempotency(p_idempotency_key, 'consolidate_draft_invoices', v_result);
+  END IF;
+  RETURN v_result;
+END;
+$function$;
+
+-- ACL mirrors create_invoice_from_order (authenticated + service_role; no anon/PUBLIC).
+-- caller-analysis: consolidate_draft_invoices :: new RPC; authenticated admin/sales_rep gated in-body (INSUFFICIENT_ROLE) + strict-actor; draft-only merge, no posted-money/period impact; ACL mirrors create_invoice_from_order; UI caller (OrderDetail billing panel) lands in #4 slice c
+REVOKE EXECUTE ON FUNCTION public.consolidate_draft_invoices(uuid, uuid, text) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.consolidate_draft_invoices(uuid, uuid, text) FROM anon;
+GRANT EXECUTE ON FUNCTION public.consolidate_draft_invoices(uuid, uuid, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.consolidate_draft_invoices(uuid, uuid, text) TO service_role;

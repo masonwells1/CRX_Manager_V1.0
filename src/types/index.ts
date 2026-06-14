@@ -40,6 +40,10 @@ export interface Product {
   epa_registration: string | null;
   is_rup: boolean;
   signal_word: 'Danger' | 'Warning' | 'Caution' | null;
+  /** WPS restricted-entry interval in hours, from the product label (NULL = not entered) */
+  rei_hours: number | null;
+  /** Pre-harvest interval in days, from the product label (NULL = not entered) */
+  phi_days: number | null;
   product_form: ProductForm | null;
   inventory_unit: string | null;
   container_unit: string | null;
@@ -203,6 +207,18 @@ export interface QuoteItem {
   product?: Product;
 }
 
+// Per-(quote, product) booking draw-down ledger (sell-side roadmap #1).
+// Lives in its own table — NOT on quote_items — because save_quote recreates
+// all quote_items on every edit, which would wipe item-level draw history.
+export interface QuoteProductDraw {
+  id: string;
+  quote_id: string;
+  product_id: string;
+  quantity_drawn: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface QuoteVersion {
   id: string;
   quote_id: string;
@@ -306,6 +322,9 @@ export interface Order {
   order_number: string;
   order_name: string | null;
   quote_id: string | null;
+  /** true when the order was created by draw_down_quote (a booking draw) —
+   * voiding/cancelling a draw order returns its quantity to the booking. */
+  booking_draw?: boolean;
   customer_id: string;
   status: OrderStatus;
   commission_split: CommissionSplit | null;
@@ -319,6 +338,14 @@ export interface Order {
   deleted_at: string | null;
   customer_po_number: string | null;
   is_planned: boolean;
+  /** Ship-now/price-later (sell-side #2): 'needs_pricing' = rush order shipped
+   * before pricing was finalized; its invoices cannot POST until price_order
+   * runs. Defaults to 'priced' for every normal order. */
+  pricing_status: 'priced' | 'needs_pricing';
+  /** Ship-now/price-later (#2 v3): check_unpriced_orders cron dedupe stamps —
+   * when the 48h reminder / 7d escalation notification was last sent. Internal. */
+  pricing_reminder_sent_at: string | null;
+  pricing_escalation_sent_at: string | null;
   notes: string | null;
   program_notes: string | null;
   created_at: string;
@@ -367,6 +394,13 @@ export interface OrderItem {
   quantity_remaining: number;
   sort_order: number;
   notes: string | null;
+  /** Ship-now/price-later (sell-side #2): true = line awaiting its final price
+   * (rush order shipped before pricing). Cleared by price_order. */
+  pricing_pending: boolean;
+  /** Ship-now/price-later (sell-side #2): tier price snapshot captured by
+   * create_rush_order at ship time (per customer.assigned_tier); the v2 pricing
+   * screen's default suggestion. NULL on normally-priced lines. */
+  suggested_price: number | null;
 }
 
 export interface Inventory {
@@ -978,6 +1012,10 @@ export interface Invoice {
   voided_by: string | null;
   voided_at: string | null;
   void_reason: string | null;
+  /** Ship-now/price-later (sell-side #2): true = invoice for a still-unpriced
+   * rush order. CREATION is allowed; post_invoice / post_invoice_group raise
+   * PRICING_INCOMPLETE until price_order finalizes and clears this. */
+  pricing_pending: boolean;
 
   // Metadata
   invoice_date: string;
@@ -1186,10 +1224,62 @@ export interface PrepayCredit {
   source_type: string | null;
   source_reference: string | null;
   bucket_label: string | null;
+  quote_id: string | null; // roadmap #6: earmark a prepay credit to a booking (quote)
   created_by: string | null;
   created_at: string;
   updated_at: string;
   customer?: Customer;
+}
+
+// Roadmap #6(a): per-booking settlement read shape (get_booking_settlement RPC).
+// All *_cents are bigint cents (divide by 100 to display). Qty fields are product
+// units; locked_price is numeric dollars per unit (the booked weighted-average).
+export interface BookingSettlementLine {
+  product_id: string;
+  product_name: string | null;
+  booked_qty: number;
+  drawn_qty: number;
+  remaining_qty: number;
+  locked_price: number;
+  current_price?: number;
+  booked_cents: number;
+  drawn_cents: number;
+  remaining_cents: number;
+}
+
+export interface BookingSettlement {
+  success: boolean;
+  found: boolean;
+  quote_id: string;
+  quote_number?: string;
+  customer_id?: string;
+  status?: string;
+  season?: number | null;
+  is_planned?: boolean;
+  lines?: BookingSettlementLine[];
+  booked_cents?: number;
+  drawn_cents?: number;
+  remaining_cents?: number;
+  prepay_earmarked_cents?: number;
+  prepay_applied_cents?: number;
+  prepay_remaining_cents?: number;
+}
+
+// Roadmap #6(d): one summary row per open booking (get_open_booking_rollover RPC).
+// All *_cents are bigint cents (÷100 to display).
+export interface BookingRolloverRow {
+  quote_id: string;
+  quote_number: string;
+  customer_id: string;
+  customer_name: string | null;
+  status: string;
+  season: number | null;
+  booked_cents: number;
+  drawn_cents: number;
+  remaining_cents: number;
+  prepay_earmarked_cents: number;
+  prepay_remaining_cents: number;
+  prepay_applied_cents: number;
 }
 
 export interface PrepayApplication {
@@ -1444,7 +1534,10 @@ export type LicenseType = 'private' | 'commercial' | 'public';
 
 export interface ApplicatorLicense {
   id: string;
-  customer_id: string;
+  /** Customer-held license (RUP buyer). NULL when staff-held. */
+  customer_id: string | null;
+  /** Staff-held license (internal applicator profile). NULL when customer-held. */
+  profile_id: string | null;
   license_number: string;
   license_type: LicenseType;
   holder_name: string;

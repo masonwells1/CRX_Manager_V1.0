@@ -4,7 +4,7 @@
 - `profiles` - Users (id refs auth.users, email, full_name, role, phone, is_active, applicator_license_number, faa_certificate_number)
 - `customers` - Farms (farm_name, assigned_sales_rep, assigned_tier 1-4, credit_limit, finance_charge_rate, prepay_balance)
 - `customer_addresses` - Multiple addresses per customer (label, address, delivery_notes, is_default)
-- `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, product_form, notes [grower description], internal_notes [internal only])
+- `products` - Product master (product_name, sku, category, vendor, tier1-4 pricing, EPA reg, RUP status, signal_word, rei_hours [WPS restricted-entry interval], phi_days [pre-harvest interval], product_form, notes [grower description], internal_notes [internal only])
 - `cost_history` - Cost change audit log (product_id, old/new costs and prices, change_note)
 - `fields` - Farm fields (customer_id, field_name, county, acres, FSA numbers, Mapbox polygon geometry)
 - `field_billing_defaults` - Per-field billing splits (field_id, customer_id, split_pct)
@@ -18,6 +18,7 @@
 - `quote_sections` - Sections within a quote (section_name, sort_order, field_id)
 - `quote_items` - Line items (product_id, section_id, pricing, rates, acres, totals)
 - `quote_versions` - Frozen snapshots of sent quotes (version_number, snapshot_data jsonb)
+- `quote_product_draws` - Per-(quote, product) booking draw-down ledger (quantity_drawn, UNIQUE(quote_id, product_id)). Survives quote edits (save_quote recreates quote_items); written only by `draw_down_quote`/`convert_quote_to_order` SECDEF RPCs. Added `20260610145253`
 - `quote_pdf_templates` - Saved column presets for quote PDF generation (template_name, columns jsonb)
 - `quote_templates` - Reusable quote structures (template_name, description, created_by)
 - `orders` - Confirmed orders (order_number, status, totals, order_date, customer_po_number, is_planned, season, program_notes). Note: `total_paid`/`balance_due` columns were DROPPED — AR is tracked via `invoices.balance_cents`.
@@ -107,7 +108,7 @@
 - `return_items` - Return line items (return_id, order_item_id, product_id, quantity, unit_price, restocked, sort_order)
 
 ## Compliance
-- `applicator_licenses` - Applicator license tracking (customer_id, license_number, license_type: private/commercial/public, holder_name, state, expiry_date, certification_categories text[])
+- `applicator_licenses` - Applicator license tracking; held by a customer OR a staff profile (customer_id uuid NULL, profile_id uuid NULL REFERENCES profiles — CHECK `applicator_licenses_holder_check` requires one holder; license_number, license_type: private/commercial/public, holder_name, state, expiry_date, certification_categories text[], is_active). Staff-held licenses gate job assignment via the `enforce_applicator_license` trigger on `jobs` (migration 20260610185714).
 
 ## Rebates
 - `rebate_programs` - Manufacturer rebate programs (program_name, manufacturer, season, product_id, rebate_type, rebate_amount, start_date, end_date, status)
@@ -152,6 +153,7 @@
 | customer_addresses | All authenticated | Admin / Sales Rep (own customer) | Admin / Sales Rep (own customer) | Admin |
 | quotes | Admin / Sales Rep | Admin / Sales Rep (own) | Admin / Sales Rep (own) | Admin |
 | quote_sections | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
+| quote_product_draws | Admin / Sales Rep | - (SECDEF RPCs only) | - (SECDEF RPCs only) | - (SECDEF RPCs only) |
 | quote_items | All authenticated | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) | Admin / Sales Rep (quote owner) |
 | quote_versions | All authenticated | Admin / Sales Rep (quote owner) | - | - |
 | orders | Admin / Sales Rep | Admin / Sales Rep | Admin | Admin |

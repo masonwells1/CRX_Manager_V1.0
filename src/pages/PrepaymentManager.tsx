@@ -104,6 +104,9 @@ export default function PrepaymentManager() {
   const [deleteReason, setDeleteReason] = useState('');
   const [savingDelete, setSavingDelete] = useState(false);
 
+  // (Assign-to-booking earmark modal removed 2026-06-14 — earmark engine shelved:
+  // docs/roadmap/shelved-earmark-engine/)
+
   // Split Check modal state
   const [showNewCheck, setShowNewCheck] = useState(false);
   const [allCustomers, setAllCustomers] = useState<{ id: string; farm_name: string }[]>([]);
@@ -269,6 +272,9 @@ export default function PrepaymentManager() {
       },
     });
   };
+
+  // (openBooking / handleSaveBooking earmark handlers removed 2026-06-14 — the
+  // booking-prepay earmark engine is shelved: docs/roadmap/shelved-earmark-engine/)
 
   // Fetch bucket labels + all customers for the New Check modal
   useEffect(() => {
@@ -666,7 +672,12 @@ export default function PrepaymentManager() {
                         <tr key={cr.id} className="border-b border-gray-50 hover:bg-gray-50/50">
                           <td className="py-2 px-3 text-secondary">{new Date(cr.created_at).toLocaleDateString()}</td>
                           <td className="py-2 px-3 font-medium">{cr.reference_number || '—'}</td>
-                          <td className="py-2 px-3">{cr.bucket_label ? <Badge variant="default">{cr.bucket_label}</Badge> : '—'}</td>
+                          <td className="py-2 px-3">
+                            <div className="flex flex-wrap items-center gap-1">
+                              {cr.bucket_label && <Badge variant="default">{cr.bucket_label}</Badge>}
+                              {!cr.bucket_label && '—'}
+                            </div>
+                          </td>
                           <td className="py-2 px-3 text-right">{fmt(cr.original_amount_cents)}</td>
                           <td className={`py-2 px-3 text-right font-medium ${cr.balance_cents > 0 ? 'text-crx-green' : 'text-secondary'}`}>
                             {fmt(cr.balance_cents)}
@@ -805,6 +816,9 @@ export default function PrepaymentManager() {
           </div>
         )}
       </Modal>
+
+      {/* (Assign-to-Booking earmark modal removed 2026-06-14 — earmark engine shelved
+          for a reserved-pool redesign: docs/roadmap/shelved-earmark-engine/) */}
 
       {/* Batch Apply All Confirmation */}
       <Modal open={showBatchConfirm} onClose={() => setShowBatchConfirm(false)} title="Apply All Prepayments">

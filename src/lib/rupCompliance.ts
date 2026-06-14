@@ -48,12 +48,15 @@ export async function checkRUPCompliance(
   result.rupProductNames = rupProducts.map((p) => p.product_name);
 
   // 2. Check customer's applicator license
+  // (was `.is('deleted_at', null)` — that column never existed on applicator_licenses,
+  // so this query 400'd and the check silently degraded to the generic warning.
+  // Live-verified + fixed 2026-06-10 alongside migration 20260610185741.)
   const today = localToday();
   const { data: licenses, error: licenseError } = await supabase
     .from('applicator_licenses')
     .select('id, expiry_date')
     .eq('customer_id', customerId)
-    .is('deleted_at', null);
+    .eq('is_active', true);
 
   if (licenseError) {
     return { ...result, warnings: ['Unable to verify applicator license - database error'] };
@@ -81,4 +84,26 @@ export async function checkRUPCompliance(
   );
 
   return result;
+}
+
+export type RUPRegisterDisposition = {
+  /** compliance_status generate_rup_sales_records will record for this sale. */
+  status: 'non_compliant' | 'warning' | null;
+  /** user-facing label matching that status (null = nothing to record). */
+  label: 'NON-COMPLIANT' | 'WARNING' | null;
+};
+
+/**
+ * Classify what the RUP sales register will record, MATCHING the server semantics
+ * in generate_rup_sales_records (migration 20260610185741):
+ *   - missing license -> non_compliant  (label NON-COMPLIANT)
+ *   - expired license -> warning        (label WARNING — flagged, NOT non-compliant)
+ *   - valid / no RUP   -> nothing to record
+ * Keep this in lockstep with that SQL CASE so the point-of-sale warning never
+ * overstates the recorded disposition (#6, 2026-06-13 overlapping-sessions recovery).
+ */
+export function rupRegisterDisposition(res: RUPComplianceResult): RUPRegisterDisposition {
+  if (!res.hasRUPProducts || res.hasValidLicense) return { status: null, label: null };
+  if (res.missingLicense) return { status: 'non_compliant', label: 'NON-COMPLIANT' };
+  return { status: 'warning', label: 'WARNING' };
 }

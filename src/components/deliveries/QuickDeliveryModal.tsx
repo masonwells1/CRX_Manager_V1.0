@@ -248,11 +248,20 @@ export default function QuickDeliveryModal({
       if (error) throw error;
       quickDeliveryIdem.resetKey();
 
-      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null }>(data, 'create_quick_delivery');
+      const result = assertRpcResult<{ delivery_id: string; delivery_number: string; invoice_number: string | null; credit_warning?: boolean }>(data, 'create_quick_delivery');
       const invoiceMsg = result.invoice_number
         ? ` with draft invoice ${result.invoice_number}`
         : ' (no invoice created)';
       toast('success', `Quick delivery ${result.delivery_number} created${invoiceMsg}`);
+
+      // #7 (G4 = warn-but-allow): create_quick_delivery already computes the
+      // draft-inclusive projected exposure, returns credit_warning, AND notifies
+      // admins server-side (Codex P2: do NOT re-run check_customer_credit_limit
+      // here — it excludes drafts so it'd miss the just-created delivery crossing
+      // the limit, and would double-notify). Just surface the RPC's flag.
+      if (result.credit_warning) {
+        toast('warning', `Heads up: this delivery puts ${selectedCustomer.farm_name} over their credit limit. Admins have been notified.`);
+      }
 
       // Reset form
       setSelectedCustomer(null);

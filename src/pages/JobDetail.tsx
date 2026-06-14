@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -11,8 +11,12 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
-import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, checkMutationResult, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { getLicenseStatus, licenseStatusLabel } from '../lib/licenseStatus';
+import { generateWpsNoticePdf } from '../lib/wpsNoticePdf';
+import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerateWpsNotice } from '../lib/jobSaveHelpers';
+import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
@@ -131,6 +135,8 @@ export default function JobDetail() {
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [applicators, setApplicators] = useState<Profile[]>([]);
+  // Staff-held license rows per profile (B5 license gates)
+  const [licensesByProfile, setLicensesByProfile] = useState<Record<string, { expiry_date: string; is_active: boolean }[]>>({});
   const [recipes, setRecipes] = useState<BlendRecipe[]>([]);
 
   // Job form
@@ -140,6 +146,92 @@ export default function JobDetail() {
   const [jobDate, setJobDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [applicatorId, setApplicatorId] = useState('');
+  // The applicator currently saved on the job — the license gate only fires on a CHANGE
+  const [savedApplicatorId, setSavedApplicatorId] = useState<string | null>(null);
+  const [showLicenseOverrideConfirm, setShowLicenseOverrideConfirm] = useState(false);
+  const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
+  // B3: WPS pre-application notice PDF
+  const [printingWps, setPrintingWps] = useState(false);
+  // C4: weather auto-capture at completion
+  const [fetchingWeather, setFetchingWeather] = useState(false);
+
+  const handleWpsNotice = async () => {
+    // #5: the notice is built from current form state, so it MUST reflect the saved
+    // job. Block while there are unsaved edits — the printed REI/PHI, fields, products
+    // and applicator must match the persisted record, not in-progress form values.
+    if (!canGenerateWpsNotice({ isDirty })) {
+      toast('error', 'Save the job before printing the WPS notice — it must match the saved record.');
+      return;
+    }
+    setPrintingWps(true);
+    try {
+      // Pull label fields for EVERY product on the job, INCLUDING any since-
+      // deactivated ones — allProducts is is_active=true only, so a historical or
+      // scheduled job with a retired product would otherwise print a notice missing
+      // its EPA reg / signal word / REI / PHI (Codex 2026-06-13 finding 2).
+      const wpsPids = chemRows.filter((c) => c.product_id).map((c) => c.product_id);
+      const labelById = new Map<string, { product_name: string; epa_registration: string | null; signal_word: string | null; rei_hours: number | null; phi_days: number | null }>();
+      if (wpsPids.length > 0) {
+        const { data: lp, error: lpErr } = await supabase
+          .from('products')
+          .select('id, product_name, epa_registration, signal_word, rei_hours, phi_days')
+          .in('id', wpsPids);
+        // A WPS notice is a compliance document — never print it with missing label
+        // data. Supabase returns { data:null, error } without throwing, so abort the
+        // PDF on a failed lookup, or if any job product has no label row at all
+        // (Codex 2026-06-13 round-3 finding 1).
+        if (lpErr || !lp) {
+          toast('error', 'Could not load product label data — try again before printing the WPS notice.');
+          setPrintingWps(false);
+          return;
+        }
+        (lp as Array<{ id: string; product_name: string; epa_registration: string | null; signal_word: string | null; rei_hours: number | null; phi_days: number | null }>).forEach((p) => labelById.set(p.id, p));
+        const missingLabel = wpsPids.filter((pid) => !labelById.has(pid));
+        if (missingLabel.length > 0) {
+          toast('error', 'Some products on this job have no label data on file — the WPS notice cannot be completed.');
+          setPrintingWps(false);
+          return;
+        }
+      }
+      await generateWpsNoticePdf({
+        job_number: jobNumber || 'draft',
+        customer_name: customers.find((c) => c.id === customerId)?.farm_name || 'Customer',
+        application_date: jobDate,
+        scheduled_time: scheduledTime || null,
+        applicator_name: applicators.find((a) => a.id === applicatorId)?.full_name || null,
+        fields: fieldRows
+          .filter((f) => f.field_id)
+          .map((f) => {
+            const fld = allFields.find((af) => af.id === f.field_id);
+            return {
+              field_name: fld?.field_name || 'Field',
+              county: fld?.county || null,
+              state: fld?.state || null,
+              acres: parseFloat(f.acres_to_treat) || 0,
+            };
+          }),
+        products: chemRows
+          .filter((c) => c.product_id)
+          .map((c) => {
+            const p = labelById.get(c.product_id);
+            return {
+              product_name: p?.product_name || c.product_name || 'Product',
+              epa_registration: p?.epa_registration || null,
+              signal_word: p?.signal_word || null,
+              rei_hours: p?.rei_hours ?? null,
+              phi_days: p?.phi_days ?? null,
+              rate_per_acre: parseFloat(c.rate_per_acre) || null,
+              rate_unit: c.rate_unit || null,
+            };
+          }),
+      });
+      if (profile) logActivity({ event: 'wps_notice_printed', description: `WPS pre-application notice generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'wps_notice_pdf' } });
+      toast('error', 'Failed to generate WPS notice');
+    }
+    setPrintingWps(false);
+  };
   const [vehicleId, setVehicleId] = useState('');
   const [recipeId, setRecipeId] = useState('');
   const [notes, setNotes] = useState('');
@@ -200,6 +292,17 @@ export default function JobDetail() {
     setVehicles((vehicleResult.data || []) as Vehicle[]);
     setApplicators((appResult.data || []) as Profile[]);
     setRecipes((recipeResult.data || []) as BlendRecipe[]);
+
+    // Staff-held license rows for the license-gate badge + pre-save check (B5)
+    const licResult = await supabase
+      .from('applicator_licenses')
+      .select('profile_id, expiry_date, is_active')
+      .not('profile_id', 'is', null);
+    const byProfile: Record<string, { expiry_date: string; is_active: boolean }[]> = {};
+    ((licResult.data || []) as { profile_id: string; expiry_date: string; is_active: boolean }[]).forEach((l) => {
+      (byProfile[l.profile_id] ||= []).push({ expiry_date: l.expiry_date, is_active: l.is_active });
+    });
+    setLicensesByProfile(byProfile);
   };
 
   const fetchJob = useCallback(async () => {
@@ -233,6 +336,7 @@ export default function JobDetail() {
     setJobDate(j.job_date);
     setScheduledTime(j.scheduled_time || '');
     setApplicatorId(j.applicator_id || '');
+    setSavedApplicatorId(j.applicator_id || null);
     setVehicleId(j.vehicle_id || '');
     setRecipeId(j.recipe_id || '');
     setNotes(j.notes || '');
@@ -312,6 +416,57 @@ export default function JobDetail() {
     ? Math.ceil(totalGallons / selectedVehicle.capacity_gallons)
     : null;
 
+  // C4: weather auto-capture at completion (first selected field's centroid).
+  // fields.centroid is a PostGIS geometry — its GeoJSON text is exposed only by
+  // the get_field_geojson RPC (a plain fields.select('*') has NO centroid_geojson
+  // column), so fetch it for the first selected field. Fail-soft: any miss just
+  // hides the weather button, leaving manual entry (weather prefill is never a gate).
+  const firstFieldId = fieldRows.find((r) => r.field_id)?.field_id ?? null;
+  const [jobFieldCentroid, setJobFieldCentroid] = useState<{ lat: number; lng: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!firstFieldId) {
+      setJobFieldCentroid(null);
+      return;
+    }
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('get_field_geojson', { p_field_id: firstFieldId });
+        if (cancelled) return;
+        if (error) {
+          setJobFieldCentroid(null);
+          return;
+        }
+        const rows = assertRpcResult<Array<{ centroid_geojson?: string | null }>>(data, 'get_field_geojson');
+        setJobFieldCentroid(parseCentroid(rows[0]?.centroid_geojson));
+      } catch {
+        if (!cancelled) setJobFieldCentroid(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [firstFieldId]);
+
+  const handleFetchWeather = async () => {
+    if (!jobFieldCentroid) return;
+    setFetchingWeather(true);
+    const w = await fetchCurrentWeather(jobFieldCentroid.lat, jobFieldCentroid.lng);
+    setFetchingWeather(false);
+    if (!w) {
+      toast('error', 'Could not fetch weather — enter conditions manually');
+      return;
+    }
+    setAppliedInfo((prev) => ({
+      ...prev,
+      wind_speed: w.wind_speed_mph.toString(),
+      wind_direction: w.wind_direction,
+      temperature: w.temperature_f.toString(),
+      humidity: w.humidity_pct.toString(),
+    }));
+    toast('success', 'Weather filled from current conditions — adjust if needed');
+  };
+
   const handleSave = async () => {
     // Codex P2 fix (PR #59, 2026-05-16): reset saveJobIdem per save attempt.
     // The job form is always-editable (no separate edit toggle), so any
@@ -320,13 +475,53 @@ export default function JobDetail() {
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
 
+    // B5 license gate pre-check — only when assigning or CHANGING the applicator
+    // (editing other fields on a job that already has this applicator stays allowed,
+    // matching the DB trigger's IS NOT DISTINCT FROM skip).
+    if (applicatorId && applicatorId !== (savedApplicatorId || '')) {
+      const st = getLicenseStatus(licensesByProfile[applicatorId] || []);
+      if (st.status === 'expired') {
+        if (profile?.role === 'admin') {
+          setShowLicenseOverrideConfirm(true);
+        } else {
+          toast('error', "This applicator's license has expired — an admin can override if needed.");
+        }
+        return;
+      }
+    }
+
+    await performSave(false);
+  };
+
+  /** Assign the applicator via the override RPC (admin-only path, B5). */
+  const assignWithOverride = async (jobId: string) => {
+    assignIdem.resetKey();
+    const { data, error } = await supabase.rpc('assign_job_applicator', {
+      p_job_id: jobId,
+      p_applicator_id: applicatorId,
+      p_license_override: true,
+      p_performed_by: profile!.id,
+      p_idempotency_key: assignIdem.getKey(),
+    });
+    if (error) throw error;
+    assertRpcResult(data, 'assign_job_applicator');
+    assignIdem.resetKey();
+  };
+
+  const performSave = async (licenseOverride: boolean) => {
     setSaving(true);
     try {
       const payload = {
         customer_id: customerId,
         job_date: jobDate,
         scheduled_time: scheduledTime || null,
-        applicator_id: applicatorId || null,
+        // #4 (atomic-safe override): never change the applicator INSIDE save_job. New
+        // job -> create unassigned; existing job -> keep the persisted applicator (a
+        // same-value UPDATE OF applicator_id is a no-op for the license trigger, which
+        // returns early when NEW.applicator_id IS NOT DISTINCT FROM OLD). The override
+        // (re)assignment runs via assign_job_applicator AFTER save_job commits, so a
+        // failed save can never leave a committed applicator change behind.
+        applicator_id: overrideSaveApplicatorId({ licenseOverride, isNew, applicatorId, savedApplicatorId }),
         vehicle_id: vehicleId || null,
         recipe_id: recipeId || null,
         notes: notes || null,
@@ -367,10 +562,35 @@ export default function JobDetail() {
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
 
+      // #4: the job is now persisted with its applicator UNCHANGED. Flip the
+      // applicator via assign_job_applicator (admin override) ONLY after the save
+      // committed. If THIS fails, the edits are already saved and the applicator is
+      // simply unchanged — a clean, retryable state, never a partial "applicator
+      // changed but the save was lost" (the failure-after-override-assignment case).
+      if (shouldReassignApplicatorAfterSave({ licenseOverride, applicatorId, savedApplicatorId })) {
+        try {
+          await assignWithOverride(isNew ? result.job_id : id!);
+        } catch (assignErr) {
+          Sentry.captureException(assignErr instanceof Error ? assignErr : new Error(String(assignErr)), { extra: { context: 'assign_job_applicator_after_save' } });
+          toast('error', isNew
+            ? 'Job created, but the override applicator assignment failed — assign the applicator from this page.'
+            : 'Job saved, but the override applicator change failed — retry the applicator assignment.');
+          setIsDirty(false);
+          if (isNew) {
+            navigate(`/jobs/${result.job_id}`);
+          } else {
+            await fetchJob();
+          }
+          setSaving(false);
+          return;
+        }
+      }
+
       if (profile) logActivity({ event: isNew ? 'job_created' : 'job_updated', description: isNew ? `Job created for ${customers.find(c => c.id === customerId)?.farm_name}` : `Job ${jobNumber} updated`, performedBy: profile.id });
 
       toast('success', isNew ? 'Job created' : 'Job saved');
       setIsDirty(false);
+      setSavedApplicatorId(applicatorId || null);
 
       if (isNew) {
         navigate(`/jobs/${result.job_id}`);
@@ -378,8 +598,17 @@ export default function JobDetail() {
         await fetchJob();
       }
     } catch (err: unknown) {
-      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_job' } });
-      toast('error', err instanceof Error ? err.message : 'Failed to save job');
+      // Race: licenses changed since page load and the DB trigger fired.
+      if (hasRpcCode(err, RpcErrorCodes.LICENSE_EXPIRED)) {
+        if (profile?.role === 'admin') {
+          setShowLicenseOverrideConfirm(true);
+        } else {
+          toast('error', "This applicator's license has expired — an admin can override if needed.");
+        }
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_job' } });
+        toast('error', err instanceof Error ? err.message : 'Failed to save job');
+      }
     }
     setSaving(false);
   };
@@ -592,6 +821,12 @@ export default function JobDetail() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {!isNew && fieldRows.some((f) => f.field_id) && chemRows.some((c) => c.product_id) && (
+            <Button variant="secondary" onClick={handleWpsNotice} loading={printingWps}>
+              <Printer className="w-4 h-4" />
+              WPS Notice
+            </Button>
+          )}
           {!isNew && (status === 'scheduled' || status === 'in_progress') && (
             <Button variant="danger" onClick={() => setShowCancelConfirm(true)} loading={cancelling}>
               <Ban className="w-4 h-4" />
@@ -678,6 +913,17 @@ export default function JobDetail() {
                 <option key={a.id} value={a.id}>{a.full_name} ({a.role})</option>
               ))}
             </select>
+            {applicatorId && (() => {
+              const st = getLicenseStatus(licensesByProfile[applicatorId] || []);
+              if (st.status === 'valid') return null;
+              return (
+                <p className={`mt-1 text-xs font-medium ${
+                  st.status === 'expired' ? 'text-red-600' : st.status === 'expiring_soon' ? 'text-yellow-600' : 'text-gray-500'
+                }`}>
+                  {licenseStatusLabel(st)}
+                </p>
+              );
+            })()}
           </div>
           <div>
             <label className="block text-sm font-medium text-nav-dark mb-1">Vehicle</label>
@@ -902,6 +1148,12 @@ export default function JobDetail() {
           <p className="text-sm text-secondary">
             Record weather conditions and actual application data. This will create an application record and deduct inventory.
           </p>
+          {jobFieldCentroid && (
+            <Button variant="ghost" size="sm" onClick={handleFetchWeather} loading={fetchingWeather}>
+              <CloudSun className="w-4 h-4" />
+              Use current weather at {allFields.find(f => f.id === fieldRows.find(r => r.field_id)?.field_id)?.field_name || 'field'}
+            </Button>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <Input label="Wind Speed (mph)" type="number" value={appliedInfo.wind_speed}
               onChange={(e) => setAppliedInfo({ ...appliedInfo, wind_speed: e.target.value })} />
@@ -967,6 +1219,18 @@ export default function JobDetail() {
       )}
 
       {/* Complete Job Confirm */}
+      {/* License-override confirm (admin only, B5) */}
+      <ConfirmModal
+        open={showLicenseOverrideConfirm}
+        onClose={() => setShowLicenseOverrideConfirm(false)}
+        onConfirm={() => { setShowLicenseOverrideConfirm(false); performSave(true); }}
+        title="Applicator License Expired"
+        message="This applicator's license has expired. Save the job and assign them anyway? The override is recorded in the activity log."
+        confirmLabel="Assign Anyway"
+        variant="warning"
+        loading={saving}
+      />
+
       <ConfirmModal
         open={showCompleteConfirm}
         onClose={() => setShowCompleteConfirm(false)}

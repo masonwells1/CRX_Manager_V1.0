@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck, Mail, RotateCcw,
+  Save, Send, Ban, Plus, Trash2, Search, DollarSign, FileText, Printer, Truck, Mail, RotateCcw, AlertTriangle,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -20,6 +20,7 @@ import { sendEmail, pdfToBase64, buildEmailHtml } from '../lib/emailService';
 import { logActivity } from '../lib/activityLogger';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
+import { checkRUPCompliance, rupRegisterDisposition } from '../lib/rupCompliance';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import WriteOffModal from '../components/invoices/WriteOffModal';
@@ -112,6 +113,8 @@ export default function InvoiceDetail() {
   // Print PDF
   const [printing, setPrinting] = useState(false);
   const printingRef = useRef(false);
+  // Latest invoice id the route is showing — older in-flight fetches bail (stale guard).
+  const activeInvoiceIdRef = useRef<string | undefined>(undefined);
 
   // Email invoice
   const [emailing, setEmailing] = useState(false);
@@ -157,6 +160,57 @@ export default function InvoiceDetail() {
   // Post loading
   const [posting, setPosting] = useState(false);
   const [showPostConfirm, setShowPostConfirm] = useState(false);
+  // B1 (deep-dive H1): RUP warning surfaced in the post-confirm when the buyer
+  // has no valid applicator license — posting is the legal point of sale.
+  const [rupPostWarning, setRupPostWarning] = useState<string | null>(null);
+
+  const openPostConfirm = async () => {
+    postIdem.resetKey();
+    let warning: string | null = null;
+    // The RUP check must NEVER block posting — any failure falls through to the
+    // plain confirm (warn+confirm by design, not a gate).
+    try {
+      if (invoice?.invoice_group_id) {
+        // Posting a grouped invoice posts EVERY sibling atomically via
+        // post_invoice_group (see handlePost), so the RUP advisory must cover the
+        // WHOLE group, not just the displayed invoice — a non-RUP sibling could
+        // otherwise post a RUP sibling with no warning. Check each sibling's own
+        // (customer, products) and aggregate. Still advisory, never a gate.
+        const { data: grp } = await supabase
+          .from('invoices')
+          .select('id, invoice_number, customer_id, invoice_items(product_id)')
+          .eq('invoice_group_id', invoice.invoice_group_id);
+        const parts: string[] = [];
+        for (const inv of (grp || []) as Array<{ invoice_number: string; customer_id: string | null; invoice_items: { product_id: string | null }[] | null }>) {
+          const pids = (inv.invoice_items || []).map((x) => x.product_id).filter((p): p is string => Boolean(p));
+          if (!inv.customer_id || pids.length === 0) continue;
+          const res = await checkRUPCompliance(inv.customer_id, pids);
+          if (res.hasRUPProducts && !res.hasValidLicense) {
+            const disp = rupRegisterDisposition(res);
+            parts.push(`${inv.invoice_number}: ${res.rupProductNames.join(', ')} — ${res.missingLicense ? 'NO applicator license' : 'EXPIRED license'} (${disp.label})`);
+          }
+        }
+        if (parts.length > 0) {
+          warning = `Posting this invoice group posts every invoice in it. Restricted-use products without a valid license — ${parts.join('; ')}. These will be recorded in the RUP sales register.`;
+        }
+      } else {
+        const productIds = items.map((it) => it.product_id).filter((p): p is string => Boolean(p));
+        if (invoice?.customer_id && productIds.length > 0) {
+          const res = await checkRUPCompliance(invoice.customer_id, productIds);
+          if (res.hasRUPProducts && !res.hasValidLicense) {
+            // #6: align the warning's stated disposition with what the DB actually
+            // records — missing license = NON-COMPLIANT, expired = WARNING (flagged).
+            const disp = rupRegisterDisposition(res);
+            warning = `This invoice includes restricted-use products (${res.rupProductNames.join(', ')}) and the customer has ${res.missingLicense ? 'NO applicator license' : 'only EXPIRED applicator licenses'} on file — it will be recorded as ${disp.label} in the RUP sales register.`;
+          }
+        }
+      }
+    } catch (err) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'rup_post_check' } });
+    }
+    setRupPostWarning(warning);
+    setShowPostConfirm(true);
+  };
 
   // Fetch reference data
   useEffect(() => {
@@ -173,6 +227,9 @@ export default function InvoiceDetail() {
   }, []);
 
   const fetchInvoice = useCallback(async (invoiceId: string) => {
+    // Stale-fetch guard: on rapid invoice-to-invoice navigation an older
+    // in-flight fetch must not render the previous invoice's amounts.
+    const isStale = () => activeInvoiceIdRef.current !== invoiceId;
     setLoading(true);
     // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
@@ -181,6 +238,7 @@ export default function InvoiceDetail() {
       .eq('id', invoiceId)
       .single();
 
+    if (isStale()) return;
     if (error || !data) {
       toast('error', 'Invoice not found');
       navigate('/invoices');
@@ -200,6 +258,7 @@ export default function InvoiceDetail() {
     // Attach salesman in the same shape the JSX consumes (`invoice.salesman?.full_name`).
     (data as Record<string, unknown>).salesman = salesman;
 
+    if (isStale()) return;
     setInvoice(data as Invoice);
     setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
 
@@ -224,6 +283,7 @@ export default function InvoiceDetail() {
           .not('status', 'in', '("voided","cancelled")')
           .order('invoice_number'),
       ]);
+      if (isStale()) return;
       setParentOrder(orderRes.data as { id: string; order_number: string } | null);
 
       // PR-07 follow-up: resolve driver names via profile_public_view.
@@ -275,6 +335,7 @@ export default function InvoiceDetail() {
       .eq('invoice_id', invoiceId)
       .order('sort_order');
 
+    if (isStale()) return;
     if (itemData) {
       setItems(
         (itemData as Array<Record<string, unknown> & { id: string; product_id: string; product?: { product_name: string }; description: string; quantity: number; unit_price_cents: number; extended_cents: number; cost_cents: number; rate_per_acre?: number | null; acres?: number | null; unit_size?: string; rate_unit?: string; total_applied?: number; sort_order?: number }>).map((it) => ({
@@ -312,6 +373,7 @@ export default function InvoiceDetail() {
       .select('id, amount_cents, reason, created_at, reversed_at')
       .eq('invoice_id', invoiceId)
       .order('created_at');
+    if (isStale()) return;
     setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
     setLoading(false);
@@ -319,6 +381,7 @@ export default function InvoiceDetail() {
 
   // Fetch existing invoice
   useEffect(() => {
+    activeInvoiceIdRef.current = id;
     if (!isNew && id) fetchInvoice(id);
   }, [id, isNew, fetchInvoice]);
 
@@ -819,7 +882,7 @@ export default function InvoiceDetail() {
           )}
           <GuardrailBanner warning={creditWarning} onDismiss={dismissCreditWarning} />
           {!isNew && editable && isAdmin && (
-            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={() => { postIdem.resetKey(); setShowPostConfirm(true); }} loading={posting}>
+            <Button variant="secondary" icon={<Send className="w-4 h-4" />} onClick={openPostConfirm} loading={posting}>
               Post
             </Button>
           )}
@@ -1403,9 +1466,12 @@ export default function InvoiceDetail() {
         onClose={() => setShowPostConfirm(false)}
         onConfirm={() => { setShowPostConfirm(false); handlePost(); }}
         title="Post Invoice"
-        message="Post this invoice? This will lock amounts and start AR aging."
+        message={rupPostWarning
+          ? `${rupPostWarning} Post this invoice anyway? This will lock amounts and start AR aging.`
+          : 'Post this invoice? This will lock amounts and start AR aging.'}
         confirmLabel="Post Invoice"
-        variant="warning"
+        variant={rupPostWarning ? 'danger' : 'warning'}
+        icon={AlertTriangle}
         loading={posting}
       />
     </div>

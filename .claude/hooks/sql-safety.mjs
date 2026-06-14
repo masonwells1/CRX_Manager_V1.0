@@ -6,8 +6,22 @@
 //   - Only inspect *.sql files in supabase/migrations/
 //   - If no content visible, allow (fail-open)
 //   - Block known patterns that have caused recurring bugs.
+//
+// v2 (C3, 2026-06-10) — registry-backed rules 6-8 (read .claude/schema-registry.json):
+//   6. UPDATE <table> SET <col> = NULL where col is NOT NULL live
+//      (B1: unapply_credit_memo set returns.total_credit_cents = NULL — NOT NULL DEFAULT 0)
+//   7. INSERT INTO <table> (...) explicitly listing a column that doesn't exist live
+//      (B1 follow-on: issue_return_credit wrote returns.credited_by before the column existed)
+//   8. nextval()/currval()/setval() or '<name>_seq'::regclass referencing a sequence
+//      that doesn't exist live (B6: cm_invoice_number_seq was disk-only for months)
+//   Carve-outs: tables CREATEd, columns ADDed (ALTER TABLE ... ADD COLUMN), columns
+//   with DROP NOT NULL, and sequences CREATEd in the SAME file are exempt.
+//   Marker `-- sql-safety: exempt-registry` skips rules 6-8 only (rules 1-5 always run).
+//   Rules 6-8 fail-open when the registry is missing or still v1-shaped.
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 function out(decision, reason) {
   const payload = decision === "block"
@@ -41,13 +55,22 @@ if (/\bpg_get_functiondef\b/.test(content)) {
   violations.push("pg_get_functiondef() — never use this to clone/modify functions; rewrite explicitly.");
 }
 
+// Schema registry (v2) — powers rules 2 (augmented) and 6-8. Fail-open if absent.
+let registry = null;
+try {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  registry = JSON.parse(readFileSync(path.join(here, "..", "schema-registry.json"), "utf8"));
+} catch { /* fail-open */ }
+
 // 2. updated_at on tables that lack the column
-const tablesWithoutUpdatedAt = [
+// (hardcoded fallback list, unioned with the registry's live-derived list)
+const tablesWithoutUpdatedAt = [...new Set([
   "commissions", "purchase_order_items", "payments", "write_offs", "delivery_items",
   "order_items", "quote_items", "return_items", "finance_charges", "prepay_applications",
   "cycle_counts", "cycle_count_items", "activity_feed", "financial_audit_log",
   "idempotency_keys", "receiving_records", "inventory_transactions", "invoice_line_allocations",
-];
+  ...(Array.isArray(registry?.tables_without_updated_at) ? registry.tables_without_updated_at : []),
+])];
 for (const t of tablesWithoutUpdatedAt) {
   const re = new RegExp(`UPDATE\\s+${t}\\s+SET[\\s\\S]{0,400}?\\bupdated_at\\b`, "i");
   if (re.test(content)) {
@@ -71,7 +94,11 @@ if (/idempotency_keys/i.test(content)) {
 }
 
 // 4. ::text cast on idempotency_keys.result (jsonb)
-if (/INSERT\s+INTO\s+idempotency_keys[\s\S]{0,400}?::text/i.test(content)) {
+// `to_jsonb(expr::text)` is SAFE — the cast is wrapped, so the inserted value
+// is still jsonb (live batch_post_invoices stores to_jsonb(v_count::text));
+// mask that shape first so only bare ::text near the INSERT trips the rule.
+const rule4Content = content.replace(/to_jsonb\s*\([^()]*::text[^()]*\)/gi, "to_jsonb(__safe_wrapped__)");
+if (/INSERT\s+INTO\s+idempotency_keys[\s\S]{0,400}?::text/i.test(rule4Content)) {
   violations.push("INSERT INTO idempotency_keys with ::text cast — result is jsonb. Pass jsonb_build_object(...) without ::text.");
 }
 
@@ -89,8 +116,106 @@ if (truncatingMatches) {
   );
 }
 
+// ─── Rules 6-8: registry-backed live-schema checks ───────────────────────
+const registryExempt = /--\s*sql-safety:\s*exempt-registry/i.test(content);
+const hasV2 = registry && registry.columns && registry.not_null_columns && Array.isArray(registry.sequences);
+
+if (!registryExempt && hasV2) {
+  // Work on comment-stripped content (reuse `stripped` from rule 5).
+  const sql = stripped;
+
+  // In-file carve-outs.
+  const inFileTables = new Set();
+  let m6;
+  const ctRe = /CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(\w+)/gi;
+  while ((m6 = ctRe.exec(sql)) !== null) inFileTables.add(m6[1]);
+
+  const inFileSequences = new Set();
+  const csRe = /CREATE\s+SEQUENCE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:public\.)?(\w+)/gi;
+  while ((m6 = csRe.exec(sql)) !== null) inFileSequences.add(m6[1]);
+
+  const inFileAddedCols = {};       // table -> Set(col)
+  const inFileDroppedNotNull = {};  // table -> Set(col)
+  const alterRe = /ALTER\s+TABLE\s+(?:ONLY\s+)?(?:public\.)?(\w+)\b([\s\S]*?)(?=;|$)/gi;
+  while ((m6 = alterRe.exec(sql)) !== null) {
+    const tbl = m6[1];
+    const body = m6[2];
+    let cm;
+    const addRe = /ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?/gi;
+    while ((cm = addRe.exec(body)) !== null) (inFileAddedCols[tbl] = inFileAddedCols[tbl] || new Set()).add(cm[1]);
+    const dnnRe = /ALTER\s+(?:COLUMN\s+)?"?(\w+)"?\s+DROP\s+NOT\s+NULL/gi;
+    while ((cm = dnnRe.exec(body)) !== null) (inFileDroppedNotNull[tbl] = inFileDroppedNotNull[tbl] || new Set()).add(cm[1]);
+  }
+
+  // Rule 6 — UPDATE <table> SET <col> = NULL where col is NOT NULL live.
+  const updRe = /UPDATE\s+(?:ONLY\s+)?(?:public\.)?(\w+)(?:\s+(?:AS\s+)?\w+)?\s+SET\b([\s\S]*?)(?=\bWHERE\b|\bRETURNING\b|;|$)/gi;
+  while ((m6 = updRe.exec(sql)) !== null) {
+    const tbl = m6[1];
+    const nn = registry.not_null_columns[tbl];
+    if (!nn || inFileTables.has(tbl)) continue;
+    const notNullSet = new Set([...(nn.no_default || []), ...(nn.with_default || [])]);
+    let sm;
+    const setNullRe = /\b(\w+)\s*=\s*NULL\b/gi;
+    while ((sm = setNullRe.exec(m6[2])) !== null) {
+      const col = sm[1];
+      if (notNullSet.has(col) && !inFileDroppedNotNull[tbl]?.has(col)) {
+        violations.push(
+          `UPDATE ${tbl} SET ${col} = NULL — ${col} is NOT NULL live; Postgres rejects every call ` +
+          `(B1 class: returns.total_credit_cents). Use the column's neutral value (e.g. 0) or DROP NOT NULL first.`
+        );
+      }
+    }
+  }
+
+  // Rule 7 — INSERT INTO <table> (...) listing a column that doesn't exist live.
+  const insRe = /INSERT\s+INTO\s+(?:public\.)?(\w+)\s*\(([^)]+)\)/gi;
+  while ((m6 = insRe.exec(sql)) !== null) {
+    const tbl = m6[1];
+    const known = registry.columns[tbl];
+    if (!known || inFileTables.has(tbl)) continue;
+    const cols = m6[2].split(",").map(c => c.replace(/"/g, "").trim());
+    if (!cols.every(c => /^\w+$/.test(c))) continue; // not a plain column list — skip
+    const allowed = new Set([...known, ...(inFileAddedCols[tbl] || [])]);
+    const unknown = cols.filter(c => !allowed.has(c));
+    if (unknown.length > 0) {
+      violations.push(
+        `INSERT INTO ${tbl} (...${unknown.join(", ")}...) — column(s) do not exist live ` +
+        `(B1 class: returns.credited_by was referenced before it existed). ` +
+        `ADD COLUMN in this migration first, or fix the column name.`
+      );
+    }
+  }
+
+  // Rule 8 — sequence refs that don't exist live.
+  const seqSet = new Set(registry.sequences);
+  const seenSeqViolations = new Set();
+  const nvRe = /\b(?:nextval|currval|setval)\s*\(\s*'(?:public\.)?(\w+)'/gi;
+  while ((m6 = nvRe.exec(sql)) !== null) {
+    const seq = m6[1];
+    if (!seqSet.has(seq) && !inFileSequences.has(seq) && !seenSeqViolations.has(seq)) {
+      seenSeqViolations.add(seq);
+      violations.push(
+        `nextval/currval/setval('${seq}') — sequence does not exist live ` +
+        `(B6 class: cm_invoice_number_seq was disk-only and crashed on first use). ` +
+        `CREATE SEQUENCE in this migration, or fix the name. Live sequences: ${[...seqSet].join(", ")}.`
+      );
+    }
+  }
+  const rcRe = /'(?:public\.)?(\w+_seq)'\s*::\s*regclass/gi;
+  while ((m6 = rcRe.exec(sql)) !== null) {
+    const seq = m6[1];
+    if (!seqSet.has(seq) && !inFileSequences.has(seq) && !seenSeqViolations.has(seq)) {
+      seenSeqViolations.add(seq);
+      violations.push(`'${seq}'::regclass — sequence does not exist live. CREATE SEQUENCE first or fix the name.`);
+    }
+  }
+}
+
 if (violations.length > 0) {
-  out("block", "SQL SAFETY VIOLATION: " + violations.join(" | "));
+  out("block", "SQL SAFETY VIOLATION: " + violations.join(" | ") +
+    (hasV2 && !registryExempt
+      ? " | (If a registry-backed rule 6-8 hit is a false positive because the schema just changed, refresh via /regen-schema-registry, or add -- sql-safety: exempt-registry with a justification comment.)"
+      : ""));
 }
 
 out("allow");

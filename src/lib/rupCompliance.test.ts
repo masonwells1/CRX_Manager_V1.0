@@ -26,8 +26,20 @@ vi.mock('./db', () => {
   };
 });
 
-import { checkRUPCompliance } from './rupCompliance';
+import { checkRUPCompliance, rupRegisterDisposition, type RUPComplianceResult } from './rupCompliance';
 import { supabase } from './db';
+
+function rupRes(p: Partial<RUPComplianceResult>): RUPComplianceResult {
+  return {
+    hasRUPProducts: false,
+    hasValidLicense: false,
+    expiredLicense: false,
+    missingLicense: false,
+    rupProductNames: [],
+    warnings: [],
+    ...p,
+  };
+}
 
 function mockSupabaseFrom(responses: Record<string, { data: unknown[] | null; error: null }>) {
   (supabase.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
@@ -129,5 +141,22 @@ describe('checkRUPCompliance', () => {
     expect(result.rupProductNames).toEqual(['Atrazine', 'Paraquat']);
     expect(result.warnings[0]).toContain('Atrazine');
     expect(result.warnings[0]).toContain('Paraquat');
+  });
+});
+
+// Mirrors the CASE in generate_rup_sales_records (migration 20260610185741):
+//   missing -> non_compliant, expired -> warning, valid/none -> nothing.
+describe('rupRegisterDisposition (#6 — UI disposition matches the DB record)', () => {
+  it('no RUP products -> records nothing', () => {
+    expect(rupRegisterDisposition(rupRes({ hasRUPProducts: false }))).toEqual({ status: null, label: null });
+  });
+  it('RUP + valid license -> records nothing', () => {
+    expect(rupRegisterDisposition(rupRes({ hasRUPProducts: true, hasValidLicense: true }))).toEqual({ status: null, label: null });
+  });
+  it('RUP + MISSING license -> non_compliant / NON-COMPLIANT', () => {
+    expect(rupRegisterDisposition(rupRes({ hasRUPProducts: true, missingLicense: true }))).toEqual({ status: 'non_compliant', label: 'NON-COMPLIANT' });
+  });
+  it('RUP + EXPIRED license -> warning / WARNING (NOT non-compliant)', () => {
+    expect(rupRegisterDisposition(rupRes({ hasRUPProducts: true, expiredLicense: true }))).toEqual({ status: 'warning', label: 'WARNING' });
   });
 });

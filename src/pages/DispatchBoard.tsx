@@ -13,12 +13,13 @@ import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import Skeleton from '../components/ui/Skeleton';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import { usePageMeta } from '../hooks/usePageMeta';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, checkMutationResult } from '../lib/db';
+import { supabase, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { Sentry } from '../lib/sentry';
-import { logActivity } from '../lib/activityLogger';
 import { localToday } from '../lib/dateUtils';
 import type { Job, Profile, Field } from '../types';
 
@@ -49,6 +50,10 @@ export default function DispatchBoard() {
   const [dateFilter, setDateFilter] = useState(localToday());
   const [applicatorFilter, setApplicatorFilter] = useState('');
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+
+  // License-override confirm (B5 license gates) — admin only
+  const [licenseOverridePrompt, setLicenseOverridePrompt] = useState<{ jobId: string; applicatorId: string } | null>(null);
+  const assignIdem = useIdempotencyKey('assign_job_applicator', profile?.id || '');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -143,29 +148,32 @@ export default function DispatchBoard() {
     urgent: { variant: 'error', label: 'Urgent' },
   };
 
-  async function handleAssign(jobId: string, applicatorId: string) {
+  async function handleAssign(jobId: string, applicatorId: string, licenseOverride = false) {
+    // Every select change is a new intent — fresh idempotency key per attempt.
+    assignIdem.resetKey();
     try {
-      const result = await supabase
-        .from('jobs')
-        .update({ applicator_id: applicatorId || null, updated_at: new Date().toISOString() })
-        .eq('id', jobId)
-        .select();
-      checkMutationResult(result, 'Assign applicator');
+      const { data, error } = await supabase.rpc('assign_job_applicator', {
+        p_job_id: jobId,
+        p_applicator_id: applicatorId || null,
+        p_license_override: licenseOverride,
+        p_performed_by: profile?.id ?? null,
+        p_idempotency_key: assignIdem.getKey(),
+      });
+      if (error) throw error;
+      assertRpcResult(data, 'assign_job_applicator');
+      assignIdem.resetKey();
 
-      if (profile) {
-        const app = applicators.find(a => a.id === applicatorId);
-        logActivity({
-          event: 'job_assigned',
-          description: `Job assigned to ${app?.full_name || 'unassigned'}`,
-          performedBy: profile.id,
-          entityType: 'job',
-          entityId: jobId,
-        });
-      }
-
-      toast('success', 'Applicator assigned');
+      toast('success', licenseOverride ? 'Applicator assigned (license override)' : 'Applicator assigned');
       fetchData();
     } catch (err) {
+      if (hasRpcCode(err, RpcErrorCodes.LICENSE_EXPIRED)) {
+        if (profile?.role === 'admin') {
+          setLicenseOverridePrompt({ jobId, applicatorId });
+        } else {
+          toast('error', "This applicator's license has expired — an admin can override if needed.");
+        }
+        return;
+      }
       Sentry.captureException(err, { tags: { source: 'action', action: 'assign_applicator' } });
       toast('error', 'Failed to assign applicator. Please try again.');
     }
@@ -370,6 +378,23 @@ export default function DispatchBoard() {
           )}
         </div>
       </div>
+
+      {/* License-override confirm (admin only) */}
+      <ConfirmModal
+        open={licenseOverridePrompt !== null}
+        onClose={() => setLicenseOverridePrompt(null)}
+        onConfirm={() => {
+          if (licenseOverridePrompt) {
+            const { jobId, applicatorId } = licenseOverridePrompt;
+            setLicenseOverridePrompt(null);
+            handleAssign(jobId, applicatorId, true);
+          }
+        }}
+        title="Applicator License Expired"
+        message="This applicator's license has expired. Assign them to this job anyway? The override is recorded in the activity log."
+        confirmLabel="Assign Anyway"
+        variant="warning"
+      />
     </div>
   );
 }

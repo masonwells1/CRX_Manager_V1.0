@@ -28,6 +28,8 @@ function makeProduct(overrides?: Partial<Product>): Product {
     epa_registration: null,
     is_rup: false,
     signal_word: null,
+    rei_hours: null,
+    phi_days: null,
     product_form: 'liquid',
     inventory_unit: 'Gallon',
     container_unit: null,
