@@ -113,3 +113,15 @@ A second, aggressive red-team review (4 hunters, grounded against the **live** R
 - `customer_addresses` RLS is `USING (true)` (world-readable to authenticated) — pre-existing, not introduced here; FieldStop now selects only `address_line, city, state, zip`.
 
 Note: the Codex packet (`docs/audits/2026-06-14-codex-field-mode-prompt.md`) predates this round — it still describes the Claim flow and the address bug. Re-running real Codex is still worthwhile for independent-model coverage; the code it reviews now has Claim removed and the address bug fixed.
+
+---
+
+## Codex cross-review round (2026-06-14) — 3 BLOCKER + 2 HIGH + 1 MED, all fixed
+
+Real Codex reviewed the branch and returned **STOP**. Claude independently verified all 6 against live code + DB (none refuted — Codex was right on every count; adjudication `docs/audits/2026-06-14-codex-field-mode-findings-review-prompt.md`), remediated them (`e2266e9`), a live-DB fix-verification round found one residual LOW (`030b222`), and a re-review packet was handed back (`docs/audits/2026-06-14-codex-field-mode-remediation-rereview-prompt.md`).
+
+- **F1 (BLOCKER):** `FieldRoute` called `statusToBadgeVariant(stop.status)` — it's a `Record`, not a function → runtime crash on the first stop card. Fixed to index it. **Why it shipped:** the *active* pre-commit hook is the **main checkout's** (`core.hooksPath` → `C:\CRX_Manager\.husky\_`), which runs `build` (esbuild, no type-check) not `typecheck`; the branch's own hook does run typecheck but is never invoked for worktree commits. So a TS2349 sailed through. Lesson: in this multi-worktree setup, run `npm run typecheck` manually before committing; the branch hook only protects once on `main`.
+- **F3 (BLOCKER, self-inflicted):** the offline conflict-guard added in the prior red-team round (`2b97739`) made scheduled→Arrive→offline→Complete self-conflict (snapshot used the stale pre-Arrive `updated_at`). Fixed: re-read `updated_at` after Arrive + full-reload fallback on re-read failure.
+- **F2 (HIGH):** added a numeric input for fractional partials (live data has 12.5/88.2/…). **F4 (HIGH):** signature upload now surfaces the *returned* Storage error. **F5 (HIGH):** offline notice now states the receipt + notifications aren't sent for an offline completion (replay itself is a documented follow-up). **F6 (MED):** load-error states instead of empty.
+
+New test: `src/pages/FieldRoute.test.tsx` (F1 render guard). Suite 2,001 green; typecheck/lint clean. **Verdict moved from DO-NOT-PUSH to SAFE-TO-PUSH-WITH-FOLLOW-UPS** (follow-up = F5 offline side-effect replay + broader FieldStop interaction tests), pending Mason's on-device pass + an optional Codex re-review of the remediation packet.
