@@ -83,23 +83,3 @@ fi
 Plus: confirm the CI workflow runs `npm run typecheck`. (Worktree caveat from the report stands: a worktree's husky isn't invoked via `core.hooksPath` — the gate protects the main checkout; worktree sessions still rely on `/ship` Step 2, which already type-checks.)
 
 **P5 — ratchet teeth:** in `codex-gauntlet.md` Step 6 + `CODEX_REVIEW_GAUNTLET.md` "Prevention Actions", make the executable check **mandatory and regression-shaped** for confirmed BLOCKER/HIGH: *"a test that fails on the pre-fix code and passes after — not merely a sibling check."* In `stop-wrap.mjs`, extend the C10 ratchet so a remediation commit (not just an `audit/*` doc) closing a BLOCKER/HIGH that lacks a new/changed `*.test.*` is listed. (Keep it a listed loose-end, consistent with the hook's existing block-by-listing semantics.)
-
-## 8. Implementation log (2026-06-14)
-
-| Control | Commit | Status |
-|---|---|---|
-| **P1** typecheck in `.husky/pre-commit` (+ `/ship` already had it) | `74ba12a` | ✅ done |
-| **P5** prevention-capture requires a failing-then-passing regression test (gauntlet docs) | `74ba12a` | ✅ done (stop-wrap.mjs code-teeth deferred — file held parallel-session WIP) |
-| **P4** render-smoke harness, 30 pages allowlisted | `97a8bdf` | ✅ partial (native @fullcalendar pages + detail-page fixtures = expansion backlog) |
-| **P3** `handle-supabase-error` ESLint rule + 3 real swallowed-error bugs fixed | `b84e088` | ✅ done |
-| **P2** generated DB types foundation | (this commit) | ✅ foundation only — see below |
-
-### P2 — measured blast radius + adoption plan (the "larger lift", confirmed)
-
-The real C2 fix is a **typed Supabase client** (`createClient<Database>`), which makes a wrong column name (the ADDR bug — `customer_addresses.street`, which does not exist) a **compile error**. I generated the live-schema types and committed them to `src/types/supabase.ts` (regenerate via the Supabase MCP `generate_typescript_types`, project `rhyzpcqhnizqbxphqdkr`).
-
-I then flipped the client to `createClient<Database>` and **measured**: `npm run typecheck` surfaced **238 errors across 58 files**, almost all the same class — generated types correctly mark nullable columns `string | null`, while the codebase's hand-written interfaces assume non-null `string`. These are *real latent null-safety gaps* (a column treated as non-null that can be null), not false positives — but fixing 238 across 58 files is a focused multi-pass remediation, not a one-commit change. The client flip was **reverted**; the types file stays as the foundation.
-
-**Why no `no-select-star` rule:** with generated types, `.select('*')` is type-safe (returns the full Row), and there are **101 legitimate uses across 50 files** — a rule would be 101 warnings of noise for little gain. The wrong-column protection comes from the typed client, not from banning `*`.
-
-**Recommended adoption path (the C2 follow-up):** flip the client to `createClient<Database>`, then fix the 238 nullable-safety gaps **file-by-file** (each: confirm the column is genuinely nullable, then null-guard the use or correct the local interface), highest-traffic pages first (DeliveryDetail 21, OrderDetail 19, BlendTicketDetail 17, CustomerDetail 16, offlineSync 12). Keep `src/types/supabase.ts` fresh by regenerating after each migration. Until then, new code can import `Database['public']['Tables'][...]['Row']` for typed shapes voluntarily.
