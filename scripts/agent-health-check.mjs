@@ -104,19 +104,26 @@ function checkCodexCli() {
 // review toolkit (codex-review / codex-gauntlet) silently fails without auth.
 // Smoke the credential file `codex login` writes (~/.codex/auth.json) so a
 // logged-out machine surfaces loudly instead of producing empty reviews.
-export function checkCodexAuth(home = process.env.USERPROFILE || os.homedir()) {
-  const authPath = path.join(home, ".codex", "auth.json");
+export function checkCodexAuth(home = process.env.USERPROFILE || os.homedir(), env = process.env) {
+  // `codex` reads auth from $CODEX_HOME/auth.json when CODEX_HOME is set, else ~/.codex/auth.json.
+  // Inspecting the wrong home is a false-green: agent-health PASSes while `codex review` is
+  // logged out in the configured home (verified: CODEX_HOME=tmp → `codex login status` = "Not logged in").
+  const authPath = env.CODEX_HOME
+    ? path.join(env.CODEX_HOME, "auth.json")
+    : path.join(home, ".codex", "auth.json");
   if (!existsSync(authPath)) {
-    return check("FAIL", "Codex CLI auth", "~/.codex/auth.json missing — run `codex login`");
+    return check("FAIL", "Codex CLI auth", `${authPath} missing — run \`codex login\``);
   }
   try {
     const auth = JSON.parse(readFileSync(authPath, "utf8"));
-    // `auth_mode` only records which login flow was last selected — NOT a credential.
-    // Require a real token/key so a logged-out-but-mode-set auth.json still FAILs.
-    const hasCreds = Boolean(auth?.tokens || auth?.OPENAI_API_KEY);
-    return hasCreds
+    // `auth_mode` only records which login flow was chosen — NOT a credential. An empty
+    // `tokens: {}` is also not valid (codex errors "missing field id_token"), so require a
+    // NON-EMPTY tokens object or a real OPENAI_API_KEY string.
+    const hasTokens = auth?.tokens && typeof auth.tokens === "object" && Object.keys(auth.tokens).length > 0;
+    const hasKey = typeof auth?.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY.length > 0;
+    return (hasTokens || hasKey)
       ? check("PASS", "Codex CLI auth", "auth.json present")
-      : check("FAIL", "Codex CLI auth", "auth.json has no tokens/key — run `codex login`");
+      : check("FAIL", "Codex CLI auth", "auth.json has no usable token/key — run `codex login`");
   } catch (error) {
     return check("FAIL", "Codex CLI auth", `auth.json unreadable: ${String(error?.message || error)}`);
   }
@@ -129,16 +136,19 @@ export function checkClaudeAuth(home = process.env.USERPROFILE || os.homedir(), 
   if (env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN) {
     return check("PASS", "Claude CLI auth", "API key/token in env");
   }
-  const credPath = path.join(home, ".claude", ".credentials.json");
+  // Honor CLAUDE_CONFIG_DIR (Claude Code's config-dir override) like codex honors CODEX_HOME.
+  const claudeDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
+  const credPath = path.join(claudeDir, ".credentials.json");
   if (!existsSync(credPath)) {
-    return check("WARN", "Claude CLI auth", "no ~/.claude/.credentials.json and no API-key env (may use OS keychain) — run `claude login` if reviews fail to auth");
+    return check("WARN", "Claude CLI auth", "no .credentials.json and no API-key env (may use OS keychain) — run `claude login` if reviews fail to auth");
   }
   try {
     const cred = JSON.parse(readFileSync(credPath, "utf8"));
-    const hasCreds = Boolean(cred?.claudeAiOauth || cred?.mcpOAuth);
-    return hasCreds
+    // Only `claudeAiOauth` (or an env token above) proves Claude CLI login. `mcpOAuth` holds
+    // connector/MCP tokens — NOT Claude CLI credentials — so mcpOAuth-only stays a WARN.
+    return cred?.claudeAiOauth
       ? check("PASS", "Claude CLI auth", "credentials present")
-      : check("WARN", "Claude CLI auth", "credentials file present but empty — run `claude login`");
+      : check("WARN", "Claude CLI auth", "no claudeAiOauth (mcpOAuth/connector tokens are not Claude CLI login) — run `claude login`");
   } catch (error) {
     return check("WARN", "Claude CLI auth", `credentials unreadable: ${String(error?.message || error)}`);
   }
