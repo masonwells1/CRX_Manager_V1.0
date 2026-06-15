@@ -33,13 +33,16 @@ if [ $LINT_EXIT -ne 0 ]; then
 fi
 
 echo ""
-echo "🔎 Running TypeScript typecheck..."
+echo "🔎 Running type-check (tsc --noEmit)..."
+# build (vite/esbuild) only TRANSPILES — it never type-checks. A pure type error
+# (e.g. calling a Record as a function, TS2349) shipped a prod runtime crash in
+# Field Mode 2026-06-14 because this gate stopped at build. typecheck is the fix.
 npm run typecheck 2>&1
 TYPECHECK_EXIT=$?
 
 if [ $TYPECHECK_EXIT -ne 0 ]; then
   echo ""
-  echo "❌ TYPECHECK FAILED — commit blocked. Fix type errors first."
+  echo "❌ TYPE-CHECK FAILED — commit blocked. (build = transpile only; this catches TS errors build misses.)"
   exit 1
 fi
 
@@ -62,6 +65,17 @@ TEST_EXIT=$?
 if [ $TEST_EXIT -ne 0 ]; then
   echo ""
   echo "❌ TESTS FAILED — commit blocked. Fix failing tests first."
+  exit 1
+fi
+
+echo ""
+echo "🤝 Checking agent workflow wiring..."
+npm run test:agent-workflows 2>&1
+AGENT_EXIT=$?
+
+if [ $AGENT_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ AGENT WORKFLOW CHECKS FAILED — commit blocked. Fix Claude/Codex workflow drift first."
   exit 1
 fi
 

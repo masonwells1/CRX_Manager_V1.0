@@ -54,10 +54,12 @@ These also run automatically when Mason types `git commit` (via husky pre-commit
 Run both:
 
 ```bash
+npm run test:agent-workflows
 node scripts/check-doc-drift.mjs
 node scripts/verify-deps.mjs
 ```
 
+- `test:agent-workflows` failing → Claude/Codex handoff, review, hook, or health-check wiring drifted; fix it before commit.
 - `check-doc-drift` failing → a reference doc (CLAUDE.md counts, migration-history rows, etc.) is stale; fix the doc, don't commit around it.
 - `verify-deps` failing → `node_modules` doesn't match the lockfile (or a peer range is violated); run `npm ci` and re-check.
 

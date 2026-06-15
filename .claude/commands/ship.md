@@ -1,9 +1,9 @@
-Drive a coding job from "implement" all the way to "reviewed, applied, committed, and ready to push" — hands-off through the whole review-and-fix gate, pausing only at the two human gates Mason chose: **run Codex** (when the change warrants it) and **approve the push to prod**. This is the autonomous "work till completion" pipeline; it orchestrates the existing subagents, workflows, and hooks rather than reinventing them.
+Drive a coding job from "implement" all the way to "reviewed, committed, and ready for Mason's production decision" — hands-off through the review-and-fix gate, pausing at the human gates Mason requires: **approve any live migration apply** and **approve the push to prod**. The independent Codex cross-review now runs automatically via the headless `codex` CLI when the change warrants it (it's a read-only gate, like the reviewer subagents) — no copy-paste. This is the autonomous "work till completion" pipeline; it orchestrates the existing subagents, workflows, and hooks rather than reinventing them.
 
 **The job** is everything after `/ship` (e.g. `/ship add a CSV export button to the AR aging report`). If no job text was given, ask Mason what the job is, then proceed.
 
 Autonomy boundary (Mason's standing choice — do not exceed without asking):
-- **Migrations:** auto-apply reviewed-clean migrations to the live DB (reversible via a follow-up migration).
+- **Migrations:** NEVER apply migrations to the live DB without Mason's explicit approval in the current conversation.
 - **Prod push:** NEVER push to `main` / deploy the frontend without explicit approval. `main` = live croprxsolutions.app.
 
 ## Step 0 — Set up a branch
@@ -29,6 +29,7 @@ npm run typecheck
 npm run lint
 npm run build
 npm run test
+npm run test:agent-workflows
 ```
 
 If `package.json` or `package-lock.json` changed, also run:
@@ -63,7 +64,7 @@ For every **confirmed** BLOCKER or HIGH finding (the workflows already adversari
 
 MED/LOW findings: fix the cheap ones; list the rest in the final summary as accepted/deferred — do not loop on them. Cap the loop at a sane number of rounds; if a finding can't be resolved, STOP and surface it to Mason rather than thrashing.
 
-## Step 5 — If a migration is involved: apply it live
+## Step 5 — If a migration is involved: prepare the live-apply gate
 
 Only after Step 4 is clean for the migration:
 
@@ -73,21 +74,31 @@ Only after Step 4 is clean for the migration:
      "reviewers": ["rls-security-reviewer", "migration-drift-reviewer"],
      "findings": "clean" }
    ```
-2. **Apply via Supabase MCP** `apply_migration`.
-3. **Smoke-chain test (hard rule — chains, not probes):** EVERY RPC the migration creates or modifies must pass its full business-chain spec from `scripts/smoke/smoke-specs.json`. For each touched RPC run `node scripts/smoke/run-smoke.mjs --spec <rpc>`:
+2. STOP and ask Mason for explicit approval to apply the named migration to the live Supabase DB. Do not continue this step without that approval in the current conversation.
+3. **Only after Mason approves:** apply via Supabase MCP `apply_migration`.
+4. **Smoke-chain test (hard rule — chains, not probes):** EVERY RPC the migration creates or modifies must pass its full business-chain spec from `scripts/smoke/smoke-specs.json`. For each touched RPC run `node scripts/smoke/run-smoke.mjs --spec <rpc>`:
    - Runner exits 2 with "no spec covers" → **write or extend a chain first** (per `scripts/smoke/README.md` — investigate live catalog, house conventions, register in `smoke-specs.json`). This is a gate, not a suggestion.
    - Execute each printed chain as ONE statement via MCP `execute_sql`. PASS = the error text contains `SMOKE_PASS_ROLLBACK` (proves nothing persisted). Any other error, or no error → FAIL: fix it, then **re-run the FULL chain — never just the failing step** (clean reviewers + md5 fidelity have missed latently-broken prod RPCs before; an isolated statement probe is never evidence of a fix).
-4. **B7 rename:** rename the disk migration file to the version stamp the MCP assigned (so it can't be re-applied later).
-5. **Regen the schema registry** (`/regen-schema-registry` via MCP introspection) if the migration added a status enum, generated column, or table — otherwise the hooks run on stale data.
-6. **Run the db-invariant sweeps (post-apply gate):** `npm run db-sweeps` prints each predicate's SQL — execute every block read-only via MCP `execute_sql` and compare returned `violation_key`s against `scripts/db-invariant-sweeps/allowlist.json`. **Any unallowlisted violation BLOCKS the ship** — fix it (or report it as a finding); NEVER allowlist a real hole to get green.
+5. **B7 rename:** rename the disk migration file to the version stamp the MCP assigned (so it can't be re-applied later).
+6. **Regen the schema registry** (`/regen-schema-registry` via MCP introspection) if the migration added a status enum, generated column, or table — otherwise the hooks run on stale data.
+7. **Run the db-invariant sweeps (post-apply gate):** `npm run db-sweeps` prints each predicate's SQL — execute every block read-only via MCP `execute_sql` and compare returned `violation_key`s against `scripts/db-invariant-sweeps/allowlist.json`. **Any unallowlisted violation BLOCKS the ship** — fix it (or report it as a finding); NEVER allowlist a real hole to get green.
 
 If the migration touches a CHECK constraint, function with an existing name, or an existing table, that is exactly what the two reviewers in Step 3 are for — do not skip them.
 
-## Step 6 — Codex gate (pauses if worthy)
+## Step 6 — Codex gate (automated cross-review)
 
-Decide if the change is **Codex-worthy**: it touches a migration, RLS/RPC security, a money path, or an Edge Function. (A pure CSS/copy/layout change is NOT worthy — note that and skip.)
+Decide if the change is **Codex-worthy**: it touches a migration, RLS/RPC security, a money path, or an Edge Function. (A pure CSS/copy/layout change is NOT worthy — note that and skip to Step 7.)
 
-If worthy: run `/codex-cross-review` to draft the packet (`docs/audits/<date>-codex-<slug>-prompt.md` + the file list), then **STOP and present it to Mason** with: "Codex-worthy change — here's the packet. Run Codex and paste the reply, and I'll write the disposition. Or say 'skip Codex' to proceed." Do not push while a Codex review is pending unless Mason waives it.
+If worthy, run an **independent Codex (gpt-5.5) review directly via the headless CLI** — invoke `/codex-review` (scope `--base main`). It runs `codex review` non-interactively, captures findings to `.claude/session-state/codex-review-latest.txt`, and returns a verdict (SHIP / SHIP-WITH-FOLLOWUPS / NEEDS-WORK). No paste loop.
+
+Then act on the result like any other reviewer:
+- **BLOCKER / HIGH** → feed back into the Step 4 auto-fix loop (read the cited line, confirm it's real, fix, re-verify, re-dispatch the scoped subagents), then **re-run `/codex-review` until the verdict is SHIP or SHIP-WITH-FOLLOWUPS**. If Claude genuinely disagrees with a Codex BLOCKER, do NOT silently override — surface both positions to Mason and stop.
+- **MED / LOW / NIT** → fix the cheap ones; list the rest as deferred in the Step 8 summary. Don't loop on them.
+- Optionally write a disposition doc `docs/audits/<date>-claude-disposition-of-codex-<slug>.md` if the batch warrants a tracked record.
+
+**Fallback (CLI unavailable):** if `/codex-review` Step 0 can't resolve `codex.exe` or auth is broken, fall back to the manual packet — run `/codex-cross-review` to draft `docs/audits/<date>-codex-<slug>-prompt.md`, then STOP and ask Mason to run Codex + paste the reply. Don't self-certify the gate when it couldn't run (the "required safety gate unavailable → hand off" rule).
+
+This gate runs the Codex *review* automatically; it still never pushes — that stays Mason's call at Step 8.
 
 ## Step 7 — Docs + commit (on the branch)
 
@@ -118,22 +129,23 @@ Review gate:
 
 Verify:   typecheck ✓  lint ✓  build ✓  tests X/Y
 Migration: <applied live + smoke-tested / none>
-Codex:    <packet drafted, PENDING your run / not worthy / waived>
+Codex:    <verdict: SHIP / SHIP-WITH-FOLLOWUPS after N fixes / not worthy / CLI down → packet pending>
 Deferred: <MED/LOW items accepted, if any>
 
 ─── NEXT (your call) ───────────────────────────────
   Approve push to prod?  → I'll `git push` (and you can
   `/loop` the Vercel deploy to watch it go READY).
-  Codex first?           → run the packet, paste the reply.
+  (Codex already cross-reviewed — verdict above. Only if
+   the CLI was down: run the drafted packet + paste back.)
 ```
 
 Then WAIT. Do not push.
 
 ## Hard Rules
 - NEVER `git push` / deploy to prod without Mason's explicit approval in this turn. That is the one gate that never auto-fires.
-- NEVER apply a migration without the two reviewers clean + the proof file written (the guard enforces this; don't try to route around it).
+- NEVER apply a migration without Mason's explicit approval in the current conversation, the two reviewers clean, and the proof file written (the guard enforces this; don't try to route around it).
 - NEVER report the gate "clean" while any confirmed BLOCKER/HIGH is open, even if lint/build/test pass.
 - NEVER skip the review fan-out to "save time" — it is the entire point of `/ship`.
 - NEVER `--no-verify`, `@ts-ignore`, or `any` (except `reportPdf.ts` columnStyles).
-- Auto-applying a migration is allowed; auto-pushing is not. Keep that line bright.
+- Auto-applying a migration is not allowed. Auto-pushing is not allowed. Keep both lines bright.
 - If a required safety gate is unavailable (e.g. a reviewer can't run), STOP and hand off — do not self-certify. (Mason's prod-gate-discipline rule.)
