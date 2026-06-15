@@ -23,6 +23,7 @@ import ConfirmModal from '../components/ui/ConfirmModal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { formatCents as fmt } from '../lib/money';
@@ -107,6 +108,10 @@ export default function PaymentAllocation() {
       setShowDropdown(false);
       return;
     }
+    // L3: cancel flag so a debounced response that resolves after the input
+    // changed (or after unmount) never overwrites the current results, and
+    // unexpected search failures are reported instead of silently swallowed.
+    let cancelled = false;
     const timer = setTimeout(async () => {
       setSearchLoading(true);
       try {
@@ -118,16 +123,20 @@ export default function PaymentAllocation() {
           .order('farm_name')
           .limit(15);
         if (error) throw error;
+        if (cancelled) return;
         setCustomerResults((data || []) as CustomerOption[]);
         setShowDropdown(true);
-      } catch {
-        setCustomerResults([]);
-        setShowDropdown(false);
+      } catch (err) {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'payment_customer_search' } });
+        if (!cancelled) {
+          setCustomerResults([]);
+          setShowDropdown(false);
+        }
       } finally {
         setSearchLoading(false);
       }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [customerSearch, selectedCustomer]);
 
   /* ── Load invoices when customer selected ──────────────────────────── */
@@ -291,6 +300,7 @@ export default function PaymentAllocation() {
       }
       toast('success', parts.join('. '));
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'allocate_payment' } });
       toast('error', sanitizeError(err));
     }
     setSubmitting(false);

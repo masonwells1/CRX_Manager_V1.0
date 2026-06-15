@@ -666,6 +666,7 @@ export default function InvoiceDetail() {
       setReverseWoTarget(null);
       if (id) fetchInvoice(id);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'reverse_write_off' } });
       toast('error', sanitizeError(err));
     }
     setReversingWo(false);

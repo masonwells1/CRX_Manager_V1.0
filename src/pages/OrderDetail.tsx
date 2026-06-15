@@ -3,7 +3,7 @@
  * GAP FIX #13: Edit Orders After Creation
  * AR derived from linked invoices (single source of truth).
  */
-import { useEffect, useState , useCallback, useMemo } from 'react';
+import { useEffect, useState , useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Truck, Pencil, Save, X, Trash2, FileText, Users, Plus, AlertTriangle, MessageSquarePlus, Printer, ClipboardList, DollarSign } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
@@ -15,6 +15,7 @@ import Input from '../components/ui/Input';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { logActivity } from '../lib/activityLogger';
 import { notifyOrderStatusChange } from '../lib/notificationTriggers';
 import { supabase, checkMutationResult, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
@@ -59,6 +60,11 @@ export default function OrderDetail() {
   const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
   const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
   const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
+  // Latest order id the route is showing — older in-flight fetches bail (M6 stale guard).
+  const activeOrderIdRef = useRef<string | undefined>(undefined);
+  // Per-invoice idempotency keys for "post all drafts" (M7) — keyed ref cache so a
+  // network-retry reuses each invoice's key and the server dedup matches.
+  const postDraftKeysRef = useRef<Record<string, string>>({});
   const [order, setOrder] = useState<Order | null>(null);
   const [items, setItems] = useState<OrderItem[]>([]);
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -130,12 +136,16 @@ export default function OrderDetail() {
   const canEdit = (role === 'admin' || role === 'sales_rep') && order?.status !== 'fulfilled' && order?.status !== 'cancelled' && order?.status !== 'partially_fulfilled' && !order?.booking_draw;
 
   const fetchOrder = useCallback(async () => {
+    // Stale-route guard (M6): on rapid order-to-order navigation an older in-flight
+    // fetch must not render the previous order's items/invoices/deliveries.
+    const isStale = () => activeOrderIdRef.current !== id;
     const { data: orderData } = await supabase
       .from('orders')
       .select('*')
       .eq('id', id!)
       .maybeSingle();
 
+    if (isStale()) return;
     if (orderData) {
       setOrder(orderData as Order);
 
@@ -160,6 +170,7 @@ export default function OrderDetail() {
         .eq('order_id', id!)
         .order('section_name');
       const itemsList = (itemsData || []) as OrderItem[];
+      if (isStale()) return;
       setItems(itemsList);
       setEditItems(itemsList.map((i) => ({ ...i })));
       // Ship-now/price-later (#2): seed price inputs from each pending line's tier snapshot.
@@ -201,6 +212,7 @@ export default function OrderDetail() {
           .in('id', deliveryDriverIds);
         (driverData || []).forEach((p: { id: string; full_name: string }) => { deliveryDriverMap[p.id] = p.full_name; });
       }
+      if (isStale()) return;
       setDeliveries(
         (deliveryData || []).map((d: Delivery) => ({
           ...d,
@@ -215,6 +227,7 @@ export default function OrderDetail() {
         .eq('order_id', id!)
         .not('status', 'in', '("voided","cancelled")')
         .order('invoice_number');
+      if (isStale()) return;
       setInvoices(invoiceData || []);
 
       // Load order shares
@@ -223,12 +236,15 @@ export default function OrderDetail() {
         .select('*')
         .eq('order_id', id!)
         .order('sort_order');
+      if (isStale()) return;
       setShares((shareData || []) as OrderShare[]);
     }
+    if (isStale()) return;
     setLoading(false);
   }, [id]);
 
   useEffect(() => {
+    activeOrderIdRef.current = id;
     if (id) fetchOrder();
   }, [id, fetchOrder]);
 
@@ -487,6 +503,7 @@ export default function OrderDetail() {
       toast('success', newValue ? 'Order marked as Planned' : 'Order marked as Committed');
       logActivity({ event: 'order_updated', description: `Order ${order.order_number} marked as ${newValue ? 'planned' : 'committed'}`, performedBy: profile.id, entityType: 'order', entityId: order.id, customerId: order.customer_id });
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'toggle_order_planned' } });
       toast('error', sanitizeError(err));
     }
     setTogglingPlanned(false);
@@ -602,6 +619,7 @@ export default function OrderDetail() {
       setVoidReason('');
       fetchOrder();
     } catch (error: unknown) {
+      Sentry.captureException(error instanceof Error ? error : new Error(String(error)), { tags: { source: 'critical_action', action: 'void_order' } });
       toast('error', sanitizeError(error));
     } finally {
       setVoiding(false);
@@ -656,6 +674,7 @@ export default function OrderDetail() {
       setNewSharePct('');
       fetchOrder();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'add_order_share' } });
       toast('error', sanitizeError(err));
     }
     setSavingShares(false);
@@ -669,6 +688,7 @@ export default function OrderDetail() {
       toast('success', 'Share removed');
       fetchOrder();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'remove_order_share' } });
       toast('error', sanitizeError(err));
     }
     setSavingShares(false);
@@ -762,9 +782,17 @@ export default function OrderDetail() {
           alreadyPosted++;            // a prior attempt already posted it — done, not an error
           continue;
         }
+        // M7: per-invoice idempotency key from a keyed ref cache so a network-retry
+        // (post committed server-side but response lost) reuses the SAME key per
+        // invoice and the server dedup matches instead of double-posting. Generated
+        // once per invoice; the cache resets on a clean run (below).
+        if (!postDraftKeysRef.current[inv.id]) {
+          postDraftKeysRef.current[inv.id] = generateIdempotencyKey('post_invoice', `${profile?.id || ''}:${inv.id}`);
+        }
+        const postKey = postDraftKeysRef.current[inv.id];
         // post_invoice RETURNS void → no result to assert. Use the canonical
         // void-RPC pattern (.throwOnError(), no `=` capture).
-        await supabase.rpc('post_invoice', { p_invoice_id: inv.id }).throwOnError();
+        await supabase.rpc('post_invoice', { p_invoice_id: inv.id, p_idempotency_key: postKey }).throwOnError();
         posted++;
       } catch (err) {
         if (hasRpcCode(err, RpcErrorCodes.PRICING_INCOMPLETE)) errors.push(`${inv.invoice_number}: needs pricing first`);
@@ -779,6 +807,7 @@ export default function OrderDetail() {
       Sentry.captureException(new Error('post_all_drafts partial failure'), { level: 'warning', tags: { source: 'critical_action', action: 'post_all_drafts' }, extra: { errors } });
       for (const e of errors) toast('error', e);
     }
+    if (errors.length === 0) postDraftKeysRef.current = {}; // clean run — mint fresh keys next time
     await fetchOrder();
     setPostingAll(false);
   };

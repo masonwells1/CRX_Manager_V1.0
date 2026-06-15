@@ -70,6 +70,8 @@ export default function FieldStop() {
   const confirmIdem = useIdempotencyKey('confirm_delivery', profile?.id || '');
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Latest stop id the route is showing — older in-flight fetches bail (H3 stale guard).
+  const activeStopIdRef = useRef<string | undefined>(undefined);
 
   const [delivery, setDelivery] = useState<StopDelivery | null>(null);
   const [items, setItems] = useState<StopItem[]>([]);
@@ -95,11 +97,16 @@ export default function FieldStop() {
       .select('id, image_url, caption')
       .eq('delivery_id', id)
       .order('sort_order');
+    if (activeStopIdRef.current !== id) return; // stale guard (H3)
     setPhotos((data || []) as StopPhoto[]);
   }, [id]);
 
   const fetchStop = useCallback(async () => {
     if (!id) return;
+    // Stale-route guard (H3): on rapid stop-to-stop navigation an older in-flight
+    // fetch must not overwrite the current stop's delivery/items/address/photos —
+    // handleComplete submits against the live route id plus this component state.
+    const isStale = () => activeStopIdRef.current !== id;
     setLoading(true);
     const { data, error } = await supabase
       .from('deliveries')
@@ -107,6 +114,7 @@ export default function FieldStop() {
       .eq('id', id)
       .maybeSingle();
 
+    if (isStale()) return;
     if (error || !data) {
       if (error) Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-stop' } });
       toast('error', 'Could not load this stop');
@@ -128,6 +136,7 @@ export default function FieldStop() {
       .from('delivery_items')
       .select('id, quantity, product_id, product:products(product_name)')
       .eq('delivery_id', id);
+    if (isStale()) return;
     // Don't let a failed items query masquerade as "No items on this delivery".
     setItemsError(!!itemErr);
     if (itemErr) {
@@ -146,6 +155,7 @@ export default function FieldStop() {
         .select('address_line, city, state, zip')
         .eq('id', del.delivery_address_id)
         .maybeSingle();
+      if (isStale()) return;
       if (addr) {
         const a = addr as { address_line?: string | null; city?: string | null; state?: string | null; zip?: string | null };
         setAddressLine([a.address_line, a.city, a.state, a.zip].filter(Boolean).join(', '));
@@ -155,7 +165,7 @@ export default function FieldStop() {
     setLoading(false);
   }, [id, navigate, toast, fetchPhotos]);
 
-  useEffect(() => { fetchStop(); }, [fetchStop]);
+  useEffect(() => { activeStopIdRef.current = id; fetchStop(); }, [id, fetchStop]);
 
   // After a successful Arrive, re-read deliveries.updated_at so an offline
   // completion snapshots the POST-arrive value. confirm_delivery bumps
@@ -181,6 +191,9 @@ export default function FieldStop() {
   // ── Arrive (confirm_delivery: scheduled → in_progress) ──────────────────
   const handleArrive = async () => {
     if (!delivery || !profile || !id) return;
+    // Stale-route guard (H3): never act on a delivery from a different stop than
+    // the route currently shows (rapid stop-to-stop switch mid-load).
+    if (delivery.id !== id) { toast('error', 'This stop just changed — please retry'); return; }
     // confirm_delivery is never queued offline (complete_delivery needs an
     // in_progress stop and a queued confirm has no replay caller).
     if (!isOnline) {
@@ -273,6 +286,9 @@ export default function FieldStop() {
 
   const handleComplete = async () => {
     if (!delivery || !profile || !id) return;
+    // Stale-route guard (H3): a fast stop-to-stop switch must never complete the
+    // WRONG stop — the route id is fresh but component state could still lag.
+    if (delivery.id !== id) { toast('error', 'This stop just changed — please retry'); return; }
     setCompleteConfirmOpen(false);
     setCompleting(true);
 

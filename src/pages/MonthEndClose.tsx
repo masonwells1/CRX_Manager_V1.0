@@ -13,6 +13,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult, sanitizeError } from '../lib/db';
+import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { logActivity } from '../lib/activityLogger';
 import { downloadBatchStatements } from '../lib/statementPdf';
@@ -222,6 +223,7 @@ export default function MonthEndClose() {
       setShowCloseModal(false);
       fetchData();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'close_accounting_period' } });
       toast('error', sanitizeError(err));
     }
     setClosing(false);
@@ -252,6 +254,7 @@ export default function MonthEndClose() {
       setReopenTarget(null);
       fetchData();
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'reopen_accounting_period' } });
       toast('error', sanitizeError(err));
     }
     setReopening(false);
@@ -281,6 +284,7 @@ export default function MonthEndClose() {
       await downloadBatchStatements(statements, options);
       toast('success', `Generated ${statements.length} customer statement(s)`);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'generate_batch_statements' } });
       toast('error', sanitizeError(err));
     }
     setGenerating(false);
@@ -322,6 +326,7 @@ export default function MonthEndClose() {
       toast('success', `Generated ${summaries.length} year-end summary PDF(s)`);
       setShowYeDialog(false);
     } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'get_batch_year_end_summaries' } });
       toast('error', sanitizeError(err));
     }
     setYeLoading(false);
