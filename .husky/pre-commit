@@ -69,6 +69,17 @@ if [ $TEST_EXIT -ne 0 ]; then
 fi
 
 echo ""
+echo "🤝 Checking agent workflow wiring..."
+npm run test:agent-workflows 2>&1
+AGENT_EXIT=$?
+
+if [ $AGENT_EXIT -ne 0 ]; then
+  echo ""
+  echo "❌ AGENT WORKFLOW CHECKS FAILED — commit blocked. Fix Claude/Codex workflow drift first."
+  exit 1
+fi
+
+echo ""
 echo "📋 Checking doc drift (counts in CLAUDE.md / migration-history.md vs disk)..."
 # husky runs this script under `sh -e`, so a bare failing command aborts the
 # whole hook before any $? check — the || branch is what makes this step
