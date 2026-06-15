@@ -284,8 +284,8 @@ export default function PaymentAllocation() {
         p_total_cents: checkCents,
         p_allocations: allocations,
         p_payment_method: paymentMethod,
-        p_reference_number: referenceNumber || null,
-        p_notes: notes || null,
+        p_reference_number: referenceNumber || undefined,
+        p_notes: notes || undefined,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
       });

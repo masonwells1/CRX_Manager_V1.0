@@ -165,8 +165,9 @@ export default function Reports() {
     if (error) { toast('error', 'Failed to load customer profitability.'); return; }
 
     const grouped: Record<string, CustomerProfit> = {};
-    ((data || []) as Array<{ total_price: number; total_profit: number; total_margin_pct: number; customer: { farm_name: string }[] | null }>).forEach((o) => {
-      const name = o.customer?.[0]?.farm_name || 'Unknown';
+    ((data || []) as Array<{ total_price: number; total_profit: number; total_margin_pct: number; customer: { farm_name: string } | { farm_name: string }[] | null }>).forEach((o) => {
+      const customerJoin = Array.isArray(o.customer) ? o.customer[0] : o.customer;
+      const name = customerJoin?.farm_name || 'Unknown';
       if (!grouped[name]) grouped[name] = { farm_name: name, total_revenue: 0, total_profit: 0, margin_pct: 0, order_count: 0 };
       grouped[name].total_revenue += o.total_price || 0;
       grouped[name].total_profit += o.total_profit || 0;
@@ -351,7 +352,7 @@ export default function Reports() {
         .select('id, full_name')
         .in('id', applicatorIds);
       applicatorNameMap = Object.fromEntries(
-        (applicators || []).map((a: { id: string; full_name: string }) => [a.id, a.full_name])
+        ((applicators || []) as Array<{ id: string; full_name: string }>).map((a) => [a.id, a.full_name])
       );
     }
 
@@ -468,7 +469,7 @@ export default function Reports() {
         const { data, error } = await supabase.rpc('create_commission_payment', {
           p_commission_ids: ids,
           p_payment_method: 'other',
-          p_reference: null,
+          p_reference: '',
           p_payment_date: today,
           p_notes: 'Quick pay from Reports page',
           p_performed_by: profile!.id,

@@ -145,14 +145,14 @@ export default function NewVendorBill() {
 
       const { data, error } = await supabase.rpc('create_vendor_bill', {
         p_vendor_id: vendorId,
-        p_purchase_order_id: purchaseOrderId || null,
+        p_purchase_order_id: purchaseOrderId || undefined,
         p_bill_number: billNumber.trim(),
         p_bill_date: billDate,
         p_due_date: computedDueDate,
-        p_payment_terms: paymentTerms || null,
+        p_payment_terms: paymentTerms || undefined,
         p_subtotal_cents: subtotalCents,
         p_adjustment_cents: adjustmentCents,
-        p_notes: notes || null,
+        p_notes: notes || undefined,
         p_idempotency_key: idemKey,
       });
 

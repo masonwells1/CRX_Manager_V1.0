@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import type { Database } from '../types/supabase';
 import { Sentry } from './sentry';
 export { sanitizeError } from './errorSanitizer';
 
@@ -11,7 +12,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   auth: {
     // Keep the session alive across page reloads and tab switches
     persistSession: true,

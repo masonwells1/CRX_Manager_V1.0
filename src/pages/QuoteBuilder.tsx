@@ -67,6 +67,7 @@ import type {
   QuoteStatus,
   BookingSettlement,
 } from '../types';
+import type { Json } from '../types/supabase';
 
 interface LocalSection {
   _key: string;
@@ -874,7 +875,7 @@ export default function QuoteBuilder() {
       created_by: profile.id,
       tier,
       status: newStatus || status,
-      commission_split: commissionSplit,
+      commission_split: { splits: commissionSplit.splits },
       total_price: totals.totalPrice,
       total_cost: totals.totalCost,
       total_profit: totals.totalProfit,
@@ -925,8 +926,8 @@ export default function QuoteBuilder() {
     try {
       const idemKey = saveQuoteIdem.getKey();
       const { data, error } = await supabase.rpc('save_quote', {
-        p_quote_id: (quoteId && isEditing) ? quoteId : null,
-        p_quote_payload: quotePayload,
+        p_quote_id: ((quoteId && isEditing) ? quoteId : null) as string,
+        p_quote_payload: quotePayload as Json,
         p_sections: sectionsPayload,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
@@ -1002,7 +1003,7 @@ export default function QuoteBuilder() {
     const { data, error } = await supabase.rpc('save_quote_template', {
       p_quote_id: quoteId,
       p_template_name: templateName.trim(),
-      p_description: templateDescription.trim() || null,
+      p_description: templateDescription.trim() || undefined,
       p_performed_by: profile.id,
       p_idempotency_key: tmplIdemKey,
     });
@@ -1271,6 +1272,7 @@ export default function QuoteBuilder() {
     // the grower would get an unreproducible quote. Block until saved.
     if (isDirty) { toast('warning', 'You have unsaved changes — save the quote before emailing it.'); return; }
     if (!selectedCustomer?.email) { toast('error', 'This customer has no email address on file.'); return; }
+    if (!profile) { toast('error', 'You must be signed in to send a quote.'); return; }
     setEmailingGrower(true);
     try {
       // #2 (Codex P1): FREEZE the quote before sending so the grower's PDF is a
@@ -1291,7 +1293,7 @@ export default function QuoteBuilder() {
         const freezeVerKey = createVersionIdem.getKey();
         const { data: freezeVer, error: freezeErr } = await supabase.rpc('create_quote_version', {
           p_quote_id: quoteId,
-          p_performed_by: profile?.id,
+          p_performed_by: profile.id,
           p_method: 'emailed',
           p_idempotency_key: freezeVerKey,
         });

@@ -221,7 +221,7 @@ export default function InvoiceDetail() {
         supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).eq('is_active', true).order('full_name'),
       ]);
       if (custRes.data) setCustomers(custRes.data as Customer[]);
-      if (salesRes.data) setSalespeople(salesRes.data);
+      if (salesRes.data) setSalespeople(salesRes.data as { id: string; full_name: string }[]);
     };
     fetchRef();
   }, []);
@@ -253,13 +253,13 @@ export default function InvoiceDetail() {
         .select('id, full_name')
         .eq('id', salesmanId)
         .maybeSingle();
-      if (smData) salesman = { full_name: smData.full_name };
+      if (smData) salesman = { full_name: smData.full_name ?? '' };
     }
     // Attach salesman in the same shape the JSX consumes (`invoice.salesman?.full_name`).
     (data as Record<string, unknown>).salesman = salesman;
 
     if (isStale()) return;
-    setInvoice(data as Invoice);
+    setInvoice(data as object as Invoice);
     setCustomerName((data as unknown as { customer?: { farm_name: string } }).customer?.farm_name || '');
 
     // Fetch parent order for breadcrumb + related deliveries for cross-link
@@ -298,7 +298,7 @@ export default function InvoiceDetail() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', delDriverIds);
-        (driverData || []).forEach((p: { id: string; full_name: string }) => { delDriverMap[p.id] = p.full_name; });
+        ((driverData || []) as { id: string; full_name: string }[]).forEach((p: { id: string; full_name: string }) => { delDriverMap[p.id] = p.full_name; });
       }
       setRelatedDeliveries(
         (delRes.data || []).map((d: Record<string, unknown>) => ({
@@ -541,14 +541,14 @@ export default function InvoiceDetail() {
       if (invoice.invoice_group_id) {
         const { data, error } = await supabase.rpc('post_invoice_group', {
           p_invoice_group_id: invoice.invoice_group_id,
-          p_performed_by: profile?.id ?? null,
+          p_performed_by: (profile?.id ?? null) as string,
           p_idempotency_key: idemKey,
         });
         if (error) throw error;
         assertRpcResult(data, 'post_invoice_group');
       } else {
         // post_invoice RETURNS void — use .throwOnError() (no `=` capture).
-        await supabase.rpc('post_invoice', { p_invoice_id: id, p_idempotency_key: idemKey }).throwOnError();
+        await supabase.rpc('post_invoice', { p_invoice_id: id!, p_idempotency_key: idemKey }).throwOnError();
       }
       postIdem.resetKey();
       toast('success', invoice.invoice_group_id ? 'Invoice group posted' : 'Invoice posted');
@@ -569,7 +569,7 @@ export default function InvoiceDetail() {
       const idemKey = voidIdem.getKey();
       // void_invoice RETURNS void — use .throwOnError() (no `=` capture).
       await supabase.rpc('void_invoice', {
-        p_invoice_id: id,
+        p_invoice_id: id!,
         p_void_reason: voidReason || 'Voided by admin',
         p_idempotency_key: idemKey,
       }).throwOnError();
@@ -614,8 +614,8 @@ export default function InvoiceDetail() {
         p_customer_id: invoice.customer_id,
         p_total_cents: amountCents,
         p_payment_method: payMethod,
-        p_reference_number: payRef || null,
-        p_notes: payNotes || null,
+        p_reference_number: payRef || undefined,
+        p_notes: payNotes || undefined,
         p_allocations: [{ invoice_id: id, amount_cents: amountCents }],
         p_idempotency_key: idemKey,
       });
@@ -677,7 +677,7 @@ export default function InvoiceDetail() {
     const { data: enrichedItems } = await supabase
       .from('invoice_items')
       .select('*, product:products(product_name, epa_registration, product_form)')
-      .eq('invoice_id', id)
+      .eq('invoice_id', id!)
       .order('sort_order');
 
     const cust = customers.find(c => c.id === invoice.customer_id);
@@ -711,7 +711,7 @@ export default function InvoiceDetail() {
         acres: s.acres,
         amount_cents: s.amount_cents,
       })) : undefined,
-      items: (enrichedItems || []).map((it: Record<string, unknown> & { description?: string; product?: { product_name: string; epa_registration?: string | null; product_form?: string | null }; quantity?: number; unit_size?: string; unit_price_cents?: number; extended_cents?: number; cost_cents?: number; rate_per_acre?: number | null; rate_unit?: string | null; acres?: number | null; total_applied?: number | null }) => ({
+      items: (enrichedItems || []).map((it) => ({
         description: it.description,
         product_name: it.product?.product_name || it.description,
         quantity: Number(it.quantity),

@@ -348,7 +348,7 @@ export default function FieldApplicationInvoice() {
           rate_unit: c.rate_unit,
           manual_override: c.manual_override === true,
         })),
-        p_application_service_id: appServiceId,
+        p_application_service_id: (appServiceId || null) as string,
       });
       if (error) throw error;
       const result = assertRpcResult<PreviewFieldAppSplitResult>(data, 'preview_field_app_invoice_split');
@@ -368,7 +368,9 @@ export default function FieldApplicationInvoice() {
     try {
       const key = saveIdem.getKey();
       const { data, error } = await supabase.rpc('save_field_app_invoice', {
-        p_invoice_id: id || null,
+        // save_field_app_invoice accepts NULL p_invoice_id to create a new
+        // invoice (live signature is nullable; generated type narrows to string).
+        p_invoice_id: (id || null) as string,
         p_invoice: {
           invoice_number: invoiceNumber || null,
           invoice_date: transactionDate,
@@ -400,7 +402,7 @@ export default function FieldApplicationInvoice() {
           manual_override: c.manual_override === true,
         })),
         p_performed_by: profile.id,
-        p_application_service_id: appServiceId,
+        p_application_service_id: (appServiceId || null) as string,
         p_idempotency_key: key,
       });
 

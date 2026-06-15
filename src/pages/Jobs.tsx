@@ -126,7 +126,7 @@ export default function Jobs() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', applicatorIds);
-      (applicators || []).forEach((a: { id: string; full_name: string }) => { applicatorMap[a.id] = a.full_name; });
+      (applicators || []).forEach((a: { id: string | null; full_name: string | null }) => { if (a.id) applicatorMap[a.id] = a.full_name ?? ''; });
     }
 
     const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; vehicle?: { vehicle_name?: string }; job_fields?: unknown[]; applicator_id?: string | null }>).map((j) => ({

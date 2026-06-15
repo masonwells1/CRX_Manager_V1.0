@@ -6,10 +6,12 @@ const requireAssertRpcResult = require('./rules/require-assert-rpc-result.cjs');
 const noDirectSentryImport = require('./rules/no-direct-sentry-import.cjs');
 const assertRpcResultArgShape = require('./rules/assert-rpc-result-arg-shape.cjs');
 const idempotencyKeyFromHook = require('./rules/idempotency-key-from-hook.cjs');
+const handleSupabaseError = require('./rules/handle-supabase-error.cjs');
 
 module.exports = {
   'require-assert-rpc-result': requireAssertRpcResult,
   'no-direct-sentry-import': noDirectSentryImport,
   'assert-rpc-result-arg-shape': assertRpcResultArgShape,
   'idempotency-key-from-hook': idempotencyKeyFromHook,
+  'handle-supabase-error': handleSupabaseError,
 };

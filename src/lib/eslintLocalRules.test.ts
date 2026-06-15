@@ -20,6 +20,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const argShapeRule = require('../../eslint-local-rules/rules/assert-rpc-result-arg-shape.cjs');
 const idemKeyRule = require('../../eslint-local-rules/rules/idempotency-key-from-hook.cjs');
+const handleSupabaseErrorRule = require('../../eslint-local-rules/rules/handle-supabase-error.cjs');
 
 // Wire RuleTester into vitest's describe/it
 RuleTester.describe = describe;
@@ -194,6 +195,93 @@ ruleTester.run('idempotency-key-from-hook', idemKeyRule, {
         await supabase.rpc('save_field', { p_idempotency_key: generateIdempotencyKey('save_field', userId) });
       }`,
       errors: [{ messageId: 'freshKey' }],
+    },
+  ],
+});
+
+// -------------------------------------------------------------------------
+// handle-supabase-error — C3 / Field Mode F4 + F6
+// -------------------------------------------------------------------------
+
+ruleTester.run('handle-supabase-error', handleSupabaseErrorRule, {
+  valid: [
+    // positive check: if (error) throw
+    `async function f() {
+      const { data, error } = await supabase.from('orders').select('*');
+      if (error) throw error;
+      return data;
+    }`,
+    // positive check on an aliased binding
+    `async function f() {
+      const { error: uploadError } = await supabase.storage.from('sigs').upload(p, blob);
+      if (uploadError) { toast(uploadError.message); return; }
+    }`,
+    // !error gate WITH an else that handles the error
+    `async function f() {
+      const { data, error } = await supabase.from('jobs').select('*');
+      if (!error) { setRows(data); } else { toast('failed'); throw error; }
+    }`,
+    // handed to the checkMutationResult convention
+    `async function f() {
+      const { data, error } = await supabase.from('invoices').update({ x: 1 }).eq('id', id).select();
+      checkMutationResult({ data, error }, 'update invoice');
+    }`,
+    // ternary / member use counts as handling
+    `async function f() {
+      const { data, error } = await supabase.from('products').select('*');
+      const rows = error ? [] : data;
+      return rows;
+    }`,
+    // rpc() is intentionally NOT this rule's concern (require-assert-rpc-result owns it)
+    `async function f() {
+      const { data, error } = await supabase.rpc('save_quote', {});
+      return data;
+    }`,
+    // not the supabase client — unrelated destructure
+    `async function f() {
+      const { data, error } = await fetchThing();
+      return data;
+    }`,
+    // error not destructured at all — out of scope (different shape)
+    `async function f() {
+      const { data } = await supabase.from('orders').select('*');
+      return data;
+    }`,
+  ],
+  invalid: [
+    // F6: error destructured from a select but never inspected
+    {
+      code: `async function f() {
+        const { data, error } = await supabase.from('orders').select('*');
+        setRows(data);
+      }`,
+      errors: [{ messageId: 'unhandled' }],
+    },
+    // F4: storage upload, only an `if (!error)` success-gate, no else / no throw
+    {
+      code: `async function f() {
+        const { error: uploadError } = await supabase.storage.from('sigs').upload(p, blob);
+        if (!uploadError) {
+          await commitRecord();
+        }
+      }`,
+      errors: [{ messageId: 'unhandled' }],
+    },
+    // single() detail fetch — error ignored
+    {
+      code: `async function f() {
+        const { data, error } = await supabase.from('jobs').select('*').eq('id', id).single();
+        return data;
+      }`,
+      errors: [{ messageId: 'unhandled' }],
+    },
+    // mutation with destructured-but-unused error
+    {
+      code: `async function f() {
+        const { error } = await supabase.from('orders').delete().eq('id', id);
+        toast('deleted');
+      }`,
+      errors: [{ messageId: 'unhandled' }],
     },
   ],
 });

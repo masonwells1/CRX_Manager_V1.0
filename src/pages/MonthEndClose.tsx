@@ -261,13 +261,17 @@ export default function MonthEndClose() {
   };
 
   const handleGenerateStatements = async (options: StatementOptions) => {
+    if (!profile) {
+      toast('error', 'Cannot generate statements — profile not loaded. Please refresh.');
+      return;
+    }
     setShowStatementDialog(false);
     setGenerating(true);
     try {
       const stmtKey = generateStatementsIdem.getKey();
       const { data, error } = await supabase.rpc('generate_batch_statements', {
         p_as_of_date: options.as_of_date,
-        p_performed_by: profile?.id,
+        p_performed_by: profile.id,
         p_mode: options.mode,
         p_idempotency_key: stmtKey,
       });

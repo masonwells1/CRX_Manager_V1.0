@@ -320,7 +320,7 @@ export default function JobDetail() {
         job_chemicals(*, product:products(product_name)),
         applied_info:job_applied_info(*)
       `)
-      .eq('id', id)
+      .eq('id', id!)
       .single();
 
     if (error || !data) {
@@ -550,7 +550,10 @@ export default function JobDetail() {
 
       const idemKey = saveJobIdem.getKey();
       const { data, error } = await supabase.rpc('save_job', {
-        p_job_id: isNew ? null : id,
+        // save_job accepts NULL p_job_id to create a new job (live signature is
+        // nullable; generated types narrowed it to string). Cast preserves the
+        // runtime null/id value while satisfying the typed arg.
+        p_job_id: (isNew ? null : id) as string,
         p_job_payload: payload,
         p_fields: fieldsPayload,
         p_chemicals: chemsPayload,
@@ -641,7 +644,7 @@ export default function JobDetail() {
     try {
       const idemKey = completeJobIdem.getKey();
       const { data, error } = await supabase.rpc('complete_job', {
-        p_job_id: id,
+        p_job_id: id!,
         p_applied_info: appliedInfo,
         p_performed_by: profile!.id,
         p_idempotency_key: idemKey,
@@ -691,7 +694,7 @@ export default function JobDetail() {
     try {
       const idemKey = transferJobIdem.getKey();
       const { data, error } = await supabase.rpc('transfer_job_to_invoice', {
-        p_job_id: id,
+        p_job_id: id!,
         p_performed_by: profile!.id,
         p_idempotency_key: idemKey,
       });

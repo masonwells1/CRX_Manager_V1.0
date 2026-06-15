@@ -131,7 +131,7 @@ export default function Returns() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', requesterIds);
-      (requesters || []).forEach((p: { id: string; full_name: string }) => { requesterMap[p.id] = p.full_name; });
+      (requesters || []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) requesterMap[p.id] = p.full_name || 'Unknown'; });
     }
 
     const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; order?: { order_number: string }; requested_by?: string | null; items?: unknown[] }>).map((r) => ({

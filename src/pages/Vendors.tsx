@@ -128,7 +128,7 @@ export default function Vendors() {
         notes: form.notes || null,
       };
       const { data, error } = await supabase.rpc('save_vendor', {
-        p_vendor_id: editingId,
+        p_vendor_id: editingId as string,
         p_payload: payload,
         p_idempotency_key: key,
       });

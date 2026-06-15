@@ -190,7 +190,7 @@ export default function QuickReceive() {
       }));
       const { data, error } = await supabase.rpc('match_quick_receive_items', {
         p_items: payload,
-        p_vendor: vendor || null,
+        p_vendor: vendor || undefined,
       });
       if (error) throw error;
       setMatchResults(assertRpcResult<QuickReceiveMatchResult[]>(data, 'match_quick_receive_items'));

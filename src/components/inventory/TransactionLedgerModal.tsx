@@ -143,11 +143,11 @@ export default function TransactionLedgerModal({ open, onClose, productId, produ
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', performerIds);
-        (performers || []).forEach((p: { id: string; full_name: string }) => {
-          performerMap[p.id] = { full_name: p.full_name };
+        (performers || []).forEach((p: { id: string | null; full_name: string | null }) => {
+          if (p.id) performerMap[p.id] = { full_name: p.full_name ?? '' };
         });
       }
-      const enriched = ((data || []) as Array<Transaction & { performed_by?: string | null }>).map((t) => ({
+      const enriched = (data || []).map((t) => ({
         ...t,
         performer: t.performed_by ? performerMap[t.performed_by] || null : null,
       }));

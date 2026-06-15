@@ -165,7 +165,7 @@ export default function Compliance() {
     const { data, error } = await supabase.rpc('get_rup_sales_register', {
       p_start_date: rupStartDate,
       p_end_date: rupEndDate,
-      p_compliance_status: rupComplianceFilter || null,
+      p_compliance_status: rupComplianceFilter || undefined,
     });
 
     if (error) {

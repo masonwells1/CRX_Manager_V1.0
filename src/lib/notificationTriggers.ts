@@ -13,6 +13,7 @@
  * for admin visibility and automatic retry.
  */
 import { supabase } from './db';
+import type { Json } from '../types/supabase';
 import { Sentry } from './sentry';
 import { createNotification, notifyAdmins } from './activityLogger';
 import { localToday, formatLocalDate } from './dateUtils';
@@ -36,10 +37,10 @@ async function logNotificationFailure(
   try {
     await supabase.rpc('log_failed_notification', {
       p_notification_type: notificationType,
-      p_entity_type: entityType || null,
-      p_entity_id: entityId || null,
+      p_entity_type: entityType ?? undefined,
+      p_entity_id: entityId ?? undefined,
       p_error_message: errorMessage,
-      p_payload: payload || {},
+      p_payload: (payload ?? {}) as Json,
       p_idempotency_key: crypto.randomUUID(),
     });
   } catch (logErr) {
@@ -276,14 +277,16 @@ export async function notifyOrderNeedsPricing(
       .in('role', ['admin', 'sales_rep'])
       .eq('is_active', true);
     if (staff && staff.length > 0) {
-      const rows = staff.map((s) => ({
-        user_id: s.id,
-        title: 'Order needs pricing',
-        message: `Rush order ${orderNumber} for ${customerName} shipped without pricing — set its prices so it can be invoiced.`,
-        notification_type: 'needs_pricing',
-        related_entity_type: 'order',
-        related_entity_id: orderId,
-      }));
+      const rows = staff
+        .filter((s): s is { id: string } => s.id != null)
+        .map((s) => ({
+          user_id: s.id,
+          title: 'Order needs pricing',
+          message: `Rush order ${orderNumber} for ${customerName} shipped without pricing — set its prices so it can be invoiced.`,
+          notification_type: 'needs_pricing',
+          related_entity_type: 'order',
+          related_entity_id: orderId,
+        }));
       const { error } = await supabase.from('notifications').insert(rows);
       if (error) Sentry.captureException(error, { tags: { source: 'notification_trigger', action: 'notify_order_needs_pricing' } });
     }

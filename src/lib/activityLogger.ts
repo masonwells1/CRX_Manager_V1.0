@@ -86,14 +86,16 @@ export async function notifyAdmins(
       .eq('is_active', true);
 
     if (admins && admins.length > 0) {
-      const notifications = admins.map((admin) => ({
-        user_id: admin.id,
-        title,
-        message,
-        notification_type: notificationType,
-        related_entity_type: relatedEntityType || null,
-        related_entity_id: relatedEntityId || null,
-      }));
+      const notifications = admins
+        .filter((admin): admin is { id: string } => admin.id !== null)
+        .map((admin) => ({
+          user_id: admin.id,
+          title,
+          message,
+          notification_type: notificationType,
+          related_entity_type: relatedEntityType || null,
+          related_entity_id: relatedEntityId || null,
+        }));
       const { error: logErr } = await supabase.from('notifications').insert(notifications);
       if (logErr) Sentry.captureException(logErr, { tags: { source: 'activity_logger', action: 'notify_admins' } });
     }

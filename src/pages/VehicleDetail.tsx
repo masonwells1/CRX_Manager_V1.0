@@ -58,7 +58,7 @@ export default function VehicleDetail() {
     const { data, error } = await supabase
       .from('vehicles')
       .select('*')
-      .eq('id', id)
+      .eq('id', id!)
       .single();
 
     if (error || !data) {
@@ -122,7 +122,7 @@ export default function VehicleDetail() {
         setIsDirty(false);
         navigate(`/vehicles/${result.data!.id}`);
       } else {
-        const result = await supabase.from('vehicles').update(payload).eq('id', id).select().single();
+        const result = await supabase.from('vehicles').update(payload).eq('id', id!).select().single();
         checkMutationResult(result, 'Update vehicle');
         if (profile) logActivity({ event: 'vehicle_updated', description: `Vehicle "${form.vehicle_name}" updated`, performedBy: profile.id });
         toast('success', 'Vehicle saved');

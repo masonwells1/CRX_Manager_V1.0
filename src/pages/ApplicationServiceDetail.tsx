@@ -61,7 +61,7 @@ export default function ApplicationServiceDetail() {
   }, []);
 
   const fetchService = useCallback(async () => {
-    const { data, error } = await supabase.from('application_services').select('*').eq('id', id).single();
+    const { data, error } = await supabase.from('application_services').select('*').eq('id', id!).single();
     if (error || !data) { toast('error', 'Service not found'); navigate('/application-services'); return; }
     setForm({ name: data.name, vehicle_id: data.vehicle_id || '', default_rate_per_acre: formatCentsToDollars(data.default_rate_per_acre_cents), cost_per_acre: formatCentsToDollars(data.cost_per_acre_cents), is_active: data.is_active, sort_order: String(data.sort_order) });
     setLoading(false);
@@ -91,7 +91,7 @@ export default function ApplicationServiceDetail() {
         if (profile) logActivity({ event: 'app_service_created', description: `Application service "${form.name}" created`, performedBy: profile.id, entityType: 'application_service', entityId: result.data!.id });
         toast('success', 'Application service created'); setIsDirty(false); navigate(`/application-services/${result.data!.id}`);
       } else {
-        const result = await supabase.from('application_services').update(payload).eq('id', id).select().single();
+        const result = await supabase.from('application_services').update(payload).eq('id', id!).select().single();
         checkMutationResult(result, 'Update application service');
         if (profile) logActivity({ event: 'app_service_updated', description: `Application service "${form.name}" updated`, performedBy: profile.id, entityType: 'application_service', entityId: id! });
         toast('success', 'Service saved'); setIsDirty(false);
@@ -108,7 +108,7 @@ export default function ApplicationServiceDetail() {
     const dup = overrides.find((o) => o.customer_id === newOverride.customer_id && o.season === (parseInt(newOverride.season) || currentSeason()));
     if (dup) { toast('error', 'This customer already has a rate for this season. Remove the existing one first.'); return; }
     try {
-      const result = await supabase.from('customer_application_rates').insert({ customer_id: newOverride.customer_id, application_service_id: id, rate_per_acre_cents: parseDollarsToCents(newOverride.rate), season: parseInt(newOverride.season) || currentSeason(), notes: newOverride.notes || null, created_by: profile?.id }).select('*, customer:customers(farm_name)').single();
+      const result = await supabase.from('customer_application_rates').insert({ customer_id: newOverride.customer_id, application_service_id: id!, rate_per_acre_cents: parseDollarsToCents(newOverride.rate), season: parseInt(newOverride.season) || currentSeason(), notes: newOverride.notes || null, created_by: profile?.id }).select('*, customer:customers(farm_name)').single();
       checkMutationResult(result, 'Add customer rate override');
       setOverrides((prev) => [result.data as CustomerApplicationRate, ...prev]);
       setNewOverride({ customer_id: '', rate: '', season: currentSeason().toString(), notes: '' });

@@ -32,11 +32,11 @@ import {
 describe('checkOrderTotals', () => {
   it('returns empty when totals match', () => {
     const orders: OrderRow[] = [
-      { id: 'o1', order_number: 'ORD-001', total_amount: 150 },
+      { id: 'o1', order_number: 'ORD-001', total_price: 150 },
     ];
     const items: OrderItemRow[] = [
-      { order_id: 'o1', quantity: 10, price_per_unit: 10 },
-      { order_id: 'o1', quantity: 5, price_per_unit: 10 },
+      { order_id: 'o1', total_price: 100 },
+      { order_id: 'o1', total_price: 50 },
     ];
 
     expect(checkOrderTotals(orders, items)).toEqual([]);
@@ -44,10 +44,10 @@ describe('checkOrderTotals', () => {
 
   it('detects mismatch when stored total differs from line items', () => {
     const orders: OrderRow[] = [
-      { id: 'o1', order_number: 'ORD-001', total_amount: 200 },
+      { id: 'o1', order_number: 'ORD-001', total_price: 200 },
     ];
     const items: OrderItemRow[] = [
-      { order_id: 'o1', quantity: 10, price_per_unit: 10 }, // = 100
+      { order_id: 'o1', total_price: 100 },
     ];
 
     const result = checkOrderTotals(orders, items);
@@ -61,21 +61,21 @@ describe('checkOrderTotals', () => {
   it('tolerates ±1 cent rounding', () => {
     const orders: OrderRow[] = [
       // 33.34 in dollars — 3334 cents
-      { id: 'o1', order_number: 'ORD-001', total_amount: 33.34 },
+      { id: 'o1', order_number: 'ORD-001', total_price: 33.34 },
     ];
     const items: OrderItemRow[] = [
-      // 3 × 11.1133... = 33.34  — might round to 3334 or 3333 cents
-      { order_id: 'o1', quantity: 3, price_per_unit: 11.11 },
+      // line total 33.33 → 3333 cents
+      { order_id: 'o1', total_price: 33.33 },
     ];
 
-    // 3 * 11.11 = 33.33, stored = 33.34, delta = 1 cent → within tolerance
+    // line sum = 33.33, stored = 33.34, delta = 1 cent → within tolerance
     const result = checkOrderTotals(orders, items);
     expect(result).toEqual([]);
   });
 
   it('handles orders with no items', () => {
     const orders: OrderRow[] = [
-      { id: 'o1', order_number: 'ORD-001', total_amount: 100 },
+      { id: 'o1', order_number: 'ORD-001', total_price: 100 },
     ];
     const items: OrderItemRow[] = [];
 
@@ -87,12 +87,12 @@ describe('checkOrderTotals', () => {
 
   it('checks multiple orders independently', () => {
     const orders: OrderRow[] = [
-      { id: 'o1', order_number: 'ORD-001', total_amount: 100 },
-      { id: 'o2', order_number: 'ORD-002', total_amount: 500 }, // mismatch
+      { id: 'o1', order_number: 'ORD-001', total_price: 100 },
+      { id: 'o2', order_number: 'ORD-002', total_price: 500 }, // mismatch
     ];
     const items: OrderItemRow[] = [
-      { order_id: 'o1', quantity: 10, price_per_unit: 10 },
-      { order_id: 'o2', quantity: 10, price_per_unit: 10 }, // = 100, not 500
+      { order_id: 'o1', total_price: 100 },
+      { order_id: 'o2', total_price: 100 }, // = 100, not 500
     ];
 
     const result = checkOrderTotals(orders, items);
@@ -100,15 +100,15 @@ describe('checkOrderTotals', () => {
     expect(result[0].entityId).toBe('o2');
   });
 
-  it('handles fractional quantities correctly', () => {
+  it('handles fractional dollar totals correctly', () => {
     const orders: OrderRow[] = [
-      { id: 'o1', order_number: 'ORD-001', total_amount: 125.50 },
+      { id: 'o1', order_number: 'ORD-001', total_price: 125.50 },
     ];
     const items: OrderItemRow[] = [
-      { order_id: 'o1', quantity: 2.5, price_per_unit: 50.20 },
+      { order_id: 'o1', total_price: 125.50 },
     ];
 
-    // 2.5 * 50.20 = 125.50 → should match
+    // line total 125.50 = order total → should match
     expect(checkOrderTotals(orders, items)).toEqual([]);
   });
 });

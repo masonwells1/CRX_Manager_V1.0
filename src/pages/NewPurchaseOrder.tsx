@@ -189,7 +189,7 @@ export default function NewPurchaseOrder() {
 
         const idemKey = saveIdem.getKey();
         const { data, error } = await supabase.rpc('save_purchase_order', {
-          p_po_id: savedPoId,
+          p_po_id: savedPoId as string,
           p_po_payload: poPayload,
           p_items: itemsPayload,
           p_performed_by: profile.id,

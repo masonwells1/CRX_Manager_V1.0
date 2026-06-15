@@ -54,8 +54,8 @@ export default function ActivityFeed({ noteId, limit = 20 }: ActivityFeedProps) 
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', userIds);
-      (profiles || []).forEach((p: { id: string; full_name: string }) => {
-        userMap[p.id] = { full_name: p.full_name };
+      (profiles || []).forEach((p: { id: string | null; full_name: string | null }) => {
+        if (p.id) userMap[p.id] = { full_name: p.full_name ?? '' };
       });
     }
 

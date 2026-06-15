@@ -17,6 +17,7 @@ import { parseLocalDate, localToday } from '../lib/dateUtils';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import type { Customer, CustomerAddress, CommissionSplit, Quote, Order, Delivery, DeliveryRemainder, Field, LinkedEntityType, ActivityFeedItem } from '../types';
+import type { Json } from '../types/supabase';
 import { Sentry } from '../lib/sentry';
 import { parseDollarsToCents } from '../lib/parseCents';
 import { formatUSD as fmt } from '../lib/money';
@@ -120,14 +121,14 @@ export default function CustomerDetail() {
   const blocker = useUnsavedChanges(isDirty);
 
   const fetchCustomer = useCallback(async () => {
-    const { data, error } = await supabase.from('customers').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await supabase.from('customers').select('*').eq('id', id!).maybeSingle();
     if (error) {
       toast('error', 'Failed to load customer');
       setLoading(false);
       return;
     }
     if (data) {
-      setCustomer(data);
+      setCustomer(data as Customer);
       // Fetch parent customer name if set
       if (data.parent_customer_id) {
         const { data: parent, error: parentError } = await supabase
@@ -144,7 +145,7 @@ export default function CustomerDetail() {
   }, [id, toast]);
 
   const fetchAddresses = useCallback(async () => {
-    const { data, error } = await supabase.from('customer_addresses').select('*').eq('customer_id', id).order('created_at');
+    const { data, error } = await supabase.from('customer_addresses').select('*').eq('customer_id', id!).order('created_at');
     if (error) toast('error', 'Failed to load addresses');
     setAddresses(data || []);
   }, [id, toast]);
@@ -189,14 +190,14 @@ export default function CustomerDetail() {
       const { data } = await supabase
         .from('quotes')
         .select('*')
-        .eq('customer_id', id)
+        .eq('customer_id', id!)
         .order('created_at', { ascending: false });
       setQuotes((data || []) as Quote[]);
     } else if (selectedTab === 'orders') {
       const { data } = await supabase
         .from('orders')
         .select('*')
-        .eq('customer_id', id)
+        .eq('customer_id', id!)
         .is('deleted_at', null)
         .order('order_date', { ascending: false });
       const rows = ((data || []) as Order[]).map((o) => {
@@ -231,7 +232,7 @@ export default function CustomerDetail() {
       const { data } = await supabase
         .from('deliveries')
         .select('*')
-        .eq('customer_id', id)
+        .eq('customer_id', id!)
         .order('scheduled_date', { ascending: false });
       const driverIds = [...new Set(
         ((data || []) as Delivery[])
@@ -244,7 +245,7 @@ export default function CustomerDetail() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', driverIds);
-        (driverData || []).forEach((p: { id: string; full_name: string }) => { driverMap[p.id] = p.full_name; });
+        (driverData || []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) driverMap[p.id] = p.full_name ?? ''; });
       }
       const rows = ((data || []) as Delivery[]).map((d) => ({
         ...d,
@@ -256,7 +257,7 @@ export default function CustomerDetail() {
       const { data: remData } = await supabase
         .from('delivery_remainders')
         .select('*, product:products(product_name), original_delivery:deliveries!delivery_remainders_original_delivery_id_fkey(delivery_number)')
-        .eq('customer_id', id)
+        .eq('customer_id', id!)
         .eq('status', 'pending')
         .order('created_at', { ascending: false });
       const remainders = ((remData || []) as RemainderRow[]).map((r) => ({
@@ -284,7 +285,7 @@ export default function CustomerDetail() {
         const myAging = allAging.find((a) => a.customer_id === id) || null;
         setAging(myAging);
 
-        const { data: txnData, error: txnError } = await supabase.rpc('get_customer_statement', { p_customer_id: id, p_start_date: ninetyDaysAgo, p_end_date: today });
+        const { data: txnData, error: txnError } = await supabase.rpc('get_customer_statement', { p_customer_id: id!, p_start_date: ninetyDaysAgo, p_end_date: today });
         if (txnError) throw txnError;
         setTransactions(assertRpcResult<TxnRow[]>(txnData, 'get_customer_statement'));
 
@@ -304,7 +305,7 @@ export default function CustomerDetail() {
         const { data: tlData, error: tlError } = await supabase
           .from('activity_feed')
           .select('*')
-          .eq('customer_id', id)
+          .eq('customer_id', id!)
           .order('created_at', { ascending: false })
           .limit(50);
         if (tlError) toast('error', 'Failed to load timeline');
@@ -322,8 +323,8 @@ export default function CustomerDetail() {
             .from('profile_public_view')
             .select('id, full_name, role')
             .in('id', performerIds);
-          (perfData || []).forEach((p: { id: string; full_name: string; role: string }) => {
-            performerMap[p.id] = p;
+          (perfData || []).forEach((p: { id: string | null; full_name: string | null; role: string | null }) => {
+            if (p.id) performerMap[p.id] = { id: p.id, full_name: p.full_name ?? '', role: p.role ?? '' };
           });
         }
         setTimeline(
@@ -340,7 +341,7 @@ export default function CustomerDetail() {
       const { data: orderIds, error: orderIdsError } = await supabase
         .from('orders')
         .select('id')
-        .eq('customer_id', id)
+        .eq('customer_id', id!)
         .is('deleted_at', null);
       if (orderIdsError) toast('error', 'Failed to load order history');
       if (orderIds && orderIds.length > 0) {
@@ -481,10 +482,12 @@ export default function CustomerDetail() {
 
       const idemKey = saveCustomerIdem.getKey();
       const { data, error } = await supabase.rpc('save_customer', {
-        p_customer_id: isNew ? null : id,
-        p_customer_payload: customerPayload,
-        p_addresses: addressesPayload,
-        p_performed_by: profile?.id,
+        // save_customer accepts NULL p_customer_id to create a new customer
+        // (live signature is nullable; generated type narrows it to string).
+        p_customer_id: (isNew ? null : id) as string,
+        p_customer_payload: customerPayload as Json,
+        p_addresses: addressesPayload as Json,
+        p_performed_by: profile?.id as string,
         p_idempotency_key: idemKey,
       });
 
@@ -977,7 +980,7 @@ export default function CustomerDetail() {
                         const idemKey = duplicateQuoteIdem.getKey();
                         const { data, error } = await supabase.rpc('duplicate_quote', {
                           p_source_quote_id: lastQuote.id,
-                          p_performed_by: profile?.id,
+                          p_performed_by: profile?.id as string,
                           p_idempotency_key: idemKey,
                         });
                         if (error) { toast('error', 'Failed to duplicate quote'); return; }

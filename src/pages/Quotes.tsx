@@ -51,7 +51,7 @@ export default function Quotes() {
   const loadRollover = useCallback(async () => {
     setRolloverLoading(true);
     try {
-      const { data, error } = await supabase.rpc('get_open_booking_rollover', { p_customer_id: null, p_season: null });
+      const { data, error } = await supabase.rpc('get_open_booking_rollover', { p_customer_id: undefined, p_season: undefined });
       if (error) throw error;
       const result = assertRpcResult<{ success: boolean; bookings: BookingRolloverRow[] }>(data, 'get_open_booking_rollover');
       setRolloverRows(result.bookings || []);

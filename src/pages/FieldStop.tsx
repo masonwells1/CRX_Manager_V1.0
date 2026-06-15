@@ -295,7 +295,7 @@ export default function FieldStop() {
     const quantitiesJson = isPartial
       ? Object.fromEntries(items.map((it) => [it.id, deliveryQtys[it.id] ?? it.quantity]))
       : null;
-    const rpcParams: Record<string, unknown> = {
+    const rpcParams = {
       p_delivery_id: id,
       p_signed_by: signedBy,
       p_performed_by: profile.id,

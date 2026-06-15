@@ -26,6 +26,7 @@ import { checkRUPCompliance } from '../lib/rupCompliance';
 import StartDeliveryModal from '../components/deliveries/StartDeliveryModal';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import { queueAction } from '../lib/offlineQueue';
+import type { Json } from '../types/supabase';
 import { compressImage } from '../lib/imageCompression';
 import { parseLocalDate } from '../lib/dateUtils';
 import { formatCents as fmtCents } from '../lib/money';
@@ -295,7 +296,7 @@ export default function DeliveryDetail() {
           if (remError) {
             toast('error', sanitizeError(remError));
           } else {
-            setRemainders((remData || []).map((r: DeliveryRemainder & { product?: { product_name: string } | null }) => ({
+            setRemainders(((remData || []) as Array<DeliveryRemainder & { product?: { product_name: string } | null }>).map((r) => ({
               ...r,
               product_name: r.product?.product_name || 'Unknown',
             })) as DeliveryRemainder[]);
@@ -501,13 +502,13 @@ export default function DeliveryDetail() {
     const idemKey = editIdem.getKey();
     const { data, error } = await supabase.rpc('edit_delivery', {
       p_delivery_id: id!,
-      p_assigned_driver: editDriver || null,
+      p_assigned_driver: editDriver || undefined,
       p_scheduled_date: editDate,
-      p_scheduled_time: editTime || null,
-      p_delivery_window_start: editWindowStart || null,
-      p_delivery_window_end: editWindowEnd || null,
-      p_delivery_address_id: editAddress || null,
-      p_delivery_notes: editNotes || null,
+      p_scheduled_time: editTime || undefined,
+      p_delivery_window_start: editWindowStart || undefined,
+      p_delivery_window_end: editWindowEnd || undefined,
+      p_delivery_address_id: editAddress || undefined,
+      p_delivery_notes: editNotes || undefined,
       p_priority: editPriority,
       p_items: itemsPayload,
       p_performed_by: profile.id,
@@ -542,12 +543,17 @@ export default function DeliveryDetail() {
       toast('error', sanitizeError(error));
     } else {
       cancelIdem.resetKey();
-      assertRpcResult(cancelResult, 'cancel_delivery');
+      const cancelData = assertRpcResult<{
+        items_restored?: number;
+        draft_invoices_cancelled?: number;
+        draft_invoices_voided?: number;
+        posted_invoices_flagged?: number;
+      }>(cancelResult, 'cancel_delivery');
       // Show detailed summary toast with cascade info
       const parts: string[] = ['Delivery cancelled.'];
-      if (cancelResult?.items_restored > 0) parts.push(`Inventory restored for ${cancelResult.items_restored} item(s).`);
-      if ((cancelResult?.draft_invoices_cancelled ?? cancelResult?.draft_invoices_voided) > 0) parts.push(`${cancelResult.draft_invoices_cancelled ?? cancelResult.draft_invoices_voided} draft invoice(s) cancelled.`);
-      if (cancelResult?.posted_invoices_flagged > 0) parts.push(`Admin notified about ${cancelResult.posted_invoices_flagged} posted invoice(s) needing review.`);
+      if ((cancelData.items_restored ?? 0) > 0) parts.push(`Inventory restored for ${cancelData.items_restored} item(s).`);
+      if (((cancelData.draft_invoices_cancelled ?? cancelData.draft_invoices_voided) ?? 0) > 0) parts.push(`${cancelData.draft_invoices_cancelled ?? cancelData.draft_invoices_voided} draft invoice(s) cancelled.`);
+      if ((cancelData.posted_invoices_flagged ?? 0) > 0) parts.push(`Admin notified about ${cancelData.posted_invoices_flagged} posted invoice(s) needing review.`);
       toast('success', parts.join(' '));
       setCancelOpen(false);
       setCancelReason('');
@@ -572,9 +578,9 @@ export default function DeliveryDetail() {
       toast('error', sanitizeError(error));
     } else {
       voidIdem.resetKey();
-      assertRpcResult(voidResult, 'void_delivery');
+      const voidData = assertRpcResult<{ posted_invoices_exist?: boolean }>(voidResult, 'void_delivery');
       const parts: string[] = [`Delivery ${delivery.delivery_number} voided.`];
-      if (voidResult?.posted_invoices_exist) {
+      if (voidData.posted_invoices_exist) {
         parts.push('Warning: posted invoices linked to this order require manual review.');
       }
       toast('success', parts.join(' '));
@@ -749,7 +755,15 @@ export default function DeliveryDetail() {
       : null;
 
     const idemKey = completeIdem.getKey();
-    const rpcParams: Record<string, unknown> = {
+    const rpcParams: {
+      p_delivery_id: string;
+      p_signed_by: string;
+      p_performed_by?: string;
+      p_idempotency_key?: string;
+      p_quantities?: Json;
+      p_issue_type?: string;
+      p_issue_notes?: string;
+    } = {
       p_delivery_id: id!,
       p_signed_by: signedBy,
       p_performed_by: profile.id,
@@ -782,7 +796,10 @@ export default function DeliveryDetail() {
       completeIdem.resetKey();
       assertRpcResult(completeResult, 'complete_delivery');
 
-      // Upload signature image if provided
+      // Upload signature image if provided. The delivery has ALREADY completed
+      // (complete_delivery succeeded above), so a failed upload must NOT abort
+      // the success flow — track it and warn accurately instead.
+      let signatureUploadFailed = false;
       if (signatureDataUrl) {
         try {
           const base64Data = signatureDataUrl.split(',')[1];
@@ -796,20 +813,27 @@ export default function DeliveryDetail() {
           const { error: uploadError } = await supabase.storage
             .from('delivery-signatures')
             .upload(filePath, blob, { upsert: true, contentType: 'image/png' });
-          if (!uploadError) {
-            // Store the storage path (not a public URL) — signed URLs are
-            // generated on demand for privacy (signatures are PII)
-            const sigResult = await supabase
-              .from('deliveries')
-              .update({ signature_url: filePath })
-              .eq('id', id!)
-              .select();
-            checkMutationResult(sigResult, 'Update delivery signature');
-          }
+          // Supabase Storage RETURNS its error (doesn't throw) — route it to the
+          // catch below so a failed signature upload can't silently complete the
+          // delivery without its signature (Field Mode F4 class).
+          if (uploadError) throw uploadError;
+          // Store the storage path (not a public URL) — signed URLs are
+          // generated on demand for privacy (signatures are PII)
+          const sigResult = await supabase
+            .from('deliveries')
+            .update({ signature_url: filePath })
+            .eq('id', id!)
+            .select();
+          checkMutationResult(sigResult, 'Update delivery signature');
         } catch (sigErr) {
+          // complete_delivery already succeeded, so the delivery IS completed —
+          // do NOT return (that would skip the invoice/notification/refresh flow)
+          // and do NOT tell the driver to "complete it again" (the completed
+          // status makes that retry unreliable). Warn accurately and let the
+          // completion flow finish; the signature can be re-captured. (Codex P2.)
+          signatureUploadFailed = true;
           Sentry.captureException(sigErr instanceof Error ? sigErr : new Error(String(sigErr)), { extra: { context: 'Signature upload failed during delivery completion' } });
-          toast('error', 'Signature could not be saved. Please try completing the delivery again.');
-          return;
+          toast('error', 'Delivery completed, but the signature could not be saved. Re-capture it from this delivery.');
         }
       }
 
@@ -823,7 +847,9 @@ export default function DeliveryDetail() {
         toast('success', isPartialDelivery
           ? `Delivery completed (partial). Draft invoice ${invoiceNum} created.`
           : `Delivery completed. Draft invoice ${invoiceNum} created.`);
-      } else {
+      } else if (!signatureUploadFailed) {
+        // When the signature failed we already showed an accurate warning toast
+        // that says the delivery completed — skip the redundant success toast.
         toast('success', isPartialDelivery ? 'Delivery completed (partial quantities)' : 'Delivery completed');
       }
       logActivity({ event: 'delivery_completed', description: `Delivery ${delivery.delivery_number} completed${isPartialDelivery ? ' (partial)' : ''}${invoiceNum ? ` — draft invoice ${invoiceNum} auto-created` : ''}`, performedBy: profile.id, entityType: 'delivery', entityId: delivery.id, customerId: delivery.customer_id });

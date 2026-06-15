@@ -298,10 +298,10 @@ export default function Rebates() {
           p_program_id: cForm.program_id,
           p_quantity: Number(cForm.quantity),
           p_claim_amount_cents: parseDollarsToCents(String(cForm.claim_amount_cents)),
-          p_order_id: cForm.order_id || null,
-          p_customer_id: cForm.customer_id || null,
-          p_product_id: cForm.product_id || null,
-          p_notes: cForm.notes || null,
+          p_order_id: cForm.order_id || undefined,
+          p_customer_id: cForm.customer_id || undefined,
+          p_product_id: cForm.product_id || undefined,
+          p_notes: cForm.notes || undefined,
           p_idempotency_key: createClaimKey.getKey(),
         });
         if (error) throw error;

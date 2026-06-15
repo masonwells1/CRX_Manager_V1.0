@@ -68,13 +68,12 @@ const TOLERANCE_CENTS = 1;
 export interface OrderRow {
   id: string;
   order_number: string;
-  total_amount: number; // dollars
+  total_price: number; // dollars
 }
 
 export interface OrderItemRow {
   order_id: string;
-  quantity: number;
-  price_per_unit: number; // dollars
+  total_price: number; // dollars — per-line extended total
 }
 
 export function checkOrderTotals(
@@ -94,10 +93,10 @@ export function checkOrderTotals(
   for (const order of orders) {
     const orderItems = itemsByOrder.get(order.id) ?? [];
     const computedCents = orderItems.reduce(
-      (sum, i) => sum + Math.round(i.quantity * i.price_per_unit * 100),
+      (sum, i) => sum + Math.round(i.total_price * 100),
       0,
     );
-    const storedCents = Math.round(order.total_amount * 100);
+    const storedCents = Math.round(order.total_price * 100);
 
     if (Math.abs(storedCents - computedCents) > TOLERANCE_CENTS) {
       issues.push({
@@ -620,11 +619,11 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
     const [ordersRes, itemsRes] = await Promise.all([
       supabase
         .from('orders')
-        .select('id, order_number, total_amount')
-        .not('total_amount', 'is', null),
+        .select('id, order_number, total_price')
+        .not('total_price', 'is', null),
       supabase
         .from('order_items')
-        .select('order_id, quantity, price_per_unit'),
+        .select('order_id, total_price'),
     ]);
 
     if (ordersRes.error) throw new Error(`Orders query failed: ${ordersRes.error.message}`);
@@ -635,7 +634,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
 
     checks.push({
       name: 'Order Totals',
-      description: 'Order total matches SUM(qty × price) of line items',
+      description: 'Order total matches the sum of its line-item totals',
       passed: disc.length === 0,
       discrepancies: disc,
       entitiesChecked: orders.length,
@@ -643,7 +642,7 @@ export async function runReconciliationChecks(): Promise<ReconciliationReport> {
   } catch (err) {
     checks.push({
       name: 'Order Totals',
-      description: `Order total matches SUM(qty × price) of line items [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
+      description: `Order total matches the sum of its line-item totals [ERROR: ${err instanceof Error ? err.message : String(err)}]`,
       passed: false,
       discrepancies: [],
       entitiesChecked: 0,
