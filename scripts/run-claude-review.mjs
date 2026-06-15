@@ -98,13 +98,24 @@ function runGit(args, fallback = "") {
   }
 }
 
-function getGitContext() {
+function getGitContext(scope, commit) {
+  // The changed-file list must reflect the REVIEW SCOPE, not always the working
+  // tree: base-main diffs the merge-base with origin/main (what this branch added
+  // since it forked — committed + uncommitted), commit diffs that one commit, and
+  // uncommitted (default) diffs the working tree vs HEAD.
+  let changed;
+  if (scope === "base-main") {
+    const base = runGit(["merge-base", "origin/main", "HEAD"], "origin/main");
+    changed = runGit(["diff", "--name-only", base], "");
+  } else if (scope === "commit" && commit) {
+    changed = runGit(["diff-tree", "--no-commit-id", "--name-only", "-r", commit], "");
+  } else {
+    changed = runGit(["diff", "--name-only", "HEAD"], "");
+  }
   return {
     branch: runGit(["branch", "--show-current"], "unknown"),
     status: runGit(["status", "--short"], ""),
-    changedFiles: runGit(["diff", "--name-only", "HEAD"], "")
-      .split(/\r?\n/)
-      .filter(Boolean),
+    changedFiles: changed.split(/\r?\n/).filter(Boolean),
     stagedFiles: runGit(["diff", "--cached", "--name-only"], "")
       .split(/\r?\n/)
       .filter(Boolean),
@@ -220,7 +231,7 @@ function writeReviewOutput(outputPath, result) {
 }
 
 export function runClaudeReview(options) {
-  const gitContext = getGitContext();
+  const gitContext = getGitContext(options.scope, options.commit);
   const output = options.output
     ? (path.isAbsolute(options.output) ? options.output : path.join(ROOT, options.output))
     : defaultClaudeReviewOutputPath({ root: ROOT, topic: options.topic });

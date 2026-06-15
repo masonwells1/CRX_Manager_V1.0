@@ -28,6 +28,11 @@ function read(rel) {
 function requireFile(rel) {
   const content = read(rel);
   if (content === null) {
+    // The .codex/ and .agents/ trees are the machine-local Codex mirror
+    // (gitignored, populated by .codex/sync-from-claude.ps1). They are absent in
+    // CI and any clean checkout, so their absence must NOT fail this gate — the
+    // sync-comparison checks below already skip when a mirror copy is null.
+    if (rel.startsWith(".codex/") || rel.startsWith(".agents/")) return null;
     fail(rel, "missing");
     return null;
   }
@@ -148,9 +153,12 @@ requireIncludes("scripts/post-agent-review-to-pr.test.mjs", prCommentTest, "buil
 
 requireIncludes(".claude/settings.json", claudeSettings, "codex-to-claude-handoff-reminder.mjs");
 requireIncludes(".claude/settings.json", claudeSettings, "agent-pair-review-reminder.mjs");
-requireIncludes(".codex/hooks.json", codexHooksJson, "codex-to-claude-handoff-reminder.mjs");
-requireIncludes(".codex/hooks.json", codexHooksJson, "agent-pair-review-reminder.mjs");
-requireIncludes(".codex/hooks.json", codexHooksJson, "-IncludeHooks");
+if (codexHooksJson !== null) {
+  // Only when the machine-local Codex hook mirror is present (skipped in CI / clean checkouts).
+  requireIncludes(".codex/hooks.json", codexHooksJson, "codex-to-claude-handoff-reminder.mjs");
+  requireIncludes(".codex/hooks.json", codexHooksJson, "agent-pair-review-reminder.mjs");
+  requireIncludes(".codex/hooks.json", codexHooksJson, "-IncludeHooks");
+}
 
 if (claudeSkill !== null && codexSkill !== null) {
   if (claudeSkill === codexSkill) {
@@ -198,7 +206,7 @@ try {
   } else {
     fail("package.json check:agent-workflows script");
   }
-  if (scripts["test:agent-workflows"] === "node .claude/hooks/codex-to-claude-handoff-reminder.test.mjs && node .claude/hooks/agent-pair-review-reminder.test.mjs && node scripts/run-claude-review.test.mjs && node scripts/agent-health-check.test.mjs && node scripts/post-agent-review-to-pr.test.mjs && node scripts/check-agent-workflows.mjs") {
+  if (scripts["test:agent-workflows"] === "node .claude/hooks/codex-gauntlet-reminder.test.mjs && node .claude/hooks/codex-to-claude-handoff-reminder.test.mjs && node .claude/hooks/agent-pair-review-reminder.test.mjs && node scripts/run-claude-review.test.mjs && node scripts/agent-health-check.test.mjs && node scripts/post-agent-review-to-pr.test.mjs && node scripts/check-agent-workflows.mjs") {
     pass("package.json test:agent-workflows script");
   } else {
     fail("package.json test:agent-workflows script");
