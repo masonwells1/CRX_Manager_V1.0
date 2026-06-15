@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -100,57 +99,64 @@ function checkCodexCli() {
   return runCommand("Codex CLI", codex, ["--version"], { shell: false, warn: false });
 }
 
-// `--version` passes even when the CLI is logged out — but the whole headless
-// review toolkit (codex-review / codex-gauntlet) silently fails without auth.
-// Smoke the credential file `codex login` writes (~/.codex/auth.json) so a
-// logged-out machine surfaces loudly instead of producing empty reviews.
-export function checkCodexAuth(home = process.env.USERPROFILE || os.homedir(), env = process.env) {
-  // `codex` reads auth from $CODEX_HOME/auth.json when CODEX_HOME is set, else ~/.codex/auth.json.
-  // Inspecting the wrong home is a false-green: agent-health PASSes while `codex review` is
-  // logged out in the configured home (verified: CODEX_HOME=tmp → `codex login status` = "Not logged in").
-  const authPath = env.CODEX_HOME
-    ? path.join(env.CODEX_HOME, "auth.json")
-    : path.join(home, ".codex", "auth.json");
-  if (!existsSync(authPath)) {
-    return check("FAIL", "Codex CLI auth", `${authPath} missing — run \`codex login\``);
-  }
-  try {
-    const auth = JSON.parse(readFileSync(authPath, "utf8"));
-    // `auth_mode` only records which login flow was chosen — NOT a credential. An empty
-    // `tokens: {}` is also not valid (codex errors "missing field id_token"), so require a
-    // NON-EMPTY tokens object or a real OPENAI_API_KEY string.
-    const hasTokens = auth?.tokens && typeof auth.tokens === "object" && Object.keys(auth.tokens).length > 0;
-    const hasKey = typeof auth?.OPENAI_API_KEY === "string" && auth.OPENAI_API_KEY.length > 0;
-    return (hasTokens || hasKey)
-      ? check("PASS", "Codex CLI auth", "auth.json present")
-      : check("FAIL", "Codex CLI auth", "auth.json has no usable token/key — run `codex login`");
-  } catch (error) {
-    return check("FAIL", "Codex CLI auth", `auth.json unreadable: ${String(error?.message || error)}`);
-  }
+// Run a CLI status command and capture its outcome. Returns {ok, stdout, stderr};
+// `ok` reflects exit 0. Uses spawnSync (not execFileSync) so BOTH streams are captured
+// regardless of exit — `codex login status` prints "Logged in" to stderr while signalling
+// success via exit code 0, so a stdout-only capture would miss it.
+function runStatus(command, args, options = {}) {
+  const res = spawnSync(command, args, {
+    cwd: ROOT,
+    encoding: "utf8",
+    timeout: options.timeout || 15_000,
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: process.platform === "win32" && options.shell !== false,
+  });
+  return {
+    ok: res.status === 0 && !res.error,
+    stdout: String(res.stdout || ""),
+    stderr: String(res.stderr || res.error?.message || ""),
+  };
 }
 
-// Claude auth can live in an env var, the credentials file, or (on some
-// platforms) an OS keychain we can't inspect here — so a missing file is a
-// WARN, not a hard FAIL, to avoid false negatives on keychain-backed setups.
-export function checkClaudeAuth(home = process.env.USERPROFILE || os.homedir(), env = process.env) {
-  if (env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN) {
-    return check("PASS", "Claude CLI auth", "API key/token in env");
+// `--version` passes even when the CLI is logged out — but the whole headless
+// review toolkit (codex-review / codex-gauntlet) silently fails without auth.
+// Delegate to `codex login status` (the authoritative check the review command itself
+// relies on): it honors CODEX_HOME, rejects malformed/expired tokens, and is exit-coded —
+// far more robust than inspecting auth.json's shape ourselves. `runner` is injectable for tests.
+export function checkCodexAuth(runner) {
+  const run = runner || (() => {
+    const codex = resolveNewestCodexBinary();
+    if (!codex) return { ok: false, stdout: "", stderr: "newest OpenAI Codex binary not found" };
+    return runStatus(codex, ["login", "status"], { shell: false });
+  });
+  const r = run();
+  // Exit 0 is the authoritative "logged in" signal (codex prints "Logged in…" to stderr).
+  if (r.ok) {
+    return check("PASS", "Codex CLI auth", ((r.stdout || r.stderr).split(/\r?\n/).find(Boolean) || "logged in").trim());
   }
-  // Honor CLAUDE_CONFIG_DIR (Claude Code's config-dir override) like codex honors CODEX_HOME.
-  const claudeDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
-  const credPath = path.join(claudeDir, ".credentials.json");
-  if (!existsSync(credPath)) {
-    return check("WARN", "Claude CLI auth", "no .credentials.json and no API-key env (may use OS keychain) — run `claude login` if reviews fail to auth");
+  const note = (r.stderr || r.stdout || "not logged in").split(/\r?\n/).find(Boolean) || "not logged in";
+  return check("FAIL", "Codex CLI auth", `${note.trim()} — run \`codex login\``);
+}
+
+// Delegate to `claude auth status` (machine-readable JSON: {"loggedIn":true,...}). It reads
+// the keychain/credentials/env the CLI actually uses, so it can't be fooled by a malformed
+// credentials file. Logged-out is a WARN, not FAIL: non-interactive `claude -p` (used by
+// run-claude-review) can still auth via ANTHROPIC_API_KEY / apiKeyHelper even when the OAuth
+// session shows logged out. `runner` is injectable for tests.
+export function checkClaudeAuth(runner) {
+  const run = runner || (() => runStatus("claude", ["auth", "status"]));
+  const r = run();
+  if (!r.ok) {
+    return check("WARN", "Claude CLI auth", "`claude auth status` unavailable (older CLI / not installed) — run `claude login` if reviews fail to auth");
   }
   try {
-    const cred = JSON.parse(readFileSync(credPath, "utf8"));
-    // Only `claudeAiOauth` (or an env token above) proves Claude CLI login. `mcpOAuth` holds
-    // connector/MCP tokens — NOT Claude CLI credentials — so mcpOAuth-only stays a WARN.
-    return cred?.claudeAiOauth
-      ? check("PASS", "Claude CLI auth", "credentials present")
-      : check("WARN", "Claude CLI auth", "no claudeAiOauth (mcpOAuth/connector tokens are not Claude CLI login) — run `claude login`");
-  } catch (error) {
-    return check("WARN", "Claude CLI auth", `credentials unreadable: ${String(error?.message || error)}`);
+    const parsed = JSON.parse(r.stdout);
+    if (parsed?.loggedIn === true) {
+      return check("PASS", "Claude CLI auth", parsed.authMethod ? `logged in (${parsed.authMethod})` : "logged in");
+    }
+    return check("WARN", "Claude CLI auth", "claude auth status reports logged out (env/apiKeyHelper auth may still work) — run `claude login` if reviews fail");
+  } catch {
+    return check("WARN", "Claude CLI auth", "could not parse `claude auth status` — run `claude login` if reviews fail to auth");
   }
 }
 
