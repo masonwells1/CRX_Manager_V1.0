@@ -1,10 +1,14 @@
-# Migration History (455 migrations)
+# Migration History (456 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/archive/2026-spring/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-15 (commission backfill — Foundation Ultra Review H1 — 1 migration)
+
+`20260615173849_backfill_missing_commissions_march_2026` — data-only `DO` block. 11 March-2026 orders (ORD-2026-0148/0150/0153/0161/0162/0177/0178/0179/0180/0186/0188) had no commission rows: they were booked 2026-03-09..03-13, **before** each customer's commission split was configured, so the canonical writer correctly produced nothing at the time. Every order created after that window already has commissions, and all four live order-creation RPCs (`create_direct_order`/`convert_quote_to_order`/`create_quick_delivery`/`draw_down_quote`) call `_insert_commissions_for_order` with a real split — a one-time HISTORICAL gap, NOT an active bug. The migration reuses `_insert_commissions_for_order` with each customer's `default_commission_split`, the order's `total_profit`, and `order_date`; rows land `pending` (nothing auto-paid). Idempotent (`NOT EXISTS` guard) + reversible (soft-delete). rls-security-reviewer + migration-drift-reviewer both 0 BLOCKER/HIGH/MED; rolled-back live smoke + post-apply verify: 11 orders covered, 13 rows, all linked to a payable recipient, total **$60,599.07** (CMCTW LLC $40,442.17 / Mason Wells $10,078.45 / Chance Tuttle $10,078.45). Disk file B7-renamed to the MCP stamp `20260615173849`.
 
 ## Applied 2026-06-14 (create_direct_order customer-PO param — 1 migration)
 
