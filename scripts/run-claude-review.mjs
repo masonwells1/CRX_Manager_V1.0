@@ -110,7 +110,11 @@ function getGitContext(scope, commit) {
   } else if (scope === "commit" && commit) {
     changed = runGit(["diff-tree", "--no-commit-id", "--name-only", "-r", commit], "");
   } else {
-    changed = runGit(["diff", "--name-only", "HEAD"], "");
+    // uncommitted: working-tree changes vs HEAD PLUS untracked-new files
+    // (git diff omits untracked — a brand-new migration/script/hook would be missed).
+    const tracked = runGit(["diff", "--name-only", "HEAD"], "");
+    const untracked = runGit(["ls-files", "--others", "--exclude-standard"], "");
+    changed = [tracked, untracked].filter(Boolean).join("\n");
   }
   return {
     branch: runGit(["branch", "--show-current"], "unknown"),

@@ -103,11 +103,15 @@ function main() {
     const sensitiveWarnings = findSensitiveContentWarnings(body);
 
     if (options.dryRun) {
-      console.log(body);
+      // Scan BEFORE echoing: if the body contains a secret, do NOT print it —
+      // printing would leak it to the terminal/transcript even on the safe
+      // dry-run path. Refuse instead.
       if (sensitiveWarnings.length > 0) {
-        console.log("");
-        console.log(`SENSITIVE CONTENT WARNING - ${sensitiveWarnings.join(", ")}`);
+        console.error(`SENSITIVE CONTENT WARNING - ${sensitiveWarnings.join(", ")}`);
+        console.error("Refusing to print the review body — it appears to contain a secret. Sanitize the file and re-run.");
+        process.exit(1);
       }
+      console.log(body);
       console.log("");
       console.log("DRY RUN - no GitHub comment posted. Re-run with --confirm to post.");
       process.exit(0);
@@ -121,6 +125,11 @@ function main() {
       ].join("\n"));
     }
 
+    // gh runs through cmd.exe on Windows (shell:true for the .cmd shim), so a PR
+    // value with shell metacharacters could inject commands — constrain to digits.
+    if (!/^\d+$/.test(String(options.pr))) {
+      throw new Error(`Invalid --pr "${options.pr}" — must be a numeric PR number.`);
+    }
     const tempFile = path.join(os.tmpdir(), `crx-agent-review-pr-${options.pr}-${Date.now()}.md`);
     writeFileSync(tempFile, body, "utf8");
     const result = spawnSync("gh", ["pr", "comment", options.pr, "--body-file", tempFile], {

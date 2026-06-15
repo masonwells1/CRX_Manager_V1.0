@@ -60,7 +60,7 @@ Codex `review` is read-only analysis of the diff. Run it from the repo root, pin
 no-approval so it can't hang unattended, and tee the output so Claude can parse it:
 
 ```bash
-cd /c/CRX_Manager
+cd "$(git rev-parse --show-toplevel)"
 mkdir -p .claude/session-state
 "$CODEX" review --base main \
   --title "Pre-push review: $(git rev-parse --abbrev-ref HEAD)" \
