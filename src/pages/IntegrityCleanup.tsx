@@ -206,7 +206,7 @@ export default function IntegrityCleanup() {
             .select('order_id')
             .in('order_id', orderIds)
             .not('status', 'in', '("voided","cancelled")');
-          const billedOrderIds = new Set((invoiceRows || []).map((i: { order_id: string }) => i.order_id));
+          const billedOrderIds = new Set(((invoiceRows || []) as { order_id: string }[]).map((i: { order_id: string }) => i.order_id));
           const filtered = allCompleted.filter((d) => !billedOrderIds.has(d.order_id));
           setUnbilled(
             filtered.map((d) => {

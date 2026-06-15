@@ -63,7 +63,7 @@ export default function LogbookReport() {
         // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
         const { data: rows, error } = await supabase.from('profile_public_view').select('id, full_name, role').in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name').limit(200);
         if (error) { toast('error', 'Failed to load applicators'); return; }
-        setEntities((rows || []).map((r) => ({ id: r.id, label: r.full_name })));
+        setEntities((rows || []).map((r) => ({ id: r.id ?? '', label: r.full_name ?? '' })));
       } else if (tab === 'field') {
         const { data: rows, error } = await supabase.from('fields').select('id, field_name, customer:customers(farm_name)').eq('is_active', true).order('field_name').limit(500);
         if (error) { toast('error', 'Failed to load fields'); return; }

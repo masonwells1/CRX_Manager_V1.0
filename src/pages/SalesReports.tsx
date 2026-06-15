@@ -111,7 +111,7 @@ export default function SalesReports() {
       .then(({ data }) => setCustomerOptions((data || []).map(r => ({ id: r.id, name: r.farm_name }))));
     // PR-07 follow-up: profile_public_view exposes only id/full_name/role/is_active.
     supabase.from('profile_public_view').select('id, full_name').in('role', ['admin', 'sales_rep']).order('full_name')
-      .then(({ data }) => setSalesRepOptions((data || []).map(r => ({ id: r.id, name: r.full_name }))));
+      .then(({ data }) => setSalesRepOptions((data || []).map(r => ({ id: r.id, name: r.full_name })) as FilterOption[]));
     supabase.from('products').select('category').eq('is_active', true).not('category', 'is', null)
       .then(({ data }) => {
         const unique = [...new Set((data || []).map(r => r.category as string))].filter(Boolean).sort();

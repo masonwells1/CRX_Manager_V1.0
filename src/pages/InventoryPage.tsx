@@ -242,10 +242,10 @@ export default function InventoryPage() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', creatorIds);
-      (creators || []).forEach((p: { id: string; full_name: string }) => { creatorMap[p.id] = p.full_name; });
+      ((creators || []) as Array<{ id: string; full_name: string }>).forEach((p) => { creatorMap[p.id] = p.full_name; });
     }
 
-    const holdRows = (data || []).map((h: Record<string, unknown> & { product?: { product_name: string }; customer?: { farm_name: string }; created_by?: string | null }) => ({
+    const holdRows = ((data || []) as Array<Record<string, unknown> & { product?: { product_name: string }; customer?: { farm_name: string }; created_by?: string | null }>).map((h) => ({
       ...h,
       product_name: h.product?.product_name || 'Unknown',
       customer_name: h.customer?.farm_name || null,
@@ -344,14 +344,14 @@ export default function InventoryPage() {
     const idemKey = createHoldIdem.getKey();
     const { data, error } = await supabase.rpc('create_inventory_hold', {
       p_product_id: holdProductId,
-      p_customer_id: holdCustomerId || null,
+      p_customer_id: (holdCustomerId || null) as string,
       p_quantity: qty,
       p_hold_type: 'manual',
-      p_expires_at: holdExpires || null,
-      p_notes: holdNotes || null,
+      p_expires_at: (holdExpires || null) as string,
+      p_notes: (holdNotes || null) as string,
       p_performed_by: profile.id,
       p_force: force,
-      p_force_reason: forceReason,
+      p_force_reason: forceReason ?? undefined,
       p_idempotency_key: idemKey,
     });
     if (error) throw error;
@@ -470,10 +470,10 @@ export default function InventoryPage() {
       p_product_id: addProductId,
       p_location: addLocation || 'Main Warehouse',
       p_quantity: qty,
-      p_unit_size: addUnitSize || null,
-      p_performed_by: profile?.id || null,
-      p_notes: qty > 0 ? `Initial inventory record created with ${qty} units` : null,
-      p_unit_cost: unitCost && unitCost > 0 ? unitCost : null,
+      p_unit_size: addUnitSize || undefined,
+      p_performed_by: profile?.id || undefined,
+      p_notes: qty > 0 ? `Initial inventory record created with ${qty} units` : undefined,
+      p_unit_cost: unitCost && unitCost > 0 ? unitCost : undefined,
       p_idempotency_key: manualAddIdem.getKey(),
     });
     if (!error) assertRpcResult(manualAddData, 'manual_inventory_add');
@@ -505,6 +505,12 @@ export default function InventoryPage() {
       .eq('product_id', target.product_id)
       .in('purchase_orders.status', ['submitted', 'partially_received']);
 
+    if (error) {
+      // Supabase RETURNS this error (doesn't throw) — surface it instead of
+      // silently showing an empty PO list (Field Mode F6 class).
+      Sentry.captureException(error, { extra: { context: 'Load receivable POs for product', productId: target.product_id } });
+      toast('error', 'Could not load purchase orders for this product.');
+    }
     if (!error && data) {
       const pos = (data as unknown as Array<{ id: string; quantity_ordered: number; quantity_received: number; unit_cost: number; unit_size: string | null; product_id: string; purchase_order_id: string; purchase_orders: { po_number: string; status: string } }>).map((item) => ({
         id: item.id,
@@ -588,7 +594,7 @@ export default function InventoryPage() {
         const { data, error } = await supabase.rpc('adjust_inventory', {
           p_inventory_id: selectedId,
           p_delta: qty,
-          p_reason: adjustNote || null,
+          p_reason: (adjustNote || null) as string,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
         });

@@ -117,17 +117,17 @@ export function BlendTicketDetail() {
             customer:customers(id, farm_name),
             field:fields(id, field_name)
           `)
-          .eq('id', id)
+          .eq('id', id!)
           .single(),
         supabase
           .from('blend_ticket_images')
           .select('*')
-          .eq('blend_ticket_id', id)
+          .eq('blend_ticket_id', id!)
           .order('upload_order'),
         supabase
           .from('blend_ticket_products')
           .select('*, product:products(*)')
-          .eq('blend_ticket_id', id)
+          .eq('blend_ticket_id', id!)
           .order('sequence_order'),
         supabase
           .from('products')
@@ -169,7 +169,7 @@ export function BlendTicketDetail() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', profIds);
-        (profRows || []).forEach((p: { id: string; full_name: string }) => {
+        ((profRows || []) as { id: string; full_name: string }[]).forEach((p: { id: string; full_name: string }) => {
           profMap[p.id] = p;
         });
       }
@@ -179,7 +179,7 @@ export function BlendTicketDetail() {
         reviewer: tdata?.reviewed_by ? profMap[tdata.reviewed_by] || null : null,
         salesman: tdata?.salesman_id ? profMap[tdata.salesman_id] || null : null,
       };
-      setTicket(enrichedTicket);
+      setTicket(enrichedTicket as BlendTicket);
 
       const fetchedImages = imagesResult.data || [];
       const imagesWithSignedUrls = await Promise.all(
@@ -194,12 +194,12 @@ export function BlendTicketDetail() {
         })
       );
       setImages(imagesWithSignedUrls);
-      setProducts(productsResult.data || []);
-      setAllProducts(allProductsResult.data || []);
-      setCustomers(customersResult.data || []);
+      setProducts((productsResult.data || []) as BlendTicketProduct[]);
+      setAllProducts((allProductsResult.data || []) as Product[]);
+      setCustomers((customersResult.data || []) as Customer[]);
       const allFields = (fieldsResult.data || []) as Field[];
       setAvailableFields(allFields);
-      setLinkedOrders(linkedResult.data || []);
+      setLinkedOrders((linkedResult.data || []) as BlendTicketToOrderItem[]);
       setAvailableJobs((jobsResult.data || []) as Pick<Job, 'id' | 'job_number' | 'job_date' | 'status'>[]);
       setSelectedJobId(ticketResult.data.job_id || '');
       // Fetch application services for dropdown
@@ -210,7 +210,7 @@ export function BlendTicketDetail() {
       const { data: btfData } = await supabase
         .from('blend_ticket_fields')
         .select('field_id, customer_id, planned_acres, sort_order')
-        .eq('blend_ticket_id', id)
+        .eq('blend_ticket_id', id!)
         .order('sort_order');
       if (btfData?.length) {
         setTicketFields(btfData.map((btf: { field_id: string; customer_id: string | null; planned_acres: number | null }) => {
@@ -263,8 +263,10 @@ export function BlendTicketDetail() {
       // Wrapped in its own try/catch so suggestion failures don't block page load
       try {
         const custId = ticketResult.data.customer_id;
-        const prods = productsResult.data || [];
-        const pids = prods.filter((p: BlendTicketProduct) => p.product_id).map((p: BlendTicketProduct) => p.product_id);
+        const prods = (productsResult.data || []) as BlendTicketProduct[];
+        const pids = prods
+          .map((p: BlendTicketProduct) => p.product_id)
+          .filter((pid): pid is string => Boolean(pid));
         if (ticketResult.data.order_link_status === 'unlinked' && custId && pids.length) {
           const { data: co } = await supabase.from('orders').select('id, order_number').eq('customer_id', custId).eq('status', 'confirmed');
           if (co?.length) {
@@ -503,7 +505,7 @@ export function BlendTicketDetail() {
       return;
     }
     if (data) {
-      setProducts([...products, data]);
+      setProducts([...products, data as BlendTicketProduct]);
     }
   }
 
@@ -546,7 +548,7 @@ export function BlendTicketDetail() {
       toast('error', 'Failed to load orders');
       return;
     }
-    setAvailableOrders(data || []);
+    setAvailableOrders((data || []) as (Order & { items?: OrderItem[] })[]);
     setSelectedOrderId('');
     setShowLinkModal(true);
   }
@@ -645,7 +647,7 @@ export function BlendTicketDetail() {
         p_blend_ticket_id: ticket.id,
         p_order_number: newOrderNumber.trim(),
         p_order_date: newOrderDate,
-        p_notes: newOrderNotes || null,
+        p_notes: newOrderNotes || undefined,
         p_performed_by: profile.id,
         p_idempotency_key: createOrderKey,
       });

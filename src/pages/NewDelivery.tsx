@@ -111,11 +111,11 @@ export default function NewDelivery() {
       return;
     }
 
-    const rows = ((data || []) as Array<Order & { customer: { farm_name: string } | null }>).map((o) => ({
+    const rows = ((data || []) as Array<Omit<Order, 'customer'> & { customer: { farm_name: string } | null }>).map((o) => ({
       ...o,
       customer_name: o.customer?.farm_name || 'Unknown',
     }));
-    setOrders(rows);
+    setOrders(rows as (Order & { customer_name: string })[]);
     setLoadingOrders(false);
   }, [toast]);
 
@@ -400,10 +400,10 @@ export default function NewDelivery() {
         tote_number: item.tote_number || null,
         notes: item.notes || null,
       })),
-      p_delivery_address_id: selectedAddressId || null,
-      p_assigned_driver: selectedDriverId || null,
-      p_scheduled_time: scheduledTime || null,
-      p_delivery_notes: deliveryNotes || null,
+      p_delivery_address_id: selectedAddressId || undefined,
+      p_assigned_driver: selectedDriverId || undefined,
+      p_scheduled_time: scheduledTime || undefined,
+      p_delivery_notes: deliveryNotes || undefined,
       p_idempotency_key: createDeliveryKey.getKey(),
     });
 

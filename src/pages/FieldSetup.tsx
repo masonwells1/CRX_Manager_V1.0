@@ -13,6 +13,7 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult } from '../lib/db';
+import type { Json } from '../types/supabase';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import { computeBounds } from '../hooks/useFitBounds';
@@ -111,6 +112,7 @@ export default function FieldSetup() {
   }, []);
 
   const fetchField = useCallback(async () => {
+    if (!id) return;
     const { data, error } = await supabase
       .from('fields')
       .select('*, customer:customers!fields_customer_id_fkey(farm_name)')
@@ -123,7 +125,8 @@ export default function FieldSetup() {
       return;
     }
     if (data) {
-      setField(data);
+      const { customer: _customer, ...fieldRow } = data;
+      setField(fieldRow as Partial<Field>);
       const cust = data.customer as { farm_name: string } | null;
       setOwnerName(cust?.farm_name || '');
 
@@ -189,7 +192,7 @@ export default function FieldSetup() {
       if (defaults && defaults.length > 0) {
         setBillingOpen(true);
         setBillingSplits(
-          defaults.map((d: { customer_id: string; customer?: { farm_name: string }; split_pct: number; is_primary: boolean; notes?: string; price_override_cents?: number | null; pricing_note?: string }) => ({
+          defaults.map((d: { customer_id: string; customer?: { farm_name: string | null } | null; split_pct: number; is_primary: boolean; notes?: string | null; price_override_cents?: number | null; pricing_note?: string | null }) => ({
             customer_id: d.customer_id,
             customer_name: d.customer?.farm_name || 'Unknown',
             split_pct: Number(d.split_pct),
@@ -318,7 +321,7 @@ export default function FieldSetup() {
 
       const idemKey = saveFieldIdem.getKey();
       const { data, error } = await supabase.rpc('save_field', {
-        p_field_id: isNew ? null : id,
+        p_field_id: (isNew ? null : id) as string,
         p_field_payload: fieldPayload,
         p_billing_defaults: billingPayload,
         p_performed_by: profile!.id,
@@ -335,7 +338,7 @@ export default function FieldSetup() {
         // Save polygons (multi-polygon mode) or single boundary (legacy mode)
         if (drawnPolygons.length > 0 && savedFieldId) {
           const polygonPayload = drawnPolygons.map((p, i) => ({
-            polygon_geojson: p.polygon.geometry,
+            polygon_geojson: { ...p.polygon.geometry },
             label: p.label,
             acres: p.acres,
             sort_order: i,
@@ -345,7 +348,7 @@ export default function FieldSetup() {
           try {
             await supabase.rpc('save_field_polygons', {
               p_field_id: savedFieldId,
-              p_polygons: polygonPayload,
+              p_polygons: polygonPayload as Json,
               p_performed_by: profile!.id,
               p_idempotency_key: geoIdemKey,
             }).throwOnError();

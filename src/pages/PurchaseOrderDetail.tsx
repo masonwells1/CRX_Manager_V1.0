@@ -129,6 +129,11 @@ export default function PurchaseOrderDetail() {
       .eq('purchase_order_id', id!)
       .order('received_at', { ascending: false });
 
+    if (error) {
+      // Supabase RETURNS this error (doesn't throw) — surface it instead of
+      // silently leaving the receiving history empty (Field Mode F6 class).
+      toast('error', 'Could not load receiving history.');
+    }
     if (!error && data) {
       const receiverIds = [...new Set(
         (data as Array<{ received_by?: string | null }>)
@@ -141,7 +146,7 @@ export default function PurchaseOrderDetail() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', receiverIds);
-        (receivers || []).forEach((p: { id: string; full_name: string }) => { receiverMap[p.id] = p.full_name; });
+        (receivers || []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) receiverMap[p.id] = p.full_name ?? ''; });
       }
       const rows = (data as Array<ReceivingRecord & { product?: { product_name: string }; received_by?: string | null }>).map((r) => ({
         ...r,
@@ -151,7 +156,7 @@ export default function PurchaseOrderDetail() {
       setReceivingHistory(rows as ReceivingRecord[]);
     }
     setHistoryLoading(false);
-  }, [id]);
+  }, [id, toast]);
 
   useEffect(() => {
     if (id) {
@@ -432,7 +437,7 @@ export default function PurchaseOrderDetail() {
         .ilike('product_name', `%${editProductQuery}%`)
         .eq('is_active', true)
         .limit(8);
-      setEditProductResults(data || []);
+      setEditProductResults((data || []) as Array<{ id: string; product_name: string; unit_size: string }>);
     }, 250);
     return () => clearTimeout(timer);
   }, [editProductQuery, editProductSearch]);
@@ -454,7 +459,7 @@ export default function PurchaseOrderDetail() {
 
       const savePOKey = savePOIdem.getKey();
       const { data, error } = await supabase.rpc('save_purchase_order', {
-        p_po_id: id,
+        p_po_id: id!,
         p_po_payload: {
           vendor: editForm.vendor,
           status: editForm.status,
@@ -491,7 +496,7 @@ export default function PurchaseOrderDetail() {
       const result = await supabase
         .from('purchase_orders')
         .update({ status: 'submitted', submitted_date: localToday() })
-        .eq('id', id)
+        .eq('id', id!)
         .select();
       checkMutationResult(result, 'Submit purchase order');
       toast('success', `Purchase order ${po.po_number} submitted`);
@@ -510,7 +515,7 @@ export default function PurchaseOrderDetail() {
     try {
       const cancelKey = cancelPOIdem.getKey();
       const { data, error } = await supabase.rpc('cancel_purchase_order', {
-        p_po_id: id,
+        p_po_id: id!,
         p_reason: cancelReason || 'Cancelled',
         p_performed_by: profile.id,
         p_idempotency_key: cancelKey,

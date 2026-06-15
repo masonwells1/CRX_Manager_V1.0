@@ -154,13 +154,15 @@ export default function Orders() {
       }
     });
 
-    const enriched = ((ordersData || []) as Order[]).map((o) => {
+    const enriched = ((ordersData || []) as Array<Omit<Order, 'customer'> & {
+      customer: { farm_name: string; parent_customer_id: string | null } | null;
+    }>).map((o) => {
       const counts = itemsByOrder[o.id] || { neededValue: 0, deliveredValue: 0 };
       const pct = counts.neededValue > 0 ? Math.round((counts.deliveredValue / counts.neededValue) * 100) : 0;
       const orderCents = Math.round((o.total_price || 0) * 100);
       const invCents = invoicedByOrder[o.id] || 0;
       const invPct = orderCents > 0 ? Math.round((invCents / orderCents) * 100) : 0;
-      const cust = o.customer as unknown as { farm_name: string; parent_customer_id: string | null } | null;
+      const cust = o.customer;
       const farmGroupName = cust?.parent_customer_id ? parentNameMap[cust.parent_customer_id] || null : null;
       const customerName = cust?.farm_name || '';
       const delInfo = deliveryByOrder[o.id] || { count: 0, earliestDate: null };
@@ -172,7 +174,7 @@ export default function Orders() {
         customer_name: customerName,
         active_delivery_count: delInfo.count,
         earliest_delivery_date: delInfo.earliestDate,
-      };
+      } as OrderWithFulfillment;
     });
 
     setOrders(enriched);

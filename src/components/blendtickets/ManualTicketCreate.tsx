@@ -65,7 +65,7 @@ export function ManualTicketCreate({ customers, onComplete }: ManualTicketCreate
         .eq('is_active', true)
         .order('product_name');
       if (prodError) Sentry.captureException(new Error(String(prodError.message)), { extra: { context: 'Failed to load products' } });
-      if (prodData) setAllProducts(prodData);
+      if (prodData) setAllProducts(prodData as Product[]);
 
       // Fetch active blend recipes with their items
       const { data: recipeData, error: recipeError } = await supabase

@@ -183,12 +183,12 @@ export default function TeamBoard() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', profileIds);
-        (profileRows || []).forEach((p: { id: string; full_name: string }) => {
-          profileMap[p.id] = { full_name: p.full_name };
+        (profileRows || []).forEach((p: { id: string | null; full_name: string | null }) => {
+          if (p.id) profileMap[p.id] = { full_name: p.full_name ?? '' };
         });
       }
 
-      const notesWithExtras = notesData.map((note: TeamNote & { id: string; created_by?: string | null; assigned_to?: string | null; completed_by?: string | null }) => ({
+      const notesWithExtras = (notesData as (TeamNote & { id: string; created_by?: string | null; assigned_to?: string | null; completed_by?: string | null })[]).map((note) => ({
         ...note,
         tags: tagMap[note.id] || [],
         comment_count: countMap[note.id] || 0,
@@ -236,7 +236,7 @@ export default function TeamBoard() {
 
     if (data && data.length > 0) {
       // Fetch note titles for context
-      const noteIds = [...new Set(data.map((a: { note_id: string }) => a.note_id).filter(Boolean))];
+      const noteIds = [...new Set(data.map((a: { note_id: string | null }) => a.note_id).filter((x): x is string => Boolean(x)))];
       const titleMap: Record<string, string> = {};
 
       if (noteIds.length > 0) {
@@ -258,12 +258,12 @@ export default function TeamBoard() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', userIds);
-        (userData || []).forEach((u: { id: string; full_name: string }) => {
-          userMap[u.id] = { full_name: u.full_name };
+        (userData || []).forEach((u: { id: string | null; full_name: string | null }) => {
+          if (u.id) userMap[u.id] = { full_name: u.full_name ?? '' };
         });
       }
 
-      const enriched = data.map((a: GlobalActivity & { note_id: string; user_id: string; changes?: Record<string, unknown> | null }) => ({
+      const enriched = (data as (GlobalActivity & { note_id: string; user_id: string; changes?: Record<string, unknown> | null })[]).map((a) => ({
         ...a,
         note_title: titleMap[a.note_id] || ((a.changes as Record<string, Record<string, unknown>> | null)?.note?.title as string) || 'Deleted note',
         user: userMap[a.user_id],
@@ -298,8 +298,8 @@ export default function TeamBoard() {
             .from('profile_public_view')
             .select('id, full_name')
             .in('id', ids);
-          (profs || []).forEach((p: { id: string; full_name: string }) => {
-            profMap[p.id] = { full_name: p.full_name };
+          (profs || []).forEach((p: { id: string | null; full_name: string | null }) => {
+            if (p.id) profMap[p.id] = { full_name: p.full_name ?? '' };
           });
         }
         note = {

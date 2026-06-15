@@ -154,9 +154,9 @@ export default function DispatchBoard() {
     try {
       const { data, error } = await supabase.rpc('assign_job_applicator', {
         p_job_id: jobId,
-        p_applicator_id: applicatorId || null,
+        p_applicator_id: applicatorId || undefined,
         p_license_override: licenseOverride,
-        p_performed_by: profile?.id ?? null,
+        p_performed_by: profile?.id ?? undefined,
         p_idempotency_key: assignIdem.getKey(),
       });
       if (error) throw error;

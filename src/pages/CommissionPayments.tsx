@@ -106,7 +106,7 @@ export default function CommissionPayments() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', recipientIds);
-      (recipients || []).forEach((r: { id: string; full_name: string }) => { recipientMap[r.id] = r.full_name; });
+      (recipients || []).forEach((r: { id: string | null; full_name: string | null }) => { if (r.id) recipientMap[r.id] = r.full_name ?? ''; });
     }
 
     // Get item counts
@@ -160,7 +160,7 @@ export default function CommissionPayments() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', recipientUserIds);
-      (recipients || []).forEach((r: { id: string; full_name: string }) => { recipientMap[r.id] = r.full_name; });
+      (recipients || []).forEach((r: { id: string | null; full_name: string | null }) => { if (r.id) recipientMap[r.id] = r.full_name ?? ''; });
     }
 
     setUnpaidCommissions(
@@ -224,9 +224,9 @@ export default function CommissionPayments() {
       const { data, error } = await supabase.rpc('create_commission_payment', {
         p_commission_ids: Array.from(selectedCommissions),
         p_payment_method: payMethod,
-        p_reference: payRef || null,
+        p_reference: (payRef || null) as string,
         p_payment_date: payDate,
-        p_notes: payNotes || null,
+        p_notes: (payNotes || null) as string,
         p_performed_by: profile?.id,
         p_idempotency_key: createKey,
       });

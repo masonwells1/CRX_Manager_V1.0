@@ -9,6 +9,9 @@ import { compressImage } from '../../lib/imageCompression';
 import { localToday } from '../../lib/dateUtils';
 import { Sentry } from '../../lib/sentry';
 import type { Customer } from '../../types';
+import type { Database } from '../../types/supabase';
+
+type BlendTicketInsert = Database['public']['Tables']['blend_tickets']['Insert'];
 
 interface ImageFile {
   file: File;
@@ -120,7 +123,7 @@ export function BulkTicketUpload({ customers, onUploadComplete }: BulkTicketUplo
       if (ticketError) throw ticketError;
       const ticketNumber = assertRpcResult<string>(ticketNumberData, 'generate_ticket_number');
 
-      const ticketData: Record<string, unknown> = {
+      const ticketData: BlendTicketInsert = {
         ticket_number: ticketNumber,
         uploaded_by: profile!.id,
         upload_date: new Date().toISOString(),

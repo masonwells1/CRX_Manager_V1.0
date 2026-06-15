@@ -199,10 +199,10 @@ export default function OrderDetail() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', deliveryDriverIds);
-        (driverData || []).forEach((p: { id: string; full_name: string }) => { deliveryDriverMap[p.id] = p.full_name; });
+        (driverData || []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) deliveryDriverMap[p.id] = p.full_name ?? ''; });
       }
       setDeliveries(
-        (deliveryData || []).map((d: Delivery) => ({
+        ((deliveryData || []) as Delivery[]).map((d: Delivery) => ({
           ...d,
           driver_name: d.assigned_driver ? deliveryDriverMap[d.assigned_driver] || undefined : undefined,
         }))
@@ -215,7 +215,7 @@ export default function OrderDetail() {
         .eq('order_id', id!)
         .not('status', 'in', '("voided","cancelled")')
         .order('invoice_number');
-      setInvoices(invoiceData || []);
+      setInvoices((invoiceData || []) as Invoice[]);
 
       // Load order shares
       const { data: shareData } = await supabase
@@ -243,7 +243,7 @@ export default function OrderDetail() {
         .in('purchase_orders.status', ['submitted', 'partially_received']),
     ]);
 
-    setProducts(productsRes.data || []);
+    setProducts((productsRes.data || []) as Product[]);
 
     const invMap: Record<string, { available: number; prebooked: number; onOrder: number }> = {};
     for (const row of inventoryRes.data || []) {
@@ -583,19 +583,25 @@ export default function OrderDetail() {
       });
       if (error) throw error;
       voidOrderIdem.resetKey();
-      assertRpcResult(voidResult, 'void_order');
+      const voided = assertRpcResult<{
+        inventory_products_restored?: number;
+        commissions_cancelled?: number;
+        draft_invoices_voided?: number;
+        posted_invoices_flagged?: number;
+        paid_commissions_flagged?: number;
+      }>(voidResult, 'void_order');
 
       const parts: string[] = ['Order voided.'];
-      if (voidResult?.inventory_products_restored > 0)
-        parts.push(`Inventory restored for ${voidResult.inventory_products_restored} product(s).`);
-      if (voidResult?.commissions_cancelled > 0)
-        parts.push(`${voidResult.commissions_cancelled} commission(s) cancelled.`);
-      if (voidResult?.draft_invoices_voided > 0)
-        parts.push(`${voidResult.draft_invoices_voided} draft invoice(s) voided.`);
-      if (voidResult?.posted_invoices_flagged > 0)
-        parts.push(`Admin notified about ${voidResult.posted_invoices_flagged} posted invoice(s).`);
-      if (voidResult?.paid_commissions_flagged > 0)
-        parts.push(`Admin notified about ${voidResult.paid_commissions_flagged} paid commission(s).`);
+      if ((voided.inventory_products_restored ?? 0) > 0)
+        parts.push(`Inventory restored for ${voided.inventory_products_restored} product(s).`);
+      if ((voided.commissions_cancelled ?? 0) > 0)
+        parts.push(`${voided.commissions_cancelled} commission(s) cancelled.`);
+      if ((voided.draft_invoices_voided ?? 0) > 0)
+        parts.push(`${voided.draft_invoices_voided} draft invoice(s) voided.`);
+      if ((voided.posted_invoices_flagged ?? 0) > 0)
+        parts.push(`Admin notified about ${voided.posted_invoices_flagged} posted invoice(s).`);
+      if ((voided.paid_commissions_flagged ?? 0) > 0)
+        parts.push(`Admin notified about ${voided.paid_commissions_flagged} paid commission(s).`);
 
       toast('success', parts.join(' '));
       setVoidModalOpen(false);
