@@ -43,7 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .eq('id', userId)
         .maybeSingle();
       if (!error) {
-        setProfile(data ?? null);
+        setProfile((data as Profile | null) ?? null);
         if (data) setUserContext(data.id, data.role ?? 'unknown');
         return;
       }

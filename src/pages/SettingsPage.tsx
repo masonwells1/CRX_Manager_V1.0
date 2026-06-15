@@ -338,7 +338,7 @@ export default function SettingsPage() {
         target_user_id: editingUser.id,
         new_role: editRole,
         new_full_name: editName,
-        new_phone: editPhone || null,
+        new_phone: editPhone || undefined,
         new_is_active: editIsActive,
         new_denied_pages: editRole === 'admin' ? [] : editDeniedPages,
         p_idempotency_key: idemKey,
@@ -346,9 +346,9 @@ export default function SettingsPage() {
       if (error) {
         toast('error', sanitizeError(error));
       } else {
-        assertRpcResult(data, 'admin_update_profile');
-        if (data?.error) {
-          toast('error', data.error);
+        const updateResult = assertRpcResult<{ error?: string }>(data, 'admin_update_profile');
+        if (updateResult?.error) {
+          toast('error', updateResult.error);
         } else {
           adminUpdateIdem.resetKey();
           toast('success', 'User updated successfully');

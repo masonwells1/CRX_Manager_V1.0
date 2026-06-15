@@ -103,6 +103,8 @@ export default tseslint.config(
       'local-rules/assert-rpc-result-arg-shape': 'error',
       // p_idempotency_key minted fresh at the callsite → retries double-execute
       'local-rules/idempotency-key-from-hook': 'error',
+      // destructured supabase .from()/.storage `error` swallowed (Field Mode F4/F6 / C3)
+      'local-rules/handle-supabase-error': 'error',
     },
   },
   {
@@ -115,6 +117,7 @@ export default tseslint.config(
     rules: {
       'local-rules/assert-rpc-result-arg-shape': 'off',
       'local-rules/idempotency-key-from-hook': 'off',
+      'local-rules/handle-supabase-error': 'off',
     },
   },
   {

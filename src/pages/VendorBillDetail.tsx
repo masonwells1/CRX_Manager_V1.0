@@ -124,7 +124,7 @@ export default function VendorBillDetail() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', creatorIds);
-      (creators || []).forEach((c: { id: string; full_name: string }) => { creatorMap[c.id] = c.full_name; });
+      ((creators || []) as Array<{ id: string; full_name: string }>).forEach((c) => { creatorMap[c.id] = c.full_name; });
     }
 
     const mappedPayments = ((payData || []) as Array<Record<string, unknown> & { created_by?: string | null }>).map((p) => ({
@@ -152,9 +152,9 @@ export default function VendorBillDetail() {
         p_vendor_bill_id: id,
         p_payment_date: payDate,
         p_amount_cents: amountCents,
-        p_payment_method: payMethod || null,
-        p_reference_number: payRef || null,
-        p_notes: payNotes || null,
+        p_payment_method: payMethod || undefined,
+        p_reference_number: payRef || undefined,
+        p_notes: payNotes || undefined,
         p_idempotency_key: payKey,
       });
       if (error) throw error;
@@ -214,7 +214,7 @@ export default function VendorBillDetail() {
         p_adjustment_cents: adjustmentCents,
         p_bill_date: editBillDate,
         p_due_date: editDueDate,
-        p_notes: editNotes || null,
+        p_notes: editNotes || '',
         p_idempotency_key: key,
       });
       if (error) throw error;
@@ -271,7 +271,7 @@ export default function VendorBillDetail() {
       // RETURNS void — use .throwOnError() (regex coverage skips fire-and-forget).
       await supabase.rpc('void_vendor_bill', {
         p_vendor_bill_id: id,
-        p_reason: voidReason || null,
+        p_reason: voidReason || undefined,
         p_idempotency_key: voidKey,
       }).throwOnError();
       voidIdem.resetKey();

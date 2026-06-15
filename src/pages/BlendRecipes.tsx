@@ -101,7 +101,7 @@ export default function BlendRecipes() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', creatorIds);
-      (creators || []).forEach((c: { id: string; full_name: string }) => { creatorMap[c.id] = c.full_name; });
+      ((creators || []) as { id: string; full_name: string }[]).forEach((c: { id: string; full_name: string }) => { creatorMap[c.id] = c.full_name; });
     }
 
     const rows: RecipeRow[] = ((data || []) as Array<RecipeDbRow & { created_by?: string | null }>).map((r) => ({
@@ -123,7 +123,7 @@ export default function BlendRecipes() {
       toast('error', 'Failed to load products: ' + error.message);
       return;
     }
-    setProducts(data || []);
+    setProducts((data || []) as Product[]);
   }, [toast]);
 
   useEffect(() => {
@@ -200,7 +200,7 @@ export default function BlendRecipes() {
         // can't wipe the recipe's items (the DELETE rolls back too).
         const saveKey = saveRecipeIdem.getKey();
         const { data, error } = await supabase.rpc('save_blend_recipe', {
-          p_recipe_id: editId,
+          p_recipe_id: editId as string,
           p_name: form.name.trim(),
           p_recipe_type: form.recipe_type,
           p_items: editItems.map((item) => ({
@@ -211,9 +211,9 @@ export default function BlendRecipes() {
             rate_per_acre: item.rate_per_acre,
             notes: item.notes || null,
           })),
-          p_description: form.description || null,
-          p_crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || null : null,
-          p_timing: form.recipe_type === 'crop_specific' ? form.timing || null : null,
+          p_description: form.description || undefined,
+          p_crop_type: form.recipe_type === 'crop_specific' ? form.crop_type || undefined : undefined,
+          p_timing: form.recipe_type === 'crop_specific' ? form.timing || undefined : undefined,
           p_idempotency_key: saveKey,
         });
         if (error) throw error;

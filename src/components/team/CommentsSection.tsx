@@ -85,7 +85,7 @@ export default function CommentsSection({ noteId }: CommentsSectionProps) {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', creatorIds);
-      (creators || []).forEach((c: { id: string; full_name: string }) => {
+      ((creators || []) as Array<{ id: string; full_name: string }>).forEach((c) => {
         creatorMap[c.id] = { full_name: c.full_name };
       });
     }

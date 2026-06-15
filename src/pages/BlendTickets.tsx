@@ -87,7 +87,16 @@ export function BlendTickets() {
       if (ticketsResult.error) throw ticketsResult.error;
       if (customersResult.error) throw customersResult.error;
 
-      const ticketRows = (ticketsResult.data || []) as Array<BlendTicket & { uploaded_by?: string | null; reviewed_by?: string | null; salesman_id?: string | null }>;
+      const ticketRows = (ticketsResult.data || []) as Array<
+        Omit<BlendTicket, 'customer' | 'field' | 'images'> & {
+          uploaded_by?: string | null;
+          reviewed_by?: string | null;
+          salesman_id?: string | null;
+          customer?: { id: string; farm_name: string } | null;
+          field?: { id: string; field_name: string } | null;
+          images?: { count: number }[];
+        }
+      >;
       const profIds = [...new Set([
         ...ticketRows.map((t) => t.uploaded_by),
         ...ticketRows.map((t) => t.reviewed_by),
@@ -99,7 +108,7 @@ export function BlendTickets() {
           .from('profile_public_view')
           .select('id, full_name')
           .in('id', profIds);
-        (profRows || []).forEach((p: { id: string; full_name: string }) => {
+        ((profRows || []) as { id: string; full_name: string }[]).forEach((p) => {
           profMap[p.id] = p;
         });
       }
@@ -111,7 +120,7 @@ export function BlendTickets() {
       })) as BlendTicket[];
 
       setTickets(enriched);
-      setCustomers(customersResult.data || []);
+      setCustomers((customersResult.data || []) as Customer[]);
     } catch (error) {
       Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_blend_tickets' } });
       toast('error', 'Failed to load blend tickets. Please try again.');

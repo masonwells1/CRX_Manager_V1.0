@@ -410,13 +410,13 @@ export default function Products() {
             product_id: productId,
             changed_by: profile.id,
             old_cost: original.current_cost,
-            new_cost: 'current_cost' in fields ? fields.current_cost : original.current_cost,
+            new_cost: 'current_cost' in fields ? (fields.current_cost as number | null) : original.current_cost,
             old_tier1_price: original.tier1_price,
-            new_tier1_price: 'tier1_price' in fields ? fields.tier1_price : original.tier1_price,
+            new_tier1_price: 'tier1_price' in fields ? (fields.tier1_price as number | null) : original.tier1_price,
             old_tier2_price: original.tier2_price,
-            new_tier2_price: 'tier2_price' in fields ? fields.tier2_price : original.tier2_price,
+            new_tier2_price: 'tier2_price' in fields ? (fields.tier2_price as number | null) : original.tier2_price,
             old_tier3_price: original.tier3_price,
-            new_tier3_price: 'tier3_price' in fields ? fields.tier3_price : original.tier3_price,
+            new_tier3_price: 'tier3_price' in fields ? (fields.tier3_price as number | null) : original.tier3_price,
             change_note: 'Updated via inline bulk edit',
           }).select();
           if (costResult.error) Sentry.captureException(costResult.error);

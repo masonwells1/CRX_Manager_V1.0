@@ -149,7 +149,7 @@ export default function PrepaymentManager() {
         farm_name: c.farm_name,
         prepay_balance_cents: c.prepay_balance_cents || 0,
         unpaid_invoice_count: (invData || []).length,
-        unpaid_balance_cents: (invData || []).reduce((s: number, i: { balance_cents: number }) => s + i.balance_cents, 0),
+        unpaid_balance_cents: (invData || []).reduce((s: number, i: { balance_cents: number | null }) => s + (i.balance_cents ?? 0), 0),
       });
     }
 
@@ -212,9 +212,9 @@ export default function PrepaymentManager() {
         const { data, error } = await supabase.rpc('edit_prepay_credit', {
           p_credit_id: editCredit.id,
           p_new_balance_cents: newBalanceCents,
-          p_reference_number: editForm.reference_number || null,
-          p_bucket_label: editForm.bucket_label || null,
-          p_notes: editForm.notes || null,
+          p_reference_number: editForm.reference_number || undefined,
+          p_bucket_label: editForm.bucket_label || undefined,
+          p_notes: editForm.notes || undefined,
           p_performed_by: profile?.id,
           p_idempotency_key: editKey,
         });
@@ -340,11 +340,13 @@ export default function PrepaymentManager() {
           amount_cents: splitAmountsCents[i],
         }));
         const splitKey = splitCheckIdem.getKey();
+        const performedBy = (await supabase.auth.getUser()).data.user?.id;
+        if (!performedBy) throw new Error('Not authenticated');
         const { data, error } = await supabase.rpc('create_prepay_check_splits', {
           p_customer_id: checkForm.customer_id,
           p_reference_number: checkForm.reference_number,
           p_splits: splits,
-          p_performed_by: (await supabase.auth.getUser()).data.user?.id,
+          p_performed_by: performedBy,
           p_idempotency_key: splitKey,
         });
         if (error) throw new Error(error.message);
@@ -379,7 +381,7 @@ export default function PrepaymentManager() {
   };
 
   const confirmApply = async () => {
-    if (!confirmCustomer) return;
+    if (!confirmCustomer || !profile) return;
     setApplying(confirmCustomer.id);
     setShowConfirm(false);
 
@@ -387,7 +389,7 @@ export default function PrepaymentManager() {
       const applyKey = applyPrepayIdem.getKey();
       const { data, error } = await supabase.rpc('apply_remaining_prepayments', {
         p_customer_id: confirmCustomer.id,
-        p_performed_by: profile?.id,
+        p_performed_by: profile.id,
         p_idempotency_key: applyKey,
       });
       if (error) throw error;

@@ -72,13 +72,13 @@ export default function ProductDetail() {
   }, [product]);
 
   const fetchProduct = useCallback(async () => {
-    const { data, error } = await supabase.from('products').select('*').eq('id', id).maybeSingle();
+    const { data, error } = await supabase.from('products').select('*').eq('id', id!).maybeSingle();
     if (error) {
       toast('error', 'Failed to load product');
       setLoading(false);
       return;
     }
-    if (data) setProduct(data);
+    if (data) setProduct(data as Product);
     setLoading(false);
     setTimeout(() => { initialLoadDone.current = true; }, 0);
   }, [id, toast]);
@@ -87,7 +87,7 @@ export default function ProductDetail() {
     const { data } = await supabase
       .from('cost_history')
       .select('*')
-      .eq('product_id', id)
+      .eq('product_id', id!)
       .order('changed_at', { ascending: false })
       .limit(20);
     setCostHistory(data || []);
@@ -171,7 +171,7 @@ export default function ProductDetail() {
 
     setSaving(true);
     if (isNew) {
-      const productInsertResult = await supabase.from('products').insert([product]).select();
+      const productInsertResult = await supabase.from('products').insert([product as Product]).select();
       if (productInsertResult.error) {
         toast('error', productInsertResult.error.message);
       } else {
@@ -186,7 +186,7 @@ export default function ProductDetail() {
       const { data: current } = await supabase
         .from('products')
         .select('current_cost, tier1_price, tier2_price, tier3_price')
-        .eq('id', id)
+        .eq('id', id!)
         .maybeSingle();
 
       const pricingChanged = current && (
@@ -198,7 +198,7 @@ export default function ProductDetail() {
 
       if (pricingChanged && profile) {
         const costHistoryResult = await supabase.from('cost_history').insert({
-          product_id: id,
+          product_id: id!,
           changed_by: profile.id,
           old_cost: current.current_cost,
           new_cost: product.current_cost,
@@ -218,7 +218,7 @@ export default function ProductDetail() {
         const result = await supabase
           .from('products')
           .update({ ...product, updated_at: new Date().toISOString() })
-          .eq('id', id)
+          .eq('id', id!)
           .select();
         checkMutationResult(result, 'Update product');
         setIsDirty(false);
@@ -241,8 +241,8 @@ export default function ProductDetail() {
     }
     const manualCostResult = await supabase.from('cost_history').insert([
       {
-        product_id: id,
-        changed_by: profile?.id,
+        product_id: id!,
+        changed_by: profile!.id,
         old_cost: product.current_cost,
         new_cost: cost,
         old_tier1_price: product.tier1_price,
@@ -260,7 +260,7 @@ export default function ProductDetail() {
         const result = await supabase
           .from('products')
           .update({ current_cost: cost, cost_updated_date: new Date().toISOString(), updated_at: new Date().toISOString() })
-          .eq('id', id)
+          .eq('id', id!)
           .select();
         checkMutationResult(result, 'Update product cost');
         setProduct((p) => ({ ...p, current_cost: cost }));

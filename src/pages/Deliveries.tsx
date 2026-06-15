@@ -268,7 +268,7 @@ export default function Deliveries() {
 
     const driverNameMap: Record<string, string> = {};
     const { data: drivers } = driversResult;
-    (drivers || []).forEach((d: { id: string; full_name: string }) => { driverNameMap[d.id] = d.full_name; });
+    ((drivers || []) as Array<{ id: string; full_name: string }>).forEach((d) => { driverNameMap[d.id] = d.full_name; });
 
     const rows = ((delData || []) as Array<Delivery & {
       customer: { farm_name: string; parent_customer_id: string | null } | null;
@@ -369,7 +369,7 @@ export default function Deliveries() {
           farm_group_name: cust?.parent_customer_id ? pMap[cust.parent_customer_id] || null : null,
         };
       });
-      setUnassigned(rows);
+      setUnassigned(rows as DeliveryRow[]);
     })();
   }, [isDriver]);
 

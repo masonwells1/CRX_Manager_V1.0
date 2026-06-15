@@ -18,6 +18,7 @@ import Modal from '../components/ui/Modal';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../lib/db';
+import type { Json } from '../types/supabase';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { parseDollarsToCents } from '../lib/parseCents';
@@ -193,8 +194,12 @@ export default function PrepayWorkspace() {
       action: async () => {
         const key = batchApplyIdem.getKey();
         const { data, error } = await supabase.rpc('batch_apply_prepayments', {
-          p_allocations: pendingAllocations,
-          p_performed_by: profile?.id,
+          p_allocations: pendingAllocations.map((a) => ({
+            prepay_credit_id: a.prepay_credit_id,
+            invoice_id: a.invoice_id,
+            amount_cents: a.amount_cents,
+          })) as Json,
+          p_performed_by: profile?.id as string,
           p_idempotency_key: key,
         });
         if (error) throw error;

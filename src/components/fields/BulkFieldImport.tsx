@@ -344,7 +344,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         };
 
         const { data: fieldId, error: saveError } = await supabase.rpc('save_field', {
-          p_field_id: null,
+          p_field_id: (null as string | null) as string,
           p_field_payload: fieldPayload,
           p_billing_defaults: [],
           p_performed_by: profile!.id,

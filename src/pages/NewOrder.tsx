@@ -193,8 +193,8 @@ export default function NewOrder() {
     }
     setInventoryByProduct(invMap);
 
-    setCustomers(customersRes.data || []);
-    setProducts(productsRes.data || []);
+    setCustomers((customersRes.data || []) as Customer[]);
+    setProducts((productsRes.data || []) as Product[]);
     setLoading(false);
   }, [toast]);
 
@@ -391,8 +391,8 @@ export default function NewOrder() {
           const { data, error } = await supabase.rpc('create_rush_order', {
             p_customer_id: customerId,
             p_items: validItems.map((item) => ({ product_id: item.product_id, qty: item.quantity })),
-            p_notes: notes || null,
-            p_customer_po_number: customerPoNumber.trim() || null,
+            p_notes: notes || undefined,
+            p_customer_po_number: customerPoNumber.trim() || undefined,
             p_performed_by: profile.id,
             p_idempotency_key: rushKey,
           });
@@ -427,12 +427,12 @@ export default function NewOrder() {
         const { data, error } = await supabase.rpc('create_direct_order', {
           p_customer_id: customerId,
           p_order_date: orderDate,
-          p_order_name: orderName || null,
-          p_notes: notes || null,
+          p_order_name: orderName || undefined,
+          p_notes: notes || undefined,
           p_items: rpcItems,
           p_performed_by: profile.id,
           p_idempotency_key: idemKey,
-          p_customer_po_number: customerPoNumber.trim() || null,
+          p_customer_po_number: customerPoNumber.trim() || undefined,
         });
 
         if (error) throw error;

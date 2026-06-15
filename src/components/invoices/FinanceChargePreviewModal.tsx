@@ -103,14 +103,12 @@ export default function FinanceChargePreviewModal({
     setGenerating(true);
     try {
       const idemKey = financeChargeIdem.getKey();
-      const params: Record<string, unknown> = {
+      const params = {
         p_as_of_date: asOfDate,
         p_performed_by: profile.id,
         p_idempotency_key: idemKey,
+        ...(customerIds ? { p_customer_ids: customerIds } : {}),
       };
-      if (customerIds) {
-        params.p_customer_ids = customerIds;
-      }
       const { data, error } = await supabase.rpc('generate_finance_charges', params);
       if (error) throw error;
       financeChargeIdem.resetKey();

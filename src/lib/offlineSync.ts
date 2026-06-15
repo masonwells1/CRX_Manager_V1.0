@@ -4,6 +4,7 @@
  */
 import { supabase, assertRpcResult } from './db';
 import { Sentry } from './sentry';
+import type { Database } from '../types/supabase';
 import {
   getPendingActions,
   removeAction,
@@ -14,6 +15,15 @@ import {
 } from './offlineQueue';
 
 export const MAX_RETRIES = 3;
+
+/** Known RPC-name union from the generated DB types. */
+type FunctionName = keyof Database['public']['Functions'];
+/** Args shape the typed client expects for a given RPC. */
+type FunctionArgs<N extends FunctionName> = Database['public']['Functions'][N] extends {
+  Args: infer A;
+}
+  ? A
+  : never;
 
 /**
  * Process all pending actions in the offline queue.
@@ -98,8 +108,11 @@ async function executeAction(action: PendingAction): Promise<void> {
 
   // Conflict detection: if we captured a snapshot, check for server-side changes
   if (action.snapshotAt && action.entityTable && action.entityId) {
+    // entityTable is a runtime-dynamic name; for typing we treat it as a table
+    // known to carry `updated_at` (the conflict path is only ever used for such
+    // tables — deliveries/orders). The runtime value is still action.entityTable.
     const { data, error: lookupError } = await supabase
-      .from(action.entityTable)
+      .from(action.entityTable as 'deliveries')
       .select('updated_at')
       .eq('id', action.entityId)
       .maybeSingle();
@@ -140,55 +153,55 @@ async function executeAction(action: PendingAction): Promise<void> {
   // sites. See LogbookReport.tsx for the canonical example of this shape.
   switch (operation) {
     case 'complete_delivery': {
-      const { data, error } = await supabase.rpc('complete_delivery', params);
+      const { data, error } = await supabase.rpc('complete_delivery', params as FunctionArgs<'complete_delivery'>);
       if (error) throw error;
       assertRpcResult(data, 'complete_delivery');
       return;
     }
     case 'allocate_payment': {
-      const { data, error } = await supabase.rpc('allocate_payment', params);
+      const { data, error } = await supabase.rpc('allocate_payment', params as FunctionArgs<'allocate_payment'>);
       if (error) throw error;
       assertRpcResult(data, 'allocate_payment');
       return;
     }
     case 'receive_po_items': {
-      const { data, error } = await supabase.rpc('receive_po_items', params);
+      const { data, error } = await supabase.rpc('receive_po_items', params as FunctionArgs<'receive_po_items'>);
       if (error) throw error;
       assertRpcResult(data, 'receive_po_items');
       return;
     }
     case 'update_order_items': {
-      const { data, error } = await supabase.rpc('update_order_items', params);
+      const { data, error } = await supabase.rpc('update_order_items', params as FunctionArgs<'update_order_items'>);
       if (error) throw error;
       assertRpcResult(data, 'update_order_items');
       return;
     }
     case 'complete_job': {
-      const { data, error } = await supabase.rpc('complete_job', params);
+      const { data, error } = await supabase.rpc('complete_job', params as FunctionArgs<'complete_job'>);
       if (error) throw error;
       assertRpcResult(data, 'complete_job');
       return;
     }
     case 'cancel_delivery': {
-      const { data, error } = await supabase.rpc('cancel_delivery', params);
+      const { data, error } = await supabase.rpc('cancel_delivery', params as FunctionArgs<'cancel_delivery'>);
       if (error) throw error;
       assertRpcResult(data, 'cancel_delivery');
       return;
     }
     case 'cancel_order': {
-      const { data, error } = await supabase.rpc('cancel_order', params);
+      const { data, error } = await supabase.rpc('cancel_order', params as FunctionArgs<'cancel_order'>);
       if (error) throw error;
       assertRpcResult(data, 'cancel_order');
       return;
     }
     case 'confirm_delivery': {
-      const { data, error } = await supabase.rpc('confirm_delivery', params);
+      const { data, error } = await supabase.rpc('confirm_delivery', params as FunctionArgs<'confirm_delivery'>);
       if (error) throw error;
       assertRpcResult(data, 'confirm_delivery');
       return;
     }
     case 'match_quick_receive_items': {
-      const { data, error } = await supabase.rpc('match_quick_receive_items', params);
+      const { data, error } = await supabase.rpc('match_quick_receive_items', params as FunctionArgs<'match_quick_receive_items'>);
       if (error) throw error;
       assertRpcResult(data, 'match_quick_receive_items');
       return;

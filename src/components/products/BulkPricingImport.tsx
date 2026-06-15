@@ -244,7 +244,7 @@ export default function BulkPricingImport({ open, onClose, onSuccess }: BulkPric
         if (costChanged || tier1Changed || tier2Changed || tier3Changed) {
           const costHistResult = await supabase.from('cost_history').insert({
             product_id: product.id,
-            changed_by: profile?.id,
+            changed_by: profile?.id as string,
             old_cost: product.current_cost,
             new_cost: row.cost ?? product.current_cost,
             old_tier1_price: product.tier1_price,

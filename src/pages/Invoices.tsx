@@ -138,7 +138,7 @@ export default function Invoices() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', salesmanIds);
-      (salesmen || []).forEach((s: { id: string; full_name: string }) => { salesmanMap[s.id] = s.full_name; });
+      ((salesmen || []) as { id: string; full_name: string }[]).forEach((s) => { salesmanMap[s.id] = s.full_name; });
     }
 
     const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman_id?: string | null }>).map((inv) => ({

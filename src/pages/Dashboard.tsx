@@ -256,7 +256,14 @@ export default function Dashboard() {
         .eq('is_completed', false)
         .eq('note_type', 'todo')
         .is('deleted_at', null);
-      if (!cancelled && !error) setOpenActionItemsCount(count ?? 0);
+      if (cancelled) return;
+      if (error) {
+        // Best-effort card — log the failure but leave the count null so the UI
+        // falls back to the widget list length (per the comment above).
+        Sentry.captureException(error, { tags: { source: 'dashboard', action: 'open_action_items_count' } });
+        return;
+      }
+      setOpenActionItemsCount(count ?? 0);
     })();
     return () => { cancelled = true; };
   }, [role]);

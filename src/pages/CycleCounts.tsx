@@ -108,7 +108,7 @@ export default function CycleCounts() {
         .from('profile_public_view')
         .select('id, full_name')
         .in('id', profileIds);
-      (profs || []).forEach((p: { id: string; full_name: string }) => { profileMap[p.id] = p.full_name; });
+      (profs || []).forEach((p: { id: string | null; full_name: string | null }) => { if (p.id) profileMap[p.id] = p.full_name ?? ''; });
     }
 
     const rows: CountRow[] = ((data || []) as Array<CycleCountDbRow & { initiated_by?: string | null; completed_by?: string | null }>).map((c) => ({
@@ -251,7 +251,7 @@ export default function CycleCounts() {
 
     const { data, error } = await supabase.rpc('update_cycle_count_item', {
       p_item_id: itemId,
-      p_counted_qty: countedQty,
+      p_counted_qty: countedQty ?? undefined,
       p_performed_by: profile.id,
     });
 
