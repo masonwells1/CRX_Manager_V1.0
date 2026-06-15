@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -99,6 +100,50 @@ function checkCodexCli() {
   return runCommand("Codex CLI", codex, ["--version"], { shell: false, warn: false });
 }
 
+// `--version` passes even when the CLI is logged out — but the whole headless
+// review toolkit (codex-review / codex-gauntlet) silently fails without auth.
+// Smoke the credential file `codex login` writes (~/.codex/auth.json) so a
+// logged-out machine surfaces loudly instead of producing empty reviews.
+export function checkCodexAuth(home = process.env.USERPROFILE || os.homedir()) {
+  const authPath = path.join(home, ".codex", "auth.json");
+  if (!existsSync(authPath)) {
+    return check("FAIL", "Codex CLI auth", "~/.codex/auth.json missing — run `codex login`");
+  }
+  try {
+    const auth = JSON.parse(readFileSync(authPath, "utf8"));
+    // `auth_mode` only records which login flow was last selected — NOT a credential.
+    // Require a real token/key so a logged-out-but-mode-set auth.json still FAILs.
+    const hasCreds = Boolean(auth?.tokens || auth?.OPENAI_API_KEY);
+    return hasCreds
+      ? check("PASS", "Codex CLI auth", "auth.json present")
+      : check("FAIL", "Codex CLI auth", "auth.json has no tokens/key — run `codex login`");
+  } catch (error) {
+    return check("FAIL", "Codex CLI auth", `auth.json unreadable: ${String(error?.message || error)}`);
+  }
+}
+
+// Claude auth can live in an env var, the credentials file, or (on some
+// platforms) an OS keychain we can't inspect here — so a missing file is a
+// WARN, not a hard FAIL, to avoid false negatives on keychain-backed setups.
+export function checkClaudeAuth(home = process.env.USERPROFILE || os.homedir(), env = process.env) {
+  if (env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN) {
+    return check("PASS", "Claude CLI auth", "API key/token in env");
+  }
+  const credPath = path.join(home, ".claude", ".credentials.json");
+  if (!existsSync(credPath)) {
+    return check("WARN", "Claude CLI auth", "no ~/.claude/.credentials.json and no API-key env (may use OS keychain) — run `claude login` if reviews fail to auth");
+  }
+  try {
+    const cred = JSON.parse(readFileSync(credPath, "utf8"));
+    const hasCreds = Boolean(cred?.claudeAiOauth || cred?.mcpOAuth);
+    return hasCreds
+      ? check("PASS", "Claude CLI auth", "credentials present")
+      : check("WARN", "Claude CLI auth", "credentials file present but empty — run `claude login`");
+  } catch (error) {
+    return check("WARN", "Claude CLI auth", `credentials unreadable: ${String(error?.message || error)}`);
+  }
+}
+
 function checkSessionStaleness() {
   try {
     const output = execFileSync(process.execPath, [path.join(ROOT, ".claude", "hooks", "session-staleness.mjs")], {
@@ -166,7 +211,9 @@ function buildHealthChecks(root = ROOT) {
 
   checks.push(checkCodexSessionStartSyncsHooks(readJsonIfPresent(path.join(root, ".codex", "hooks.json"))));
   checks.push(runCommand("Claude CLI", "claude", ["--version"], { warn: false }));
+  checks.push(checkClaudeAuth());
   checks.push(checkCodexCli());
+  checks.push(checkCodexAuth());
   checks.push(runCommand("GitHub auth", "gh", ["auth", "status"], { warn: true }));
   checks.push(runCommand("Vercel CLI", "vercel", ["--version"], { warn: true }));
   checks.push(runCommand("Supabase CLI", "supabase", ["--version"], { warn: true }));
