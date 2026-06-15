@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-15 — Documentation cleanup & reference reconciliation (docs only)
+
+Full documentation refresh to current reality — **no code, DB, or deploy changes.**
+
+- **Counts brought current everywhere** (verified live 2026-06-15): 68 pages, 455 migrations, 96 tables (+2 views), 226 callable RPCs + 47 trigger functions, 7 Edge Functions, 2,005 unit tests passing / 70 skipped (139 files), 94 E2E specs. Fixed in `README.md` (was stamped 2026-03-02: 50 pages / 1,433 tests / 72+ tables / 107 migrations / 5 Edge Fns), `TESTING.md`, `DEPLOYMENT.md`, the `CLAUDE.md` reference-docs table, and `AGENTS.md` (regenerated).
+- **Reference docs fully reconciled against the live database:** `rpc-functions.md` gained the **34** previously-undocumented RPCs (6 new sell-side — `create_rush_order` / `price_order` / `check_unpriced_orders` / `consolidate_draft_invoices` / `get_booking_settlement` / `get_open_booking_rollover` — plus a backlog incl. `void_order` / `void_payment` / `cancel_return` / `unapply_credit_memo` / `reopen_accounting_period` / the field-polygon + prepay-edit families); `migration-history.md` gained the **11-migration G5 sell-side go-live** section; `database-schema.md` header 95→96; `pages-routes.md` gained Field Mode `/my-route` + `/my-route/:id` (66→68). Verified **0 missing RPCs** and **0 missing migrations** vs live.
+- **TODO.md rewritten** — removed every shipped item; now tracks only open owner-actions, intentional deferrals, and out-of-scope work.
+- **ROADMAP.md** — E1 (driver/applicator mobile workspace) marked v1 Done (Field Mode shipped 2026-06-14).
+- **Archived 23 pre-June one-off audit files** (May Codex prompts / dispositions / dated reports + the 2026-05-16 ultra-review findings) from `docs/audits/` (64→42 files) and `docs/reports/` into `docs/archive/2026-spring/`. Kept the 6 reusable undated `*-prompt.md` audit templates and all June files in place.
+
+---
+
 ## 2026-06-14 — create_direct_order customer-PO param (sales_rep money-adjacent fix), applied live
 
 Branch `ship/create-direct-order-customer-po` (isolated worktree off `origin/main`), one migration applied live through the `/ship` gate (rls-security + migration-drift + compliance reviewers all CLEAN; rolled-back `SMOKE_PASS_ROLLBACK`; db-invariant sweeps clean; B7 rename).

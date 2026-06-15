@@ -1,117 +1,72 @@
-# CRX Manager — TODO (as of 2026-05-31)
+# CRX Manager — TODO (as of 2026-06-15)
 
-Snapshot of what's done, outstanding, and deferred. Recent waves: 2026-05-09 → 05-16
-audit/ultra-review (below); the 2026-05-26 → 05-29 full-codebase ultra-review + Codex
-remediation; the 2026-05-30 P2/P3 sprint + branch consolidation; and the 2026-05-31
-Codex pre-push review + batch-RPC strict-actor fix (applied live). Full detail in
-`CLAUDE.md` Current State, `docs/CHANGELOG.md`, and the recent handoffs in `docs/audits/`.
+What's still **open**, what's **deferred on purpose**, and what's **out of scope**.
+Everything that's been shipped lives in `docs/CHANGELOG.md` and the `CLAUDE.md`
+**Current State** section — this file only tracks what's left.
 
 ---
 
-## ✅ Done (do not redo)
+## 🔴 Outstanding — needs Mason (owner action)
 
-### Audit fix sprint 2026-05-09 → 2026-05-13
-- Phase 1 (4/4 critical), Phase 2 (9/9 money/inventory), Phase 3 (4/4 RLS+deps)
-- Decision-B (#9a + #9b RLS → admin/sales_rep/applicator)
-- All numbered audit items: #5, #6, #7, #10/#31/#34, #11/#27, #18, #19, #28, #32, #33, #35
+These are blocked on something only you can provide or do.
 
-### PR #59 codex review (2026-05-13)
-- All 9 P1 findings closed (or false-positive documented)
-- 11 of 13 P2 findings closed
-- 12 follow-up migrations applied to live Supabase via MCP
-- 4 Edge Functions deployed to live (`create-user`, `reset-user-password`, `seed-admin`, `setup-blend-tickets-storage`)
-- Strict-actor security hotfix on `edit/delete_prepay_credit` applied within minutes of detection
-- `parseDollarsToCents` refactored to positive-only default
+### Quick verifications
+- **G5 sell-side in-app smoke** — click through the new flows on the live site:
+  ship-now/price-later (create a rush order → price it later), draft-invoice
+  consolidation, and the open-booking rollover view. Confirm they behave as
+  expected with real data. (Shipped & live 2026-06-14; just needs your eyes.)
+- **Phase 4 backup verification** — Supabase dashboard → Settings → Database →
+  Backups: confirm PITR is on and daily snapshots run. Then schedule a one-time
+  restore drill (spin up a throwaway project, replay migrations, restore latest
+  backup, smoke-test, delete). Not exposed via tooling — dashboard only.
+- **M4** — confirm the `seed-admin` Edge Function has `ENVIRONMENT=production` set.
+- **L4** — enable Supabase **leaked-password protection** (dashboard → Auth).
 
-See `docs/audits/2026-05-13-pr59-codex-review-summary.md` for full table.
-
-### 2026-05-16 verification session (morning)
-- **`send-email` Edge Function deployed to v10** — `farm_name` fix from PR-03 was sitting undeployed for ~7 days; live v9 was silently failing every customer-tied email. Verified via `get_edge_function`.
-- **Frontend idempotency-key reuse verified clean** — all 5 callsites from the 2026-05-12 ultra review already use `useIdempotencyKey()` or stable per-order keys.
-- **Migration 334** — `transfer_job_to_invoice` cents-math fix (`safe_cents_qty` + ROUND) applied live.
-- **Advisory comment posted on PR #60** (later resolved — see closeout).
-- **17 of 20 PR #59 codex threads bulk-resolved** via GraphQL.
-
-### 2026-05-16 ultra-review Phase 1 + 2 (`docs/reports/2026-05-16-ultra-code-review-findings.md`)
-- **P1 #1 closed** — Migration 335 wires canonical `check_idempotency` / `save_idempotency` into `transfer_job_to_invoice`. Removes the prior exempt marker.
-- **P1 #2 verified false positive** — All 5 cited SECURITY DEFINER functions already have `search_path=public, pg_temp` in live `pg_proc` (reviewer was looking at original source migrations; subsequent migrations had fixed them).
-- **P1 #3 closed** — `offlineSync.ts` now uses `assertRpcResult` to catch `{data:null,error:null}` silent failures. Restructured to per-branch switch with literal RPC names for assertRpcCoverage compliance. Added regression test (1913 → 1914 tests).
-- **P1 #4 closed** — Migration 336 adds `p_idempotency_key text DEFAULT NULL` + canonical wiring to `log_failed_notification` and `notify_damaged_receiving`. Frontend was passing the key but PostgREST was failing function lookup silently.
-
-### 2026-05-16 ultra-review Phase 3
-- **P2 #5 closed** — Migration 337 expands `email_log.status` CHECK to include `'pending'`. `send-email` Edge Function deployed to v11 with durable write-ahead-log pattern: insert pending row BEFORE Resend, update to sent/failed after. If pre-send insert fails, don't send.
-- **P2 #6 code closed** — `process-blend-ticket` had 10 unchecked writes; now 5 critical writes throw with descriptive messages, 1 notification capture to Sentry as warning, 4 catch-block writes capture per-write to Sentry without re-throwing. **Edge Function deploy still pending** — file is 1168 lines, impractical to inline via MCP, Supabase CLI not installed locally.
-- **P3 #7 closed** — `setup-blend-tickets-storage` CORS hardening (v14): removed silent prod-URL fallback, throws on missing `ALLOWED_ORIGIN`.
-- **P3 #8 closed** — `rpc-functions.md` corrected: `void_vendor_bill` returns `void`, not `jsonb`.
-
-### 2026-05-16 closeout (afternoon)
-- **Final 3 PR #59 threads resolved** (customer RLS upper bound, apply_prepay hand-decrement, entity commission recipients). PR #59 now shows 0 open codex conversations.
-- **PR #60 follow-up posted** — investigation showed all 3 PR #60 migrations have already been applied to live (someone applied them earlier today). Live state verified healthy: `profile_public_view` exists, the 3 affected buckets are still `public=true` so `getPublicUrl()` rendering works. The original advisory ("do not merge") is now obsolete; the PR is safe to merge.
-- **`process-blend-ticket` Edge Function deployed v17** — completing the ultra-review Phase 3 work. All 10 error-check fixes verified in deployed bundle. Approach: used `node` via Bash to JSON-encode the 1168-line file content, then read the encoded result through the Read tool and pasted it as the `content` parameter of `deploy_edge_function`. Earlier hesitation about JSON-escape errors was unwarranted — the MCP handles 47KB inline payloads fine.
+### Bigger items waiting on your input
+- **A1 — ACH pay-now links** (let customers pay online; the #1 competitive gap).
+  To start: create a Stripe account and hand over the API keys. This also unlocks
+  the grower-portal payment features (A2/A4).
+- **D1 — vendor-bill AI extraction pilot.** To start: send ~10 real vendor bills
+  (PDF/photo) for the accuracy gate; production also needs an Anthropic API key in
+  the Edge Function secrets.
+- **H1 — inventory re-base.** 17 products are currently in a negative on-hand state
+  and can't be delivered until corrected. Needs physical counts from you to set the
+  true starting numbers.
+- **Data enablement** — the system is feature-rich but operationally empty: 0 of
+  ~604 products have label data (EPA #, REI/PHI, signal word) and 0 of ~112 have
+  reorder points. Compliance, WPS, reorder, and field-profitability features stay
+  blank until this base data is loaded. (Label-data research draft is in progress —
+  see the grower-portal memory.)
 
 ---
 
-## 🔴 Outstanding — Mason action required
+## 🟡 Deferred (intentional — revisit later)
 
-### ⏳ Deploy the OCR Edge Function fix (`process-blend-ticket` M3 atomic queue-claim)
-**The only open item from the 2026-05-30/31 consolidation.** The M3 atomic-claim change
-(prevents a poller race that duplicated extracted product rows) is committed on `main`
-but **NOT deployed** — `process-blend-ticket` is still live at **v19** (the pre-M3 build).
-Left undeployed on purpose: its safety gate is a real OCR smoke test, which needs you
-watching one live ticket.
-
-Steps (≈5 min):
-1. Run `/deploy-edge-function process-blend-ticket`.
-2. Upload ONE real blend ticket; confirm it OCRs normally — products extracted, no
-   duplicates, not stuck on "processing".
-3. If anything looks off, redeploy v19 (instant rollback).
-
-Why waiting is safe: the duplicate-row race already exists in prod and is low-severity;
-shipping an untested claim-filter could instead stall ALL OCR (worse). Status quo holds
-until the smoke test passes. See `docs/audits/2026-05-30-pre-push-consolidation-handoff.md` §6.
-
-### Phase 4: Backup verification (Supabase dashboard only — not exposed via MCP)
-- Open Supabase dashboard → Settings → Database → Backups.
-- Verify PITR (point-in-time recovery) is enabled.
-- Verify daily snapshots are running.
-- Plan + schedule a future restore drill (half-day exercise: spin up fresh project, replay migrations, restore latest backup, smoke-test, delete project).
-
-### #38: Abandoned-package swap
-- Needs test fixtures from you: `.shp`, `.dbf`, `.prj`, `.kml` sample files for the field-import flow.
-- Once fixtures land, `shapefile` and `@mapbox/togeojson` can be swapped to `shpjs` and `@tmcw/togeojson`.
-
-### ~~Entity commission recipients design call~~ — RESOLVED 2026-05-16
-Decided **Option 1** (service profile rows) and implemented in migration `20260516090000`:
-non-loginable profiles with role `entity_recipient` for `CMCTW LLC` and `Crop Rx Solutions`,
-so `create_commission_payment`'s group-by-`recipient_user_id` works with no refactor.
-Verified live 2026-05-25: 2 entity profiles, 18 commissions linked ($72,174.90 CMCTW now payable),
-1 remaining NULL recipient is a benign cancelled $0 row. No further action.
-
-### Live-fire smoke test of `send-email` v11 (recommended but not blocking)
-30-second test: trigger any customer-tied email from the app, confirm it arrives. Proves the v11 WAL-pattern code executes end-to-end (deploy proves the bundle is there; this proves the new flow works).
-
-### Codex billing (if you want more reviews)
-- Codex usage limit hit at end of 2026-05-13. Either upgrade plan or add credits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage), or accept the current state as final.
+- **#6b prepay "earmark" write-engine** — shelved to
+  `docs/roadmap/shelved-earmark-engine/` pending a reserved-pool redesign (the new
+  mechanism collided with the legacy aggregate one). The 3 shelved migrations must
+  **not** be applied as-is. Only the read-only #6 booking views shipped at G5.
+- **Field Mode follow-ups** — on-device pass on a real phone + an offline-replay
+  pass for the `/my-route` driver workspace (shipped & live, additive/zero-migration).
+- **schema-registry live refresh** — re-run the registry refresh so the PreToolUse
+  hooks see the post-G5 schema. Housekeeping, low urgency.
+- **H2 squashed migration baseline** — collapse the 455-file history into a baseline.
+  Deferred deliberately; schedule when there's a quiet window.
+- **Customer RLS upper bound** — drivers/applicators can see customers for jobs
+  scheduled arbitrarily far ahead. Left as-is on purpose (route/job planning needs
+  future visibility); the lower bound already prevents the historical leak.
+- **apply_prepay hand-decrement cleanup** — `apply_prepay_to_invoice` still
+  hand-decrements the prepay balance while a trigger also recomputes it (same end
+  state). Safe to drop the hand-decrement after a few more weeks of watching the
+  trigger in prod.
 
 ---
 
-## 🟡 Deferred (intentional or follow-up sprint)
+## 🚫 Out of scope (separate project)
 
-### `safe_cents_qty` follow-up (CLOSED 2026-05-16)
-**Done.** Live grep against `pg_proc` on 2026-05-16 showed only `transfer_job_to_invoice` actually had unsafe `(cents * qty)::bigint` patterns; the other two RPCs (`create_invoice_from_blend_ticket`, `save_field_app_invoice`) already used `ROUND(...)::bigint` throughout. The 2026-05-13 audit overcounted. Fix landed in migration 334 + 335. Schema-aware hook continues to block new instances.
-
-### Customer RLS upper bound (P2 #3)
-**Decision: leave as-is.** Drivers/applicators can see customers for jobs scheduled arbitrarily far in the future. Intentional — farm logistics require future visibility for route/job planning. Lower bound prevents the meaningful historical leak. PR #59 thread resolved 2026-05-16.
-
-### Apply prepay hand-decrement cleanup (deferred observation window)
-Per the 2026-05-12 audit, `apply_prepay_to_invoice` still hand-decrements `prepay_credits.balance_cents` in its body while the new trigger (migration 314) recomputes from `original_amount_cents - SUM(applications)`. Same end-state because the trigger fires after and overwrites. The hand-decrement can be dropped after watching the trigger in prod for a few weeks. PR #59 thread resolved 2026-05-16 (deferred is a decision).
-
----
-
-## 🚫 Out of scope (separate PR / project)
-
-### PR-23 / Task 4: E2E staging Supabase
-Blocked on creating `crx-manager-staging` Supabase project + adding `STAGING_SUPABASE_URL` / `STAGING_SUPABASE_ANON_KEY` GitHub secrets. Will be a separate PR once unblocked. Tracked in original 2026-05-09 audit plan.
+- **E2E staging Supabase project** — blocked on creating a `crx-manager-staging`
+  project + adding `STAGING_SUPABASE_URL` / `STAGING_SUPABASE_ANON_KEY` GitHub
+  secrets. A standalone PR when unblocked.
 
 ---
 
@@ -119,16 +74,15 @@ Blocked on creating `crx-manager-staging` Supabase project + adding `STAGING_SUP
 
 | Metric | Value |
 |---|---|
-| Migrations | 370 |
-| Pages | 66 |
-| Tables | 95 (+2 views) |
-| RPCs | 218 curated (262 live `public` functions, 0 overloads) |
-| Edge Functions | 7 — `process-blend-ticket` at **v19** (M3 OCR fix committed, deploy pending — see Outstanding); others current |
-| Unit tests | 1,924 passing (130 files, 70 skipped) |
+| Pages | 68 |
+| Migrations | 455 (all applied live) |
+| Tables | 96 (+2 views) |
+| RPCs | 226 callable + 47 trigger functions |
+| Edge Functions | 7 (all current; `process-blend-ticket` at v20) |
+| Unit tests | 2,005 passing / 70 skipped (139 files) |
 | E2E spec files | 94 |
-| ESLint errors | 0 |
-| TypeScript errors | 0 |
-| Supabase perf advisor WARN | 0 (was 97) |
-| CI on `fix/audit-2026-05-09` | green |
-| PR #59 codex threads open | 0 (all 20 resolved) |
-| PR #60 status | Live state already applied; safe to merge per follow-up comment |
+| ESLint / TypeScript errors | 0 / 0 |
+| Supabase perf advisor WARN | 0 |
+| Production | Live at croprxsolutions.app (`main` = live) |
+
+> Full shipped history → `docs/CHANGELOG.md` and the `CLAUDE.md` **Current State** section.

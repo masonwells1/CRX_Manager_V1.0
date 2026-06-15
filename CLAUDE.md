@@ -35,7 +35,7 @@
 - **2026-05-30 (review fix-branch P1 sprint, applied live):** 3 P1 fixes applied via MCP from branch `fix/review-2026-05-29` (cherry-picked to main). (1) `20260530020412_reverse_write_off_strict_actor` — replaced forgeable `COALESCE(p_performed_by, auth.uid())` with the canonical strict-actor block (`AUTH_REQUIRED`/`ACTOR_MISMATCH` + `is_active` admin check); the one mutating-financial RPC missed by the 2026-05-26 sweep (verified forgeable live pre-apply, strict post-apply). (2) `20260530020452_save_job_idempotency` — `save_job` declared `p_idempotency_key` but never used it, so a double-click created two jobs; added canonical check-at-top/save-at-end idempotency. (3) `20260530020514_release_holds_on_quote_cancel` — cancelling a planned quote left its `inventory_holds` active forever; added `'cancelled'` to the release trigger's status sets. Both reviewers clean; all live-verified post-apply (overload counts=1, forgeable→fixed, body uses `idempotency_keys`, trigger includes cancelled). Non-DB in same sprint: unified 10 PDF modules' company address to single-source `src/lib/companyInfo.ts` (**West York, IL**; remit-to address flagged for Mason and CONFIRMED by him 2026-05-30 (`src/lib/companyInfo.ts:33-47` — 9100 E 2000th Ave, Annapolis, IL; ledger verified 2026-06-10)), hardened `rpcContracts.test.ts` to verify idempotency *body* usage (not just the param), `npm audit fix` cleared 3 prod CVEs (dompurify/ws/protocol-buffers-schema). See `docs/audits/2026-05-29-fix-branch-handoff.md`.
 - **2026-05-29 (workflow review + Codex remediation, applied live):** 3 BLOCKER fixes applied via MCP. (1) `20260529214355_revoke_anon_execute_on_report_dashboard_secdef` — REVOKE EXECUTE FROM anon,PUBLIC on **37** SECDEF report/dashboard/geo/financial RPCs that were leaking customer PII/financials to the unauthenticated `anon` key (proven exploitable); re-GRANT to authenticated/service_role. anon-executable SECDEF dropped **89→52** (remaining 52 verified safe). (2) `20260529214538_fix_void_order_void_invoice_status_transitions` — `void_order` was crashing on every call (fulfilled→voided blocked by trigger, no `admin_override`); fixed with the override bracket + draft invoices→cancelled; `void_invoice` draft/unposted→cancelled. (3) `20260529214423_fix_get_customer_transaction_review_running_balance_cast` — fixed SQLSTATE 42804 (numeric→bigint window-sum cast). Both reviewers clean. Codex's 4th "BLOCKER" (`batch_void_invoices` actor-spoof) was **refuted on live** (vulnerable body is disk-only; deployed fn gates on `auth.uid()`). Deferred (documented in `docs/audits/2026-05-29-codex-disposition.md`): defense-in-depth internal role guards on the 37, `batch_void_invoices` disk-drift hardening, restore-RPC fix-or-drop, migration rebuild-fidelity shadow-DB diff.
 - Edge Function live versions (verified 2026-06-10 via MCP): `create-user` v20, `send-email` v13, `setup-blend-tickets-storage` v15, `process-blend-ticket` **v20** (M3 OCR atomic-claim deployed 2026-06-10 — closes owner item L1; bundle verified ACTIVE with the claim + `already_processing` bail in the deployed source; logs clean; smoke test = next real ticket upload, watch `get_logs`), `reset-user-password` v12, `process-document` v13, `seed-admin` v15.
-- 1,924 unit tests passing + 70 skipped (1,994 total across 130 files) + 94 E2E spec files, all passing
+- 2,005 unit tests passing + 70 skipped (2,075 total across 139 files) + 94 E2E spec files, all passing
 - Supabase performance advisor: 0 WARN findings (was 97). 72 FK indexes added, 23 permissive-policy overlap groups consolidated, 55 RLS policies rewrote `auth.uid()` as `(SELECT auth.uid())` for once-per-query evaluation.
 - 0 ESLint errors, 0 TypeScript errors, CI green
 - Pre-commit hook: lint + build + vitest
@@ -320,10 +320,10 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 
 | Doc | Contents |
 |-----|----------|
-| `docs/reference/database-schema.md` | 95 tables + RLS matrix |
-| `docs/reference/rpc-functions.md` | 218 RPCs + triggers |
-| `docs/reference/migration-history.md` | 379 migrations |
-| `docs/reference/pages-routes.md` | 66 pages with routes (68 on the Field Mode branch) |
+| `docs/reference/database-schema.md` | 96 tables (+2 views) + RLS matrix |
+| `docs/reference/rpc-functions.md` | 226 callable RPCs + 47 trigger functions |
+| `docs/reference/migration-history.md` | 455 migrations |
+| `docs/reference/pages-routes.md` | 68 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
 | `docs/CHANGELOG.md` | Sprint-by-sprint history |

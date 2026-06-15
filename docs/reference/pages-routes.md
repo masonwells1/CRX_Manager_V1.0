@@ -1,4 +1,4 @@
-# Pages & Routes Reference (66 total)
+# Pages & Routes Reference (68 pages, 70 routes)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -19,6 +19,8 @@
 | `/deliveries/new` | NewDelivery | Create delivery from order |
 | `/deliveries/:id` | DeliveryDetail | Full lifecycle: confirm, edit, cancel, photos, issues, remainders, order context, auto-emails customer on completion (~1350 lines) |
 | `/delivery-remainders` | DeliveryRemainders | Pending remainder items across all customers |
+| `/my-route` | FieldRoute | **Field Mode** driver/applicator workspace — today's route of stops (deliveries + jobs) in a task-first mobile flow. Roles: admin/sales_rep/driver. Added 2026-06-14 (PR #80/#81) |
+| `/my-route/:id` | FieldStop | **Field Mode** single route-stop detail — complete a delivery or job from the field (signature, photos, quantities). Roles: admin/sales_rep/driver |
 | `/blend-tickets` | BlendTickets | OCR ticket processing with image upload |
 | `/blend-tickets/:id` | BlendTicketDetail | Ticket review, approve/reject, create application record |
 | `/purchase-orders` | PurchaseOrders | PO list with status filters |
