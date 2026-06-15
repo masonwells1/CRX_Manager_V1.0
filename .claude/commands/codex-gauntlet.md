@@ -50,6 +50,28 @@ If unrelated staged files exist, say exactly which files are staged and do not c
 
 Note schema/doc warnings from the session staleness hook if they affect the review. A stale schema registry matters for schema-aware hooks and DB review.
 
+### Baseline against `origin/main`, never the checkout (prevents the #1 false BLOCKER)
+
+DB, migration, schema-registry, and doc "drift" MUST be judged against `origin/main` (its merge-base with `HEAD`) — **never the current checkout**. First establish how the branch sits relative to main:
+
+```bash
+git fetch origin main
+git rev-list --left-right --count origin/main...HEAD   # left = commits behind, right = ahead
+```
+
+If the branch is **behind** `origin/main`, migrations that are applied to live AND already merged to `main` will look like "live is ahead of the repo" or "N migrations missing" — that is a **stale-branch artifact, not a finding**. Before reporting any "the repo is not a source of truth for live" drift, confirm against `origin/main`, not the working tree:
+
+```bash
+MB=$(git merge-base origin/main HEAD)                              # the fork point — the correct baseline (NOT the tip)
+git ls-tree -r --name-only origin/main -- supabase/migrations      # are the "missing" migrations already on main?
+git diff --name-status "$MB" -- supabase/migrations                # what the WORKING TREE (committed + uncommitted) adds/deletes since the fork
+git ls-files --others --exclude-standard -- supabase/migrations    # untracked new migrations (git diff omits these; matters for --uncommitted scope)
+```
+
+(Diff the **merge-base**, never `origin/main` directly: a two-dot `git diff origin/main HEAD` on a behind branch reports every migration main added since the fork as a deletion from `HEAD` — the exact false finding this rule exists to prevent.)
+
+The remedy for a stale branch is to **rebase/refresh it onto `main`** (or re-point the gauntlet's baseline at `main`) — NOT to import the live migrations onto the branch, which manufactures duplicate-version drift. The live-row-count vs disk-file-count gap is pre-existing MCP-stamp/rename drift and is out of scope.
+
 ## Per-Change Mode
 
 ### Step 1: Pick Scope
@@ -69,6 +91,8 @@ Inspect the diff. If it touches migrations, RPCs, RLS, money, inventory, invoice
 ```bash
 npm run db-sweeps
 ```
+
+`npm run db-sweeps` prints each predicate's SQL — run every block READ-ONLY via Supabase MCP `execute_sql` and compare `violation_key`s to `allowlist.json`. **A printed sweep is not a passed sweep:** in an autonomous/scheduled run the exit code is 0 even when it only printed instructions, so an exit-code check would misread it as passed — require real linked-live execution there. (Strict-execution and changed-only-scan gates that enforce this are tracked separately and wire in once they reach `main`.)
 
 For each touched RPC with a smoke spec, run:
 
