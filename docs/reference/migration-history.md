@@ -1,10 +1,20 @@
-# Migration History (457 migrations)
+# Migration History (458 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/archive/2026-spring/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
+
+**H4 — `20260615115130_product_label_corrections_safe` recovered to disk.** Applied LIVE 2026-06-15 (~11:51) by the parallel label-research session but had no disk file, so `origin/main` (tail `20260614153000`) lagged live. Recovered VERBATIM from `supabase_migrations.schema_migrations.statements` (two idempotent guarded `products` UPDATEs: Trivapro EPA # `100-1567`→`100-1613`; `is_rup=true` on the two beta-cyfluthrin generics). Already live — **NOT re-applied**. ⚠️ Originated in a parallel session; the same-stamp verbatim file merges cleanly if that session also adds it — confirm before merge to avoid a duplicate stamp.
+
+**M2 — `20260614153000_revoke_execute_sql_readonly_authenticated` stamp gap (accepted, documented).** The REVOKE is functionally LIVE (verified `authenticated`/`anon` EXECUTE = false on `execute_sql_readonly`) and the file is on `origin/main`, but it is NOT in live `schema_migrations` (applied via the Supabase dashboard, not the migration tool). Pre-high-water (< `20260615182721`) ledger gap, not a behavior gap — a clean rebuild runs the idempotent file and stamps it. Per H5 (do not repair/reset prod from disk migration history), the live ledger is left as-is; optional follow-up once the Supabase CLI is linked: `supabase migration repair --status applied 20260614153000`.
+
+**M3 — `execute_sql_readonly(text)` has no disk `CREATE FUNCTION` (legacy, captured).** Exists live (SECDEF, `SET search_path=public,pg_temp`, SELECT/WITH-only guard) and is correctly locked down (EXECUTE revoked from anon/authenticated/PUBLIC). Its `CREATE FUNCTION` is absent from disk migrations. Intentionally NOT recreated via a new migration (re-emitting an arbitrary-SQL SECDEF function is higher-risk than the documentation benefit, and it is already locked down). Live definition captured for reference in `docs/reference/legacy-execute_sql_readonly.sql`.
+
+**M8 — migration-version parity rule.** Live `schema_migrations` and disk filenames do NOT align 1:1 for the pre-B7 era (historical stamp/rename drift). Judge drift by the high-water version + post-high-water rows, NOT a global 1:1 match. After this batch the only known pre-high-water live↔disk delta is M2 above (plus the documented pre-2026-05-26 drift).
 
 ## Applied 2026-06-15 (storage bucket hardening — Foundation Ultra Review M1 — 1 migration)
 
