@@ -75,6 +75,14 @@ const codexAgentHealthSkillPath = ".agents/skills/agent-health/SKILL.md";
 const agentPrCommentCommandPath = ".claude/commands/agent-pr-comment.md";
 const agentPrCommentSkillPath = ".claude/skills/agent-pr-comment/SKILL.md";
 const codexAgentPrCommentSkillPath = ".agents/skills/agent-pr-comment/SKILL.md";
+const codexGauntletCommandPath = ".claude/commands/codex-gauntlet.md";
+const codexGauntletSkillPath = ".claude/skills/codex-gauntlet/SKILL.md";
+const codexCodexGauntletSkillPath = ".agents/skills/codex-gauntlet/SKILL.md";
+const codexGauntletHookPath = ".claude/hooks/codex-gauntlet-reminder.mjs";
+const codexGauntletHookTestPath = ".claude/hooks/codex-gauntlet-reminder.test.mjs";
+const codexCodexGauntletHookPath = ".codex/hooks/codex-gauntlet-reminder.mjs";
+const codexReviewSkillPath = ".claude/skills/codex-review/SKILL.md";
+const codexCodexReviewSkillPath = ".agents/skills/codex-review/SKILL.md";
 
 const command = requireFile(commandPath);
 const claudeSkill = requireFile(claudeSkillPath);
@@ -97,6 +105,14 @@ const codexAgentHealthSkill = requireFile(codexAgentHealthSkillPath);
 const agentPrCommentCommand = requireFile(agentPrCommentCommandPath);
 const agentPrCommentSkill = requireFile(agentPrCommentSkillPath);
 const codexAgentPrCommentSkill = requireFile(codexAgentPrCommentSkillPath);
+const codexGauntletCommand = requireFile(codexGauntletCommandPath);
+const codexGauntletSkill = requireFile(codexGauntletSkillPath);
+const codexCodexGauntletSkill = requireFile(codexCodexGauntletSkillPath);
+const codexGauntletHook = requireFile(codexGauntletHookPath);
+const codexGauntletHookTest = requireFile(codexGauntletHookTestPath);
+const codexCodexGauntletHook = requireFile(codexCodexGauntletHookPath);
+const codexReviewSkill = requireFile(codexReviewSkillPath);
+const codexCodexReviewSkill = requireFile(codexCodexReviewSkillPath);
 const runClaudeReviewScript = requireFile("scripts/run-claude-review.mjs");
 const runClaudeReviewTest = requireFile("scripts/run-claude-review.test.mjs");
 const agentHealthScript = requireFile("scripts/agent-health-check.mjs");
@@ -157,6 +173,15 @@ requireIncludes(agentPrCommentSkillPath, agentPrCommentSkill, "name: agent-pr-co
 requireIncludes("scripts/post-agent-review-to-pr.mjs", prCommentScript, "Default is safe dry-run");
 requireIncludes("scripts/post-agent-review-to-pr.test.mjs", prCommentTest, "buildPrCommentBody");
 
+requireIncludes(codexGauntletCommandPath, codexGauntletCommand, "CRX Codex Review Gauntlet");
+requireIncludes(codexGauntletCommandPath, codexGauntletCommand, "Baseline against `origin/main`");
+requireIncludes(codexGauntletCommandPath, codexGauntletCommand, "Do not push.");
+requireIncludes(codexGauntletSkillPath, codexGauntletSkill, "name: codex-gauntlet");
+requireIncludes(codexGauntletHookPath, codexGauntletHook, "Codex Review Gauntlet");
+requireIncludes(codexGauntletHookTestPath, codexGauntletHookTest, "Codex Review Gauntlet reminder");
+requireIncludes(codexReviewSkillPath, codexReviewSkill, "name: codex-review");
+requireIncludes(codexReviewSkillPath, codexReviewSkill, "Codex Review (direct CLI");
+
 requireIncludes(".claude/settings.json", claudeSettings, "codex-to-claude-handoff-reminder.mjs");
 requireIncludes(".claude/settings.json", claudeSettings, "agent-pair-review-reminder.mjs");
 requireIncludes(".claude/settings.json", claudeSettings, "codex-gauntlet-reminder.mjs");
@@ -183,6 +208,8 @@ for (const [source, copy, label] of [
   [pairReviewSkill, codexPairReviewSkill, "Agent pair review skill copy is synced from Claude"],
   [agentHealthSkill, codexAgentHealthSkill, "Agent health skill copy is synced from Claude"],
   [agentPrCommentSkill, codexAgentPrCommentSkill, "Agent PR comment skill copy is synced from Claude"],
+  [codexGauntletSkill, codexCodexGauntletSkill, "Codex gauntlet skill copy is synced from Claude"],
+  [codexReviewSkill, codexCodexReviewSkill, "Codex review skill copy is synced from Claude"],
 ]) {
   if (source !== null && copy !== null) {
     if (source === copy) {
@@ -206,6 +233,14 @@ if (pairReviewHook !== null && codexPairReviewHook !== null) {
     pass("Codex pair review hook copy is synced from Claude");
   } else {
     fail("Codex pair review hook copy is synced from Claude", "run .codex\\sync-from-claude.ps1 -IncludeHooks");
+  }
+}
+
+if (codexGauntletHook !== null && codexCodexGauntletHook !== null) {
+  if (codexGauntletHook === codexCodexGauntletHook) {
+    pass("Codex gauntlet hook copy is synced from Claude");
+  } else {
+    fail("Codex gauntlet hook copy is synced from Claude", "run .codex\\sync-from-claude.ps1 -IncludeHooks");
   }
 }
 

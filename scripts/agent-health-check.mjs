@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -99,6 +99,73 @@ function checkCodexCli() {
   return runCommand("Codex CLI", codex, ["--version"], { shell: false, warn: false });
 }
 
+// Run a CLI status command and capture its outcome. Returns {ok, stdout, stderr};
+// `ok` reflects exit 0. Uses spawnSync (not execFileSync) so BOTH streams are captured
+// regardless of exit — `codex login status` prints "Logged in" to stderr while signalling
+// success via exit code 0, so a stdout-only capture would miss it.
+function runStatus(command, args, options = {}) {
+  const res = spawnSync(command, args, {
+    cwd: ROOT,
+    encoding: "utf8",
+    timeout: options.timeout || 15_000,
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: process.platform === "win32" && options.shell !== false,
+  });
+  return {
+    ok: res.status === 0 && !res.error,
+    stdout: String(res.stdout || ""),
+    stderr: String(res.stderr || res.error?.message || ""),
+  };
+}
+
+// `--version` passes even when the CLI is logged out — but the whole headless
+// review toolkit (codex-review / codex-gauntlet) silently fails without auth.
+// Delegate to `codex login status` (the authoritative check the review command itself
+// relies on): it honors CODEX_HOME, rejects malformed/expired tokens, and is exit-coded —
+// far more robust than inspecting auth.json's shape ourselves. `runner` is injectable for tests.
+export function checkCodexAuth(runner) {
+  const run = runner || (() => {
+    const codex = resolveNewestCodexBinary();
+    if (!codex) return { ok: false, stdout: "", stderr: "newest OpenAI Codex binary not found" };
+    return runStatus(codex, ["login", "status"], { shell: false });
+  });
+  const r = run();
+  // Exit 0 is the authoritative "logged in" signal (codex prints "Logged in…" to stderr).
+  if (r.ok) {
+    return check("PASS", "Codex CLI auth", ((r.stdout || r.stderr).split(/\r?\n/).find(Boolean) || "logged in").trim());
+  }
+  const note = (r.stderr || r.stdout || "not logged in").split(/\r?\n/).find(Boolean) || "not logged in";
+  return check("FAIL", "Codex CLI auth", `${note.trim()} — run \`codex login\``);
+}
+
+// Delegate to `claude auth status` (machine-readable JSON: {"loggedIn":true,...}). It reads
+// the keychain/credentials/env the CLI actually uses, so it can't be fooled by a malformed
+// credentials file. Logged-out is a WARN, not FAIL: non-interactive `claude -p` (used by
+// run-claude-review) can still auth via ANTHROPIC_API_KEY / apiKeyHelper even when the OAuth
+// session shows logged out. `runner` is injectable for tests.
+//
+// Known limitation (documented follow-up): `auth status` proves *auth*, not the end-to-end
+// review path — a stale/invalid env key could let `auth status` report logged-in while
+// `claude -p` still fails at review time. The authoritative check is a live `claude -p`
+// smoke; it's intentionally kept OUT of the default so an on-demand health check doesn't
+// incur a billed model call on every run. Add an opt-in deep mode if that proof is needed.
+export function checkClaudeAuth(runner) {
+  const run = runner || (() => runStatus("claude", ["auth", "status"]));
+  const r = run();
+  if (!r.ok) {
+    return check("WARN", "Claude CLI auth", "`claude auth status` unavailable (older CLI / not installed) — run `claude login` if reviews fail to auth");
+  }
+  try {
+    const parsed = JSON.parse(r.stdout);
+    if (parsed?.loggedIn === true) {
+      return check("PASS", "Claude CLI auth", parsed.authMethod ? `logged in (${parsed.authMethod})` : "logged in");
+    }
+    return check("WARN", "Claude CLI auth", "claude auth status reports logged out (env/apiKeyHelper auth may still work) — run `claude login` if reviews fail");
+  } catch {
+    return check("WARN", "Claude CLI auth", "could not parse `claude auth status` — run `claude login` if reviews fail to auth");
+  }
+}
+
 function checkSessionStaleness() {
   try {
     const output = execFileSync(process.execPath, [path.join(ROOT, ".claude", "hooks", "session-staleness.mjs")], {
@@ -166,7 +233,9 @@ function buildHealthChecks(root = ROOT) {
 
   checks.push(checkCodexSessionStartSyncsHooks(readJsonIfPresent(path.join(root, ".codex", "hooks.json"))));
   checks.push(runCommand("Claude CLI", "claude", ["--version"], { warn: false }));
+  checks.push(checkClaudeAuth());
   checks.push(checkCodexCli());
+  checks.push(checkCodexAuth());
   checks.push(runCommand("GitHub auth", "gh", ["auth", "status"], { warn: true }));
   checks.push(runCommand("Vercel CLI", "vercel", ["--version"], { warn: true }));
   checks.push(runCommand("Supabase CLI", "supabase", ["--version"], { warn: true }));

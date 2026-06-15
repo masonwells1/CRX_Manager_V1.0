@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  checkClaudeAuth,
+  checkCodexAuth,
   checkCodexSessionStartSyncsHooks,
   checkFilesPresent,
   compareSyncedFiles,
@@ -85,6 +87,30 @@ try {
     ]).exitCode,
     1,
   );
+
+  // ── CLI auth smokes (delegate to the CLI's own authoritative status command) ──
+  // The checks shell out to `codex login status` / `claude auth status`; tests inject a
+  // fake runner so every outcome (logged in / out / malformed / CLI-missing) is deterministic.
+
+  // Codex: PASS on exit 0 (codex prints "Logged in" to STDERR and signals success via the
+  // exit code — so the check must not depend on stdout content); everything else FAILs.
+  assert.equal(checkCodexAuth(() => ({ ok: true, stdout: "", stderr: "Logged in using ChatGPT" })).status, "PASS");
+  assert.equal(checkCodexAuth(() => ({ ok: false, stdout: "Not logged in", stderr: "" })).status, "FAIL");
+  // Malformed/expired tokens — codex exits non-zero with "missing field id_token" → FAIL (the
+  // exact case a JSON-shape smoke would have falsely PASSed).
+  assert.equal(checkCodexAuth(() => ({ ok: false, stdout: "", stderr: "Error checking login status: missing field `id_token`" })).status, "FAIL");
+  // Binary not found → FAIL.
+  assert.equal(checkCodexAuth(() => ({ ok: false, stdout: "", stderr: "newest OpenAI Codex binary not found" })).status, "FAIL");
+
+  // Claude: PASS only on loggedIn:true; logged-out/unparseable/CLI-missing → WARN (env or
+  // apiKeyHelper auth may still work for non-interactive `claude -p`).
+  assert.equal(checkClaudeAuth(() => ({ ok: true, stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }), stderr: "" })).status, "PASS");
+  assert.equal(checkClaudeAuth(() => ({ ok: true, stdout: JSON.stringify({ loggedIn: false }), stderr: "" })).status, "WARN");
+  // Empty/malformed claudeAiOauth would make a shape-check PASS, but `claude auth status` reports
+  // loggedIn:false → WARN (the round-2 P3 case).
+  assert.equal(checkClaudeAuth(() => ({ ok: true, stdout: JSON.stringify({ loggedIn: false, claudeAiOauth: {} }), stderr: "" })).status, "WARN");
+  assert.equal(checkClaudeAuth(() => ({ ok: true, stdout: "not json", stderr: "" })).status, "WARN");
+  assert.equal(checkClaudeAuth(() => ({ ok: false, stdout: "", stderr: "unknown command 'auth'" })).status, "WARN");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
