@@ -47,21 +47,27 @@ the *spray plan/pass* layer, the *customer shed ledger*, and the *reminder rows*
 
 ## 2. New tables
 
-### 2.1 `spray_plans` — the per-field season plan
-`id, customer_id (FK), field_id (FK), season int, crop text, source text ('program'|'copied'|'manual'), status text ('active'|'archived'), created_by, created_at, updated_at, p_idempotency`
-- One plan per field per season. Seeded from the grower's CRX nutrition/chem program (§3), copied from last year, or manual.
+### 2.1 `spray_programs` — the farm-wide plan, per crop (REVISED 2026-06-15 per Mason)
+Mason: farms run **complete programs**, not per-field plans — typically ~2 corn programs (e.g. GMO vs non-GMO trait/blend) + 1 soybean program, each run across **all** of that crop's acres; field-by-field variation is minimal. So the plan is authored ONCE at the program level and assigned to many fields.
+`id, customer_id (FK), season int, crop text ('corn'|'soybean'|…), variant text nullable (the trait/blend split, e.g. 'GMO'|'non-GMO'|'conventional'), name text, source text ('program'|'copied'|'manual'), status text ('active'|'archived'), created_by, timestamps, p_idempotency`
 
-### 2.2 `spray_passes` — the checklist rows + the trigger for a compliance record
-`id, spray_plan_id (FK), pass_type text ('burndown'|'pre_emerge'|'post_emerge'|'fungicide'|'insecticide'|'desiccation'|'other'), sequence int, planned_window daterange|date, status text, assignment text ('grower'|'crew'), job_id (FK nullable → jobs), application_record_id (FK nullable → application_records), parent_pass_id (FK self, for follow-up chaining), followup_interval_days int nullable (per-pass override), planned_products jsonb, created_by, timestamps, p_idempotency`
-- **Status lifecycle:** `planned → applied → recorded` (+ terminal `skipped`, `cancelled`). "Applied" = it happened; "recorded" = the compliance record is complete (§3).
-- **Checking a pass off creates/links the compliance record** — `application_record_id` is set when recorded.
-- `assignment='crew'` ⇒ `job_id` is set (§4); `assignment='grower'` ⇒ no job.
-- `parent_pass_id` chains follow-ups (pre-emerge → its 2nd-trip pass).
+### 2.2 `spray_program_passes` — the planned passes (authored once per program)
+`id, spray_program_id (FK), pass_type text ('burndown'|'pre_emerge'|'post_emerge'|'fungicide'|'insecticide'|'desiccation'|'other'), sequence int, planned_window daterange|date, planned_products jsonb (product + rate), followup_interval_days int nullable (per-pass override of the product default), parent_pass_id (FK self → follow-up chaining), created_by, timestamps`
+- The checklist/board is driven off these. `parent_pass_id` chains follow-ups (pre-emerge → its 2nd-trip pass).
+
+### 2.2b `spray_program_fields` — assign a program to fields (many-to-many)
+`id, spray_program_id (FK), field_id (FK), created_at` — UNIQUE(program, field).
+- "All my GMO-corn fields run program X." This is where per-field reality reconnects: the *plan* is farm-wide; the *acres it covers* are the assigned fields. Next year = "copy 2026 → 2027" + drop/add fields.
+
+### 2.2c `spray_pass_executions` — per-field status + the trigger for a compliance record
+`id, spray_program_pass_id (FK), field_id (FK), status text ('planned'|'applied'|'recorded'|'skipped'|'cancelled'), applied_date, assignment text ('grower'|'crew'), job_id (FK nullable → jobs), application_record_id (FK nullable → application_records), created_by, timestamps`
+- One execution row per (pass × field). **Checking a pass off — for one field or the whole crop at once — fans out to per-field `application_records`** (§2.3): the same whole-farm pre-emerge checked off for 30 fields = 30 compliance records in one action.
+- `assignment='crew'` ⇒ `job_id` set (§4); `'grower'` ⇒ no job. Status → `recorded` once the compliance record is complete (§3).
 
 ### 2.3 `application_records` — **extend, don't replace** (the compliance log)
 Add to the existing table / its write path:
 - `source_type` CHECK: add `'spray_pass'` (currently `job`/`blend_ticket`).
-- `regime text` — `'private'` | `'commercial'`, **derived** (CRX-staff applicator + job → commercial; grower applicator + spray_pass → private) and stored for enforcement (§6.8).
+- `regime text` — `'private'` | `'commercial'`, **derived** (CRX-staff applicator + job → commercial; grower applicator + spray_pass → private) and stored for enforcement (§6.8). **Per Mason (2026-06-15): the two regimes capture essentially the SAME fields** — so build ONE record form; the regime difference is *ownership + the customer-copy duty + retention*, not a divergent required-field set. (Keep the required set config-driven so the exact IL legal bar can still be tuned.)
 - **Snapshot columns** (point-in-time, set at completion): `epa_registration_snapshot`, `applicator_license_number`, `applicator_license_expiry`, `is_rup_snapshot`, `rate_source text ('crx_recommended'|'grower_chosen')`.
 - `completion_status text ('draft'|'complete')` — the two-state record (§3 / open Q4). Only `complete` is export-eligible and append-only.
 - `customer_copy_sent_at timestamptz`, `customer_copy_email_log_id` — proves the commercial customer-copy duty was met (§6.8).
@@ -95,12 +101,12 @@ One-tap check-off → `application_records` row with `completion_status='draft'`
 
 ---
 
-## 4. The `jobs ↔ spray_passes` link (G3 — least greenfield)
+## 4. The `jobs ↔ spray_pass_executions` link (G3 — least greenfield)
 A CRX custom pass = a **planned job** with spray context:
-1. Schedule: create a `spray_passes` row with `assignment='crew'` + a linked `jobs` row (`job_id`). The B5 license-expiry gate already fires on `jobs.applicator_id`.
-2. Complete the job → write the `application_records` row (`source_type='spray_pass'`, `regime='commercial'`, applicator = crew, license snapshotted), set the pass to `recorded`, generate + deliver + log the customer copy (§2.3).
+1. Schedule: create a `spray_pass_executions` row (`assignment='crew'`) + a linked `jobs` row (`job_id`). The B5 license-expiry gate already fires on `jobs.applicator_id`.
+2. Complete the job → write the `application_records` row (`source_type='spray_pass'`, `regime='commercial'`, applicator = crew, license snapshotted), set the execution to `recorded`, generate + deliver + log the customer copy (§2.3).
 3. Bill: job → invoice via the existing `transfer_job_to_invoice` path; `application_records.invoice_id` links it.
-→ The internal crew board is a filtered view over `spray_passes` (+ their jobs) across all customers, fed by the §2.5 reminder rows. **This is mostly wiring existing parts** — the recommended first `/ship`.
+→ The internal crew board is a filtered view over `spray_pass_executions` (+ their jobs) across all customers, fed by the §2.5 reminder rows. **This is mostly wiring existing parts** — the recommended first `/ship`.
 
 ---
 
@@ -116,16 +122,16 @@ A CRX custom pass = a **planned job** with spray context:
 
 ---
 
-## 7. Open design questions (async — no rush, mobile-friendly)
-1. **Plan granularity:** one `spray_plans` row per field per season (proposed) vs per crop-stage program? (Per-field keeps the board simple.)
-2. **Whole-farm vs per-field shed:** `customer_chemical_inventory_txns` is per (customer, product) — i.e., one shed per farm, not per field. Confirm growers think of the shed farm-wide (almost certainly yes).
-3. **Commercial required-field set:** what exactly must be filled before a CRX-crew record can be marked `complete`? (Drives §3 validation — confirm against the IL rule + your insurer per §10.5.)
-4. **Generic products' EPA #:** recorded per delivery (since `Gen …` products span multiple brands) — store the chosen EPA # on the shed `delivered_in` row, and snapshot it onto the record. Confirm that's how you want it.
+## 7. Design questions — RESOLVED 2026-06-15 (Mason)
+1. **Plan granularity → FARM-WIDE PROGRAM, not per-field** (drove the §2.1–2.2c rewrite). A farm runs complete programs: ~2 corn programs (split by trait/blend — GMO vs non-GMO) + 1 soybean program, each across all that crop's acres; field-by-field variation is minimal. Plan authored once per program → assigned to many fields → executed/recorded per field.
+2. **Shed = whole-farm.** Confirmed — `customer_chemical_inventory_txns` per (customer, product), one shed per farm. ✓
+3. **Crew/commercial records = essentially the SAME info as a grower's** (per Mason). Build ONE record form; the regime difference is ownership + customer-copy duty + retention, not a different field set (§2.3). The exact IL legal bar stays config-driven; confirm with insurer / IL Dept of Ag before launch (§10.5).
+4. **EPA # per delivery — YES, and move the catalog to ACTUAL generic product names.** Mason: stop using umbrella names like "Gen Liberty: (Cheetah, Glufosinate, Opportunity, Reckon)" — many companies make the same active ingredient with **different EPA #s**, so the catalog should carry the *specific* generic product (e.g. "Red Eagle Glufosinate 280", EPA 85678-90) and capture the exact product + EPA # on each delivery, stamped onto the compliance record. → **NEW WORK ITEM: catalog cleanup** — split umbrella generics into real per-manufacturer products (or treat the umbrella as an equivalence-group and resolve to the specific SKU at delivery). The 2026-06-14 label-research draft already pulled per-manufacturer EPA #s for the top 9.
 
 ---
 
 ## 8. What this unblocks + suggested first `/ship` slice
-- **First slice (internal-only, no portal):** `spray_plans` + `spray_passes` + the `application_records` extensions + the `jobs` link (§4) + an internal spray-board page. Validates the model, builds the label catalog in practice, needs **no** portal-security work.
+- **First slice (internal-only, no portal):** `spray_programs` + `spray_program_passes` + `spray_program_fields` + `spray_pass_executions` + the `application_records` extensions + the `jobs` link (§4) + an internal spray-board page. Validates the model, builds the label catalog in practice, needs **no** portal-security work.
 - **Hard prerequisite (parallel, non-code):** the top-20 label-data lift (worksheet sent 2026-06-14) — `followup_interval_days`/REI/PHI/RUP are 0% populated, and the timers can't run without them.
 - **Then:** shed ledger (§2.4) → reminders (§2.5) → portal read-only (G9) → grower self-logging.
 
