@@ -47,13 +47,14 @@ the *spray plan/pass* layer, the *customer shed ledger*, and the *reminder rows*
 
 ## 2. New tables
 
-### 2.1 `spray_programs` — the farm-wide plan, per crop (REVISED 2026-06-15 per Mason)
-Mason: farms run **complete programs**, not per-field plans — typically ~2 corn programs (e.g. GMO vs non-GMO trait/blend) + 1 soybean program, each run across **all** of that crop's acres; field-by-field variation is minimal. So the plan is authored ONCE at the program level and assigned to many fields.
-`id, customer_id (FK), season int, crop text ('corn'|'soybean'|…), variant text nullable (the trait/blend split, e.g. 'GMO'|'non-GMO'|'conventional'), name text, source text ('program'|'copied'|'manual'), status text ('active'|'archived'), created_by, timestamps, p_idempotency`
+### 2.1 `application_programs` — the farm-wide plan, per operation (REVISED 2026-06-15 #2 per Mason)
+Mason: farms run **complete programs by operation**, not per-field plans — a farm typically has *several*: a pre-emerge program, a post-emerge program, a fungicide program, often a dry-fertilizer and a side-dress program, etc. ("~3" earlier was just an example — it's usually more.) Each program = one operation's blend run across **all** the relevant acres of a crop; field-by-field variation is minimal. **This spans fertility too** (dry fert, side-dress) — hence "application program," not "spray program"; the fertility programs converge with the G8 nutrition-program vision (unify when we build).
+`id, customer_id (FK), season int, crop text ('corn'|'soybean'|…), variant text nullable (trait/blend split, e.g. 'GMO'|'non-GMO'), operation text ('burndown'|'pre_emerge'|'post_emerge'|'fungicide'|'insecticide'|'dry_fertilizer'|'side_dress'|'desiccation'|'other'), name text, blend jsonb (products + rates), followup_interval_days int nullable, source text ('program'|'copied'|'manual'), status text ('active'|'archived'), created_by, timestamps, p_idempotency`
+- A farm has MANY of these — one per operation per crop/variant. The **operation now lives on the program** (Mason names programs by operation), so the separate passes table (§2.2) mostly collapses into this.
+- *Naming note: this revision renames `spray_*` → `application_*`; §2.2b/2.2c/§4/§7/§8 below still say `spray_*` — treat them as the same entities pending a full naming pass.*
 
-### 2.2 `spray_program_passes` — the planned passes (authored once per program)
-`id, spray_program_id (FK), pass_type text ('burndown'|'pre_emerge'|'post_emerge'|'fungicide'|'insecticide'|'desiccation'|'other'), sequence int, planned_window daterange|date, planned_products jsonb (product + rate), followup_interval_days int nullable (per-pass override of the product default), parent_pass_id (FK self → follow-up chaining), created_by, timestamps`
-- The checklist/board is driven off these. `parent_pass_id` chains follow-ups (pre-emerge → its 2nd-trip pass).
+### 2.2 `application_program_passes` — OPTIONAL (only multi-step programs / follow-up trips)
+With the operation now on the program (§2.1), most programs are a single pass and don't need this table. Keep it only where one program implies a planned **follow-up trip** (e.g., a residual pre-emerge that schedules a 2nd pass): `id, application_program_id (FK), sequence int, planned_window, followup_from_pass_id (FK self), notes`. For v1 you can model follow-ups purely via `followup_interval_days` on the program (§2.1) + the reminder rows (§2.5) and skip this table.
 
 ### 2.2b `spray_program_fields` — assign a program to fields (many-to-many)
 `id, spray_program_id (FK), field_id (FK), created_at` — UNIQUE(program, field).
