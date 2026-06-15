@@ -143,6 +143,12 @@ export function checkCodexAuth(runner) {
 // credentials file. Logged-out is a WARN, not FAIL: non-interactive `claude -p` (used by
 // run-claude-review) can still auth via ANTHROPIC_API_KEY / apiKeyHelper even when the OAuth
 // session shows logged out. `runner` is injectable for tests.
+//
+// Known limitation (documented follow-up): `auth status` proves *auth*, not the end-to-end
+// review path — a stale/invalid env key could let `auth status` report logged-in while
+// `claude -p` still fails at review time. The authoritative check is a live `claude -p`
+// smoke; it's intentionally kept OUT of the default so an on-demand health check doesn't
+// incur a billed model call on every run. Add an opt-in deep mode if that proof is needed.
 export function checkClaudeAuth(runner) {
   const run = runner || (() => runStatus("claude", ["auth", "status"]));
   const r = run();
