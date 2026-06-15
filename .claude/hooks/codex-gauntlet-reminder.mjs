@@ -89,7 +89,13 @@ const triggerPatterns = [
   // 4. safe/ok/ready/good/clear + to + CODE verb, clause-terminal (guards "ready to ship grain").
   /\b(?:safe|ok|okay|ready|good|clear|alright|cleared|fine)\b[^.?!]{0,20}?\bto\s+(?:ship|push|merge|deploy|commit|go\s*live|put\s*(?:it\s*)?live|release)\b(?:\s+(?:this|it|up|in))?(?:\s+to\s+(?:prod\w*|main|live))?\s*(?:[?.!]|$|\b(?:before|now|yet|pls|please|or\s+not)\b)/,
   /\b(?:this|it|everything|we|that)\s+(?:is\s+|are\s+)?good\s+to\s+go\b/,
-  /\bgood\s+to\s+go\b(?:\s*[?.!]|\s+(?:live|to\s+prod\w*|to\s+production|with\s+(?:this|the)|on\s+this|or\s+(?:not|no)|before|yet|now))/,
+  // Domain guard: do NOT fire on "is this delivery/load/order good to go?" — only on
+  // a deploy-flavored "good to go" that is NOT preceded by a farm/business object.
+  new RegExp(
+    String.raw`(?<!\b` + DOMAIN + String.raw`\s)` +
+    String.raw`\bgood\s+to\s+go\b(?:\s*[?.!]|\s+(?:live|to\s+prod\w*|to\s+production|with\s+(?:this|the)|on\s+this|or\s+(?:not|no)|before|yet|now))`,
+    ""
+  ),
   /\b(?:ready|safe|ok|okay|clear|alright)\s+to\s+go\s+live\b/,
   /\bis\s+(?:it|this)\s+(?:gonna\s+be\s+)?ready\s+to\s+go\b/,
   /\bgo(?:es|ing)?\s+live\b/,

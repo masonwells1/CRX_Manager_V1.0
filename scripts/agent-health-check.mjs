@@ -159,6 +159,8 @@ function buildHealthChecks(root = ROOT) {
       [".claude/skills/agent-health/SKILL.md", ".agents/skills/agent-health/SKILL.md"],
       [".claude/skills/agent-pr-comment/SKILL.md", ".agents/skills/agent-pr-comment/SKILL.md"],
       [".claude/hooks/agent-pair-review-reminder.mjs", ".codex/hooks/agent-pair-review-reminder.mjs"],
+      [".claude/hooks/codex-to-claude-handoff-reminder.mjs", ".codex/hooks/codex-to-claude-handoff-reminder.mjs"],
+      [".claude/hooks/codex-gauntlet-reminder.mjs", ".codex/hooks/codex-gauntlet-reminder.mjs"],
     ]),
   ];
 

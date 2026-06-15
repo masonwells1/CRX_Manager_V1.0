@@ -80,6 +80,8 @@ const SHOULD_NOT_FIRE = [
   "vet this new supplier before i order from them",
   "is the herbicide delivery good to go for tomorrow?",
   "is the new applicator certified and good to go on routes",
+  "is this delivery good to go?",
+  "is this load good to go?",
   "check if that customer's credit is good before we ship the load",
   "sanity check these commission payouts before i cut the checks",
   "create an rpc to generate the sales report",

@@ -25,14 +25,20 @@ function read(rel) {
   return readFileSync(abs, "utf8");
 }
 
+// Is the machine-local Codex/agents mirror present AT ALL? The .codex/ and .agents/
+// trees are gitignored (populated by .codex/sync-from-claude.ps1), so they are
+// entirely absent in CI / a clean checkout. When the mirror is absent its files
+// are optional (skip); when it IS present, a MISSING mirror file is a real
+// partial-sync failure — don't let a half-synced mirror pass silently.
+const codexMirrorPresent =
+  existsSync(path.join(root, ".codex")) || existsSync(path.join(root, ".agents"));
+
 function requireFile(rel) {
   const content = read(rel);
   if (content === null) {
-    // The .codex/ and .agents/ trees are the machine-local Codex mirror
-    // (gitignored, populated by .codex/sync-from-claude.ps1). They are absent in
-    // CI and any clean checkout, so their absence must NOT fail this gate — the
-    // sync-comparison checks below already skip when a mirror copy is null.
-    if (rel.startsWith(".codex/") || rel.startsWith(".agents/")) return null;
+    if ((rel.startsWith(".codex/") || rel.startsWith(".agents/")) && !codexMirrorPresent) {
+      return null; // clean checkout: no mirror at all → optional
+    }
     fail(rel, "missing");
     return null;
   }
