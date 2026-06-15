@@ -63,6 +63,45 @@ Native iOS/Android apps · multi-tenancy now · ML demand forecasting (supersede
 
 ---
 
+## Priority 0: Grower Portal & Agronomy Expansion (VISION — iterating, not yet planned)
+
+**The big bet for 2026–27:** expand CRX from internal ops into customer-facing
+services — agronomy (soil/tissue testing, nutrition programs), a grower portal,
+grower data uploads, and field profitability analytics.
+
+Detailed living vision doc: **`docs/plans/2026-06-10-grower-portal-brainstorm.md`**
+(PR #74 — keep iterating there; this table is the index). Settled so far:
+**separate portal app, same Supabase DB**, walled off by RLS + customer-scoped
+`portal_*` RPCs and a new `customer` role. Nothing below is scheduled yet — when
+the vision settles, each item gets its own `/ship`-grade implementation plan.
+
+**Design/grounding docs (2026-06-14, verified live):**
+[`spray-compliance-data-model.md`](plans/2026-06-14-spray-compliance-data-model.md) (G1–G3 first-build data model) ·
+[`portal-roadmap-build-vs-reuse-audit.md`](plans/2026-06-14-portal-roadmap-build-vs-reuse-audit.md) (what's already built vs greenfield across G4–G15 — PostGIS/pg_cron already on, but `orders`/`invoices` lack `field_id` and the `customer` role + `portal_*` RPCs are all greenfield).
+
+| # | Feature | Where | Status |
+|---|---------|-------|--------|
+| G1 | ⭐ **Chemical tracking & spray compliance** — chemical-shed inventory auto-fed from CRX deliveries, per-field spray checklist (sprayed/not + dates), compliance-grade RUP application log (auto-filled EPA reg #s, append-only), exports | Portal + CRX | VISION (Mason priority — candidate first portal feature) |
+| G2 | ⭐ **Follow-up trip timers** — pass logged → residual clock starts (e.g. pre-emerge + 26 days → "2nd trip due"); REI/PHI timers; 14-day records-due nudge; doubles as CRX delivery/crew workload forecast | Portal + CRX | VISION (Mason priority) |
+| G3 | ⭐ **Internal crew spray board** — same spray-plan data model for custom acres; passes assigned grower vs CRX crew; likely `spray_passes ↔ jobs`/DispatchBoard link; job completion writes compliance record → flows to invoicing | CRX Manager | VISION (Mason priority) |
+| G4 | Field seasons (planting/harvest records, manual tier) + whole-field **breakeven calculator** | CRX first, then portal | VISION |
+| G5 | Field season costs w/ auto-suggested lines from the grower's own CRX invoices/applications | CRX + portal | VISION |
+| G6 | Soil testing program (grid/zone sampling, results maps, resample tracker) | CRX Manager | VISION |
+| G7 | Tissue sampling program (growth-stage schedule, season trend charts) | CRX Manager | VISION |
+| G8 | Nutrition / dry-fertilizer program builder → one-click CRX quote; grower e-accepts in portal | CRX + portal | VISION |
+| G9 | Grower portal MVP — auth (`customer_users`, `customer` role), read-only: programs, test results, documents, statements | New portal repo | VISION |
+| G10 | Spatial yield upload (monitor shapefiles/CSV → cleaned → grid-binned cells) | Portal + Edge Fn | VISION |
+| G11 | **Profitability map** — per-cell profit/ac (yield × price − costs), red/green over satellite on the existing Mapbox stack; "worst 10% of acres cost you $X" | Portal + CRX | VISION |
+| G12 | Grower financial tools — what-if price sliders, per-field P&L, rented-ground analyzer | Portal | VISION |
+| G13 | Notifications (email exists; SMS provider TBD) | Edge Fn | VISION |
+| G14 | LLM assistant — Claude API via Edge Function, strictly customer-scoped context | Portal | VISION |
+| G15 | Nutrient-removal engine — yield map × removal rates → replacement-fert rec / program input | CRX Manager | VISION |
+
+Parked (revisit later): VR prescription writing, multi-year yield stability maps,
+NDVI/satellite layers, PostGIS analytics, grain marketing, cross-grower benchmarking.
+
+---
+
 ## Priority 1: Team Board Enhancements (IN PROGRESS)
 
 Detailed brainstorm: `docs/archive/2026-Q1-brainstorms/2026-03-01-team-board-brainstorm.md`
