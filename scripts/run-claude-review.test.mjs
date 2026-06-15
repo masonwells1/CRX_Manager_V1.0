@@ -54,14 +54,16 @@ assert.match(prompt, /BLOCKER \/ HIGH \/ MED \/ LOW \/ NIT/);
 assert.match(prompt, /verdict: SHIP \/ SHIP-WITH-FOLLOWUPS \/ NEEDS-WORK/i);
 assert.match(prompt, /package\.json/);
 
-const commandArgs = buildClaudeCommandArgs({ prompt });
-assert.deepEqual(commandArgs.slice(0, 5), [
+const commandArgs = buildClaudeCommandArgs();
+assert.deepEqual(commandArgs, [
   "-p",
   "--output-format",
   "text",
   "--permission-mode",
   "plan",
 ]);
-assert.equal(commandArgs.at(-1), prompt);
+// SECURITY: the prompt must NOT be a CLI arg (it's passed via stdin) so shell
+// metacharacters can't reach cmd.exe on Windows.
+assert.ok(!commandArgs.includes(prompt), "prompt must not be passed as a CLI arg");
 
 console.log("OK - run-claude-review helpers passed.");

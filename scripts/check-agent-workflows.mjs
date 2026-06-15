@@ -153,10 +153,14 @@ requireIncludes("scripts/post-agent-review-to-pr.test.mjs", prCommentTest, "buil
 
 requireIncludes(".claude/settings.json", claudeSettings, "codex-to-claude-handoff-reminder.mjs");
 requireIncludes(".claude/settings.json", claudeSettings, "agent-pair-review-reminder.mjs");
+requireIncludes(".claude/settings.json", claudeSettings, "codex-gauntlet-reminder.mjs");
 if (codexHooksJson !== null) {
   // Only when the machine-local Codex hook mirror is present (skipped in CI / clean checkouts).
   requireIncludes(".codex/hooks.json", codexHooksJson, "codex-to-claude-handoff-reminder.mjs");
   requireIncludes(".codex/hooks.json", codexHooksJson, "agent-pair-review-reminder.mjs");
+  // The gauntlet reminder ("is this safe to ship?") must be mirrored to Codex too —
+  // otherwise a stale mirror missing only it would still pass while Codex never prompts.
+  requireIncludes(".codex/hooks.json", codexHooksJson, "codex-gauntlet-reminder.mjs");
   requireIncludes(".codex/hooks.json", codexHooksJson, "-IncludeHooks");
 }
 

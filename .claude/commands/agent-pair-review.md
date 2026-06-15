@@ -34,11 +34,18 @@ If unclear, ask Mason one short question.
 
 ## Step 2 - Run The Other Agent
 
-When running from Codex:
+When running from Codex, run the Claude side with the `--scope` that matches your Step 1 choice:
 
 ```powershell
-node scripts/run-claude-review.mjs --scope uncommitted --reason "Pair review: independently review Codex's current work and cite findings."
+# Current uncommitted work:
+node scripts/run-claude-review.mjs --scope uncommitted --reason "Pair review: independently review the current work and cite findings."
+# Current branch vs main (use this for a clean pre-push branch):
+node scripts/run-claude-review.mjs --scope base-main --reason "Pair review: review this branch vs main and cite findings."
+# One commit:
+node scripts/run-claude-review.mjs --scope commit --commit <sha> --reason "Pair review: review this commit and cite findings."
 ```
+
+Use the scope picked in Step 1 — on a clean branch with no uncommitted changes, `--scope uncommitted` reviews nothing and produces a false-clean pair review.
 
 When running from Claude, use `/codex-review` for code review or `/codex-cross-review` only if the Codex CLI is unavailable.
 

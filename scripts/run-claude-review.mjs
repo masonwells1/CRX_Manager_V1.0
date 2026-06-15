@@ -200,14 +200,18 @@ export function buildClaudeReviewPrompt({
   return lines.join("\n");
 }
 
-export function buildClaudeCommandArgs({ prompt, outputFormat = "text", permissionMode = "plan" }) {
+// SECURITY: the prompt is deliberately NOT an argv element. On Windows the
+// `claude` launcher is a .cmd shim, so the spawn needs shell:true — and a prompt
+// passed as an arg would then be parsed by cmd.exe, letting `&`, `|`, `>` in a
+// --reason / --prompt-file / audit doc inject commands. The prompt is fed via
+// stdin instead (claude -p reads it from stdin); these args carry only fixed flags.
+export function buildClaudeCommandArgs({ outputFormat = "text", permissionMode = "plan" } = {}) {
   return [
     "-p",
     "--output-format",
     outputFormat,
     "--permission-mode",
     permissionMode,
-    prompt,
   ];
 }
 
@@ -253,10 +257,13 @@ export function runClaudeReview(options) {
   }
 
   const claudeBin = process.env.CLAUDE_BIN || "claude";
-  const result = spawnSync(claudeBin, buildClaudeCommandArgs({ prompt }), {
+  const result = spawnSync(claudeBin, buildClaudeCommandArgs(), {
     cwd: ROOT,
     encoding: "utf8",
     maxBuffer: 50 * 1024 * 1024,
+    // Prompt via stdin (not argv) so shell metacharacters in it can never reach
+    // cmd.exe — see buildClaudeCommandArgs. shell stays on for the Windows .cmd shim.
+    input: prompt,
     shell: process.platform === "win32",
   });
 
