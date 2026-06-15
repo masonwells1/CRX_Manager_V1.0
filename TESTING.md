@@ -6,8 +6,8 @@ This guide will walk you through testing the application. No coding experience n
 
 | Metric | Count |
 |--------|-------|
-| **Unit tests** | 1,433 (Vitest, 92 test files in `src/`) |
-| **E2E specs** | 98 Playwright spec files (589 tests in `tests/e2e/`) |
+| **Unit tests** | 2,005 passing (Vitest, 139 test files in `src/`, 70 skipped) |
+| **E2E specs** | 94 Playwright spec files in `tests/e2e/` |
 | **Pre-commit hook** | Runs `npm run build` + `npm test` before every commit — blocks if anything fails |
 
 ## Table of Contents
@@ -159,7 +159,7 @@ Unit tests check individual pieces of logic (calculations, PDF generation, data 
 npm test
 ```
 
-This runs all 1,433 unit tests across 92 test files. Takes about 10-20 seconds.
+This runs all 2,005 unit tests across 139 test files. Takes about 10-20 seconds.
 
 ### Running Tests in Watch Mode
 
@@ -184,7 +184,7 @@ This keeps running and automatically re-tests when you save a file. Great during
 
 Every time you commit code, the pre-commit hook automatically runs:
 1. `npm run build` — ensures the app compiles
-2. `npm test` — ensures all 1,433 unit tests pass
+2. `npm test` — ensures all 2,005 unit tests pass
 
 If either fails, the commit is **blocked**. You must fix the issue before committing.
 
@@ -199,7 +199,7 @@ E2E (end-to-end) tests open a real browser and test the full application — log
 - **Login/Logout:** Can users log in and out?
 - **Customer Management:** Can you create, view, and search for customers?
 - **Permissions:** Can users access the pages they're supposed to?
-- **All 50 pages:** Every page is tested for loading and basic functionality
+- **All 68 pages:** Every page is tested for loading and basic functionality
 
 ### Running the Tests
 
@@ -494,7 +494,7 @@ npm run lint         # Run ESLint
 
 ### Unit Tests (Vitest)
 ```bash
-npm test                  # Run all 1,433 unit tests
+npm test                  # Run all 2,005 unit tests
 npm run test:watch        # Run unit tests in watch mode
 ```
 

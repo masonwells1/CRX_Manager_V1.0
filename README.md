@@ -9,7 +9,7 @@ Business management system for **Crop RX Solutions**, an agricultural chemical d
 - **Maps:** Mapbox GL JS + react-map-gl (satellite field mapping with draw tools)
 - **Testing:** Vitest (unit) + Playwright (E2E)
 - **Deployment:** Vercel → [croprxsolutions.app](https://croprxsolutions.app)
-- **Other:** jsPDF (PDF generation), Google Vision AI (OCR), proj4/shapefile (GIS import), Sentry (error tracking), Lucide React (icons)
+- **Other:** jsPDF (PDF generation), Google Vision AI (OCR), proj4/shpjs/@tmcw/togeojson (GIS import), Sentry (error tracking), Lucide React (icons)
 
 ## Quick Start
 
@@ -50,7 +50,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 | `npm run dev` | Start development server (port 5173) |
 | `npm run build` | Build for production |
 | `npm run preview` | Preview production build locally |
-| `npm test` | Run all 1,433 unit tests |
+| `npm test` | Run all 2,005 unit tests |
 | `npm run test:watch` | Run unit tests in watch mode |
 | `npm run typecheck` | Check TypeScript errors |
 | `npm run lint` | Run ESLint |
@@ -106,7 +106,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 
 ## Database
 
-72+ tables in Supabase PostgreSQL with Row Level Security (RLS) on all tables. ~115 RPC functions. 107 migration files in `supabase/migrations/`. 5 Edge Functions for user creation, OCR processing, and storage setup.
+96 tables (+2 views) in Supabase PostgreSQL with Row Level Security (RLS) on all tables. ~225 RPC functions. 455 migration files in `supabase/migrations/`. 7 Edge Functions for user creation, OCR processing, email, and storage setup.
 
 See [CLAUDE.md](./CLAUDE.md) for the complete table list, RLS policy matrix, and RPC function inventory.
 
@@ -126,9 +126,9 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment instructions, environme
 
 ## Current State
 
-- **50 pages**, 50+ components, fully lazy-loaded
-- **1,433 unit tests** (92 test files) + **98 E2E spec files** (589 tests)
-- **72+ database tables**, ~115 RPC functions, 107 migrations
+- **68 pages**, fully lazy-loaded
+- **2,005 unit tests** passing (139 test files, 70 skipped) + **94 E2E spec files**
+- **96 database tables** (+2 views), ~225 RPC functions, 455 migrations
 - **0 ESLint errors**, 0 TypeScript errors
 - **Pre-commit hook** blocks commits if build or tests fail
 - **Deployed to Vercel** at [croprxsolutions.app](https://croprxsolutions.app) (live)
@@ -141,4 +141,4 @@ Private - All rights reserved
 ---
 
 **Version:** 1.0
-**Last Updated:** 2026-03-02
+**Last Updated:** 2026-06-15

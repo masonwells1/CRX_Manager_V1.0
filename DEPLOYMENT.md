@@ -97,7 +97,7 @@ VITE_SENTRY_DSN=https://your-sentry-dsn (optional)
 - [ ] All TODO comments addressed
 
 ### Testing
-- [ ] All unit tests pass (`npm test` — 1,433 tests)
+- [ ] All unit tests pass (`npm test` — 2,005 tests)
 - [ ] All E2E tests pass (`npm run test:e2e`)
 - [ ] Manual testing completed on staging
 - [ ] Mobile responsiveness verified

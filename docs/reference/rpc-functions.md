@@ -1,4 +1,6 @@
-# RPC Functions Reference (218 unique functions)
+# RPC Functions Reference (226 callable RPCs + 47 trigger/internal functions — live as of 2026-06-15)
+
+> Live function inventory (Supabase `pg_proc`, 2026-06-15): **226 callable RPCs**, **47 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here).
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -22,6 +24,7 @@
 - `admin_update_profile()` — admin-only profile updates (name, role, email, active flag)
 - `save_quote_template()` — Saves quote template with sections and items
 - `create_quote_from_template()` — Creates a new quote from a saved template
+- `revert_quote_status(p_quote_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin/sales_rep, strict-actor. Status revert (e.g. accepted → sent) under an `app.admin_override` bracket; powers QuoteBuilder "unstick" actions.
 
 ## Order & Delivery
 - `convert_quote_to_order()` — whole-quote conversion; also releases inventory holds linked to the quote. Copies `qi.notes` to `order_items.notes` and aggregates section_header_notes into `orders.program_notes`. Since `20260610145253`: rejects draft/declined/expired/cancelled quotes (`BOOKING_CLOSED`), rejects partially-drawn quotes (`BOOKING_PARTIALLY_DRAWN`), and marks all products fully drawn in `quote_product_draws`
@@ -44,6 +47,9 @@
 - `bulk_import_order(p_order_number text, p_customer_id uuid, p_status text, totals..., p_items jsonb, ...)` — atomic per-order create for `BulkOrderImport.tsx`. Closes audit #31 (orphaned-orders during CSV import). Frontend resolves customer/product IDs first then ships per-order to this RPC. Migration 20260513010000.
 - `check_duplicate_delivery()` — check if a duplicate delivery exists for an order
 - `void_delivery()` — void a completed delivery, reversing inventory transactions. **P4-10 (2026-05-07):** same WARN-only backdated check as `complete_delivery` — voiding for a date in a closed period emits a non-blocking warning and proceeds.
+- `void_order(p_order_id, p_performed_by, p_reason, p_idempotency_key)` → jsonb — admin-only, strict-actor. Voids a confirmed/fulfilled order, reversing prebooked inventory and cancelling draft invoices. Brackets the enforcer-forbidden status write with `app.admin_override`.
+- `restore_cancelled_order(p_order_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor. Restores a cancelled order back to confirmed (`app.admin_override` bracket).
+- `restore_cancelled_delivery(p_delivery_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor. Restores a cancelled delivery back to scheduled (override bracket).
 
 ## Invoice & Payments
 - `create_invoice_from_order()` — create invoice from order items
@@ -57,6 +63,8 @@
 - `record_invoice_payment()` — record payment against a specific invoice
 - ~~`record_payment()`~~ — **DROPPED 2026-06-08** (migration `20260608145944`, audit AW-3): deprecated + unreachable; use `allocate_payment` / `record_invoice_payment` instead
 - `allocate_payment()` — allocate/re-allocate payment amounts across invoices
+- `void_payment(p_allocation_set_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor. Reverses a recorded payment/allocation set, re-opening the affected invoices' balances and reversing any overpayment prepay credit.
+- `unapply_credit_memo(p_credit_memo_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor. Un-applies a credit memo from the invoices it was applied to, restoring their balances.
 
 ## Inventory & Receiving
 - `adjust_inventory()` — manual inventory adjustment with reason
@@ -72,6 +80,8 @@
 - `match_quick_receive_items()` — auto-allocate products to oldest open POs for Quick Receive
 - `validate_product_units()` — trigger function that validates product unit consistency
 - `convert_to_gl_lb()` — convert quantity from any unit to gallons or pounds for standardized reporting
+- `reverse_receiving_record(p_record_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor. Reverses a receiving event, subtracting the received quantity (ledger ≡ snapshot — no zero-clamp since `20260610131048`) and recomputing the PO header (skips cancelled POs).
+- `get_expiring_planned_holds(p_days_ahead int, p_idempotency_key)` → jsonb — lists planned-quote inventory holds expiring within N days (powers the expiring-holds Dashboard alert).
 
 ## Job Scheduling
 - `assign_job_applicator(p_job_id, p_applicator_id, p_license_override, p_performed_by, p_idempotency_key)` → jsonb — assign/unassign a job's applicator (strict-actor, admin/sales_rep; the `enforce_applicator_license` trigger on `jobs` raises `LICENSE_EXPIRED` when the applicator's linked active licenses are all expired; `p_license_override` is admin-only and brackets the update with `app.admin_override`). Sole assignment path for DispatchBoard; JobDetail uses it for the override flow. (B5, 20260610185714)
@@ -89,6 +99,7 @@
 - `batch_reject_blend_tickets(p_ticket_ids, p_rejected_by, p_idempotency_key)` → jsonb — bulk reject completed+unreviewed tickets, returns `rejected_count`
 - `save_blend_ticket_fields(p_blend_ticket_id, p_fields, p_performed_by, p_idempotency_key)` — save per-field application assignments (delete+reinsert)
 - `check_duplicate_blend_ticket(p_ticket_number, p_ticket_date)` — check for duplicate ticket by number+date
+- `reverse_blend_ticket_approval(p_ticket_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin/sales_rep, strict-actor. Reverts an approved blend ticket back to `unreviewed` so it can be re-reviewed.
 
 ## Returns & Credits
 - `approve_return()` — approve a return request
@@ -96,6 +107,11 @@
 - `issue_return_credit()` — issue credit memo for a return, integrated with AR
 - `create_prepay_credit()` — create prepay credit for a customer
 - `reconcile_prepay_balances()` — reconcile prepay balances across all customers
+- `cancel_return(p_return_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin/sales_rep, strict-actor. Cancels a return at any non-terminal stage (requested/approved/received → cancelled); brackets the status write with `app.admin_override`.
+- `create_prepay_check_splits(p_customer_id, p_reference_number, p_splits, p_performed_by, p_idempotency_key)` → jsonb — records one customer check split into multiple labeled prepay buckets (PrepaymentManager "Split Check" entry).
+- `edit_prepay_credit(p_credit_id, p_new_balance_cents, p_reference_number, p_bucket_label, p_notes, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor edit of a prepay credit (balance/reference/label).
+- `delete_prepay_credit(p_credit_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor soft-delete/void of a prepay credit.
+- `increment_customer_prepay(p_customer_id, p_amount_cents, p_idempotency_key)` → void — internal helper that bumps a customer's prepay balance (called from payment/overpayment paths).
 
 ## Sequential Numbers (advisory locks)
 - `next_delivery_number()` -> DEL-YYYY-NNNN
@@ -126,6 +142,8 @@
 - `get_detailed_statement_data()` — detailed statement data for PDF generation. Includes both 'posted' and 'overdue' invoices. Aging buckets: current(0-30), 31-60, 61-90, 91-120, over-120 (non-overlapping).
 - `generate_batch_statements()` — generate batch PDF statements for multiple customers
 - `get_season_comparison()` — compare two seasons side-by-side
+- `get_customer_year_end_summary(p_customer_id, p_season)` → jsonb — one customer's year-end purchase/AR summary for the season.
+- `get_batch_year_end_summaries(p_customer_ids uuid[], p_season)` → jsonb — year-end summaries for many customers at once (batch statement / year-end mailing).
 
 ## Financial
 - `close_accounting_period()`, `check_period_open()`, `get_monthly_summary()`
@@ -141,6 +159,10 @@
 - `calculate_billing_splits()` — calculate billing splits for an order
 - `check_customer_credit_limit()` — check if customer has exceeded credit limit
 - `mark_overdue_invoices()` — batch scan: sets posted invoices past due_date to 'overdue', logs to financial_audit_log, returns `{ invoices_marked_overdue, run_at }`
+- `reopen_accounting_period(p_period_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin-only, strict-actor reopen of a closed accounting period (audited).
+- `batch_apply_all_prepayments(p_performed_by, p_idempotency_key)` → jsonb — admin-only. Applies every customer's available prepay balance to their oldest-unpaid posted invoices in one batch ("Apply all prepayments" button).
+- `preview_finance_charges(p_as_of_date)` → table — read-only preview of the charges `generate_finance_charges` would create (customer, overdue balance, rate, days overdue, charge amount).
+- `compute_application_service_fee(p_service_id, p_customer_id, p_acres, p_season)` → jsonb — computes a field-application service fee using the per-customer rate override, falling back to the service default.
 
 ## Pricing
 - `calculate_prices_from_margin()` — trigger: auto-calculate tier prices from margin target
@@ -153,6 +175,10 @@
 
 ## Geo / Maps
 - `get_fields_with_geojson()`, `get_field_geojson()`, `save_field_geometry()` — use `SET search_path = public, extensions` for PostGIS
+- `get_field_polygons(p_field_id)` → table — returns the multi-polygon set for a field (`field_polygons`: geojson, label, acres, sort_order).
+- `save_field_polygons(p_field_id, p_polygons, p_performed_by, p_idempotency_key)` → void — replaces a field's polygon set (delete + reinsert) in one transaction.
+- `link_fields_to_parent(p_parent_id, p_child_ids uuid[], p_performed_by, p_idempotency_key)` → void — groups child fields under a parent field (`fields.parent_field_id`).
+- `unlink_field_from_parent(p_field_id, p_performed_by, p_idempotency_key)` → void — removes a field from its parent grouping.
 
 ## Dashboard
 - `dashboard_summary()` — legacy operational summary (inventory levels, deliveries, recent activity, integrity alerts). Slimmed from original 8-query version; financial KPIs moved to `financial_dashboard_summary()`
@@ -204,6 +230,8 @@
 ## Automation
 - `auto_expire_quotes()` — cron-callable: expires quotes past their expiration date, deactivates inventory holds. **F7 (2026-05-07):** belt-and-suspenders restoration UPDATE removed; deactivation only — holds are soft reservations that never debited `quantity_available`.
 - `check_remainder_reminders()` — cron-callable: checks for delivery remainders needing follow-up reminders
+- `retry_failed_notifications()` → jsonb — cron-callable: retries entries in `failed_notifications` (e.g. email sends that errored). EXECUTE revoked from anon/authenticated — service_role/cron only.
+- `log_failed_notification(p_notification_type, p_entity_type, p_entity_id, p_error_message, p_payload, p_idempotency_key)` → uuid — records a failed notification for later retry.
 
 ## Helper Functions (SQL)
 ```sql
@@ -228,6 +256,14 @@ safe_cents_qty(p_cents bigint, p_qty numeric) RETURNS bigint
 ## Rebate RPCs (audit #33, 2026-05-13)
 - `create_rebate_claim(p_program_id uuid, p_quantity numeric, p_claim_amount_cents bigint, p_order_id uuid?, p_customer_id uuid?, p_product_id uuid?, p_notes text?, p_idempotency_key text?)` — atomic claim create with auto-generated `RC-YYYY-NNNN` claim_number from per-year `rebate_claim_counters` table (atomic via `INSERT ... ON CONFLICT DO UPDATE` row-lock). Replaces the racy `count(*) + 1` pattern in `Rebates.tsx`. SECURITY DEFINER, role-gated to admin/sales_rep.
 - `transition_rebate_claim(p_claim_id uuid, p_new_status text, p_paid_amount_cents bigint?, p_manufacturer_ref text?, p_idempotency_key text?)` — state-machine transition under `SELECT FOR UPDATE` row lock. Validates pending→submitted/rejected, submitted→approved/rejected, approved→paid. Raises `INVALID_TRANSITION` token on stale-state. For `'paid'`, writes `paid_amount_cents` (defaults to `claim_amount_cents`) — closes the gap where the original UI never set this column. Admin-only.
+
+## Sell-Side: Pricing & Booking (2026-06-14, roadmap #2 / #4 / #6)
+- `create_rush_order(p_customer_id, p_items, p_notes, p_customer_po_number, p_performed_by, p_idempotency_key)` → jsonb — **ship-now / price-later (#2):** creates a confirmed order with prices pending (`orders.pricing_status='pending'`, `order_items.pricing_pending=true`) so product can ship before final pricing. admin/sales_rep, strict-actor, idempotent.
+- `price_order(p_order_id, p_items, p_performed_by, p_idempotency_key)` → jsonb — **#2:** applies final per-line prices to a pending order, clears `pricing_pending`, recomputes totals + commissions, flips `pricing_status` to priced.
+- `check_unpriced_orders()` → jsonb — **#2:** cron-callable scan (06:10 UTC) flagging shipped-but-unpriced orders for owner follow-up.
+- `consolidate_draft_invoices(p_order_id, p_performed_by, p_idempotency_key)` → jsonb — **order billing cockpit (#4):** merges an order's multiple per-delivery DRAFT invoices into ONE draft (Agvance pattern).
+- `get_booking_settlement(p_quote_id)` → jsonb — **prepay-backed bookings (#6, read-only):** settlement view of a booking (quote) against its linked prepay credit (`prepay_credits.quote_id`).
+- `get_open_booking_rollover(p_customer_id, p_season)` → jsonb — **#6 (read-only):** a customer's open (undrawn) booking balance available to roll into the next season.
 
 ---
 
@@ -258,6 +294,8 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 - `check_idempotency()` — check if an idempotency key has been used
 - `save_idempotency()` — persist an idempotency key result
 - `check_rate_limit()` — rate limiting check
+- `cleanup_rate_limits()` — cron-callable cleanup of expired rate-limit rows. EXECUTE revoked from anon/authenticated — service_role/cron only.
+- `execute_sql_readonly(sql_query text)` → jsonb — **internal/admin diagnostic** that runs a caller-supplied SELECT as the table owner. EXECUTE revoked from anon (2026-05-26, B4) AND authenticated (`20260614153000`, HIGH RLS-bypass) — service_role/postgres only, no production callers.
 
 ### Commission / Order Helpers (audit #6, 2026-05-13)
 - `_insert_commissions_for_order(p_order_id uuid, p_customer_id uuid, p_order_profit numeric, p_commission_split jsonb, p_order_date date)` — single source of truth for commission INSERT. Called via `PERFORM` from `convert_quote_to_order`, `create_direct_order`, and `create_quick_delivery`. Uses `compute_commission_amount()` helper for the formula. SECURITY DEFINER. EXECUTE revoked from PUBLIC/anon/authenticated — only callable from inside other SECURITY DEFINER bodies (which run as the owner).

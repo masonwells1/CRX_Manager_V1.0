@@ -1,6 +1,6 @@
 # CRX Manager — Roadmap
 
-> **Last updated:** 2026-06-10 | **Owner:** Mason Wells
+> **Last updated:** 2026-06-15 | **Owner:** Mason Wells
 >
 > _Q1 brainstorm docs were moved to `docs/archive/2026-Q1-brainstorms/` and the links below repointed (2026-05-31). Feature statuses for Priorities 1–6 reflect the March planning cycle; for current system state see `CLAUDE.md`._
 
@@ -43,7 +43,7 @@
 | B4 | REI/PHI tracking per field + dispatch warnings | M | TODO |
 | E4 | Field-level profitability (margin per acre per field/customer/season) | M | TODO |
 | D2 | Vendor price-sheet ingestion → proposed cost updates | M | TODO |
-| E1 | Driver/applicator mobile workspace (refactor DeliveryDetail into task-first flow) | L | TODO |
+| E1 | Driver/applicator mobile workspace (refactor DeliveryDetail into task-first flow) | L | ✅ v1 Done (2026-06-14 — **Field Mode** `/my-route` + `/my-route/:id`, `assign_job_applicator`; PR #80/#81 merged + live). Follow-ups: on-device pass + offline replay. |
 
 ### H3 — Multi-year: the defensible end-state
 | ID | Item | Notes |
