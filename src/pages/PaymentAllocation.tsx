@@ -106,6 +106,7 @@ export default function PaymentAllocation() {
     if (customerSearch.length < 2 || selectedCustomer) {
       setCustomerResults([]);
       setShowDropdown(false);
+      setSearchLoading(false);
       return;
     }
     // L3: cancel flag so a debounced response that resolves after the input
@@ -133,7 +134,7 @@ export default function PaymentAllocation() {
           setShowDropdown(false);
         }
       } finally {
-        setSearchLoading(false);
+        if (!cancelled) setSearchLoading(false);
       }
     }, 300);
     return () => { cancelled = true; clearTimeout(timer); };

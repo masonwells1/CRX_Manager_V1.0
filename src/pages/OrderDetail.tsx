@@ -154,6 +154,7 @@ export default function OrderDetail() {
         const { data: qData } = await supabase
           .from('quotes').select('id, quote_number')
           .eq('id', orderData.quote_id).maybeSingle();
+        if (isStale()) return;
         setParentQuote(qData as { id: string; quote_number: string } | null);
       } else { setParentQuote(null); }
 
@@ -162,6 +163,7 @@ export default function OrderDetail() {
         .select('*')
         .eq('id', orderData.customer_id)
         .maybeSingle();
+      if (isStale()) return;
       setCustomer(custData as Customer | null);
 
       const { data: itemsData } = await supabase
@@ -183,6 +185,7 @@ export default function OrderDetail() {
         .from('blend_ticket_to_order_items')
         .select('blend_ticket_id, blend_ticket:blend_tickets(id, ticket_number, ticket_date, order_link_status, payment_status)')
         .eq('order_id', id!);
+      if (isStale()) return;
       // Deduplicate by blend_ticket_id
       const uniqueTickets = new Map<string, { id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null }>();
       ((btLinks || []) as unknown as Array<{ blend_ticket_id: string; blend_ticket: { id: string; ticket_number: string; ticket_date: string | null; order_link_status: string | null; payment_status: string | null } | null }>).forEach((link) => {
