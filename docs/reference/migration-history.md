@@ -1,10 +1,14 @@
-# Migration History (456 migrations)
+# Migration History (457 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/archive/2026-spring/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Applied 2026-06-15 (storage bucket hardening — Foundation Ultra Review M1 — 1 migration)
+
+`20260615182721_harden_storage_buckets_mime_size` — config-only `UPDATE storage.buckets` setting an image-only `allowed_mime_types` allowlist (jpeg/png/webp/heic/heif/gif) + a 10 MB `file_size_limit` on the 3 public buckets (`delivery-photos`, `receiving-photos`, `team-note-attachments`), which were `public=true` with both columns NULL — any authenticated user could upload any type/size via a direct Storage API call (the UI checked, the bucket didn't). Matches the already-hardened `document-uploads` (10 MB) / `delivery-signatures` (1 MB) buckets and every real uploader (all `accept="image/*"`, compressImage→jpeg; receiving-photos has no frontend uploader). public/RLS posture unchanged. Both reviewers 0 BLOCKER/HIGH/MED; idempotent + reversible; post-apply verify confirmed all 3 buckets constrained. B7-renamed to MCP stamp `20260615182721`.
 
 ## Applied 2026-06-15 (commission backfill — Foundation Ultra Review H1 — 1 migration)
 
