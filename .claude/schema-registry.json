@@ -1,13 +1,13 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-06-13",
+    "generated_at": "2026-06-14",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260613191516",
-    "high_water_note": "Bumped to the 20260613191516 hold-resync apply. The 3 migrations 20260613191120/191323/191516 are function-only (re-emit save_quote/create_planned_holds/restore_quote_version/cancel_order/void_order + add the _sync_planned_holds helper) — NO new tables/columns/CHECK constraints/sequences/generated columns, so the schema-tracked content below is unchanged from the 20260611211058 introspection."
+    "migrations_high_water": "20260614153000",
+    "high_water_note": "Refreshed 2026-06-14 (targeted column-delta refresh against live, not a full regen). Set to 20260614153000 to match the highest supabase/migrations/*.sql filename on disk (what session-staleness.mjs compares against). That migration (revoke_execute_sql_readonly_authenticated) is GRANT-only and was applied live via the Supabase dashboard, so live schema_migrations max(version) is 20260614152456 — everything above the last schema change is grant/function/trigger/cron-only. Schema-affecting delta since 20260613191516: sell-side #2 (20260614144252) added orders.pricing_status (+orders_pricing_status_check), orders.pricing_escalation_sent_at, orders.pricing_reminder_sent_at, order_items.pricing_pending, order_items.suggested_price, invoices.pricing_pending; sell-side #6 (20260614151115) added prepay_credits.quote_id. All other intervening migrations (customer_po/auto_expire/create_rush_order/price_order/check_unpriced/invoice_from_order_delivery_guard/consolidate_draft_invoices/open_booking_rollover/quote_terminal_draw_guard/revert_quote_status_recreate_planned_holds) are function/trigger/cron/grant-only — no new tables/columns/CHECK constraints/sequences/generated columns. Live column inventory diffed 1:1 against this registry on 2026-06-14; these 7 columns were the only delta."
   },
   "generated_columns": [
     {
@@ -103,6 +103,10 @@
       "processing",
       "completed",
       "failed"
+    ],
+    "orders.pricing_status": [
+      "priced",
+      "needs_pricing"
     ],
     "orders.status": [
       "confirmed",
@@ -641,6 +645,15 @@
       ],
       "constraints": [
         "ocr_processing_queue_status_check"
+      ]
+    },
+    "orders.pricing_status": {
+      "values": [
+        "priced",
+        "needs_pricing"
+      ],
+      "constraints": [
+        "orders_pricing_status_check"
       ]
     },
     "orders.status": {
@@ -1768,7 +1781,8 @@
         "invoice_date",
         "created_at",
         "updated_at",
-        "write_off_cents"
+        "write_off_cents",
+        "pricing_pending"
       ]
     },
     "job_applied_info": {
@@ -1875,7 +1889,8 @@
         "profit",
         "net_margin",
         "quantity_delivered",
-        "quantity_remaining"
+        "quantity_remaining",
+        "pricing_pending"
       ]
     },
     "order_line_allocations": {
@@ -1920,7 +1935,8 @@
         "created_at",
         "updated_at",
         "is_planned",
-        "booking_draw"
+        "booking_draw",
+        "pricing_status"
       ]
     },
     "payments": {
@@ -3122,7 +3138,8 @@
       "application_service_id",
       "delivery_id",
       "wind_direction",
-      "temperature_text"
+      "temperature_text",
+      "pricing_pending"
     ],
     "job_applied_info": [
       "id",
@@ -3245,7 +3262,9 @@
       "quantity_remaining",
       "sort_order",
       "notes",
-      "cost_at_time_cents"
+      "cost_at_time_cents",
+      "pricing_pending",
+      "suggested_price"
     ],
     "order_line_allocations": [
       "id",
@@ -3289,7 +3308,10 @@
       "customer_po_number",
       "is_planned",
       "program_notes",
-      "booking_draw"
+      "booking_draw",
+      "pricing_status",
+      "pricing_escalation_sent_at",
+      "pricing_reminder_sent_at"
     ],
     "payments": [
       "id",
@@ -3327,7 +3349,8 @@
       "updated_at",
       "source_type",
       "source_reference",
-      "bucket_label"
+      "bucket_label",
+      "quote_id"
     ],
     "products": [
       "id",

@@ -18,6 +18,11 @@
  *                    allowlist key column, and adjudication rules are printed alongside so the
  *                    human-in-the-loop disposition is unambiguous.
  *
+ *   --strict (or DB_SWEEPS_REQUIRE_LIVE=1) forbids the print-only fallback: if a real linked-live
+ *   run is not possible (no SUPABASE_DB_URL / no psql), the runner exits 2 instead of printing and
+ *   exiting 0. An autonomous/scheduled gauntlet MUST use --strict so it can never mistake printed
+ *   instructions for a passed sweep.
+ *
  * Predicate contract (every predicates/*.sql MUST honor it):
  *   - Read-only. SELECT only. NEVER DDL/DML. The runner refuses to execute a file containing a
  *     write keyword as a defense-in-depth guard (see SQL_WRITE_GUARD below).
@@ -30,10 +35,12 @@
  *   node run-sweeps.mjs --list          # list discovered predicates + allowlist counts, then exit
  *   node run-sweeps.mjs --explain <p>   # print one predicate's header + SQL + allowlist entries
  *   node run-sweeps.mjs --json          # (psql mode) emit machine-readable result summary
+ *   node run-sweeps.mjs --strict        # require a real linked-live run; exit 2 (not print-only) if live unreachable
  *
  * Exit codes: 0 = all clear (or Claude-mode print, which never fails the build on its own),
  *             1 = at least one unallowlisted violation (psql mode),
- *             2 = usage / configuration / predicate-contract error.
+ *             2 = usage / configuration / predicate-contract error, OR --strict requested
+ *                 but a real linked-live run was not possible (live unreachable).
  */
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
@@ -191,7 +198,33 @@ if (args.includes('--explain')) {
 
 // Default: run all predicates.
 const jsonMode = args.includes('--json');
+const strict = args.includes('--strict') || process.env.DB_SWEEPS_REQUIRE_LIVE === '1';
 const psql = hasPsql();
+
+// --strict / DB_SWEEPS_REQUIRE_LIVE: a printed sweep is NOT a passed sweep. When a real
+// linked-live run is required but impossible (no SUPABASE_DB_URL / no psql), fail loudly with
+// exit 2 instead of falling through to the print-only path that exits 0. An autonomous/scheduled
+// gauntlet MUST invoke this so it can never mistake printed instructions for a passed sweep.
+// (Codex June-14 gauntlet HIGH #2.)
+if (!psql && strict) {
+  console.error(
+    [
+      '════════════════════════════════════════════════════════════════════════',
+      ' db-invariant-sweeps — STRICT MODE FAILURE (no live execution available)',
+      '════════════════════════════════════════════════════════════════════════',
+      '',
+      ' --strict (or DB_SWEEPS_REQUIRE_LIVE=1) requires a real linked-live run, but',
+      ' SUPABASE_DB_URL is not set or `psql` is not on PATH, so this runner can only',
+      ' PRINT the predicate SQL (Claude mode) — it cannot execute it.',
+      '',
+      ' A printed sweep is NOT a passed sweep. Set SUPABASE_DB_URL to a read-only',
+      ' connection string with psql installed, then re-run. An autonomous gauntlet',
+      ' MUST treat this exit code (2) as "sweep did not run" — never as a pass.',
+      '════════════════════════════════════════════════════════════════════════',
+    ].join('\n'),
+  );
+  process.exit(2);
+}
 
 if (!psql) {
   // ---- Claude-first mode: print SQL with banners for MCP execute_sql ----

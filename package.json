@@ -21,6 +21,7 @@
     "check-doc-drift": "node scripts/check-doc-drift.mjs",
     "verify-deps": "node scripts/verify-deps.mjs",
     "db-sweeps": "node scripts/db-invariant-sweeps/run-sweeps.mjs",
+    "db-sweeps:strict": "node scripts/db-invariant-sweeps/run-sweeps.mjs --strict",
     "smoke": "node scripts/smoke/run-smoke.mjs",
     "verify:deps": "node scripts/verify-deps.mjs",
     "check:docs": "node scripts/check-doc-drift.mjs",

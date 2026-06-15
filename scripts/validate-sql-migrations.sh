@@ -7,9 +7,10 @@
 # Usage:
 #   bash scripts/validate-sql-migrations.sh
 #   bash scripts/validate-sql-migrations.sh --idempotency-only   # just check idempotency bugs
+#   bash scripts/validate-sql-migrations.sh --changed-only       # only migrations changed vs origin/main (fast loop path)
 #
 # Exit codes:
-#   0 = all clean
+#   0 = all clean (or no changed migrations under --changed-only)
 #   1 = violations found
 # ============================================================================
 
@@ -19,16 +20,27 @@ VIOLATIONS=0
 WARNINGS=0
 IDEMPOTENCY_ONLY=false
 MAX_VIOLATIONS=""
+CHANGED_ONLY=false
+BASE_REF="origin/main"
 
 # Argument parsing
 for arg in "$@"; do
   case "$arg" in
     --idempotency-only) IDEMPOTENCY_ONLY=true ;;
+    --changed-only) CHANGED_ONLY=true ;;
+    --base=*) BASE_REF="${arg#--base=}" ;;
     --max-violations=*) MAX_VIOLATIONS="${arg#--max-violations=}" ;;
     --help|-h)
-      echo "Usage: $0 [--idempotency-only] [--max-violations=N]"
+      echo "Usage: $0 [--idempotency-only] [--changed-only] [--base=<ref>] [--max-violations=N]"
       echo ""
       echo "  --idempotency-only   Only check idempotency_keys column-name bugs"
+      echo "  --changed-only       Scan ONLY migrations changed vs <ref> (default origin/main)."
+      echo "                       Fast path for the per-change loop: a full scan of all"
+      echo "                       migrations takes >3min, but old/baselined violations in"
+      echo "                       untouched files don't tell you whether THIS change regressed."
+      echo "                       Falls back to a full scan (with a warning) if git or the base"
+      echo "                       ref is unavailable, so it never silently scans nothing."
+      echo "  --base=<ref>         Base ref for --changed-only (default origin/main)."
       echo "  --max-violations=N   Exit 0 if violations <= N (baseline ratchet for CI)."
       echo "                       Exit 1 if violations > N. Recommend updating the"
       echo "                       baseline downward when violations decrease."
@@ -81,12 +93,84 @@ if [ ! -d "$MIGRATION_DIR" ]; then
   exit 1
 fi
 
-ALL_SQL=$(find "$MIGRATION_DIR" -name '*.sql' -type f | sort)
+SCAN_MODE="full"
+DELETED=""
+if [ "$CHANGED_ONLY" = true ]; then
+  # Fast path for the per-change loop: scan ONLY migrations this branch changed vs
+  # BASE_REF — added/modified (committed or not) plus untracked-new files. A full
+  # scan of all migrations takes >3min, but old/baselined violations in untouched
+  # files don't tell you whether THIS change regressed, so scanning just the diff
+  # turns the sweep sub-second. Untracked files MUST be unioned in (`git diff` omits
+  # them, and a brand-new migration starts untracked). Renames are included via
+  # --diff-filter=AMR, whose --name-only output is the rename DESTINATION, so a
+  # renamed-AND-edited migration is still scanned (a B7 content-identical rename just
+  # re-scans already-clean SQL). DELETED migrations (classified D, never R) are caught
+  # separately below as a red-line violation — never a clean no-op. Falls back to a
+  # full scan (loudly) if git or the base ref is unavailable.
+  if git rev-parse --verify --quiet "$BASE_REF" >/dev/null 2>&1; then
+    # Diff against the MERGE BASE, not the tip of BASE_REF. A branch that is behind
+    # origin/main would otherwise see main's post-fork migrations as "deleted" (a
+    # two-dot diff vs the tip), producing false deleted-migration violations. The
+    # merge-base..working-tree set is exactly what THIS branch changed (committed +
+    # uncommitted) — which is what --changed-only is meant to validate.
+    MB=$(git merge-base "$BASE_REF" HEAD 2>/dev/null || echo "$BASE_REF")
+    CHANGED=$( {
+      { git diff -M --name-only --diff-filter=AMR "$MB" -- "$MIGRATION_DIR" 2>/dev/null || true; }
+      { git ls-files --others --exclude-standard -- "$MIGRATION_DIR" 2>/dev/null || true; }
+    } | { grep -E '\.sql$' || true; } | sort -u )
+    DELETED=$( { git diff -M --name-only --diff-filter=D "$MB" -- "$MIGRATION_DIR" 2>/dev/null || true; } | { grep -E '\.sql$' || true; } | sort -u )
+    EXISTING=""
+    for f in $CHANGED; do
+      if [ -f "$f" ]; then EXISTING="${EXISTING}${f} "; fi
+    done
+    ALL_SQL=$(printf '%s\n' $EXISTING)
+    SCAN_MODE="changed-only vs $BASE_REF (merge-base)"
+    # Zero baseline applies ONLY on the real changed-only path: the scanned set is just
+    # what this change touched, so any violation is a regression and the --max-violations
+    # ratchet (which exists for the full historical scan, ~61 legacy violations) would
+    # mask new ones. The full-scan fallback in the else branch KEEPS the caller's baseline.
+    if [ -n "$MAX_VIOLATIONS" ]; then
+      echo "NOTE: --max-violations ignored with --changed-only (zero baseline — any violation in a changed file is a regression)."
+      echo ""
+      MAX_VIOLATIONS=""
+    fi
+  else
+    echo "WARNING: --changed-only requested but base ref '$BASE_REF' not found — running FULL scan instead."
+    echo ""
+    ALL_SQL=$(find "$MIGRATION_DIR" -name '*.sql' -type f | sort)
+  fi
+else
+  ALL_SQL=$(find "$MIGRATION_DIR" -name '*.sql' -type f | sort)
+fi
+
+# Deleted migrations are a red-line violation (history is append-only) — report each
+# so --changed-only can never silently bless a destructive change. Renames are
+# classified R (not D) by rename detection, so legitimate B7 renames are exempt.
+for d in $DELETED; do
+  echo "VIOLATION: $d"
+  echo "  Migration DELETED vs $BASE_REF — migrations are append-only; NEVER delete an existing migration file."
+  echo ""
+  VIOLATIONS=$((VIOLATIONS + 1))
+done
+
+if [ -z "$ALL_SQL" ]; then
+  echo "============================================"
+  echo "  SQL Migration Audit ($SCAN_MODE)"
+  if [ "$VIOLATIONS" -gt 0 ]; then
+    echo "  No files to scan, but $VIOLATIONS deleted-migration violation(s) found above."
+    echo "============================================"
+    exit 1
+  fi
+  echo "  0 changed migration file(s) vs $BASE_REF — nothing to scan."
+  echo "============================================"
+  exit 0
+fi
+
 FILE_COUNT=$(echo "$ALL_SQL" | wc -l | tr -d ' ')
 
 echo "============================================"
-echo "  SQL Migration Full Audit"
-echo "  Scanning $FILE_COUNT migration files..."
+echo "  SQL Migration Audit ($SCAN_MODE)"
+echo "  Scanning $FILE_COUNT migration file(s)..."
 echo "============================================"
 echo ""
 
