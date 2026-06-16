@@ -1,7 +1,9 @@
 # Nightly-Debug Remediation — Handoff (resume here)
 
-**As of 2026-06-16 ~07:25 CT.** Branch `claude/priceless-austin-0d3ccd`, worktree
-`C:\CRX_Manager\.claude\worktrees\priceless-austin-0d3ccd`. Last commit `15581f3`. Tree clean.
+**As of 2026-06-16 PM-2.** Branch `claude/priceless-austin-0d3ccd` (worktree this session:
+`C:\CRX_Manager\.claude\worktrees\eloquent-hawking-6d28a7`). **Last commit `000c8c0`.** Tree clean.
+Large-RPC pass: #8/#11/#5 + cancel_delivery + the original 5 foundation migrations are LIVE; #10 deferred,
+#3 owner-blocked, #2 remaining (do-last). **Nothing pushed to main / deployed.** See "Session 2026-06-16 PM-2" below.
 Mason authorized **auto-apply-after-review** (apply to live after the gate; **NEVER push to main / deploy
 without his OK**). Scope = everything, safest-first. Decisions: **cancel_delivery = Option A**;
 **AR-aging = keep gross + document**; OrderDetail = add a "Written Off" tile.
@@ -29,11 +31,32 @@ without his OK**). Scope = everything, safest-first. Decisions: **cancel_deliver
 
 **Per-migration flow used (proven this session):** pull live fn → write file (verbatim-except-the-change) → rolled-back revert-to-baseline-md5 proof (or post-apply for single-literal/additive) → rls-security + migration-drift reviewers (proof file written to all 3 candidate `.claude/session-state/` dirs since `$CLAUDE_PROJECT_DIR` is empty for this session) → apply → post-apply revert-match == baseline md5 + overload=1 → B7-rename to the stamped version → migration-history.md row → commit (full pre-commit suite). **Codex:** batched — the additive/single-predicate fixes above rely on the 2 mandated reviewers + md5-verbatim proof; per-item Codex is reserved for the behavior-changing MED/HIGH rewrites (#8 save_quote, #9 split-invoice, #11 cancel_delivery, #12 update_order_items pairing), plus one batched Codex cross-review of the whole large-RPC set before any push to main.
 
-**Still REMAINING in the large-RPC pass** (numbering from the list below): ~~#1 cancel_delivery (HIGH)~~ **DONE + Codex-clean (3 rounds, live)**, #2 update_order_items+PARKED-05 (paired, do last), #3 create_split_invoices_from_order (Hamilton), #5 save_quote (idempotency+map), ~~#6 complete_delivery~~ DONE, ~~#7 void_order~~ DONE, #8 blend/field-app invoice audit rows, #9 delete_invoice RPC, #10 pipeline-auth tokens, #11 void_delivery idempotency, + save_quote transition-map + the frontend greens. (Items #1/#4/#6/#7 in the numbered list below are DONE.) **Codex is now installed → run it BEFORE apply per-item on the remaining behavior changes (#2/#3/#5).**
+**Still REMAINING in the large-RPC pass** (numbering from the list below): ~~#1 cancel_delivery (HIGH)~~ DONE, #2 update_order_items+PARKED-05 (paired, **do last — riskiest, fresh context**), #3 create_split_invoices_from_order (**⚠️ BLOCKED on multi-field billing semantics — see item #3 below; do NOT apply until Mason confirms**), #5 save_quote ~~(idempotency+map)~~ **DONE**, ~~#6 complete_delivery~~ DONE, ~~#7 void_order~~ DONE, #8 blend/field-app invoice audit rows **DONE**, #9 delete_invoice RPC (not in this session's scope), #10 pipeline-auth tokens **DEFERRED (Mason 2026-06-16)**, #11 void_delivery idempotency **DONE**, ~~save_quote transition-map~~ DONE (folded into #5). **Only #2 (do-last) and #3 (owner-blocked) remain of the items in scope.**
 
-**cancel_delivery (HIGH) — ✅ DONE + CODEX-CLEAN, applied live 2026-06-16** (`20260616151122` + Codex P2 follow-ups `20260616170714` & `20260616172121`). Built INLINE (Option A intent, NOT `PERFORM cancel_order` — admin-only), scope-extended to `scheduled`+`in_progress`, releases by `order_items`, flags paid commissions, locks the order. Codex review of the final commit = clean. See the DONE block above + the 3 migration-history rows.
+**cancel_delivery (HIGH) — ✅ DONE + CODEX-CLEAN, applied live 2026-06-16** (`20260616151122` + Codex P2 follow-ups `20260616170714` & `20260616172121`).
 
-**Session boundary (2026-06-16 PM):** stopped here deliberately after 3 clean fixes + the cancel_delivery analysis — the remaining items are all either large-function verbatim reproductions (drift-sensitive) or behavior changes needing Codex + functional smokes, which deserve fresh context for fidelity. Branch tip `7542d30`+ (this doc). Nothing pushed/deployed.
+## Session 2026-06-16 PM-2 (this session) — 3 more landed live + Codex-clean, #10 deferred, #3 blocked
+**Branch tip after this session: `000c8c0`. Nothing pushed/deployed.** Same proven per-migration flow (now with
+the **line-level `pg_get_functiondef` diff** as the fidelity gate — removed/added line arrays, stronger than md5
+alone; see [[project_apply-guard-proof-bom-and-diff-proof]]) + per-item Codex review of each commit.
+- ✅ **#8** blend/field-app `invoice_created` audit rows — live `20260616191740`, commit `0bdc92d`, Codex clean.
+- ✅ **#11** void_delivery canonical idempotency (replays rich payload) — live `20260616201800`, commit `668591f`, Codex clean.
+- ✅ **#5** save_quote canonical idempotency + transition-map trim (both findings) — live `20260616204400`,
+  commit `000c8c0`, Codex clean. JWT-spoofed rolled-back functional smoke proved retry replays the real quote_id.
+- ⏭️ **#10** pipeline-auth tokens — **DEFERRED by Mason** (AskUserQuestion): the population is ~30 freeform RPCs
+  (not 7) + a deliberate sibling-consistency freeform family; partial conversion increases inconsistency.
+- ⚠️ **#3** split-invoice — **BLOCKED on a multi-field billing-semantics question** (see item #3 below). Dormant
+  on live (0 split invoices ever, all single-field). Do NOT apply the Hamilton + sum=100 fix until Mason confirms.
+
+**GOTCHA fixed this session:** the apply-guard proof JSON MUST be written BOM-free — Windows PowerShell
+`Set-Content -Encoding utf8` adds a BOM → the hook's `JSON.parse` throws → it silently skips the proof → apply
+blocked. Write proofs with **Node** (`fs.writeFileSync`). See [[project_apply-guard-proof-bom-and-diff-proof]].
+
+**NEXT SESSION (fresh context recommended):** (1) get Mason's multi-field answer to unblock/scope #3; (2) do
+#2 update_order_items + PARKED-05 — the riskiest paired change (the apply gate already proved that broadening
+`_enforce_delivery_items_parent_lock` to `<> 'scheduled'` regresses update_order_items' cancelled/voided
+cleanup DELETE; fix = wrap that DELETE in `set_config('app.admin_override','true',true)` + recompute
+total_profit/total_margin_pct, THEN broaden the lock in the same/paired migration — see ⛔ DEFERRED block).
 
 ## ⛔ DEFERRED by the gate (do as a PAIR)
 - **PARKED-05 delivery_items terminal lock** — broadening `_enforce_delivery_items_parent_lock` to
@@ -48,8 +71,22 @@ without his OK**). Scope = everything, safest-first. Decisions: **cancel_deliver
    cancel the exclusive auto-order + zero pending commissions + audit row), scope-extended to
    `scheduled`+`in_progress`. Codex pending (batched pre-push).
 2. **update_order_items (+ PARKED-05 pairing, LOW/MED):** see DEFERRED above.
-3. **create_split_invoices_from_order (MED):** route per-line split through `calculate_billing_splits`
-   (Hamilton) + require split_pct sum = 100.
+3. ⚠️ **BLOCKED — needs Mason's business answer (analyzed 2026-06-16, NOT applied).**
+   create_split_invoices_from_order: the penny-drift is real (each customer's per-line share is `round()`d
+   independently → the per-line shares can sum to ≠ the line total). The Hamilton fix is DESIGNED: collect
+   customers + summed pct into stable-ordered arrays, create one draft invoice per customer, then for EACH
+   order line `v_line_splits := calculate_billing_splits(round(total_price*100), v_cust_pcts)` and write
+   `extended_cents = v_line_splits[i]` per customer (item-outer/customer-inner) so each line's cents sum
+   EXACTLY; accumulate per-customer totals. **BLOCKER:** `get_field_billing_splits_for_order` SUMS `split_pct`
+   per customer ACROSS fields. Single-field order → pcts sum to 100 (fix is correct). **Multi-field order →
+   per-customer summed pct can be ≠100** (2 fields each 100% to different customers → sum 200); the original
+   bills each customer their FULL summed pct of every line (double-bills), and BOTH the Hamilton apportionment
+   AND a `require sum=100` guard would change/break that. **Need:** does CRX ever split-invoice an order that
+   spans multiple fields, and if so what's the intended per-customer allocation? LIVE TODAY is safe to defer:
+   4 field_billing_defaults rows / 3 fields all sum to 100, **0 multi-field quotes**, 1 order with a quote,
+   **0 split invoices ever created** → the bug is dormant and the feature is dark. Do NOT apply the Hamilton +
+   sum=100 fix until the multi-field semantics are confirmed (else the first real multi-field split invoice
+   mis-bills or is wrongly blocked).
 4. **create_quick_delivery (MED):** add `delivery_id = v_delivery_id` to the invoice INSERT (so
    complete_delivery's partial rewrite matches).
 5. ✅ **DONE (live 2026-06-16, `20260616204400`):** save_quote idempotency → canonical
