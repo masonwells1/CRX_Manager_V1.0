@@ -1,4 +1,4 @@
-# Migration History (464 migrations)
+# Migration History (465 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -40,6 +40,13 @@ clean, gated apply, B7-renamed to the stamped version.
   delivery silently kept full quantities (over-bill). Additive nullable FK; body verbatim (reverts to live
   md5 `48a86269b9e62fdd87cfb29cbe85d8c5`; post-apply md5 `e1409f1829ea63e00c0768d7a5fec21a`). Both reviewers
   clean; overload=1.
+- `20260616140912_complete_delivery_partial_rebill_join_order_item` — `complete_delivery`'s partial
+  re-bill loop joined `invoice_items`↔`delivery_items` on `product_id`, which is ambiguous when an order
+  repeats a product (each invoice line matched both delivery lines → non-deterministic partial billing).
+  Changed the single join predicate to `ii.order_item_id = di.order_item_id` (the tote-update + auto-invoice
+  already use that 1:1 key; 0 NULL `order_item_id` on linked draft invoices live). Body verbatim (reverts to
+  live md5 `b9f01eecfd986e49d9736cb090ceacaa`; post-apply md5 `f7291f02903574854c3cc440726ac3dd`). Both
+  reviewers clean; overload=1.
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 
