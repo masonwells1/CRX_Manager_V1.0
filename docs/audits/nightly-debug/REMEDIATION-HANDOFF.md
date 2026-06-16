@@ -20,11 +20,14 @@ without his OK**). Scope = everything, safest-first. Decisions: **cancel_deliver
 - ✅ `20260616140912_complete_delivery_partial_rebill_join_order_item` (was REMAINING #6) — complete_delivery partial re-bill joins order_item_id not product_id. Commit `46ad637`.
 - ✅ `20260616142001_void_order_restore_logs_void_delivery_reversal` (was REMAINING #7) — void_order restore logs void_delivery_reversal not adjusted. Commit `2e93593`.
 
+### Large-RPC pass — continued 2026-06-16 (fresh session, worktree `clever-archimedes-67b859`, branch `claude/priceless-austin-0d3ccd`). Mason re-authorized auto-apply-after-review IN THIS CHAT (AskUserQuestion); Codex CLI NOT available this session → Mason chose "apply now, Codex in the batch":
+- ✅ `20260616151122_cancel_delivery_release_prebook_on_quick_cancel` (was REMAINING #1, **HIGH**) — INLINE Option-A build (release prebook + cancel exclusive auto-order + zero pending commissions + financial_audit_log row), NOT `PERFORM cancel_order`. Scope EXTENDED to `status IN ('scheduled','in_progress')`. 3-scenario rolled-back live smoke + post-apply re-smoke passed (admin/sched, sales_rep/sched=no auth regression, admin/in_progress); both reviewers clean; overload=1. **Codex pending (batched pre-push).**
+
 **Per-migration flow used (proven this session):** pull live fn → write file (verbatim-except-the-change) → rolled-back revert-to-baseline-md5 proof (or post-apply for single-literal/additive) → rls-security + migration-drift reviewers (proof file written to all 3 candidate `.claude/session-state/` dirs since `$CLAUDE_PROJECT_DIR` is empty for this session) → apply → post-apply revert-match == baseline md5 + overload=1 → B7-rename to the stamped version → migration-history.md row → commit (full pre-commit suite). **Codex:** batched — the additive/single-predicate fixes above rely on the 2 mandated reviewers + md5-verbatim proof; per-item Codex is reserved for the behavior-changing MED/HIGH rewrites (#8 save_quote, #9 split-invoice, #11 cancel_delivery, #12 update_order_items pairing), plus one batched Codex cross-review of the whole large-RPC set before any push to main.
 
-**Still REMAINING in the large-RPC pass** (numbering from the list below): #1 cancel_delivery (HIGH), #2 update_order_items+PARKED-05 (paired, do last), #3 create_split_invoices_from_order (Hamilton), #5 save_quote (idempotency+map), #6 complete_delivery (DONE above), #7 void_order (DONE above), #8 blend/field-app invoice audit rows, #9 delete_invoice RPC, #10 pipeline-auth tokens, #11 void_delivery idempotency, + save_quote transition-map + the frontend greens. (Items #4/#6/#7 in the numbered list below are DONE.)
+**Still REMAINING in the large-RPC pass** (numbering from the list below): ~~#1 cancel_delivery (HIGH)~~ **DONE 2026-06-16 (live, Codex-pending)**, #2 update_order_items+PARKED-05 (paired, do last), #3 create_split_invoices_from_order (Hamilton), #5 save_quote (idempotency+map), ~~#6 complete_delivery~~ DONE, ~~#7 void_order~~ DONE, #8 blend/field-app invoice audit rows, #9 delete_invoice RPC, #10 pipeline-auth tokens, #11 void_delivery idempotency, + save_quote transition-map + the frontend greens. (Items #1/#4/#6/#7 in the numbered list below are DONE.)
 
-**cancel_delivery (HIGH) — ANALYZED, NOT applied (2026-06-16):** the literal Option A "call cancel_order" is UNSAFE — cancel_order is admin-only while cancel_delivery allows sales_rep, so a sales_rep cancelling a quick delivery would abort with "Only admins can cancel orders". Correct build is INLINE (release prebook + set the auto-order to 'cancelled' directly, in the admin_override bracket). Full spec + the inline recipe are in `parked-migrations/PARKED-03` (IMPLEMENTATION NOTE 2026-06-16). Needs a multi-actor functional smoke (admin AND sales_rep) + Codex. This is the top item for the next focused pass.
+**cancel_delivery (HIGH) — ✅ DONE, applied live 2026-06-16** (`20260616151122`). Built INLINE (Option A intent, NOT `PERFORM cancel_order` — that is admin-only and would abort a sales_rep cancel), scope-extended to `scheduled`+`in_progress`. See PARKED-03 banner + the migration-history row. Codex independent review still pending — queued for the batched pre-push pass.
 
 **Session boundary (2026-06-16 PM):** stopped here deliberately after 3 clean fixes + the cancel_delivery analysis — the remaining items are all either large-function verbatim reproductions (drift-sensitive) or behavior changes needing Codex + functional smokes, which deserve fresh context for fidelity. Branch tip `7542d30`+ (this doc). Nothing pushed/deployed.
 
@@ -37,8 +40,9 @@ without his OK**). Scope = everything, safest-first. Decisions: **cancel_deliver
 
 ## ⏭️ REMAINING (large-RPC pass — each: reproduce full live fn VERBATIM except the change [md5-verify],
 ##    Codex-review it, run rls-security + migration-drift reviewers, write proof, apply, B7-rename, sweep, commit)
-1. **cancel_delivery — Option A (HIGH):** on cancel of a `scheduled` `is_quick_delivery`, also cancel the
-   auto-created order so its prebook releases the normal way (no zombie order, no stranded inventory).
+1. ✅ **DONE (live 2026-06-16, `20260616151122`):** cancel_delivery — Option A built INLINE (release prebook +
+   cancel the exclusive auto-order + zero pending commissions + audit row), scope-extended to
+   `scheduled`+`in_progress`. Codex pending (batched pre-push).
 2. **update_order_items (+ PARKED-05 pairing, LOW/MED):** see DEFERRED above.
 3. **create_split_invoices_from_order (MED):** route per-line split through `calculate_billing_splits`
    (Hamilton) + require split_pct sum = 100.

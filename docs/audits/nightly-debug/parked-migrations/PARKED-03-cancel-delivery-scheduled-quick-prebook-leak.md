@@ -1,6 +1,14 @@
 # PARKED-03 — `cancel_delivery` strands prebooked inventory on a scheduled quick-delivery
 
-**Severity:** HIGH · **Status:** VERIFIED real · **needs a design decision from Mason before I draft the migration** (not auto-applied).
+> ✅ **RESOLVED + APPLIED LIVE 2026-06-16** — migration `20260616151122_cancel_delivery_release_prebook_on_quick_cancel`
+> (post-apply md5 `90ba258797cbac40e80673fba0767369`). Built INLINE per the IMPLEMENTATION NOTE below
+> (Option A intent, not `PERFORM cancel_order`), and SCOPE-EXTENDED to also cover `in_progress` quick
+> deliveries (`confirm_delivery` releases no inventory, so they leak identically). rls-security +
+> migration-drift reviewers clean; 3-scenario rolled-back live smoke + post-apply re-smoke passed
+> (admin/scheduled, sales_rep/scheduled = no auth regression, admin/in_progress). Codex independent review
+> still pending (CLI unavailable this session) — queued for the batched pre-push pass. Not pushed/deployed.
+
+**Severity:** HIGH · **Status:** ✅ RESOLVED (applied live 2026-06-16) · was: VERIFIED real, Mason chose **Option A**.
 Finding key: `delivery:cancel_delivery:scheduled-quick-prebooked-leak` · Nightly Debug cycle 2 · 2026-06-15
 
 ## The bug (verified against live `rhyzpcqhnizqbxphqdkr`)

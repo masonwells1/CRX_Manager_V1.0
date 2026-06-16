@@ -54,6 +54,21 @@ clean, gated apply, B7-renamed to the stamped version.
   label, not the stock source of truth). Body verbatim (reverts to live md5
   `6df426040f112e4a8b17627b7a652f30`; post-apply md5 `2ec5a64c67c1e08b3e71eae3529a2d83`). Both reviewers
   clean; overload=1.
+- `20260616151122_cancel_delivery_release_prebook_on_quick_cancel` (PARKED-03, **HIGH**, behavior change) —
+  cancelling a quick delivery while `scheduled`/`in_progress` released no inventory and left its auto-order
+  `confirmed`: a zombie order with a stranded prebook (Net Free understated forever; `create_quick_delivery`
+  increments `inventory.quantity_prebooked`, `confirm_delivery` touches no inventory, and the old restore
+  block only fired for `quantity_delivered>0`). Fix is **inline** (NOT `PERFORM cancel_order` — that RPC is
+  admin-only and would abort a sales_rep cancel): for `is_quick_delivery AND status IN ('scheduled',
+  'in_progress')` AND the auto-order is exclusive to this delivery, release the prebook (a `'released'` txn
+  per line), cancel the auto-order, zero its pending commissions, write a `financial_audit_log`
+  `'order_cancelled'` row. Scope EXTENDED from the parked `scheduled`-only spec to also cover `in_progress`
+  (same leak — verified `confirm_delivery` releases nothing). Body verbatim from live md5
+  `c6aba47c51aa83653e153399e84d4981` except DECLARE additions, BLOCK B order-status handling, and the result
+  jsonb (`+prebooked_released`); post-apply md5 `90ba258797cbac40e80673fba0767369`. rls-security +
+  migration-drift reviewers clean; 3-scenario rolled-back live smoke passed (admin/scheduled,
+  sales_rep/scheduled = no auth regression, admin/in_progress) + post-apply re-smoke; overload=1.
+  **Codex independent review pending** (CLI unavailable this session) — queued for the batched pre-push pass.
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 
