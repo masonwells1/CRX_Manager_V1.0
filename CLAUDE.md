@@ -20,7 +20,7 @@ scripts/regenerate-agents-md.mjs and does not parse this file.
 
 ## Snapshot (2026-06-15)
 
-**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 68 pages · 96 tables (+2 views) · 226 callable RPCs (+47 trigger fns) · **470 migrations** on disk · 7 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
+**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 68 pages · 96 tables (+2 views) · 226 callable RPCs (+47 trigger fns) · **471 migrations** on disk · 7 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
 
 - **`main` = production** (croprxsolutions.app). NEVER push, deploy, apply a live migration, delete data, or commit unrelated files without Mason's explicit OK *in the current chat*.
 - **Where history lives now** (so this file stays lean): sprint log → [`docs/CHANGELOG.md`](docs/CHANGELOG.md); detailed per-topic narrative → the `memory/` files (auto-loaded each session); the old multi-month "Current State" block → [`docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md`](docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md).

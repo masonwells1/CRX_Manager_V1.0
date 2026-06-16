@@ -1,4 +1,4 @@
-# Migration History (470 migrations)
+# Migration History (471 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -106,6 +106,19 @@ clean, gated apply, B7-renamed to the stamped version.
   `fa132dea7ceac1ecff6230e889df45e1` / `8d06e2501b9403764ed5102fa48cde8d`). rls-security + migration-drift reviewers
   clean; live audit-row INSERT smoke accepted; overload=1 each; neither anon-executable (sweep stays at 53 baseline).
   Stamped `20260616191740` (filename B7-renamed from `20260616180000`).
+- `20260616201800_void_delivery_canonical_idempotency` (large-RPC pass #11, **LOW**) — `void_delivery`'s
+  idempotency diverged from the canonical helper pattern: a retried call returned a bare
+  `{"status":"already_processed"}` marker (which `DeliveryDetail.tsx` reads `posted_invoices_exist` off of —
+  it was `undefined` on replay) and it stored `to_jsonb(p_delivery_id)` (a bare UUID) as the cached result.
+  Moved to `check_idempotency()`/`save_idempotency()` (same as `create_invoice_from_order`), caching + replaying
+  the REAL rich payload (`success/delivery_id/delivery_number/new_order_status/posted_invoices_exist`); replay
+  shape is now a strict superset. `expires_at` unchanged in effect (`idempotency_keys.expires_at` DEFAULTs to
+  `now()+24h`, the window the removed explicit INSERT used). Body live-verbatim except 3 marked `DELTA-IDEM`
+  blocks — proven by rolled-back line-level `pg_get_functiondef` diff (base md5 `bcc970f05a4dfa0d70b584b4837834e5`;
+  removed_from_base = exactly the 9 old idempotency lines; post-apply md5 `6d9bc7f2fdbd4a28c4b10429f4708c70`).
+  Strict-actor gate (AUTH_REQUIRED/ACTOR_MISMATCH/admin) unchanged + still precedes the idempotency lookup; helpers
+  are anon/authenticated-revoked (B9). rls-security + migration-drift reviewers clean; round-trip smoke confirmed
+  rich-payload replay; overload=1; sweep stays at 53. Stamped `20260616201800` (B7-renamed from `20260616193000`).
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 

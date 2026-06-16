@@ -57,12 +57,19 @@ without his OK**). Scope = everything, safest-first. Decisions: **cancel_deliver
 6. **complete_delivery (LOW):** partial-invoice rewrite should join on `order_item_id`, not `product_id`.
 7. **void_order (LOW):** restore loop should log `void_delivery_reversal`, not `adjusted` (confirm no
    report filters on `'adjusted'` first).
-8. **create_invoice_from_blend_ticket + save_field_app_invoice (LOW):** add an `invoice_created`
-   financial_audit_log row at draft creation (match create_invoice_from_order).
+8. ✅ **DONE (live 2026-06-16, `20260616191740`, commit `0bdc92d`):** create_invoice_from_blend_ticket +
+   save_field_app_invoice now write an `invoice_created` financial_audit_log row at draft creation (match
+   create_invoice_from_order; field-app gated on new `v_is_new_invoice` so edits don't log a creation).
+   Byte-faithful verbatim repro (rolled-back line-level pg_get_functiondef diff, removed_from_base=NULL);
+   both reviewers clean; smoke accepted; sweeps clean (53 baseline); Codex = SQL sound (2 P3 doc-nits fixed).
 9. **Invoices raw soft-delete (LOW):** new `delete_invoice` SECDEF RPC (asserts draft/unposted/voided +
    audit row) + rewire `Invoices.tsx`/`FieldApplicationInvoice.tsx` `.update({deleted_at})` calls.
 10. **pipeline-auth-error tokens (LOW):** standardize 7 RPCs onto AUTH_REQUIRED/ACTOR_MISMATCH/INSUFFICIENT_ROLE.
-11. **void_delivery (LOW):** move idempotency to the canonical helper, cache/replay the rich payload.
+11. ✅ **DONE (live 2026-06-16, `20260616201800`):** void_delivery idempotency moved to canonical
+   check_idempotency/save_idempotency — replays the rich payload (was a bare `already_processed`); expires_at
+   unchanged (24h default). Byte-faithful; both reviewers clean; round-trip smoke confirmed; sweeps clean.
+   **#10 (pipeline-auth tokens): DEFERRED by Mason 2026-06-16** — investigation found ~30 freeform RPCs (not 7)
+   + a deliberate sibling-consistency freeform family; partial conversion increases inconsistency. See LEDGER.
 - **save_quote transition-map (MED):** trim its internal v_allowed_transitions to a subset of the enforcer.
 - **Frontend greens:** OrderDetail "Written Off" tile; money.ts ESLint rule (don't blind-rename); the
   BlendTicketDetail approve/reject RPC routing follow-up; AR-aging gross convention doc note; (optional)
