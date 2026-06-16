@@ -103,7 +103,7 @@ Claude MUST automatically invoke the matching skill/command when the task matche
 ### Business Logic
 - NEVER skip delivery confirm→complete flow (scheduled → in_progress → completed)
 - NEVER allow editing delivery items once delivery is in_progress or beyond — items are only editable while status = 'scheduled'
-- NEVER create invoices without an order OR blend ticket — must have order_id or blend_ticket_id. (Enforced by **RPC convention, NOT a DB CHECK** — `invoices` has zero CHECK constraints. **Credit memos are exempt:** `issue_return_credit` inserts a `credit_memo` whose `order_id` may be NULL with no `blend_ticket_id`. Don't add a literal `order_id OR blend_ticket_id` CHECK without excluding `invoice_type='credit_memo'`, or credit memos break.)
+- NEVER create invoices without an order OR blend ticket — must have order_id or blend_ticket_id. (Enforced by **RPC convention, NOT a DB CHECK** — there is no `order_id`-OR-`blend_ticket_id` CHECK on `invoices` (it *does* carry status/type/non-negativity CHECKs — 5 total). **Credit memos are exempt:** `issue_return_credit` inserts a `credit_memo` whose `order_id` may be NULL with no `blend_ticket_id`. Don't add a literal `order_id OR blend_ticket_id` CHECK without excluding `invoice_type='credit_memo'`, or credit memos break.)
 - NEVER bypass `check_period_open()` — closed periods block backdated transactions
 - NEVER allow non-admin access to month-end, commissions, or settings
 - `/payments` (PaymentAllocation) is **sales+admin** — both roles can record check entries and allocate to invoices. Confirmed at `App.tsx:198`: `allowedRoles={['admin', 'sales_rep']}`. Do NOT lock this page to admin-only without a deliberate policy change. (Audit Q6, 2026-05-06.)

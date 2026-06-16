@@ -27,7 +27,7 @@
     },
     {
       "key": "invoices-no-order-or-blend-check-constraint",
-      "reason": "invoices has zero CHECK constraints; the order_id-OR-blend_ticket_id rule is an RPC convention, NOT a DB CHECK. Credit memos are exempt. Accepted/by-design — do not propose adding a literal CHECK."
+      "reason": "invoices has NO order_id-OR-blend_ticket_id CHECK (it DOES carry status/type/non-negativity CHECKs — 5 total live as of 2026-06-16); that order/blend rule is an RPC convention, NOT a DB CHECK. Credit memos are exempt. Accepted/by-design — do not propose adding a literal order/blend CHECK."
     }
   ]
 }

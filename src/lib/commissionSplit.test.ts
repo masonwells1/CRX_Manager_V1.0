@@ -265,10 +265,11 @@ describe('commission split integration', () => {
       calculateCommissionAmount(totalCents, s.percentage),
     );
 
-    // 50% of 9999 = 4999.5, rounds to 5000 each
-    // Total distributed = 10000, which is 1 cent MORE than the total.
-    // This is the known rounding behavior — the SQL side handles it with
-    // "last recipient gets remainder" logic. Here we just verify the math.
+    // 50% of 9999 = 4999.5, rounds to 5000 each → 10000, i.e. 1 cent OVER.
+    // NOTE: calculateCommissionAmount() here is a NAIVE per-split mirror, NOT the
+    // production algorithm. The live RPC _insert_commissions_for_order is penny-exact
+    // (the last recipient absorbs the remainder), so real payouts never lose or gain a
+    // cent. This test only asserts the naive helper stays within 1 cent of the total.
     const distributed = amounts.reduce((sum, a) => sum + a, 0);
     expect(Math.abs(distributed - totalCents)).toBeLessThanOrEqual(1);
   });

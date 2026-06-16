@@ -93,3 +93,26 @@ fixes/drafts the confirmed ones.
 **Parked for your approval right now:** PARKED-01 (invoice BLOCKER) · PARKED-02 (payment
 over-allocation) · PARKED-03 (delivery prebook — needs your one-word decision). Cycle 3 keeps
 verifying the remaining ~20 backlog findings and applies the safe Green cleanups.
+
+### Cycle 3 — Green cleanups + verification catching an unsafe "recommended" fix (2026-06-16 ~00:05)
+
+**Applied (Green, committed on the branch):**
+- Corrected a stale `CLAUDE.md` claim that "`invoices` has zero CHECK constraints" — live has **5**
+  (status, type, and three non-negativity checks). Kept the load-bearing point intact (there's no
+  `order_id`-OR-`blend_ticket_id` CHECK; that rule is an RPC convention). Synced `accepted-findings.json`.
+- Clarified a misleading `commissionSplit.test.ts` comment (the in-test helper is a *naive* mirror; the
+  production commission RPC is penny-exact — last recipient absorbs the remainder).
+
+**Verified real but deliberately NOT auto-applied — this is the safety model working:**
+- 🛑 **`QuoteBuilder` convert-failure revert (MEDIUM):** the audit's recommended fix — route the revert
+  through `revert_quote_status` — would have **broken sales-rep conversions**, because that RPC is
+  **admin-only**. The bug is real (a failed conversion of a *planned* quote doesn't rebuild its inventory
+  holds), but the fix needs a sales-rep-safe approach. Parked as a note, not applied. *(Good thing I read
+  the function before wiring it in.)*
+- **`OrderDetail` "Amount Paid" tile (LOW, latent):** it omits write-offs, so Invoiced − Paid ≠ Balance
+  when an invoice has a write-off. Real but cosmetic and needs a small UX choice (relabel "Settled" vs add
+  a "Written Off" tile) — deferred to you.
+- **`money.ts` dual-`fmt` footgun (LOW):** real latent hazard, but the suggested 7-file rename is itself
+  risky (could introduce the 100× bug it's meant to prevent). Queued as a safer ESLint-rule idea.
+
+Backlog ~14 unverified remain; later cycles continue. Still nothing touching production.
