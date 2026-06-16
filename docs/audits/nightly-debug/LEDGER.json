@@ -1,0 +1,16 @@
+{
+  "mission": "crx-nightly-debug",
+  "branch": "claude/priceless-austin-0d3ccd",
+  "started": "2026-06-15T22:50:12-05:00",
+  "scope": "sales-pipeline-first-then-whole-app",
+  "stats": {
+    "cyclesRun": 0,
+    "greenFixed": 0,
+    "yellowParked": 0,
+    "redBlocked": 0,
+    "refuted": 0,
+    "consecutiveDryCycles": 0
+  },
+  "cycles": [],
+  "findings": []
+}

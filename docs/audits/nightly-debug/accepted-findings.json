@@ -1,0 +1,33 @@
+{
+  "note": "Allowlist of KNOWN-ACCEPTED findings. The nightly mission filters these out so advisor/lint noise doesn't drown new signal. Sourced from CLAUDE.md 'Schema Gotchas' + accepted security findings. A finding whose dedupeKey matches one of these (or clearly describes the same accepted condition) is dropped, NOT reported. Remove an entry only with Mason's OK.",
+  "accepted": [
+    {
+      "key": "profile_public_view-security-definer",
+      "reason": "profile_public_view uses security_invoker=off (SECURITY DEFINER semantics) BY DESIGN to expose only non-PII profile columns. Supabase advisor flags it as ERROR; accepted. Migration 20260510070000."
+    },
+    {
+      "key": "anon-executable-secdef-functions",
+      "reason": "~53 anon-executable SECURITY DEFINER functions the advisor flags are accepted/inert grant-debt: each self-gates on auth.uid()/require_admin() as its first executable statement (runtime-proven anon is rejected). Trigger fns in the set error on direct call. NOT a hole."
+    },
+    {
+      "key": "commissions.commission_amount-numeric-dollars",
+      "reason": "commissions.commission_amount is numeric DOLLARS (not bigint cents) BY DESIGN. Do not flag as money-as-float."
+    },
+    {
+      "key": "reportPdf.ts-columnStyles-any",
+      "reason": "reportPdf.ts columnStyles uses the one allowed `any` per CLAUDE.md. Accepted."
+    },
+    {
+      "key": "customer-rls-lower-bound-only",
+      "reason": "Customer RLS is intentionally lower-bound-only by design. Accepted."
+    },
+    {
+      "key": "supabase-leaked-password-protection-disabled",
+      "reason": "Leaked-password protection toggle is a known OWNER item (L4) — Mason toggles it in the Supabase dashboard. Not a code finding."
+    },
+    {
+      "key": "invoices-no-order-or-blend-check-constraint",
+      "reason": "invoices has zero CHECK constraints; the order_id-OR-blend_ticket_id rule is an RPC convention, NOT a DB CHECK. Credit memos are exempt. Accepted/by-design — do not propose adding a literal CHECK."
+    }
+  ]
+}
