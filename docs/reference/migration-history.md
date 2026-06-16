@@ -1,4 +1,4 @@
-# Migration History (469 migrations)
+# Migration History (470 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -92,6 +92,20 @@ clean, gated apply, B7-renamed to the stamped version.
   takes it sooner). Verbatim from v2 (md5 `5c583450306712d3c272487d50891e0f`) except that clause + comments;
   post-apply md5 `5bcb78e31d38ab4d4c9f24fbb6658977`. rls-security + migration-drift reviewers clean; functional
   rolled-back smoke re-run (no single-session regression); overload=1; anon cannot execute.
+- `20260616191740_blend_and_fieldapp_invoice_audit_rows` (large-RPC pass #8, **LOW**, audit-trail parity) —
+  `create_invoice_from_blend_ticket` and `save_field_app_invoice` created draft invoices but never wrote the
+  `'invoice_created'` `financial_audit_log` row that `create_invoice_from_order` writes for every order-sourced
+  invoice, so field-application / blend-ticket invoices were invisible to the append-only money ledger AR/foundation
+  audits read. Adds one `'invoice_created'` row per invoice at draft creation, column-for-column matching
+  `create_invoice_from_order` (`entity_type='invoice'`, `actor_user_id` omitted → `auth.uid()` default,
+  `actor_role` from `profiles`, total_impact_cents = invoice total). Blend ticket: always logs (every invoice freshly
+  inserted). Field app: logs only when newly created this call (new `v_is_new_invoice` boolean), so edits keep just
+  their `activity_feed` trail. Both bodies reproduced live-verbatim except the marked `DELTA-AUDIT-ROW` blocks —
+  proven by a rolled-back line-level `pg_get_functiondef` diff (removed_from_base = NULL; base md5
+  `c238733728b07dcf9b15ebbb6ecb2752` / `12e58ba283790de02c60ee390045ce84`; post-apply md5
+  `fa132dea7ceac1ecff6230e889df45e1` / `8d06e2501b9403764ed5102fa48cde8d`). rls-security + migration-drift reviewers
+  clean; live audit-row INSERT smoke accepted; overload=1 each; neither anon-executable (sweep stays at 53 baseline).
+  Stamped `20260616191740` (filename B7-renamed from `20260616180000`).
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 
