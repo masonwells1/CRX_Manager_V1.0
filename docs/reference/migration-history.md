@@ -1,10 +1,32 @@
-# Migration History (458 migrations)
+# Migration History (463 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/archive/2026-spring/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Nightly Debug remediation 2026-06-16 (foundation fixes — applied live)
+
+Five migrations applied live after the nightly-debug audit + Codex cross-review, each through the
+5-reviewer apply gate (rls-security + migration-drift) + rolled-back validation + post-apply invariant
+sweeps. All additive / strict-superset with documented rollbacks:
+
+- `20260616115308_fix_quote_terminal_not_drawn_add_expired` — adds `'expired'` to the partial-draw
+  guard `_enforce_quote_terminal_not_drawn` (strict superset; blocks expiring a drawn booking).
+- `20260616120604_fix_invoice_paid_status_transitions` — **BLOCKER**: adds `paid → {voided,posted,overdue}`
+  to `_enforce_invoice_status_transition` so `void_invoice` / `void_payment` / `reverse_write_off` no longer
+  crash on a paid invoice (strict superset).
+- `20260616121105_add_allocation_over_payment_guard` — additive BEFORE trigger on `allocation_sets`
+  rejecting `total_allocated_cents > total_payment_cents` (`ALLOCATIONS_EXCEED_PAYMENT`).
+- `20260616121521_add_order_shares_total_guard` — additive `SECURITY DEFINER` trigger (+ `FOR UPDATE`
+  lock) capping `SUM(split_percentage)` per order at 100 (`ORDER_SHARES_OVER_100`).
+- `20260616122108_revoke_execute_order_shares_guard_fn` — revokes default `PUBLIC`/`anon` EXECUTE on the
+  order-share guard fn (keeps the `anon-exec-secdef` sweep at its 53 baseline).
+
+**Deferred:** the delivery_items terminal-state lock (PARKED-05) — the apply gate caught that broadening
+it would regress `update_order_items`' cancelled/voided cleanup DELETE; folded into the `update_order_items`
+rewrite (large-RPC pass).
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 

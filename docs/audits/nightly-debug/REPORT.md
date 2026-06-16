@@ -48,6 +48,27 @@ ship. I can then run the queued large-RPC fixes one at a time with Codex cross-r
 
 ---
 
+## 🔧 Remediation — LIVE applies in progress (2026-06-16)
+
+You authorized auto-apply-after-review. Applying safest-first; each fix goes through the 5-reviewer apply
+gate (rls-security + migration-drift) + a rolled-back live check + post-apply invariant sweeps. **Applied
+to your live database so far (5 migrations):**
+- ✅ Quote partial-draw guard (adds `expired`)
+- ✅ **Invoice-void BLOCKER** — voiding/correcting a fully-paid invoice no longer crashes
+- ✅ Payment over-allocation guard (`ALLOCATIONS_EXCEED_PAYMENT`)
+- ✅ Order bill-split 100% cap (`SECURITY DEFINER` + per-order lock)
+- ✅ Grant tightening on the order-share guard (sweep stayed at its 53 baseline)
+
+**The gate caught a regression and held a fix back:** broadening the delivery-item lock would have broken
+legitimate order editing (`update_order_items` deletes cancelled/voided items without the override). Folded
+into the `update_order_items` rewrite instead — this is the review gate doing exactly its job.
+
+**Next:** the larger fixes (`cancel_delivery` Option A, the ~10 RPC rewrites), each Codex-reviewed
+individually, then the frontend cleanups. **Nothing pushed to `main` or deployed — your live website is
+unchanged**; only the database has these additive, reversible guards.
+
+---
+
 ## 🔁 Codex cross-review (2026-06-16) — done, 4 fixes applied
 
 You asked for an independent Codex pass before remediating. Codex (a different model — gpt-5.5) reviewed the whole
