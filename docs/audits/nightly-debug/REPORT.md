@@ -139,3 +139,25 @@ throwaway UUID (a retried new-quote save returns the wrong id).
 **Now parked for your approval: 5 items** — PARKED-01 (invoice BLOCKER), PARKED-02 (payment
 over-allocation), PARKED-03 (delivery prebook decision), PARKED-04 (order-share 100% guard),
 PARKED-05 (delivery-item lock). Only 9 LOW findings left to verify. Still nothing touching production.
+
+### Cycle 5 — final 9 LOWs verified · sales-pipeline backlog DRAINED (2026-06-16 ~01:05)
+
+Every one of the 30 cycle-1 findings is now dispositioned. One more clean fix parked:
+- 🟡 **`PARKED-06`** — the partial-draw protection guard blocked decline/cancel of a drawn booking but
+  **not expire**. Unreachable today, but a latent gap; added `'expired'` for symmetry. Validated.
+
+The other 8 LOWs: 6 are real but their fixes mean carefully rewriting a large database function
+(split-invoice rounding, quick-delivery `delivery_id`, `save_quote` idempotency, order-edit stale
+profit/commissions, void-order audit-type, blend/field-app invoice audit rows, the soft-delete RPC,
+the 7-RPC error-token cleanup, `void_delivery` idempotency shape) — recorded with the exact fix for a
+focused drafting pass so I don't ship a botched 2 AM reproduction. One (`draw_down_quote` weighted-avg
+pricing) is a **documented v1 simplification**, not a defect. One (`create_prepay_credit`) is **unused
+legacy** (retire-or-harden, low priority).
+
+**Scoreboard:** 3 Green fixes applied · **6 fixes parked** for approval (PARKED-01…06) · 10 verified
+fixes queued for a careful drafting pass · 2 decisions for you · 3 false positives ruled out · **0 left
+unverified.** 
+
+The first audit only covered the **sales pipeline**. Next the loop turns to the rest of the app —
+other pages, the 7 edge functions, PDF generators, broad RLS, dependencies — which hasn't been
+reviewed yet. Still nothing touching production.
