@@ -1,4 +1,4 @@
-# Migration History (468 migrations)
+# Migration History (469 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -81,7 +81,17 @@ clean, gated apply, B7-renamed to the stamped version.
   post-apply md5 `5c583450306712d3c272487d50891e0f`. rls-security + migration-drift reviewers clean; rolled-back
   live smoke proved an edited order (released 12 not 10) + an added item (released, no delivery_item) + a paid
   commission (preserved + flagged, 3 admin notifications) + a sales_rep cancel (no auth error); overload=1;
-  anon cannot execute.
+  anon cannot execute. **Codex re-reviewed this commit and flagged one more P2 (concurrency) → fixed below
+  (`20260616172121`).**
+- `20260616172121_cancel_delivery_lock_order_before_quick_release` (Codex P2 concurrency follow-up) — adds
+  `FOR UPDATE` to the `cancel_delivery` order-status read so it serializes against a concurrent
+  `update_order_items` (which holds `orders FOR UPDATE` and can add prebook): without the lock, an edit could
+  add prebook in the window between the release loop and the order cancel, stranding it. `cancel_order` locks
+  the order the same way. ONE-CLAUSE change vs v2 (`SELECT status INTO v_order_status ... FOR UPDATE`); no new
+  deadlock class (cancel_delivery already took the order lock later, same delivery→order direction — this just
+  takes it sooner). Verbatim from v2 (md5 `5c583450306712d3c272487d50891e0f`) except that clause + comments;
+  post-apply md5 `5bcb78e31d38ab4d4c9f24fbb6658977`. rls-security + migration-drift reviewers clean; functional
+  rolled-back smoke re-run (no single-session regression); overload=1; anon cannot execute.
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 
