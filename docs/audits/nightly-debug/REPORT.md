@@ -116,3 +116,26 @@ verifying the remaining ~20 backlog findings and applies the safe Green cleanups
   risky (could introduce the 100× bug it's meant to prevent). Queued as a safer ESLint-rule idea.
 
 Backlog ~14 unverified remain; later cycles continue. Still nothing touching production.
+
+### Cycle 4 — MEDIUM backlog verified; two more clean fixes parked (2026-06-16 ~00:35)
+
+Verified all 5 remaining MEDIUMs against the live DB. Two had clean, low-risk fixes — **drafted,
+validated, and parked**:
+- 🟡 **`PARKED-04` — order bill-splits can exceed 100%.** `order_shares` only guards each row
+  (0–100%); nothing caps the *sum* per order, and shares are written by a direct table insert (no
+  RPC), so two racing "Add Share" clicks or a direct API write can total >100% and mis-state each
+  party's share. Fix = an additive trigger that rejects an over-100% total. Validated.
+- 🟡 **`PARKED-05` — items editable on cancelled/voided deliveries.** The lock trigger only fires for
+  `in_progress`/`completed`, so a sales rep could add/remove line items on a *cancelled* or *voided*
+  delivery via the API, corrupting history. Fix = lock items whenever the delivery isn't `scheduled`
+  (the real RPCs use the admin override, so they're unaffected). Validated.
+
+Three more MEDIUMs are **verified real but need a careful rewrite of a large function**, so I've
+recorded them for a dedicated drafting pass rather than risk a botched reproduction overnight:
+split-invoice penny rounding (should use the existing Hamilton helper), quick-delivery draft invoice
+missing its `delivery_id` (defeats partial-quantity billing), and `save_quote`'s idempotency caching a
+throwaway UUID (a retried new-quote save returns the wrong id).
+
+**Now parked for your approval: 5 items** — PARKED-01 (invoice BLOCKER), PARKED-02 (payment
+over-allocation), PARKED-03 (delivery prebook decision), PARKED-04 (order-share 100% guard),
+PARKED-05 (delivery-item lock). Only 9 LOW findings left to verify. Still nothing touching production.
