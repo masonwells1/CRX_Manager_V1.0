@@ -1,4 +1,4 @@
-# Migration History (463 migrations)
+# Migration History (464 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -27,6 +27,19 @@ sweeps. All additive / strict-superset with documented rollbacks:
 **Deferred:** the delivery_items terminal-state lock (PARKED-05) — the apply gate caught that broadening
 it would regress `update_order_items`' cancelled/voided cleanup DELETE; folded into the `update_order_items`
 rewrite (large-RPC pass).
+
+### Large-RPC pass (continued 2026-06-16) — Codex/reviewer-gated, applied live
+
+The verified-but-drafting-pending fixes from the audit backlog, each: live function reproduced
+verbatim-except-the-change (post-apply revert-to-live-md5 proof), rls-security + migration-drift reviewers
+clean, gated apply, B7-renamed to the stamped version.
+
+- `20260616135524_link_quick_delivery_invoice_to_delivery` — `create_quick_delivery` now stamps
+  `delivery_id = v_delivery_id` on its draft-invoice INSERT so `complete_delivery`'s partial re-bill loop
+  (matches `delivery_id = p_delivery_id`) finds the quick-delivery invoice; without it a partial quick
+  delivery silently kept full quantities (over-bill). Additive nullable FK; body verbatim (reverts to live
+  md5 `48a86269b9e62fdd87cfb29cbe85d8c5`; post-apply md5 `e1409f1829ea63e00c0768d7a5fec21a`). Both reviewers
+  clean; overload=1.
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 
