@@ -55,10 +55,10 @@
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__get_publishable_keys",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__generate_typescript_types",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__search_docs",
-      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql"
+      "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__execute_sql",
+      "Bash(git push:*)"
     ],
     "ask": [
-      "Bash(git push:*)",
       "mcp__50e15046-cf2c-49da-b8df-ceef27768f63__deploy_edge_function"
     ],
     "deny": [

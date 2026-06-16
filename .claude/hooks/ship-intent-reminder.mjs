@@ -66,7 +66,7 @@ emit([
   "  -> implement -> Step 2.5 prove it actually RUNS (not just 'tests pass') -> scoped review fan-out + fix (hard cap 3 rounds) -> migration/Codex gates.",
   "Tell Mason in ONE line you're running it through /ship; do NOT make him type the command.",
   "",
-  "SAFETY (non-negotiable): the word \"push\" does NOT authorize a production deploy. /ship does the whole job and then STOPS at Step 8 for Mason's explicit one-click approval before ANY git push to main, Vercel deploy, or live-migration apply. Never cross those gates without his OK in this conversation.",
+  "PUSH POLICY: Mason authorized AUTO-PUSH (2026-06-16) — push regular code to main once the pipeline is green (review clean + tests + the pre-push hook's typecheck/build), no approval click; Vercel rollback is one click. STILL stop for Mason's explicit OK before applying a live migration, deploying an edge function, or deleting data — those can corrupt data / down the live app and are never automatic.",
   "",
   "If this message is just a question, a discussion, or a genuinely trivial one-line change, IGNORE this reminder (don't spin up the heavy pipeline).",
 ].join("\n"));
