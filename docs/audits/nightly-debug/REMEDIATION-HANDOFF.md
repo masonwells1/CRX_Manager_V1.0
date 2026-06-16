@@ -15,6 +15,15 @@ without his OK**). Scope = everything, safest-first. Decisions: **cancel_deliver
   BlendTicket button gate, PDF footers).
 - Codex cross-review done + its 6 findings fixed; crawl hard-gated to staging-only (can't run vs prod).
 
+### Large-RPC pass — IN PROGRESS (2026-06-16 PM, this session). 3 of the queued fixes landed:
+- ✅ `20260616135524_link_quick_delivery_invoice_to_delivery` (was REMAINING #4) — create_quick_delivery stamps invoice.delivery_id. Commit `e15e9af`.
+- ✅ `20260616140912_complete_delivery_partial_rebill_join_order_item` (was REMAINING #6) — complete_delivery partial re-bill joins order_item_id not product_id. Commit `46ad637`.
+- ✅ `20260616142001_void_order_restore_logs_void_delivery_reversal` (was REMAINING #7) — void_order restore logs void_delivery_reversal not adjusted. Commit `2e93593`.
+
+**Per-migration flow used (proven this session):** pull live fn → write file (verbatim-except-the-change) → rolled-back revert-to-baseline-md5 proof (or post-apply for single-literal/additive) → rls-security + migration-drift reviewers (proof file written to all 3 candidate `.claude/session-state/` dirs since `$CLAUDE_PROJECT_DIR` is empty for this session) → apply → post-apply revert-match == baseline md5 + overload=1 → B7-rename to the stamped version → migration-history.md row → commit (full pre-commit suite). **Codex:** batched — the additive/single-predicate fixes above rely on the 2 mandated reviewers + md5-verbatim proof; per-item Codex is reserved for the behavior-changing MED/HIGH rewrites (#8 save_quote, #9 split-invoice, #11 cancel_delivery, #12 update_order_items pairing), plus one batched Codex cross-review of the whole large-RPC set before any push to main.
+
+**Still REMAINING in the large-RPC pass** (numbering from the list below): #1 cancel_delivery (HIGH), #2 update_order_items+PARKED-05 (paired, do last), #3 create_split_invoices_from_order (Hamilton), #5 save_quote (idempotency+map), #6 complete_delivery (DONE above), #7 void_order (DONE above), #8 blend/field-app invoice audit rows, #9 delete_invoice RPC, #10 pipeline-auth tokens, #11 void_delivery idempotency, + save_quote transition-map + the frontend greens. (Items #4/#6/#7 in the numbered list below are DONE.)
+
 ## ⛔ DEFERRED by the gate (do as a PAIR)
 - **PARKED-05 delivery_items terminal lock** — broadening `_enforce_delivery_items_parent_lock` to
   `<> 'scheduled'` regresses `update_order_items`' cancelled/voided cleanup `DELETE` (it runs WITHOUT
