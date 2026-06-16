@@ -52,8 +52,13 @@ without his OK**). Scope = everything, safest-first. Decisions: **cancel_deliver
    (Hamilton) + require split_pct sum = 100.
 4. **create_quick_delivery (MED):** add `delivery_id = v_delivery_id` to the invoice INSERT (so
    complete_delivery's partial rewrite matches).
-5. **save_quote (MED):** replace inline idempotency with canonical check/save_idempotency at the tail,
-   caching the REAL `v_quote_id` (not `gen_random_uuid()`).
+5. ✅ **DONE (live 2026-06-16, `20260616204400`):** save_quote idempotency → canonical
+   check/save_idempotency at the tail caching the REAL `v_quote_id` + rich result (was: new-quote retry
+   returned `quote_id=null` / stored a throwaway `gen_random_uuid()`). **+ folded in the save_quote
+   transition-map (MED):** trimmed `v_allowed_transitions` to a strict subset of the enforcer (removed the
+   `draft→[revised,declined,expired]` + `expired→[revised]` edges the trigger already rejects). JWT-spoofed
+   rolled-back functional smoke proved old=duplicate/null, new=replays the same real id (1 quote created);
+   both reviewers clean; enforcer verified unchanged.
 6. **complete_delivery (LOW):** partial-invoice rewrite should join on `order_item_id`, not `product_id`.
 7. **void_order (LOW):** restore loop should log `void_delivery_reversal`, not `adjusted` (confirm no
    report filters on `'adjusted'` first).
@@ -70,7 +75,8 @@ without his OK**). Scope = everything, safest-first. Decisions: **cancel_deliver
    unchanged (24h default). Byte-faithful; both reviewers clean; round-trip smoke confirmed; sweeps clean.
    **#10 (pipeline-auth tokens): DEFERRED by Mason 2026-06-16** — investigation found ~30 freeform RPCs (not 7)
    + a deliberate sibling-consistency freeform family; partial conversion increases inconsistency. See LEDGER.
-- **save_quote transition-map (MED):** trim its internal v_allowed_transitions to a subset of the enforcer.
+- ~~**save_quote transition-map (MED):** trim its internal v_allowed_transitions to a subset of the enforcer.~~
+  ✅ **DONE** — folded into `20260616204400` with the #5 idempotency fix (see #5 above).
 - **Frontend greens:** OrderDetail "Written Off" tile; money.ts ESLint rule (don't blind-rename); the
   BlendTicketDetail approve/reject RPC routing follow-up; AR-aging gross convention doc note; (optional)
   the 4 PDF page-overflow guards.

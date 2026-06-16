@@ -1,4 +1,4 @@
-# Migration History (471 migrations)
+# Migration History (472 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -119,6 +119,24 @@ clean, gated apply, B7-renamed to the stamped version.
   Strict-actor gate (AUTH_REQUIRED/ACTOR_MISMATCH/admin) unchanged + still precedes the idempotency lookup; helpers
   are anon/authenticated-revoked (B9). rls-security + migration-drift reviewers clean; round-trip smoke confirmed
   rich-payload replay; overload=1; sweep stays at 53. Stamped `20260616201800` (B7-renamed from `20260616193000`).
+- `20260616204400_save_quote_canonical_idempotency_and_transition_map` (large-RPC pass #5, **MED** — two
+  save_quote findings) — (A) **idempotency cached a throwaway id:** the old block returned
+  `{status:'duplicate', quote_id:p_quote_id}` (NULL for a NEW quote, so a retried new-quote save returned
+  `quote_id=null` — QuoteBuilder reads `result.quote_id`) and stored `COALESCE(p_quote_id, gen_random_uuid())`
+  BEFORE the quote existed (a random UUID unrelated to the real id). Moved to canonical
+  `check_idempotency()`/`save_idempotency()`: check at the head, cache the REAL rich result
+  (`status/quote_id/server_totals`) at the TAIL. (B) **transition map diverged from the enforcer:** the internal
+  `v_allowed_transitions` advertised `draft→[revised,declined,expired]` and `expired→[revised]` which the DB
+  guard trigger `_enforce_quote_status_transition` rejects — trimmed to a strict subset
+  (`draft→[sent]`, `expired` removed); no legitimate transition newly blocked (every removed edge was already
+  trigger-rejected), the error just surfaces earlier. The enforcer trigger remains the authoritative gate.
+  Body live-verbatim except 3 marked `DELTA-SQ` blocks — proven by rolled-back line-level `pg_get_functiondef`
+  diff (base md5 `9d10588243ca32dd1bc9e0f5627057c4`; removed = old idempotency block + 3 changed map lines +
+  old RETURN; post-apply md5 `4cbf12553097a079b118caa6a872207a`). JWT-spoofed rolled-back functional smoke:
+  old live returns `duplicate`/null on retry; the new version replays the SAME real quote_id + full
+  server_totals and creates only ONE quote on a retried new-quote save. Auth/actor gate + SECDEF/search_path
+  unchanged; helpers anon/authenticated-revoked. Both reviewers clean; overload=1; sweep stays at 53.
+  Stamped `20260616204400` (B7-renamed from `20260616203000`).
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 
