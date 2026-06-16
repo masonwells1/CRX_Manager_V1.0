@@ -1603,7 +1603,7 @@ export function BlendTicketDetail() {
         <Button variant="secondary" onClick={() => navigate('/blend-tickets')}>
           Cancel
         </Button>
-        {ticket.review_status === 'unreviewed' && (
+        {ticket.status === 'completed' && ticket.review_status === 'unreviewed' && (
           <>
             <Button variant="secondary" onClick={() => setRejectConfirmOpen(true)} className="text-red-600 hover:text-red-700">
               <X className="h-4 w-4" />

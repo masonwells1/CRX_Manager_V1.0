@@ -5,24 +5,26 @@
   "scope": "sales-pipeline-first-then-whole-app",
   "phase": "SALES-PIPELINE BACKLOG DRAINED (all 30 cycle-1 findings dispositioned). Whole-app audit pass pending (cycle 6).",
   "stats": {
-    "cyclesRun": 5,
-    "findingsTotal": 30,
-    "greenFixed": 3,
+    "cyclesRun": 6,
+    "phase": "BOTH audit passes complete (sales-pipeline + whole-app). Winding down to await Mason's decisions + a Codex-reviewed pass on the large-RPC drafts.",
+    "findingsConfirmed": 39,
+    "greenFixed": 5,
     "yellowParked": 5,
+    "parkedOwnerAction": 1,
     "parkedDecision": 1,
-    "verifiedDraftPending": 10,
-    "verifiedOther": 8,
+    "verifiedDraftPending": 11,
+    "verifiedOther": 12,
     "unverified": 0,
-    "refuted": 3,
-    "redBlocked": 0,
-    "consecutiveDryCycles": 0
+    "refutedFalsePositives": 16,
+    "redBlocked": 0
   },
   "cycles": [
     { "n": 1, "note": "Workflow fan-out; ~23 verifiers rate-limited. BLOCKER + 2 HIGHs hand-verified." },
     { "n": 2, "note": "PARKED-02 (allocate_payment), PARKED-03 (cancel_delivery decision); verified quote transition-map." },
     { "n": 3, "note": "2 greens fixed; caught unsafe QuoteBuilder/revert_quote_status (admin-only)." },
     { "n": 4, "note": "Verified 5 MEDIUMs; PARKED-04 (order_shares 100%), PARKED-05 (delivery_items lock)." },
-    { "n": 5, "ranAt": "2026-06-16T01:05-05:00", "note": "Verified the final 9 LOWs -> pipeline backlog DRAINED. PARKED-06 (quote terminal-not-drawn add 'expired'). 6 LOWs need large-RPC reproductions (draft-pending); draw_down weighted-avg is accepted v1; create_prepay_credit is unused legacy. Next: whole-app pass." }
+    { "n": 5, "ranAt": "2026-06-16T01:05-05:00", "note": "Verified the final 9 LOWs -> pipeline backlog DRAINED. PARKED-06 (quote terminal-not-drawn add 'expired'). 6 LOWs need large-RPC reproductions (draft-pending); draw_down weighted-avg is accepted v1; create_prepay_credit is unused legacy. Next: whole-app pass." },
+    { "n": 6, "ranAt": "2026-06-16T01:30-05:00", "note": "WHOLE-APP pass via small 5-dim Workflow (edge fns, broad RLS, PDFs, non-pipeline frontend, deps) — no rate-limiting. 9 confirmed, 13 refuted. HIGH: seed-admin verify_jwt=false unauthenticated admin-mint -> PARKED-07 (OWNER ACTION). Fixed 2 greens (BlendTicketDetail approve/reject button gate; 3 PDF footers single-sourced to COMPANY_LEGAL_NAME). 4 PDF page-overflow + process-document size-cap verified (cosmetic/edge or needs deploy). Mission winding down." }
   ],
   "findings": [
     { "dedupeKey": "lifecycle:_enforce_invoice_status_transition:paid-dead-end", "severity": "BLOCKER", "tier": "yellow", "status": "parked", "artifact": "PARKED-01" },
@@ -54,6 +56,15 @@
     { "dedupeKey": "money:commissionSplit.test:misleading-rounding-comment", "severity": "LOW", "tier": "green", "status": "fixed", "note": "8c2579e." },
     { "dedupeKey": "money:delivery-rpcs:order_items-dollars-vs-invoice-cents", "severity": "LOW", "tier": "green", "status": "refuted", "note": "FALSE_POSITIVE." },
     { "dedupeKey": "payment:record_invoice_payment:numeric-dollars-legacy", "severity": "LOW", "tier": "green", "status": "refuted", "note": "FALSE_POSITIVE (documented accepted exception)." },
-    { "dedupeKey": "money:order_shares:amount_cents-display-desync", "severity": "LOW", "tier": "green", "status": "refuted", "note": "FALSE_POSITIVE." }
+    { "dedupeKey": "money:order_shares:amount_cents-display-desync", "severity": "LOW", "tier": "green", "status": "refuted", "note": "FALSE_POSITIVE." },
+    { "dedupeKey": "edgefn:seed-admin:fail-open-admin-seed", "severity": "HIGH", "tier": "red", "status": "parked-owner-action", "artifact": "PARKED-07", "cycle": 6, "note": "seed-admin verify_jwt=false (only fn of 7); ENVIRONMENT gate unconfirmed (M4); static secret. Unauthenticated admin-mint worst case. Owner must confirm ENVIRONMENT + redeploy/delete. NOT touched (RED)." },
+    { "dedupeKey": "blendtickets:BlendTicketDetail:approve-reject-bypasses-rpc", "severity": "MEDIUM", "tier": "green", "status": "fixed", "cycle": 6, "note": "Approve/Reject buttons now gated on status==='completed' (matches list page), closing the approve-non-completed exposure. Follow-up queued: route the two raw .update()s through batch_approve/reject_blend_tickets RPCs for DB enforcement + idempotency." },
+    { "dedupeKey": "pdf:footers:hardcoded-legal-name-not-single-sourced", "severity": "LOW", "tier": "green", "status": "fixed", "cycle": 6, "note": "invoicePdf/statementPdf/yearEndSummaryPdf footers now use COMPANY_LEGAL_NAME from companyInfo.ts instead of the hardcoded literal." },
+    { "dedupeKey": "edgefn:config-toml:missing-verify-jwt-iac", "severity": "LOW", "tier": "green", "status": "parked-owner-action", "artifact": "PARKED-07", "cycle": 6, "note": "No tracked supabase/config.toml pinning per-function verify_jwt. Proposal folded into PARKED-07 (ties to the seed-admin decision)." },
+    { "dedupeKey": "edgefn:process-document:no-base64-size-cap", "severity": "LOW", "tier": "yellow", "status": "verified-draft-pending", "cycle": 6, "note": "process-document caps page COUNT (20) but not per-page/total base64 bytes (send-email does). Add decodedBase64Length cap. Edge-fn change -> needs deploy." },
+    { "dedupeKey": "pdf:orderPickListPdf:no-page-overflow", "severity": "LOW", "tier": "green", "status": "verified-queued", "cycle": 6, "note": "Cosmetic: post-table warnings/notes can clip on very long picks; table auto-paginates + warnings are redundant. Add ensureSpace/didDrawPage guards." },
+    { "dedupeKey": "pdf:deliveryPdf:no-page-overflow", "severity": "LOW", "tier": "green", "status": "verified-queued", "cycle": 6, "note": "Cosmetic: signature/footer can clip on ~20+ item deliveries; signature stored independently so no data loss. Add page-space guard before signature." },
+    { "dedupeKey": "pdf:receivingPdf:no-page-overflow", "severity": "LOW", "tier": "green", "status": "verified-queued", "cycle": 6, "note": "Cosmetic: notes/summary/signature can clip on a 39-line receive; internal receipt. Add page-break guards." },
+    { "dedupeKey": "pdf:quotePdf:portrait-wide-column-overflow", "severity": "LOW", "tier": "green", "status": "verified-queued", "cycle": 6, "note": "Cosmetic: portrait + up to 12 ad-hoc columns -> cramped/wrapped (autoTable wraps, no overflow). Auto-switch to landscape when many columns selected." }
   ]
 }

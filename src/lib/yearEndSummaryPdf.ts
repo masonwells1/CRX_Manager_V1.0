@@ -18,7 +18,7 @@
 import type { YearEndSummaryData, YearEndProductUsage } from '../types';
 import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, BLUE, type JsPDFWithAutoTable } from './pdfTheme';
 import type { CellHookData } from 'jspdf-autotable';
-import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE } from './companyInfo';
+import { COMPANY_TAGLINE_HEADER as COMPANY_TAGLINE, COMPANY_LEGAL_NAME } from './companyInfo';
 import { formatCents as fmt } from './money';
 
 
@@ -82,7 +82,7 @@ export async function generateYearEndSummaryPdf(
       doc.setFontSize(7);
       doc.setTextColor(160, 160, 160);
       doc.text(
-        `Crop RX Solutions, Inc.  •  Season Summary generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
+        `${COMPANY_LEGAL_NAME}  •  Season Summary generated ${new Date().toLocaleDateString()}  •  Page ${pageNum}`,
         pageW / 2,
         footerY,
         { align: 'center' },

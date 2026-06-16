@@ -10,6 +10,44 @@
 
 ---
 
+## ☀️ Morning summary — what happened overnight (read this first)
+
+The mission ran **6 cycles** and completed **two full audit passes**: the **sales pipeline**
+(quote→order→delivery→invoice→payment) and the **whole app** (edge functions, RLS, PDFs,
+non-pipeline pages, dependencies). It surfaced **39 verified findings** and ruled out **16 false
+positives**. **Nothing touched production** — every fix is either a commit on this branch or a parked
+draft awaiting your OK.
+
+### 🔴 Needs YOU first (in priority order)
+1. **`PARKED-07` — `seed-admin` security (HIGH).** The `seed-admin` edge function is deployed with JWT
+   verification OFF; its only real barrier is the unconfirmed `ENVIRONMENT=production` secret (your open
+   M4 item). Worst case: an unauthenticated admin account could be minted. **Confirm `ENVIRONMENT` is set
+   on the live project, then redeploy or delete `seed-admin`.** I did not touch it (deploy = your call).
+2. **Two one-word decisions** that unblock parked fixes: **"cancel_delivery: Option A"** (the quick-delivery
+   prebook leak) and your **AR-aging gross-vs-net** preference.
+
+### 🟢 Already fixed + committed on this branch (5)
+AR-aging column label · a stale CLAUDE.md fact · a misleading test comment · the BlendTicket Approve/Reject
+buttons now require a completed ticket · 3 PDF footers now single-source the company legal name.
+
+### 🟡 Parked for your approval — validated, ready to ship (7)
+`PARKED-01` invoice-void **BLOCKER** · `PARKED-02` payment over-allocation · `PARKED-03` delivery prebook
+(needs your Option A/B) · `PARKED-04` order-share >100% guard · `PARKED-05` delivery-item lock ·
+`PARKED-06` quote partial-draw guard · `PARKED-07` seed-admin security (owner action). Each was validated
+against your live DB inside a rolled-back transaction (zero footprint). Approve any and I'll ship it via
+`/migration-review` + `/ship`.
+
+### ⏭️ Queued for a careful, Codex-reviewed pass (≈11)
+Real fixes that require rewriting large database functions (split-invoice rounding, quick-delivery billing,
+`save_quote` idempotency, the 7-RPC error-token cleanup, etc.). I deliberately did **not** reproduce big
+functions unattended at 2 AM — that's exactly the migration-drift risk this project guards against. They're
+recorded with exact fix specs in [`LEDGER.json`](LEDGER.json), ready for a focused pass with you + Codex.
+
+**How to proceed:** action the 🔴 items, reply with the two decisions, and tell me which 🟡 parked fixes to
+ship. I can then run the queued large-RPC fixes one at a time with Codex cross-review.
+
+---
+
 ## Launch readiness (cycle 0)
 
 - ✅ Live DB (Supabase MCP) + Sentry read access confirmed.

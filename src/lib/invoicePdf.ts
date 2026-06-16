@@ -11,7 +11,7 @@
  */
 
 import type { InvoicePrintOptions } from '../types';
-import { COMPANY_TAGLINE_HEADER } from './companyInfo';
+import { COMPANY_TAGLINE_HEADER, COMPANY_LEGAL_NAME } from './companyInfo';
 import { formatCents as fmt } from './money';
 import type jsPDF from 'jspdf';
 import { CRX_GREEN, CHARCOAL, GRAY, LIGHT_BG, RED, TABLE_HEADER_BG, ALT_ROW_BG, type JsPDFWithAutoTable } from './pdfTheme';
@@ -129,7 +129,7 @@ export async function generateInvoicePdf(data: InvoicePdfData) {
       doc.setFontSize(7);
       doc.setTextColor(160, 160, 160);
       doc.text(
-        `Crop RX Solutions, Inc.  •  Generated ${new Date().toLocaleDateString()}`,
+        `${COMPANY_LEGAL_NAME}  •  Generated ${new Date().toLocaleDateString()}`,
         pageW / 2,
         footerY,
         { align: 'center' },
