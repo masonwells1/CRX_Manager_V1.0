@@ -1,13 +1,12 @@
 <!--
 MAINTAINER NOTE (block-level HTML comments are stripped before this file enters Claude's context — they cost no tokens).
 This file is kept deliberately lean. Guidance followed (Anthropic "Best practices for Claude Code" + "How Claude
-remembers your project"): target a short, every-session-facts-only file; push sometimes-relevant detail out to docs +
-skills; prune by asking "would removing this line cause Claude to make a mistake?". Heavy reference content was moved to
-docs/reference/sql-canonical-patterns.md and docs/reference/agent-guardrails.md; the running history to docs/CHANGELOG.md
-+ memory/. The "Working Principles" block adapts Karpathy's ACTUAL committed guidance
-(github.com/karpathy/autoresearch/program.md); the viral "Karpathy CLAUDE.md" is a third-party derivative
-(github.com/multica-ai/andrej-karpathy-skills), NOT his own file. AGENTS.md is generated separately by
-scripts/regenerate-agents-md.mjs and does not parse this file.
+remembers your project" + "Effective context engineering"): target a short, every-session-facts-only file; push
+sometimes-relevant detail out to docs + skills; prune by asking "would removing this line cause Claude to make a
+mistake?"; and DON'T duplicate what a hook/linter already enforces (the deterministic layer is the real boundary —
+prose on top of it is advisory noise). Heavy reference content lives in docs/reference/ (sql-canonical-patterns.md,
+agent-guardrails.md, coding-guidelines.md); running history in docs/CHANGELOG.md + memory/. AGENTS.md is generated
+separately by scripts/regenerate-agents-md.mjs and does not parse this file.
 -->
 # CLAUDE.md - CRX Manager V1.0
 
@@ -20,7 +19,7 @@ scripts/regenerate-agents-md.mjs and does not parse this file.
 
 ## Snapshot (2026-06-15)
 
-**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 68 pages · 96 tables (+2 views) · 226 callable RPCs (+47 trigger fns) · **458** migration files on disk (reference docs track ~455) · 7 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
+**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 68 pages · 96 tables (+2 views) · 226 callable RPCs (+47 trigger fns) · **458 migrations** on disk · 7 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
 
 - **`main` = production** (croprxsolutions.app). NEVER push, deploy, apply a live migration, delete data, or commit unrelated files without Mason's explicit OK *in the current chat*.
 - **Where history lives now** (so this file stays lean): sprint log → [`docs/CHANGELOG.md`](docs/CHANGELOG.md); detailed per-topic narrative → the `memory/` files (auto-loaded each session); the old multi-month "Current State" block → [`docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md`](docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md).
@@ -29,11 +28,17 @@ scripts/regenerate-agents-md.mjs and does not parse this file.
 
 ## Working Principles
 
-Kept short on purpose: this whole file loads on **every turn**, so bloat makes Claude follow it *less* (Anthropic: "Bloated CLAUDE.md files cause Claude to ignore your actual instructions"). General coding discipline = the **Karpathy-derived guidelines appended at the end of this file** (think-before-coding · simplicity-first · surgical changes · goal-driven execution). On top of those, the CRX-specific rules that always apply:
+Kept short on purpose: this whole file loads on **every turn**, so bloat makes Claude follow it *less* (Anthropic: "Bloated CLAUDE.md files cause Claude to ignore your actual instructions"). General coding discipline, distilled: **think before coding** (state assumptions; if multiple readings exist, surface them; if a simpler way exists, say so) · **simplicity first** (the minimum code that solves it; nothing speculative) · **surgical changes** (touch only what the task needs; match existing style) · **goal-driven** (turn the task into a check you can run — write/curate the test, then make it pass). Fuller version: [`docs/reference/coding-guidelines.md`](docs/reference/coding-guidelines.md). On top of those, the CRX-specific rules that always apply:
 
 - **Verify, don't assume.** Read the live schema / existing code before writing; if a fact is load-bearing, confirm it (a quick query, `get_advisors`, the actual file) rather than trusting memory or a handoff.
-- **The Hard Red Lines beat everything — including the appended "NEVER STOP."** Drive a task to completion without stalling on trivial questions, BUT never push, deploy, apply a live migration, delete data, or commit unrelated files without Mason's explicit OK in the current chat. CRX runs a live business; "NEVER STOP" governs task *momentum*, never production actions.
+- **Drive to completion, but stop at the production gates.** Don't stall on trivial questions or pause to ask "should I keep going?" mid-task — keep momentum. BUT never push, deploy, apply a live migration, delete data, or commit unrelated files without Mason's explicit OK in the current chat. Task momentum never overrides these gates — CRX runs a live business.
 - **Lead for Mason.** He has ~0 coding experience: explain in plain English, define jargon, and **recommend a clear next step** instead of listing options.
+
+## How to size the work (effort · verification · hygiene)
+- **Match the workflow to the risk.** A trivial single-file change (no SQL, money, RLS, or lifecycle) just needs lint + build + test — do NOT run the full `/ship` multi-agent review on it (that pipeline costs ~15× the tokens; reserve it for changes touching SQL / money / RLS / a lifecycle, or multiple files). Anthropic: most coding is single-agent work.
+- **"Done" = ran and proven, not "tests pass."** For DB work, exercise the change against the live schema (a rolled-back smoke run / `plpgsql_check`) before calling it done — a unit suite you wrote yourself can rubber-stamp the same misunderstanding as the bug. For UI, open the page and look.
+- **Plan first on real changes.** For multi-file or migration work, write a short plain-English plan (assumptions + the 2–4 files you'll touch) so Mason can catch a wrong direction before code exists.
+- **Model & session hygiene.** Opus + high effort for migration / RLS / money / architecture; a faster model is fine for known-pattern pages and fixes (switching models needs `/clear`). `/clear` between unrelated tasks; `/compact` when one task's session gets long; let subagents do the heavy reading so exploration doesn't fill the main context.
 
 ## Architecture Rules
 1. **Database changes = migrations only** — files in `supabase/migrations/`, never modify tables directly
@@ -50,44 +55,18 @@ Kept short on purpose: this whole file loads on **every turn**, so bloat makes C
 
 ---
 
-## Auto-Triggered Skills & Commands (MANDATORY)
+## Auto-Triggered Skills & Commands
 
-Claude MUST automatically invoke the matching skill/command when the task matches — do NOT wait for the user to type the slash command. These exist in `.claude/skills/` and `.claude/commands/` and travel with the repo.
+Invoke the matching skill/command automatically when the task fits — don't wait for Mason to type it (he won't). **The big one: route any substantive coding job through `/ship`** (it scaffolds → reviews → fixes → gates) and tell him in one line you're doing so; skip it for trivial one-line tweaks or questions (see "How to size the work"). Other routing:
 
-### Skills (multi-step guided workflows)
-| When the task involves... | Auto-invoke |
-|---------------------------|-------------|
-| **Any substantive coding job done to completion** — "add/build/implement/fix/create X", a new feature, page, RPC, fix, or migration. **Mason will NOT type the command — default to this** and tell him in one line that you're running it through `/ship` (it wraps the scaffold skills below as its implement step, then runs the review gate + auto-fix + auto-apply, stopping only for Codex when worthy and the prod-push approval). Skip for trivial one-line tweaks or questions. | `/ship` |
-| Adding a new page/screen to the app | `/new-page` |
-| Creating a new RPC / database function / stored procedure | `/new-rpc` |
-| Creating a new migration / table / column / index / RLS policy | `/create-migration` |
-| Running a full health check, audit, or "is everything okay?" | `/audit` |
-| Deploying, or "is this ready to ship?" | `/deploy-check` |
-| Checking docs for drift or staleness | `/update-docs` |
-| Deploying a Supabase Edge Function (live deploy of `send-email`, `create-user`, etc.) | `/deploy-edge-function` |
-| Setting up a Codex cross-review for a finding, fix, or proposed change | `/codex-cross-review` |
-| Translating a SQL migration into plain English before approving `apply_migration` | `/explain-migration` |
-| Quick live production health check (Sentry + Supabase + Vercel + Edge Functions) | `/spot-check-prod` |
-| Regenerating `.claude/schema-registry.json` after a status enum / generated column / table change | `/regen-schema-registry` |
-| Checking whether the app drifted from the workflow map — "is everything still wired right?", "did anything drift?", "find missing/broken page↔RPC↔lifecycle connections" | `/map-drift-audit` |
-| Stress-testing the architecture for FRAGILITY — "where are the weak spots?", "single points of failure?", "is this double-submit/race safe?", "what connections are missing for resilience?" | `/architecture-weakness-audit` |
-| "How does X work?", "what's the architecture of Y?", "trace this flow" — codebase exploration | `feature-dev:code-explorer` |
-| "I want to add X feature" — needs architecture design before coding | `feature-dev:code-architect` |
-| "A customer reported X", "a customer can't Y", "something looks weird for user Z" | `posthog:investigating-replay` (pulls their actual session replay) |
-| "Why is this failing in prod?", "I see an error" — production debugging | `engineering:debug` |
-| "We had an incident" / "production is down" / "rollback X" | `engineering:incident-response` |
-| "Are we ready to deploy?", "deploy checklist" | `engineering:deploy-checklist` |
-| "Where are we slowing down?", "tech debt review" | `engineering:tech-debt` |
-| Any new feature with non-trivial complexity (before writing code) | `superpowers:brainstorming` (MUST — required by my system) |
+- New page → `/new-page` · new RPC → `/new-rpc` · new migration/table/column/RLS → `/create-migration`
+- Full health check / "is everything okay?" → `/audit` · "ready to ship?" → `/deploy-check` · deploy an Edge Function → `/deploy-edge-function`
+- Docs drift → `/update-docs` · regen schema registry after an enum/generated-col/table change → `/regen-schema-registry`
+- Plain-English a migration before `apply_migration` → `/explain-migration` · independent Codex review → `/codex-review` (or `/codex-cross-review` to draft a packet)
+- Quick prod health → `/spot-check-prod` · before any commit → `/preflight` · "where are we" → `/status` · "something's broken" → `/quick-fix`
+- Deeper read-only reviews when Mason asks for them: `/foundation-ultra-review`, `/review-workflow`, `/architecture-weakness-audit`, `/map-drift-audit`, `/whole-codebase-audit`.
 
-### Commands (quick one-shot checks)
-| When the user says... | Auto-invoke |
-|-----------------------|-------------|
-| "commit this", "ready to commit", or before any git commit | `/preflight` |
-| "what's the status", "where are we", "show me the state" | `/status` |
-| "something's broken", "check for errors", "what's wrong" | `/quick-fix` |
-
-**Rule:** If the user's request matches ANY row above, invoke the skill/command FIRST, then follow its steps. Do not freelance the workflow — the skill exists to prevent mistakes. Skills only guide the process — they still require user approval before any destructive or irreversible action (deploys, migrations, commits).
+These guide the process to prevent mistakes — they still require Mason's approval before any deploy, migration, or commit.
 
 ---
 
@@ -138,6 +117,7 @@ These rules exist because **migration drift caused 40+ bugs** in March 2026.
 
 ### After Writing Migrations
 - Verify: `SELECT proname, count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace GROUP BY proname HAVING count(*) > 1;` — should return ZERO rows
+- **Smoke it against live before calling it done:** run the change through a rolled-back transaction / `plpgsql_check` (see `scripts/smoke/` + `scripts/db-invariant-sweeps/`) — a clean diff and green unit tests do NOT prove an RPC runs. ("Done = ran and proven.")
 - Run `npm run build` + `npm run test` before committing
 
 ---
@@ -287,10 +267,13 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 |-----|----------|
 | `docs/reference/database-schema.md` | 96 tables (+2 views) + RLS matrix |
 | `docs/reference/rpc-functions.md` | 226 callable RPCs + 47 trigger functions |
-| `docs/reference/migration-history.md` | 455 migrations |
+| `docs/reference/migration-history.md` | 458 migrations |
 | `docs/reference/pages-routes.md` | 68 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
 | `docs/reference/qa-testing.md` | Role matrix, workflow tests, edge cases |
+| `docs/reference/sql-canonical-patterns.md` | Copy-paste templates for migrations/RPCs/mutations |
+| `docs/reference/agent-guardrails.md` | Every hook + review subagent and the bug each prevents |
+| `docs/reference/coding-guidelines.md` | Fuller general coding discipline (moved out of this file) |
 | `docs/CHANGELOG.md` | Sprint-by-sprint history |
 | `TODO.md` | Current TODO/Done/Deferred status |
 
@@ -310,135 +293,20 @@ After any change that alters counts, schema, routes, RPCs, or lifecycles, update
 - **Schema / RPC / route / migration change:** update the relevant `docs/reference/*.md`, then run `node scripts/regenerate-agents-md.mjs` (rebuilds AGENTS.md counts) and, for schema changes, `node scripts/regenerate-schema-registry.mjs` (the PreToolUse hooks read this).
 - **Lifecycle / enum change:** also update the Business Logic Lifecycles section above.
 
-## Code Drift Prevention Rules (MANDATORY)
+---
 
-These rules exist because code drift caused 40+ bugs. Follow them to keep the codebase consistent.
+## Code Drift Prevention
+
+Drift caused 40+ bugs; most rules below are now **enforced automatically** so you don't have to hold them in your head — the deterministic layer is the real boundary.
 
 ### Canonical code patterns → [`docs/reference/sql-canonical-patterns.md`](docs/reference/sql-canonical-patterns.md)
-**Read that file before writing a migration, RPC, or mutation.** It holds the full copy-paste templates (operation-scoped idempotency lookup, the `check_idempotency`/`save_idempotency` helpers, the strict-actor block, the SECURITY DEFINER header, machine-readable error tokens, RPC return shapes, and the frontend `checkMutationResult`/`logActivity`/`ConfirmModal`/Sentry rules). The non-negotiable few, inline so they're never forgotten:
+**Read that file before writing a migration, RPC, or mutation.** The non-negotiable few, inline so they're never forgotten:
 - `idempotency_keys` columns are **`idempotency_key` / `operation` / `result`** (jsonb) — never `key`/`entity_type`/`entity_id`; the lookup MUST filter `AND operation = '<this_rpc_name>'` (an unscoped lookup returns another op's cached row — the `restore_quote_version` bug class).
 - Every SECURITY DEFINER fn: `SET search_path = public, pg_temp`. Every mutating RPC: `p_idempotency_key text DEFAULT NULL` **and actually use it** in the body.
 - Money is `bigint` cents (never float). After `.update()/.delete()` → `checkMutationResult()`. After an RPC → `assertRpcResult()`. Strict-actor: bind `auth.uid()` and reject a mismatched `p_performed_by` with `ACTOR_MISMATCH`.
 
-### Naming & Convention Rules
-- **Status enums** — ALWAYS check existing CHECK constraints before adding/modifying statuses. Your new list MUST be a superset of the old values.
-- **Column names** — ALWAYS read the actual table schema before referencing columns in RPCs. Never assume column names from memory.
-- **RPC signatures** — ALWAYS check for existing overloads before CREATE OR REPLACE. Run: `SELECT proname, pg_get_function_identity_arguments(oid) FROM pg_proc WHERE proname = 'func_name';`
-- **Type definitions** — When adding new DB columns, ALWAYS update `src/types/index.ts` to match
-- **idempotency_keys columns** — The table uses `idempotency_key` (NOT `key`), `operation` (NOT `entity_type`), `result` (NOT `result_id` or `entity_id`). Pre-commit hook validates this.
-
-### Pattern Consistency Rules
-- **New pages** MUST follow the existing pattern: lazy import → Route → nav link → page component with standard layout
-- **New RPCs** MUST accept `p_idempotency_key text DEFAULT NULL` if they mutate data
-- **New tables** MUST have RLS policies — no exceptions
-- **New mutations** MUST use `checkMutationResult()` after `.update()` or `.delete()`
-- **Money values** MUST use `bigint` cents — NEVER floating point
-- **Activity logging** — call `logActivity(performedBy=profile.id)` for user-visible actions
-- **Error handling** — use toast notifications, never `window.alert()` or `window.confirm()` (use `ConfirmModal`)
-- **Sentry** — import `{ Sentry }` from `lib/sentry`, never directly from `@sentry/react`
-
-### Automated Enforcement (Pre-Commit Hook)
-The pre-commit hook runs these checks automatically — code that violates them CANNOT be committed:
-
-1. **`scripts/validate-sql.sh`** — Blocks SQL with wrong idempotency columns, pg_get_functiondef, updated_at on wrong tables
-2. **`scripts/validate-frontend.sh`** — Blocks frontend code with direct @sentry/react imports, warns on missing checkMutationResult
-3. **ESLint rules** — `no-restricted-globals` blocks `confirm()` and `alert()`, `no-restricted-properties` blocks `window.confirm()` and `window.alert()`, `no-restricted-imports` blocks `@sentry/react`
-4. **Build + test** — TypeScript check, production build, all unit tests
-
-### Automated guardrails (hooks + subagents) → [`docs/reference/agent-guardrails.md`](docs/reference/agent-guardrails.md)
-You don't have to remember the rules above by hand — **deterministic PreToolUse hooks BLOCK the bad write**: wrong idempotency columns, `updated_at` on a table that lacks it, a status not in the live CHECK constraint, UPDATE on a GENERATED column (e.g. `invoices.balance_cents`), `.env`/`service_role` leaks, a new table with no RLS, `parseFloat` on a `*_cents` value — and `apply_migration` is gated behind a recent reviewer proof-file. Before any migration is applied, five review subagents run in parallel: `rls-security-reviewer`, `migration-drift-reviewer`, `typescript-types-drift-reviewer`, `pdf-output-reviewer`, `compliance-reviewer`. The full table of every hook + subagent and the exact bug each prevents is in [`docs/reference/agent-guardrails.md`](docs/reference/agent-guardrails.md).
+### Enforced for you — don't re-memorize → [`docs/reference/agent-guardrails.md`](docs/reference/agent-guardrails.md)
+Deterministic PreToolUse hooks **BLOCK the bad write**: wrong idempotency columns, `updated_at` on a table that lacks it, a status outside the live CHECK constraint, an UPDATE on a GENERATED column (e.g. `invoices.balance_cents`), `.env`/`service_role` leaks, a new table with no RLS, `parseFloat` on a `*_cents` value. `apply_migration` is gated behind a recent reviewer proof-file, and five review subagents run before any migration applies (`rls-security-reviewer`, `migration-drift-reviewer`, `typescript-types-drift-reviewer`, `pdf-output-reviewer`, `compliance-reviewer`). ESLint blocks `confirm()`/`alert()`/`window.confirm`/`window.alert`, direct `@sentry/react` imports, and enforces `assertRpcResult`. **The few judgment calls the hooks can't make for you:** before changing a status enum, read the live CHECK so your new list is a superset; read the real table before referencing columns; check for function overloads before `CREATE OR REPLACE`; update `src/types/index.ts` when you add a column.
 
 ### Before Every Commit
-1. `npm run lint` — 0 errors (ESLint now blocks confirm/alert/wrong-imports)
-2. `npm run build` — clean build
-3. `npm run test` — all tests pass
-4. Doc counts match reality (see Keeping Docs In Sync above)
-5. SQL + frontend validation passes (automatic via pre-commit hook)
-
----
-
-## Appendix — Karpathy-derived coding guidelines (verbatim)
-
-> Mason asked to include the popular "Karpathy CLAUDE.md" here. Below is the 100k+ star file by **Forrest Chang**
-> (`github.com/multica-ai/andrej-karpathy-skills`), distilled from Andrej Karpathy's LLM-coding observations and
-> reproduced **verbatim** (including its own `# CLAUDE.md` heading). Provenance: this is a community *derivative* —
-> Karpathy did not author it. Where these differ from the CRX-specific "Working Principles" near the top of this
-> file, the CRX rules win.
-
-# CLAUDE.md
-
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
-
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-
-## 1. Think Before Coding
-
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
-
-Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them - don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
-
-## 2. Simplicity First
-
-**Minimum code that solves the problem. Nothing speculative.**
-
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
-
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-## 3. Surgical Changes
-
-**Touch only what you must. Clean up only your own mess.**
-
-When editing existing code:
-- Don't "improve" adjacent code, comments, or formatting.
-- Don't refactor things that aren't broken.
-- Match existing style, even if you'd do it differently.
-- If you notice unrelated dead code, mention it - don't delete it.
-
-When your changes create orphans:
-- Remove imports/variables/functions that YOUR changes made unused.
-- Don't remove pre-existing dead code unless asked.
-
-The test: Every changed line should trace directly to the user's request.
-
-## 4. Goal-Driven Execution
-
-**Define success criteria. Loop until verified.**
-
-Transform tasks into verifiable goals:
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan:
-```
-1. [Step] → verify: [check]
-2. [Step] → verify: [check]
-3. [Step] → verify: [check]
-```
-
-Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
-
----
-
-**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
-
----
-
-### Karpathy's own "NEVER STOP" (verbatim — `github.com/karpathy/autoresearch`, `program.md`)
-
-> This is Andrej Karpathy's *actual* text (Mason asked for it specifically), written as an instruction for an
-> autonomous ML-experiment loop — not a coding-agent rule he publishes for general use. **CRX precedence:** it
-> governs *task momentum* (don't pause to ask "should I keep going?" mid-task), but it does NOT override the Hard
-> Red Lines — pushing, deploying, applying a live migration, deleting data, or committing always require Mason's
-> explicit OK in the current chat.
-
-**NEVER STOP**: Once the experiment loop has begun (after the initial setup), do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep, or gone from a computer and expects you to continue working *indefinitely* until you are manually stopped. You are autonomous. If you run out of ideas, think harder — read papers referenced in the code, re-read the in-scope files for new angles, try combining previous near-misses, try more radical architectural changes. The loop runs until the human interrupts you, period.
+1. `npm run lint` — 0 errors · 2. `npm run build` — clean · 3. `npm run test` — all pass · 4. Doc counts match reality (see Keeping Docs In Sync) · 5. SQL + frontend validation passes (automatic via pre-commit hook)

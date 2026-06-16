@@ -27,10 +27,12 @@ The workflow runs `rls-security-reviewer` + `migration-drift-reviewer` + `typesc
      "migration": "<migration name or filename>",
      "timestamp": "<the ISO timestamp from step 1>",
      "reviewers": ["rls-security-reviewer", "migration-drift-reviewer"],
-     "findings": "clean"
+     "findings": "clean",
+     "queryHash": "<sha256 of the exact migration SQL — see note>"
    }
    ```
    Use `"findings": "blockers-fixed"` instead if blockers were found and fixed earlier this session.
+   `queryHash` binds the proof to this exact SQL so an edit-after-review can't slip through. Reliable way to get it: when Mason approves the apply (step 4), attempt the `apply_migration` call once — the guard prints the expected SHA-256 — paste that into `queryHash` and retry. (Omitting it still works but loses the content-binding protection.)
    IMPORTANT: the `migration` value must substring-match the `name` you will pass to `apply_migration`, or the guard won't match the proof. The proof expires after 30 minutes.
 3. Tell Mason it's clean, list any MED/LOW findings as FYI (not blockers), and list the `refutedBlockers` so he can see what was checked and dismissed.
 

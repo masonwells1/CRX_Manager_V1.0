@@ -16,9 +16,20 @@ git branch --show-current
 
 If on `main`, create one: `git checkout -b ship/<short-slug>`. Tell Mason the branch name. (Re-verify the branch right before any commit — a commit has landed on main before.)
 
+## Step 0.5 — Size the work, then plan (cheap; prevents the #1 bug)
+
+**Size it first** (Anthropic: most coding is single-agent work — don't pay the ~15× multi-agent review cost on a tiny change):
+- **Trivial** — one file, no SQL / money / RLS / lifecycle (a copy tweak, a style fix, a prop rename): SKIP the review fan-out (Step 3) and the migration gate. Just make the change, run Step 2 (lint + build + test) and Step 2.5, then go to Step 7. Tell Mason in one line you're taking the light path.
+- **Substantial** — multiple files, OR touches SQL / money / RLS / a lifecycle / an RPC: run the full pipeline below.
+
+**For substantial work, plan before coding** — this is where Mason (a non-coder) has the most power, because he can read English even though he can't read code:
+1. Read the live schema / existing code for the area (don't trust memory).
+2. Write a short plain-English plan: what you'll build, the assumptions you're making, and the 2–4 files you'll touch.
+3. Show it to Mason and let him confirm or correct **before** you write code. A wrong understanding caught here costs one message; caught after coding costs a whole rebuild. (Skip the confirmation only for genuinely mechanical multi-file changes.)
+
 ## Step 1 — Implement the job to completion
 
-Do the work. If the job is a non-trivial feature, FIRST invoke `superpowers:brainstorming` (required by Mason's system) and the relevant scaffold skill (`/new-page`, `/new-rpc`, `/create-migration`) — those encode the correct patterns. Your PreToolUse hooks (sql-safety, money-safety, idempotency-body-check, rls-on-new-tables, status-enum-check, generated-column-check, env-guard) will refuse a bad write as you go — treat any hook block as a real defect to fix, not an obstacle to route around.
+Do the work (you've already sized + planned it in Step 0.5). For a non-trivial feature, use the relevant scaffold skill (`/new-page`, `/new-rpc`, `/create-migration`) — those encode the correct patterns. Your PreToolUse hooks (sql-safety, money-safety, idempotency-body-check, rls-on-new-tables, status-enum-check, generated-column-check, env-guard) will refuse a bad write as you go — treat any hook block as a real defect to fix, not an obstacle to route around.
 
 Finish the whole job before moving on. Partial implementations do not enter the gate.
 
@@ -39,6 +50,15 @@ node scripts/verify-deps.mjs
 ```
 
 Capture pass/fail for each. Any failure → fix it now and re-run before continuing. Do not enter the review gate on a red build.
+
+## Step 2.5 — Prove it actually runs (behavioral verification — closes the #1 bug)
+
+Green unit tests and a clean build do NOT prove the change does the right thing — a suite you wrote yourself can encode the same misunderstanding as the bug. Before the change counts as working:
+- **UI change** → open it in the running app (preview tools), click the actual flow a user would, and confirm the real result (screenshot for Mason if it's visual). Check the console/network for errors.
+- **RPC / DB-touching change** (even without a new migration) → exercise the real function against the live schema in a rolled-back transaction (`scripts/smoke/` — see Step 5.4 for the chain protocol) so a wrong column / bad cast / unchecked error surfaces here, not in production.
+- **Data read** → confirm the query returns the real shape (prefer the typed Supabase client; never trust a `.select('*')` + cast to be reading the column you think it is).
+
+If you genuinely can't run it, say so explicitly in the summary rather than reporting it "done."
 
 ## Step 3 — Review fan-out (parallel, scoped to what changed)
 
@@ -62,7 +82,7 @@ For every **confirmed** BLOCKER or HIGH finding (the workflows already adversari
 2. Re-run Step 2 (verify) and re-dispatch the reviewers whose scope you touched (Step 3).
 3. Repeat until: reviewers return **clean** (or BLOCKER/HIGH all fixed) AND build + tests are green.
 
-MED/LOW findings: fix the cheap ones; list the rest in the final summary as accepted/deferred — do not loop on them. Cap the loop at a sane number of rounds; if a finding can't be resolved, STOP and surface it to Mason rather than thrashing.
+MED/LOW findings: fix the cheap ones; list the rest in the final summary as accepted/deferred — do not loop on them. **Hard loop cap: max 3 fix→re-review rounds.** If the SAME finding survives two rounds in a row, or you reach round 3 with anything still open, STOP and hand it to Mason with both positions — do not keep thrashing or burn rounds on a finding you can't resolve.
 
 ## Step 5 — If a migration is involved: prepare the live-apply gate
 
@@ -72,8 +92,9 @@ Only after Step 4 is clean for the migration:
    ```json
    { "migration": "<filename>", "timestamp": "<current ISO-8601>",
      "reviewers": ["rls-security-reviewer", "migration-drift-reviewer"],
-     "findings": "clean" }
+     "findings": "clean", "queryHash": "<sha256 of the exact migration SQL>" }
    ```
+   `queryHash` binds the proof to this exact SQL — if the migration is edited after review, the guard blocks again (content changed = stale review). Easiest way to get it: attempt the apply; the guard prints the expected hash, paste it into `queryHash`, and retry.
 2. STOP and ask Mason for explicit approval to apply the named migration to the live Supabase DB. Do not continue this step without that approval in the current conversation.
 3. **Only after Mason approves:** apply via Supabase MCP `apply_migration`.
 4. **Smoke-chain test (hard rule — chains, not probes):** EVERY RPC the migration creates or modifies must pass its full business-chain spec from `scripts/smoke/smoke-specs.json`. For each touched RPC run `node scripts/smoke/run-smoke.mjs --spec <rpc>`:

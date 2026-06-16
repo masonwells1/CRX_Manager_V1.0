@@ -18,6 +18,7 @@
 // in-script for tool names containing "apply_migration".
 
 import { readFileSync, existsSync, readdirSync, statSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 function out(decision, reason) {
@@ -50,6 +51,8 @@ try { mkdirSync(stateDir, { recursive: true }); } catch { /* ignore */ }
 // back to the first matching migration file from the SQL query content.
 const input = payload?.tool_input || {};
 const migName = (input.name || "").toString().trim();
+const migQuery = (input.query || "").toString();
+const currentHash = migQuery ? createHash("sha256").update(migQuery).digest("hex") : "";
 
 // Look at all proof files in stateDir and find a recent one for this migration.
 const MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
@@ -74,6 +77,10 @@ try {
     ) {
       const findings = (data.findings || "").toString();
       if (findings === "clean" || findings === "blockers-fixed") {
+        // Content-binding: if the proof recorded a queryHash, it must match the SQL
+        // actually being applied. A mismatch means the migration was edited AFTER it
+        // was reviewed, so the proof no longer attests to this content — skip it.
+        if (data.queryHash && currentHash && data.queryHash !== currentHash) continue;
         validProof = { file: f, data };
         break;
       }
@@ -99,10 +106,14 @@ out("block",
   `           "migration": "${migName}",\n` +
   `           "timestamp": "<current ISO timestamp>",\n` +
   `           "reviewers": ["rls-security-reviewer", "migration-drift-reviewer"],\n` +
-  `           "findings": "clean"\n` +
+  `           "findings": "clean",\n` +
+  `           "queryHash": "${currentHash}"\n` +
   `         }\n` +
   `  4. Retry the apply_migration call.\n\n` +
   `The proof file expires after 30 minutes — this catches stale reviews on long sessions.\n` +
+  `The "queryHash" above is the SHA-256 of the exact SQL being applied; it binds this proof to\n` +
+  `this content. If the migration is edited after review, the hash changes and this guard blocks\n` +
+  `again — re-confirm the reviewers, then update queryHash to the new value printed here.\n` +
   `This guard exists because of the B7/B8/B9 incidents (2026-05-26) where migrations were\n` +
   `applied without the parallel-session reviewers catching anon-EXECUTE-able SECDEF DML.`
 );
