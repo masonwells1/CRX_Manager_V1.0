@@ -48,6 +48,24 @@ ship. I can then run the queued large-RPC fixes one at a time with Codex cross-r
 
 ---
 
+## 🔁 Codex cross-review (2026-06-16) — done, 4 fixes applied
+
+You asked for an independent Codex pass before remediating. Codex (a different model — gpt-5.5) reviewed the whole
+branch and **did not dispute the 39 findings or the core parked fixes** (PARKED-01/02/03/05/06). It found **4 real
+defects in my own audit artifacts**, and I agreed with and fixed all four:
+1. **The page-crawler wasn't truly read-only** — `/quotes/new` would have burned a real quote number on load. Removed
+   all 7 creation-form routes from the crawl (it never ran, so no harm).
+2. **PARKED-07's config example** would have kept `seed-admin` unauthenticated if copied — flipped it to require a JWT.
+3. **The crawler mis-counted** a redirected (broken) page as healthy — now flagged.
+4. **PARKED-04's order-share guard** had a race + permissions hole — hardened to `SECURITY DEFINER` + a per-order lock
+   (re-validated against your live DB).
+
+Full disposition: [`docs/audits/2026-06-16-claude-disposition-of-codex-nightly-debug.md`](../2026-06-16-claude-disposition-of-codex-nightly-debug.md).
+**The 7 parked fixes are now cross-reviewed and ready** — say the word and I'll ship them one at a time through the
+normal review + deploy gate.
+
+---
+
 ## Launch readiness (cycle 0)
 
 - ✅ Live DB (Supabase MCP) + Sentry read access confirmed.

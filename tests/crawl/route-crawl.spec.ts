@@ -62,21 +62,20 @@ const ROUTES: { path: string; roles: Role[] }[] = [
   { path: '/products', roles: AS },
   { path: '/customers', roles: AS },
   { path: '/fields', roles: AS },
+  // Creation / "new" form routes are EXCLUDED from this crawl: some reserve a real sequence
+  // value on mount — e.g. /quotes/new mounts QuoteBuilder which calls generate_quote_number()
+  // -> nextval('quote_number_seq'), which would MUTATE prod and break the read-only safety
+  // model (Codex P1). The crawl visits list/detail/index pages only.
   { path: '/quotes', roles: AS },
-  { path: '/quotes/new', roles: AS },
   { path: '/orders', roles: AS },
-  { path: '/orders/new', roles: AS },
   { path: '/inventory', roles: AS },
   { path: '/invoices', roles: AS },
-  { path: '/invoices/field-app/new', roles: AS },
   { path: '/blend-tickets', roles: AS },
   { path: '/recipes', roles: AS },
   { path: '/cycle-counts', roles: ADMIN },
   { path: '/returns', roles: AS },
   { path: '/receiving', roles: AS },
-  { path: '/receiving/quick', roles: AS },
   { path: '/purchase-orders', roles: AS },
-  { path: '/purchase-orders/new', roles: AS },
   { path: '/brand-vs-generic', roles: AS },
   { path: '/reports', roles: AS },
   { path: '/sales-reports', roles: AS },
@@ -92,7 +91,6 @@ const ROUTES: { path: string; roles: Role[] }[] = [
   { path: '/program-tracker', roles: AS },
   { path: '/delivery-remainders', roles: AS },
   { path: '/deliveries', roles: ['admin', 'sales_rep', 'driver'] },
-  { path: '/deliveries/new', roles: AS },
   { path: '/my-route', roles: ['admin', 'sales_rep', 'driver'] },
   { path: '/jobs', roles: ['admin', 'sales_rep', 'applicator'] },
   { path: '/dispatch', roles: ['admin', 'sales_rep', 'applicator'] },
@@ -106,7 +104,6 @@ const ROUTES: { path: string; roles: Role[] }[] = [
   { path: '/prepay-workspace', roles: ADMIN },
   { path: '/accounts-payable', roles: ADMIN },
   { path: '/accounts-payable/bills', roles: ADMIN },
-  { path: '/accounts-payable/bills/new', roles: ADMIN },
   { path: '/vendors', roles: ADMIN },
   { path: '/settings', roles: ADMIN },
 ];
@@ -132,7 +129,7 @@ interface RouteResult {
   consoleErrors: string[];
   pageErrors: string[];
   failedResponses: string[];
-  status: 'ok' | 'crashed' | 'console-errors' | 'network-errors' | 'guard-ok' | 'guard-leak';
+  status: 'ok' | 'crashed' | 'console-errors' | 'network-errors' | 'unexpected-redirect' | 'guard-ok' | 'guard-leak';
 }
 
 const results: RouteResult[] = [];
@@ -197,6 +194,10 @@ async function crawlRoute(page: Page, role: Role, route: { path: string; roles: 
   let status: RouteResult['status'];
   if (!allowed) {
     status = redirected ? 'guard-ok' : 'guard-leak';
+  } else if (redirected) {
+    // Codex P2: an ALLOWED route that redirects away never rendered — a broken/missing route
+    // or an auth/profile-guard regression. Don't let it fall through to 'ok'.
+    status = 'unexpected-redirect';
   } else if (crashed) {
     status = 'crashed';
   } else if (pageErrors.length > 0 || consoleErrors.length > 0) {
@@ -251,6 +252,7 @@ test.afterAll(() => {
     crashed: results.filter((r) => r.status === 'crashed').length,
     consoleErrors: results.filter((r) => r.status === 'console-errors').length,
     networkErrors: results.filter((r) => r.status === 'network-errors').length,
+    unexpectedRedirect: results.filter((r) => r.status === 'unexpected-redirect').length,
     guardOk: results.filter((r) => r.status === 'guard-ok').length,
     guardLeak: results.filter((r) => r.status === 'guard-leak').length,
   };

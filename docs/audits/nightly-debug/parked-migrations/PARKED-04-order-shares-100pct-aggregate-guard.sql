@@ -19,6 +19,11 @@
 --   A BEFORE INSERT/UPDATE trigger that sums split_percentage across the order (other rows +
 --   NEW) and raises ORDER_SHARES_OVER_100 if the total would exceed 100 (1% tolerance for the
 --   numeric rounding the per-row CHECK already allows). Mirrors validate_commission_split_json.
+--   SECURITY DEFINER + a FOR UPDATE lock on the parent order (Codex cross-review P2): the DEFINER
+--   context makes the aggregate see ALL of the order's shares regardless of the caller's RLS (a
+--   sales_rep's row-visibility could otherwise under-count and let the total exceed 100), and the
+--   per-order lock serializes concurrent inserts so two racing writes can't each read a pre-commit
+--   total and both pass.
 --
 -- VALIDATION: function + trigger compiled against the live schema inside a rolled-back
 --   transaction (sentinel VALIDATION_OK). 0 existing rows violate, so no backfill conflict.
@@ -30,11 +35,16 @@
 CREATE OR REPLACE FUNCTION public._validate_order_shares_total()
  RETURNS trigger
  LANGUAGE plpgsql
+ SECURITY DEFINER
  SET search_path TO 'public', 'pg_temp'
 AS $function$
 DECLARE
   v_total numeric;
 BEGIN
+  -- Serialize concurrent share writes for this order (Codex P2 race fix): lock the parent
+  -- order row so two inserts can't each read a pre-commit total and both pass.
+  PERFORM 1 FROM orders WHERE id = NEW.order_id FOR UPDATE;
+  -- SECURITY DEFINER (above) so the aggregate sees ALL shares for the order, RLS-independent.
   SELECT COALESCE(SUM(split_percentage), 0) INTO v_total
   FROM order_shares
   WHERE order_id = NEW.order_id

@@ -53,8 +53,11 @@ if (!ok) return new Response('Forbidden', { status: 403 });
 Proposed `supabase/config.toml`:
 ```toml
 [functions.seed-admin]
-verify_jwt = false   # (or delete the function and remove this block)
-# all other functions default verify_jwt = true
+verify_jwt = true
+# All other functions already default to verify_jwt = true.
+# ⚠️ Do NOT pin verify_jwt = false here — that would re-expose the unauthenticated admin-mint
+#    (Codex cross-review P1). If you DELETE seed-admin instead (recommended — the one-time seed
+#    is done), omit this block entirely.
 ```
 
 **Tell me how you want to proceed** (e.g. "delete seed-admin" or "harden + redeploy it") and I'll prepare the
