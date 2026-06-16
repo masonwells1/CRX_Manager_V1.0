@@ -24,6 +24,10 @@ without his OK**). Scope = everything, safest-first. Decisions: **cancel_deliver
 
 **Still REMAINING in the large-RPC pass** (numbering from the list below): #1 cancel_delivery (HIGH), #2 update_order_items+PARKED-05 (paired, do last), #3 create_split_invoices_from_order (Hamilton), #5 save_quote (idempotency+map), #6 complete_delivery (DONE above), #7 void_order (DONE above), #8 blend/field-app invoice audit rows, #9 delete_invoice RPC, #10 pipeline-auth tokens, #11 void_delivery idempotency, + save_quote transition-map + the frontend greens. (Items #4/#6/#7 in the numbered list below are DONE.)
 
+**cancel_delivery (HIGH) — ANALYZED, NOT applied (2026-06-16):** the literal Option A "call cancel_order" is UNSAFE — cancel_order is admin-only while cancel_delivery allows sales_rep, so a sales_rep cancelling a quick delivery would abort with "Only admins can cancel orders". Correct build is INLINE (release prebook + set the auto-order to 'cancelled' directly, in the admin_override bracket). Full spec + the inline recipe are in `parked-migrations/PARKED-03` (IMPLEMENTATION NOTE 2026-06-16). Needs a multi-actor functional smoke (admin AND sales_rep) + Codex. This is the top item for the next focused pass.
+
+**Session boundary (2026-06-16 PM):** stopped here deliberately after 3 clean fixes + the cancel_delivery analysis — the remaining items are all either large-function verbatim reproductions (drift-sensitive) or behavior changes needing Codex + functional smokes, which deserve fresh context for fidelity. Branch tip `7542d30`+ (this doc). Nothing pushed/deployed.
+
 ## ⛔ DEFERRED by the gate (do as a PAIR)
 - **PARKED-05 delivery_items terminal lock** — broadening `_enforce_delivery_items_parent_lock` to
   `<> 'scheduled'` regresses `update_order_items`' cancelled/voided cleanup `DELETE` (it runs WITHOUT
