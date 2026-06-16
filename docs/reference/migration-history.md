@@ -1,4 +1,4 @@
-# Migration History (465 migrations)
+# Migration History (466 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -47,6 +47,13 @@ clean, gated apply, B7-renamed to the stamped version.
   already use that 1:1 key; 0 NULL `order_item_id` on linked draft invoices live). Body verbatim (reverts to
   live md5 `b9f01eecfd986e49d9736cb090ceacaa`; post-apply md5 `f7291f02903574854c3cc440726ac3dd`). Both
   reviewers clean; overload=1.
+- `20260616142001_void_order_restore_logs_void_delivery_reversal` — void_order's inventory-restore loop
+  logged its `inventory_transactions` rows as `'adjusted'` (manual-correction catch-all) instead of the
+  purpose-built `'void_delivery_reversal'` type; muddied the ledger. Single-literal change (the ledger UI
+  already renders `'void_delivery_reversal'` as "Void Delivery", positive sign; transaction_type is a log
+  label, not the stock source of truth). Body verbatim (reverts to live md5
+  `6df426040f112e4a8b17627b7a652f30`; post-apply md5 `2ec5a64c67c1e08b3e71eae3529a2d83`). Both reviewers
+  clean; overload=1.
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 
