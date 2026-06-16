@@ -78,10 +78,10 @@ So the map is the **checklist**; the live DB + code are the **truth**. Your job 
 |--------|----------------|-----------|
 | The map's claims | `Read docs/app-workflow-map.html` — the `NODES` array (between `// __NODES_START__` / `__NODES_END__`) and `EDGES` array (`// __EDGES_START__` / `__EDGES_END__`); the "Auto-detected Problems" section | Pages + role labels + groups, nav/rpc/data edges, already-computed problems |
 | The map's hardcoded assertions | `Read scripts/generate-workflow-map.mjs` — `DATA_FLOW_EDGES`, `INTERNAL_RPCS`, `rpcToGroupId`, role parsing | What the map *asserts* vs *derives* |
-| Live RPCs | `execute_sql` (catalog queries in §3) | The real 218 RPCs, their overloads, signatures, SECDEF/search_path, grants |
+| Live RPCs | `execute_sql` (catalog queries in §3) | The current set of public RPCs (run the §3 snapshot for the live count — do NOT trust any number written here), their overloads, signatures, SECDEF/search_path, grants |
 | Live constraints | `execute_sql` on `pg_constraint` | Real status enums / CHECK values |
 | Live RLS & grants | `execute_sql` on `pg_policies`, `has_function_privilege` | Who can actually reach the data |
-| Live tables | `list_tables` | The real 95 tables + columns |
+| Live tables | `list_tables` | The current public tables + columns (live count from list_tables — do NOT trust any number written here) |
 | Advisors | `get_advisors` (security + performance) | Anon-executable SECDEF, missing RLS, etc. |
 | Frontend reality | `Grep`/`Read` over `src/` | Actual `.rpc('name')` calls, status strings sent, navigate targets, role gates |
 | Migrations | `Glob supabase/migrations/*.sql` + `Read` | History of a constraint/function when live & docs disagree |

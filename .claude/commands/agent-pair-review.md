@@ -85,8 +85,9 @@ Use this structure:
 ## Step 4 - Act Only On Verified Findings
 
 - Confirm BLOCKER/HIGH findings before fixing.
-- If both agents agree on a BLOCKER/HIGH, route it through the normal safe development workflow.
+- If both agents agree on a BLOCKER/HIGH, route the fix through /ship (it sizes the work, writes a plain-English plan for Mason on substantial / SQL / money / RLS changes, runs the review gate, and stops for Mason's explicit OK before any commit, push, deploy, or live migration).
 - If the agents disagree on a BLOCKER/HIGH, stop and show Mason both positions with evidence.
+- Every BLOCKER/HIGH row MUST carry a file:line or command-output citation in the Evidence column; an unsupported BLOCKER/HIGH is downgraded until evidence is attached.
 - MED/LOW/NIT findings can be fixed if cheap or deferred with a clear note.
 
 ## Step 5 - Report

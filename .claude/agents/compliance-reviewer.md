@@ -19,7 +19,9 @@ git diff --name-only HEAD
 git status --short
 ```
 
-Focus on files under `src/` and `supabase/migrations/`. Read the actual changed lines (`git diff HEAD -- <file>`) — review what changed, not the whole file, but read enough surrounding context to avoid false positives.
+Focus on files under `src/`, `supabase/migrations/`, and `supabase/functions/`. Read the actual changed lines (`git diff HEAD -- <file>`) — review what changed, not the whole file, but read enough surrounding context to avoid false positives.
+
+For any `supabase/functions/**/*.ts` change: confirm the CORS `ALLOWED_ORIGIN` env var is honored, no `service_role` key is leaked to the client, and JWT is verified where required.
 
 ## Your Checks
 
@@ -29,7 +31,7 @@ For each violation capture: file, line number, severity, and a one-line fix. **C
 - Any `parseFloat(...)` on a variable or property whose name ends in `_cents` / contains `cents`.
 - Money math (`+ - * /`) on `*_cents` values that routes through a float (e.g. `Number(x) * 1.0`, `* 100` without integer rounding).
 - New money stored/typed as `number` meant to be dollars where the rest of the table uses `bigint` cents.
-- **Correct:** money is `bigint` cents; display divides by 100 via `formatCents()` from `src/lib/money.ts`. Use `parseDollarsToCents` (positive) / `parseDollarsToCentsSigned` (the 3 vendor-bill callsites only).
+- **Correct:** money is `bigint` cents; display divides by 100 via `formatCents()` from `src/lib/money.ts`. Money INPUT must parse via `parseDollarsToCents` (positive) / `parseDollarsToCentsSigned` (the 3 vendor-bill callsites only) from `src/lib/parseCents.ts`.
 
 ### CHECK 2 — Mutation result not checked  — HIGH
 - Any `supabase.from(...).update(...)` or `.delete(...)` whose result is not passed to `checkMutationResult(result, '<context>')` (imported from `../lib/db`).
@@ -64,7 +66,7 @@ Flag code that would violate a documented lifecycle:
 - An invoice created with neither `order_id` nor `blend_ticket_id` — **EXCEPT** `invoice_type='credit_memo'` (credit memos are intentionally exempt; do NOT flag those).
 - A backdated financial write that bypasses `check_period_open()`.
 - Non-admin (sales_rep) access wired to month-end, commissions, or settings. **Do NOT flag `/payments`** — it is intentionally `admin` + `sales_rep`.
-- Any UPDATE/append to `financial_audit_log` (append-only) or `inventory_transactions` (immutable) outside the documented bypass.
+- Any UPDATE to `financial_audit_log` (append-only — CLAUDE.md Hard Red Line) or `inventory_transactions` outside the legitimate reversal/correction transaction types documented in `docs/workflows/INVENTORY_RULES.md` (`cancelled_delivery_reversal`, `void_delivery_reversal`, `prebook_reconciliation`) — flag a mutating UPDATE to an existing row, not those compensating INSERTs.
 
 ### CHECK 11 — Framework rules  — MED
 - New icon package (only `lucide-react` allowed) or CSS framework (only Tailwind; brand `crx-green` `#28A26A`).

@@ -18,9 +18,10 @@ You will be given:
 
 You have access to:
 - `src/types/index.ts` (the TS side)
-- `.claude/schema-registry.json` (snapshot of DB enums, generated columns, tables-without-updated_at)
+- `.claude/schema-registry.json` — **the PRIMARY source of truth for this agent.** It already covers every CHECK below: the per-table columns map (CHECK 2 & 3), `status_enums` (CHECK 5), `generated_columns` (CHECK 6), and `tables_without_updated_at` (CHECK 7).
 - `docs/reference/database-schema.md` (human-maintained schema doc — may itself be drifted)
-- Supabase MCP `mcp__50e15046-cf2c-49da-b8df-ceef27768f63__list_tables` for live introspection
+
+> **Note:** The Supabase MCP is NOT in this agent's `tools` grant — you cannot introspect the live DB directly. If the registry looks stale (see Rules / the RECOMMENDATION block), escalate to the orchestrator to run `/regen-schema-registry` rather than attempting a live query.
 
 ## Your Checks
 
@@ -31,7 +32,7 @@ For each table referenced in `src/lib/db.ts` or any `.from('table_name')` call i
 
 ### CHECK 2 — Every interface field exists in the live DB
 For each interface in `src/types/index.ts` that maps to a table:
-1. Cross-reference each field against the live DB (use Supabase MCP `list_tables` or read the schema registry).
+1. Cross-reference each field against the columns map in `.claude/schema-registry.json`.
 2. If an interface field has no matching DB column, severity = **HIGH** — runtime SELECTs of that field return undefined.
 3. Snake_case vs camelCase: most CRX Manager interfaces use snake_case directly (DB-shaped). Flag any unexpected case-conversion.
 
@@ -131,6 +132,7 @@ LOW:  <count>
 
 ## Rules
 
+- Report only REAL drift — something that breaks correctness or violates a stated CRX rule (a field that returns `undefined` at runtime, a generated column in a write shape, an `updated_at` on a table that lacks it). Do NOT pad the report with style preferences. Treat CHECK 5 status-narrowing as OPTIONAL polish: surface it as a single batched LOW note (e.g. "N status fields are typed `string` and could be narrowed"), never one finding per field. If everything in scope is in sync, say so plainly — an empty report is a valid, good result.
 - Always cite line numbers in `src/types/index.ts` so the orchestrator can jump straight to the edit point.
 - Propose EXACT TS code for each fix — don't say "add the field." Show the line.
 - If you can't tell whether a discrepancy is real drift or intentional (e.g., a write-shape type that deliberately omits a generated column), say so and ask the orchestrator to confirm.

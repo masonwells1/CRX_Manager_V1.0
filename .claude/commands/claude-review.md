@@ -19,6 +19,10 @@ Use `codex-to-claude-handoff` instead when Mason wants a continuation packet for
 - Do not expose secrets, `.env` values, tokens, service-role keys, or customer private data.
 - Production push, production deploy, migration application, and destructive data actions require Mason's explicit approval in the current conversation.
 
+## Review Scope
+
+- Flag only correctness bugs, security / red-line violations, and gaps against the stated requirement. Do NOT pad with defensive-coding suggestions, style/formatting preferences, or speculative hardening — note any of those at most as a single NIT line.
+
 ## Step 0 - State Check
 
 Run:
@@ -75,6 +79,8 @@ Read `.claude/session-state/claude-review-latest.txt` and classify each Claude f
 Verify BLOCKER and HIGH findings against source, tests, migration evidence, smoke results, or live read-only DB evidence before acting.
 
 ## Step 4 - Report To Mason
+
+Severity in plain English: BLOCKER = do not ship, breaks prod / data / money / a red line; HIGH = real bug, fix before merge; MED = should fix soon; LOW/NIT = optional polish.
 
 Report:
 

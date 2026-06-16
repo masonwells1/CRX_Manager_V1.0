@@ -16,7 +16,7 @@ export const meta = {
 // ---------------------------------------------------------------------------
 const PREAMBLE = [
   'You are auditing the CRX Manager codebase (React 18 + TypeScript + Vite + Supabase + Tailwind) at C:\\CRX_Manager.',
-  'It is a production agricultural-retail ERP. Money is stored as bigint cents (display ÷100). The app has ~66 pages, ~97 tables, ~204 RPCs, 363 migrations, and 7 Edge Functions.',
+  'It is a production agricultural-retail ERP. Money is stored as bigint cents (display ÷100). The app spans dozens of pages, ~100 tables, 200+ RPCs, 450+ migrations, and 7 Edge Functions; treat any count as a lead to confirm live, never a fact.',
   '',
   'GROUND TRUTH: Use the actual repo on disk AND the LIVE Supabase database. The Supabase MCP tools are available — load them with ToolSearch (e.g. query "execute_sql" or "supabase list tables"). Live project id is rhyzpcqhnizqbxphqdkr. You MAY run read-only SQL (SELECT, pg_catalog, information_schema) to ground every finding against the live DB.',
   '',
@@ -91,12 +91,12 @@ const DIMENSIONS = [
   {
     key: 'pdf-output',
     prompt:
-      'Audit the customer-facing PDF generators in src/lib (the *Pdf.ts files: invoicePdf, statementPdf, deliveryPdf, quotePdf, reportPdf, receivingPdf, orderSummaryPdf, orderPickListPdf, loadSheetPdf, yearEndSummaryPdf). Read them. Flag: (a) cents rendered without ÷100; (b) off-brand colors (brand crx-green is #28A26A); (c) company address NOT single-sourced from src/lib/companyInfo.ts (West York, IL) — any hardcoded address is a finding; (d) page-overflow / table-width layout risks on long real-world data; (e) missing or broken image-asset references that would fail on a real customer print; (f) unsafe font fallback.',
+      'Audit the customer-facing PDF generators in src/lib. Read the src/lib *Pdf.ts files (invoicePdf, statementPdf, deliveryPdf, quotePdf, reportPdf, receivingPdf, orderSummaryPdf, orderPickListPdf, loadSheetPdf, yearEndSummaryPdf, wpsNoticePdf — glob src/lib/*Pdf.ts to confirm the full set). Flag: (a) cents rendered without ÷100; (b) off-brand colors (brand crx-green is #28A26A); (c) company address NOT single-sourced from src/lib/companyInfo.ts (West York, IL) — any hardcoded address is a finding; (d) page-overflow / table-width layout risks on long real-world data; (e) missing or broken image-asset references that would fail on a real customer print; (f) unsafe font fallback.',
   },
   {
     key: 'money-financial',
     prompt:
-      'Audit MONEY & FINANCIAL correctness. Flag: (a) float math on money — parseFloat on *_cents variables, or money stored as numeric/float instead of bigint cents (exception: commissions.commission_amount is numeric dollars by design); (b) parseDollarsToCents vs parseDollarsToCentsSigned misuse — signed is legitimate only in the 3 vendor-bill adjustment callsites; (c) any UPDATE that writes invoices.balance_cents (it is GENERATED ALWAYS — writing it is a bug); (d) violations of inventory_transactions / financial_audit_log immutability invariants; (e) rounding errors in commission splits or payment allocation. Inspect src/lib (parseCents, reconciliation, paymentAllocation, commissionSplit, financeChargeCalc) and the relevant RPC bodies via live pg_proc.',
+      'Audit MONEY & FINANCIAL correctness. Flag: (a) float math on money — parseFloat on *_cents variables, or money stored as numeric/float instead of bigint cents (exception: commissions.commission_amount is numeric dollars by design); (b) parseDollarsToCents vs parseDollarsToCentsSigned misuse — signed is legitimate only in the 3 vendor-bill adjustment callsites; (c) any UPDATE that writes invoices.balance_cents (it is GENERATED ALWAYS — writing it is a bug); (d) violations of inventory_transactions / financial_audit_log immutability invariants; (e) rounding errors in commission splits or payment allocation. Inspect src/lib/parseCents.ts (parseDollarsToCents / parseDollarsToCentsSigned), src/lib/reconciliation.ts, the *.test.ts for commission-split / payment-allocation / finance-charge math, and the corresponding mutating RPC bodies via live pg_proc (commission split, payment allocation, finance charges).',
   },
   {
     key: 'frontend-safety',

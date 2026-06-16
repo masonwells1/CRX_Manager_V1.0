@@ -106,6 +106,8 @@ Do not claim a database or money fix is ready from code inspection alone.
 
 Use `/codex-review` with the selected scope. If the direct Codex CLI fails to resolve, fall back to `/codex-cross-review`.
 
+Codex is the only genuinely independent gate here — a different vendor/model (gpt-5.5). Claude's Step 4 verification reduces Codex false positives; it is NOT a substitute for Codex. The re-review in Step 5 (sub-item 2) must be the same Codex scope, not a Claude-only pass.
+
 ### Step 4: Verify Findings
 
 For every Codex BLOCKER or HIGH:
@@ -115,9 +117,13 @@ For every Codex BLOCKER or HIGH:
 - cut any finding that cannot be grounded in evidence;
 - keep genuine disagreement visible for Mason.
 
+Scope: keep only correctness bugs and gaps against a stated requirement (the Hard Red Lines / lifecycle / money / RLS / idempotency rules). Drop defensive-coding-for-impossible-inputs, style, naming, and speculative-flexibility findings the same as an ungrounded finding.
+
+Severity rubric: BLOCKER = data loss / money error / security hole / breaks a Hard Red Line; HIGH = wrong business result or lifecycle violation on a real path; MED = correctness gap on an unlikely path; LOW = minor. Verdict: SHIP = no open BLOCKER/HIGH; SHIP-WITH-FOLLOWUPS = open items are MED/LOW and explicitly accepted by Mason.
+
 ### Step 5: Fix Loop
 
-Fix confirmed BLOCKER/HIGH findings through the normal safe development workflow. For DB changes, use new migration files only and run the migration reviewers before any live apply request.
+Fix confirmed BLOCKER/HIGH findings through the normal safe development workflow. For DB changes, use new migration files only and run the migration reviewers (/migration-review) to produce the apply-guard proof file — which is content-bound by queryHash (sha256 of the exact migration SQL), so any edit after review re-blocks the apply — before any live apply request, which still needs Mason's explicit OK.
 
 After fixes:
 

@@ -51,7 +51,7 @@ code change, *recommend* running it in the report — don't run it inline.
 - Live DB: Supabase MCP (project `rhyzpcqhnizqbxphqdkr`) — `execute_sql` (SELECT only),
   `list_migrations`, `list_edge_functions`, `get_edge_function`, `get_advisors`
 - Repo: `supabase/migrations/`, `supabase/functions/`, `src/`, `src/types/index.ts`
-- Ledger: `CLAUDE.md` Current State + Deferred sections, `TODO.md`, `docs/audits/*`
+- Ledger: `CLAUDE.md` Snapshot + "Open owner items" line, `TODO.md`, `docs/audits/*` (plus archived `docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md` for older deferrals)
 - Registry: `.claude/schema-registry.json`
 
 ## 3. Phase 0 — Recon & risk-weighting (orchestrator, no subagents)
@@ -62,13 +62,13 @@ Build the target list before spawning anything:
    the last clean audit? Domains with zero change since their last clean verdict get
    a spot-check, not a deep dive.
 2. `get_advisors` (security + performance) — note counts; deltas vs the accepted
-   baseline in CLAUDE.md Schema Gotchas (52 anon-SECDEF grant-debt is accepted).
+   baseline in CLAUDE.md Schema Gotchas (53 anon-SECDEF (live count 2026-06-15 — re-confirm against CLAUDE.md Schema Gotchas at run time; the count drifts) grant-debt is accepted).
 3. `list_migrations` count vs `ls supabase/migrations/*.sql | wc -l` — first drift signal.
 4. `list_edge_functions` versions vs the versions recorded in CLAUDE.md.
-5. Skim CLAUDE.md "Current State" + "Deferred" + "Pending Mason" for the deferred
+5. Skim CLAUDE.md "## Snapshot" + "Open owner items" + TODO.md Deferred section for the deferred
    ledger to hand to Agent D.
 
-Output of Phase 0: a short worklist per layer (A–E) with risk weights, plus the exact
+Output of Phase 0: a short worklist per layer (A-F) with risk weights, plus the exact
 deferred-claim list for Agent D.
 
 ## 4. Phase 1 — Parallel fan-out (one message, all agents at once)
@@ -125,8 +125,8 @@ Severity: DEPLOYED-AHEAD = HIGH; REPO-AHEAD on a security guard = HIGH; other
 REPO-AHEAD = MED.
 
 ### Agent D — Deferred-ledger reconciliation (`general-purpose`)
-Take the Phase-0 deferred-claim list (CLAUDE.md Current State/Deferred/Pending,
-TODO.md, recent `docs/audits/*` "deferred/follow-up" sections). For each claim,
+Take the Phase-0 deferred-claim list (CLAUDE.md Snapshot + Open owner items,
+TODO.md Deferred, recent `docs/audits/*` "deferred/follow-up" sections). For each claim,
 verify its CURRENT truth against live/repo/git: still open? silently fixed? worse
 than recorded? Output a reconciled ledger table: `claim | recorded status | verified
 status | evidence`. Severity: a "deferred-as-LOW" item that verification shows is
@@ -143,7 +143,7 @@ ledger entries = LOW (doc fix).
   guards on pages with rapid param changes; double-submit surfaces lacking
   `useIdempotencyKey` on money-mutating buttons.
 - Sample deeply rather than skim everything: the 10 money-heaviest pages first.
-- **State the sample.** Layer E cannot cover all 66 pages — name which pages were
+- **State the sample.** Layer E cannot cover all 68 routed pages (verify the live count via `node scripts/check-doc-drift.mjs` — it grows) — name which pages were
   examined and label the CLEAN claims as sample-based, not exhaustive.
 Severity: missing role guard on a mutating page = HIGH; swallowed money-path error = MED.
 
@@ -155,7 +155,7 @@ because no layer audited the read-authorization surface.** SELECT-only.
   WHERE nspname='public' AND (relacl::text ILIKE '%anon=%' OR relacl::text ILIKE '%=r%/…PUBLIC%')`.
   For EACH hit, **prove reachability with a real probe**: `SET ROLE anon; SELECT … FROM <obj>`
   (and/or an anonymous REST call with the publishable anon key) — a catalog grant is not
-  proof; a returned row is. Cross-reference the accepted-findings list (the 52 anon-SECDEF
+  proof; a returned row is. Cross-reference the accepted-findings list (the 53 anon-SECDEF (live count 2026-06-15 — re-confirm against CLAUDE.md Schema Gotchas at run time; the count drifts)
   functions self-gate on `auth.uid()` and are accepted; a **view** has no in-body gate, so
   an anon-readable view that bypasses RLS — `security_invoker = off` — is a real exposure).
 - **RLS read-policy spot-check:** on the PII/financial-bearing tables (`profiles`,
@@ -214,7 +214,7 @@ appendix with the refutation — that appendix is as valuable as the findings.
 Write ONE file: `docs/audits/<YYYY-MM-DD>-foundation-ultra-review.md` containing:
 
 1. **Verdict:** `SOLID` / `SOLID-WITH-FOLLOWUPS` / `NEEDS-WORK` (any BLOCKER ⇒ NEEDS-WORK)
-2. **Counts** by severity, per layer A–E
+2. Counts by severity, per layer A-F
 3. **Findings** — each: severity, layer, claim, citation, verified-by, suggested fix
    route (`/ship` job description for each actionable finding)
 4. **Refuted appendix** (Phase 3 kills)

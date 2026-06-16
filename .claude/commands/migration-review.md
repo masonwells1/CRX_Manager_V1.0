@@ -21,7 +21,7 @@ The workflow runs `rls-security-reviewer` + `migration-drift-reviewer` + `typesc
 ### 3a. If verdict is `'clean'`
 1. Get a real current UTC timestamp (the workflow cannot — its clock is disabled). Run:
    `(Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")`
-2. Write the proof file to `.claude/session-state/migration-review-<safe-name>.json` where `<safe-name>` is the migration name with every char outside `[A-Za-z0-9_.-]` replaced by `_` (this matches the guard's own slug rule). Content:
+2. Write the proof file to `.claude/session-state/migration-review-<safe-name>.json` where `<safe-name>` is the migration name with every char outside `[A-Za-z0-9_.-]` replaced by `_`, then truncated to 80 characters (this matches the guard's own slug rule). Content:
    ```json
    {
      "migration": "<migration name or filename>",
@@ -31,6 +31,7 @@ The workflow runs `rls-security-reviewer` + `migration-drift-reviewer` + `typesc
      "queryHash": "<sha256 of the exact migration SQL — see note>"
    }
    ```
+   (The reviewers list is provenance-only — the migration-apply-guard hook validates findings + queryHash, not this list.)
    Use `"findings": "blockers-fixed"` instead if blockers were found and fixed earlier this session.
    `queryHash` binds the proof to this exact SQL so an edit-after-review can't slip through. Reliable way to get it: when Mason approves the apply (step 4), attempt the `apply_migration` call once — the guard prints the expected SHA-256 — paste that into `queryHash` and retry. (Omitting it still works but loses the content-binding protection.)
    IMPORTANT: the `migration` value must substring-match the `name` you will pass to `apply_migration`, or the guard won't match the proof. The proof expires after 30 minutes.

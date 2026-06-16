@@ -1,4 +1,4 @@
-Run the **foundation ultra review** — an orchestrated, read-only, dynamic multi-agent audit of the layers no other tool checks: live-data integrity, disk-vs-live drift, edge-function bundle drift, deferred-ledger reconciliation, and frontend runtime safety.
+Run the **foundation ultra review** — an orchestrated, read-only, dynamic multi-agent audit of the layers no other tool checks: live-data integrity, disk-vs-live drift, edge-function bundle drift, deferred-ledger reconciliation, frontend runtime safety, and authorization & exposure surface.
 
 It is **read-only**: it analyzes and writes ONE report file. It does not edit code, apply migrations, deploy, or commit.
 
@@ -9,7 +9,7 @@ The full, canonical instructions live in **`docs/audits/foundation-ultra-review-
 In summary, that prompt runs **5 phases**:
 
 0. **Recon** — risk-weight the targets from git delta, advisors, migration/edge-function version parity, and the deferred ledger.
-1. **Parallel fan-out** — 5 read-only agents (A: live-data invariant probes · B: disk-vs-live function/constraint drift · C: deployed-vs-repo edge bundles · D: deferred-claim verification · E: frontend route-guard/error-path safety) + delta-scoped standing reviewers, all in ONE message.
+1. **Parallel fan-out** — 6 read-only agents (A: live-data invariant probes · B: disk-vs-live function/constraint drift · C: deployed-vs-repo edge bundles · D: deferred-claim verification · E: frontend route-guard/error-path safety · F: authorization & exposure surface — anon/PUBLIC read grants, RLS read-policies, Storage buckets, pg_cron) + delta-scoped standing reviewers, all in ONE message.
 2. **Dynamic escalation** — findings spawn targeted deep-dives (data anomaly → causal trace; drift → blast radius; undeployed guard → exposure check). Max 2 waves.
 3. **Adversarial verification gate** — every BLOCKER/HIGH must survive an independent refutation attempt before it reaches the report.
 4. **Synthesis** — ONE dated report: `docs/audits/<YYYY-MM-DD>-foundation-ultra-review.md` (real clock — never fabricate), including the refuted appendix and the reconciled deferred ledger.

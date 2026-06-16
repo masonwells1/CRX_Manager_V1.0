@@ -24,7 +24,7 @@ If no paths are provided, look at the most recently modified files under `supaba
 ### CHECK 1 — CHECK constraint regression
 For each new `ADD CONSTRAINT ... CHECK (... IN (...))` or `ALTER ... CHECK (... IN (...))` block:
 1. Identify the table and column.
-2. Look up the existing enum values in `.claude/schema-registry.json` under `status_enums.<table>.<column>`.
+2. Look up the existing enum values under the FLAT dotted key `status_enums["<table>.<column>"]` (e.g. `status_enums["orders.status"]`), NOT a nested `status_enums.<table>.<column>` path. If absent there, fall back to `check_constraints["<table>.<column>"].values` (that key holds an object `{ values:[...], constraints:[...] }`, so read its `.values` array). If still ambiguous, hand off to the orchestrator to verify against the live DB.
 3. The new list MUST be a SUPERSET of the old list.
 4. If ANY value is missing, severity = **BLOCKER**. Report which value is missing.
 
@@ -46,14 +46,13 @@ Example: `invoices.balance_cents` is GENERATED — writing to it errors.
 
 ### CHECK 5 — Column name drift vs TypeScript types
 For each column referenced in `INSERT INTO <table> (<col1>, <col2>, ...)`:
-1. Read `src/types/index.ts` and find the interface for `<table>` (e.g., `Invoice`, `Order`).
-2. Verify each column name exists as a field on the TS interface.
-3. If a column doesn't exist on the TS side, severity = **HIGH** — either the migration uses a wrong name, or the TS types are stale. Either way, drift.
+1. Validate primarily against `columns["<table>"]` in the schema registry. If the column is absent from the live registry `columns["<table>"]` -> **HIGH** (wrong column name). If present in the registry but absent from `src/types/index.ts` -> **MED** (TS types are stale; flag for `typescript-types-drift-reviewer`).
+2. As a SECONDARY cross-check, read `src/types/index.ts` and find the interface for `<table>` (e.g., `Invoice`, `Order`) and verify each column name exists as a field on the TS interface.
 
 ### CHECK 6 — Migration filename version-stamp mismatch
 This is the B7 pattern from 2026-05-26.
 1. Extract the timestamp prefix from each filename: `<YYYYMMDDHHMMSS>_<description>.sql`.
-2. If `mcp__50e15046-cf2c-49da-b8df-ceef27768f63__list_migrations` is callable (check via Bash echo + handoff to orchestrator), suggest the orchestrator verify the disk filename matches the version Supabase will stamp. If they don't match, the disk file should be renamed to match Supabase's assigned version BEFORE applying.
+2. You CANNOT call Supabase MCP (your tools are Read/Grep/Glob/Bash). Do NOT attempt the Supabase MCP `list_migrations` tool. Instead, compare the on-disk filename timestamps against each other for ordering sanity, and emit a HIGH finding telling the orchestrator: 'Before applying, confirm via the Supabase MCP `list_migrations` tool that the disk filename version matches the version Supabase will stamp (B7 pattern).' Leave the live check to the orchestrator.
 3. Severity: **HIGH** if filenames look out-of-order with recently-applied migrations.
 
 ### CHECK 7 — Missing migration-history.md entry

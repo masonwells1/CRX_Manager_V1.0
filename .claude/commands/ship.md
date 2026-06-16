@@ -69,7 +69,7 @@ Detect what changed (`git diff --name-only HEAD` + `git status --short`) and dis
 | Any `supabase/migrations/*.sql` | `rls-security-reviewer` + `migration-drift-reviewer` |
 | `src/types/index.ts` OR a migration | `typescript-types-drift-reviewer` |
 | Any `src/` file importing `jspdf` / `jspdf-autotable` | `pdf-output-reviewer` |
-| Any `src/` or migration change (always) | `compliance-reviewer` |
+| Any `src/`, `supabase/functions/`, or migration change (always) | `compliance-reviewer` |
 | Workflow / lifecycle / page↔RPC logic touched | run the `/review-workflow` workflow (4 layers + adversarial verify) |
 
 Pass each reviewer the list of changed files. Wait for all reports.
@@ -123,7 +123,7 @@ This gate runs the Codex *review* automatically; it still never pushes — that 
 
 ## Step 7 — Docs + commit (on the branch)
 
-Update the docs the change touched (per CLAUDE.md "Documentation Maintenance"): CLAUDE.md Current State counts, `docs/reference/migration-history.md`, `rpc-functions.md`, `pages-routes.md`, `database-schema.md`, `docs/CHANGELOG.md` as applicable.
+Update the docs the change touched (per CLAUDE.md "Keeping Docs In Sync"): CLAUDE.md Snapshot counts, `docs/reference/migration-history.md`, `rpc-functions.md`, `pages-routes.md`, `database-schema.md`, `docs/CHANGELOG.md` as applicable.
 
 Before committing, run `node scripts/check-doc-drift.mjs` — fix any drift it reports (stale counts, missing migration-history rows) rather than committing around it.
 

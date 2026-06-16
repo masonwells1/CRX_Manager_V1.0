@@ -27,9 +27,7 @@ For each category that flipped to true, dispatch the matching subagent. CRITICAL
 | `MIGRATION_CHANGED` | `rls-security-reviewer` AND `migration-drift-reviewer` (both, parallel) |
 | `TYPES_CHANGED` OR `MIGRATION_CHANGED` | `typescript-types-drift-reviewer` |
 | `PDF_CHANGED` | `pdf-output-reviewer` |
-| Any TS/TSX changed in `src/` | `pr-review-toolkit:code-reviewer` AND `pr-review-toolkit:silent-failure-hunter` (parallel) |
-| Any new try/catch blocks, fallbacks, or error handling | `pr-review-toolkit:silent-failure-hunter` (already covered above if TS changed) |
-| New types added to `src/types/index.ts` | `pr-review-toolkit:type-design-analyzer` |
+| Any `src/`, `supabase/functions/`, or migration file changed (always) | `compliance-reviewer` (audits the Hard Red Lines / code-drift conventions — money-as-cents, RLS, `assertRpcResult`, `checkMutationResult` after `.update()`/`.delete()`, no `confirm()`/`alert()`, Sentry-from-lib, no `@ts-ignore`/`any`, lifecycle invariants — which lint/build/test cannot catch). Matches `/ship` Step 3. |
 
 For each subagent, pass the list of changed files in scope. Wait for all reports to come back.
 
@@ -43,11 +41,12 @@ Run each and capture pass/fail:
 
 ```bash
 npm run lint
+npm run typecheck
 npm run build
 npm run test -- --reporter=verbose 2>&1 | tail -15
 ```
 
-These also run automatically when Mason types `git commit` (via husky pre-commit hook). Running them here just surfaces failures earlier so Mason can fix before the commit attempt rejects.
+These also run automatically when Mason types `git commit` (via husky pre-commit hook). Running them here just surfaces failures earlier so Mason can fix before the commit attempt rejects. `npm run typecheck` is included (ordered before build, mirroring the hook) because `npm run build` (vite/esbuild) only *transpiles* — it never type-checks, so a pure type error (e.g. `TS2349`) passes build green but is then rejected by the commit's typecheck; that exact gap shipped a Field Mode prod crash on 2026-06-14.
 
 ## Step 3b: Prevention-control checks
 
@@ -73,7 +72,7 @@ node scripts/verify-deps.mjs
 echo "Pages: $(grep -c 'lazy(' src/App.tsx)" && echo "Migrations: $(ls supabase/migrations/*.sql | wc -l)"
 ```
 
-Compare to the counts in CLAUDE.md "Current State". Flag mismatches.
+Compare to the counts in the CLAUDE.md "Snapshot" section (or just run `node scripts/check-doc-drift.mjs`, already run in Step 3b — it's the authoritative drift check). Flag mismatches.
 
 ## Step 5: Print the verdict
 
@@ -86,6 +85,8 @@ What changed:
   - <N> migrations
   - <N> TS files
   - <N> Edge Function files
+  - <N> PDF files
+  - registry: changed/unchanged
   - <N> other
 
 Subagent reviews:
@@ -93,12 +94,19 @@ Subagent reviews:
   migration-drift-reviewer:        <...>
   typescript-types-drift-reviewer: <...>
   pdf-output-reviewer:             <...>
+  compliance-reviewer:             <...>
 
 Local validation:
-  Lint:   PASS / FAIL
-  Build:  PASS / FAIL
-  Tests:  X/Y passed
-  Docs:   in sync / N stale counts
+  Lint:      PASS / FAIL
+  Typecheck: PASS / FAIL
+  Build:     PASS / FAIL
+  Tests:     X/Y passed
+  Agent-wf:  PASS / FAIL
+  Deps:      PASS / FAIL
+  Docs:      in sync / N stale counts
+  (if MIGRATION_CHANGED)
+  DB-sweeps: clean / N violations
+  Smoke:     <rpc> PASS/MISSING
 
 ─── OVERALL ─────────────────────────────────────────
 

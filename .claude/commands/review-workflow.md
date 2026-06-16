@@ -1,6 +1,6 @@
 Run a full, widespread review of CRX Manager's workflow logic, page/RPC connections, entity lifecycles, and cross-entity business flows — anchored on the workflow map at `docs/app-workflow-map.html` but NEVER trusting it. This is the "is my foundation solid enough to build the next feature on?" check. It is **read-only**: it analyzes and writes ONE report file. It does not edit code, apply migrations, deploy, or commit.
 
-The heavy lifting now runs as the deterministic **`review-workflow` Workflow** (`.claude/workflows/review-workflow.js`): it dispatches the four review layers in parallel and adversarially verifies every BLOCKER/HIGH finding (independent skeptics try to *refute* each one) before it can reach the report. This command refreshes ground truth, runs that workflow, then synthesizes + writes the report.
+The heavy lifting now runs as the deterministic **`review-workflow` Workflow** (`.claude/workflows/review-workflow.js`): it dispatches the four review layers in parallel and adversarially verifies every BLOCKER/HIGH finding (same-model skeptics try to refute each one to cut false positives) before it can reach the report. This command refreshes ground truth, runs that workflow, then synthesizes + writes the report.
 
 ## The one rule that overrides everything
 
@@ -10,7 +10,7 @@ The heavy lifting now runs as the deterministic **`review-workflow` Workflow** (
 - prior audit docs in `docs/audits/`,
 - or the verification note already inside the HTML.
 
-The map's own "Verification Note (2026-05-20)" documents that a previous grep-heuristic pass asserted ~6 problems that were all FALSE once someone read the code (Returns "broken" — false; /notifications "orphan" — false; "drop get_field_geojson" — would have caused an outage). Treat every flag as a *lead to confirm by reading the code/DB*, never as a fact. A finding with no `file:line` or migration/constraint citation does not belong in the report. The workflow's adversarial-verify phase exists to enforce this automatically — but you still own the final judgement.
+The map's own "Verification Note (2026-05-20)" documents that a previous grep-heuristic pass asserted ~6 problems that were all FALSE once someone read the code (Returns "broken" — false; /notifications "orphan" — false; "drop get_field_geojson" — would have caused an outage). Treat every flag as a *lead to confirm by reading the code/DB*, never as a fact. A finding with no `file:line` or migration/constraint citation does not belong in the report. The workflow's adversarial-verify phase helps enforce this — but you still drop any uncited finding yourself in Step 2.
 
 Lead with **recommendations**, not just lists — for every real issue, say what you'd do about it and why.
 
@@ -101,7 +101,7 @@ Keep full detail in the file, not the chat.
 
 ## Step 5 — Offer Codex cross-review (do not auto-run)
 
-If there are any BLOCKER or HIGH findings, offer to run `/codex-cross-review` on them so a second LLM independently validates before Mason acts (per his standing preference that major findings get a Codex pass). Wait for his go-ahead.
+If there are any BLOCKER or HIGH findings, offer to run `/codex-cross-review` on them so a second, genuinely independent model (Codex/gpt-5.5 — the in-workflow skeptics are same-model and only reduce false positives) validates before Mason acts (per his standing preference that major findings get a Codex pass). Wait for his go-ahead.
 
 ## Hard rules
 - **Read-only.** No `Edit`/`Write` except the one report file. No `apply_migration`, no deploy, no `git commit`.
