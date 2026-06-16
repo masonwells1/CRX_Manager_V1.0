@@ -57,7 +57,7 @@ Kept short on purpose: this whole file loads on **every turn**, so bloat makes C
 
 ## Auto-Triggered Skills & Commands
 
-Invoke the matching skill/command automatically when the task fits — don't wait for Mason to type it (he won't). **The big one: route any substantive coding job through `/ship`** (it scaffolds → reviews → fixes → gates) and tell him in one line you're doing so; skip it for trivial one-line tweaks or questions (see "How to size the work"). Other routing:
+Invoke the matching skill/command automatically when the task fits — don't wait for Mason to type it (he won't). **The big one: route any substantive coding job through `/ship`** (it scaffolds → reviews → fixes → gates) and tell him in one line you're doing so; skip it for trivial one-line tweaks or questions (see "How to size the work"). Mason triggers this in plain English — "build me X", "ship it", "push this", "make it live", "do it" — and the `ship-intent-reminder` UserPromptSubmit hook reinforces the routing, so he never types the command. **"Push" runs the full pipeline but still STOPS for his explicit one-click OK before any prod deploy** — it is never an auto-deploy. Other routing:
 
 - New page → `/new-page` · new RPC → `/new-rpc` · new migration/table/column/RLS → `/create-migration`
 - Full health check / "is everything okay?" → `/audit` · "ready to ship?" → `/deploy-check` · deploy an Edge Function → `/deploy-edge-function`

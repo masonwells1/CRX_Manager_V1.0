@@ -123,6 +123,11 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/codex-to-claude-handoff-reminder.mjs\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/ship-intent-reminder.mjs\"",
+            "timeout": 5
           }
         ]
       }
