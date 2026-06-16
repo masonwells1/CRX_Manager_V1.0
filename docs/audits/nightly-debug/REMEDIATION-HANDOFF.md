@@ -71,7 +71,13 @@ total_profit/total_margin_pct, THEN broaden the lock in the same/paired migratio
    cancel the exclusive auto-order + zero pending commissions + audit row), scope-extended to
    `scheduled`+`in_progress`. Codex pending (batched pre-push).
 2. **update_order_items (+ PARKED-05 pairing, LOW/MED):** see DEFERRED above.
-3. ⚠️ **BLOCKED — needs Mason's business answer (analyzed 2026-06-16, NOT applied).**
+3. ⚠️ **NEEDS A FIELD-AWARE REDESIGN — Mason answered 2026-06-16: MULTI-FIELD SPLITS ARE REAL.**
+   So the originally-prescribed fix (flat per-customer Hamilton + `require sum=100`) is **WRONG** — it assumes a
+   single field. The CORRECT fix allocates **per field** (split each field's portion of the order by that field's
+   own customer splits, then sum per customer), which needs field→line attribution the function doesn't currently
+   have (it applies a flat per-customer `total_pct` to every line). Re-scope as a deeper redesign before building;
+   the penny-drift `calculate_billing_splits` idea still applies **within each field's allocation**, not across the
+   whole order. Dormant on live (0 split invoices ever, 0 multi-field quotes today) so no urgency. Original analysis:
    create_split_invoices_from_order: the penny-drift is real (each customer's per-line share is `round()`d
    independently → the per-line shares can sum to ≠ the line total). The Hamilton fix is DESIGNED: collect
    customers + summed pct into stable-ordered arrays, create one draft invoice per customer, then for EACH
