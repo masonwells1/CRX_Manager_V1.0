@@ -1,4 +1,4 @@
-# Migration History (467 migrations)
+# Migration History (468 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -68,7 +68,20 @@ clean, gated apply, B7-renamed to the stamped version.
   jsonb (`+prebooked_released`); post-apply md5 `90ba258797cbac40e80673fba0767369`. rls-security +
   migration-drift reviewers clean; 3-scenario rolled-back live smoke passed (admin/scheduled,
   sales_rep/scheduled = no auth regression, admin/in_progress) + post-apply re-smoke; overload=1.
-  **Codex independent review pending** (CLI unavailable this session) — queued for the batched pre-push pass.
+  **Codex (gpt-5.5) reviewed this commit and flagged 2 real P2 edge cases → fixed in the follow-up below
+  (`20260616170714`).**
+- `20260616170714_cancel_delivery_quick_cancel_codex_p2_fixes` (Codex P2 follow-up to the above) — fixes the
+  two gaps the independent Codex review found in v1's quick-cancel branch: **P2-1** the prebook release now
+  loops `order_items` (`GREATEST(total_units_needed - quantity_delivered, 0)`) instead of `delivery_items`, so
+  quantities ADDED/INCREASED via `update_order_items` (which bumps `order_items` + `inventory.quantity_prebooked`
+  but never `delivery_items`) are released too — v1 stranded them; **P2-2** it now counts `paid` commissions and
+  raises a `'cancellation_review'` notification per active admin (v1 only cancelled `pending`). Both deltas mirror
+  live `cancel_order`. Verbatim from v1 (md5 `90ba258797cbac40e80673fba0767369`) except the release-loop source,
+  the paid-commission block, the `v_paid_commissions` DECLARE, and the result jsonb (`+paid_commissions_flagged`);
+  post-apply md5 `5c583450306712d3c272487d50891e0f`. rls-security + migration-drift reviewers clean; rolled-back
+  live smoke proved an edited order (released 12 not 10) + an added item (released, no delivery_item) + a paid
+  commission (preserved + flagged, 3 admin notifications) + a sales_rep cancel (no auth error); overload=1;
+  anon cannot execute.
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 

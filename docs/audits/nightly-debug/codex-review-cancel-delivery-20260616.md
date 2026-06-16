@@ -1,5 +1,13 @@
 # Codex independent review packet — `cancel_delivery` quick-delivery prebook fix
 
+> ✅ **RESOLVED 2026-06-16:** Codex (gpt-5.5) ran via `codex review --commit 8cb6aea` and returned **2 P2
+> findings** (release edited-order quantities; flag paid commissions). Both were verified real against live
+> `update_order_items`/`cancel_order` and **fixed in the follow-up migration `20260616170714`
+> (`cancel_delivery_quick_cancel_codex_p2_fixes`)** — release now loops `order_items`; paid commissions are
+> counted + flagged to admins. Re-validated with a rolled-back live smoke (edited order + added item + paid
+> commission + sales_rep cancel). Both reviewers clean on the follow-up. No P1/BLOCKER was found. The QUESTIONS
+> below are retained as the standing checklist for the batched pre-push Codex pass.
+
 **For the batched pre-push Codex cross-review of the nightly-debug large-RPC pass.**
 Status: applied LIVE 2026-06-16 (`20260616151122`), NOT pushed to main / not deployed. Mason authorized
 "apply now, Codex in the batch" because the Codex CLI was unavailable in the applying session. This packet
