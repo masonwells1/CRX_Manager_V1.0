@@ -72,3 +72,24 @@ missing-idempotency paths, and a handful of green frontend cleanups). All record
 fixes/drafts the confirmed ones.
 
 **Nothing here touched production.** Green fix = a label on this branch; everything risky is parked.
+
+### Cycle 2 — both HIGHs drafted/parked + backlog verification (2026-06-15 ~23:35)
+
+- 🟡 **`allocate_payment` over-allocation (HIGH) — drafted + validated + parked** as
+  [`PARKED-02`](parked-migrations/PARKED-02-allocate-payment-over-allocation-guard.sql). Rather than
+  risk a byte-imperfect reproduction of the 6 KB function, the fix is an **additive guard trigger**
+  on `allocation_sets` that rejects `total_allocated_cents > total_payment_cents`
+  (error `ALLOCATIONS_EXCEED_PAYMENT`) — and it protects *every* writer, including the offline-sync
+  path that bypasses the UI. Compiles against live (rolled back); 0 existing rows violate it.
+- 🟠 **`cancel_delivery` prebook leak (HIGH) — verified, parked as a one-question decision**
+  ([`PARKED-03`](parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md)).
+  Cancelling a *scheduled quick delivery* strands its pre-booked inventory **and** leaves a zombie
+  `confirmed` order. The clean fix (recommended: also cancel the auto-created order) is a small
+  behavior change, so I want your nod first. **Reply "cancel_delivery: Option A"** and I'll ship the draft.
+- ✅ **Verified a MEDIUM:** `save_quote`'s internal transition map advertises `expired→revised`
+  (and a few `draft→…` edges) that the database's own guard trigger rejects — a real divergence, but
+  it can't be reached from the UI today. Cleanup queued (trim `save_quote`'s map to match the guard).
+
+**Parked for your approval right now:** PARKED-01 (invoice BLOCKER) · PARKED-02 (payment
+over-allocation) · PARKED-03 (delivery prebook — needs your one-word decision). Cycle 3 keeps
+verifying the remaining ~20 backlog findings and applies the safe Green cleanups.

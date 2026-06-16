@@ -4,15 +4,16 @@
   "started": "2026-06-15T22:50:12-05:00",
   "scope": "sales-pipeline-first-then-whole-app",
   "stats": {
-    "cyclesRun": 1,
+    "cyclesRun": 2,
     "findingsTotal": 30,
     "confirmed": 4,
     "refuted": 3,
-    "unverified": 21,
-    "twoOfThreeReverify": 2,
+    "unverified": 20,
     "greenFixed": 1,
-    "yellowParked": 1,
-    "verifiedDraftPending": 3,
+    "yellowParked": 2,
+    "parkedDecision": 1,
+    "verifiedDraftPending": 1,
+    "verifiedQueued": 1,
     "needsMasonDecision": 1,
     "redBlocked": 0,
     "consecutiveDryCycles": 0
@@ -23,17 +24,23 @@
       "ranAt": "2026-06-15T23:30-05:00",
       "scope": "sales pipeline (quote/order/delivery/invoice/payment) + money/rpc-safety/frontend-safety",
       "dimensions": ["quote-lifecycle","order-fulfillment","delivery-flow","invoice-posting","payment-allocation","money-correctness","rpc-safety","frontend-pipeline-safety"],
-      "note": "Audit fan-out via Workflow. ~23 verifier agents were rate-limited mid-run, so 21 real findings are UNVERIFIED (not refuted) and queued for main-loop re-verification in cycle 2. The BLOCKER + both HIGHs were re-verified by hand with direct read-only SQL."
+      "note": "Audit fan-out via Workflow. ~23 verifier agents were rate-limited mid-run, so 21 real findings are UNVERIFIED (not refuted) and queued for main-loop re-verification. BLOCKER + both HIGHs re-verified by hand with direct read-only SQL."
+    },
+    {
+      "n": 2,
+      "ranAt": "2026-06-15T23:35-05:00",
+      "scope": "main-loop verification (direct SQL) + draft/park the 2 HIGHs",
+      "note": "Drafted+validated+parked allocate_payment guard (PARKED-02, additive trigger). cancel_delivery verified real, parked as a design-decision note (PARKED-03) — fix needs Mason's call on zombie-order handling. Verified quote transition-map MEDIUM (real, low reachability). No agent fan-out (rate-limit avoidance)."
     }
   ],
   "findings": [
     { "dedupeKey": "lifecycle:_enforce_invoice_status_transition:paid-dead-end", "severity": "BLOCKER", "tier": "yellow", "status": "parked", "artifact": "parked-migrations/PARKED-01-invoice-paid-status-transitions.sql", "firstCycle": 1, "note": "Enforcer has no out-arm from 'paid'; void_invoice/void_payment/reverse_write_off all crash on a paid invoice (verified live, callers unbracketed). Fix = strict superset adding paid->{voided,posted,overdue}. Validated (compiles, rolled back)." },
-    { "dedupeKey": "payment:allocate_payment:no-sum-le-total-guard", "severity": "HIGH", "tier": "yellow", "status": "verified-draft-pending", "firstCycle": 1, "note": "No server-side SUM(allocations)<=payment-total guard; non-UI callers (offlineSync) can over-allocate, overstating cash/understating AR silently. Fix = add ALLOCATIONS_EXCEED_PAYMENT guard. Draft in cycle 2 (needs full fn body, md5-verified)." },
-    { "dedupeKey": "delivery:cancel_delivery:scheduled-quick-prebooked-leak", "severity": "HIGH", "tier": "yellow", "status": "verified-draft-pending", "firstCycle": 1, "note": "Cancelling a SCHEDULED quick delivery never releases the prebook (restore block only runs for completed/in_progress) -> quantity_prebooked stranded, Net Free understated. Fix needs inventory-model care (scope to is_quick_delivery scheduled; confirm non-quick path). Draft in cycle 2." },
-    { "dedupeKey": "delivery:complete_delivery:partial-invoice-product-join", "severity": "LOW", "tier": "yellow", "status": "verified-draft-pending", "firstCycle": 1, "note": "Partial-completion invoice rewrite joins delivery_items->invoice_items on product_id (not order_item_id); mis-distributes qty when one product is on multiple lines. Draft in cycle 2." },
-    { "dedupeKey": "ar:get_ar_aging:excludes-credit-memo-negatives", "severity": "LOW", "tier": "green", "status": "needs-mason-decision", "firstCycle": 1, "note": "AR aging filters balance_cents>0, so unapplied credit memos (negative balances) don't net against aging totals. System-wide convention (gross-AR). DECISION: keep gross + document, or net credits. Not auto-changed." },
-    { "dedupeKey": "frontend:ARaging:90-119-column-label", "severity": "LOW", "tier": "green", "status": "fixed", "firstCycle": 1, "note": "Column captioned '90 Days' actually holds the 90-119 bucket. Relabeled table header + CSV header to '90-119 Days'. Frontend-only, committed." },
-    { "dedupeKey": "quote:save_quote:transition-map-diverges-from-enforcer-trigger", "severity": "MEDIUM", "tier": "yellow", "status": "unverified", "firstCycle": 1 },
+    { "dedupeKey": "payment:allocate_payment:no-sum-le-total-guard", "severity": "HIGH", "tier": "yellow", "status": "parked", "artifact": "parked-migrations/PARKED-02-allocate-payment-over-allocation-guard.sql", "firstCycle": 1, "note": "No server-side SUM(allocations)<=payment-total guard; offlineSync bypasses the UI guard -> silent over-allocation. Fix = additive BEFORE trigger on allocation_sets (ALLOCATIONS_EXCEED_PAYMENT). Validated (fn+trigger compile, rolled back; 0 rows violate)." },
+    { "dedupeKey": "delivery:cancel_delivery:scheduled-quick-prebooked-leak", "severity": "HIGH", "tier": "yellow", "status": "parked-decision", "artifact": "parked-migrations/PARKED-03-cancel-delivery-scheduled-quick-prebook-leak.md", "firstCycle": 1, "note": "Cancelling a scheduled quick delivery never releases its prebook AND leaves a zombie confirmed order. Verified real; fix needs Mason's decision (recommend Option A: also cancel the auto-order). Migration drafted on approval." },
+    { "dedupeKey": "delivery:complete_delivery:partial-invoice-product-join", "severity": "LOW", "tier": "yellow", "status": "verified-draft-pending", "firstCycle": 1, "note": "Partial-completion invoice rewrite joins delivery_items->invoice_items on product_id (not order_item_id); mis-distributes qty when one product is on multiple lines. Draft in a later cycle." },
+    { "dedupeKey": "ar:get_ar_aging:excludes-credit-memo-negatives", "severity": "LOW", "tier": "green", "status": "needs-mason-decision", "firstCycle": 1, "note": "AR aging filters balance_cents>0, so unapplied credit memos don't net against aging totals. System-wide gross-AR convention. DECISION: keep gross + document, or net credits." },
+    { "dedupeKey": "frontend:ARaging:90-119-column-label", "severity": "LOW", "tier": "green", "status": "fixed", "firstCycle": 1, "note": "Column captioned '90 Days' actually held 90-119. Relabeled table + CSV header to '90-119 Days'. Committed (6ad7cc4)." },
+    { "dedupeKey": "quote:save_quote:transition-map-diverges-from-enforcer-trigger", "severity": "MEDIUM", "tier": "yellow", "status": "verified", "firstCycle": 1, "note": "Confirmed live: save_quote's internal v_allowed_transitions advertises expired->revised and draft->revised/declined/expired that the _enforce_quote_status_transition trigger rejects. Real divergence but LOW reachability (UI canEdit=['draft','revised'] can't reach those paths). Fix = trim save_quote's map to a subset of the trigger. Queued." },
     { "dedupeKey": "quote:QuoteBuilder:convert-fail-revert-skips-planned-hold-rebuild", "severity": "MEDIUM", "tier": "green", "status": "unverified", "firstCycle": 1 },
     { "dedupeKey": "quote:_enforce_quote_terminal_not_drawn:missing-expired-in-guard", "severity": "LOW", "tier": "yellow", "status": "unverified", "firstCycle": 1 },
     { "dedupeKey": "quote:draw_down_quote:weighted-avg-price-loses-per-line-lock", "severity": "LOW", "tier": "yellow", "status": "unverified", "firstCycle": 1 },
