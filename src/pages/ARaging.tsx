@@ -227,7 +227,7 @@ export default function ARaging() {
     },
     {
       key: 'days_90',
-      header: '90 Days',
+      header: '90–119 Days',
       sortable: true,
       render: (r) => (
         <span className={`font-mono ${r.days_90 > 0 ? 'text-red-500' : ''}`}>
@@ -842,7 +842,7 @@ export default function ARaging() {
                         { key: 'current_amount', header: 'Current', format: fmtCSV },
                         { key: 'days_30', header: '30 Days', format: fmtCSV },
                         { key: 'days_60', header: '60 Days', format: fmtCSV },
-                        { key: 'days_90', header: '90 Days', format: fmtCSV },
+                        { key: 'days_90', header: '90–119 Days', format: fmtCSV },
                         { key: 'over_90', header: '120+ Days', format: fmtCSV },
                         { key: 'total_outstanding', header: 'Total', format: fmtCSV },
                       ],
