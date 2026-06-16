@@ -59,12 +59,16 @@ Kept short on purpose: this whole file loads on **every turn**, so bloat makes C
 
 Invoke the matching skill/command automatically when the task fits — don't wait for Mason to type it (he won't). **The big one: route any substantive coding job through `/ship`** (it scaffolds → reviews → fixes → gates) and tell him in one line you're doing so; skip it for trivial one-line tweaks or questions (see "How to size the work"). Mason triggers this in plain English — "build me X", "ship it", "push this", "make it live", "do it" — and the `ship-intent-reminder` UserPromptSubmit hook reinforces the routing, so he never types the command. **"Push" runs the full pipeline but still STOPS for his explicit one-click OK before any prod deploy** — it is never an auto-deploy. Other routing:
 
-- New page → `/new-page` · new RPC → `/new-rpc` · new migration/table/column/RLS → `/create-migration`
-- Full health check / "is everything okay?" → `/audit` · "ready to ship?" → `/deploy-check` · deploy an Edge Function → `/deploy-edge-function`
-- Docs drift → `/update-docs` · regen schema registry after an enum/generated-col/table change → `/regen-schema-registry`
-- Plain-English a migration before `apply_migration` → `/explain-migration` · independent Codex review → `/codex-review` (or `/codex-cross-review` to draft a packet)
-- Quick prod health → `/spot-check-prod` · before any commit → `/preflight` · "where are we" → `/status` · "something's broken" → `/quick-fix`
-- Deeper read-only reviews when Mason asks for them: `/foundation-ultra-review`, `/review-workflow`, `/architecture-weakness-audit`, `/map-drift-audit`, `/whole-codebase-audit`.
+**Building** — new page → `/new-page` · new RPC → `/new-rpc` · new migration/table/column/RLS → `/create-migration` (all run *inside* `/ship`).
+
+**Reviews — Mason only needs two phrases; Claude picks the right tool:**
+- **"Is everything okay?" / "check it"** (light, fast) → before a commit: `/preflight` · project health (lint/build/test/doc-drift): `/audit` · live production right now: `/spot-check-prod`.
+- **"Do a deep review" / "is the foundation solid?"** (thorough, read-only — pick the lens by what's in question; Mason won't name it, choose for him): money / AR / security / financial foundation → `/foundation-ultra-review` · fragility / races / single-points-of-failure → `/architecture-weakness-audit` · "did anything drift / is it still wired right?" → `/map-drift-audit` · workflow logic / page↔RPC / lifecycle wiring → `/review-workflow` · broad everything-at-once → `/whole-codebase-audit`.
+- **Independent second opinion** (the Codex gate — migrations / RLS / money / edge-fns) → `/codex-review`.
+
+**Other utilities** — docs drift → `/update-docs` · regen schema registry after an enum/generated-col/table change → `/regen-schema-registry` · plain-English a migration before `apply_migration` → `/explain-migration` · "ready to ship?" → `/deploy-check` · deploy an Edge Function → `/deploy-edge-function` · "where are we" → `/status` · "something's broken in prod" → `/quick-fix`.
+
+**Internal — Mason never types these** (Claude↔Codex collaboration plumbing, invoked by the flows above, kept because they're tested infrastructure): `/codex-gauntlet`, `/codex-cross-review`, `/claude-review`, `/agent-pair-review`, `/agent-health`, `/agent-pr-comment`, `/codex-to-claude-handoff`.
 
 These guide the process to prevent mistakes — they still require Mason's approval before any deploy, migration, or commit.
 
