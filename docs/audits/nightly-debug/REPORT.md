@@ -59,6 +59,10 @@ defects in my own audit artifacts**, and I agreed with and fixed all four:
 3. **The crawler mis-counted** a redirected (broken) page as healthy — now flagged.
 4. **PARKED-04's order-share guard** had a race + permissions hole — hardened to `SECURITY DEFINER` + a per-order lock
    (re-validated against your live DB).
+5. **(confirming re-review) the page-crawler still mutated prod** — Dashboard runs maintenance RPCs on mount, and every
+   blocked route redirects through it — so the crawler is now **hard-gated to staging-only** (it refuses to run against
+   your prod project). Net: the runtime-crawl pillar needs a staging/disposable DB to be usable; it can't run against
+   your live database safely.
 
 Full disposition: [`docs/audits/2026-06-16-claude-disposition-of-codex-nightly-debug.md`](../2026-06-16-claude-disposition-of-codex-nightly-debug.md).
 **The 7 parked fixes are now cross-reviewed and ready** — say the word and I'll ship them one at a time through the

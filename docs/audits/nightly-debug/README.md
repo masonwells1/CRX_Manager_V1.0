@@ -16,8 +16,11 @@ Started: 2026-06-15 ~22:50 America/Chicago · Branch: `claude/priceless-austin-0
 2. **Static health** — `typecheck`, `lint`, `build`, unit tests (`vitest`), `db-sweeps`,
    `check-doc-drift`.
 3. **Runtime crawl** — drives every page in a headless browser as **admin / sales_rep /
-   driver**, capturing console errors, blank renders, and failed network calls. *Gated on
-   E2E creds being present in `.env` — auto-skips with a note if absent.*
+   driver**, capturing console errors, blank renders, and failed network calls. **STAGING-ONLY
+   (Codex P1):** the crawl is NOT read-only against prod — pages run maintenance RPCs on mount
+   (Dashboard releases expired quote holds; "new" pages reserve numbers) — so it **refuses to run
+   when `VITE_SUPABASE_URL` points at the prod project**. Point it at a staging/disposable DB and
+   add E2E creds to enable it.
 4. **Cross-model verification** — risky fixes get a Codex cross-review before they're trusted.
 
 ## The safety model — 3 tiers (NEVER touches prod)

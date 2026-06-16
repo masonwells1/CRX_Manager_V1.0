@@ -222,11 +222,29 @@ async function crawlRoute(page: Page, role: Role, route: { path: string; roles: 
   });
 }
 
-const ROLES = rolesFromEnv();
+// SAFETY GATE (Codex cross-review P1): this crawl is NOT read-only against production.
+// Loading pages triggers on-mount side effects — e.g. Dashboard ('/') runs
+// release_expired_quote_holds + notification RPCs, and every forbidden route redirects to
+// Dashboard; some "new" pages reserve sequence numbers. So the crawl REFUSES to run when
+// VITE_SUPABASE_URL points at the prod project; it may only run against a staging/disposable DB.
+const PROD_PROJECT_REF = 'rhyzpcqhnizqbxphqdkr';
+const TARGET_DB_URL = process.env.VITE_SUPABASE_URL || '';
+const IS_PROD_DB = TARGET_DB_URL.includes(PROD_PROJECT_REF);
 
-if (ROLES.length === 0) {
+const ROLES = IS_PROD_DB ? [] : rolesFromEnv();
+
+if (IS_PROD_DB) {
+  test('route-crawl (skipped — refuses to run against the PRODUCTION database)', () => {
+    test.skip(
+      true,
+      'VITE_SUPABASE_URL points at the prod project. The crawl is NOT read-only against prod ' +
+        '(Dashboard mounts release_expired_quote_holds + notification RPCs; redirects funnel ' +
+        'through it). Point VITE_SUPABASE_URL at a staging/disposable DB to enable it.',
+    );
+  });
+} else if (ROLES.length === 0) {
   test('route-crawl (skipped — no E2E credentials)', () => {
-    test.skip(true, 'Add E2E_TEST_EMAIL/E2E_TEST_PASSWORD (+ optional salesrep/driver) to .env to enable the crawl.');
+    test.skip(true, 'Add E2E_TEST_EMAIL/E2E_TEST_PASSWORD (+ optional salesrep/driver) to a STAGING .env to enable the crawl.');
   });
 } else {
   for (const cred of ROLES) {
