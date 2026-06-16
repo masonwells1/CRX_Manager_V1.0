@@ -4,6 +4,20 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-15 — CLAUDE.md restructured for token efficiency (docs only)
+
+Cut the always-loaded `CLAUDE.md` from 581 lines / 110 KB (~27.5K tokens) to 358 lines / 28.8 KB (~7.2K tokens) — a **~74% reduction in what loads on every turn** — with **zero rule content lost** (everything moved is preserved verbatim). Grounded in Anthropic's "Best practices for Claude Code" + "How Claude remembers your project" (keep it short; only every-session facts; push detail to docs/skills; a bloated CLAUDE.md makes Claude *ignore* instructions) and Karpathy's actual committed guidance (simplicity-first — and the finding that the viral "Karpathy CLAUDE.md" is a third-party derivative, `multica-ai/andrej-karpathy-skills`, NOT his own file; his real files are `karpathy/llm-council/CLAUDE.md` technical-notes-only + `karpathy/autoresearch/program.md`).
+
+- **Removed the multi-month "Current State" work-log** (the changelog-in-CLAUDE.md anti-pattern; ~88 KB of paragraph-length dated entries) → archived verbatim to `docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md`. Replaced with a tight `## Snapshot` (live counts + open owner items + pointers to CHANGELOG/memory/archive).
+- **Added `## Working Principles`** (think-first / simplest-thing-that-works / surgical-changes / drive-to-done-but-the-gates-win / lead-for-Mason) — adapted from Karpathy's real `autoresearch/program.md`, reconciled with CRX's production gates (we deliberately reject his "NEVER STOP").
+- **Extracted reference detail** to `docs/reference/sql-canonical-patterns.md` (copy-paste SQL/RPC templates) and `docs/reference/agent-guardrails.md` (full hook + subagent tables), leaving short imperative pointers + the non-negotiable one-liners inline.
+- **Condensed** the doc-maintenance, Graphify/map, and pre-commit sections to pointers. Added a top maintainer HTML comment (stripped from context → costs no tokens) documenting the new structure + the Karpathy provenance.
+- All Hard Red Lines, Architecture Rules, Business Logic Lifecycles, Schema Gotchas, and the auto-trigger skills table stay **inline** — they're every-session-relevant scar tissue from the March-2026 40-bug drift era. No code, DB, RPC, page, or migration change; the `AGENTS.md` generator is unaffected (it reads filesystem counts, not CLAUDE.md content). Mechanical extraction done by a throwaway script (now deleted) for byte-exact fidelity.
+- **Appended (at Mason's request) a `## Appendix — Karpathy-derived coding guidelines (verbatim)`** at the end of CLAUDE.md: the viral 100k+ star "Karpathy CLAUDE.md" — actually Forrest Chang's derivative `multica-ai/andrej-karpathy-skills` (4 principles: Think Before Coding / Simplicity First / Surgical Changes / Goal-Driven Execution) — reproduced verbatim, **plus** Karpathy's own verbatim "NEVER STOP" block from `karpathy/autoresearch/program.md`. Both carry a provenance note (the viral file is a community derivative, not Karpathy's own) and a precedence note: "NEVER STOP" governs task momentum only and never overrides the production gates.
+- Committed + pushed to `main` (production) at Mason's explicit request. Docs-only — the live web app is unchanged by a CLAUDE.md/docs change.
+
+---
+
 ## 2026-06-15 — Documentation cleanup & reference reconciliation (docs only)
 
 Full documentation refresh to current reality — **no code, DB, or deploy changes.**
