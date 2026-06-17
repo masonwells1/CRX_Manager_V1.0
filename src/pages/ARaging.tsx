@@ -3,6 +3,13 @@
  *
  * Uses the get_ar_aging() and get_customer_statement() RPCs
  * to show aging buckets and generate printable customer statements.
+ *
+ * Convention (by design, confirmed 2026-06-16): the aging buckets are GROSS
+ * receivables. get_ar_aging() sums positive invoice balances and does NOT net
+ * out credit-memo negatives (unapplied customer credits), so a customer holding
+ * an open credit memo shows their full owed amount here rather than a
+ * credit-reduced figure. This is intentional — aging tracks what is owed, not net
+ * position; credits are reflected against AR when applied via payment allocation.
  */
 import { useEffect, useState , useCallback } from 'react';
 import { DollarSign, FileText, Printer, TrendingDown, TrendingUp, ArrowLeft, Zap, FileStack, Mail, Send } from 'lucide-react';

@@ -13,6 +13,13 @@
  * formatUSD (or a dollars value to formatCents) renders the WRONG amount.
  * Each consolidated callsite was classified by whether its original local
  * helper divided by 100.
+ *
+ * ⚠️ Do NOT re-alias these to a local `fmt` (e.g. `const fmt = formatCents`).
+ * A single name `fmt` is exactly the cents-vs-dollars ambiguity this module was
+ * created to remove; import `formatCents` / `formatUSD` by their explicit names
+ * so the semantics stay visible at the callsite. (Enforcing this with a lint rule
+ * is possible future hardening — deliberately not added yet, since it would force
+ * a blind rename across the existing `fmt` callsites.)
  */
 
 const usdFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });

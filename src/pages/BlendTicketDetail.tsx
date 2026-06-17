@@ -37,6 +37,8 @@ export function BlendTicketDetail() {
   const createOrderIdem = useIdempotencyKey('create_order_from_blend_ticket', profile?.id || '');
   const appRecordIdem = useIdempotencyKey('create_application_record_from_blend_ticket', profile?.id || '');
   const fieldsIdem = useIdempotencyKey('save_blend_ticket_fields', profile?.id || '');
+  const approveIdem = useIdempotencyKey('batch_approve_blend_tickets', profile?.id || '');
+  const rejectIdem = useIdempotencyKey('batch_reject_blend_tickets', profile?.id || '');
 
   const [ticket, setTicket] = useState<BlendTicket | null>(null);
   const [images, setImages] = useState<BlendTicketImage[]>([]);
@@ -382,16 +384,21 @@ export function BlendTicketDetail() {
 
     await runCriticalAction({
       action: async () => {
-        const approveResult = await supabase
-          .from('blend_tickets')
-          .update({
-            review_status: 'approved',
-            reviewed_by: profile.id,
-            reviewed_at: new Date().toISOString(),
-          })
-          .eq('id', ticket.id)
-          .select();
-        checkMutationResult(approveResult, 'Approve blend ticket');
+        // Route through the RPC (not a raw .update) for DB-level role/actor
+        // enforcement, the status='completed' & review_status='unreviewed' guard,
+        // and idempotency. A single ticket is a one-element batch.
+        const approveKey = approveIdem.getKey();
+        const { data, error } = await supabase.rpc('batch_approve_blend_tickets', {
+          p_ticket_ids: [ticket.id],
+          p_approved_by: profile.id,
+          p_idempotency_key: approveKey,
+        });
+        if (error) throw error;
+        approveIdem.resetKey();
+        const result = assertRpcResult<{ approved_count: number }>(data, 'batch_approve_blend_tickets');
+        if (result.approved_count < 1) {
+          throw new Error('Blend ticket could not be approved — it may already be reviewed or not yet completed.');
+        }
         logActivity({ event: 'blend_ticket_approved', description: `Blend ticket ${ticket.ticket_number} approved`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       },
       toast,
@@ -406,16 +413,21 @@ export function BlendTicketDetail() {
 
     await runCriticalAction({
       action: async () => {
-        const rejectResult = await supabase
-          .from('blend_tickets')
-          .update({
-            review_status: 'rejected',
-            reviewed_by: profile.id,
-            reviewed_at: new Date().toISOString(),
-          })
-          .eq('id', ticket.id)
-          .select();
-        checkMutationResult(rejectResult, 'Reject blend ticket');
+        // Route through the RPC (not a raw .update) for DB-level role/actor
+        // enforcement, the status='completed' & review_status='unreviewed' guard,
+        // and idempotency. A single ticket is a one-element batch.
+        const rejectKey = rejectIdem.getKey();
+        const { data, error } = await supabase.rpc('batch_reject_blend_tickets', {
+          p_ticket_ids: [ticket.id],
+          p_rejected_by: profile.id,
+          p_idempotency_key: rejectKey,
+        });
+        if (error) throw error;
+        rejectIdem.resetKey();
+        const result = assertRpcResult<{ rejected_count: number }>(data, 'batch_reject_blend_tickets');
+        if (result.rejected_count < 1) {
+          throw new Error('Blend ticket could not be rejected — it may already be reviewed or not yet completed.');
+        }
         logActivity({ event: 'blend_ticket_rejected', description: `Blend ticket ${ticket.ticket_number} rejected`, performedBy: profile.id, entityType: 'blend_ticket', entityId: ticket.id, customerId: ticket.customer_id || undefined });
       },
       toast,
