@@ -1,5 +1,27 @@
 # Nightly-Debug Remediation — Handoff (resume here)
 
+**UPDATE 2026-06-16 PM-4 — frontend greens (core 4) + #9 delete_invoices DONE; branch-only (NOT pushed).**
+Branch `claude/priceless-austin-0d3ccd` tip `abbab21` (worktree `eloquent-hawking-6d28a7`).
+- **Greens (commit `8322e38`, no DB change):** OrderDetail "Written Off" tile (shown when `write_off_cents>0`;
+  `invoices.balance_cents` is GENERATED = total−paid−prepay−write_off); BlendTicketDetail approve/reject routed
+  through the existing `batch_approve_blend_tickets`/`batch_reject_blend_tickets` RPCs (kept `logActivity`,
+  errors on 0 rows); AR-aging GROSS-convention doc note (Mason's keep-gross decision); money.ts re-alias-to-`fmt`
+  warning. PDF page-overflow guards were SKIPPED this round (Mason chose core-4-only).
+- **#9 delete_invoices (commit `3979231`, Codex-P2 follow-up `abbab21`):** NEW admin-only SECDEF RPC
+  `delete_invoices(uuid[],uuid,text)` APPLIED LIVE as migration `20260617031416` (full gate: 2 reviewers ×2 clean
+  + Codex + BOM-free proof + JWT-spoofed rolled-back functional smoke PASS [soft-delete+audit+idempotent
+  replay+non-admin rejected] + sweeps overload=1/anon-exec 53). Replaces the raw `.update({deleted_at})` in
+  `Invoices.tsx` (batch) + `FieldApplicationInvoice.tsx` (single); soft-deletes draft/unposted/voided only,
+  writes one `invoice_deleted` financial_audit_log row per invoice, idempotent, strict-actor.
+  **Role gate = `require_admin()` (admin-only) to MATCH the live `invoices_update`/`invoices_delete` RLS
+  (`is_admin()`) — NOT admin_or_sales_rep, which would widen delete access.** Typed client (`src/types/supabase.ts`)
+  + 3 RPC idempotency fixtures + docs (474 migrations / 227 RPCs) updated.
+- **GOTCHA (new):** `REVOKE ALL ... FROM PUBLIC` does NOT strip `anon` — Supabase default-grants EXECUTE to
+  `anon` DIRECTLY on new public functions, so the anon-exec-SECDEF sweep went 53→54. Fix = `REVOKE ... FROM anon`
+  explicitly (also added to the migration file; live re-verified back to 53). Always `REVOKE FROM PUBLIC, anon`.
+- **Still owner-blocked (need Mason's design input, NOT built):** #3 `create_split_invoices_from_order`
+  multi-field redesign; `update_order_items` profit+commission recompute on edit. Nothing pushed/deployed.
+
 **UPDATE 2026-06-16 PM-3 — #2 (update_order_items + PARKED-05) DONE LIVE + COMMITTED (not pushed).** The
 riskiest deferred item is finished: migration `20260617013523_pair_broaden_delivery_item_lock_with_update_order_items_override`
 (commit `2bcfc4c`). It broadens `_enforce_delivery_items_parent_lock` to lock delivery_items on cancelled/voided
