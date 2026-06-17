@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-17 — Multi-field split invoices, allocated by acres (nightly-debug #1)
+
+Built the long-blocked split-invoice feature: an order line can be **spread across several fields by acres**, and at invoice time each field's owner(s) are billed their **acre-weighted share, penny-exact**. Replaces a dormant-but-broken function that could **double-bill (200%)** and drift by pennies.
+
+- **Decision (Mason 2026-06-17): split is entered on the ORDER, not the quote.** Delivers the same feature while avoiding surgery on the two most delicate functions (`save_quote`, `convert_quote_to_order`) — verification found `save_quote` silently drops the section's `field_id`, so the quote-side path was a dead end anyway.
+- **Migration A `20260617143755`** — new `order_item_field_allocations(order_item_id→order_items ON DELETE CASCADE, field_id→fields, acres>0, UNIQUE(order_item_id,field_id))`; RLS mirrors `order_items`; additive, dormant.
+- **Migration B `20260617164803`** — rewrote `create_split_invoices_from_order`: per line, split the total across its allocations BY ACRES, then each field's portion among its `field_billing_defaults` owners BY split_pct — largest-remainder (`calculate_billing_splits`) at both levels. One draft invoice per customer (`invoice_group_id`); acres + qty **prorated per customer** (no double-count); $0/discount lines retained; reconcile-or-raise.
+- **Guards:** admin/sales_rep auth gate · FOR UPDATE lock · idempotency-after-lock · reject if an active invoice/delivery exists or the order is price-pending · `FIELD_SPLIT_NOT_100` · owner-pct normalization (no over-allocation) · `SPLIT_NET_NEGATIVE`. Non-split orders unchanged (delegate to `create_invoice_from_order`).
+- **UI:** OrderDetail "Field / Acre Split" card (per-line field+acre editor, acres prefilled from `fields.total_acres`, live per-customer preview) + the existing **Create Invoice** button now generates the split invoices when the order has allocations.
+- **Discovery (verification):** the live schema already has several dormant split/share subsystems (`order_shares`/`invoice_shares`, `*_line_allocations`, Field Mode's `field_app_location_shares`) the design doc hadn't mentioned; confirmed coarser/separate, so the new per-line tables fill a real gap.
+- **Validation:** both DB reviewers clean across every revision; **Codex 7 rounds → converged clean** (each round caught + fixed a real issue: role gate, double-bill guards, penny over-allocation, idempotency race, negative lines, acres double-count, $0-line retention, net-negative reconciliation); 14-scenario JWT-spoofed rolled-back smoke; post-apply invariant checks. Both migrations applied live with Mason's OK; UI compiles/lints/builds clean. **DORMANT (0 rows)** — needs Mason's in-app smoke before deploy (dev server is prod-backed + no app creds this session, so no in-browser click-through was possible).
+
 ## 2026-06-17 — Order edits now recompute pending commissions (nightly-debug #2)
 
 Closed the nightly-debug finding `lifecycle:update_order_items:stale-profit-and-commissions`. **Migration `20260617115903`** (applied live) extends `update_order_items` so that after an order's items change, the denormalized `commissions` rows are refreshed instead of going stale.

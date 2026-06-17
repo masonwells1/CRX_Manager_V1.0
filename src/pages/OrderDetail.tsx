@@ -32,7 +32,7 @@ import { downloadOrderSummaryPdf } from '../lib/orderSummaryPdf';
 import { downloadPickListPdf } from '../lib/orderPickListPdf';
 import type { OrderSummaryData } from '../lib/orderSummaryPdf';
 import type { PickListData } from '../lib/orderPickListPdf';
-import type { Order, OrderItem, OrderShare, Customer, Invoice, Delivery, Product, LinkedEntityType } from '../types';
+import type { Order, OrderItem, OrderShare, OrderItemFieldAllocation, Customer, Invoice, Delivery, Product, LinkedEntityType } from '../types';
 
 /** Temporary new item (not yet saved to DB — has no real id) */
 interface NewOrderItem {
@@ -60,6 +60,7 @@ export default function OrderDetail() {
   const createInvoiceIdem = useIdempotencyKey('create_invoice_from_order', profile?.id || '');
   const priceOrderIdem = useIdempotencyKey('price_order', profile?.id || '');
   const consolidateIdem = useIdempotencyKey('consolidate_draft_invoices', profile?.id || '');
+  const splitInvoiceIdem = useIdempotencyKey('create_split_invoices_from_order', profile?.id || '');
   // Latest order id the route is showing — older in-flight fetches bail (M6 stale guard).
   const activeOrderIdRef = useRef<string | undefined>(undefined);
   // Per-invoice idempotency keys for "post all drafts" (M7) — keyed ref cache so a
@@ -86,6 +87,16 @@ export default function OrderDetail() {
   const [newShareCustomerId, setNewShareCustomerId] = useState('');
   const [newSharePct, setNewSharePct] = useState('');
   const [savingShares, setSavingShares] = useState(false);
+
+  // Field/acre split state (multi-field split invoicing — entered on the order, billed by acres).
+  type AllocField = { id: string; field_name: string; total_acres: number | null; customer_id: string; owners: { customer_id: string; split_pct: number }[] };
+  const [allocations, setAllocations] = useState<OrderItemFieldAllocation[]>([]);
+  const [allocFields, setAllocFields] = useState<AllocField[]>([]);
+  const [custNames, setCustNames] = useState<Record<string, string>>({});
+  const [allocEditorItemId, setAllocEditorItemId] = useState<string | null>(null);
+  const [newAllocFieldId, setNewAllocFieldId] = useState('');
+  const [newAllocAcres, setNewAllocAcres] = useState('');
+  const [savingAlloc, setSavingAlloc] = useState(false);
 
   // Edit mode state
   const [editing, setEditing] = useState(false);
@@ -241,6 +252,32 @@ export default function OrderDetail() {
         .order('sort_order');
       if (isStale()) return;
       setShares((shareData || []) as OrderShare[]);
+
+      // Field/acre split: existing per-line allocations for this order, the active fields to pick
+      // from (with their owner splits), and a customer-id → name map for the live preview.
+      const { data: allocData } = await supabase
+        .from('order_item_field_allocations')
+        .select('id, order_item_id, field_id, acres, created_at, order_items!inner(order_id)')
+        .eq('order_items.order_id', id!);
+      if (isStale()) return;
+      setAllocations(((allocData || []) as unknown as (OrderItemFieldAllocation & { order_items?: unknown })[])
+        .map(({ order_items: _oi, ...a }) => a as OrderItemFieldAllocation));
+
+      const [fieldsRes, fbdRes, custRes] = await Promise.all([
+        supabase.from('fields').select('id, field_name, total_acres, customer_id').eq('is_active', true).order('field_name'),
+        supabase.from('field_billing_defaults').select('field_id, customer_id, split_pct'),
+        supabase.from('customers').select('id, farm_name').is('deleted_at', null).limit(2000),
+      ]);
+      if (isStale()) return;
+      const ownersByField: Record<string, { customer_id: string; split_pct: number }[]> = {};
+      for (const r of fbdRes.data || []) {
+        (ownersByField[r.field_id] ||= []).push({ customer_id: r.customer_id, split_pct: Number(r.split_pct) });
+      }
+      setAllocFields(((fieldsRes.data || []) as { id: string; field_name: string; total_acres: number | null; customer_id: string }[])
+        .map((f) => ({ ...f, owners: ownersByField[f.id] || [] })));
+      const names: Record<string, string> = {};
+      for (const c of (custRes.data || []) as { id: string; farm_name: string }[]) names[c.id] = c.farm_name;
+      setCustNames(names);
     }
     if (isStale()) return;
     setLoading(false);
@@ -703,6 +740,70 @@ export default function OrderDetail() {
     setSavingShares(false);
   };
 
+  const handleAddAllocation = async (orderItemId: string) => {
+    if (!newAllocFieldId || !newAllocAcres) return;
+    const acres = parseFloat(newAllocAcres);
+    if (isNaN(acres) || acres <= 0) { toast('error', 'Acres must be greater than 0'); return; }
+    if (allocations.some((a) => a.order_item_id === orderItemId && a.field_id === newAllocFieldId)) {
+      toast('error', 'That field is already allocated on this line'); return;
+    }
+    setSavingAlloc(true);
+    try {
+      const result = await supabase.from('order_item_field_allocations').insert({
+        order_item_id: orderItemId, field_id: newAllocFieldId, acres,
+      }).select();
+      checkMutationResult(result, 'Add field allocation');
+      toast('success', 'Field allocation added');
+      setNewAllocFieldId(''); setNewAllocAcres('');
+      fetchOrder();
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'add_field_allocation' } });
+      toast('error', sanitizeError(err));
+    }
+    setSavingAlloc(false);
+  };
+
+  const handleRemoveAllocation = async (allocId: string) => {
+    setSavingAlloc(true);
+    try {
+      const result = await supabase.from('order_item_field_allocations').delete().eq('id', allocId).select();
+      checkMutationResult(result, 'Remove field allocation');
+      toast('success', 'Field allocation removed');
+      fetchOrder();
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'remove_field_allocation' } });
+      toast('error', sanitizeError(err));
+    }
+    setSavingAlloc(false);
+  };
+
+  const hasAllocations = allocations.length > 0;
+
+  // Live per-customer preview of the split. Approximate (the server does the penny-exact
+  // largest-remainder version at generation); shown only to sanity-check the allocation.
+  const splitPreview = useMemo(() => {
+    if (allocations.length === 0) return null;
+    const perCust: Record<string, number> = {};
+    const add = (cid: string, amt: number) => { if (cid) perCust[cid] = (perCust[cid] || 0) + amt; };
+    for (const it of items) {
+      const lineAllocs = allocations.filter((a) => a.order_item_id === it.id);
+      if (lineAllocs.length === 0) { add(order?.customer_id || '', it.total_price); continue; }
+      const totalAcres = lineAllocs.reduce((s, a) => s + Number(a.acres), 0);
+      if (totalAcres <= 0) continue;
+      for (const a of lineAllocs) {
+        const fieldShare = it.total_price * Number(a.acres) / totalAcres;
+        const fld = allocFields.find((f) => f.id === a.field_id);
+        const owners = fld?.owners?.length ? fld.owners : (fld ? [{ customer_id: fld.customer_id, split_pct: 100 }] : []);
+        const pctSum = owners.reduce((s, o) => s + o.split_pct, 0) || 100;
+        for (const o of owners) add(o.customer_id, fieldShare * o.split_pct / pctSum);
+      }
+    }
+    return Object.entries(perCust)
+      .map(([cid, amt]) => ({ customer_id: cid, name: custNames[cid] || 'Unknown', amount: amt }))
+      .filter((r) => Math.abs(r.amount) > 0.005)
+      .sort((a, b) => b.amount - a.amount);
+  }, [allocations, items, allocFields, custNames, order?.customer_id]);
+
   const handleDeleteItem = async (itemId: string) => {
     setEditItems((prev) => prev.filter((i) => i.id !== itemId));
   };
@@ -718,6 +819,27 @@ export default function OrderDetail() {
     setInvoiceWarnOpen(false);
     await runCriticalAction({
       action: async () => {
+        // Field/acre split: when the order's lines have field allocations, generate one draft
+        // invoice per field-owner (billed by acres) instead of a single order-level invoice. The
+        // RPC itself falls back to a single invoice when there are no allocations, but we branch
+        // here so the un-split path keeps its exact existing behavior + idempotency key.
+        if (hasAllocations) {
+          const splitKey = splitInvoiceIdem.getKey();
+          const { data, error } = await supabase.rpc('create_split_invoices_from_order', {
+            p_order_id: id,
+            p_salesman_id: profile.id,
+            p_invoice_type: 'chemical_sale',
+            p_idempotency_key: splitKey,
+          });
+          if (error) throw error;
+          splitInvoiceIdem.resetKey();
+          const ids = assertRpcResult<string[]>(data, 'create_split_invoices_from_order');
+          if (!ids || ids.length === 0) {
+            throw new Error('No split invoices were generated — the order has no billable (positive) amount allocated to a customer.');
+          }
+          navigate(`/invoices/${ids[0]}`);
+          return;
+        }
         const invoiceKey = createInvoiceIdem.getKey();
         const { data, error } = await supabase.rpc('create_invoice_from_order', {
           p_order_id: id,
@@ -730,9 +852,11 @@ export default function OrderDetail() {
         navigate(`/invoices/${invoiceId}`);
       },
       toast,
-      successMessage: 'Draft invoice created',
+      successMessage: hasAllocations
+        ? `Split invoices created${splitPreview ? ` (${splitPreview.length} customer${splitPreview.length !== 1 ? 's' : ''})` : ''}`
+        : 'Draft invoice created',
       setLoading: setCreatingInvoice,
-      sentryTag: 'create_invoice_from_order',
+      sentryTag: hasAllocations ? 'create_split_invoices_from_order' : 'create_invoice_from_order',
     });
   };
 
@@ -1638,6 +1762,112 @@ export default function OrderDetail() {
                   Add Share
                 </Button>
               </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Field / Acre Split (multi-field split invoicing) */}
+      {(hasAllocations || canEdit) && (
+        <Card>
+          <div className="flex items-center gap-2 mb-1">
+            <ClipboardList className="w-5 h-5 text-crx-green" />
+            <h3 className="font-semibold text-nav-dark">Field / Acre Split</h3>
+            <HelpTip text="Spread an order line across multiple fields by acres. When you create the invoice, each field's owner(s) get billed their acre-weighted share — one invoice per customer. A line with no fields is billed normally to this order's customer." />
+          </div>
+          <p className="text-xs text-secondary mb-3">
+            Optional. Assign fields + acres to a line to split its invoice across the fields' owners by acres.
+            {allocFields.length === 0 && <span className="text-amber-600"> No active fields are set up yet.</span>}
+          </p>
+
+          <div className="space-y-3">
+            {items.map((it) => {
+              const lineAllocs = allocations.filter((a) => a.order_item_id === it.id);
+              const used = new Set(lineAllocs.map((a) => a.field_id));
+              const isOpen = allocEditorItemId === it.id;
+              return (
+                <div key={it.id} className="border border-gray-100 rounded-lg p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-medium text-nav-dark">{it.product_name || 'Line'}</div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-secondary">{fmt(it.total_price)}</span>
+                      {canEdit && !isOpen && (
+                        <Button variant="ghost" size="sm" icon={<Plus className="w-4 h-4" />} showChevron={false}
+                          onClick={() => { setAllocEditorItemId(it.id); setNewAllocFieldId(''); setNewAllocAcres(''); }}>
+                          Field
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {lineAllocs.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {lineAllocs.map((a) => {
+                        const fld = allocFields.find((f) => f.id === a.field_id);
+                        return (
+                          <div key={a.id} className="flex items-center justify-between text-xs bg-gray-50 rounded px-2 py-1">
+                            <span className="text-nav-dark">{fld?.field_name || 'Field'} — {Number(a.acres)} ac</span>
+                            {canEdit && (
+                              <button onClick={() => handleRemoveAllocation(a.id)} className="text-red-400 hover:text-red-600 disabled:opacity-50" disabled={savingAlloc}>
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {isOpen && (
+                    <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+                      <div className="sm:col-span-2">
+                        <label className="text-[11px] font-medium text-secondary mb-1 block">Field</label>
+                        <select value={newAllocFieldId}
+                          onChange={(e) => {
+                            setNewAllocFieldId(e.target.value);
+                            const f = allocFields.find((x) => x.id === e.target.value);
+                            if (f && f.total_acres != null) setNewAllocAcres(String(f.total_acres));
+                          }}
+                          className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green">
+                          <option value="">Select field...</option>
+                          {allocFields.filter((f) => !used.has(f.id)).map((f) => (
+                            <option key={f.id} value={f.id}>{f.field_name}{f.total_acres != null ? ` (${f.total_acres} ac)` : ' (no acres on file)'}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-medium text-secondary mb-1 block">Acres</label>
+                        <input type="number" value={newAllocAcres} onChange={(e) => setNewAllocAcres(e.target.value)}
+                          min="0.01" step="0.01" placeholder="acres"
+                          className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green" />
+                      </div>
+                      <div className="sm:col-span-3 flex items-center justify-end gap-2">
+                        <Button variant="ghost" size="sm" onClick={() => setAllocEditorItemId(null)}>Cancel</Button>
+                        <Button size="sm" loading={savingAlloc} disabled={!newAllocFieldId || !newAllocAcres}
+                          onClick={() => handleAddAllocation(it.id)}>Add</Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {splitPreview && splitPreview.length > 0 && (
+            <div className="mt-4 border-t border-gray-100 pt-3">
+              <div className="flex items-center gap-2 mb-2">
+                <DollarSign className="w-4 h-4 text-crx-green" />
+                <span className="text-xs font-semibold text-nav-dark">Projected split (approx.) — one invoice per customer</span>
+              </div>
+              <div className="space-y-1">
+                {splitPreview.map((p) => (
+                  <div key={p.customer_id} className="flex items-center justify-between text-xs px-2 py-1 bg-green-50 rounded">
+                    <span className="text-nav-dark">{p.name}</span>
+                    <span className="font-semibold text-crx-green">{fmt(p.amount)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-secondary mt-2">Exact penny amounts are computed when you create the invoice.</p>
             </div>
           )}
         </Card>
