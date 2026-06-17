@@ -67,6 +67,7 @@ export default function FieldApplicationInvoice() {
   const { toast } = useToast();
   const saveIdem = useIdempotencyKey('save_field_app_invoice', profile?.id || '');
   const postIdem = useIdempotencyKey('post_invoice_group', profile?.id || '');
+  const deleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
 
   const [activeTab, setActiveTab] = useState<TabKey>('locations');
   const [saving, setSaving] = useState(false);
@@ -516,12 +517,20 @@ export default function FieldApplicationInvoice() {
       return;
     }
     try {
-      const deleteResult = await supabase
-        .from('invoices')
-        .update({ deleted_at: new Date().toISOString() })
-        .eq('id', id)
-        .select();
-      checkMutationResult(deleteResult, 'Soft delete field app invoice');
+      // Route through the guarded RPC (admin-only, audited, idempotent) instead
+      // of a raw .update({ deleted_at }). See migration delete_invoices.
+      const deleteKey = deleteIdem.getKey();
+      const { data, error } = await supabase.rpc('delete_invoices', {
+        p_invoice_ids: [id],
+        p_performed_by: profile.id,
+        p_idempotency_key: deleteKey,
+      });
+      if (error) throw error;
+      deleteIdem.resetKey();
+      const deleted = assertRpcResult<number>(data, 'delete_invoices');
+      if (deleted < 1) {
+        throw new Error('Invoice could not be deleted — it may be posted/paid or already removed.');
+      }
 
       await logActivity({
         event: 'field_app_invoice_deleted',

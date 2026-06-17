@@ -19,7 +19,7 @@ separately by scripts/regenerate-agents-md.mjs and does not parse this file.
 
 ## Snapshot (2026-06-15)
 
-**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 68 pages · 96 tables (+2 views) · 226 callable RPCs (+47 trigger fns) · **458 migrations** on disk · 7 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
+**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 68 pages · 96 tables (+2 views) · 227 callable RPCs (+47 trigger fns) · **474 migrations** on disk · 7 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
 
 - **`main` = production** (croprxsolutions.app). **Auto-push is authorized** (Mason, 2026-06-16): push regular code to `main` once the `/ship` pipeline is green (review clean + tests + the pre-push hook's typecheck/build) — no approval click; Vercel rollback is one click if needed. STILL get Mason's explicit OK before **applying a live migration, deploying an edge function, or deleting data**, and never commit unrelated files.
 - **Where history lives now** (so this file stays lean): sprint log → [`docs/CHANGELOG.md`](docs/CHANGELOG.md); detailed per-topic narrative → the `memory/` files (auto-loaded each session); the old multi-month "Current State" block → [`docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md`](docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md).
@@ -86,7 +86,7 @@ These guide the process to prevent mistakes — they still require Mason's appro
 ### Business Logic
 - NEVER skip delivery confirm→complete flow (scheduled → in_progress → completed)
 - NEVER allow editing delivery items once delivery is in_progress or beyond — items are only editable while status = 'scheduled'
-- NEVER create invoices without an order OR blend ticket — must have order_id or blend_ticket_id. (Enforced by **RPC convention, NOT a DB CHECK** — `invoices` has zero CHECK constraints. **Credit memos are exempt:** `issue_return_credit` inserts a `credit_memo` whose `order_id` may be NULL with no `blend_ticket_id`. Don't add a literal `order_id OR blend_ticket_id` CHECK without excluding `invoice_type='credit_memo'`, or credit memos break.)
+- NEVER create invoices without an order OR blend ticket — must have order_id or blend_ticket_id. (Enforced by **RPC convention, NOT a DB CHECK** — there is no `order_id`-OR-`blend_ticket_id` CHECK on `invoices` (it *does* carry status/type/non-negativity CHECKs — 5 total). **Credit memos are exempt:** `issue_return_credit` inserts a `credit_memo` whose `order_id` may be NULL with no `blend_ticket_id`. Don't add a literal `order_id OR blend_ticket_id` CHECK without excluding `invoice_type='credit_memo'`, or credit memos break.)
 - NEVER bypass `check_period_open()` — closed periods block backdated transactions
 - NEVER allow non-admin access to month-end, commissions, or settings
 - `/payments` (PaymentAllocation) is **sales+admin** — both roles can record check entries and allocate to invoices. Confirmed at `App.tsx:198`: `allowedRoles={['admin', 'sales_rep']}`. Do NOT lock this page to admin-only without a deliberate policy change. (Audit Q6, 2026-05-06.)

@@ -7559,6 +7559,14 @@ export type Database = {
         }
         Returns: Json
       }
+      delete_invoices: {
+        Args: {
+          p_idempotency_key?: string
+          p_invoice_ids: string[]
+          p_performed_by?: string
+        }
+        Returns: number
+      }
       delete_purchase_order: {
         Args: {
           p_idempotency_key?: string

@@ -3,6 +3,13 @@
  *
  * Uses the get_ar_aging() and get_customer_statement() RPCs
  * to show aging buckets and generate printable customer statements.
+ *
+ * Convention (by design, confirmed 2026-06-16): the aging buckets are GROSS
+ * receivables. get_ar_aging() sums positive invoice balances and does NOT net
+ * out credit-memo negatives (unapplied customer credits), so a customer holding
+ * an open credit memo shows their full owed amount here rather than a
+ * credit-reduced figure. This is intentional — aging tracks what is owed, not net
+ * position; credits are reflected against AR when applied via payment allocation.
  */
 import { useEffect, useState , useCallback } from 'react';
 import { DollarSign, FileText, Printer, TrendingDown, TrendingUp, ArrowLeft, Zap, FileStack, Mail, Send } from 'lucide-react';
@@ -227,7 +234,7 @@ export default function ARaging() {
     },
     {
       key: 'days_90',
-      header: '90 Days',
+      header: '90–119 Days',
       sortable: true,
       render: (r) => (
         <span className={`font-mono ${r.days_90 > 0 ? 'text-red-500' : ''}`}>
@@ -842,7 +849,7 @@ export default function ARaging() {
                         { key: 'current_amount', header: 'Current', format: fmtCSV },
                         { key: 'days_30', header: '30 Days', format: fmtCSV },
                         { key: 'days_60', header: '60 Days', format: fmtCSV },
-                        { key: 'days_90', header: '90 Days', format: fmtCSV },
+                        { key: 'days_90', header: '90–119 Days', format: fmtCSV },
                         { key: 'over_90', header: '120+ Days', format: fmtCSV },
                         { key: 'total_outstanding', header: 'Total', format: fmtCSV },
                       ],

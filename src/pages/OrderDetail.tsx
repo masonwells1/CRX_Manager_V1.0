@@ -927,9 +927,15 @@ export default function OrderDetail() {
   const totalInvoicedCents = invoices.reduce((sum, inv) => sum + (inv.total_amount_cents || 0), 0);
   const totalPaidCents = invoices.reduce((sum, inv) => sum + (inv.paid_amount_cents || 0) + (inv.prepay_applied_cents || 0), 0);
   const balanceCents = invoices.reduce((sum, inv) => sum + (inv.balance_cents || 0), 0);
+  // Written-off amount on the linked invoices. balance_cents is a generated column
+  // (total − paid − prepay − write_off), so write-offs are already reflected in
+  // Balance Due; surfacing them as their own tile makes Amount Paid + Written Off +
+  // Balance Due reconcile to Total Invoiced when part of an invoice was written off.
+  const writeOffCents = invoices.reduce((sum, inv) => sum + (inv.write_off_cents || 0), 0);
   const totalInvoiced = totalInvoicedCents / 100;
   const totalPaid = totalPaidCents / 100;
   const balanceDue = balanceCents / 100;
+  const writeOff = writeOffCents / 100;
 
   // Bill split is locked once an invoice on this order is posted/paid/overdue —
   // editing the order_shares row would drift from the invoice's historical
@@ -1212,6 +1218,12 @@ export default function OrderDetail() {
               {fmt(Math.max(0, balanceDue))}
             </p>
           </div>
+          {writeOffCents > 0 && (
+            <div>
+              <p className="text-xs text-secondary">Written Off</p>
+              <p className="text-sm font-medium text-amber-600">{fmt(writeOff)}</p>
+            </div>
+          )}
           <div className="flex items-end">
             <Button
               variant="ghost"

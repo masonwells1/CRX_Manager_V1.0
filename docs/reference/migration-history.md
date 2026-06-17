@@ -1,10 +1,160 @@
-# Migration History (458 migrations)
+# Migration History (474 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
 > ✅ **Doc-debt cleared 2026-05-17.** Entries #322–#345 backfilled in the main table below. See `docs/archive/2026-spring/2026-05-13-pr59-codex-review-summary.md` and `docs/CHANGELOG.md` for deeper context on each fix.
 
 > 🩹 **Backfill 2026-05-25.** A doc-drift audit found 10 migration files on disk that had never been indexed here (the prior "no gaps #1–#345" claim was inaccurate). They are listed in the **Un-indexed migrations (backfilled)** section below rather than renumbered into the main descending table, because the `#` column is editorial (it already has duplicate-timestamp pairs) and renumbering 346 rows carries needless risk. Every `supabase/migrations/*.sql` file is now represented in this doc.
+
+## Nightly Debug remediation 2026-06-16 (foundation fixes — applied live)
+
+Five migrations applied live after the nightly-debug audit + Codex cross-review, each through the
+5-reviewer apply gate (rls-security + migration-drift) + rolled-back validation + post-apply invariant
+sweeps. All additive / strict-superset with documented rollbacks:
+
+- `20260616115308_fix_quote_terminal_not_drawn_add_expired` — adds `'expired'` to the partial-draw
+  guard `_enforce_quote_terminal_not_drawn` (strict superset; blocks expiring a drawn booking).
+- `20260616120604_fix_invoice_paid_status_transitions` — **BLOCKER**: adds `paid → {voided,posted,overdue}`
+  to `_enforce_invoice_status_transition` so `void_invoice` / `void_payment` / `reverse_write_off` no longer
+  crash on a paid invoice (strict superset).
+- `20260616121105_add_allocation_over_payment_guard` — additive BEFORE trigger on `allocation_sets`
+  rejecting `total_allocated_cents > total_payment_cents` (`ALLOCATIONS_EXCEED_PAYMENT`).
+- `20260616121521_add_order_shares_total_guard` — additive `SECURITY DEFINER` trigger (+ `FOR UPDATE`
+  lock) capping `SUM(split_percentage)` per order at 100 (`ORDER_SHARES_OVER_100`).
+- `20260616122108_revoke_execute_order_shares_guard_fn` — revokes default `PUBLIC`/`anon` EXECUTE on the
+  order-share guard fn (keeps the `anon-exec-secdef` sweep at its 53 baseline).
+
+**Deferred:** the delivery_items terminal-state lock (PARKED-05) — the apply gate caught that broadening
+it would regress `update_order_items`' cancelled/voided cleanup DELETE; folded into the `update_order_items`
+rewrite (large-RPC pass).
+
+### Large-RPC pass (continued 2026-06-16) — Codex/reviewer-gated, applied live
+
+The verified-but-drafting-pending fixes from the audit backlog, each: live function reproduced
+verbatim-except-the-change (post-apply revert-to-live-md5 proof), rls-security + migration-drift reviewers
+clean, gated apply, B7-renamed to the stamped version.
+
+- `20260616135524_link_quick_delivery_invoice_to_delivery` — `create_quick_delivery` now stamps
+  `delivery_id = v_delivery_id` on its draft-invoice INSERT so `complete_delivery`'s partial re-bill loop
+  (matches `delivery_id = p_delivery_id`) finds the quick-delivery invoice; without it a partial quick
+  delivery silently kept full quantities (over-bill). Additive nullable FK; body verbatim (reverts to live
+  md5 `48a86269b9e62fdd87cfb29cbe85d8c5`; post-apply md5 `e1409f1829ea63e00c0768d7a5fec21a`). Both reviewers
+  clean; overload=1.
+- `20260616140912_complete_delivery_partial_rebill_join_order_item` — `complete_delivery`'s partial
+  re-bill loop joined `invoice_items`↔`delivery_items` on `product_id`, which is ambiguous when an order
+  repeats a product (each invoice line matched both delivery lines → non-deterministic partial billing).
+  Changed the single join predicate to `ii.order_item_id = di.order_item_id` (the tote-update + auto-invoice
+  already use that 1:1 key; 0 NULL `order_item_id` on linked draft invoices live). Body verbatim (reverts to
+  live md5 `b9f01eecfd986e49d9736cb090ceacaa`; post-apply md5 `f7291f02903574854c3cc440726ac3dd`). Both
+  reviewers clean; overload=1.
+- `20260616142001_void_order_restore_logs_void_delivery_reversal` — void_order's inventory-restore loop
+  logged its `inventory_transactions` rows as `'adjusted'` (manual-correction catch-all) instead of the
+  purpose-built `'void_delivery_reversal'` type; muddied the ledger. Single-literal change (the ledger UI
+  already renders `'void_delivery_reversal'` as "Void Delivery", positive sign; transaction_type is a log
+  label, not the stock source of truth). Body verbatim (reverts to live md5
+  `6df426040f112e4a8b17627b7a652f30`; post-apply md5 `2ec5a64c67c1e08b3e71eae3529a2d83`). Both reviewers
+  clean; overload=1.
+- `20260616151122_cancel_delivery_release_prebook_on_quick_cancel` (PARKED-03, **HIGH**, behavior change) —
+  cancelling a quick delivery while `scheduled`/`in_progress` released no inventory and left its auto-order
+  `confirmed`: a zombie order with a stranded prebook (Net Free understated forever; `create_quick_delivery`
+  increments `inventory.quantity_prebooked`, `confirm_delivery` touches no inventory, and the old restore
+  block only fired for `quantity_delivered>0`). Fix is **inline** (NOT `PERFORM cancel_order` — that RPC is
+  admin-only and would abort a sales_rep cancel): for `is_quick_delivery AND status IN ('scheduled',
+  'in_progress')` AND the auto-order is exclusive to this delivery, release the prebook (a `'released'` txn
+  per line), cancel the auto-order, zero its pending commissions, write a `financial_audit_log`
+  `'order_cancelled'` row. Scope EXTENDED from the parked `scheduled`-only spec to also cover `in_progress`
+  (same leak — verified `confirm_delivery` releases nothing). Body verbatim from live md5
+  `c6aba47c51aa83653e153399e84d4981` except DECLARE additions, BLOCK B order-status handling, and the result
+  jsonb (`+prebooked_released`); post-apply md5 `90ba258797cbac40e80673fba0767369`. rls-security +
+  migration-drift reviewers clean; 3-scenario rolled-back live smoke passed (admin/scheduled,
+  sales_rep/scheduled = no auth regression, admin/in_progress) + post-apply re-smoke; overload=1.
+  **Codex (gpt-5.5) reviewed this commit and flagged 2 real P2 edge cases → fixed in the follow-up below
+  (`20260616170714`).**
+- `20260616170714_cancel_delivery_quick_cancel_codex_p2_fixes` (Codex P2 follow-up to the above) — fixes the
+  two gaps the independent Codex review found in v1's quick-cancel branch: **P2-1** the prebook release now
+  loops `order_items` (`GREATEST(total_units_needed - quantity_delivered, 0)`) instead of `delivery_items`, so
+  quantities ADDED/INCREASED via `update_order_items` (which bumps `order_items` + `inventory.quantity_prebooked`
+  but never `delivery_items`) are released too — v1 stranded them; **P2-2** it now counts `paid` commissions and
+  raises a `'cancellation_review'` notification per active admin (v1 only cancelled `pending`). Both deltas mirror
+  live `cancel_order`. Verbatim from v1 (md5 `90ba258797cbac40e80673fba0767369`) except the release-loop source,
+  the paid-commission block, the `v_paid_commissions` DECLARE, and the result jsonb (`+paid_commissions_flagged`);
+  post-apply md5 `5c583450306712d3c272487d50891e0f`. rls-security + migration-drift reviewers clean; rolled-back
+  live smoke proved an edited order (released 12 not 10) + an added item (released, no delivery_item) + a paid
+  commission (preserved + flagged, 3 admin notifications) + a sales_rep cancel (no auth error); overload=1;
+  anon cannot execute. **Codex re-reviewed this commit and flagged one more P2 (concurrency) → fixed below
+  (`20260616172121`).**
+- `20260616172121_cancel_delivery_lock_order_before_quick_release` (Codex P2 concurrency follow-up) — adds
+  `FOR UPDATE` to the `cancel_delivery` order-status read so it serializes against a concurrent
+  `update_order_items` (which holds `orders FOR UPDATE` and can add prebook): without the lock, an edit could
+  add prebook in the window between the release loop and the order cancel, stranding it. `cancel_order` locks
+  the order the same way. ONE-CLAUSE change vs v2 (`SELECT status INTO v_order_status ... FOR UPDATE`); no new
+  deadlock class (cancel_delivery already took the order lock later, same delivery→order direction — this just
+  takes it sooner). Verbatim from v2 (md5 `5c583450306712d3c272487d50891e0f`) except that clause + comments;
+  post-apply md5 `5bcb78e31d38ab4d4c9f24fbb6658977`. rls-security + migration-drift reviewers clean; functional
+  rolled-back smoke re-run (no single-session regression); overload=1; anon cannot execute.
+- `20260616191740_blend_and_fieldapp_invoice_audit_rows` (large-RPC pass #8, **LOW**, audit-trail parity) —
+  `create_invoice_from_blend_ticket` and `save_field_app_invoice` created draft invoices but never wrote the
+  `'invoice_created'` `financial_audit_log` row that `create_invoice_from_order` writes for every order-sourced
+  invoice, so field-application / blend-ticket invoices were invisible to the append-only money ledger AR/foundation
+  audits read. Adds one `'invoice_created'` row per invoice at draft creation, column-for-column matching
+  `create_invoice_from_order` (`entity_type='invoice'`, `actor_user_id` omitted → `auth.uid()` default,
+  `actor_role` from `profiles`, total_impact_cents = invoice total). Blend ticket: always logs (every invoice freshly
+  inserted). Field app: logs only when newly created this call (new `v_is_new_invoice` boolean), so edits keep just
+  their `activity_feed` trail. Both bodies reproduced live-verbatim except the marked `DELTA-AUDIT-ROW` blocks —
+  proven by a rolled-back line-level `pg_get_functiondef` diff (removed_from_base = NULL; base md5
+  `c238733728b07dcf9b15ebbb6ecb2752` / `12e58ba283790de02c60ee390045ce84`; post-apply md5
+  `fa132dea7ceac1ecff6230e889df45e1` / `8d06e2501b9403764ed5102fa48cde8d`). rls-security + migration-drift reviewers
+  clean; live audit-row INSERT smoke accepted; overload=1 each; neither anon-executable (sweep stays at 53 baseline).
+  Stamped `20260616191740` (filename B7-renamed from `20260616180000`).
+- `20260616201800_void_delivery_canonical_idempotency` (large-RPC pass #11, **LOW**) — `void_delivery`'s
+  idempotency diverged from the canonical helper pattern: a retried call returned a bare
+  `{"status":"already_processed"}` marker (which `DeliveryDetail.tsx` reads `posted_invoices_exist` off of —
+  it was `undefined` on replay) and it stored `to_jsonb(p_delivery_id)` (a bare UUID) as the cached result.
+  Moved to `check_idempotency()`/`save_idempotency()` (same as `create_invoice_from_order`), caching + replaying
+  the REAL rich payload (`success/delivery_id/delivery_number/new_order_status/posted_invoices_exist`); replay
+  shape is now a strict superset. `expires_at` unchanged in effect (`idempotency_keys.expires_at` DEFAULTs to
+  `now()+24h`, the window the removed explicit INSERT used). Body live-verbatim except 3 marked `DELTA-IDEM`
+  blocks — proven by rolled-back line-level `pg_get_functiondef` diff (base md5 `bcc970f05a4dfa0d70b584b4837834e5`;
+  removed_from_base = exactly the 9 old idempotency lines; post-apply md5 `6d9bc7f2fdbd4a28c4b10429f4708c70`).
+  Strict-actor gate (AUTH_REQUIRED/ACTOR_MISMATCH/admin) unchanged + still precedes the idempotency lookup; helpers
+  are anon/authenticated-revoked (B9). rls-security + migration-drift reviewers clean; round-trip smoke confirmed
+  rich-payload replay; overload=1; sweep stays at 53. Stamped `20260616201800` (B7-renamed from `20260616193000`).
+- `20260616204400_save_quote_canonical_idempotency_and_transition_map` (large-RPC pass #5, **MED** — two
+  save_quote findings) — (A) **idempotency cached a throwaway id:** the old block returned
+  `{status:'duplicate', quote_id:p_quote_id}` (NULL for a NEW quote, so a retried new-quote save returned
+  `quote_id=null` — QuoteBuilder reads `result.quote_id`) and stored `COALESCE(p_quote_id, gen_random_uuid())`
+  BEFORE the quote existed (a random UUID unrelated to the real id). Moved to canonical
+  `check_idempotency()`/`save_idempotency()`: check at the head, cache the REAL rich result
+  (`status/quote_id/server_totals`) at the TAIL. (B) **transition map diverged from the enforcer:** the internal
+  `v_allowed_transitions` advertised `draft→[revised,declined,expired]` and `expired→[revised]` which the DB
+  guard trigger `_enforce_quote_status_transition` rejects — trimmed to a strict subset
+  (`draft→[sent]`, `expired` removed); no legitimate transition newly blocked (every removed edge was already
+  trigger-rejected), the error just surfaces earlier. The enforcer trigger remains the authoritative gate.
+  Body live-verbatim except 3 marked `DELTA-SQ` blocks — proven by rolled-back line-level `pg_get_functiondef`
+  diff (base md5 `9d10588243ca32dd1bc9e0f5627057c4`; removed = old idempotency block + 3 changed map lines +
+  old RETURN; post-apply md5 `4cbf12553097a079b118caa6a872207a`). JWT-spoofed rolled-back functional smoke:
+  old live returns `duplicate`/null on retry; the new version replays the SAME real quote_id + full
+  server_totals and creates only ONE quote on a retried new-quote save. Auth/actor gate + SECDEF/search_path
+  unchanged; helpers anon/authenticated-revoked. Both reviewers clean; overload=1; sweep stays at 53.
+  Stamped `20260616204400` (B7-renamed from `20260616203000`).
+- `20260617013523_pair_broaden_delivery_item_lock_with_update_order_items_override` (large-RPC pass #2 / PARKED-05, **MED** — paired security fix) — broadens `_enforce_delivery_items_parent_lock` from `IN ('in_progress','completed')` to `v_status IS NOT NULL AND v_status <> 'scheduled'`, so `delivery_items` are locked on cancelled/voided (and any non-scheduled) parents too — closing a hole where a sales_rep could INSERT/DELETE items on a cancelled/voided delivery via PostgREST/RLS and corrupt the historical record. **Paired** (must ship together) with an `app.admin_override` bracket around `update_order_items`' sanctioned cleanup DELETE of orphaned `delivery_items` on already-cancelled/voided deliveries, which the broadened lock would otherwise crash — the exact regression the apply gate had deferred PARKED-05 for. A live cross-function scan confirmed the only other `delivery_items` writers (`create_delivery_with_items`, `create_followup_delivery`, `create_quick_delivery`, `edit_delivery`, `complete_delivery`) write only onto `scheduled` parents or under override, so broadening breaks none of them. `update_order_items` differs from its live definition by ONLY the override bracket (overload=1, SECDEF/`search_path`/actor/idempotency unchanged; ACL re-asserted, anon-revoked). **Codex P2 → dropped the originally-bundled `total_profit`/`total_margin_pct` recompute:** recomputing the order header's profit without also updating the denormalized `commissions` rows (`order_profit`/`commission_amount`, paid-vs-pending) would desync commission reports/payouts from the order header — deferred to a separate commission-aware change. Validation: both reviewers clean (re-run ×2); pre-apply rolled-back trigger smoke (out-of-band cancelled DELETE + INSERT blocked, override-escape + scheduled-edit still allowed); post-apply rolled-back end-to-end smoke (real `update_order_items` removes an item whose orphan ditem is on a cancelled delivery, override resets to `false`); overload=1, anon-EXECUTE=false. Stamped `20260617013523` (B7-renamed from `20260616220000`).
+- `20260617031416_delete_invoices_softdelete_rpc` (large-RPC pass #9, **LOW** — audited soft-delete) — NEW
+  SECURITY DEFINER `delete_invoices(p_invoice_ids uuid[], p_performed_by uuid, p_idempotency_key text)`
+  replacing the raw `.update({ deleted_at })` the UI issued from `Invoices.tsx` (handleBatchDelete) and
+  `FieldApplicationInvoice.tsx` (handleDelete), which had NO DB-layer role/actor check and wrote NO
+  `financial_audit_log` row (finding `frontend:Invoices:raw-softdelete-no-audit`). Soft-deletes only
+  `draft`/`unposted`/`voided` invoices (the union of the two UI gates — posted/paid/overdue are skipped via
+  `CONTINUE`), writes one `invoice_deleted` audit row per invoice, idempotent via canonical
+  `check_idempotency`/`save_idempotency('delete_invoices')`. **Role gate = `require_admin()` (admin-only), NOT
+  admin_or_sales_rep** — matches the live `invoices_update`/`invoices_delete` RLS (`USING (is_admin())`), so
+  the SECDEF fn re-imposes the same admin-only boundary it bypasses (no privilege widening). Strict-actor
+  (`auth.uid()` bind, `ACTOR_MISMATCH`), `FOR UPDATE` lock, `search_path=public, pg_temp`,
+  REVOKE PUBLIC+anon / GRANT authenticated (anon-exec-secdef sweep stays 53; overload=1). Both reviewers clean
+  (re-run after the role-gate tightening); Codex clean (its 2 P2s = wire the frontend + update docs, both done
+  in this change); JWT-spoofed rolled-back functional smoke PASS (soft-delete + audit row + idempotent replay
+  + non-admin rejected). Frontend rewired through the RPC; `delete_invoices` registered in the 3 RPC
+  idempotency-coverage fixtures (`rpcContracts`/`rpcIdempotencyScope`/`rpcFixtureLiveDiff`). Stamped
+  `20260617031416` (B7-renamed from `20260617030000`).
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 

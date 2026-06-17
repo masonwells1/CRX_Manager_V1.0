@@ -1,6 +1,6 @@
-# RPC Functions Reference (226 callable RPCs + 47 trigger/internal functions — live as of 2026-06-15)
+# RPC Functions Reference (227 callable RPCs + 47 trigger/internal functions — live as of 2026-06-16)
 
-> Live function inventory (Supabase `pg_proc`, 2026-06-15): **226 callable RPCs**, **47 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here).
+> Live function inventory (Supabase `pg_proc`, 2026-06-16): **227 callable RPCs**, **47 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here).
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -60,6 +60,7 @@
 - `void_invoice()` — void a posted invoice, reversing all related records
 - `batch_post_invoices()` — batch post multiple invoices at once
 - `batch_void_invoices()` — batch void multiple invoices
+- `delete_invoices(p_invoice_ids, p_performed_by, p_idempotency_key)` → integer — **admin-only** soft-delete of draft/unposted/voided invoices (posted/paid/overdue skipped); writes an `invoice_deleted` financial_audit_log row per invoice; idempotent; strict-actor. Replaces the raw UI `.update({deleted_at})` (nightly-debug #9). Gate matches the invoices RLS (`is_admin()`).
 - `record_invoice_payment()` — record payment against a specific invoice
 - ~~`record_payment()`~~ — **DROPPED 2026-06-08** (migration `20260608145944`, audit AW-3): deprecated + unreachable; use `allocate_payment` / `record_invoice_payment` instead
 - `allocate_payment()` — allocate/re-allocate payment amounts across invoices

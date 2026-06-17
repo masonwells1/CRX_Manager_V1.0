@@ -108,6 +108,7 @@ const HELPER_SCOPED: string[] = [
   'create_quick_delivery',
   'create_rebate_claim',
   'create_vendor_bill',
+  'delete_invoices',
   'delete_purchase_order',
   'delete_vendor',
   'draw_down_quote',
