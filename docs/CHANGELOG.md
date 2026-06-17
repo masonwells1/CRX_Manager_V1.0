@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-17 — Auto-invoice + RUP RPCs: idempotency + strict-actor (sections 2-15 gauntlet, Lane B)
+
+Cleared the two prepped Lane B migrations from the sections 2-15 gauntlet remediation (ledger: `docs/audits/gauntlet/sections-2-15-remediation-LEDGER.md`). Both applied live + smoke-proven, both DB reviewers clean.
+
+- **Migration `20260617190000` — `create_invoice_from_delivery` (MED-4 + fin-audit actor).** The RPC that auto-creates a draft invoice from a completed delivery declared `p_idempotency_key` but never used it, so a **double-submit / network retry created a SECOND draft invoice** for one delivery; and it stamped `financial_audit_log.actor_role` / `invoices.created_by` / `activity_feed.performed_by` from a **forgeable** `p_performed_by`. Fix prepends the canonical strict-actor block (`v_actor := auth.uid()` → `AUTH_REQUIRED` / `ACTOR_MISMATCH`), wires canonical operation-scoped `check_idempotency`/`save_idempotency` (replay after strict-actor; the natural "invoice already exists" guard now runs after authz + replay), and stamps every actor write from `v_actor`. Body byte-identical to live except those deltas; signature/return/SECDEF/`search_path`/overload(=1)/grants unchanged.
+- **Migration `20260617190500` — `generate_rup_sales_records` (LOW-1).** The RUP-compliance RPC (sole caller `post_invoice`) advertised `p_idempotency_key` but ignored it (contract drift; it already de-dups rows naturally). Fix wires the canonical helpers (count wrapped as `{"count":n}` jsonb, unwrapped on replay) without touching the signature, the natural de-dup guard, or grants. `RETURNS integer` preserved; REVOKE/GRANT block restates the exact live posture (service_role + postgres only) so `CREATE OR REPLACE` can't widen access.
+- **Validation:** rls-security-reviewer + migration-drift-reviewer CLEAN on both (0 blockers; each diffed vs live `pg_get_functiondef`). One rolled-back live smoke covering all behavioral deltas PASS — `AUTH_REQUIRED` (no auth), `ACTOR_MISMATCH` (forged actor), authz-reject (non-admin), both idempotency-replay short-circuits, and a **full happy-path double-submit** proving exactly one invoice is created and the same-key retry replays it (**zero duplicates**). Live stamps `20260617201934` / `20260617202008`.
+- **Sweep cleanup:** removed both now-obsolete `create_invoice_from_delivery` allowlist entries (`actor-forgery` + `actor-forgery-fin-audit`) — the fix adds the canonical `ACTOR_MISMATCH` token, so both predicates re-run live = clean without the exemptions.
+- **Follow-up flagged (out of scope):** `create_invoice_from_delivery` sets `order_id` but **not** `invoices.delivery_id` on the invoice it creates (pre-existing; preserved verbatim), so its natural "one invoice per delivery" guard only catches invoices created by *other* paths that set `delivery_id`. The idempotency key now covers the realistic same-request retry; the different-key duplicate path is a separate, pre-existing gap worth a dedicated reviewed migration.
+
 ## 2026-06-17 — Blend-ticket order link/unlink: forged-actor audit fix (Live Foundation Gauntlet §1)
 
 Fixed the one HIGH from the new Live Foundation Gauntlet's first section (Security / roles / RLS / SECDEF access). **Migration `20260617171500`** (applied live + smoke-proven).

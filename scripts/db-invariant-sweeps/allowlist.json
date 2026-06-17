@@ -339,20 +339,8 @@
     },
     {
       "predicate": "actor-forgery",
-      "violation_key": "create_invoice_from_delivery(p_delivery_id uuid, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "Authorization derives from auth.uid() (role IN ('admin','sales_rep') on auth.uid()); p_performed_by is attribution-only (written to invoices.created_by). Allocate_payment precedent. Verified live pg_get_functiondef 2026-06-10.",
-      "dated": "2026-06-10"
-    },
-    {
-      "predicate": "actor-forgery",
       "violation_key": "transfer_job_to_invoice(p_job_id uuid, p_performed_by uuid, p_idempotency_key text)",
       "justification": "2026-06-11: attribution-only p_performed_by (allocate_payment precedent). Live body (rewritten by 20260611002255 transfer_job_invoice_column_fixes, whose header explicitly dispositions this) authorizes via auth.uid() + role gate - corroborated by predicates (b) ungated-secdef-mutators and (d) auth-bound-role-ungated both clearing it on the live catalog 2026-06-11. p_performed_by only feeds COALESCE(p_performed_by, auth.uid()) attribution columns. Candidate for the standing defense-in-depth ACTOR_MISMATCH sweep, not an escalation."
-    },
-    {
-      "predicate": "actor-forgery-fin-audit",
-      "violation_key": "create_invoice_from_delivery(p_delivery_id uuid, p_performed_by uuid, p_idempotency_key text)",
-      "justification": "LOW / hardening-candidate, NOT an identity forgery: the financial_audit_log row sets actor_role from (SELECT role FROM profiles WHERE id = p_performed_by) but does NOT set actor_user_id from the param, so the recorded actor IDENTITY is not forgeable here -- only the role LABEL. Authorization derives from auth.uid()/role helper and is independently cleared by predicates (b) ungated-secdef-mutators and (d) auth-bound-role-ungated. HARDENING CANDIDATE: apply the canonical strict-actor block (v_actor := auth.uid(); RAISE ACTOR_MISMATCH on p_performed_by IS DISTINCT FROM v_actor; derive actor_role from v_actor) exactly as migration 20260617171500 did for link/unlink; can be bundled with the Section-6 gauntlet finding that this same function declares but does not use the idempotency helper. Verified live pg_get_functiondef 2026-06-17.",
-      "dated": "2026-06-17"
     }
   ]
 }
