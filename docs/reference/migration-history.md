@@ -1,4 +1,4 @@
-# Migration History (472 migrations)
+# Migration History (473 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -137,6 +137,7 @@ clean, gated apply, B7-renamed to the stamped version.
   server_totals and creates only ONE quote on a retried new-quote save. Auth/actor gate + SECDEF/search_path
   unchanged; helpers anon/authenticated-revoked. Both reviewers clean; overload=1; sweep stays at 53.
   Stamped `20260616204400` (B7-renamed from `20260616203000`).
+- `20260617013523_pair_broaden_delivery_item_lock_with_update_order_items_override` (large-RPC pass #2 / PARKED-05, **MED** — paired security fix) — broadens `_enforce_delivery_items_parent_lock` from `IN ('in_progress','completed')` to `v_status IS NOT NULL AND v_status <> 'scheduled'`, so `delivery_items` are locked on cancelled/voided (and any non-scheduled) parents too — closing a hole where a sales_rep could INSERT/DELETE items on a cancelled/voided delivery via PostgREST/RLS and corrupt the historical record. **Paired** (must ship together) with an `app.admin_override` bracket around `update_order_items`' sanctioned cleanup DELETE of orphaned `delivery_items` on already-cancelled/voided deliveries, which the broadened lock would otherwise crash — the exact regression the apply gate had deferred PARKED-05 for. A live cross-function scan confirmed the only other `delivery_items` writers (`create_delivery_with_items`, `create_followup_delivery`, `create_quick_delivery`, `edit_delivery`, `complete_delivery`) write only onto `scheduled` parents or under override, so broadening breaks none of them. `update_order_items` differs from its live definition by ONLY the override bracket (overload=1, SECDEF/`search_path`/actor/idempotency unchanged; ACL re-asserted, anon-revoked). **Codex P2 → dropped the originally-bundled `total_profit`/`total_margin_pct` recompute:** recomputing the order header's profit without also updating the denormalized `commissions` rows (`order_profit`/`commission_amount`, paid-vs-pending) would desync commission reports/payouts from the order header — deferred to a separate commission-aware change. Validation: both reviewers clean (re-run ×2); pre-apply rolled-back trigger smoke (out-of-band cancelled DELETE + INSERT blocked, override-escape + scheduled-edit still allowed); post-apply rolled-back end-to-end smoke (real `update_order_items` removes an item whose orphan ditem is on a cancelled delivery, override resets to `false`); overload=1, anon-EXECUTE=false. Stamped `20260617013523` (B7-renamed from `20260616220000`).
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 
