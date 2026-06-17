@@ -364,10 +364,17 @@ export default function Invoices() {
         return assertRpcResult<number>(data, 'delete_invoices');
       },
       toast,
-      successMessage: `Deleted ${ids.length} invoice(s)`,
       setLoading: setDeleting,
       sentryTag: 'delete_invoices',
-      onSuccess: () => {
+      onSuccess: (deleted) => {
+        // delete_invoices skips rows that are no longer deletable (e.g. posted in
+        // another tab after this list loaded), returning a smaller count — report
+        // the ACTUAL deleted count, not the requested count (Codex P2).
+        if (deleted < ids.length) {
+          toast('warning', `Deleted ${deleted} of ${ids.length} invoice(s) — the rest were no longer deletable (status changed).`);
+        } else {
+          toast('success', `Deleted ${deleted} invoice(s)`);
+        }
         setSelected(new Set());
         fetchInvoices();
       },
