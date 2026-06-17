@@ -7,7 +7,7 @@ import Badge from '../components/ui/Badge';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, checkMutationResult, assertRpcResult } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
@@ -72,7 +72,8 @@ export default function Invoices() {
   const { toast } = useToast();
   const batchPostIdem = useIdempotencyKey('batch_post_invoices', profile?.id || '');
   const batchVoidIdem = useIdempotencyKey('batch_void_invoices', profile?.id || '');
-  // Reset both batch keys whenever the selected set changes (Codex P2 fix).
+  const batchDeleteIdem = useIdempotencyKey('delete_invoices', profile?.id || '');
+  // Reset all batch keys whenever the selected set changes (Codex P2 fix).
   // See the `selectedKey` derivation + useEffect below.
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,6 +93,7 @@ export default function Invoices() {
   useEffect(() => {
     batchPostIdem.resetKey();
     batchVoidIdem.resetKey();
+    batchDeleteIdem.resetKey();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKey]);
   const [voiding, setVoiding] = useState(false);
@@ -345,20 +347,26 @@ export default function Invoices() {
   };
 
   const handleBatchDelete = async () => {
+    const ids = selectedDeletable.map((i) => i.id);
+    if (ids.length === 0) return;
     await runCriticalAction({
       action: async () => {
-        const ids = selectedDeletable.map((i) => i.id);
-        const result = await supabase
-          .from('invoices')
-          .update({ deleted_at: new Date().toISOString() })
-          .in('id', ids)
-          .select();
-        checkMutationResult(result, 'Delete invoices');
+        // Route through the guarded RPC (admin-only, audited, idempotent) instead
+        // of a raw .update({ deleted_at }). See migration delete_invoices.
+        const deleteKey = batchDeleteIdem.getKey();
+        const { data, error } = await supabase.rpc('delete_invoices', {
+          p_invoice_ids: ids,
+          p_performed_by: profile?.id,
+          p_idempotency_key: deleteKey,
+        });
+        if (error) throw error;
+        batchDeleteIdem.resetKey();
+        return assertRpcResult<number>(data, 'delete_invoices');
       },
       toast,
-      successMessage: `Deleted ${selectedDeletable.length} invoice(s)`,
+      successMessage: `Deleted ${ids.length} invoice(s)`,
       setLoading: setDeleting,
-      sentryTag: 'batch_delete_invoices',
+      sentryTag: 'delete_invoices',
       onSuccess: () => {
         setSelected(new Set());
         fetchInvoices();

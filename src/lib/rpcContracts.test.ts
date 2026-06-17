@@ -1369,6 +1369,7 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_quick_delivery',
   'create_rebate_claim',
   'create_vendor_bill',
+  'delete_invoices',
   'delete_prepay_credit',
   'delete_purchase_order',
   'duplicate_quote',

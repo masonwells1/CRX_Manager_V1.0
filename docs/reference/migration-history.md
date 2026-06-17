@@ -1,4 +1,4 @@
-# Migration History (473 migrations)
+# Migration History (474 migrations)
 
 Migrations are in `supabase/migrations/` ordered by timestamp prefix.
 
@@ -138,6 +138,23 @@ clean, gated apply, B7-renamed to the stamped version.
   unchanged; helpers anon/authenticated-revoked. Both reviewers clean; overload=1; sweep stays at 53.
   Stamped `20260616204400` (B7-renamed from `20260616203000`).
 - `20260617013523_pair_broaden_delivery_item_lock_with_update_order_items_override` (large-RPC pass #2 / PARKED-05, **MED** — paired security fix) — broadens `_enforce_delivery_items_parent_lock` from `IN ('in_progress','completed')` to `v_status IS NOT NULL AND v_status <> 'scheduled'`, so `delivery_items` are locked on cancelled/voided (and any non-scheduled) parents too — closing a hole where a sales_rep could INSERT/DELETE items on a cancelled/voided delivery via PostgREST/RLS and corrupt the historical record. **Paired** (must ship together) with an `app.admin_override` bracket around `update_order_items`' sanctioned cleanup DELETE of orphaned `delivery_items` on already-cancelled/voided deliveries, which the broadened lock would otherwise crash — the exact regression the apply gate had deferred PARKED-05 for. A live cross-function scan confirmed the only other `delivery_items` writers (`create_delivery_with_items`, `create_followup_delivery`, `create_quick_delivery`, `edit_delivery`, `complete_delivery`) write only onto `scheduled` parents or under override, so broadening breaks none of them. `update_order_items` differs from its live definition by ONLY the override bracket (overload=1, SECDEF/`search_path`/actor/idempotency unchanged; ACL re-asserted, anon-revoked). **Codex P2 → dropped the originally-bundled `total_profit`/`total_margin_pct` recompute:** recomputing the order header's profit without also updating the denormalized `commissions` rows (`order_profit`/`commission_amount`, paid-vs-pending) would desync commission reports/payouts from the order header — deferred to a separate commission-aware change. Validation: both reviewers clean (re-run ×2); pre-apply rolled-back trigger smoke (out-of-band cancelled DELETE + INSERT blocked, override-escape + scheduled-edit still allowed); post-apply rolled-back end-to-end smoke (real `update_order_items` removes an item whose orphan ditem is on a cancelled delivery, override resets to `false`); overload=1, anon-EXECUTE=false. Stamped `20260617013523` (B7-renamed from `20260616220000`).
+- `20260617031416_delete_invoices_softdelete_rpc` (large-RPC pass #9, **LOW** — audited soft-delete) — NEW
+  SECURITY DEFINER `delete_invoices(p_invoice_ids uuid[], p_performed_by uuid, p_idempotency_key text)`
+  replacing the raw `.update({ deleted_at })` the UI issued from `Invoices.tsx` (handleBatchDelete) and
+  `FieldApplicationInvoice.tsx` (handleDelete), which had NO DB-layer role/actor check and wrote NO
+  `financial_audit_log` row (finding `frontend:Invoices:raw-softdelete-no-audit`). Soft-deletes only
+  `draft`/`unposted`/`voided` invoices (the union of the two UI gates — posted/paid/overdue are skipped via
+  `CONTINUE`), writes one `invoice_deleted` audit row per invoice, idempotent via canonical
+  `check_idempotency`/`save_idempotency('delete_invoices')`. **Role gate = `require_admin()` (admin-only), NOT
+  admin_or_sales_rep** — matches the live `invoices_update`/`invoices_delete` RLS (`USING (is_admin())`), so
+  the SECDEF fn re-imposes the same admin-only boundary it bypasses (no privilege widening). Strict-actor
+  (`auth.uid()` bind, `ACTOR_MISMATCH`), `FOR UPDATE` lock, `search_path=public, pg_temp`,
+  REVOKE PUBLIC+anon / GRANT authenticated (anon-exec-secdef sweep stays 53; overload=1). Both reviewers clean
+  (re-run after the role-gate tightening); Codex clean (its 2 P2s = wire the frontend + update docs, both done
+  in this change); JWT-spoofed rolled-back functional smoke PASS (soft-delete + audit row + idempotent replay
+  + non-admin rejected). Frontend rewired through the RPC; `delete_invoices` registered in the 3 RPC
+  idempotency-coverage fixtures (`rpcContracts`/`rpcIdempotencyScope`/`rpcFixtureLiveDiff`). Stamped
+  `20260617031416` (B7-renamed from `20260617030000`).
 
 ## Reconciled 2026-06-15 (Foundation Ultra Review H4 / M2 / M3 / M8 — source-of-truth)
 
