@@ -732,16 +732,6 @@
       "revoke_risk": "candidate — zero callers found anywhere"
     },
     {
-      "name": "create_invoice_from_delivery",
-      "args": null,
-      "auth_exec": true,
-      "anon_exec": false,
-      "in_rls_policy": false,
-      "is_trigger_function": false,
-      "called_by_other_function": false,
-      "revoke_risk": "candidate — zero callers found anywhere"
-    },
-    {
       "name": "create_prepay_credit",
       "args": null,
       "auth_exec": true,
@@ -1515,12 +1505,6 @@
     },
     {
       "name": "create_invoice_from_blend_ticket",
-      "args": null,
-      "auth_exec": true,
-      "anon_exec": false
-    },
-    {
-      "name": "create_invoice_from_delivery",
       "args": null,
       "auth_exec": true,
       "anon_exec": false

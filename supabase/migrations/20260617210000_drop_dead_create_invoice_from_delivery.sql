@@ -1,0 +1,25 @@
+-- Retire the dead create_invoice_from_delivery RPC (confirmed-unused 2026-06-17).
+--
+-- Investigation (live catalog + full repo, 2026-06-17) proved ZERO callers:
+--   * No frontend page calls it (only test fixtures + generated supabase.ts types reference it).
+--   * No DB function calls it — price_order and consolidate_draft_invoices only MENTION it in
+--     comments documenting the per-unit cost_cents convention; caller-graph.json records
+--     called_by_other_function=false (auth_exec=true, anon_exec=false, not a trigger, not in RLS).
+--   * No edge function, no pg_cron job, no trigger references it.
+--   * Production has 0 invoices created by it: every live invoice carries delivery_id, and this
+--     function never set delivery_id on the invoice it inserted (open_null_delivery = 0).
+--
+-- It is superseded by create_invoice_for_unbilled_delivery — the function the IntegrityCleanup
+-- page actually calls — which DOES stamp invoices.delivery_id, requires admin, is idempotent, and
+-- guards on order_id (one active invoice per order, checked after the delivery FOR UPDATE lock):
+-- a stronger, race-safe duplicate guard. create_invoice_from_delivery's own natural guard
+-- (WHERE delivery_id = p_delivery_id) was inert precisely because it never stamped delivery_id,
+-- so two different-key calls could double-bill. Rather than patch dead code, retire it
+-- (Mason approved 2026-06-17). The Lane B hardening of this fn (20260617190000: idempotency +
+-- strict-actor) is thereby superseded.
+--
+-- Single overload (uuid, uuid, text) confirmed via pg_proc. Dependency-safe: a rolled-back
+-- `DROP FUNCTION` smoke (2026-06-17) succeeded with no dependent-object error.
+-- Rollback: re-create from migration 20260617190000 (its last live body).
+
+DROP FUNCTION IF EXISTS public.create_invoice_from_delivery(uuid, uuid, text);

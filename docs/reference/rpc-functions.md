@@ -53,7 +53,7 @@
 
 ## Invoice & Payments
 - `create_invoice_from_order()` — create invoice from order items
-- `create_invoice_from_delivery()` — create invoice from delivery items
+- `create_invoice_for_unbilled_delivery(p_delivery_id, p_performed_by, p_idempotency_key)` → jsonb — backfill a draft invoice for a completed-but-unbilled delivery (admin-only; sets `delivery_id`; guards on one active invoice per order). *(Retired `create_invoice_from_delivery` 2026-06-17 — it was unused dead code superseded by this fn; migration `20260617210000`.)*
 - `create_invoice_from_blend_ticket(p_blend_ticket_id, p_created_by, p_idempotency_key)` → jsonb `{invoice_ids[], invoice_group_id}` — creates draft invoice(s) from approved blend ticket. **Phase 1 (2026-04-29):** return type changed from `uuid` to `jsonb`. Multi-customer fields produce grouped split invoices via `invoice_group_id`. Acres come from `blend_ticket_fields.actual_acres → planned_acres → fields.total_acres → 0`. Mode A (grower-share `price_override_cents`) bills $/ac, Mode B bills line items + tier/quoted/manual + service fee.
 - `create_split_invoices_from_order(p_order_id, p_salesman_id, p_invoice_type, p_idempotency_key)` → uuid[] — creates proportional split invoices based on field billing splits for an order
 - `post_invoice()` — posts invoice; calls `check_period_open()` before posting; raises error if accounting period is closed. Also triggers `generate_rup_sales_records()` for RUP products.

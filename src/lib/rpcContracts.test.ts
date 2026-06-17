@@ -1363,7 +1363,6 @@ const MUTATING_RPCS_WITH_IDEMPOTENCY: string[] = [
   'create_delivery_with_items',
   'create_direct_order',
   'create_followup_delivery',
-  'create_invoice_from_delivery',
   'create_invoice_from_order',
   'create_order_from_blend_ticket',
   'create_quick_delivery',
@@ -1525,7 +1524,6 @@ const IDEMPOTENCY_BODY_EXEMPT: Record<
   unapply_credit_memo: 'verified-live',
   // naturally idempotent
   save_blend_ticket: 'natural', // UPDATE-only path; replay overwrites identically
-  create_invoice_from_delivery: 'natural', // guarded: "invoice already exists for delivery"
   generate_rup_sales_records: 'natural', // per-row NOT EXISTS guard
   // (no remaining 'gap' entries — batch_apply_all_prepayments + batch_void_invoices
   //  were wrapped with the canonical check_idempotency/save_idempotency helpers in

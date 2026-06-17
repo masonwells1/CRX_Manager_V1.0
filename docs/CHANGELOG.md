@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-17 — Retired dead `create_invoice_from_delivery` (Lane B delivery_id follow-up)
+
+Resolved the `delivery_id` duplicate-guard follow-up by **retiring the function** rather than patching it. **Migration `20260617210000`** (applied live, stamp `20260617210043`, Mason approved the retire).
+
+- **What the follow-up was:** `create_invoice_from_delivery` inserted its invoice with `order_id` but never `delivery_id`, so its own natural guard (`WHERE delivery_id = p_delivery_id`) was inert — two different-key calls could double-bill.
+- **What investigation found:** the function is **dead code** — ZERO callers. No page (only test fixtures + generated types), no DB function (`price_order`/`consolidate_draft_invoices` mention it only in comments; caller-graph `called_by_other_function=false`), no edge function, no cron, no trigger. The old caller `complete_delivery` was long ago refactored to inline its invoice INSERT (`20260616140912`). Prod has 0 invoices created by it (every live invoice carries `delivery_id`). It is fully superseded by `create_invoice_for_unbilled_delivery` (the function the Integrity Cleanup page actually calls), which sets `delivery_id`, requires admin, is idempotent, and has a stronger order-scoped, race-safe duplicate guard.
+- **The fix:** `DROP FUNCTION IF EXISTS public.create_invoice_from_delivery(uuid,uuid,text)` — removes the latent double-billing bug *and* the foot-gun of a future change wiring up the wrong, weaker function. This supersedes the Lane B hardening of the same function (`20260617190000`).
+- **Validation:** rls-security + migration-drift reviewers both CLEAN (0 blockers; drift flagged only stale-reference cleanup). Rolled-back `DROP` smoke confirmed no dependent object. Post-apply: function gone, survivor (`create_invoice_for_unbilled_delivery`) intact, DB-invariant sweeps clean. Repo cleanup done so the suite stays green: removed the name from `rpcContracts.test.ts` (fixture array + idempotency-mode map), `rpcFixtureLiveDiff.test.ts` (live snapshot CSV + count 266→265), the generated `supabase.ts` type block, both `caller-graph.json` entries, and `rpc-functions.md`.
+
 ## 2026-06-17 — Auto-invoice + RUP RPCs: idempotency + strict-actor (sections 2-15 gauntlet, Lane B)
 
 Cleared the two prepped Lane B migrations from the sections 2-15 gauntlet remediation (ledger: `docs/audits/gauntlet/sections-2-15-remediation-LEDGER.md`). Both applied live + smoke-proven, both DB reviewers clean.

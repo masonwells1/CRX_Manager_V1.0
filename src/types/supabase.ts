@@ -7443,14 +7443,6 @@ export type Database = {
         }
         Returns: Json
       }
-      create_invoice_from_delivery: {
-        Args: {
-          p_delivery_id: string
-          p_idempotency_key?: string
-          p_performed_by: string
-        }
-        Returns: Json
-      }
       create_invoice_from_order: {
         Args: {
           p_idempotency_key?: string
