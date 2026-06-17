@@ -33,6 +33,7 @@ This runner makes those queries **standing executable gates** that run **before*
 | `anon-exec-secdef.sql` | (a) every anon-executable SECDEF | only the documented RLS-helper / trigger / sequence / self-gating-report set (allowlist) |
 | `ungated-secdef-mutators.sql` | (b) authenticated SECDEF that mutates and references no auth.uid()/role helper | **zero** (the round-2 definitive predicate, standing) |
 | `actor-forgery.sql` | (c) actor-param role-check/COALESCE without ACTOR_MISMATCH | over-broad by design; allowlist semantic-safe |
+| `actor-forgery-fin-audit.sql` | (i) actor param referenced inside a `financial_audit_log` INSERT without ACTOR_MISMATCH (blind-spot closer for (c)) | over-broad by design; allowlist verified attribution-only |
 | `auth-bound-role-ungated.sql` | (d) auth.uid()-bound mutator with no role check (the `create_direct_order` W1 variant) | **zero** |
 | `secdef-searchpath.sql` | (e) SECDEF missing `search_path` | **zero** (no allowlist case) |
 | `overloads.sql` | (f) public proname with >1 signature | **zero** (no allowlist case) |
@@ -126,3 +127,25 @@ authenticated, anon, PUBLIC; GRANT … TO service_role;` (server-internal helper
 migration review gate. Low severity (insert-only, idempotent NOT-EXISTS guard, no data exfiltration,
 no money/privilege impact) but it is exactly the W1 structural class predicate (d) exists to catch, so
 it is reported, not allowlisted.
+
+## Update 2026-06-17 — `actor-forgery-fin-audit` added; link/unlink un-allowlisted
+
+The Live Foundation Gauntlet **Section 1** found `link_blend_ticket_to_order` /
+`unlink_blend_ticket_from_order` forging the audit actor: they wrote a caller-supplied `p_performed_by`
+into `financial_audit_log.actor_user_id` (+ `activity_feed.performed_by`, + the `actor_role` lookup)
+with no `ACTOR_MISMATCH` guard. They had been **allowlisted** under `actor-forgery` as "attribution-only"
+since 2026-06-10, which is exactly what suppressed the catch. Fixed live (migration `20260617171500`,
+canonical strict-actor block) and the two stale allowlist entries **removed**, so `actor-forgery` now
+actively guards them again — a revert that drops `ACTOR_MISMATCH` re-flags them (the regression fixtures
+the Section 1 report asked for).
+
+New predicate **`actor-forgery-fin-audit`** closes the blind spot predicate (c) had for *attribution-only*
+writes into the immutable money ledger: predicate (c) only fires when the param sits near a `role`
+derivation or `COALESCE`, so a raw `…actor_user_id, … VALUES (…, p_performed_by, …)` with no `role` word
+nearby slips it. This predicate keys on the `financial_audit_log` sink itself.
+
+Live seed 2026-06-17 — **1 flagged / 1 allowlisted / 0 real:** `create_invoice_from_delivery` (forges the
+role LABEL only, not the actor identity; authorization is off `auth.uid()` and independently cleared by
+predicates (b)/(d)). Allowlisted as a **hardening candidate** — the clean end-state is to apply the same
+strict-actor block to it (bundle with the Section-6 gauntlet finding that it declares-but-doesn't-use the
+idempotency helper), then remove the allowlist entry.
