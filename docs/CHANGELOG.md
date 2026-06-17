@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-16 — Deleted the `seed-admin` edge function (security; nightly-debug PARKED-07)
+
+Closed the highest-severity finding from the nightly-debug whole-app pass: `seed-admin` was the only one of 7 edge functions deployed with **`verify_jwt = false`**, and its production kill-switch depended on an unconfirmed `ENVIRONMENT` secret — a latent **unauthenticated admin-mint** (anyone who learned `SEED_ADMIN_SECRET` could create a fully-functioning admin on the live ERP).
+
+- **Deleted `seed-admin` from the live project** (`rhyzpcqhnizqbxphqdkr`) via `supabase functions delete` after Mason's explicit in-chat OK. Pre-checks: 3 active admins already exist (the one-time seed is long done, so deletion strands no one) and 24 h of edge-function logs were empty (idle). Verified gone: 6 functions remain, **all `verify_jwt = true`**.
+- **Removed the orphaned local source** `supabase/functions/seed-admin/index.ts` (no code referenced it) so it can't be silently re-deployed.
+- **Owner item M4** (confirm `ENVIRONMENT=production` for seed-admin) is now **moot/resolved** — with the function gone, its kill-switch is irrelevant.
+- Docs synced 7→6 Edge Functions: `CLAUDE.md` (Snapshot + Edge Functions section + owner-items list), `README.md`, `AGENTS.md` (regenerated), `TODO.md` (M4 struck), and the `deploy-edge-function` skill. No DB/RPC change; no app deploy.
+
+---
+
 ## 2026-06-15 — CLAUDE.md restructured for token efficiency (docs only)
 
 Cut the always-loaded `CLAUDE.md` from 581 lines / 110 KB (~27.5K tokens) to 358 lines / 28.8 KB (~7.2K tokens) — a **~74% reduction in what loads on every turn** — with **zero rule content lost** (everything moved is preserved verbatim). Grounded in Anthropic's "Best practices for Claude Code" + "How Claude remembers your project" (keep it short; only every-session facts; push detail to docs/skills; a bloated CLAUDE.md makes Claude *ignore* instructions) and Karpathy's actual committed guidance (simplicity-first — and the finding that the viral "Karpathy CLAUDE.md" is a third-party derivative, `multica-ai/andrej-karpathy-skills`, NOT his own file; his real files are `karpathy/llm-council/CLAUDE.md` technical-notes-only + `karpathy/autoresearch/program.md`).

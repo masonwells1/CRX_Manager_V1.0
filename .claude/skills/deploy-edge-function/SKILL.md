@@ -1,6 +1,6 @@
 ---
 name: deploy-edge-function
-description: Deploy a Supabase Edge Function to live via the Supabase MCP with pre-flight checks, version verification, and a post-deploy smoke test. Use when the user wants to deploy or update one of the 7 Edge Functions in supabase/functions/ (create-user, process-blend-ticket, process-document, reset-user-password, seed-admin, send-email, setup-blend-tickets-storage). Catches the B8 class of bug — guard added to the wrong function, frontend caller routes elsewhere.
+description: Deploy a Supabase Edge Function to live via the Supabase MCP with pre-flight checks, version verification, and a post-deploy smoke test. Use when the user wants to deploy or update one of the 6 Edge Functions in supabase/functions/ (create-user, process-blend-ticket, process-document, reset-user-password, send-email, setup-blend-tickets-storage). Catches the B8 class of bug — guard added to the wrong function, frontend caller routes elsewhere.
 ---
 
 # Deploy Edge Function

@@ -19,7 +19,7 @@ These are blocked on something only you can provide or do.
   Backups: confirm PITR is on and daily snapshots run. Then schedule a one-time
   restore drill (spin up a throwaway project, replay migrations, restore latest
   backup, smoke-test, delete). Not exposed via tooling — dashboard only.
-- **M4** — confirm the `seed-admin` Edge Function has `ENVIRONMENT=production` set.
+- ~~**M4** — confirm the `seed-admin` Edge Function has `ENVIRONMENT=production` set.~~ ✅ RESOLVED 2026-06-16: `seed-admin` was DELETED from the live project (nightly-debug PARKED-07), so its `ENVIRONMENT` kill-switch is moot. The one-time seed is done (3 active admins).
 - **L4** — enable Supabase **leaked-password protection** (dashboard → Auth).
 
 ### Bigger items waiting on your input

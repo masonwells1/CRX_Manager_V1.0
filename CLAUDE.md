@@ -19,11 +19,11 @@ separately by scripts/regenerate-agents-md.mjs and does not parse this file.
 
 ## Snapshot (2026-06-15)
 
-**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 68 pages · 96 tables (+2 views) · 227 callable RPCs (+47 trigger fns) · **474 migrations** on disk · 7 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
+**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 68 pages · 96 tables (+2 views) · 227 callable RPCs (+47 trigger fns) · **474 migrations** on disk · 6 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
 
 - **`main` = production** (croprxsolutions.app). **Auto-push is authorized** (Mason, 2026-06-16): push regular code to `main` once the `/ship` pipeline is green (review clean + tests + the pre-push hook's typecheck/build) — no approval click; Vercel rollback is one click if needed. STILL get Mason's explicit OK before **applying a live migration, deploying an edge function, or deleting data**, and never commit unrelated files.
 - **Where history lives now** (so this file stays lean): sprint log → [`docs/CHANGELOG.md`](docs/CHANGELOG.md); detailed per-topic narrative → the `memory/` files (auto-loaded each session); the old multi-month "Current State" block → [`docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md`](docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md).
-- **Open owner items (need Mason, not code):** Stripe pay-now keys (A1) · 10 real vendor bills for the AP-AI accuracy gate (D1) · physical counts to re-base 17 negative-inventory products (H1) · seed-admin `ENVIRONMENT=production` confirm (M4) · Supabase leaked-password protection toggle (L4) · grower-portal label CSV (0/604 products have REI/PHI/signal_word).
+- **Open owner items (need Mason, not code):** Stripe pay-now keys (A1) · 10 real vendor bills for the AP-AI accuracy gate (D1) · physical counts to re-base 17 negative-inventory products (H1) · Supabase leaked-password protection toggle (L4) · grower-portal label CSV (0/604 products have REI/PHI/signal_word).
 - **Money/AR audits are still "vacuously clean"** (≈0 posted invoices/payments live) → re-run `/foundation-ultra-review` after the first real billing cycle.
 
 ## Working Principles
@@ -198,14 +198,15 @@ checkMutationResult(result, 'Update context');
 
 ---
 
-## Edge Functions (7 in `supabase/functions/`, + `_shared/` lib dir)
+## Edge Functions (6 in `supabase/functions/`, + `_shared/` lib dir)
 - **create-user** — Admin-only user creation
 - **process-blend-ticket** — OCR via Google Vision AI
 - **process-document** — Document processing
 - **reset-user-password** — Admin-only password reset
-- **seed-admin** — One-time admin setup
 - **send-email** — Resend API, JWT auth, idempotency, PDF attachments
 - **setup-blend-tickets-storage** — Storage bucket config
+
+> `seed-admin` (one-time admin seeder) was DELETED from the live project 2026-06-16 — it was the only function deployed with `verify_jwt=false` (a latent unauthenticated admin-mint; nightly-debug PARKED-07). The one-time seed is done (3 active admins exist). Do NOT re-add it.
 
 All require `ALLOWED_ORIGIN` env var for CORS.
 

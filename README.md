@@ -106,7 +106,7 @@ All variables must start with `VITE_` to be accessible in the app. See `.env.exa
 
 ## Database
 
-96 tables (+2 views) in Supabase PostgreSQL with Row Level Security (RLS) on all tables. ~225 RPC functions. 455 migration files in `supabase/migrations/`. 7 Edge Functions for user creation, OCR processing, email, and storage setup.
+96 tables (+2 views) in Supabase PostgreSQL with Row Level Security (RLS) on all tables. ~225 RPC functions. 455 migration files in `supabase/migrations/`. 6 Edge Functions for user creation, OCR processing, email, and storage setup.
 
 See [CLAUDE.md](./CLAUDE.md) for the complete table list, RLS policy matrix, and RPC function inventory.
 
