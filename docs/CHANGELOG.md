@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-17 — Order edits now recompute pending commissions (nightly-debug #2)
+
+Closed the nightly-debug finding `lifecycle:update_order_items:stale-profit-and-commissions`. **Migration `20260617115903`** (applied live) extends `update_order_items` so that after an order's items change, the denormalized `commissions` rows are refreshed instead of going stale.
+
+- **What was actually stale (finding corrected by live verification):** the order *header* profit/margin was already kept correct by the existing `after_order_items_change` → `trg_recalc_order_totals` trigger. The real gap was only the `commissions` rows (their `order_profit`/`commission_amount` were snapshotted at order creation and never refreshed), so commission reports/payouts drifted after an edit.
+- **The fix (Mason's policy):** rescale each **pending** commission to the new `orders.total_profit` by its OWN snapshotted `split_percentage`. **Paid, cancelled, and soft-deleted rows are frozen** — never silently change an already-paid payout. `recipient`/`split_percentage` are untouched so a later change to the customer's split does not re-attribute this order's commissions. Runs automatically on every edit.
+- **Codex P1 caught + fixed:** a pending commission already pulled into a **non-voided commission-payment batch** is also frozen (its amount is snapshotted in `commission_payment_items` / summed into `commission_payments.total_amount`; rewriting it would desync the batch).
+- **Validation:** body byte-identical to live except the one marked block; rls-security-reviewer + migration-drift-reviewer clean (overload=1, SECDEF + `search_path` preserved); Codex clean after the P1 fix; JWT-spoofed rolled-back smoke + post-apply live re-smoke both PASS (recompute pending, freeze paid, freeze batched, zero prod footprint). No table/column/data change — additive function behavior only.
+
+---
+
 ## 2026-06-16 — Deleted the `seed-admin` edge function (security; nightly-debug PARKED-07)
 
 Closed the highest-severity finding from the nightly-debug whole-app pass: `seed-admin` was the only one of 7 edge functions deployed with **`verify_jwt = false`**, and its production kill-switch depended on an unconfirmed `ENVIRONMENT` secret — a latent **unauthenticated admin-mint** (anyone who learned `SEED_ADMIN_SECRET` could create a fully-functioning admin on the live ERP).
