@@ -366,6 +366,21 @@ export interface OrderShare {
   created_at: string;
 }
 
+/**
+ * Per-LINE field/acre attribution for multi-field split invoices (nightly-debug #1).
+ * A single order line can be "spread across" several fields by acres; at invoice time
+ * create_split_invoices_from_order splits the line's total across these fields by acres,
+ * then each field's portion among that field's owners (field_billing_defaults) by split_pct.
+ * Entered on the order (not the quote). See migration 20260617200000.
+ */
+export interface OrderItemFieldAllocation {
+  id: string;
+  order_item_id: string;
+  field_id: string;
+  acres: number;
+  created_at: string;
+}
+
 export interface OrderItem {
   id: string;
   order_id: string;

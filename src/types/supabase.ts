@@ -4123,6 +4123,45 @@ export type Database = {
           },
         ]
       }
+      order_item_field_allocations: {
+        Row: {
+          acres: number
+          created_at: string
+          field_id: string
+          id: string
+          order_item_id: string
+        }
+        Insert: {
+          acres: number
+          created_at?: string
+          field_id: string
+          id?: string
+          order_item_id: string
+        }
+        Update: {
+          acres?: number
+          created_at?: string
+          field_id?: string
+          id?: string
+          order_item_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "order_item_field_allocations_field_id_fkey"
+            columns: ["field_id"]
+            isOneToOne: false
+            referencedRelation: "fields"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "order_item_field_allocations_order_item_id_fkey"
+            columns: ["order_item_id"]
+            isOneToOne: false
+            referencedRelation: "order_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       order_items: {
         Row: {
           acres: number | null
