@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-17 — Order edits now refresh per-line profit/margin (targeted-gauntlet residual)
+
+Closed the last residual in `update_order_items` found while verifying the targeted Codex gauntlet handoff. **Migration `20260617123503`** (applied live, stamp `20260617125110`).
+
+- **The gap:** the SAME-PRODUCT edit branch (change a line's price or quantity without swapping the product) updated `total_price` but left the per-line `order_items.profit`/`net_margin` stale. The product-swap and new-item branches already set them; only this branch didn't. `get_sales_detail_report` (the `/sales-reports` Sales Detail tab) reads `oi.profit` per line, derives the line margin from it, and SUMs it for the report total — so after a same-product edit that report's per-line Profit and total drifted from the (correct) order header.
+- **Not a money/payout bug:** the order header `total_profit`/`total_margin_pct` is recomputed from price−cost by the `trg_recalc_order_totals` trigger, and commissions rescale from that header (migration `20260617115903`). Both stayed correct; only the per-line report column was stale.
+- **The fix:** add `profit`/`net_margin` to the same-product `UPDATE order_items`, using the identical formula the swap/new-item branches use, with cost = `COALESCE(v_old_item.cost_per_unit,0)` (cost is unchanged on a same-product edit). Body byte-identical to live `20260617115903` except those two assignments.
+- **Validation:** rls-security-reviewer + migration-drift-reviewer + compliance-reviewer all clean (no overload, `search_path` + all guards preserved, grant posture unchanged, per-line formula reconciles with the header). Pre-apply and post-apply rolled-back JWT-spoofed smoke both `SMOKE_PASS_ROLLBACK` (price 10→12 ⇒ 600/50.00/1200, header + pending commission 600; qty 100→150 ⇒ 600/40.00/1500). DB-invariant regression check clean. Open follow-up (owner-gated): one-time resync of any rows edited via the same-product path before this fix.
+
 ## 2026-06-17 — Order edits now recompute pending commissions (nightly-debug #2)
 
 Closed the nightly-debug finding `lifecycle:update_order_items:stale-profit-and-commissions`. **Migration `20260617115903`** (applied live) extends `update_order_items` so that after an order's items change, the denormalized `commissions` rows are refreshed instead of going stale.
