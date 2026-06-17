@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-17 — Blend-ticket order link/unlink: forged-actor audit fix (Live Foundation Gauntlet §1)
+
+Fixed the one HIGH from the new Live Foundation Gauntlet's first section (Security / roles / RLS / SECDEF access). **Migration `20260617171500`** (applied live + smoke-proven).
+
+- **The bug:** `link_blend_ticket_to_order` and `unlink_blend_ticket_from_order` are authenticated-callable SECURITY DEFINER mutators that trusted a caller-supplied `p_performed_by`, writing it into `blend_ticket_to_order_items.created_by`, `activity_feed.performed_by`, and `financial_audit_log.actor_user_id` (and deriving `actor_role` from it). An admin/sales_rep could call them directly and **pin a blend-ticket order link/unlink on another employee** — the attribution in the audit trail was forgeable. Role gating was already correct; only the recorded actor was at risk.
+- **The fix (mirrors `20260609195713`):** prepend the canonical strict-actor block — `v_actor := auth.uid()` → `AUTH_REQUIRED` if null → `ACTOR_MISMATCH` if `p_performed_by` is distinct from `v_actor`, placed before the idempotency replay — and stamp every audit write from `v_actor`. Bodies otherwise byte-verbatim from live: signatures, return shapes, idempotency operation strings, and business logic unchanged; one overload each; grants unchanged (`CREATE OR REPLACE` preserves).
+- **Validation:** rls-security-reviewer + migration-drift-reviewer both CLEAN (each diffed against live `pg_get_functiondef`). Post-apply **live** smoke PASS — forged actor → `ACTOR_MISMATCH` (link + unlink), no-auth → `AUTH_REQUIRED`, legit actor + bogus ticket → clean `Blend ticket not found` with zero rows mutated. UI unaffected (`BlendTicketDetail` already passes the current profile id).
+- **Prevention (recommended follow-up, not in this migration):** a deterministic sweep/fixture that flags any authenticated mutating SECDEF RPC with a `p_*_by` param lacking an `auth.uid()` actor binding + `ACTOR_MISMATCH`, with these two functions as regression fixtures.
+
 ## 2026-06-17 — Multi-field split invoices, allocated by acres (nightly-debug #1)
 
 Built the long-blocked split-invoice feature: an order line can be **spread across several fields by acres**, and at invoice time each field's owner(s) are billed their **acre-weighted share, penny-exact**. Replaces a dormant-but-broken function that could **double-bill (200%)** and drift by pennies.
