@@ -56,15 +56,27 @@ for file in $TS_FILES; do
 
   CONTENT=$(cat "$file")
 
-  # --- Check 1: .update() or .delete() without checkMutationResult nearby ---
-  # Look for supabase .update( or .delete( patterns
-  if echo "$CONTENT" | grep -qE '\.(update|delete)\s*\('; then
+  # --- Check 1: supabase .update()/.delete() without checkMutationResult ---
+  # Only a genuine supabase table mutation should trip this. We match a
+  # "mutation candidate" LINE — one that, after dropping comment-only lines,
+  # is EITHER a chain-continuation (`.update(` / `.delete(` at the start of a
+  # line, the common multi-line `supabase.from(...).update(...)` style) OR a
+  # single-line chain containing `supabase`/`.from(` alongside `.update(`/`.delete(`.
+  # This deliberately EXCLUDES JS Set/Map collection ops (`next.delete(id)`,
+  # `map.delete(key)`) and `.update(`/`.delete(` text inside comments, which are
+  # the two benign patterns that produced ~11 false-positive warnings.
+  # Verified non-weakening: every real supabase mutation in src/ still matches.
+  MUTATION_CANDIDATES=$(echo "$CONTENT" \
+    | grep -vE '^\s*(//|\*|/\*)' \
+    | grep -E '(^\s*\.(update|delete)\s*\()|((supabase|\.from\().*\.(update|delete)\s*\()' \
+    || true)
+  if [ -n "$MUTATION_CANDIDATES" ]; then
     # Check if checkMutationResult is imported
     if ! echo "$CONTENT" | grep -qE 'checkMutationResult'; then
       # Exempt files that only do reads or use RPCs
       if echo "$CONTENT" | grep -qE 'from.*lib/db'; then
         echo "WARNING: $file"
-        echo "  Has .update() or .delete() but does not import checkMutationResult."
+        echo "  Has a supabase .update()/.delete() but does not import checkMutationResult."
         echo "  Every supabase .update()/.delete() MUST use checkMutationResult()."
         WARNINGS=$((WARNINGS + 1))
       fi

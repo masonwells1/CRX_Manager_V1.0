@@ -6,8 +6,7 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260617164803",
-    "high_water_note": "Refreshed 2026-06-17 (targeted: order_item_field_allocations + create_split_invoices_from_order rewrite applied; high-water = latest applied stamp)."
+    "migrations_high_water": "20260617182051"
   },
   "generated_columns": [
     {
@@ -1053,6 +1052,12 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "order_item_field_allocations",
+      "constraint": "order_item_field_allocations_acres_check",
+      "def": "CHECK ((acres > (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "order_items",
       "constraint": "chk_oi_qty_delivered",
       "def": "CHECK ((quantity_delivered >= (0)::numeric))",
@@ -1164,12 +1169,6 @@
       "table": "write_offs",
       "constraint": "write_offs_amount_cents_check",
       "def": "CHECK ((amount_cents > 0))",
-      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
-    },
-    {
-      "table": "order_item_field_allocations",
-      "constraint": "order_item_field_allocations_acres_check",
-      "def": "CHECK ((acres > (0)::numeric))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     }
   ],
@@ -1881,6 +1880,17 @@
         "updated_at"
       ]
     },
+    "order_item_field_allocations": {
+      "no_default": [
+        "order_item_id",
+        "field_id",
+        "acres"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    },
     "order_items": {
       "no_default": [
         "order_id",
@@ -2387,17 +2397,6 @@
         "customer_id",
         "amount_cents",
         "reason"
-      ],
-      "with_default": [
-        "id",
-        "created_at"
-      ]
-    },
-    "order_item_field_allocations": {
-      "no_default": [
-        "order_item_id",
-        "field_id",
-        "acres"
       ],
       "with_default": [
         "id",
@@ -3259,6 +3258,13 @@
       "created_at",
       "updated_at"
     ],
+    "order_item_field_allocations": [
+      "id",
+      "order_item_id",
+      "field_id",
+      "acres",
+      "created_at"
+    ],
     "order_items": [
       "id",
       "order_id",
@@ -3328,8 +3334,8 @@
       "program_notes",
       "booking_draw",
       "pricing_status",
-      "pricing_escalation_sent_at",
-      "pricing_reminder_sent_at"
+      "pricing_reminder_sent_at",
+      "pricing_escalation_sent_at"
     ],
     "payments": [
       "id",
@@ -3843,13 +3849,6 @@
       "reversed_at",
       "reversed_reason",
       "reversed_by"
-    ],
-    "order_item_field_allocations": [
-      "id",
-      "order_item_id",
-      "field_id",
-      "acres",
-      "created_at"
     ]
   },
   "sequences": [

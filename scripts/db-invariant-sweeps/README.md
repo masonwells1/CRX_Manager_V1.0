@@ -112,13 +112,13 @@ node scripts/db-invariant-sweeps/run-sweeps.mjs --explain <predicate>  # header 
 | anon-exec-secdef | 53 | 53 | 0 |
 | ungated-secdef-mutators | 2 | 2 | 0 |
 | actor-forgery | 4 | 4 | 0 |
-| auth-bound-role-ungated | 1 | 0 | **1** → `generate_rup_sales_records` (see below) |
+| auth-bound-role-ungated | 1 | 0 | **1 → CLOSED 2026-06-11** (`generate_rup_sales_records`, revoked — see below) |
 | secdef-searchpath | 0 | 0 | 0 |
 | overloads | 0 | 0 | 0 |
 | status-literals | 0 | 0 | 0 |
 | plpgsql-check | 30 errors / 11 functions (2026-06-10 first scan) | 0 | 30 — baseline queue in the execution log §4, fix via /ship, never allowlist |
 
-**Open real finding (auth-bound-role-ungated):** `generate_rup_sales_records(p_invoice_id uuid,
+**RESOLVED 2026-06-11 — was an open `auth-bound-role-ungated` finding:** `generate_rup_sales_records(p_invoice_id uuid,
 p_idempotency_key text)` is an `authenticated`-EXECUTE-able SECDEF that inserts `rup_sales_records`,
 binds `auth.uid()` for `created_by`, but has **no role gate**. Its only legitimate caller is
 `post_invoice` (which is itself gated), and there is **no UI/Edge callsite** (grep: only test files
@@ -126,7 +126,10 @@ reference it). Recommended fix: `REVOKE EXECUTE ON FUNCTION generate_rup_sales_r
 authenticated, anon, PUBLIC; GRANT … TO service_role;` (server-internal helper) — through the
 migration review gate. Low severity (insert-only, idempotent NOT-EXISTS guard, no data exfiltration,
 no money/privilege impact) but it is exactly the W1 structural class predicate (d) exists to catch, so
-it is reported, not allowlisted.
+it is reported, not allowlisted. **Update — CLOSED live 2026-06-11 by migration
+`20260611001248_revoke_generate_rup_sales_records`: `REVOKE EXECUTE … FROM authenticated, anon, PUBLIC`
+applied, so live grants are now `service_role`/`postgres` only and the `auth-bound-role-ungated` sweep
+returns 0 unallowlisted rows (re-confirmed by the 2026-06-17 sections 2-15 gauntlet, LOW-3).**
 
 ## Update 2026-06-17 — `actor-forgery-fin-audit` added; link/unlink un-allowlisted
 
