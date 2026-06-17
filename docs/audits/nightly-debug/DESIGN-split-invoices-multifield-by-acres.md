@@ -1,6 +1,8 @@
 # Design: Multi-field split invoices, allocated by acres
 
-**Status:** DESIGN — not built. Needs one workflow decision from Mason (below) before any code.
+**Status:** DESIGN COMPLETE — all decisions captured (2026-06-17, see §9). Not built. The build is a
+focused next session (new tables + split-function rewrite + builder UI), gated on Mason's plan OK and
+then the live-migration apply OK.
 **Finding:** nightly-debug `money:create_split_invoices_from_order:independent-per-line-rounding`
 **Severity:** MEDIUM · **Live risk today:** none (fully dormant — 0 split invoices ever, 0 multi-field quotes)
 **Date:** 2026-06-17
@@ -124,3 +126,39 @@ I design the table** — it changes whether this is a ~2-file change or a ~6-fil
 
 Once you pick A vs B (and answer 2–3 if B), I'll turn this into a concrete build plan + migration and
 bring it back for your OK before writing code.
+
+---
+
+## 9. Decisions locked (2026-06-17) + build plan
+
+**Mason's decisions:**
+- Multi-field splits are **real**; allocation is **by acres**.
+- **Option B** — a product that covers several fields is entered **once** and the system spreads it across the fields.
+- **Acres source = prefill + override:** auto-pull each field's acres from `fields.total_acres`, but allow a **per-line manual override** for when only part of a field is applied.
+- **Owner split per field (v1):** use the field's default split in `field_billing_defaults` (no per-order owner override in v1).
+
+**Build plan (a focused next session — multi-file + drift-sensitive; Opus/high-effort; dormant so no time pressure):**
+1. **Migration A — new child tables** (each line's field+acre breakdown):
+   - `quote_item_field_allocations(id, quote_item_id → quote_items, field_id → fields, acres numeric, created_at)` + RLS mirroring `quote_items`.
+   - `order_item_field_allocations(id, order_item_id → order_items, field_id → fields, acres numeric, created_at)` + RLS mirroring `order_items`.
+   - Indexes on the FK columns; both tables get RLS (architecture rule #2).
+2. **Migration B — rewrite the split math.** Replace the buggy `sum(split_pct) across fields` in
+   `create_split_invoices_from_order` (and adjust `get_field_billing_splits_for_order`): for each line →
+   split `line_total` across its `order_item_field_allocations` **by acres** (largest-remainder via the
+   live `calculate_billing_splits` helper) → for each field, split that portion among its
+   `field_billing_defaults` owners **by split_pct** (largest-remainder) → accumulate per customer →
+   one invoice per customer (keep `invoice_group_id`). Penny-exact by construction.
+3. **Conversion paths:** `convert_quote_to_order` (+ draw/quick-delivery order creators) copy
+   `quote_item_field_allocations` → `order_item_field_allocations`.
+4. **Frontend builder:** per-line "spread across fields" editor — pick fields; acres prefill from
+   `total_acres`, editable; live per-customer split preview. Update `src/types/index.ts`, the typed
+   client `src/types/supabase.ts`, and RPC fixtures if a signature changes.
+5. **Guards:** each field's `field_billing_defaults` must sum to 100%; `acres > 0`; a "spread" line must
+   have ≥1 allocation.
+6. **Full gate:** rls-security + migration-drift reviewers, Codex, a JWT-spoofed rolled-back smoke on a
+   synthetic 2-field / 2-owner order proving each customer is billed exactly their acre-weighted share and
+   the split invoices reconcile to the order to the penny; apply-guard proof; **Mason's apply OK**; invariant
+   sweeps; docs.
+
+**Recommendation:** build this as its own fresh session — it's a real feature (2 tables + RPC + UI), and
+a long context erodes care on drift-sensitive DB work. It stays dormant and safe until then.
