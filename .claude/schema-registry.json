@@ -6,8 +6,8 @@
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260617143755",
-    "high_water_note": "Refreshed 2026-06-17 (targeted: added order_item_field_allocations after applying migration 20260617143755)."
+    "migrations_high_water": "20260617164803",
+    "high_water_note": "Refreshed 2026-06-17 (targeted: order_item_field_allocations + create_split_invoices_from_order rewrite applied; high-water = latest applied stamp)."
   },
   "generated_columns": [
     {
@@ -2393,11 +2393,17 @@
         "created_at"
       ]
     },
-    "order_item_field_allocations": [
-      "order_item_id",
-      "field_id",
-      "acres"
-    ]
+    "order_item_field_allocations": {
+      "no_default": [
+        "order_item_id",
+        "field_id",
+        "acres"
+      ],
+      "with_default": [
+        "id",
+        "created_at"
+      ]
+    }
   },
   "columns": {
     "accounting_periods": [
