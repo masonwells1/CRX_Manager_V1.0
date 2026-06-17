@@ -1,5 +1,21 @@
 # Nightly-Debug Remediation — Handoff (resume here)
 
+**UPDATE 2026-06-16 PM-3 — #2 (update_order_items + PARKED-05) DONE LIVE + COMMITTED (not pushed).** The
+riskiest deferred item is finished: migration `20260617013523_pair_broaden_delivery_item_lock_with_update_order_items_override`
+(commit `2bcfc4c`). It broadens `_enforce_delivery_items_parent_lock` to lock delivery_items on cancelled/voided
+(any non-scheduled) parents AND brackets update_order_items' sanctioned cleanup DELETE in `app.admin_override`
+— the exact pair the gate deferred. Validation: rls-security + migration-drift reviewers (×2 clean) + Codex;
+pre-apply rolled-back trigger smoke (out-of-band cancelled DELETE/INSERT blocked, override-escape + scheduled-edit
+allowed); post-apply rolled-back end-to-end smoke on the REAL update_order_items (removes an item whose orphan
+ditem is on a cancelled delivery, override resets to false); sweeps clean (anon-exec SECDEF 53, overload 1).
+**Codex P2 → the bundled total_profit/total_margin_pct recompute was DROPPED** (recomputing the order-header
+profit without also updating the denormalized `commissions` rows would desync commission reports/payouts).
+So of the in-scope large-RPC items, only **#9 delete_invoice (optional)** + the **frontend greens** remain;
+**#3 split-invoice stays owner-blocked** (field-aware redesign). **NEW DEFERRED (commission-aware):**
+update_order_items still does NOT refresh `orders.total_profit`/`total_margin_pct` OR `commissions.order_profit`/
+`commission_amount` when an order's items are edited — fixing needs a design that respects pending-vs-paid
+commissions + splits. Latent today (commissions denormalized from creation-time profit). Do it as its own change.
+
 **As of 2026-06-16 PM-2.** Branch `claude/priceless-austin-0d3ccd` (worktree this session:
 `C:\CRX_Manager\.claude\worktrees\eloquent-hawking-6d28a7`). **Last commit `000c8c0`.** Tree clean.
 Large-RPC pass: #8/#11/#5 + cancel_delivery + the original 5 foundation migrations are LIVE; #10 deferred,
@@ -58,12 +74,13 @@ blocked. Write proofs with **Node** (`fs.writeFileSync`). See [[project_apply-gu
 cleanup DELETE; fix = wrap that DELETE in `set_config('app.admin_override','true',true)` + recompute
 total_profit/total_margin_pct, THEN broaden the lock in the same/paired migration — see ⛔ DEFERRED block).
 
-## ⛔ DEFERRED by the gate (do as a PAIR)
-- **PARKED-05 delivery_items terminal lock** — broadening `_enforce_delivery_items_parent_lock` to
-  `<> 'scheduled'` regresses `update_order_items`' cancelled/voided cleanup `DELETE` (it runs WITHOUT
-  `app.admin_override`). **Fix together with the `update_order_items` rewrite:** wrap that DELETE in
-  `set_config('app.admin_override','true',true)` (+ recompute total_profit/total_margin_pct — that's the
-  update_order_items LOW finding too), THEN apply the lock broadening in the same/paired migration.
+## ✅ DONE 2026-06-16 PM-3 (was ⛔ DEFERRED by the gate — shipped as a PAIR)
+- **PARKED-05 delivery_items terminal lock + update_order_items override** — DONE LIVE
+  (`20260617013523`, commit `2bcfc4c`, not pushed). Broadened the lock to `<> 'scheduled'` AND wrapped
+  update_order_items' cancelled/voided cleanup DELETE in `set_config('app.admin_override',...)` in ONE
+  paired migration; update_order_items differs from live by ONLY the override bracket. The
+  total_profit/total_margin_pct recompute was DROPPED per Codex P2 (it would desync the denormalized
+  `commissions` rows) — re-deferred as the commission-aware item noted in the PM-3 banner at top.
 
 ## ⏭️ REMAINING (large-RPC pass — each: reproduce full live fn VERBATIM except the change [md5-verify],
 ##    Codex-review it, run rls-security + migration-drift reviewers, write proof, apply, B7-rename, sweep, commit)
