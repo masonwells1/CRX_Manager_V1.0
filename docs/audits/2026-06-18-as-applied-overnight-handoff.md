@@ -32,6 +32,25 @@ Both remaining items are real **money math** best built with fresh focus (the cr
 
 ---
 
+## 🔧 SESSION 2 — 2026-06-19 (build session, "build it all" — Mason)
+
+Built **3 of the 4** remaining pieces. All committed on `feat/as-applied-invoices`; **all database changes parked** for one batched go-live with Mason's OK.
+
+| # | Piece | Commit | Proof |
+|---|---|---|---|
+| #4 → **targeted, NOT rebuild** | `transfer_job_to_invoice`: per-acre machine fee (**G1**) + strict actor (**G3**) + removed duplicate client log. Migration `20260619140000` (PARKED). | `97836e8` | rls reviewer clean; drift reviewer caught a real BLOCKER (`price_source` CHECK) → fixed; rolled-back smoke PASS (fee bills, flat line still bills, forged actor rejected, totals+shares reconcile single + 2-grower) |
+| #2 | **Recipe pricing bundle**: `save_blend_recipe` carries `price_per_unit_cents` (migration `20260619150000`, PARKED) + `BlendRecipes.tsx` $/unit input + duplicate-path copy. Applies WITH the parked `20260618230000`. | `82ce6a4` | both reviewers clean; rolled-back bundle smoke PASS (price persists, survives edit, seeds job, negative rejected) |
+| calculator | **3-way quantity calculator** in the job-mix editor (rate ⇄ acres ⇄ quantity) — Mason's "like Chem Man" ask. UI-only. | `de1fcc6` | typecheck clean; needs Mason in-app check |
+
+**Why #4 is the targeted fix, not the locked "full rebuild":** verifying the live engine (`save_field_app_invoice`) proved the rebuild was **lossy** — it drops flat-priced lines, bills chemicals by rate×acres (no explicit-quantity input), bills the field owner not the job customer, and blanks the PDF header. Mason needs to bill **both** by quantity AND per-acre, so the rebuild would remove quantity billing. Mason confirmed targeted.
+
+### 🅿️ Three migrations awaiting BATCHED apply (Mason's OK, plus /explain-migration + fresh Codex + re-run the saved smoke after each)
+1. `20260619140000` — billing fix (G1+G3). Smoke: `scripts/smoke/smoke-transfer_job_invoice_machine_fee.sql`.
+2. `20260618230000` + `20260619150000` — recipe-pricing bundle (apply in that order). Smoke: `scripts/smoke/smoke-recipe-pricing-bundle.sql`.
+
+### ⛔ #3 (edit-path) — correctly DEFERRED to a focused, browser-verified follow-up
+A job-created unposted field invoice has **no clean editor**: the per-acre engine editor shows blank fields + re-bills per-acre + drops flat lines on save; the shared editor (`InvoiceDetail`/`save_invoice`) can edit qty/price + post but its reinsert **strips `is_application_fee` + the applied/EPA columns and never updates `invoice_shares`**. A correct fix makes `save_invoice` **field-app-aware, guarded on `invoice_type='field_application'`** (preserve the fee flag + applied columns, maintain shares), additive so chemical-sales billing stays byte-identical, then routes job invoices (`job_id` set) → `/invoices/:id`. This touches the **live chemical-sales save path**, so it needs reviewers + Codex + a real browser pass — not a tail-of-session rush. **Non-blocking** (0 field invoices live).
+
 ## ✅ Built, reviewed & committed (on the branch, NOT live)
 
 | Phase | What | Commits | Proof |
