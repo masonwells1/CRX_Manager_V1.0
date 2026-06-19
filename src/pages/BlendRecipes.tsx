@@ -31,6 +31,7 @@ interface RecipeItemDbRow {
   quantity: number;
   unit: string;
   rate_per_acre: number | null;
+  price_per_unit_cents?: number | null;
   sort_order: number;
   notes?: string | null;
   product?: { product_name: string } | null;
@@ -46,6 +47,8 @@ interface EditItem {
   quantity: number;
   unit: string;
   rate_per_acre: number | null;
+  /** Optional per-unit price in bigint cents (seeds job_chemicals.price_per_unit_cents). */
+  price_per_unit_cents: number;
   sort_order: number;
   notes: string;
 }
@@ -171,6 +174,7 @@ export default function BlendRecipes() {
           quantity: item.quantity,
           unit: item.unit,
           rate_per_acre: item.rate_per_acre,
+          price_per_unit_cents: item.price_per_unit_cents ?? 0,
           sort_order: item.sort_order,
           notes: item.notes || '',
         }))
@@ -209,6 +213,7 @@ export default function BlendRecipes() {
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
+            price_per_unit_cents: item.price_per_unit_cents,
             notes: item.notes || null,
           })),
           p_description: form.description || undefined,
@@ -264,6 +269,7 @@ export default function BlendRecipes() {
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
+            price_per_unit_cents: item.price_per_unit_cents ?? 0,
             sort_order: item.sort_order,
             notes: item.notes,
           }));
@@ -305,7 +311,7 @@ export default function BlendRecipes() {
   const addItem = () => {
     setEditItems([
       ...editItems,
-      { product_id: '', product_name: '', quantity: 0, unit: 'gal', rate_per_acre: null, sort_order: editItems.length, notes: '' },
+      { product_id: '', product_name: '', quantity: 0, unit: 'gal', rate_per_acre: null, price_per_unit_cents: 0, sort_order: editItems.length, notes: '' },
     ]);
   };
 
@@ -555,6 +561,16 @@ export default function BlendRecipes() {
                     value={item.rate_per_acre ?? ''}
                     onChange={(e) => updateItem(idx, 'rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)}
                     placeholder="Rate/ac"
+                    className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={item.price_per_unit_cents ? (item.price_per_unit_cents / 100).toString() : ''}
+                    onChange={(e) => updateItem(idx, 'price_per_unit_cents', e.target.value ? Math.round(parseFloat(e.target.value) * 100) : 0)}
+                    placeholder="$/unit"
+                    title="Price per unit (optional) — seeds the job's chemical price when this recipe is loaded"
                     className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   />
                   <button onClick={() => removeItem(idx)} className="text-red-400 hover:text-red-600 p-1">
