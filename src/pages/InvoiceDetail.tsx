@@ -241,27 +241,27 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // in-flight fetch must not render the previous invoice's amounts.
     const isStale = () => activeInvoiceIdRef.current !== invoiceId;
     setLoading(true);
-    // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
-    const { data, error } = await supabase
-      .from('invoices')
-      .select('*, customer:customers(farm_name)')
-      .eq('id', invoiceId)
-      .single();
 
+    // #3 segregation PREFLIGHT (Codex r11): resolve the route-area redirect from a
+    // MINIMAL row (invoice_type/job_id/status) BEFORE the full select('*') below, so
+    // a cross-permission URL never leaks the forbidden full invoice row in the
+    // network response. field invoices live under the field-invoices permission,
+    // chemical sales under invoices; a field-invoices-only user opening a chemical
+    // invoice id via /field-invoices/:id (or the inverse) must be bounced BEFORE the
+    // row is fetched. Mirrors FieldApplicationInvoice's minimal preflight. (Codex R5/R11)
+    const pre = await supabase
+      .from('invoices')
+      .select('invoice_type, job_id, status')
+      .eq('id', invoiceId)
+      .maybeSingle();
     if (isStale()) return;
-    if (error || !data) {
+    if (pre.error || !pre.data) {
       toast('error', 'Invoice not found');
       navigate('/invoices');
       return;
     }
-
-    // #3 segregation guard: field invoices live under the field-invoices
-    // permission, chemical sales under invoices. If this id doesn't match the
-    // area of the route it was opened on, bounce to the correct area — this
-    // closes the cross-permission URL bypass (a field-invoices-only user must not
-    // reach a chemical invoice via /field-invoices/:id, and vice-versa). Codex R5.
     {
-      const invType = (data as { invoice_type?: string }).invoice_type;
+      const invType = (pre.data as { invoice_type?: string }).invoice_type;
       if (routeArea === 'field' && invType !== 'field_application') {
         toast('error', 'Not a field invoice');
         navigate('/field-invoices', { replace: true });
@@ -274,13 +274,27 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
       // A field invoice with NO job_id is ENGINE-built (per-acre, has
       // field_app_locations) — keep an editable one in the per-acre editor, not
       // this quantity-based one, even if reached by a direct URL / bookmark (Codex).
-      const fieldJobId = (data as { job_id?: string | null }).job_id;
-      const fieldStatus = (data as { status?: string }).status;
+      const fieldJobId = (pre.data as { job_id?: string | null }).job_id;
+      const fieldStatus = (pre.data as { status?: string }).status;
       if (routeArea === 'field' && invType === 'field_application' && !fieldJobId
           && (fieldStatus === 'draft' || fieldStatus === 'unposted')) {
         navigate(`/invoices/field-app/${invoiceId}`, { replace: true });
         return;
       }
+    }
+
+    // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('*, customer:customers(farm_name)')
+      .eq('id', invoiceId)
+      .single();
+
+    if (isStale()) return;
+    if (error || !data) {
+      toast('error', 'Invoice not found');
+      navigate('/invoices');
+      return;
     }
 
     let salesman: { full_name: string } | null = null;
