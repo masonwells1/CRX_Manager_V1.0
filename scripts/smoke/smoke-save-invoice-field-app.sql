@@ -68,8 +68,9 @@ BEGIN
   SELECT total_amount_cents INTO v_inv_total FROM invoices WHERE id=v_chem_inv;
   IF v_inv_total <> 1000 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical product line not recomputed (% exp 1000, the lied extended_cents=1 must be ignored)', v_inv_total; END IF;
 
-  -- OVERRIDE: a price-override (share-only, NOT itemized) grower's charge is
-  -- PRESERVED on edit; only the non-override (itemized) shares re-balance (Codex P1).
+  -- OVERRIDE: a field invoice with a fixed-price (override) grower share has a
+  -- share-driven total the item-driven editor cannot reconcile; editing it is
+  -- BLOCKED (void/reissue) so it can neither drop nor double-count the override (Codex).
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] OvB '||v_sfx) RETURNING id INTO v_cust2;
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, created_by, season)
     VALUES ('[SMOKE] OINV-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, v_admin, 2026) RETURNING id INTO v_inv3;
@@ -77,15 +78,20 @@ BEGIN
   UPDATE invoices SET total_amount_cents=151000, status='unposted' WHERE id=v_inv3;
   INSERT INTO invoice_shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order, price_per_acre_cents) VALUES (v_inv3, v_cust,  'A', 100.0, 1,  1000,   true,  1, NULL);
   INSERT INTO invoice_shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order, price_per_acre_cents) VALUES (v_inv3, v_cust2, 'B', 100.0, 30, 150000, false, 2, 5000);
-  PERFORM save_invoice(
-    jsonb_build_object('id', v_inv3, 'customer_id', v_cust, 'invoice_type','field_application', 'invoice_date', CURRENT_DATE::text),
-    jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','Chem (A itemized)', 'quantity', 3, 'unit_price_cents', 1000, 'extended_cents', 3000, 'sort_order', 1, 'is_application_fee', false)), NULL);
+  BEGIN
+    PERFORM save_invoice(
+      jsonb_build_object('id', v_inv3, 'customer_id', v_cust, 'invoice_type','field_application', 'invoice_date', CURRENT_DATE::text),
+      jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','Chem (A itemized)', 'quantity', 3, 'unit_price_cents', 1000, 'extended_cents', 3000, 'sort_order', 1, 'is_application_fee', false)), NULL);
+    RAISE EXCEPTION 'SMOKE_FAIL: editing an override-grower field invoice was ALLOWED';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE 'FIELD_INVOICE_OVERRIDE_LOCKED%' THEN RAISE EXCEPTION 'SMOKE_FAIL: expected FIELD_INVOICE_OVERRIDE_LOCKED got %', SQLERRM; END IF;
+  END;
+  -- nothing mutated by the blocked edit: override share + items intact
   SELECT amount_cents INTO v_b FROM invoice_shares WHERE invoice_id=v_inv3 AND customer_id=v_cust2;
-  IF v_b <> 150000 THEN RAISE EXCEPTION 'SMOKE_FAIL: override grower share dropped to % (exp preserved 150000)', v_b; END IF;
-  SELECT amount_cents INTO v_a FROM invoice_shares WHERE invoice_id=v_inv3 AND customer_id=v_cust;
-  IF v_a <> 3000 THEN RAISE EXCEPTION 'SMOKE_FAIL: itemized grower share % (exp 3000)', v_a; END IF;
-  SELECT total_amount_cents INTO v_inv_total FROM invoices WHERE id=v_inv3;
-  IF v_inv_total <> 153000 THEN RAISE EXCEPTION 'SMOKE_FAIL: header % (exp 153000 = 3000 items + 150000 override)', v_inv_total; END IF;
+  IF v_b <> 150000 THEN RAISE EXCEPTION 'SMOKE_FAIL: override invoice mutated despite the block (share %)', v_b; END IF;
+  SELECT count(*) INTO v_a FROM invoice_items WHERE invoice_id=v_inv3;
+  IF v_a <> 1 THEN RAISE EXCEPTION 'SMOKE_FAIL: override invoice items changed despite the block (% items)', v_a; END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $smoke$;

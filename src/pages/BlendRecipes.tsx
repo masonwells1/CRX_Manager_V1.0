@@ -241,44 +241,38 @@ export default function BlendRecipes() {
   const handleDuplicate = async (recipe: RecipeRow) => {
     await runCriticalAction({
       action: async () => {
-        const { data: newRecipe, error } = await supabase
-          .from('blend_recipes')
-          .insert({
-            name: `${recipe.name} (Copy)`,
-            description: recipe.description,
-            recipe_type: recipe.recipe_type,
-            crop_type: recipe.crop_type,
-            timing: recipe.timing,
-          })
-          .select()
-          .single();
-        if (error) throw error;
-
+        // Duplicate via save_blend_recipe (atomic recipe+items) rather than a
+        // direct blend_recipe_items insert. The RPC is backward-compatible with
+        // the price column: the pre-migration body ignores price_per_unit_cents in
+        // p_items, the post-migration body carries it — so a frontend deploy that
+        // races ahead of migration 20260618230000 can't fail on a missing column
+        // (PostgREST schema break). Codex P2.
         const { data: items, error: itemsErr } = await supabase
           .from('blend_recipe_items')
           .select('*')
           .eq('recipe_id', recipe.id)
           .order('sort_order');
-        if (itemsErr) {
-          Sentry.captureException(itemsErr);
-        }
+        if (itemsErr) throw itemsErr;
 
-        if (items && items.length > 0) {
-          const copies = (items as RecipeItemDbRow[]).map((item) => ({
-            recipe_id: newRecipe.id,
+        const { data, error } = await supabase.rpc('save_blend_recipe', {
+          p_recipe_id: null as unknown as string,
+          p_name: `${recipe.name} (Copy)`,
+          p_recipe_type: recipe.recipe_type,
+          p_items: (items as RecipeItemDbRow[] | null || []).map((item) => ({
             product_id: item.product_id,
             product_name: item.product_name,
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
             price_per_unit_cents: item.price_per_unit_cents ?? 0,
-            sort_order: item.sort_order,
-            notes: item.notes,
-          }));
-          const copyItemsResult = await supabase.from('blend_recipe_items').insert(copies).select();
-          if (copyItemsResult.error) throw copyItemsResult.error;
-          checkMutationResult(copyItemsResult, 'Insert duplicated blend recipe items');
-        }
+            notes: item.notes ?? null,
+          })),
+          p_description: recipe.description || undefined,
+          p_crop_type: recipe.recipe_type === 'crop_specific' ? recipe.crop_type || undefined : undefined,
+          p_timing: recipe.recipe_type === 'crop_specific' ? recipe.timing || undefined : undefined,
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'save_blend_recipe');
       },
       toast,
       successMessage: 'Recipe duplicated',

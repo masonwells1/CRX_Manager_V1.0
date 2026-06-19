@@ -104,6 +104,20 @@ BEGIN
     END IF;
   END IF;
 
+  -- DELTA-C (Codex): a field_application invoice with a price-override (fixed
+  -- $/acre) grower share has a SHARE-DRIVEN total that does NOT equal the sum of
+  -- its line items — transfer_job_to_invoice itemizes the chemicals AND bills the
+  -- override grower an all-inclusive $/acre share that already includes them. An
+  -- item-driven save cannot reconcile the two without either dropping or
+  -- double-counting that override. Block editing such invoices here; they must be
+  -- voided and reissued to change. (Common single-grower / non-override field
+  -- invoices edit normally — they have no override share.)
+  IF (SELECT invoice_type FROM invoices WHERE id = v_invoice_id) = 'field_application'
+     AND EXISTS (SELECT 1 FROM invoice_shares
+                  WHERE invoice_id = v_invoice_id AND price_per_acre_cents IS NOT NULL) THEN
+    RAISE EXCEPTION 'FIELD_INVOICE_OVERRIDE_LOCKED: this field invoice has a fixed-price grower share — void and reissue to change it';
+  END IF;
+
   DELETE FROM invoice_items WHERE invoice_id = v_invoice_id;
 
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
@@ -167,42 +181,29 @@ BEGIN
   -- each share's current amount, penny-EXACT (remainder to the primary share). A
   -- single-grower job invoice has one share -> it gets the whole total. Guarded on
   -- field_application: chemical_sale / credit_memo / misc_charge are NOT touched.
+  -- Only NON-override field invoices reach here (override invoices are blocked
+  -- by DELTA-C above), so total_amount_cents = SUM(line items) is correct and the
+  -- per-grower shares simply re-balance to it (penny-exact, remainder to primary).
   IF (SELECT invoice_type FROM invoices WHERE id = v_invoice_id) = 'field_application' THEN
-    DECLARE v_override_total bigint;
-    BEGIN
-      -- Shares with a price_override (price_per_acre_cents NOT NULL) are
-      -- all-inclusive $/acre charges billed SHARE-ONLY (NOT itemized as
-      -- invoice_items), so they are NOT part of the line-item total and must be
-      -- PRESERVED across an edit (Codex). Re-balance only the NON-override shares
-      -- to the new line-item total; the header = line items + preserved overrides.
-      SELECT COALESCE(SUM(amount_cents) FILTER (WHERE price_per_acre_cents IS NOT NULL), 0)
-        INTO v_override_total
-        FROM invoice_shares WHERE invoice_id = v_invoice_id;
-
-      UPDATE invoices SET total_amount_cents = v_total_cents + v_override_total
-       WHERE id = v_invoice_id;
-
-      WITH s AS (
-        SELECT id, COALESCE(amount_cents, 0) AS amount_cents,
-               row_number() OVER (ORDER BY is_primary DESC, sort_order, id) AS rn,
-               SUM(COALESCE(amount_cents, 0)) OVER () AS tot
-        FROM invoice_shares
-        WHERE invoice_id = v_invoice_id AND price_per_acre_cents IS NULL
-      ),
-      alloc AS (
-        SELECT id, rn,
-               CASE WHEN tot > 0 THEN ROUND(v_total_cents * amount_cents / tot)::bigint
-                    WHEN rn = 1 THEN v_total_cents ELSE 0 END AS part
-        FROM s
-      ),
-      recon AS (
-        SELECT id, rn, part, v_total_cents - COALESCE(SUM(part) OVER (), 0) AS rem
-        FROM alloc
-      )
-      UPDATE invoice_shares isr
-         SET amount_cents = r.part + CASE WHEN r.rn = 1 THEN r.rem ELSE 0 END
-        FROM recon r WHERE isr.id = r.id;
-    END;
+    WITH s AS (
+      SELECT id, COALESCE(amount_cents, 0) AS amount_cents,
+             row_number() OVER (ORDER BY is_primary DESC, sort_order, id) AS rn,
+             SUM(COALESCE(amount_cents, 0)) OVER () AS tot
+      FROM invoice_shares WHERE invoice_id = v_invoice_id
+    ),
+    alloc AS (
+      SELECT id, rn,
+             CASE WHEN tot > 0 THEN ROUND(v_total_cents * amount_cents / tot)::bigint
+                  WHEN rn = 1 THEN v_total_cents ELSE 0 END AS part
+      FROM s
+    ),
+    recon AS (
+      SELECT id, rn, part, v_total_cents - COALESCE(SUM(part) OVER (), 0) AS rem
+      FROM alloc
+    )
+    UPDATE invoice_shares isr
+       SET amount_cents = r.part + CASE WHEN r.rn = 1 THEN r.rem ELSE 0 END
+      FROM recon r WHERE isr.id = r.id;
   END IF;
   -- <<< DELTA-B
 
