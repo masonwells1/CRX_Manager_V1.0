@@ -10,7 +10,7 @@ when every Phase-1 key is drained.
 |---|---|---|
 | `invoices-core` | post/create/void invoice, save_field_app_invoice, delete_invoices, finance charges | hunted ×2 (c1 broad + c2 focused) — still finding (3 new c2); NOT drained, needs 1 dry cycle |
 | `jobs-to-billing` | transfer_job_to_invoice, job-mix calculator, recipe pricing, per-acre machine fee | hunted ×2 (c1 broad + c2 focused) — still finding (1 new c2 + reconfirms); NOT drained, needs 1 dry cycle |
-| `field-app-invoices` | FieldApplicationInvoice + save_field_app_invoice + field/acre split + override-grower shares | queued |
+| `field-app-invoices` | FieldApplicationInvoice + save_field_app_invoice + field/acre split + override-grower shares | hunted ×1 (c3) — DRY (0 new; 1 re-confirm of cycle-1 generic-editor-bypass, kept parked-coordinate). Needs 1 more dry cycle to mark drained, but signal looks exhausted (the open defect is parked pending feat/as-applied-invoices) |
 | `commissions` | commission_split, per-order records, recompute-on-edit, commission_payments batch | queued |
 | `deliveries-billing` | confirm/complete/quick/cancel/void delivery + inventory txn types | queued |
 | `prepay-blend` | prepay apply/earmark + blend-ticket invoice/payment-status/actor | queued |

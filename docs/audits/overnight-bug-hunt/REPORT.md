@@ -74,3 +74,10 @@ traps that would bite once invoices/jobs start flowing. Worst-first.
 - **Fixed (green):** 0 — nothing was committable (all migration-class).
 - **Parked (yellow):** 4 new (items F–H above) + the 3 enriched re-confirmations.
 - **Note:** `invoices-core` + `jobs-to-billing` still surfaced new findings, so they're **not drained** yet — they need one quiet cycle before being marked done. Recurring pattern flagged: several RPCs don't keep their stored derived totals in sync — worth one consolidating migration.
+
+### Cycle 3 — 2026-06-19 — Phase 1: `field-app-invoices` — **DRY (nothing new)**
+- **Found:** 1 confirmed (MEDIUM), 0 refuted — but on dedupe it was the **same issue already on your parked list** (field-application invoices opening in the generic invoice editor, which corrupts their structure on Save). So **0 new findings** this cycle.
+- **Codex gate:** not run — there was no new finding to confirm and nothing to fix, so there was no change for Codex to gate (it only gates new candidates/diffs).
+- **Fixed (green):** 0. **Parked (yellow):** 0 new — I enriched the existing parked item with more detail instead of double-listing it.
+- **Why I left it alone:** this is the green/frontend item I deliberately parked in Cycle 1 — that whole area is being rebuilt on the `feat/as-applied-invoices` branch, so a fix here would clash at merge. Cycle 3 also surfaced a subtlety that *confirms* parking is right: a blanket "send all field-app invoices to the field-app editor" fix would be **partly wrong** (blend-ticket-backed ones are *supposed* to use the generic editor) — so the correct fix is the more careful one the feature branch is already building. It's also harmless today: there are **0 field-application invoices live**.
+- **Take-away:** the `field-app-invoices` area looks **tapped out** for new signal — its one open defect is parked pending the feature-branch rework. Counts as the **1st dry cycle** (3 in a row stops the hunt). Next cycle moves to a **fresh** area: commissions + deliveries-billing.
