@@ -140,7 +140,10 @@ export default function CommissionPayments() {
         id, order_number, customer_name, order_date, commission_amount,
         recipient_user_id
       `)
-      .neq('status', 'paid')
+      // Only PENDING commissions are payable. `.neq('status','paid')` also leaked
+      // CANCELLED commissions (lifecycle: pending → paid → cancelled) into the
+      // pay-selection list and the unpaid totals. (overnight-bug-hunt finding)
+      .eq('status', 'pending')
       .order('order_date', { ascending: false })
       .limit(500);
 
