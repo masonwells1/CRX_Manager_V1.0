@@ -107,6 +107,15 @@ export function getPageKeyFromPath(pathname: string): string | null {
   const segments = pathname.replace(/^\//, '').split('/');
   const firstSegment = segments[0] || '';
 
+  // The field-application invoice editor is mounted under /invoices/field-app/*
+  // for route-reuse, but it belongs to the SEPARATE Field Invoices area. Gate it
+  // by the 'field-invoices' permission, not Chemical Sales 'invoices', so a user
+  // granted Field Invoices (but denied Invoices) can still open/edit/post a field
+  // invoice — and vice-versa. (Segregation requirement; Codex Phase-1a R2.)
+  if (firstSegment === 'invoices' && segments[1] === 'field-app') {
+    return 'field-invoices';
+  }
+
   // Check if it matches a known page key
   const found = PAGE_PERMISSIONS.find((p) => p.key === firstSegment);
   return found ? found.key : null;

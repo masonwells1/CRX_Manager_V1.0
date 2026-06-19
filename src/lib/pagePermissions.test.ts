@@ -50,6 +50,20 @@ describe('getPageKeyFromPath', () => {
       expect(getPageKeyFromPath(`/${perm.key}`)).toBe(perm.key);
     }
   });
+
+  // Codex Phase-1a R2: the field-application editor is mounted under
+  // /invoices/field-app/* but must resolve to the SEPARATE 'field-invoices'
+  // permission, not Chemical Sales 'invoices'. Regression guard for the
+  // segregation requirement.
+  it('maps the field-app invoice editor to the field-invoices permission', () => {
+    expect(getPageKeyFromPath('/invoices/field-app/new')).toBe('field-invoices');
+    expect(getPageKeyFromPath('/invoices/field-app/abc-123-def')).toBe('field-invoices');
+  });
+
+  it('keeps the Chemical Sales invoice list on the invoices permission', () => {
+    expect(getPageKeyFromPath('/invoices')).toBe('invoices');
+    expect(getPageKeyFromPath('/invoices/some-invoice-id')).toBe('invoices');
+  });
 });
 
 // ── hasPageAccess ───────────────────────────────────────────────────────
