@@ -125,6 +125,15 @@ export default function FieldApplicationInvoice() {
       return;
     }
 
+    // #3 segregation guard: this is the field-app editor. Reject a non-field
+    // invoice opened by URL so a field-invoices-only user can't reach (or
+    // mutate) a Chemical Sales invoice through /invoices/field-app/:id (Codex P1).
+    if ((inv as { invoice_type?: string }).invoice_type !== 'field_application') {
+      toast('error', 'Not a field invoice');
+      navigate('/field-invoices');
+      return;
+    }
+
     const invoice = inv as Record<string, unknown>;
     setInvoiceNumber((invoice.invoice_number as string) || '');
     setTransactionDate((invoice.invoice_date as string) || '');

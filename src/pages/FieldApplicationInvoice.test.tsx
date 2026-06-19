@@ -217,6 +217,7 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
             {
               id: 'inv-solo',
               invoice_number: 'INV-1001',
+              invoice_type: 'field_application',
               invoice_date: '2026-04-29',
               header_notes: '',
               status: 'draft',
@@ -260,6 +261,7 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
     const invoiceRow = {
       id: 'inv-grp-1',
       invoice_number: 'INV-2001',
+      invoice_type: 'field_application',
       invoice_date: '2026-04-29',
       header_notes: '',
       status: 'draft',

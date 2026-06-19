@@ -522,7 +522,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         const payload = {
           id: isNew ? undefined : id,
           customer_id: invoice.customer_id,
-          invoice_type: invoice.invoice_type || 'chemical_sale',
+          // #3 segregation: on the field-invoices route the type is LOCKED to
+          // field_application — never let an edit reclassify a field invoice into
+          // Chemical Sales (which would move it out of a field-invoices-only
+          // user's reach), regardless of the selector (Codex P2).
+          invoice_type: routeArea === 'field' ? 'field_application' : (invoice.invoice_type || 'chemical_sale'),
           status: invoice.status || 'draft',
           season: invoice.season,
           salesman_id: invoice.salesman_id || null,
@@ -1043,10 +1047,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
               )}
             </div>
 
-            {/* Type */}
+            {/* Type — locked to a read-only label on the segregated field route
+                 (Codex P2): a field invoice must not be reclassified to Chemical
+                 Sales from the field-invoices area. */}
             <div>
               <label className="text-sm font-medium text-nav-dark">Invoice Type</label>
-              {editable ? (
+              {editable && routeArea !== 'field' ? (
                 <select
                   value={invoice.invoice_type || 'chemical_sale'}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, invoice_type: e.target.value as InvoiceType }))}
