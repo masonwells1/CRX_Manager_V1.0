@@ -100,6 +100,11 @@ interface ChemRow {
   cost_per_unit_cents: string;
   price_per_unit_cents: string;
   sort_order: number;
+  /** UI-only (NOT persisted): which field the user last drove — so an acreage
+   *  change re-derives the OTHER field and never silently rewrites a
+   *  hand-entered quantity (Codex P2). 'rate' = quantity follows; 'qty' = rate
+   *  follows; undefined = untouched (a loaded line follows its rate if it has one). */
+  driver?: 'rate' | 'qty';
 }
 
 interface FieldRow {
@@ -750,6 +755,16 @@ export default function JobDetail() {
     if (acres <= 0) return;
     setChemRows(prev => prev.map(c => {
       const rate = parseFloat(c.rate_per_acre);
+      const qty = parseFloat(c.quantity);
+      // Quantity-driven line (user typed a total): HOLD the quantity, refigure the
+      // rate — never silently rewrite a hand-entered quantity (Codex P2).
+      if (c.driver === 'qty') {
+        return c.quantity.trim() !== '' && !Number.isNaN(qty) && qty !== 0
+          ? { ...c, rate_per_acre: fmt4(qty / acres) }
+          : c;
+      }
+      // Rate-driven line (or a loaded line that carries a rate): quantity follows.
+      // A flat/quantity-only line with NO rate is left untouched.
       return c.rate_per_acre.trim() !== '' && !Number.isNaN(rate)
         ? { ...c, quantity: fmt4(rate * acres) }
         : c;
@@ -804,11 +819,11 @@ export default function JobDetail() {
     const acres = fieldRows.reduce((s, f) => s + (parseFloat(f.acres_to_treat) || 0), 0);
     if (acres > 0 && key === 'rate_per_acre' && value.trim() !== '') {
       const rate = parseFloat(value);
-      if (!Number.isNaN(rate)) updated[i].quantity = fmt4(rate * acres);
+      if (!Number.isNaN(rate)) { updated[i].quantity = fmt4(rate * acres); updated[i].driver = 'rate'; }
     }
     if (acres > 0 && key === 'quantity' && value.trim() !== '') {
       const qty = parseFloat(value);
-      if (!Number.isNaN(qty)) updated[i].rate_per_acre = fmt4(qty / acres);
+      if (!Number.isNaN(qty)) { updated[i].rate_per_acre = fmt4(qty / acres); updated[i].driver = 'qty'; }
     }
     setChemRows(updated);
   };
