@@ -7,12 +7,40 @@
   "codexGates": "finding-gate (codex exec read-only confirms each finding REAL) + fix-gate (codex exec read-only reviews each staged diff) — both required before any commit",
   "created": "2026-06-19",
   "stats": {
-    "cyclesRun": 0,
-    "findingsConfirmed": 0,
-    "greenFixed": 0,
-    "yellowParked": 0,
-    "refutedFalsePositives": 0
+    "cyclesRun": 1,
+    "findingsConfirmed": 12,
+    "greenFixed": 1,
+    "yellowParked": 11,
+    "refutedFalsePositives": 4
   },
-  "cycles": [],
-  "findings": []
+  "cycles": [
+    {
+      "n": 1,
+      "ranAt": "2026-06-19",
+      "slice": "Phase 1 — all 7 billing subsystems (invoices-core, jobs-to-billing, field-app-invoices, commissions, deliveries-billing, prepay-blend, splits-shares-allocation)",
+      "note": "PROOF cycle. Workflow fan-out: 12 confirmed (0 BLOCKER / 0 HIGH / 5 MED / 7 LOW), 4 refuted. Codex finding-gate confirmed the 3 acted-on findings REAL (and bumped #2 transfer_job_to_invoice actor MED->HIGH, disagreeing with Claude's verifier). 1 GREEN fixed + committed (6ded5ce, Codex fix-gate SHIP). 11 parked (all need a migration). Full chain proven end-to-end."
+    }
+  ],
+  "findings": [
+    { "dedupeKey": "lifecycle:CommissionPayments.fetchUnpaid:cancelled-leak", "severity": "LOW", "tier": "green", "status": "fixed", "fixKind": "frontend-only", "cycle": 1, "commit": "6ded5ce", "note": "FIXED. fetchUnpaid filtered .neq(status,paid) -> leaked CANCELLED commissions into the payable list/totals. Changed to .eq(status,pending). Codex finding-gate REAL + fix-gate SHIP. CommissionPayments.tsx:143." },
+
+    { "dedupeKey": "forgeable-actor:transfer_job_to_invoice:unbound-performed_by", "severity": "HIGH", "claudeSeverity": "MEDIUM", "codexSeverity": "HIGH", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "DISAGREEMENT: Claude verifier=MEDIUM, Codex finding-gate=HIGH. transfer_job_to_invoice role-gates auth.uid() but never binds p_performed_by (no ACTOR_MISMATCH); stamps invoices.created_by=p_performed_by. Siblings save_job/complete_job DO reject mismatch. NOTE: feat/as-applied-invoices already has a PARKED strict-actor fix for this (commit 97836e8, G3) — coordinate so we don't double-fix. Migration." },
+    { "dedupeKey": "audit-log:create_invoice_for_unbilled_delivery:missing-invoice_created-row", "severity": "MEDIUM", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "Backfill invoice creator writes only activity_feed, no financial_audit_log 'invoice_created' row (siblings all do). Latent (0 prod invocations). Mirror create_invoice_from_order. IntegrityCleanup.tsx:316." },
+    { "dedupeKey": "audit-log:complete_delivery:missing-invoice-created", "severity": "MEDIUM", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "complete_delivery auto-creates a billable draft invoice but writes no financial_audit_log 'invoice_created' row. Same class as #1. Migration-only/additive." },
+    { "dedupeKey": "prepay:apply_remaining_prepayments:no-ledger-double-spend", "severity": "MEDIUM", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "Bulk prepay-apply (apply_remaining_prepayments + batch_apply_all_prepayments) decrements the customer cache but writes no prepay_applications / prepay_credits.balance_cents rows -> reconcile_prepay_balances can RE-CREATE the spent balance (double-spend). Route bulk paths through the apply_prepay_to_invoice FIFO+FOR UPDATE ledger. PrepaymentManager.tsx:390/:426. Verify live reachability before fixing." },
+    { "dedupeKey": "lifecycle:void_payment:partial-void-status-stuck-paid", "severity": "MEDIUM", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "void_payment partial-void leaves the invoice status stuck at 'paid' when balance is no longer zero. Derive status from balance_cents after the reversal." },
+
+    { "dedupeKey": "audit-log:transfer_job_to_invoice:missing-invoice_created-row", "severity": "LOW", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "transfer_job_to_invoice creates a money invoice but writes no financial_audit_log row. Fold into the same migration as the actor fix above." },
+    { "dedupeKey": "stale-derived-state:load_recipe_into_job:job-totals-not-recomputed", "severity": "LOW", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "load_recipe_into_job rewrites job_chemicals but leaves jobs.total_cost_cents/total_price_cents stale. Recompute at the tail. (Related code is also under active rework on feat/as-applied-invoices — coordinate.)" },
+    { "dedupeKey": "money-cents:transfer_job_to_invoice:invoice_shares-split-rounding", "severity": "LOW", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "Field-billing split branch ROUNDs each invoice_share independently without reconciling to the invoice total (penny drift). Assign remainder to largest share. Low blast radius (0 split invoices live)." },
+    { "dedupeKey": "segregation:field_application:invoicedetail-save-desync", "severity": "LOW", "tier": "yellow", "status": "parked-coordinate", "fixKind": "frontend-only", "cycle": 1, "note": "field_application invoices editable via generic InvoiceDetail -> save_invoice desyncs the field-app split tables. Fix is frontend-only (route field_application rows to /invoices/field-app/:id) BUT this exact segregation is being comprehensively reworked on feat/as-applied-invoices — PARK to avoid a merge collision rather than partial-fix on main." },
+    { "dedupeKey": "concurrency:create_quick_delivery:duplicate-line-oversell", "severity": "LOW", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "create_quick_delivery validates inventory per-line independently, so duplicate product lines in one call can over-prebook. Aggregate by product_id before the net-available check. Defense-in-depth (UI already dedupes)." },
+    { "dedupeKey": "blend:create_invoice_from_blend_ticket:prepaid-rebill-gap", "severity": "LOW", "tier": "yellow", "status": "parked", "fixKind": "migration", "cycle": 1, "note": "Re-bill guard only blocks payment_status='billed'; a ticket manually set to 'prepaid'/'no_charge' can still generate a second invoice. Widen guard to allow billing only from 'unbilled'." }
+  ],
+  "refuted": [
+    { "dedupeKey": "money:save_field_app_invoice:cross-field-quoted-price", "verdict": "FALSE_POSITIVE" },
+    { "dedupeKey": "stale-derived-state:complete_delivery:invoice-total-cost-cents", "verdict": "FALSE_POSITIVE" },
+    { "dedupeKey": "prepay:create_prepay_credit:no-idempotency", "verdict": "FALSE_POSITIVE" },
+    { "dedupeKey": "concurrency:void_payment:invoice-no-for-update", "verdict": "FALSE_POSITIVE" }
+  ]
 }

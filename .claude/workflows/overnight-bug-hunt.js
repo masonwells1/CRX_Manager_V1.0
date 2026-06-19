@@ -182,9 +182,16 @@ const DIMENSIONS = [
   },
 ]
 
+// args may arrive as an object OR as a JSON-encoded string (the harness sometimes
+// stringifies it) — normalize both so { only:[...] } / { phase:N } slicing is reliable.
+const A = (() => {
+  if (!args) return {}
+  if (typeof args === 'string') { try { return JSON.parse(args) } catch { return {} } }
+  return args
+})()
 const SELECTED = (() => {
-  if (args && Array.isArray(args.only) && args.only.length) return DIMENSIONS.filter((d) => args.only.includes(d.key))
-  if (args && (args.phase === 1 || args.phase === 2)) return DIMENSIONS.filter((d) => d.phase === args.phase)
+  if (Array.isArray(A.only) && A.only.length) return DIMENSIONS.filter((d) => A.only.includes(d.key))
+  if (A.phase === 1 || A.phase === 2 || A.phase === '1' || A.phase === '2') return DIMENSIONS.filter((d) => String(d.phase) === String(A.phase))
   return DIMENSIONS.filter((d) => d.phase === 1) // default: Phase 1 (billing engine)
 })()
 
