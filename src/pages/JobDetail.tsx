@@ -739,10 +739,30 @@ export default function JobDetail() {
   };
 
   // Field row handlers
+  // 3-way calculator (rate/ac <-> total acres <-> quantity): quantity = rate/ac ×
+  // total acres applied. Acres are summed from the job's fields. Editing a field's
+  // acres (or its selection) re-derives each rate-driven chemical's quantity, so
+  // "keep the rate, change acres -> quantity changes" just works. Flat/quantity-
+  // only lines (no rate) are left alone.
+  const fmt4 = (x: number) => (Math.round(x * 10000) / 10000).toString();
+  const recomputeChemQtyFromAcres = (rows: FieldRow[]) => {
+    const acres = rows.reduce((s, f) => s + (parseFloat(f.acres_to_treat) || 0), 0);
+    if (acres <= 0) return;
+    setChemRows(prev => prev.map(c => {
+      const rate = parseFloat(c.rate_per_acre);
+      return c.rate_per_acre.trim() !== '' && !Number.isNaN(rate)
+        ? { ...c, quantity: fmt4(rate * acres) }
+        : c;
+    }));
+  };
   const addFieldRow = () => {
     setFieldRows([...fieldRows, { field_id: '', field_name: '', acres_to_treat: '', sort_order: fieldRows.length }]);
   };
-  const removeFieldRow = (i: number) => setFieldRows(fieldRows.filter((_, idx) => idx !== i));
+  const removeFieldRow = (i: number) => {
+    const updated = fieldRows.filter((_, idx) => idx !== i);
+    setFieldRows(updated);
+    recomputeChemQtyFromAcres(updated);
+  };
   const updateFieldRow = (i: number, key: keyof FieldRow, value: string) => {
     const updated = [...fieldRows];
     updated[i] = { ...updated[i], [key]: value };
@@ -754,6 +774,9 @@ export default function JobDetail() {
       }
     }
     setFieldRows(updated);
+    if (key === 'acres_to_treat' || key === 'field_id') {
+      recomputeChemQtyFromAcres(updated);
+    }
   };
 
   // Chem row handlers
@@ -774,6 +797,18 @@ export default function JobDetail() {
         updated[i].unit = p.unit_size || '';
         updated[i].cost_per_unit_cents = Math.round((p.current_cost || 0) * 100).toString();
       }
+    }
+    // 3-way calculator: keep quantity = rate/ac × total acres in sync. Editing the
+    // rate fills the quantity; typing a total quantity back-solves the rate. A
+    // blank value is left alone, so a flat/quantity-only line (no rate) still works.
+    const acres = fieldRows.reduce((s, f) => s + (parseFloat(f.acres_to_treat) || 0), 0);
+    if (acres > 0 && key === 'rate_per_acre' && value.trim() !== '') {
+      const rate = parseFloat(value);
+      if (!Number.isNaN(rate)) updated[i].quantity = fmt4(rate * acres);
+    }
+    if (acres > 0 && key === 'quantity' && value.trim() !== '') {
+      const qty = parseFloat(value);
+      if (!Number.isNaN(qty)) updated[i].rate_per_acre = fmt4(qty / acres);
     }
     setChemRows(updated);
   };
