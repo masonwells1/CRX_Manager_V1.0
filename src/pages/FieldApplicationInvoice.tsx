@@ -121,7 +121,7 @@ export default function FieldApplicationInvoice() {
 
     if (error || !inv) {
       toast('error', 'Failed to load invoice');
-      navigate('/invoices');
+      navigate('/field-invoices');
       return;
     }
 
@@ -541,7 +541,7 @@ export default function FieldApplicationInvoice() {
       });
 
       toast('success', 'Invoice deleted');
-      navigate('/invoices');
+      navigate('/field-invoices');
     } catch (err) {
       Sentry.captureException(err, { tags: { action: 'delete_field_app_invoice' } });
       toast('error', `Delete failed: ${sanitizeError(err)}`);
@@ -559,7 +559,7 @@ export default function FieldApplicationInvoice() {
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/invoices')} className="p-1 rounded hover:bg-gray-100">
+          <button onClick={() => navigate('/field-invoices')} className="p-1 rounded hover:bg-gray-100">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>

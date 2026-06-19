@@ -10,6 +10,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { parseDollarsToCents } from '../lib/parseCents';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
@@ -214,7 +215,7 @@ export default function BlendRecipes() {
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
-            price_per_unit_cents: item.price_input ? Math.max(0, Math.round(parseFloat(item.price_input) * 100)) : 0,
+            price_per_unit_cents: parseDollarsToCents(item.price_input),
             notes: item.notes || null,
           })),
           p_description: form.description || undefined,
