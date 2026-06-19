@@ -49,6 +49,7 @@ DECLARE
   v_cost_cents bigint; v_product record; v_order_id uuid; v_blend_id uuid; v_existing jsonb;
   v_total_cost bigint := 0;  -- DELTA-E: extended COST accumulator (field-invoice header sync)
   v_is_field boolean := false;  -- DELTA-G: field invoices preserve incoming (extended) line cost
+  v_is_fee boolean;  -- DELTA-H: server-recognized machine-fee line (flag + NO product_id)
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
   IF NOT (is_admin() OR is_sales_rep()) THEN
@@ -160,6 +161,15 @@ BEGIN
     v_qty := COALESCE((v_item->>'quantity')::numeric, 0);
     IF v_qty <= 0 THEN RAISE EXCEPTION 'Invoice line item quantity must be greater than zero'; END IF;
     v_unit_price := COALESCE((v_item->>'unit_price_cents')::bigint, 0);
+    -- DELTA-H (Codex r17): SERVER-recognize a machine-fee line — the is_application_fee
+    -- flag is client-controlled, so a normal product line can forge it. A GENUINE fee
+    -- line is a SERVICE charge with NO product_id (both transfer_job_to_invoice and
+    -- save_field_app_invoice insert their fee line with product_id NULL); a line that
+    -- carries a product_id is always a chemical. Require BOTH the flag AND product_id IS
+    -- NULL before granting any fee behavior (extended-cents bypass, the x1 cost rollup,
+    -- and the persisted is_application_fee flag) — so a product line forged as a fee is
+    -- treated as the ordinary product line it is (recompute, cost x quantity, flag false).
+    v_is_fee := COALESCE((v_item->>'is_application_fee')::boolean, false) AND (v_item->>'product_id') IS NULL;
     -- Server-authoritative line total: ALWAYS recompute quantity x unit_price first
     -- (anti-tamper) — the payload can never set an arbitrary line total directly.
     v_extended := ROUND(v_qty * v_unit_price)::bigint;
@@ -173,7 +183,7 @@ BEGIN
     -- flag: a normal line forged with is_application_fee=true + an arbitrary extended_cents
     -- diverges far beyond the gap, so it stays at the server-recomputed quantity x unit_price
     -- (no under/over-billing, no share rebalance to a forged amount). r14 P1.
-    IF COALESCE((v_item->>'is_application_fee')::boolean, false)
+    IF v_is_fee
        AND (v_item->>'extended_cents') IS NOT NULL
        AND ABS((v_item->>'extended_cents')::bigint - v_extended) <= CEIL(v_qty)::bigint + 1 THEN
       v_extended := (v_item->>'extended_cents')::bigint;
@@ -209,7 +219,7 @@ BEGIN
       v_item->>'unit_size', v_item->>'notes',
       -- >>> DELTA-A values
       v_item->>'rate_unit',
-      COALESCE((v_item->>'is_application_fee')::boolean, false),
+      v_is_fee,  -- DELTA-H: persist the SERVER-recognized fee flag (false for a product line)
       (v_item->>'total_applied')::numeric,
       v_item->>'total_applied_unit',
       (v_item->>'total_applied_gl_lb')::numeric,
@@ -228,7 +238,7 @@ BEGIN
     -- is acres, not a multiplier) -> add it as-is (x1), mirroring how the price side
     -- honors the fee's exact extended_cents (DELTA-A2). Codex r10 P2.
     v_total_cost := v_total_cost + CASE
-      WHEN COALESCE((v_item->>'is_application_fee')::boolean, false) THEN v_cost_cents
+      WHEN v_is_fee THEN v_cost_cents
       ELSE ROUND(v_cost_cents * v_qty)::bigint END;
     -- <<< DELTA-E
   END LOOP;
@@ -331,6 +341,12 @@ BEGIN
   -- forged is_application_fee flag can't set an arbitrary line total (r14 P1)
   IF v_src NOT LIKE '%ABS((v_item->>''extended_cents'')::bigint - v_extended) <=%' THEN
     RAISE EXCEPTION 'save_invoice: DELTA-A2 forged-fee tolerance guard missing';
+  END IF;
+  -- DELTA-H: a fee is server-recognized as flag AND product_id IS NULL (a product line
+  -- can't be misclassified as a fee to understate cost) (r17 P2)
+  IF v_src NOT LIKE '%DELTA-H%'
+     OR v_src NOT LIKE '%is_application_fee'')::boolean, false) AND (v_item->>''product_id'') IS NULL%' THEN
+    RAISE EXCEPTION 'save_invoice: DELTA-H server-recognized fee guard missing';
   END IF;
   -- the original order/blend new-invoice guard must remain (not weakened)
   IF v_src NOT LIKE '%Invoices must link to an order or blend ticket%' THEN

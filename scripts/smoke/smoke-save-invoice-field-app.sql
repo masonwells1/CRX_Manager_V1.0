@@ -23,7 +23,7 @@
 DO $smoke$
 DECLARE
   v_admin uuid; v_sfx text := substr(gen_random_uuid()::text,1,8); v_cust uuid; v_prod uuid;
-  v_inv uuid; v_chem_inv uuid; v_chem2 uuid; v_forge uuid; v_inv3 uuid; v_cust2 uuid; v_cust_b uuid; v_who uuid; v_fee_flag boolean; v_share_amt bigint; v_inv_total bigint; v_fee_ext bigint; v_a bigint; v_b bigint;
+  v_inv uuid; v_chem_inv uuid; v_chem2 uuid; v_forge uuid; v_forge2 uuid; v_inv3 uuid; v_cust2 uuid; v_cust_b uuid; v_who uuid; v_fee_flag boolean; v_share_amt bigint; v_inv_total bigint; v_fee_ext bigint; v_a bigint; v_b bigint;
 BEGIN
   SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no admin'; END IF;
@@ -137,6 +137,26 @@ BEGIN
     THEN RAISE EXCEPTION 'SMOKE_FAIL: forged fee inflated the invoice total'; END IF;
   IF (SELECT amount_cents FROM invoice_shares WHERE invoice_id=v_forge) <> 200
     THEN RAISE EXCEPTION 'SMOKE_FAIL: forged fee rebalanced the share to an arbitrary amount'; END IF;
+
+  -- DELTA-H (Codex r17): a PRODUCT line forged with is_application_fee=true while keeping
+  -- extended_cents = quantity x unit_price (inside the r14 tolerance) must NOT be granted
+  -- fee behavior — a genuine fee has NO product_id. It must persist is_application_fee=FALSE
+  -- and roll cost up as cost_cents x quantity (NOT x1), so it can't misclassify a chemical
+  -- and understate cost. Line: product, qty 10 x unit 100 = extended 1000 (passes), cost 50.
+  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, created_by, season)
+    VALUES ('[SMOKE] FORGE2-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, v_admin, 2026) RETURNING id INTO v_forge2;
+  INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents, sort_order, is_application_fee) VALUES (v_forge2, v_prod, 'Chem', 1, 100, 100, 0, 1, false);
+  UPDATE invoices SET total_amount_cents=100, status='unposted' WHERE id=v_forge2;
+  INSERT INTO invoice_shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order) VALUES (v_forge2, v_cust, 'F2', 100.0, 10, 100, true, 1);
+  PERFORM save_invoice(
+    jsonb_build_object('id', v_forge2, 'invoice_type','field_application', 'invoice_date', CURRENT_DATE::text),
+    jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','Chem', 'quantity', 10, 'unit_price_cents', 100, 'extended_cents', 1000, 'cost_cents', 50, 'sort_order', 1, 'is_application_fee', true)), NULL);
+  -- persisted flag is FALSE (product line, not a fee) despite the forged is_application_fee=true
+  IF (SELECT is_application_fee FROM invoice_items WHERE invoice_id=v_forge2) IS NOT FALSE
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: product line persisted as is_application_fee=true (DELTA-H server-recognition broken)'; END IF;
+  -- cost rolled up x quantity: 50 x 10 = 500 (NOT x1 = 50, which would understate margin)
+  IF (SELECT total_cost_cents FROM invoices WHERE id=v_forge2) <> 500
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: forged-fee product line cost rolled up x1 not x quantity (exp 500)'; END IF;
 
   -- SPLIT/OVERRIDE: a multi-grower (or fixed-price/override) field invoice cannot
   -- be re-balanced from line items without corrupting per-grower fees; editing it
