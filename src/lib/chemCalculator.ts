@@ -59,10 +59,13 @@ export function applyChemEdit<T extends ChemCalcRow>(
 }
 
 /**
- * Re-derive a chem row when total acres change (caller guards `acres > 0`).
- *  • driver 'qty'  → HOLD the typed quantity, refigure the rate (never silently rewrite a
- *                    hand-entered total).
- *  • driver 'rate' → quantity follows = rate × acres.
+ * Re-derive a chem row when total acres change. Safe for `acres === 0` (the caller no
+ * longer early-returns) so removing the last field clears a derived quantity.
+ *  • driver 'rate' → quantity = rate × acres, re-derived on EVERY acreage change INCLUDING
+ *                    acres dropping to 0 (→ quantity 0). Otherwise a removed-field job keeps
+ *                    a stale billable quantity for 0 acres. (Codex r16)
+ *  • driver 'qty'  → HOLD the user's typed total; refigure the rate only when acres > 0
+ *                    (never silently rewrite a hand-entered total, and never divide by 0).
  *  • no driver     → an untouched / RELOADED line is left exactly as saved (an acreage
  *                    change must not rewrite a persisted quantity whose origin is unknown).
  * Returns a NEW row when it changes, otherwise the same row reference.
@@ -70,14 +73,14 @@ export function applyChemEdit<T extends ChemCalcRow>(
 export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: number): T {
   const rate = parseFloat(row.rate_per_acre);
   const qty = parseFloat(row.quantity);
-  if (row.driver === 'qty') {
-    return row.quantity.trim() !== '' && !Number.isNaN(qty) && qty !== 0
-      ? { ...row, rate_per_acre: fmt4(qty / acres) }
-      : row;
-  }
   if (row.driver === 'rate') {
     return row.rate_per_acre.trim() !== '' && !Number.isNaN(rate)
       ? { ...row, quantity: fmt4(rate * acres) }
+      : row;
+  }
+  if (row.driver === 'qty') {
+    return acres > 0 && row.quantity.trim() !== '' && !Number.isNaN(qty) && qty !== 0
+      ? { ...row, rate_per_acre: fmt4(qty / acres) }
       : row;
   }
   return row;

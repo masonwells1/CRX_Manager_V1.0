@@ -754,8 +754,9 @@ export default function JobDetail() {
   // "keep the rate, change acres -> quantity changes" just works. Flat/quantity-
   // only lines (no rate) are left alone.
   const recomputeChemQtyFromAcres = (rows: FieldRow[]) => {
+    // NB: no acres<=0 early return — removing the last field must re-derive rate-driven
+    // lines to a 0 quantity so the job can't save/bill a stale derived amount. (Codex r16)
     const acres = sumAcres(rows);
-    if (acres <= 0) return;
     setChemRows(prev => prev.map(c => recomputeChemRowForAcres(c, acres)));
   };
   const addFieldRow = () => {

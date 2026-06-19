@@ -81,3 +81,25 @@ describe('chemCalculator — recomputeChemRowForAcres', () => {
     expect(r).toEqual(saved);
   });
 });
+
+describe('chemCalculator — Codex r16: removing the last field (acres → 0)', () => {
+  it('rate-driven line clears its derived quantity to 0 (no stale billable amount)', () => {
+    // user had rate 2 over 100 acres → quantity 200, then removes all fields → acres 0
+    const before = row({ rate_per_acre: '2', quantity: '200', driver: 'rate' });
+    const after = recomputeChemRowForAcres(before, 0);
+    expect(after.quantity).toBe('0'); // not stale 200
+    expect(after.rate_per_acre).toBe('2'); // the rate the user set is kept
+  });
+
+  it('quantity-driven line HOLDS its typed total and does not divide by zero', () => {
+    const before = row({ rate_per_acre: '2.5', quantity: '250', driver: 'qty' });
+    const after = recomputeChemRowForAcres(before, 0);
+    expect(after.quantity).toBe('250'); // explicit total held
+    expect(after.rate_per_acre).toBe('2.5'); // not rewritten to Infinity/NaN
+  });
+
+  it('no-driver line is untouched at acres 0', () => {
+    const saved = row({ rate_per_acre: '1', quantity: '42', driver: undefined });
+    expect(recomputeChemRowForAcres(saved, 0)).toEqual(saved);
+  });
+});
