@@ -801,7 +801,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         product_form: it.product_form || it.product?.product_form || null,
       })) as InvoicePdfItem[],
       total_amount_cents: invoice.total_amount_cents ?? items.reduce((s, i) => s + i.extended_cents, 0),
-      total_cost_cents: invoice.total_cost_cents ?? items.reduce((s, i) => s + Math.round(i.cost_cents * i.quantity), 0),
+      total_cost_cents: invoice.total_cost_cents ?? items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : Math.round(i.cost_cents * i.quantity)), 0),
       paid_amount_cents: invoice.paid_amount_cents ?? 0,
       prepay_applied_cents: invoice.prepay_applied_cents ?? 0,
       balance_cents: invoice.balance_cents ?? 0,
@@ -884,7 +884,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
   };
 
   const totalCents = items.reduce((s, i) => s + i.extended_cents, 0);
-  const totalCostCents = items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0);
+  // Mirror save_invoice DELTA-E: a machine-fee line stores its EXACT extended cost
+  // (its quantity is acres, not a multiplier), so add it as-is; product lines store a
+  // per-unit cost -> x quantity. Using x quantity for the fee line would inflate the
+  // displayed Total Cost/Margin by a factor of acres.
+  const totalCostCents = items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
   const editable = isNew || ['draft', 'unposted'].includes(invoice.status || '');
 
   // Customer filtered list

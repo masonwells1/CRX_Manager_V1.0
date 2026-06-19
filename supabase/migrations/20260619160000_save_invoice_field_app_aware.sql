@@ -47,6 +47,7 @@ DECLARE
   v_actor uuid := auth.uid(); v_invoice_id uuid; v_is_new boolean := false; v_item jsonb;
   v_total_cents bigint := 0; v_qty numeric; v_unit_price bigint; v_extended bigint;
   v_cost_cents bigint; v_product record; v_order_id uuid; v_blend_id uuid; v_existing jsonb;
+  v_total_cost bigint := 0;  -- DELTA-E: extended COST accumulator (field-invoice header sync)
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
   IF NOT (is_admin() OR is_sales_rep()) THEN
@@ -182,9 +183,27 @@ BEGIN
       (v_item->>'quoted_price_cents')::bigint);
       -- <<< DELTA-A values
     v_total_cents := v_total_cents + v_extended;
+    -- >>> DELTA-E: accumulate the EXTENDED line cost for the field-invoice header
+    -- (invoices.total_cost_cents, read by margin/cost reporting). A normal product
+    -- line stores a PER-UNIT cost (v_cost_cents = products.current_cost*100, or the
+    -- client cents for a manual line) -> extended cost = cost x quantity. The
+    -- is_application_fee line stores its EXACT, already-EXTENDED cost (its quantity
+    -- is acres, not a multiplier) -> add it as-is (x1), mirroring how the price side
+    -- honors the fee's exact extended_cents (DELTA-A2). Codex r10 P2.
+    v_total_cost := v_total_cost + CASE
+      WHEN COALESCE((v_item->>'is_application_fee')::boolean, false) THEN v_cost_cents
+      ELSE ROUND(v_cost_cents * v_qty)::bigint END;
+    -- <<< DELTA-E
   END LOOP;
 
-  UPDATE invoices SET total_amount_cents = v_total_cents, updated_at = now()
+  UPDATE invoices SET total_amount_cents = v_total_cents,
+    -- DELTA-E: keep the field-invoice header COST in sync with the re-billed lines so
+    -- margin/cost reporting (which reads invoices.total_cost_cents) is correct after a
+    -- "bill actual" edit. FIELD-ONLY: a chemical_sale / credit_memo / misc_charge
+    -- invoice's cost is owned by its own creation path; leaving it untouched keeps the
+    -- non-field path byte-identical to the live body (the migration's core invariant).
+    total_cost_cents = CASE WHEN invoice_type = 'field_application' THEN v_total_cost ELSE total_cost_cents END,
+    updated_at = now()
   WHERE id = v_invoice_id AND status IN ('draft', 'unposted');
 
   -- >>> DELTA-B (#3 field-app aware): a field_application invoice carries a
@@ -255,6 +274,11 @@ BEGIN
   IF v_src NOT LIKE '%DELTA-D%'
      OR v_src NOT LIKE '%CASE WHEN invoice_type = ''field_application''%THEN customer_id%' THEN
     RAISE EXCEPTION 'save_invoice: DELTA-D customer-lock missing';
+  END IF;
+  -- DELTA-E: field invoices must sync total_cost_cents from the re-billed lines
+  IF v_src NOT LIKE '%DELTA-E%'
+     OR v_src NOT LIKE '%total_cost_cents = CASE WHEN invoice_type = ''field_application''%' THEN
+    RAISE EXCEPTION 'save_invoice: DELTA-E field-app header cost sync missing';
   END IF;
   -- the original order/blend new-invoice guard must remain (not weakened)
   IF v_src NOT LIKE '%Invoices must link to an order or blend ticket%' THEN

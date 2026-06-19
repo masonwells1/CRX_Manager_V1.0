@@ -30,12 +30,12 @@ BEGIN
   PERFORM set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role','authenticated')::text, true);
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] SI '||v_sfx) RETURNING id INTO v_cust;
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] SIb '||v_sfx) RETURNING id INTO v_cust_b;
-  INSERT INTO products (product_name, unit_size) VALUES ('[SMOKE] SIP '||v_sfx, 'gal') RETURNING id INTO v_prod;
+  INSERT INTO products (product_name, unit_size, current_cost) VALUES ('[SMOKE] SIP '||v_sfx, 'gal', 10.00) RETURNING id INTO v_prod;  -- per-unit cost = $10 -> 1000c
 
   -- A field_application invoice: chem line + an is_application_fee line whose EXACT
   -- extended (79000) != quantity(33) x blended unit_price(2394)=79002. Share=79100.
-  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, created_by, season)
-    VALUES ('[SMOKE] FINV-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, v_admin, 2026) RETURNING id INTO v_inv;
+  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, total_cost_cents, created_by, season)
+    VALUES ('[SMOKE] FINV-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, 99999, v_admin, 2026) RETURNING id INTO v_inv;  -- stale cost 99999 must be OVERWRITTEN by the edit
   INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents, sort_order, is_application_fee) VALUES (v_inv, v_prod, 'Chem', 1, 100, 100, 0, 1, false);
   INSERT INTO invoice_items (invoice_id, description, quantity, unit_price_cents, extended_cents, cost_cents, sort_order, acres, rate_per_acre, rate_unit, is_application_fee, price_source) VALUES (v_inv, 'Application', 33, 2394, 79000, 0, 2, 33, 2394, 'acre', true, 'tier');
   UPDATE invoices SET total_amount_cents=79100, status='unposted' WHERE id=v_inv;
@@ -47,8 +47,14 @@ BEGIN
     jsonb_build_object('id', v_inv, 'customer_id', v_cust_b, 'invoice_type','field_application', 'invoice_date', CURRENT_DATE::text),
     jsonb_build_array(
       jsonb_build_object('product_id', v_prod, 'description','Chem', 'quantity', 3, 'unit_price_cents', 100, 'extended_cents', 300, 'sort_order', 1, 'is_application_fee', false),
-      jsonb_build_object('description','Application', 'quantity', 33, 'unit_price_cents', 2394, 'extended_cents', 79000, 'sort_order', 2, 'acres', 33, 'rate_per_acre', 2394, 'rate_unit','acre', 'is_application_fee', true, 'price_source','tier')
+      jsonb_build_object('description','Application', 'quantity', 33, 'unit_price_cents', 2394, 'extended_cents', 79000, 'sort_order', 2, 'acres', 33, 'rate_per_acre', 2394, 'rate_unit','acre', 'is_application_fee', true, 'price_source','tier', 'cost_cents', 5000)
     ), NULL);
+
+  -- DELTA-E: header cost re-synced from the re-billed lines. Chem (product cost $10/unit,
+  -- qty 3) = 3000; fee line cost is EXACT/extended (5000, x1 NOT x33 acres) = 5000. Total = 8000.
+  -- A x-quantity bug on the fee line would yield 3000 + 5000*33 = 168000.
+  SELECT total_cost_cents INTO v_inv_total FROM invoices WHERE id=v_inv;
+  IF v_inv_total <> 8000 THEN RAISE EXCEPTION 'SMOKE_FAIL: field total_cost_cents % (exp 8000 = 3000 chem + 5000 fee x1; a fee x-acres bug = 168000; stale 99999 not overwritten?)', v_inv_total; END IF;
 
   SELECT is_application_fee, extended_cents INTO v_fee_flag, v_fee_ext FROM invoice_items WHERE invoice_id=v_inv AND is_application_fee=true;
   IF v_fee_flag IS NOT TRUE THEN RAISE EXCEPTION 'SMOKE_FAIL: fee flag lost on edit'; END IF;
@@ -62,8 +68,8 @@ BEGIN
   IF v_who <> v_cust THEN RAISE EXCEPTION 'SMOKE_FAIL: field invoice customer changed to % (must stay locked to %)', v_who, v_cust; END IF;
 
   -- CONTROL: chemical_sale invoice with a (deliberately wrong) share is NOT touched; product line still recomputed
-  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, created_by, season)
-    VALUES ('[SMOKE] CINV-'||v_sfx, v_cust, 'chemical_sale', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, v_admin, 2026) RETURNING id INTO v_chem_inv;
+  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, total_cost_cents, created_by, season)
+    VALUES ('[SMOKE] CINV-'||v_sfx, v_cust, 'chemical_sale', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, 77777, v_admin, 2026) RETURNING id INTO v_chem_inv;  -- cost sentinel: DELTA-E must NOT touch a chemical_sale invoice
   INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents, sort_order) VALUES (v_chem_inv, v_prod, 'Chem', 1, 200, 200, 0, 1);
   UPDATE invoices SET total_amount_cents=200, status='unposted' WHERE id=v_chem_inv;
   INSERT INTO invoice_shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order) VALUES (v_chem_inv, v_cust, 'x', 100.0, 0, 999, true, 1);
@@ -78,6 +84,9 @@ BEGIN
   IF v_share_amt <> 999 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical_sale share touched by DELTA-B (% exp 999)', v_share_amt; END IF;
   SELECT total_amount_cents INTO v_inv_total FROM invoices WHERE id=v_chem_inv;
   IF v_inv_total <> 1000 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical product line not recomputed (% exp 1000, the lied extended_cents=1 must be ignored)', v_inv_total; END IF;
+  -- DELTA-E field-only: a chemical_sale invoice's total_cost_cents is NOT recomputed (stays at its sentinel)
+  SELECT total_cost_cents INTO v_inv_total FROM invoices WHERE id=v_chem_inv;
+  IF v_inv_total <> 77777 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical_sale total_cost_cents touched by DELTA-E (% exp 77777, field-only scope broken)', v_inv_total; END IF;
 
   -- SPLIT/OVERRIDE: a multi-grower (or fixed-price/override) field invoice cannot
   -- be re-balanced from line items without corrupting per-grower fees; editing it
