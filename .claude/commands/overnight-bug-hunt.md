@@ -52,29 +52,31 @@ Run the find+verify Workflow for this slice:
 It returns `confirmed` (adversarially verified) + `refuted`. **Dedupe `confirmed` against `LEDGER.json` and `accepted-findings.json`** — drop anything already seen/fixed/accepted. What remains are this cycle's candidates.
 
 ### Step 2 — CODEX FINDING-GATE (independent confirmation)
-Hand the candidate findings to Codex as an independent second model (gpt-5.5). Resolve the binary version-proof, then run read-only:
+Hand the candidate findings to Codex as an independent second model (gpt-5.5). **Always invoke Codex through the `node scripts/overnight-codex-gate.mjs` wrapper** — it rides the `Bash(node scripts/:*)` permission allow-list, so an UNATTENDED run never pauses for approval (a raw `codex exec` is NOT allow-listed and would stall the loop). The wrapper resolves the binary version-proof, runs `codex exec --sandbox read-only`, and closes stdin. Write the candidate digest to a file first, then:
 ```bash
-CODEX=$(ls -t /c/Users/mason/AppData/Local/OpenAI/Codex/bin/*/codex.exe 2>/dev/null | head -1)
-[ -x "$CODEX" ] || CODEX=codex     # npm shim on PATH is a valid fallback
-"$CODEX" exec --sandbox read-only -C "$(git rev-parse --show-toplevel)" \
-  "Independently confirm or refute each candidate bug below against the real code + live Supabase DB (project rhyzpcqhnizqbxphqdkr, read-only). For EACH: verdict REAL or NOT-REAL, one line of evidence (file:line / SQL), and corrected severity. Be skeptical — default NOT-REAL without hard evidence. <paste the candidate list: title, file, evidence, impact per finding>" \
+# Build the prompt file: per finding — title, file, one-line evidence, impact, severity.
+# Keep it to <=3-4 findings per call (more times out at high reasoning).
+cat > .claude/session-state/finding-gate-prompt.txt <<'EOF'
+Independent second-model gate for the CRX overnight bug hunt. READ-ONLY repo + migration access (the sandbox CANNOT reach the live DB, so ground against repo/migration files). For EACH finding output: "#N: REAL | NOT-REAL | NEEDS-EVIDENCE — <=2 lines evidence (file:line) — corrected severity". Be skeptical; default NOT-REAL without proof.
+<paste the 3-4 candidate findings here>
+EOF
+node scripts/overnight-codex-gate.mjs .claude/session-state/finding-gate-prompt.txt \
   2>&1 | tee .claude/session-state/codex-finding-gate-latest.txt
 ```
-Keep only findings Codex marks **REAL**. Where Codex and Claude disagree on a BLOCKER/HIGH, **keep both positions** in `REPORT.md` for Mason — never silently resolve. (For a DB-touching candidate, run the live evidence gate first: `npm run db-sweeps` predicates executed read-only via Supabase MCP, and the RPC's smoke chain — don't hand Codex a "clean" claim over an unchecked catalog.)
+Keep only findings Codex marks **REAL**. Where Codex and Claude disagree on a BLOCKER/HIGH (e.g. a severity split), **keep both positions** in `REPORT.md` for Mason — never silently resolve. (For a DB-touching candidate, Claude runs the live evidence gate first on its side — `npm run db-sweeps` predicates executed read-only via Supabase MCP + the RPC's smoke chain — since Codex's sandbox can't.)
 
 ### Step 3 — Draft fixes (green tier only this cycle)
 For each Codex-confirmed **green** finding (`fixKind` frontend-only / docs-or-test): make the minimal, surgical edit that matches surrounding style. For each **yellow** finding: write the migration/edge-fn draft + rolled-back-validate it against live (multi-statement `execute_sql` in a transaction that ends in ROLLBACK / `plpgsql_check`) — but **do not apply**; it parks.
 
 ### Step 4 — CODEX FIX-GATE (review the actual change)
-Stage the green edits and hand the real diff to Codex BEFORE committing:
+Stage **only the files this fix touched** (never `-A`), then hand the real diff to Codex through the wrapper BEFORE committing:
 ```bash
-cd "$(git rev-parse --show-toplevel)" && git add -A
-git diff --cached > .claude/session-state/overnight-fix.diff
-"$CODEX" exec --sandbox read-only -C "$(git rev-parse --show-toplevel)" \
-  "Review this staged diff for correctness, money/idempotency/actor/lifecycle bugs, and whether it fully fixes the stated finding without introducing a new one. Verdict SHIP / NEEDS-WORK per hunk. Diff:\n$(cat .claude/session-state/overnight-fix.diff)" \
+git add <the-fix's-files>                                  # ONLY this fix's files
+{ echo "Review this staged diff for the CRX overnight bug hunt. It must fully fix: <finding>. Judge correctness + money/idempotency/actor/lifecycle bugs + whether it introduces a new bug. Output 'VERDICT: SHIP' or 'VERDICT: NEEDS-WORK — <reason>'. Diff:"; git diff --cached; } > .claude/session-state/fix-gate-prompt.txt
+node scripts/overnight-codex-gate.mjs .claude/session-state/fix-gate-prompt.txt \
   2>&1 | tee .claude/session-state/codex-fix-gate-latest.txt
 ```
-(Use `codex exec` over the staged diff — NOT `codex review --uncommitted`, which **stashes** the working tree and would review nothing.) Address every Codex NEEDS-WORK and re-run the gate. **Hard cap: 3 fix-gate rounds** per finding — if still NEEDS-WORK after 3, revert that edit and re-tier the finding to **yellow/park** (it's subtler than a green fix).
+(The wrapper runs `codex exec` over the staged diff — NOT `codex review --uncommitted`, which **stashes** the working tree and would review nothing.) Address every Codex NEEDS-WORK and re-run the gate. **Hard cap: 3 fix-gate rounds** per finding — if still NEEDS-WORK after 3, revert that edit (`git restore --staged --worktree <files>`) and re-tier the finding to **yellow/park** (it's subtler than a green fix).
 
 ### Step 5 — Verify + commit (green) / park (yellow)
 Green, only after Codex says SHIP:
