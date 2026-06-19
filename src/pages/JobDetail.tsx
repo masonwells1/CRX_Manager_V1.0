@@ -759,18 +759,24 @@ export default function JobDetail() {
     setChemRows(prev => prev.map(c => {
       const rate = parseFloat(c.rate_per_acre);
       const qty = parseFloat(c.quantity);
-      // Quantity-driven line (user typed a total): HOLD the quantity, refigure the
-      // rate — never silently rewrite a hand-entered quantity (Codex P2).
+      // Quantity-driven line (user typed a total THIS session): HOLD the quantity,
+      // refigure the rate — never silently rewrite a hand-entered quantity.
       if (c.driver === 'qty') {
         return c.quantity.trim() !== '' && !Number.isNaN(qty) && qty !== 0
           ? { ...c, rate_per_acre: fmt4(qty / acres) }
           : c;
       }
-      // Rate-driven line (or a loaded line that carries a rate): quantity follows.
-      // A flat/quantity-only line with NO rate is left untouched.
-      return c.rate_per_acre.trim() !== '' && !Number.isNaN(rate)
-        ? { ...c, quantity: fmt4(rate * acres) }
-        : c;
+      // Rate-driven line (user set the rate THIS session): quantity follows.
+      if (c.driver === 'rate') {
+        return c.rate_per_acre.trim() !== '' && !Number.isNaN(rate)
+          ? { ...c, quantity: fmt4(rate * acres) }
+          : c;
+      }
+      // Untouched / RELOADED lines (no driver) are left exactly as saved — an
+      // acreage change must NOT rewrite a persisted quantity, because we can't
+      // tell whether that line's saved rate was hand-entered or derived from a
+      // typed quantity (Codex). The user re-engages the calc by editing the line.
+      return c;
     }));
   };
   const addFieldRow = () => {

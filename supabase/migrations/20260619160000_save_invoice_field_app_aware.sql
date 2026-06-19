@@ -82,7 +82,14 @@ BEGIN
       0, v_actor) RETURNING id INTO v_invoice_id;
   ELSE
     UPDATE invoices SET
-      customer_id = COALESCE((p_invoice->>'customer_id')::uuid, customer_id),
+      -- DELTA-D (Codex): a field_application invoice's customer is job-derived and
+      -- mirrored in the invoice_shares ledger (+ PDFs/statements); changing only
+      -- the header would desync the share customer. Lock the customer on field
+      -- invoices (the field editor also shows it read-only); chemical invoices
+      -- still allow a customer change.
+      customer_id = CASE WHEN invoice_type = 'field_application'
+                         THEN customer_id
+                         ELSE COALESCE((p_invoice->>'customer_id')::uuid, customer_id) END,
       invoice_type = COALESCE(p_invoice->>'invoice_type', invoice_type),
       season = COALESCE((p_invoice->>'season')::int, season),
       salesman_id = (p_invoice->>'salesman_id')::uuid,
@@ -243,6 +250,11 @@ BEGIN
   IF v_src NOT LIKE '%DELTA-B%'
      OR v_src NOT LIKE '%invoice_type FROM invoices WHERE id = v_invoice_id) = ''field_application''%' THEN
     RAISE EXCEPTION 'save_invoice: DELTA-B field-app share re-balance missing';
+  END IF;
+  -- DELTA-D: field invoices must lock customer_id (no payload-driven customer change)
+  IF v_src NOT LIKE '%DELTA-D%'
+     OR v_src NOT LIKE '%CASE WHEN invoice_type = ''field_application''%THEN customer_id%' THEN
+    RAISE EXCEPTION 'save_invoice: DELTA-D customer-lock missing';
   END IF;
   -- the original order/blend new-invoice guard must remain (not weakened)
   IF v_src NOT LIKE '%Invoices must link to an order or blend ticket%' THEN

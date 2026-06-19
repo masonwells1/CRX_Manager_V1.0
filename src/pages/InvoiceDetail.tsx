@@ -1015,10 +1015,12 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         <Card className="md:col-span-2">
           <h2 className="text-sm font-semibold text-nav-dark mb-4">Invoice Details</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Customer */}
+            {/* Customer — read-only on the segregated field route (Codex): a field
+                 invoice's customer is job-derived and mirrored in the share ledger;
+                 it can't be changed here (save_invoice also locks it server-side). */}
             <div className="col-span-2 relative">
               <label className="text-sm font-medium text-nav-dark">Customer *</label>
-              {editable ? (
+              {editable && routeArea !== 'field' ? (
                 <div className="relative mt-1">
                   <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
