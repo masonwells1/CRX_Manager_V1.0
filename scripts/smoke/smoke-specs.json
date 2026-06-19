@@ -61,6 +61,11 @@
       "description": "Customer-PO param (migration 20260614130000): a REAL active sales_rep creates a direct order WITH p_customer_po_number and the PO persists on orders (the bug: the old frontend post-create orders.update() hit the admin-only orders_update RLS and failed for sales_rep). Asserts order/order_items/inventory-prebook created, status confirmed; whitespace PO normalizes to NULL; idempotency replay returns the same order with no duplicate; plus the auth probes (no-auth -> Authentication required, driver -> INSUFFICIENT_ROLE, forged actor -> Actor mismatch).",
       "covers": ["create_direct_order"]
     },
+    "load_recipe_into_job": {
+      "chain": "smoke-recipe-per-unit-pricing.sql",
+      "description": "Recipe per-unit pricing (Phase 4, REQUIRES migration 20260618230000): load_recipe_into_job seeds job_chemicals.price_per_unit_cents from the new blend_recipe_items.price_per_unit_cents (item A 1500 -> 1500) instead of the old hard-coded 0; a default-priced recipe item stays 0; cost_per_unit_cents still seeds from products.current_cost x100; the non-negative CHECK rejects a negative recipe price. Pre-apply the priced INSERT errors (column missing).",
+      "covers": ["load_recipe_into_job"]
+    },
     "transfer_job_to_invoice": {
       "chain": "smoke-field-invoice-loop.sql",
       "description": "As-Applied / Field-Invoice FULL LOOP (Phase 1b, REQUIRES migration 20260618220000): schedule job -> start_job -> complete_job (writes the application_record + weather + job_applied_info, idempotent replay makes no 2nd record) -> transfer_job_to_invoice (unposted field invoice, links application_records.invoice_id, job->invoiced; the UNRATED Chem B line yields NULL gl_lb instead of the pre-fix 55000 'record v_conversion not assigned yet' crash) -> edit while unposted -> post_invoice (posted, balance set, audit row) -> void_invoice (voided, totals zeroed, audit row). Pre-apply this chain crashes at transfer (the documented bug).",
