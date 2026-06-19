@@ -51,6 +51,16 @@ Built **3 of the 4** remaining pieces. All committed on `feat/as-applied-invoice
 ### ⛔ #3 (edit-path) — correctly DEFERRED to a focused, browser-verified follow-up
 A job-created unposted field invoice has **no clean editor**: the per-acre engine editor shows blank fields + re-bills per-acre + drops flat lines on save; the shared editor (`InvoiceDetail`/`save_invoice`) can edit qty/price + post but its reinsert **strips `is_application_fee` + the applied/EPA columns and never updates `invoice_shares`**. A correct fix makes `save_invoice` **field-app-aware, guarded on `invoice_type='field_application'`** (preserve the fee flag + applied columns, maintain shares), additive so chemical-sales billing stays byte-identical, then routes job invoices (`job_id` set) → `/invoices/:id`. This touches the **live chemical-sales save path**, so it needs reviewers + Codex + a real browser pass — not a tail-of-session rush. **Non-blocking** (0 field invoices live).
 
+### 🤖 Codex (gpt-5.5) pre-ship gate — 4 rounds, `--base main`
+Mason asked "has Codex reviewed everything before we ship?" — it has now. Across **4 rounds** Codex found and I fixed **5 real money bugs in the migrations**, each re-proven by smoke + the two reviewers:
+1. `price_source` CHECK violation on the fee line → write `'tier'` (drift reviewer).
+2. **Split-grower fee used the wrong rate** → compute per-customer at each grower's own rate (`cb8d3ec`).
+3. Invoice didn't record `application_service_id` → carry it onto the invoice (`cb8d3ec`).
+4. Calculator could silently rewrite a flat line's quantity → per-line "driver" flag holds the typed field (`d170945`).
+5. **Override-priced growers double-charged** the machine fee → skip override shares; **priced recipe left the job total stale** → re-roll it on load (`d099f8e`).
+
+**Migrations are now Codex-clean.** The two findings that remain are **not in the migrations** and are tracked as follow-ups: the #3 edit-path/permission routing (above) and recreating the absent `smoke-field-invoice-loop.sql` full-chain test + registering it. Neither blocks applying the three parked migrations.
+
 ## ✅ Built, reviewed & committed (on the branch, NOT live)
 
 | Phase | What | Commits | Proof |
