@@ -19,6 +19,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { applyChemEdit, recomputeChemRowForAcres, sumAcres } from '../lib/chemCalculator';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -752,32 +753,10 @@ export default function JobDetail() {
   // acres (or its selection) re-derives each rate-driven chemical's quantity, so
   // "keep the rate, change acres -> quantity changes" just works. Flat/quantity-
   // only lines (no rate) are left alone.
-  const fmt4 = (x: number) => (Math.round(x * 10000) / 10000).toString();
   const recomputeChemQtyFromAcres = (rows: FieldRow[]) => {
-    const acres = rows.reduce((s, f) => s + (parseFloat(f.acres_to_treat) || 0), 0);
+    const acres = sumAcres(rows);
     if (acres <= 0) return;
-    setChemRows(prev => prev.map(c => {
-      const rate = parseFloat(c.rate_per_acre);
-      const qty = parseFloat(c.quantity);
-      // Quantity-driven line (user typed a total THIS session): HOLD the quantity,
-      // refigure the rate — never silently rewrite a hand-entered quantity.
-      if (c.driver === 'qty') {
-        return c.quantity.trim() !== '' && !Number.isNaN(qty) && qty !== 0
-          ? { ...c, rate_per_acre: fmt4(qty / acres) }
-          : c;
-      }
-      // Rate-driven line (user set the rate THIS session): quantity follows.
-      if (c.driver === 'rate') {
-        return c.rate_per_acre.trim() !== '' && !Number.isNaN(rate)
-          ? { ...c, quantity: fmt4(rate * acres) }
-          : c;
-      }
-      // Untouched / RELOADED lines (no driver) are left exactly as saved — an
-      // acreage change must NOT rewrite a persisted quantity, because we can't
-      // tell whether that line's saved rate was hand-entered or derived from a
-      // typed quantity (Codex). The user re-engages the calc by editing the line.
-      return c;
-    }));
+    setChemRows(prev => prev.map(c => recomputeChemRowForAcres(c, acres)));
   };
   const addFieldRow = () => {
     setFieldRows([...fieldRows, { field_id: '', field_name: '', acres_to_treat: '', sort_order: fieldRows.length }]);
@@ -822,18 +801,11 @@ export default function JobDetail() {
         updated[i].cost_per_unit_cents = Math.round((p.current_cost || 0) * 100).toString();
       }
     }
-    // 3-way calculator: keep quantity = rate/ac × total acres in sync. Editing the
-    // rate fills the quantity; typing a total quantity back-solves the rate. A
-    // blank value is left alone, so a flat/quantity-only line (no rate) still works.
-    const acres = fieldRows.reduce((s, f) => s + (parseFloat(f.acres_to_treat) || 0), 0);
-    if (acres > 0 && key === 'rate_per_acre' && value.trim() !== '') {
-      const rate = parseFloat(value);
-      if (!Number.isNaN(rate)) { updated[i].quantity = fmt4(rate * acres); updated[i].driver = 'rate'; }
-    }
-    if (acres > 0 && key === 'quantity' && value.trim() !== '') {
-      const qty = parseFloat(value);
-      if (!Number.isNaN(qty)) { updated[i].rate_per_acre = fmt4(qty / acres); updated[i].driver = 'qty'; }
-    }
+    // 3-way calculator (rate ⇄ quantity via total acres). The driver flag is recorded
+    // even with no fields chosen yet (acres === 0), so a rate/total entered before fields
+    // are added is filled in by recomputeChemQtyFromAcres once acres exist rather than
+    // being dropped to a 0 quantity. Pure logic + tests in lib/chemCalculator. (Codex r15)
+    updated[i] = applyChemEdit(updated[i], key, value, sumAcres(fieldRows));
     setChemRows(updated);
   };
 
