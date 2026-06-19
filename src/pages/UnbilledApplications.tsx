@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Tractor, ClipboardCheck, FileStack, ArrowRight } from 'lucide-react';
+import { RefreshCw, Tractor, ClipboardCheck, ArrowRight } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import { useToast } from '../components/ui/Toast';
@@ -9,12 +9,20 @@ import { Sentry } from '../lib/sentry';
 import { SkeletonCard } from '../components/ui/Skeleton';
 
 // Phase 2 of the As-Applied / Field-Invoice build (read-only reconciliation).
-// Surfaces "applied but not yet billed" work across the THREE places it can hide,
-// so nothing sprayed slips through unbilled:
+// Surfaces the TWO reliable, actionable "applied but not yet billed" backlogs so
+// nothing sprayed slips through unbilled:
 //   1. Completed jobs with no invoice yet (jobs.status='completed', invoice_id NULL)
 //   2. Approved blend tickets not yet billed (review_status='approved',
 //      payment_status='unbilled')
-//   3. Application records with no invoice (application_records.invoice_id NULL)
+//
+// NOTE (Codex Phase-2 review): we deliberately do NOT add a third
+// "application_records WHERE invoice_id IS NULL" section. application_records are
+// DERIVED rows (source_type is only 'job' or 'blend_ticket'), so they would
+// double-count the two backlogs above; worse, the blend-ticket billing rail
+// updates blend_tickets.payment_status rather than reliably filling
+// application_records.invoice_id, so billed/no-charge work could still show as
+// "unbilled". The two source-of-truth backlogs above are the correct view.
+//
 // READ-ONLY: it lists and links out to the source screens — it writes nothing.
 // (Lives under /field-invoices/* so it inherits the Field Invoices permission.)
 
@@ -22,7 +30,7 @@ const QUERY_LIMIT = 500;
 
 interface UnbilledRow {
   id: string;
-  ref: string;        // job_number / ticket_number / record_number
+  ref: string;        // job_number / ticket_number
   date: string | null;
   acres: number | null;
   customer_name: string;
@@ -56,12 +64,11 @@ export default function UnbilledApplications() {
   const [loading, setLoading] = useState(true);
   const [jobs, setJobs] = useState<UnbilledRow[]>([]);
   const [tickets, setTickets] = useState<UnbilledRow[]>([]);
-  const [records, setRecords] = useState<UnbilledRow[]>([]);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
 
-    const [jobsRes, ticketsRes, recordsRes] = await Promise.all([
+    const [jobsRes, ticketsRes] = await Promise.all([
       supabase
         .from('jobs')
         .select('id, job_number, job_date, total_acres, customer:customers(farm_name)')
@@ -78,15 +85,9 @@ export default function UnbilledApplications() {
         .is('deleted_at', null)
         .order('ticket_date', { ascending: false })
         .limit(QUERY_LIMIT),
-      supabase
-        .from('application_records')
-        .select('id, record_number, application_date, total_acres, customer:customers(farm_name)')
-        .is('invoice_id', null)
-        .order('application_date', { ascending: false })
-        .limit(QUERY_LIMIT),
     ]);
 
-    const firstError = jobsRes.error || ticketsRes.error || recordsRes.error;
+    const firstError = jobsRes.error || ticketsRes.error;
     if (firstError) {
       Sentry.captureException(firstError, { tags: { source: 'fetch', page: 'unbilled-applications' } });
       toast('error', 'Failed to load unbilled applications');
@@ -96,7 +97,6 @@ export default function UnbilledApplications() {
 
     setJobs(mapRows(jobsRes.data as RawRow[], 'job_number', 'job_date'));
     setTickets(mapRows(ticketsRes.data as RawRow[], 'ticket_number', 'ticket_date'));
-    setRecords(mapRows(recordsRes.data as RawRow[], 'record_number', 'application_date'));
     setLoading(false);
   }, [toast]);
 
@@ -123,18 +123,9 @@ export default function UnbilledApplications() {
       refLabel: 'Ticket #',
       parentPath: '/blend-tickets',
     },
-    {
-      key: 'records',
-      title: 'Application records — not billed',
-      subtitle: 'Regulatory application records with no linked invoice',
-      icon: <FileStack className="w-5 h-5 text-crx-green" />,
-      rows: records,
-      refLabel: 'Record #',
-      parentPath: '/application-records',
-    },
   ];
 
-  const totalUnbilled = jobs.length + tickets.length + records.length;
+  const totalUnbilled = jobs.length + tickets.length;
 
   const fmtDate = (d: string | null) =>
     d ? new Date(d + 'T00:00:00').toLocaleDateString() : '—';
@@ -142,8 +133,7 @@ export default function UnbilledApplications() {
   if (loading) {
     return (
       <div className="p-6 space-y-6">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <SkeletonCard />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <SkeletonCard />
           <SkeletonCard />
         </div>
@@ -158,16 +148,21 @@ export default function UnbilledApplications() {
         <div>
           <h2 className="text-xl font-semibold font-heading text-nav-dark">Unbilled Applications</h2>
           <p className="text-xs text-secondary mt-0.5">
-            Applied work that has not been turned into a field invoice yet — {totalUnbilled} item(s) across 3 sources.
+            Applied work that has not been turned into a field invoice yet — {totalUnbilled} item(s) across 2 billing backlogs.
           </p>
         </div>
-        <Button variant="secondary" size="sm" icon={<RefreshCw className="w-4 h-4" />} onClick={fetchAll}>
-          Refresh
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={() => navigate('/field-invoices')}>
+            Field Invoices
+          </Button>
+          <Button variant="secondary" size="sm" icon={<RefreshCw className="w-4 h-4" />} onClick={fetchAll}>
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {sections.map((s) => (
           <Card key={`card-${s.key}`}>
             <div className="flex items-center gap-3 mb-2">

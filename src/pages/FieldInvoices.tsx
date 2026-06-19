@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Ban, Download } from 'lucide-react';
+import { Plus, FileText, Check, Ban, Download, ClipboardCheck } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -262,6 +262,14 @@ export default function FieldInvoices() {
             loading={exportingPdf}
           >
             Download PDF
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<ClipboardCheck className="w-4 h-4" />}
+            onClick={() => navigate('/field-invoices/unbilled')}
+          >
+            Unbilled
           </Button>
           <Button variant="secondary" icon={<Plus className="w-4 h-4" />} onClick={() => navigate('/invoices/field-app/new')}>
             New Field Application
