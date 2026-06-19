@@ -81,3 +81,19 @@ traps that would bite once invoices/jobs start flowing. Worst-first.
 - **Fixed (green):** 0. **Parked (yellow):** 0 new — I enriched the existing parked item with more detail instead of double-listing it.
 - **Why I left it alone:** this is the green/frontend item I deliberately parked in Cycle 1 — that whole area is being rebuilt on the `feat/as-applied-invoices` branch, so a fix here would clash at merge. Cycle 3 also surfaced a subtlety that *confirms* parking is right: a blanket "send all field-app invoices to the field-app editor" fix would be **partly wrong** (blend-ticket-backed ones are *supposed* to use the generic editor) — so the correct fix is the more careful one the feature branch is already building. It's also harmless today: there are **0 field-application invoices live**.
 - **Take-away:** the `field-app-invoices` area looks **tapped out** for new signal — its one open defect is parked pending the feature-branch rework. Counts as the **1st dry cycle** (3 in a row stops the hunt). Next cycle moves to a **fresh** area: commissions + deliveries-billing.
+
+### Cycle 4 — 2026-06-19 — Phase 1: `commissions` + `deliveries-billing`
+- **Found:** 3 confirmed (0 BLOCKER / 0 HIGH / 1 MEDIUM / 2 LOW), **1 refuted** as a false positive. After dedupe: **2 new** (1 was a re-confirm of a Cycle-1 parked item), **0 green** (both new ones need a migration).
+- **Codex finding-gate:** independently confirmed **both new findings REAL**, severities **matching** mine (1 MEDIUM + 1 LOW), and settled a tricky dedupe question on the first one (see note) — *and* caught a mistake in my proposed fix, which I've recorded so the eventual migration is correct.
+- **Fixed (green):** 0 — nothing committable (both migration-class). **Parked (yellow):** 2 new (items I & J below).
+- **Re-confirmed (already on your list):** the quick-delivery "same product listed twice could oversell" item from Cycle 1 — enriched, not re-listed.
+- **Refuted (no action):** a commission-report item that *looks* wrong (the "Total Earned" column doesn't filter out cancelled commissions) but **can't actually produce a wrong number today** — cancelling an order zeroes the commission in the same step, so there's nothing to mis-count. Logged as a false positive.
+
+### Parked — added in Cycle 4 (need a migration; all latent today)
+
+| # | Plain-English issue | Why it matters | Severity |
+|---|---|---|---|
+| I | **A partial delivery on an already-drafted invoice fixes the *price* but not the *cost*.** When you deliver only part of an order that already has a draft invoice, the invoice's revenue drops to what was actually delivered — but its recorded **cost stays at the full ordered amount**. | The invoice's profit/margin would read too low (cost overstated). It feeds month-end margin/COGS numbers and is never corrected later. **Codex flagged that the right field to fix is the invoice's stored total cost** (the per-item cost is per-unit, so it shouldn't be re-multiplied) — noted for the migration. | MEDIUM |
+| J | **Editing an order can leave a multi-person commission split a penny off.** When commissions are first created, the last person's share is adjusted so the parts add up exactly to the order's profit. The *edit* path doesn't do that final adjustment, so after an edit an uneven or 3-way split can be off by a cent. | The commission rows would no longer sum to the order's profit (off by ±1¢ per edit). **Harmless today** — every current split is either one person (100%) or an even 50/50, neither of which can drift. It only bites once you set up an uneven or 3-way split *and* then edit that order. | LOW |
+
+> Both are **latent** — they can't produce a wrong number on today's live data; they're traps that activate once partial deliveries / uneven commission splits actually happen. The fix for both is a database migration, so by your rule they wait for your OK.
