@@ -13,6 +13,22 @@
 
 ---
 
+## 🌅 MORNING UPDATE — 2026-06-19 (after Mason's review)
+
+Mason answered the four decisions. Status now:
+
+- **① Crash fix → APPLIED LIVE ✅.** Mason said "apply it now." Applied via the migration-review gate (proof + apply-guard); live `transfer_job_to_invoice` md5 went `a361586e…` → `a998acd5…`, crash pattern gone, fix present. Re-ran the **whole flow against the live, fixed function** → `SMOKE_PASS_ROLLBACK`. Post-apply invariants clean (no dup overloads; SECDEF + search_path + grants intact). **The live billing crash is fixed.** _(Follow-up: record the applied row in `docs/reference/migration-history.md`; the migration file lives on the branch and reaches `main` when the feature branch merges.)_
+- **③ Chemical Sales list → DONE ✅** (`18c5432`). `/invoices` now excludes `field_application` (fetch `.neq` + dropped the type-filter option). The two areas are segregated. (No visible change yet — 0 field invoices live.)
+- **② Recipe pricing → model confirmed: PER-UNIT.** The parked migration `20260618230000` is the right model. Still must ship as a **bundle** (migration + `save_blend_recipe` wiring + recipe price UI) — **not yet built** (see below).
+- **④ Machine fee + actor → "smaller targeted fixes" chosen** (not the full rebuild) — **not yet built** (see below).
+
+### ▶️ Next focused session (recommended) — two billing changes, not urgent
+Both remaining items are real **money math** best built with fresh focus (the crash that mattered is already fixed, so neither is urgent):
+- **#4 — machine fee (G1) + actor (G3) targeted fixes.** G3 is a clean strict-actor block. G1 adds a per-acre `is_application_fee` line via `compute_application_service_fee` and must fold into the invoice total **and** the customer share-split (single-customer is simple; multi-grower split needs care, matching `save_field_app_invoice`'s `is_application_fee`/`price_source` line convention). A new migration on `transfer_job_to_invoice`; build → prove totals/shares tie out → review → **apply with Mason's OK**.
+- **#2 — recipe-pricing bundle (per-unit).** Wire `price_per_unit_cents` through `save_blend_recipe`'s delete/reinsert + add the price box to the Recipes editor, then apply migration `20260618230000`.
+
+---
+
 ## ✅ Built, reviewed & committed (on the branch, NOT live)
 
 | Phase | What | Commits | Proof |
