@@ -113,6 +113,32 @@ export default function FieldApplicationInvoice() {
 
   const fetchInvoice = useCallback(async () => {
     if (!id) return;
+    // #3 segregation: validate the invoice belongs in THIS (per-acre, field-app)
+    // editor BEFORE pulling the full row, so a denied / wrong-editor URL doesn't
+    // expose invoice data — only the type + job_id discriminators are read first
+    // (Codex P1). Then redirect: a non-field invoice -> field list; a JOB-built
+    // field invoice (job_id, quantity lines + machine fee, no field_app_locations)
+    // -> the generic editor.
+    const { data: chk, error: chkErr } = await supabase
+      .from('invoices')
+      .select('invoice_type, job_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (chkErr || !chk) {
+      toast('error', 'Failed to load invoice');
+      navigate('/field-invoices');
+      return;
+    }
+    if ((chk as { invoice_type?: string }).invoice_type !== 'field_application') {
+      toast('error', 'Not a field invoice');
+      navigate('/field-invoices');
+      return;
+    }
+    if ((chk as { job_id?: string | null }).job_id) {
+      navigate(`/field-invoices/${id}`, { replace: true });
+      return;
+    }
+
     const { data: inv, error } = await supabase
       .from('invoices')
       .select('*')
@@ -122,23 +148,6 @@ export default function FieldApplicationInvoice() {
     if (error || !inv) {
       toast('error', 'Failed to load invoice');
       navigate('/field-invoices');
-      return;
-    }
-
-    // #3 segregation guard: this is the field-app editor. Reject a non-field
-    // invoice opened by URL so a field-invoices-only user can't reach (or
-    // mutate) a Chemical Sales invoice through /invoices/field-app/:id (Codex P1).
-    if ((inv as { invoice_type?: string }).invoice_type !== 'field_application') {
-      toast('error', 'Not a field invoice');
-      navigate('/field-invoices');
-      return;
-    }
-
-    // A JOB-built field invoice (job_id set) is quantity-based with a machine-fee
-    // line and NO field_app_locations — it must use the generic field-invoice
-    // editor, not this per-acre one, even by direct URL / bookmark (Codex).
-    if ((inv as { job_id?: string | null }).job_id) {
-      navigate(`/field-invoices/${id}`, { replace: true });
       return;
     }
 

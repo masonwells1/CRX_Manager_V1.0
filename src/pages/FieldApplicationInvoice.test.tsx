@@ -108,6 +108,7 @@ function makeFromMock(perTable: Record<string, { data: unknown; error?: unknown 
     chain.insert = vi.fn().mockReturnValue(chain);
     chain.delete = vi.fn().mockReturnValue(chain);
     chain.single = single;
+    chain.maybeSingle = single;
     // The page awaits chains terminated by .order(...) (returning array data).
     // Make .order() ALSO be thenable so `await query.eq(...).order(...)` resolves.
     const thenable = (resolve: (v: { data: unknown; error: unknown }) => void) =>

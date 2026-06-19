@@ -68,9 +68,9 @@ BEGIN
   SELECT total_amount_cents INTO v_inv_total FROM invoices WHERE id=v_chem_inv;
   IF v_inv_total <> 1000 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical product line not recomputed (% exp 1000, the lied extended_cents=1 must be ignored)', v_inv_total; END IF;
 
-  -- OVERRIDE: a field invoice with a fixed-price (override) grower share has a
-  -- share-driven total the item-driven editor cannot reconcile; editing it is
-  -- BLOCKED (void/reissue) so it can neither drop nor double-count the override (Codex).
+  -- SPLIT/OVERRIDE: a multi-grower (or fixed-price/override) field invoice cannot
+  -- be re-balanced from line items without corrupting per-grower fees; editing it
+  -- is BLOCKED (void/reissue). This fixture is a 2-grower split with an override (Codex).
   INSERT INTO customers (farm_name) VALUES ('[SMOKE] OvB '||v_sfx) RETURNING id INTO v_cust2;
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, created_by, season)
     VALUES ('[SMOKE] OINV-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, v_admin, 2026) RETURNING id INTO v_inv3;
@@ -82,10 +82,10 @@ BEGIN
     PERFORM save_invoice(
       jsonb_build_object('id', v_inv3, 'customer_id', v_cust, 'invoice_type','field_application', 'invoice_date', CURRENT_DATE::text),
       jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','Chem (A itemized)', 'quantity', 3, 'unit_price_cents', 1000, 'extended_cents', 3000, 'sort_order', 1, 'is_application_fee', false)), NULL);
-    RAISE EXCEPTION 'SMOKE_FAIL: editing an override-grower field invoice was ALLOWED';
+    RAISE EXCEPTION 'SMOKE_FAIL: editing a split/override field invoice was ALLOWED';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM LIKE 'SMOKE_FAIL%' THEN RAISE; END IF;
-    IF SQLERRM NOT LIKE 'FIELD_INVOICE_OVERRIDE_LOCKED%' THEN RAISE EXCEPTION 'SMOKE_FAIL: expected FIELD_INVOICE_OVERRIDE_LOCKED got %', SQLERRM; END IF;
+    IF SQLERRM NOT LIKE 'FIELD_INVOICE_SPLIT_LOCKED%' THEN RAISE EXCEPTION 'SMOKE_FAIL: expected FIELD_INVOICE_SPLIT_LOCKED got %', SQLERRM; END IF;
   END;
   -- nothing mutated by the blocked edit: override share + items intact
   SELECT amount_cents INTO v_b FROM invoice_shares WHERE invoice_id=v_inv3 AND customer_id=v_cust2;

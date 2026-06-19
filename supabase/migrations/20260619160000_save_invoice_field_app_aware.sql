@@ -104,18 +104,23 @@ BEGIN
     END IF;
   END IF;
 
-  -- DELTA-C (Codex): a field_application invoice with a price-override (fixed
-  -- $/acre) grower share has a SHARE-DRIVEN total that does NOT equal the sum of
-  -- its line items — transfer_job_to_invoice itemizes the chemicals AND bills the
-  -- override grower an all-inclusive $/acre share that already includes them. An
-  -- item-driven save cannot reconcile the two without either dropping or
-  -- double-counting that override. Block editing such invoices here; they must be
-  -- voided and reissued to change. (Common single-grower / non-override field
-  -- invoices edit normally — they have no override share.)
-  IF (SELECT invoice_type FROM invoices WHERE id = v_invoice_id) = 'field_application'
-     AND EXISTS (SELECT 1 FROM invoice_shares
-                  WHERE invoice_id = v_invoice_id AND price_per_acre_cents IS NOT NULL) THEN
-    RAISE EXCEPTION 'FIELD_INVOICE_OVERRIDE_LOCKED: this field invoice has a fixed-price grower share — void and reissue to change it';
+  -- DELTA-C (Codex): only a SINGLE-grower, non-override field invoice has
+  -- total = SUM(line items) that an item-driven save can edit correctly. A
+  -- MULTI-grower split (each share = chemical split + a fixed per-grower machine
+  -- fee at THAT grower's rate) or a fixed-price (override $/acre, share-only)
+  -- grower cannot be re-balanced from line items without corrupting the
+  -- per-grower fee/override. Block editing those here — void and reissue to
+  -- change them. (Common single-grower field invoices edit normally.)
+  IF (SELECT invoice_type FROM invoices WHERE id = v_invoice_id) = 'field_application' THEN
+    DECLARE v_share_n int; v_has_ovr boolean;
+    BEGIN
+      SELECT count(*), COALESCE(bool_or(price_per_acre_cents IS NOT NULL), false)
+        INTO v_share_n, v_has_ovr
+        FROM invoice_shares WHERE invoice_id = v_invoice_id;
+      IF v_share_n > 1 OR v_has_ovr THEN
+        RAISE EXCEPTION 'FIELD_INVOICE_SPLIT_LOCKED: this field invoice is split across growers (or has a fixed-price grower) — void and reissue to change it';
+      END IF;
+    END;
   END IF;
 
   DELETE FROM invoice_items WHERE invoice_id = v_invoice_id;
