@@ -12,7 +12,7 @@
 -- machine charge), so we keep the job rail's explicit-quantity chemical billing
 -- and fix only the two real gaps directly on it:
 --   * G1  the per-acre machine charge was billed NOWHERE (jobs.total_price_cents
---         is chemicals-only — set client-side in JobDetail.tsx:407, no trigger
+--         is chemicals-only — set client-side in JobDetail.tsx, no trigger
 --         maintains it, and transfer never read jobs.application_service_id).
 --   * G3  p_performed_by was attribution-only (role gate is on auth.uid(), but no
 --         ACTOR_MISMATCH bind), so the recorded performer was forgeable.
@@ -30,13 +30,15 @@
 --
 -- DELTA-7 (G3 strict actor): bind auth.uid() and reject a forged p_performed_by
 --   with ACTOR_MISMATCH, matching complete_job / start_job / save_field_app_invoice.
--- DELTA-8 (G1 per-acre fee): if jobs.application_service_id is set, compute the
---   per-acre machine charge via the canonical compute_application_service_fee()
---   helper (customer_application_rates override -> service default) and add it as
---   an is_application_fee=true line. Fold the fee into the invoice header total
---   AND allocate it across the invoice_shares proportionally by acres
---   (penny-exact: any rounding remainder goes to the primary share), so line
---   items continue to reconcile to the header and shares sum to the header.
+-- DELTA-8 (G1 per-acre fee): if jobs.application_service_id is set, charge the
+--   per-acre machine fee PER billed customer at THAT customer's rate (Codex P1) —
+--   compute_application_service_fee() per invoice_share (customer_application_rates
+--   override -> service default), add each customer's fee to their share, emit ONE
+--   is_application_fee=true line for the summed total, fold it into the invoice
+--   header total, AND carry the job's application_service_id onto the invoice
+--   (Codex P2 — was NULL). Single-customer jobs are unchanged (one share =
+--   rate x acres); split jobs now bill each grower at their own rate. Penny-exact
+--   (each share's fee is the real figure — no allocation rounding).
 --
 -- NOT CHANGED (deliberately out of scope): the chemical billing basis (explicit
 --   job quantity x price_per_unit, incl. flat/unrated lines), the job-customer
@@ -49,8 +51,9 @@
 --   * compute_application_service_fee(uuid,uuid,numeric,integer) RETURNS jsonb
 --     {rate_per_acre_cents,total_fee_cents,cost_per_acre_cents,total_cost_cents,
 --      source,service_name}; returns total_fee_cents=0 for NULL/<=0 acres or an
---      inactive/missing service (so the fee line is simply skipped).
+--      inactive/missing service (so a share with 0 acres adds nothing).
 --   * No trigger maintains jobs.total_price_cents / total_cost_cents.
+--   * invoices.application_service_id exists (set by save_field_app_invoice).
 --
 -- PARKED: do NOT apply without Mason's explicit OK.
 -- ============================================================================
@@ -87,6 +90,8 @@ DECLARE
   v_fee jsonb;
   v_fee_total bigint := 0;
   v_fee_cost bigint := 0;
+  v_fee_c bigint;
+  v_cost_c bigint;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM profiles WHERE id = auth.uid() AND is_active = true AND role IN ('admin','sales_rep')
@@ -145,7 +150,12 @@ BEGIN
     invoice_number, customer_id, invoice_type, status, invoice_date, due_date,
     total_amount_cents, total_cost_cents, paid_amount_cents, prepay_applied_cents,
     field_names, crop_type, total_acres, applicator_name, vehicle_name,
-    application_date, header_notes, season, created_by, job_id
+    application_date, header_notes, season, created_by, job_id,
+    -- DELTA-8 (Codex P2): carry the job's application service onto the invoice so
+    -- the field-app screen shows the selected service and service-based reports
+    -- include this machine-fee invoice (was NULL — the fee line existed but the
+    -- header FK did not).
+    application_service_id
   ) VALUES (
     -- BEGIN DELTA-1 (transfer_job_invoice_column_fixes): insert as 'draft' —
     -- trg_invoice_draft_insert rejects any non-draft, non-credit_memo insert;
@@ -164,7 +174,7 @@ BEGIN
     CASE WHEN extract(month FROM CURRENT_DATE) >= 10
          THEN extract(year FROM CURRENT_DATE)::integer + 1
          ELSE extract(year FROM CURRENT_DATE)::integer END,
-    p_performed_by, p_job_id
+    p_performed_by, p_job_id, v_job.application_service_id
   ) RETURNING id INTO v_invoice_id;
 
   FOR v_chem IN
@@ -217,40 +227,10 @@ BEGIN
 
   UPDATE invoices SET total_cost_cents = v_total_cost_cents WHERE id = v_invoice_id;
 
-  -- BEGIN DELTA-8a (G1 per-acre application fee): the simple job rail never
-  -- billed the per-acre machine charge. Compute it via the canonical
-  -- compute_application_service_fee() helper (customer_application_rates
-  -- override -> application_services default) and add it as a dedicated
-  -- is_application_fee line. The helper returns total_fee_cents=0 for a NULL /
-  -- inactive service or non-positive acres, so the line is skipped cleanly.
-  IF v_job.application_service_id IS NOT NULL AND v_total_acres > 0 THEN
-    v_fee := compute_application_service_fee(
-               v_job.application_service_id, v_job.customer_id, v_total_acres, v_job.season);
-    v_fee_total := COALESCE((v_fee->>'total_fee_cents')::bigint, 0);
-    v_fee_cost  := COALESCE((v_fee->>'total_cost_cents')::bigint, 0);
-    IF v_fee_total > 0 THEN
-      v_item_order := v_item_order + 1;
-      INSERT INTO invoice_items (
-        invoice_id, description, quantity, unit_size, unit_price_cents, extended_cents,
-        cost_cents, sort_order, acres, rate_per_acre, rate_unit,
-        is_application_fee, price_source
-      ) VALUES (
-        v_invoice_id, COALESCE(v_fee->>'service_name', 'Application'), v_total_acres, 'acre',
-        COALESCE((v_fee->>'rate_per_acre_cents')::bigint, 0), v_fee_total,
-        v_fee_cost, v_item_order, v_total_acres,
-        COALESCE((v_fee->>'rate_per_acre_cents')::bigint, 0), 'acre',
-        -- price_source is constrained by chk_invoice_items_price_source to
-        -- ('quoted','tier','manual'); the fee helper's `source`
-        -- ('service_default'/'customer_override') is a DIFFERENT value domain and
-        -- would violate the CHECK. Mirror save_field_app_invoice's own
-        -- is_application_fee line, which writes 'tier'.
-        true, 'tier'
-      );
-      v_total_cost_cents := v_total_cost_cents + v_fee_cost;
-      UPDATE invoices SET total_cost_cents = v_total_cost_cents WHERE id = v_invoice_id;
-    END IF;
-  END IF;
-  -- END DELTA-8a
+  -- (G1 per-acre application fee is computed in DELTA-8 below — AFTER the
+  -- invoice_shares are built — so each billed customer is charged at THAT
+  -- customer's own rate, not a single job-customer rate spread across growers.
+  -- Codex P1.)
 
   IF EXISTS (SELECT 1 FROM job_fields jf JOIN field_billing_defaults fbd ON fbd.field_id = jf.field_id WHERE jf.job_id = p_job_id) THEN
     SELECT EXISTS (SELECT 1 FROM job_fields jf JOIN field_billing_defaults fbd ON fbd.field_id = jf.field_id WHERE jf.job_id = p_job_id AND fbd.price_override_cents IS NOT NULL) INTO v_has_price_override;
@@ -293,46 +273,59 @@ BEGIN
     FROM customers c WHERE c.id = v_job.customer_id;
   END IF;
 
-  -- BEGIN DELTA-8b (G1 per-acre application fee): fold the fee into the invoice
-  -- header total AND allocate it across the shares proportionally by acres so
-  -- (a) line items still reconcile to the header and (b) shares still sum to the
-  -- header. Penny-exact: the rounding remainder is assigned to the primary share
-  -- (ORDER BY is_primary DESC, then the job customer, then sort_order). The fee
-  -- is added on top of whatever the header already was (job.total_price_cents,
-  -- or v_share_total in the price-override branch).
-  IF v_fee_total > 0 THEN
-    UPDATE invoices SET total_amount_cents = COALESCE(total_amount_cents, 0) + v_fee_total
-     WHERE id = v_invoice_id;
-
-    WITH s AS (
-      SELECT id,
-             COALESCE(acres, 0) AS acres,
-             row_number() OVER (
-               ORDER BY is_primary DESC, (customer_id = v_job.customer_id) DESC, sort_order, id
-             ) AS rn,
-             SUM(COALESCE(acres, 0)) OVER () AS tot_acres,
-             count(*) OVER () AS n
+  -- BEGIN DELTA-8 (G1 per-acre application fee, PER-CUSTOMER rate — Codex P1):
+  -- now that invoice_shares exist (one per billed customer, with that customer's
+  -- allocated acres), charge EACH billed customer the per-acre machine fee at
+  -- THAT customer's own rate (customer_application_rates override ->
+  -- application_services default, via the canonical compute_application_service_fee
+  -- helper). Add each customer's fee to their share, then emit ONE
+  -- is_application_fee line for the summed total and fold it into the header.
+  -- Computing per-share is penny-EXACT (each share's fee is the real figure, no
+  -- allocation rounding) AND correct when growers carry different rate overrides
+  -- (the prior single-rate-spread-by-acres approach mis-billed split jobs).
+  IF v_job.application_service_id IS NOT NULL AND v_total_acres > 0 THEN
+    FOR v_share IN
+      SELECT id, customer_id, COALESCE(acres, 0) AS acres
       FROM invoice_shares WHERE invoice_id = v_invoice_id
-    ),
-    alloc AS (
-      SELECT id, rn, n,
-             CASE WHEN tot_acres > 0
-                  THEN ROUND(v_fee_total * acres / tot_acres)::bigint
-                  ELSE 0 END AS part
-      FROM s
-    ),
-    recon AS (
-      SELECT id, rn, part,
-             v_fee_total - COALESCE(SUM(part) OVER (), 0) AS remainder
-      FROM alloc
-    )
-    UPDATE invoice_shares isr
-       SET amount_cents = isr.amount_cents + r.part
-                          + CASE WHEN r.rn = 1 THEN r.remainder ELSE 0 END
-      FROM recon r
-     WHERE isr.id = r.id;
+    LOOP
+      v_fee := compute_application_service_fee(
+                 v_job.application_service_id, v_share.customer_id, v_share.acres, v_job.season);
+      v_fee_c  := COALESCE((v_fee->>'total_fee_cents')::bigint, 0);
+      v_cost_c := COALESCE((v_fee->>'total_cost_cents')::bigint, 0);
+      v_fee_total := v_fee_total + v_fee_c;
+      v_fee_cost  := v_fee_cost  + v_cost_c;
+      IF v_fee_c <> 0 THEN
+        UPDATE invoice_shares SET amount_cents = amount_cents + v_fee_c WHERE id = v_share.id;
+      END IF;
+    END LOOP;
+
+    IF v_fee_total > 0 THEN
+      v_item_order := v_item_order + 1;
+      INSERT INTO invoice_items (
+        invoice_id, description, quantity, unit_size, unit_price_cents, extended_cents,
+        cost_cents, sort_order, acres, rate_per_acre, rate_unit,
+        is_application_fee, price_source
+      ) VALUES (
+        v_invoice_id, COALESCE(v_fee->>'service_name', 'Application'), v_total_acres, 'acre',
+        -- unit_price / rate_per_acre = blended fee per acre (single-customer jobs:
+        -- exactly the rate; split jobs with mixed rates: the average) — display
+        -- only; extended_cents carries the exact billed total.
+        ROUND(v_fee_total / v_total_acres)::bigint, v_fee_total,
+        v_fee_cost, v_item_order, v_total_acres,
+        ROUND(v_fee_total / v_total_acres)::bigint, 'acre',
+        -- price_source is constrained by chk_invoice_items_price_source to
+        -- ('quoted','tier','manual'); the fee helper's `source` is a different
+        -- value domain that would violate the CHECK. Mirror save_field_app_invoice's
+        -- own is_application_fee line, which writes 'tier'.
+        true, 'tier'
+      );
+      UPDATE invoices SET
+        total_amount_cents = COALESCE(total_amount_cents, 0) + v_fee_total,
+        total_cost_cents   = total_cost_cents + v_fee_cost
+      WHERE id = v_invoice_id;
+    END IF;
   END IF;
-  -- END DELTA-8b
+  -- END DELTA-8
 
   UPDATE jobs SET status = 'invoiced', invoice_id = v_invoice_id WHERE id = p_job_id;
   UPDATE application_records SET invoice_id = v_invoice_id WHERE source_type = 'job' AND source_id = p_job_id;
@@ -392,11 +385,11 @@ BEGIN
     RAISE EXCEPTION 'transfer_job_to_invoice: DELTA-7 strict-actor bind missing';
   END IF;
 
-  -- DELTA-8 per-acre fee present (helper call + fold-in)
-  IF v_src NOT LIKE '%BEGIN DELTA-8a%'
+  -- DELTA-8 per-acre fee present (per-customer helper call + service FK on insert)
+  IF v_src NOT LIKE '%BEGIN DELTA-8%'
      OR v_src NOT LIKE '%compute_application_service_fee(%'
-     OR v_src NOT LIKE '%BEGIN DELTA-8b%' THEN
-    RAISE EXCEPTION 'transfer_job_to_invoice: DELTA-8 per-acre fee missing';
+     OR v_src NOT LIKE '%application_service_id%' THEN
+    RAISE EXCEPTION 'transfer_job_to_invoice: DELTA-8 per-acre fee / service FK missing';
   END IF;
 
   -- Crash fix (DELTA-6) MUST still be present and the bad guard gone
