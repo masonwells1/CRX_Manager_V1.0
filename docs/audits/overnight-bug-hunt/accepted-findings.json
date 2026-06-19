@@ -1,0 +1,36 @@
+{
+  "note": "Allowlist of KNOWN-ACCEPTED and ALREADY-FIXED findings. The overnight bug hunt drops anything whose dedupeKey matches one of these (or clearly describes the same condition) so only NEW signal surfaces. Seeded from CLAUDE.md 'Schema Gotchas' + accepted security findings + the 2026-06-15/16 nightly-debug ledger. Remove an entry only with Mason's OK.",
+  "acceptedByDesign": [
+    { "key": "profile_public_view-security-definer", "reason": "profile_public_view uses security_invoker=off (SECURITY DEFINER semantics) BY DESIGN to expose only non-PII profile columns. Advisor flags ERROR; accepted. Migration 20260510070000." },
+    { "key": "anon-executable-secdef-functions", "reason": "~53 anon-executable SECURITY DEFINER functions are accepted/inert grant-debt: each self-gates on auth.uid()/require_admin() as its first executable statement (runtime-proven anon is rejected). Trigger fns in the set error on direct call. NOT a hole. Only a NEW anon-exec SECDEF mutator NOT in this baseline is a finding." },
+    { "key": "commissions.commission_amount-numeric-dollars", "reason": "commissions.commission_amount is numeric DOLLARS (not bigint cents) BY DESIGN. Do not flag as money-as-float." },
+    { "key": "reportPdf.ts-columnStyles-any", "reason": "reportPdf.ts columnStyles uses the one allowed `any` per CLAUDE.md. Accepted." },
+    { "key": "customer-rls-lower-bound-only", "reason": "Customer RLS is intentionally lower-bound-only by design. Accepted." },
+    { "key": "supabase-leaked-password-protection-disabled", "reason": "Leaked-password protection toggle is a known OWNER item (L4) — Mason toggles it in the Supabase dashboard. Not a code finding." },
+    { "key": "invoices-no-order-or-blend-check-constraint", "reason": "invoices has NO order_id-OR-blend_ticket_id CHECK by design (RPC convention; credit memos exempt). It DOES carry 5 status/type/non-negativity CHECKs. Do not propose adding a literal order/blend CHECK." }
+  ],
+  "alreadyFixedLive": [
+    { "key": "quote:save_quote:idempotency", "reason": "FIXED LIVE 20260616204400 — canonical idempotency + transition-map trim." },
+    { "key": "delivery:void_delivery:idempotency-shape", "reason": "FIXED LIVE 20260616201800 — canonical idempotency rich-replay." },
+    { "key": "audit:invoice-create:blend-and-fieldapp-no-financial-audit", "reason": "FIXED LIVE 20260616191740 — invoice_created audit rows added." },
+    { "key": "frontend:Invoices:raw-softdelete-no-audit", "reason": "FIXED LIVE 20260617031416 — delete_invoices admin-only audited soft-delete." },
+    { "key": "lifecycle:_enforce_invoice_status_transition:paid-dead-end", "reason": "FIXED LIVE 20260616120604 (PARKED-01)." },
+    { "key": "payment:allocate_payment:no-sum-le-total-guard", "reason": "FIXED LIVE 20260616121105 (PARKED-02)." },
+    { "key": "money:order_shares:no-aggregate-100pct-constraint", "reason": "FIXED LIVE 20260616121521 (PARKED-04)." },
+    { "key": "quote:_enforce_quote_terminal_not_drawn:missing-expired-in-guard", "reason": "FIXED LIVE 20260616115308 (PARKED-06)." },
+    { "key": "delivery:create_quick_delivery:invoice-missing-delivery-id", "reason": "FIXED LIVE (large-RPC pass) — invoice.delivery_id stamped." },
+    { "key": "delivery:complete_delivery:partial-invoice-product-join", "reason": "FIXED LIVE (large-RPC pass) — joins on order_item_id." },
+    { "key": "inventory:void_order:adjusted-not-void_delivery_reversal", "reason": "FIXED LIVE (large-RPC pass) — logs void_delivery_reversal." },
+    { "key": "delivery:cancel_delivery:scheduled-quick-prebooked-leak", "reason": "FIXED LIVE (8cb6aea + Codex P2 follow-ups) — prebook release + lock order before quick-cancel." },
+    { "key": "lifecycle:update_order_items:stale-profit-and-commissions", "reason": "FIXED LIVE 20260617123503 — same-product per-line profit/margin refresh." },
+    { "key": "security:blend-ticket:link-unlink-actor-forgeable", "reason": "FIXED LIVE a3ba49c — actor bound to auth.uid()." },
+    { "key": "commissions:order-item-edit:no-recompute", "reason": "FIXED 4b93cdc — recompute pending commissions on order-item edit." }
+  ],
+  "knownParkedOrDeferred": [
+    { "key": "delivery:enforce_delivery_items_parent_lock:terminal-states-unlocked", "reason": "PARKED-05 — fold into the update_order_items rewrite (broadening the lock regresses its cancelled/voided cleanup DELETE). Don't re-surface as a fresh green fix." },
+    { "key": "money:create_split_invoices_from_order:independent-per-line-rounding", "reason": "Needs a field-aware redesign (multi-field split orders are real); dormant on live (0 split invoices). Deferred until semantics resolved. A NEW, different angle is reportable; the known penny-drift is not." },
+    { "key": "quote:draw_down_quote:weighted-avg-price-loses-per-line-lock", "reason": "Accepted v1 simplification (documented in the migration header)." },
+    { "key": "prepay:create_prepay_credit:missing-idempotency", "reason": "Unused legacy fn (only referenced in supabase.ts; no UI caller). Retire-or-harden, low priority." },
+    { "key": "rpc:pipeline-auth-errors:freeform-vs-screaming-snake", "reason": "Deferred owner decision — converting a 7-of-30 subset increases inconsistency; the blend/field-app family is deliberately freeform for sibling-consistency." }
+  ]
+}

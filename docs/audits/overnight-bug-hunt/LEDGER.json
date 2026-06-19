@@ -1,0 +1,18 @@
+{
+  "mission": "crx-overnight-bug-hunt",
+  "branch": "claude/overnight-bug-hunt",
+  "base": "main",
+  "scope": "billing-engine-first-then-whole-app",
+  "autonomy": "commit-green-fixes-to-branch (no push); migration/edge-fn/data ALWAYS parked",
+  "codexGates": "finding-gate (codex exec read-only confirms each finding REAL) + fix-gate (codex exec read-only reviews each staged diff) — both required before any commit",
+  "created": "2026-06-19",
+  "stats": {
+    "cyclesRun": 0,
+    "findingsConfirmed": 0,
+    "greenFixed": 0,
+    "yellowParked": 0,
+    "refutedFalsePositives": 0
+  },
+  "cycles": [],
+  "findings": []
+}
