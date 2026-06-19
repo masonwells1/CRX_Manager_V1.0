@@ -324,13 +324,17 @@ export default function FieldInvoices() {
             searchKeys={['invoice_number', 'customer_name', 'applicator_name']}
             onRowClick={(row) =>
               navigate(
-                // Draft/unposted field invoices open the field-app editor
-                // (locations / customer shares / application service /
-                // applied-info + the field-app save+post RPCs). Posted/overdue/
-                // voided land on the generic invoice detail for AR/payment view.
-                row.status === 'draft' || row.status === 'unposted'
+                // Two kinds of field invoice need two editors (#3 edit-path):
+                //  • ENGINE-built (no job_id) + still editable -> the per-acre
+                //    field-app editor (locations / shares / applied-info RPCs).
+                //  • JOB-built (job_id set, quantity-based lines + a machine-fee
+                //    line, NO field_app_locations) AND any posted field invoice ->
+                //    the generic invoice detail, but on a /field-invoices/:id route
+                //    gated by the field-invoices permission (save_invoice is now
+                //    field-app aware: it keeps the fee line + re-balances the share).
+                !row.job_id && (row.status === 'draft' || row.status === 'unposted')
                   ? `/invoices/field-app/${row.id}`
-                  : `/invoices/${row.id}`
+                  : `/field-invoices/${row.id}`
               )
             }
             emptyTitle="No field invoices yet"

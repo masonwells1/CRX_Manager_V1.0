@@ -188,6 +188,10 @@ const router = createBrowserRouter([
           { path: 'invoices/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InvoiceDetail /></ProtectedRoute> },
           { path: 'field-invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldInvoices /></ProtectedRoute> },
           { path: 'field-invoices/unbilled', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><UnbilledApplications /></ProtectedRoute> },
+          // Field-invoice detail (job-built quantity invoices + posted field invoices)
+          // reuses the generic invoice editor but under the field-invoices permission
+          // (getPageKeyFromPath maps /field-invoices/* -> 'field-invoices'). #3 edit-path.
+          { path: 'field-invoices/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InvoiceDetail /></ProtectedRoute> },
           { path: 'blend-tickets', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><BlendTickets /></ProtectedRoute> },
           { path: 'blend-tickets/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><BlendTicketDetail /></ProtectedRoute> },
           { path: 'recipes', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><BlendRecipes /></ProtectedRoute> },

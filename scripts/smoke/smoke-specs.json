@@ -66,6 +66,11 @@
       "description": "Recipe per-unit pricing BUNDLE (Phase 4, REQUIRES 20260618230000 + 20260619150000): save_blend_recipe persists price_per_unit_cents on create AND keeps it on edit (no wipe — Codex Phase-4 P2); load_recipe_into_job seeds job_chemicals.price_per_unit_cents from it; a negative price is rejected. Pre-apply the chain FAILS (live save_blend_recipe drops the column).",
       "covers": ["load_recipe_into_job", "save_blend_recipe"]
     },
+    "save_invoice": {
+      "chain": "smoke-save-invoice-field-app.sql",
+      "description": "save_invoice field-application aware (#3 edit-path, REQUIRES 20260619160000): editing a field_application invoice PRESERVES the is_application_fee machine-fee line + re-balances the per-grower invoice_shares to the new total; a chemical_sale invoice's shares are NOT touched (field-only guard). Pre-apply the chain FAILS (live save_invoice drops the fee flag + never touches shares).",
+      "covers": ["save_invoice"]
+    },
     "transfer_job_to_invoice": {
       "chain": "smoke-transfer_job_invoice_machine_fee.sql",
       "description": "Job->field-invoice billing (REQUIRES 20260619140000): forged actor -> ACTOR_MISMATCH (G3); a job with application_service_id gets ONE is_application_fee line (price_source 'tier') + the service FK on the invoice; a FLAT/unrated chemical line still bills; per-customer fee rate in split jobs (a grower's customer_application_rates override is honored — Codex P1); totals + shares reconcile in single / same-rate-split / different-rate-split cases. Pre-apply the chain FAILS (live body has no fee line). NOTE: the prior full start_job->complete->post->void loop chain file is absent; this chain certifies transfer_job_to_invoice's fee+actor behavior.",

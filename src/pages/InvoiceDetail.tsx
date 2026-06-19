@@ -47,6 +47,16 @@ interface LineItem {
   tote_number: string | null;
   price_source: 'quoted' | 'tier' | 'manual' | null;
   quoted_price_cents: number | null;
+  // Field-application detail — preserved through edits so the machine-fee flag,
+  // applied amounts and EPA/form survive a "bill actual" edit (#3 edit-path).
+  is_application_fee: boolean;
+  rate_unit: string | null;
+  total_applied: number | null;
+  total_applied_unit: string | null;
+  total_applied_gl_lb: number | null;
+  gl_lb_unit: string | null;
+  epa_registration: string | null;
+  product_form: string | null;
 }
 
 const statusBadge = (status: InvoiceStatus) => {
@@ -355,6 +365,14 @@ export default function InvoiceDetail() {
           tote_number: (it.tote_number as string) ?? null,
           price_source: (it.price_source as LineItem['price_source']) ?? null,
           quoted_price_cents: it.quoted_price_cents != null ? Number(it.quoted_price_cents) : null,
+          is_application_fee: Boolean((it as Record<string, unknown>).is_application_fee),
+          rate_unit: ((it as Record<string, unknown>).rate_unit as string) ?? null,
+          total_applied: (it as Record<string, unknown>).total_applied != null ? Number((it as Record<string, unknown>).total_applied) : null,
+          total_applied_unit: ((it as Record<string, unknown>).total_applied_unit as string) ?? null,
+          total_applied_gl_lb: (it as Record<string, unknown>).total_applied_gl_lb != null ? Number((it as Record<string, unknown>).total_applied_gl_lb) : null,
+          gl_lb_unit: ((it as Record<string, unknown>).gl_lb_unit as string) ?? null,
+          epa_registration: ((it as Record<string, unknown>).epa_registration as string) ?? null,
+          product_form: ((it as Record<string, unknown>).product_form as string) ?? null,
         })) as LineItem[]
       );
     }
@@ -436,6 +454,14 @@ export default function InvoiceDetail() {
         tote_number: null,
         price_source: null,
         quoted_price_cents: null,
+        is_application_fee: false,
+        rate_unit: null,
+        total_applied: null,
+        total_applied_unit: null,
+        total_applied_gl_lb: null,
+        gl_lb_unit: null,
+        epa_registration: null,
+        product_form: null,
       },
     ]);
     setShowProductModal(false);
@@ -501,6 +527,18 @@ export default function InvoiceDetail() {
           acres: it.acres,
           unit_size: it.unit_size,
           notes: it.notes,
+          // Field-application detail preserved through the edit (#3 edit-path) —
+          // null/false on chemical-sale lines, so save_invoice stays a no-op for them.
+          is_application_fee: it.is_application_fee,
+          rate_unit: it.rate_unit,
+          total_applied: it.total_applied,
+          total_applied_unit: it.total_applied_unit,
+          total_applied_gl_lb: it.total_applied_gl_lb,
+          gl_lb_unit: it.gl_lb_unit,
+          epa_registration: it.epa_registration,
+          product_form: it.product_form,
+          price_source: it.price_source,
+          quoted_price_cents: it.quoted_price_cents,
         }));
 
         const idemKey = saveIdem.getKey();
