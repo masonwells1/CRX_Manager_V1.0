@@ -26,9 +26,20 @@
 -- NEW billing path that overlaps the existing per-acre application fee — a
 -- bigger design. >>> MASON DECISION: confirm per-unit (this) vs per-acre. <<<
 --
--- This migration is PARKED — do NOT apply without Mason's explicit OK. The
--- recipe-editor UI to SET a per-unit price is a follow-up gated on that OK (so
--- the live recipe editor is never coupled to an unapplied column).
+-- This migration is PARKED — do NOT apply without Mason's explicit OK.
+--
+-- !!! DO NOT APPLY THIS MIGRATION ALONE !!! (Codex Phase-4 review, P2 — a real
+-- data-loss path once non-zero prices exist.) Recipe pricing must land as a
+-- BUNDLE, because the current recipe-save path would WIPE a set price:
+--   * src/pages/BlendRecipes.tsx strips fields before calling save_blend_recipe, and
+--   * save_blend_recipe DELETEs + reinserts recipe items WITHOUT this column,
+--     so any non-zero price_per_unit_cents resets to the DEFAULT 0 on the next
+--     recipe edit/duplicate.
+-- BEFORE/WITH applying this migration, the follow-up MUST also: (a) wire
+-- price_per_unit_cents through save_blend_recipe's delete/reinsert, and (b) add
+-- the recipe-editor price input (which is also what lets anyone SET a price).
+-- Until that bundle is built, this migration is harmless (no UI/backfill can
+-- create a non-zero price), so it stays staged.
 --
 -- EVIDENCE (live, project rhyzpcqhnizqbxphqdkr, 2026-06-18):
 --   * blend_recipe_items has NO price column today (cols: id, recipe_id,
