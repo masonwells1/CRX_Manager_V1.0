@@ -92,6 +92,7 @@ DECLARE
   v_fee_cost bigint := 0;
   v_fee_c bigint;
   v_cost_c bigint;
+  v_fee_acres numeric := 0;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM profiles WHERE id = auth.uid() AND is_active = true AND role IN ('admin','sales_rep')
@@ -285,34 +286,40 @@ BEGIN
   -- (the prior single-rate-spread-by-acres approach mis-billed split jobs).
   IF v_job.application_service_id IS NOT NULL AND v_total_acres > 0 THEN
     FOR v_share IN
-      SELECT id, customer_id, COALESCE(acres, 0) AS acres
+      SELECT id, customer_id, COALESCE(acres, 0) AS acres, price_per_acre_cents
       FROM invoice_shares WHERE invoice_id = v_invoice_id
     LOOP
+      -- A grower on a price_override (all-inclusive $/acre — the Mode A path; the
+      -- share carries price_per_acre_cents) does NOT also pay the per-acre machine
+      -- fee, or they'd be double-charged. Mirrors save_field_app_invoice, which
+      -- sums fee acres only WHERE price_override_cents IS NULL (Codex P1).
+      IF v_share.price_per_acre_cents IS NOT NULL THEN CONTINUE; END IF;
       v_fee := compute_application_service_fee(
                  v_job.application_service_id, v_share.customer_id, v_share.acres, v_job.season);
       v_fee_c  := COALESCE((v_fee->>'total_fee_cents')::bigint, 0);
       v_cost_c := COALESCE((v_fee->>'total_cost_cents')::bigint, 0);
       v_fee_total := v_fee_total + v_fee_c;
       v_fee_cost  := v_fee_cost  + v_cost_c;
+      v_fee_acres := v_fee_acres + v_share.acres;
       IF v_fee_c <> 0 THEN
         UPDATE invoice_shares SET amount_cents = amount_cents + v_fee_c WHERE id = v_share.id;
       END IF;
     END LOOP;
 
-    IF v_fee_total > 0 THEN
+    IF v_fee_total > 0 AND v_fee_acres > 0 THEN
       v_item_order := v_item_order + 1;
       INSERT INTO invoice_items (
         invoice_id, description, quantity, unit_size, unit_price_cents, extended_cents,
         cost_cents, sort_order, acres, rate_per_acre, rate_unit,
         is_application_fee, price_source
       ) VALUES (
-        v_invoice_id, COALESCE(v_fee->>'service_name', 'Application'), v_total_acres, 'acre',
-        -- unit_price / rate_per_acre = blended fee per acre (single-customer jobs:
-        -- exactly the rate; split jobs with mixed rates: the average) — display
-        -- only; extended_cents carries the exact billed total.
-        ROUND(v_fee_total / v_total_acres)::bigint, v_fee_total,
-        v_fee_cost, v_item_order, v_total_acres,
-        ROUND(v_fee_total / v_total_acres)::bigint, 'acre',
+        -- quantity/acres = the FEE-ELIGIBLE (non-override) acres; unit_price /
+        -- rate_per_acre = blended fee per acre over those acres (single-customer
+        -- jobs: exactly the rate) — display only; extended_cents is the exact total.
+        v_invoice_id, COALESCE(v_fee->>'service_name', 'Application'), v_fee_acres, 'acre',
+        ROUND(v_fee_total / v_fee_acres)::bigint, v_fee_total,
+        v_fee_cost, v_item_order, v_fee_acres,
+        ROUND(v_fee_total / v_fee_acres)::bigint, 'acre',
         -- price_source is constrained by chk_invoice_items_price_source to
         -- ('quoted','tier','manual'); the fee helper's `source` is a different
         -- value domain that would violate the CHECK. Mirror save_field_app_invoice's

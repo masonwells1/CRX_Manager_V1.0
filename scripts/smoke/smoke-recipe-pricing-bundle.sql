@@ -21,7 +21,7 @@ DO $smoke$
 DECLARE
   v_admin uuid; v_sfx text := substr(gen_random_uuid()::text,1,8);
   v_prod uuid; v_cust uuid; v_recipe uuid; v_job uuid;
-  v_res jsonb; v_price bigint; v_jc_price bigint;
+  v_res jsonb; v_price bigint; v_jc_price bigint; v_job_total bigint;
 BEGIN
   SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no admin'; END IF;
@@ -45,12 +45,16 @@ BEGIN
   SELECT price_per_unit_cents INTO v_price FROM blend_recipe_items WHERE recipe_id=v_recipe;
   IF v_price <> 1500 THEN RAISE EXCEPTION 'SMOKE_FAIL: price wiped on edit (% exp 1500)', v_price; END IF;
 
-  -- 3) load_recipe_into_job seeds job_chemicals.price_per_unit_cents
-  INSERT INTO jobs (job_number, customer_id, status, job_date, created_by)
-    VALUES ('[SMOKE] RJOB-'||v_sfx, v_cust, 'scheduled', CURRENT_DATE, v_admin) RETURNING id INTO v_job;
+  -- 3) load_recipe_into_job seeds job_chemicals.price_per_unit_cents AND re-rolls
+  --    the job total from the priced chemicals (Codex P1) — the stale 99999 below
+  --    must be replaced by 1500 x 2 = 3000.
+  INSERT INTO jobs (job_number, customer_id, status, job_date, total_price_cents, created_by)
+    VALUES ('[SMOKE] RJOB-'||v_sfx, v_cust, 'scheduled', CURRENT_DATE, 99999, v_admin) RETURNING id INTO v_job;
   PERFORM load_recipe_into_job(v_job, v_recipe, NULL);
   SELECT price_per_unit_cents INTO v_jc_price FROM job_chemicals WHERE job_id=v_job AND product_id=v_prod;
   IF v_jc_price <> 1500 THEN RAISE EXCEPTION 'SMOKE_FAIL: load_recipe did not seed price (% exp 1500)', v_jc_price; END IF;
+  SELECT total_price_cents INTO v_job_total FROM jobs WHERE id=v_job;
+  IF v_job_total <> 3000 THEN RAISE EXCEPTION 'SMOKE_FAIL: job total not re-rolled from priced recipe (% exp 3000)', v_job_total; END IF;
 
   -- 4) negative price rejected
   BEGIN

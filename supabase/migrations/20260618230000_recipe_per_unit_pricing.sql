@@ -110,7 +110,19 @@ BEGIN
     -- <<< DELTA:recipe_price
     v_count := v_count + 1;
   END LOOP;
-  UPDATE jobs SET recipe_id = p_recipe_id WHERE id = p_job_id;
+  -- >>> DELTA:recipe_price (Codex P1): now that recipe items can carry a real
+  -- price, re-roll the job's money totals from the freshly-loaded job_chemicals
+  -- (same per-line safe_cents_qty math the client + transfer_job_to_invoice use).
+  -- Pre-pricing the recipe always loaded at $0 so jobs.total_price_cents stayed
+  -- consistent; with prices, NOT updating it here left the invoice header/shares
+  -- (read from jobs.total_price_cents) out of sync with the priced line items if
+  -- the user transferred without another Save. Live literal was just recipe_id.
+  UPDATE jobs SET
+    recipe_id = p_recipe_id,
+    total_price_cents = COALESCE((SELECT SUM(safe_cents_qty(price_per_unit_cents, quantity)) FROM job_chemicals WHERE job_id = p_job_id), 0),
+    total_cost_cents  = COALESCE((SELECT SUM(safe_cents_qty(cost_per_unit_cents, quantity)) FROM job_chemicals WHERE job_id = p_job_id), 0)
+  WHERE id = p_job_id;
+  -- <<< DELTA:recipe_price
   v_result := jsonb_build_object('success', true, 'items_loaded', v_count);
   IF p_idempotency_key IS NOT NULL THEN
     PERFORM save_idempotency(p_idempotency_key, 'load_recipe_into_job', v_result);
