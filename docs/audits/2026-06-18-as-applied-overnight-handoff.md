@@ -44,12 +44,13 @@ Built **3 of the 4** remaining pieces. All committed on `feat/as-applied-invoice
 
 **Why #4 is the targeted fix, not the locked "full rebuild":** verifying the live engine (`save_field_app_invoice`) proved the rebuild was **lossy** — it drops flat-priced lines, bills chemicals by rate×acres (no explicit-quantity input), bills the field owner not the job customer, and blanks the PDF header. Mason needs to bill **both** by quantity AND per-acre, so the rebuild would remove quantity billing. Mason confirmed targeted.
 
-### 🅿️ Three migrations awaiting BATCHED apply (Mason's OK, plus /explain-migration + fresh Codex + re-run the saved smoke after each)
-1. `20260619140000` — billing fix (G1+G3). Smoke: `scripts/smoke/smoke-transfer_job_invoice_machine_fee.sql`.
-2. `20260618230000` + `20260619150000` — recipe-pricing bundle (apply in that order). Smoke: `scripts/smoke/smoke-recipe-pricing-bundle.sql`.
+### 🅿️ FOUR migrations awaiting ONE BATCHED apply (Mason: "hold migrations, build the edit screen + everything, ship together"). Each: /explain-migration + confirm live md5 + re-run the saved smoke after.
+1. `20260619140000` — billing fix (per-acre machine fee G1 + strict actor G3, per-customer rate, override-skip). Smoke: `smoke-transfer_job_invoice_machine_fee.sql`.
+2. `20260618230000` + `20260619150000` — recipe-pricing bundle (apply in that order). Smoke: `smoke-recipe-pricing-bundle.sql`.
+3. `20260619160000` — `save_invoice` field-app aware (the #3 edit screen). Smoke: `smoke-save-invoice-field-app.sql`.
 
-### ⛔ #3 (edit-path) — correctly DEFERRED to a focused, browser-verified follow-up
-A job-created unposted field invoice has **no clean editor**: the per-acre engine editor shows blank fields + re-bills per-acre + drops flat lines on save; the shared editor (`InvoiceDetail`/`save_invoice`) can edit qty/price + post but its reinsert **strips `is_application_fee` + the applied/EPA columns and never updates `invoice_shares`**. A correct fix makes `save_invoice` **field-app-aware, guarded on `invoice_type='field_application'`** (preserve the fee flag + applied columns, maintain shares), additive so chemical-sales billing stays byte-identical, then routes job invoices (`job_id` set) → `/invoices/:id`. This touches the **live chemical-sales save path**, so it needs reviewers + Codex + a real browser pass — not a tail-of-session rush. **Non-blocking** (0 field invoices live).
+### ✅ #3 (edit-path) — BUILT (Mason: build it + ship together)
+A job-created field invoice now has a safe editor. `save_invoice` was made **field-app aware, guarded on `invoice_type='field_application'`** (migration `20260619160000`): its reinsert preserves `is_application_fee` + the applied/EPA columns, and it re-balances `invoice_shares` to the edited total — Chemical Sales billing stays byte-identical (smoke-proven incl. a chemical-sale control). Job-built field invoices now route to a **field-invoices-permission-gated** `/field-invoices/:id` (reusing `InvoiceDetail`); engine-built editable ones keep the per-acre editor. The detail routes are **segregated by invoice type** so neither permission can open the other's invoices by URL (Codex R5). Reviewer-clean + smoke-proven; **browser pass still pending** (auth wall + 0 field invoices + parked migration → Mason's in-app check after apply).
 
 ### 🤖 Codex (gpt-5.5) pre-ship gate — 4 rounds, `--base main`
 Mason asked "has Codex reviewed everything before we ship?" — it has now. Across **4 rounds** Codex found and I fixed **5 real money bugs in the migrations**, each re-proven by smoke + the two reviewers:
