@@ -107,6 +107,7 @@ const navigation: NavEntry[] = [
         { path: '/quotes', label: 'Quotes', icon: <FileText className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/orders', label: 'Orders', icon: <ClipboardList className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/invoices', label: 'Invoices', icon: <Receipt className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/field-invoices', label: 'Field Invoices', icon: <Sprout className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/payments', label: 'Payments', icon: <DollarSign className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },

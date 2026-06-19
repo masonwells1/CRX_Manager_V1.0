@@ -25,6 +25,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'quotes', label: 'Quotes', category: 'Sales', roles: ['admin', 'sales_rep'] },
   { key: 'orders', label: 'Orders', category: 'Sales', roles: ['admin', 'sales_rep'] },
   { key: 'invoices', label: 'Invoices', category: 'Sales', roles: ['admin', 'sales_rep'] },
+  { key: 'field-invoices', label: 'Field Invoices', category: 'Sales', roles: ['admin', 'sales_rep'] },
   { key: 'payments', label: 'Payments', category: 'Sales', roles: ['admin', 'sales_rep'] },
 
   // Customers
