@@ -23,7 +23,7 @@
 DO $smoke$
 DECLARE
   v_admin uuid; v_sfx text := substr(gen_random_uuid()::text,1,8); v_cust uuid; v_prod uuid;
-  v_inv uuid; v_chem_inv uuid; v_inv3 uuid; v_cust2 uuid; v_cust_b uuid; v_who uuid; v_fee_flag boolean; v_share_amt bigint; v_inv_total bigint; v_fee_ext bigint; v_a bigint; v_b bigint;
+  v_inv uuid; v_chem_inv uuid; v_chem2 uuid; v_inv3 uuid; v_cust2 uuid; v_cust_b uuid; v_who uuid; v_fee_flag boolean; v_share_amt bigint; v_inv_total bigint; v_fee_ext bigint; v_a bigint; v_b bigint;
 BEGIN
   SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no admin'; END IF;
@@ -43,8 +43,10 @@ BEGIN
 
   -- Edit via save_invoice: bump chem qty 1->3 (extended 300); fee line unchanged (send its exact extended_cents).
   -- DELTA-D: deliberately pass a DIFFERENT customer (v_cust_b) -- it must be ignored (customer locked).
+  -- DELTA-F: deliberately pass a HOSTILE invoice_type='chemical_sale' -- it must be ignored (type locked
+  -- so the field-invoice guards below still see field_application and run).
   PERFORM save_invoice(
-    jsonb_build_object('id', v_inv, 'customer_id', v_cust_b, 'invoice_type','field_application', 'invoice_date', CURRENT_DATE::text),
+    jsonb_build_object('id', v_inv, 'customer_id', v_cust_b, 'invoice_type','chemical_sale', 'invoice_date', CURRENT_DATE::text),
     jsonb_build_array(
       jsonb_build_object('product_id', v_prod, 'description','Chem', 'quantity', 3, 'unit_price_cents', 100, 'extended_cents', 300, 'sort_order', 1, 'is_application_fee', false),
       jsonb_build_object('description','Application', 'quantity', 33, 'unit_price_cents', 2394, 'extended_cents', 79000, 'sort_order', 2, 'acres', 33, 'rate_per_acre', 2394, 'rate_unit','acre', 'is_application_fee', true, 'price_source','tier', 'cost_cents', 5000)
@@ -66,6 +68,9 @@ BEGIN
   -- DELTA-D: the customer must NOT have changed to v_cust_b
   SELECT customer_id INTO v_who FROM invoices WHERE id=v_inv;
   IF v_who <> v_cust THEN RAISE EXCEPTION 'SMOKE_FAIL: field invoice customer changed to % (must stay locked to %)', v_who, v_cust; END IF;
+  -- DELTA-F (a): the hostile invoice_type='chemical_sale' must have been IGNORED (still field_application)
+  IF (SELECT invoice_type FROM invoices WHERE id=v_inv) <> 'field_application'
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: field invoice was reclassified out of field_application (DELTA-F lock broken)'; END IF;
 
   -- CONTROL: chemical_sale invoice with a (deliberately wrong) share is NOT touched; product line still recomputed
   INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, total_cost_cents, created_by, season)
@@ -75,11 +80,15 @@ BEGIN
   INSERT INTO invoice_shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order) VALUES (v_chem_inv, v_cust, 'x', 100.0, 0, 999, true, 1);
   -- a non-fee product line that LIES about extended_cents must be recomputed (anti-tamper): 5 x 200 = 1000, NOT the 1 sent.
   -- DELTA-D control: a chemical_sale invoice DOES honor a customer change (pass v_cust_b -> it sticks).
+  -- DELTA-F (c): a NON-field type change (chemical_sale -> misc_charge) is still ALLOWED (no over-lock).
   PERFORM save_invoice(
-    jsonb_build_object('id', v_chem_inv, 'customer_id', v_cust_b, 'invoice_type','chemical_sale', 'invoice_date', CURRENT_DATE::text),
+    jsonb_build_object('id', v_chem_inv, 'customer_id', v_cust_b, 'invoice_type','misc_charge', 'invoice_date', CURRENT_DATE::text),
     jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','Chem', 'quantity', 5, 'unit_price_cents', 200, 'extended_cents', 1, 'sort_order', 1)), NULL);
   SELECT customer_id INTO v_who FROM invoices WHERE id=v_chem_inv;
   IF v_who <> v_cust_b THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical_sale customer NOT updated (% exp %, DELTA-D over-locked)', v_who, v_cust_b; END IF;
+  -- DELTA-F (c): the non-field type change took effect
+  IF (SELECT invoice_type FROM invoices WHERE id=v_chem_inv) <> 'misc_charge'
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical_sale -> misc_charge change was blocked (DELTA-F over-locked non-field types)'; END IF;
   SELECT amount_cents INTO v_share_amt FROM invoice_shares WHERE invoice_id=v_chem_inv;
   IF v_share_amt <> 999 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical_sale share touched by DELTA-B (% exp 999)', v_share_amt; END IF;
   SELECT total_amount_cents INTO v_inv_total FROM invoices WHERE id=v_chem_inv;
@@ -87,6 +96,18 @@ BEGIN
   -- DELTA-E field-only: a chemical_sale invoice's total_cost_cents is NOT recomputed (stays at its sentinel)
   SELECT total_cost_cents INTO v_inv_total FROM invoices WHERE id=v_chem_inv;
   IF v_inv_total <> 77777 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical_sale total_cost_cents touched by DELTA-E (% exp 77777, field-only scope broken)', v_inv_total; END IF;
+
+  -- DELTA-F (b): a chemical invoice CANNOT be reclassified INTO field_application (else it
+  -- becomes a 'field' invoice with no invoice_shares / field data and escapes into /field-invoices).
+  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, created_by, season)
+    VALUES ('[SMOKE] CINV2-'||v_sfx, v_cust, 'chemical_sale', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, v_admin, 2026) RETURNING id INTO v_chem2;
+  INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents, sort_order) VALUES (v_chem2, v_prod, 'Chem', 1, 200, 200, 0, 1);
+  UPDATE invoices SET total_amount_cents=200, status='unposted' WHERE id=v_chem2;
+  PERFORM save_invoice(
+    jsonb_build_object('id', v_chem2, 'invoice_type','field_application', 'invoice_date', CURRENT_DATE::text),
+    jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','Chem', 'quantity', 1, 'unit_price_cents', 200, 'extended_cents', 200, 'sort_order', 1)), NULL);
+  IF (SELECT invoice_type FROM invoices WHERE id=v_chem2) <> 'chemical_sale'
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical invoice reclassified INTO field_application (DELTA-F in-lock broken)'; END IF;
 
   -- SPLIT/OVERRIDE: a multi-grower (or fixed-price/override) field invoice cannot
   -- be re-balanced from line items without corrupting per-grower fees; editing it

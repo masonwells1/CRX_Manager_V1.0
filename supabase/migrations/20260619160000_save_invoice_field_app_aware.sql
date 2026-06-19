@@ -91,7 +91,23 @@ BEGIN
       customer_id = CASE WHEN invoice_type = 'field_application'
                          THEN customer_id
                          ELSE COALESCE((p_invoice->>'customer_id')::uuid, customer_id) END,
-      invoice_type = COALESCE(p_invoice->>'invoice_type', invoice_type),
+      -- DELTA-F (Codex r12): invoice_type is the SEGREGATION boundary. This SET runs
+      -- BEFORE the field-invoice split-lock (DELTA-C) and share/cost rebalance
+      -- (DELTA-B/DELTA-E), all of which gate on the CURRENT invoice_type. A crafted or
+      -- stale admin/sales client could send invoice_type='chemical_sale'/'misc_charge'
+      -- on a field invoice (or 'field_application' on a chemical one) to flip the type
+      -- here and make those guards read the NEW type and skip — moving the invoice out
+      -- of /field-invoices while leaving invoice_shares / field data inconsistent (or
+      -- fabricating a field invoice with no shares). Lock the type whenever
+      -- field_application is on EITHER side: a field invoice can't be reclassified out,
+      -- and a non-field invoice can't be reclassified in (field invoices are born only
+      -- via transfer_job_to_invoice / save_field_app_invoice). Other type changes
+      -- (e.g. chemical_sale <-> misc_charge) remain allowed.
+      invoice_type = CASE
+        WHEN invoice_type = 'field_application'
+          OR COALESCE(p_invoice->>'invoice_type', invoice_type) = 'field_application'
+        THEN invoice_type
+        ELSE COALESCE(p_invoice->>'invoice_type', invoice_type) END,
       season = COALESCE((p_invoice->>'season')::int, season),
       salesman_id = (p_invoice->>'salesman_id')::uuid,
       invoice_date = COALESCE((p_invoice->>'invoice_date')::date, invoice_date),
@@ -279,6 +295,11 @@ BEGIN
   IF v_src NOT LIKE '%DELTA-E%'
      OR v_src NOT LIKE '%total_cost_cents = CASE WHEN invoice_type = ''field_application''%' THEN
     RAISE EXCEPTION 'save_invoice: DELTA-E field-app header cost sync missing';
+  END IF;
+  -- DELTA-F: invoice_type is a segregation boundary; can't be flipped in/out of field_application via save
+  IF v_src NOT LIKE '%DELTA-F%'
+     OR v_src NOT LIKE '%OR COALESCE(p_invoice->>''invoice_type'', invoice_type) = ''field_application''%' THEN
+    RAISE EXCEPTION 'save_invoice: DELTA-F invoice_type lock missing';
   END IF;
   -- the original order/blend new-invoice guard must remain (not weakened)
   IF v_src NOT LIKE '%Invoices must link to an order or blend ticket%' THEN
