@@ -73,7 +73,7 @@ const statusBadge = (status: InvoiceStatus) => {
   return <Badge variant={s.variant}>{s.label}</Badge>;
 };
 
-export default function InvoiceDetail() {
+export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'chemical' } = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { profile } = useAuth();
@@ -255,6 +255,24 @@ export default function InvoiceDetail() {
       return;
     }
 
+    // #3 segregation guard: field invoices live under the field-invoices
+    // permission, chemical sales under invoices. If this id doesn't match the
+    // area of the route it was opened on, bounce to the correct area — this
+    // closes the cross-permission URL bypass (a field-invoices-only user must not
+    // reach a chemical invoice via /field-invoices/:id, and vice-versa). Codex R5.
+    {
+      const invType = (data as { invoice_type?: string }).invoice_type;
+      if (routeArea === 'field' && invType !== 'field_application') {
+        toast('error', 'Not a field invoice');
+        navigate('/field-invoices', { replace: true });
+        return;
+      }
+      if (routeArea === 'chemical' && invType === 'field_application') {
+        navigate(`/field-invoices/${invoiceId}`, { replace: true });
+        return;
+      }
+    }
+
     let salesman: { full_name: string } | null = null;
     const salesmanId = (data as { salesman_id?: string | null }).salesman_id;
     if (salesmanId) {
@@ -395,7 +413,7 @@ export default function InvoiceDetail() {
     setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
     setLoading(false);
-  }, [toast, navigate]);
+  }, [toast, navigate, routeArea]);
 
   // Fetch existing invoice
   useEffect(() => {

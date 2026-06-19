@@ -711,7 +711,10 @@ export default function JobDetail() {
       // the same event (Codex LOW, As-Applied Phase 1c). Removed.
       toast('success', `Invoice ${result.invoice_number} created`);
       setIsDirty(false);
-      navigate(`/invoices/${result.invoice_id}`);
+      // A job transfers to a field_application invoice -> open it under the
+      // field-invoices area (its quantity-based editor), not the Chemical Sales
+      // route which a field-invoices-only user is denied (Codex R5 P2).
+      navigate(`/field-invoices/${result.invoice_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
       toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
