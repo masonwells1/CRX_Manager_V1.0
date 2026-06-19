@@ -110,7 +110,17 @@ BEGIN
     v_qty := COALESCE((v_item->>'quantity')::numeric, 0);
     IF v_qty <= 0 THEN RAISE EXCEPTION 'Invoice line item quantity must be greater than zero'; END IF;
     v_unit_price := COALESCE((v_item->>'unit_price_cents')::bigint, 0);
-    v_extended := ROUND(v_qty * v_unit_price)::bigint;
+    -- DELTA-A2 (Codex): an is_application_fee line carries an EXACT extended_cents
+    -- (the summed per-customer fee from transfer_job_to_invoice) but only a ROUNDED
+    -- blended per-acre display rate, so quantity x unit_price != that exact total.
+    -- Honor the client's extended_cents for the fee line so a no-op editor save
+    -- can't drift the machine-fee total / grower shares by a rounding cent. Product
+    -- lines stay recomputed from quantity x unit_price (anti-tamper, no rounding gap).
+    IF COALESCE((v_item->>'is_application_fee')::boolean, false) THEN
+      v_extended := COALESCE((v_item->>'extended_cents')::bigint, ROUND(v_qty * v_unit_price)::bigint);
+    ELSE
+      v_extended := ROUND(v_qty * v_unit_price)::bigint;
+    END IF;
     v_cost_cents := COALESCE((v_item->>'cost_cents')::bigint, 0);
     IF (v_item->>'product_id') IS NOT NULL THEN
       SELECT * INTO v_product FROM products WHERE id = (v_item->>'product_id')::uuid;

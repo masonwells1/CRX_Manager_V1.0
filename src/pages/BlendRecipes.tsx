@@ -47,8 +47,9 @@ interface EditItem {
   quantity: number;
   unit: string;
   rate_per_acre: number | null;
-  /** Optional per-unit price in bigint cents (seeds job_chemicals.price_per_unit_cents). */
-  price_per_unit_cents: number;
+  /** Optional per-unit price typed as a raw dollar string (decimal-friendly so
+   *  "1.2" doesn't collapse to "12"); converted to bigint cents in the save payload. */
+  price_input: string;
   sort_order: number;
   notes: string;
 }
@@ -174,7 +175,7 @@ export default function BlendRecipes() {
           quantity: item.quantity,
           unit: item.unit,
           rate_per_acre: item.rate_per_acre,
-          price_per_unit_cents: item.price_per_unit_cents ?? 0,
+          price_input: item.price_per_unit_cents ? (item.price_per_unit_cents / 100).toString() : '',
           sort_order: item.sort_order,
           notes: item.notes || '',
         }))
@@ -213,7 +214,7 @@ export default function BlendRecipes() {
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
-            price_per_unit_cents: item.price_per_unit_cents,
+            price_per_unit_cents: item.price_input ? Math.max(0, Math.round(parseFloat(item.price_input) * 100)) : 0,
             notes: item.notes || null,
           })),
           p_description: form.description || undefined,
@@ -311,7 +312,7 @@ export default function BlendRecipes() {
   const addItem = () => {
     setEditItems([
       ...editItems,
-      { product_id: '', product_name: '', quantity: 0, unit: 'gal', rate_per_acre: null, price_per_unit_cents: 0, sort_order: editItems.length, notes: '' },
+      { product_id: '', product_name: '', quantity: 0, unit: 'gal', rate_per_acre: null, price_input: '', sort_order: editItems.length, notes: '' },
     ]);
   };
 
@@ -564,11 +565,10 @@ export default function BlendRecipes() {
                     className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   />
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={item.price_per_unit_cents ? (item.price_per_unit_cents / 100).toString() : ''}
-                    onChange={(e) => updateItem(idx, 'price_per_unit_cents', e.target.value ? Math.round(parseFloat(e.target.value) * 100) : 0)}
+                    type="text"
+                    inputMode="decimal"
+                    value={item.price_input}
+                    onChange={(e) => updateItem(idx, 'price_input', e.target.value)}
                     placeholder="$/unit"
                     title="Price per unit (optional) — seeds the job's chemical price when this recipe is loaded"
                     className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
