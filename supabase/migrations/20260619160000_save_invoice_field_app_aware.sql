@@ -160,16 +160,23 @@ BEGIN
     v_qty := COALESCE((v_item->>'quantity')::numeric, 0);
     IF v_qty <= 0 THEN RAISE EXCEPTION 'Invoice line item quantity must be greater than zero'; END IF;
     v_unit_price := COALESCE((v_item->>'unit_price_cents')::bigint, 0);
-    -- DELTA-A2 (Codex): an is_application_fee line carries an EXACT extended_cents
-    -- (the summed per-customer fee from transfer_job_to_invoice) but only a ROUNDED
-    -- blended per-acre display rate, so quantity x unit_price != that exact total.
-    -- Honor the client's extended_cents for the fee line so a no-op editor save
-    -- can't drift the machine-fee total / grower shares by a rounding cent. Product
-    -- lines stay recomputed from quantity x unit_price (anti-tamper, no rounding gap).
-    IF COALESCE((v_item->>'is_application_fee')::boolean, false) THEN
-      v_extended := COALESCE((v_item->>'extended_cents')::bigint, ROUND(v_qty * v_unit_price)::bigint);
-    ELSE
-      v_extended := ROUND(v_qty * v_unit_price)::bigint;
+    -- Server-authoritative line total: ALWAYS recompute quantity x unit_price first
+    -- (anti-tamper) — the payload can never set an arbitrary line total directly.
+    v_extended := ROUND(v_qty * v_unit_price)::bigint;
+    -- DELTA-A2 (Codex r10 + HARDENED r14): a GENUINE machine-fee line carries an EXACT
+    -- summed total (sum of per-customer compute_application_service_fee totals) but only
+    -- a ROUNDED blended per-acre display rate, so quantity(acres) x unit_price differs
+    -- from that exact total by at most a sub-cent-per-acre rounding gap (<= acres cents).
+    -- Honor the client's exact extended_cents ONLY when it is within that gap of the
+    -- recomputed total — this absorbs the legitimate rounding so a no-op save can't drift
+    -- the fee / grower shares, WITHOUT trusting the client-controlled is_application_fee
+    -- flag: a normal line forged with is_application_fee=true + an arbitrary extended_cents
+    -- diverges far beyond the gap, so it stays at the server-recomputed quantity x unit_price
+    -- (no under/over-billing, no share rebalance to a forged amount). r14 P1.
+    IF COALESCE((v_item->>'is_application_fee')::boolean, false)
+       AND (v_item->>'extended_cents') IS NOT NULL
+       AND ABS((v_item->>'extended_cents')::bigint - v_extended) <= CEIL(v_qty)::bigint + 1 THEN
+      v_extended := (v_item->>'extended_cents')::bigint;
     END IF;
     v_cost_cents := COALESCE((v_item->>'cost_cents')::bigint, 0);
     -- DELTA-G (Codex r13): refresh a product line's cost from products.current_cost
@@ -319,6 +326,11 @@ BEGIN
   IF v_src NOT LIKE '%DELTA-G%'
      OR v_src NOT LIKE '%IS NOT NULL AND NOT v_is_field%' THEN
     RAISE EXCEPTION 'save_invoice: DELTA-G field line-cost preserve missing';
+  END IF;
+  -- DELTA-A2 hardened: the fee-line extended bypass is bounded by the rounding gap so a
+  -- forged is_application_fee flag can't set an arbitrary line total (r14 P1)
+  IF v_src NOT LIKE '%ABS((v_item->>''extended_cents'')::bigint - v_extended) <=%' THEN
+    RAISE EXCEPTION 'save_invoice: DELTA-A2 forged-fee tolerance guard missing';
   END IF;
   -- the original order/blend new-invoice guard must remain (not weakened)
   IF v_src NOT LIKE '%Invoices must link to an order or blend ticket%' THEN

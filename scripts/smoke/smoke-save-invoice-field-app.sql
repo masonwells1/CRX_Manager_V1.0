@@ -23,7 +23,7 @@
 DO $smoke$
 DECLARE
   v_admin uuid; v_sfx text := substr(gen_random_uuid()::text,1,8); v_cust uuid; v_prod uuid;
-  v_inv uuid; v_chem_inv uuid; v_chem2 uuid; v_inv3 uuid; v_cust2 uuid; v_cust_b uuid; v_who uuid; v_fee_flag boolean; v_share_amt bigint; v_inv_total bigint; v_fee_ext bigint; v_a bigint; v_b bigint;
+  v_inv uuid; v_chem_inv uuid; v_chem2 uuid; v_forge uuid; v_inv3 uuid; v_cust2 uuid; v_cust_b uuid; v_who uuid; v_fee_flag boolean; v_share_amt bigint; v_inv_total bigint; v_fee_ext bigint; v_a bigint; v_b bigint;
 BEGIN
   SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no admin'; END IF;
@@ -41,7 +41,8 @@ BEGIN
   UPDATE invoices SET total_amount_cents=79100, status='unposted' WHERE id=v_inv;
   INSERT INTO invoice_shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order) VALUES (v_inv, v_cust, 'SI', 100.0, 33, 79100, true, 1);
 
-  -- Edit via save_invoice: bump chem qty 1->3 (extended 300); fee line unchanged (send its exact extended_cents).
+  -- Edit via save_invoice: chem line stays quantity=1 (extended model) with a new extended price 300
+  -- and an EXTENDED cost_cents 200; fee line unchanged (send its exact extended_cents).
   -- DELTA-D: deliberately pass a DIFFERENT customer (v_cust_b) -- it must be ignored (customer locked).
   -- DELTA-F: deliberately pass a HOSTILE invoice_type='chemical_sale' -- it must be ignored (type locked
   -- so the field-invoice guards below still see field_application and run).
@@ -117,6 +118,25 @@ BEGIN
     jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','Chem', 'quantity', 1, 'unit_price_cents', 200, 'extended_cents', 200, 'sort_order', 1)), NULL);
   IF (SELECT invoice_type FROM invoices WHERE id=v_chem2) <> 'chemical_sale'
     THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical invoice reclassified INTO field_application (DELTA-F in-lock broken)'; END IF;
+
+  -- DELTA-A2 hardened (Codex r14): a NORMAL line forged with is_application_fee=true and an
+  -- arbitrary extended_cents must NOT set that total — it falls far outside the rounding gap
+  -- (<= CEIL(acres)+1) and is recomputed to quantity x unit_price. The GENUINE fee above
+  -- (79000 within 2 of 79002) is still honored, proving the bound passes real fees.
+  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, created_by, season)
+    VALUES ('[SMOKE] FORGE-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, v_admin, 2026) RETURNING id INTO v_forge;
+  INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents, sort_order, is_application_fee) VALUES (v_forge, v_prod, 'X', 1, 100, 100, 0, 1, false);
+  UPDATE invoices SET total_amount_cents=100, status='unposted' WHERE id=v_forge;
+  INSERT INTO invoice_shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order) VALUES (v_forge, v_cust, 'F', 100.0, 2, 100, true, 1);
+  PERFORM save_invoice(
+    jsonb_build_object('id', v_forge, 'invoice_type','field_application', 'invoice_date', CURRENT_DATE::text),
+    jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','X', 'quantity', 2, 'unit_price_cents', 100, 'extended_cents', 999999, 'sort_order', 1, 'is_application_fee', true)), NULL);
+  IF (SELECT extended_cents FROM invoice_items WHERE invoice_id=v_forge) <> 200
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: forged is_application_fee line set an arbitrary total (DELTA-A2 hardening broken; exp recomputed 200)'; END IF;
+  IF (SELECT total_amount_cents FROM invoices WHERE id=v_forge) <> 200
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: forged fee inflated the invoice total'; END IF;
+  IF (SELECT amount_cents FROM invoice_shares WHERE invoice_id=v_forge) <> 200
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: forged fee rebalanced the share to an arbitrary amount'; END IF;
 
   -- SPLIT/OVERRIDE: a multi-grower (or fixed-price/override) field invoice cannot
   -- be re-balanced from line items without corrupting per-grower fees; editing it
