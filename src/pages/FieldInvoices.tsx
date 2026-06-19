@@ -325,14 +325,17 @@ export default function FieldInvoices() {
             onRowClick={(row) =>
               navigate(
                 // Two kinds of field invoice need two editors (#3 edit-path):
-                //  • ENGINE-built (no job_id) + still editable -> the per-acre
-                //    field-app editor (locations / shares / applied-info RPCs).
-                //  • JOB-built (job_id set, quantity-based lines + a machine-fee
-                //    line, NO field_app_locations) AND any posted field invoice ->
-                //    the generic invoice detail, but on a /field-invoices/:id route
-                //    gated by the field-invoices permission (save_invoice is now
-                //    field-app aware: it keeps the fee line + re-balances the share).
-                !row.job_id && (row.status === 'draft' || row.status === 'unposted')
+                //  • ENGINE-built (NEITHER job_id NOR blend_ticket_id) + still
+                //    editable -> the per-acre field-app editor (it has
+                //    field_app_locations / shares / applied-info RPCs).
+                //  • JOB-built (job_id) OR BLEND-TICKET-built (blend_ticket_id):
+                //    quantity-based lines, NO field_app_locations -> the generic
+                //    invoice detail on a /field-invoices/:id route gated by the
+                //    field-invoices permission (save_invoice is field-app aware).
+                //    Also any posted field invoice. A blend-ticket field invoice has
+                //    job_id NULL but blend_ticket_id set; routing it to the per-acre
+                //    editor would load zero locations and fail to save. (Codex r13)
+                !row.job_id && !row.blend_ticket_id && (row.status === 'draft' || row.status === 'unposted')
                   ? `/invoices/field-app/${row.id}`
                   : `/field-invoices/${row.id}`
               )

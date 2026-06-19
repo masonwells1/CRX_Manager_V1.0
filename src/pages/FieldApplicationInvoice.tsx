@@ -115,13 +115,14 @@ export default function FieldApplicationInvoice() {
     if (!id) return;
     // #3 segregation: validate the invoice belongs in THIS (per-acre, field-app)
     // editor BEFORE pulling the full row, so a denied / wrong-editor URL doesn't
-    // expose invoice data — only the type + job_id discriminators are read first
-    // (Codex P1). Then redirect: a non-field invoice -> field list; a JOB-built
-    // field invoice (job_id, quantity lines + machine fee, no field_app_locations)
-    // -> the generic editor.
+    // expose invoice data — only the type + job_id/blend_ticket_id discriminators are
+    // read first (Codex P1). Then redirect: a non-field invoice -> field list; a
+    // JOB-built (job_id) OR BLEND-TICKET-built (blend_ticket_id) field invoice has
+    // quantity lines + no field_app_locations -> the generic editor. Only an
+    // ENGINE-built field invoice (NEITHER set) belongs here. (Codex r13)
     const { data: chk, error: chkErr } = await supabase
       .from('invoices')
-      .select('invoice_type, job_id')
+      .select('invoice_type, job_id, blend_ticket_id')
       .eq('id', id)
       .maybeSingle();
     if (chkErr || !chk) {
@@ -134,7 +135,8 @@ export default function FieldApplicationInvoice() {
       navigate('/field-invoices');
       return;
     }
-    if ((chk as { job_id?: string | null }).job_id) {
+    if ((chk as { job_id?: string | null }).job_id
+        || (chk as { blend_ticket_id?: string | null }).blend_ticket_id) {
       navigate(`/field-invoices/${id}`, { replace: true });
       return;
     }

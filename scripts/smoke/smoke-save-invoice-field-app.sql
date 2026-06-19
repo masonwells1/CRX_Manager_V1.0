@@ -48,15 +48,20 @@ BEGIN
   PERFORM save_invoice(
     jsonb_build_object('id', v_inv, 'customer_id', v_cust_b, 'invoice_type','chemical_sale', 'invoice_date', CURRENT_DATE::text),
     jsonb_build_array(
-      jsonb_build_object('product_id', v_prod, 'description','Chem', 'quantity', 3, 'unit_price_cents', 100, 'extended_cents', 300, 'sort_order', 1, 'is_application_fee', false),
+      jsonb_build_object('product_id', v_prod, 'description','Chem', 'quantity', 1, 'unit_price_cents', 300, 'extended_cents', 300, 'cost_cents', 200, 'sort_order', 1, 'is_application_fee', false),
       jsonb_build_object('description','Application', 'quantity', 33, 'unit_price_cents', 2394, 'extended_cents', 79000, 'sort_order', 2, 'acres', 33, 'rate_per_acre', 2394, 'rate_unit','acre', 'is_application_fee', true, 'price_source','tier', 'cost_cents', 5000)
     ), NULL);
 
-  -- DELTA-E: header cost re-synced from the re-billed lines. Chem (product cost $10/unit,
-  -- qty 3) = 3000; fee line cost is EXACT/extended (5000, x1 NOT x33 acres) = 5000. Total = 8000.
-  -- A x-quantity bug on the fee line would yield 3000 + 5000*33 = 168000.
+  -- DELTA-E + DELTA-G: header cost re-synced from the re-billed lines, PRESERVING the field
+  -- line's incoming EXTENDED cost. Field chem line is quantity=1 with cost_cents=200; DELTA-G
+  -- SKIPS the per-unit products.current_cost ($10 -> 1000) refresh, so cost stays 200 (x qty 1).
+  -- Fee line cost is EXACT/extended (5000, x1 NOT x33 acres). Total = 200 + 5000 = 5200.
+  -- Without DELTA-G the override would give 1000 + 5000 = 6000; a fee x-acres bug = 1000 + 165000.
   SELECT total_cost_cents INTO v_inv_total FROM invoices WHERE id=v_inv;
-  IF v_inv_total <> 8000 THEN RAISE EXCEPTION 'SMOKE_FAIL: field total_cost_cents % (exp 8000 = 3000 chem + 5000 fee x1; a fee x-acres bug = 168000; stale 99999 not overwritten?)', v_inv_total; END IF;
+  IF v_inv_total <> 5200 THEN RAISE EXCEPTION 'SMOKE_FAIL: field total_cost_cents % (exp 5200 = 200 chem preserved + 5000 fee x1; override-not-skipped = 6000; stale 99999 not overwritten?)', v_inv_total; END IF;
+  -- DELTA-G: the field chem line cost_cents was PRESERVED (200), not refreshed to per-unit 1000
+  IF (SELECT cost_cents FROM invoice_items WHERE invoice_id=v_inv AND is_application_fee=false) <> 200
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: field chem line cost refreshed from products (DELTA-G preserve broken)'; END IF;
 
   SELECT is_application_fee, extended_cents INTO v_fee_flag, v_fee_ext FROM invoice_items WHERE invoice_id=v_inv AND is_application_fee=true;
   IF v_fee_flag IS NOT TRUE THEN RAISE EXCEPTION 'SMOKE_FAIL: fee flag lost on edit'; END IF;
@@ -96,6 +101,10 @@ BEGIN
   -- DELTA-E field-only: a chemical_sale invoice's total_cost_cents is NOT recomputed (stays at its sentinel)
   SELECT total_cost_cents INTO v_inv_total FROM invoices WHERE id=v_chem_inv;
   IF v_inv_total <> 77777 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical_sale total_cost_cents touched by DELTA-E (% exp 77777, field-only scope broken)', v_inv_total; END IF;
+  -- DELTA-G field-scoped: a NON-field product line STILL refreshes cost from products
+  -- (per-unit current_cost $10 -> 1000); the override is only skipped for field invoices.
+  IF (SELECT cost_cents FROM invoice_items WHERE invoice_id=v_chem_inv) <> 1000
+    THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical product line cost NOT refreshed from products (DELTA-G over-broadened to non-field)'; END IF;
 
   -- DELTA-F (b): a chemical invoice CANNOT be reclassified INTO field_application (else it
   -- becomes a 'field' invoice with no invoice_shares / field data and escapes into /field-invoices).

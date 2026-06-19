@@ -48,6 +48,7 @@ DECLARE
   v_total_cents bigint := 0; v_qty numeric; v_unit_price bigint; v_extended bigint;
   v_cost_cents bigint; v_product record; v_order_id uuid; v_blend_id uuid; v_existing jsonb;
   v_total_cost bigint := 0;  -- DELTA-E: extended COST accumulator (field-invoice header sync)
+  v_is_field boolean := false;  -- DELTA-G: field invoices preserve incoming (extended) line cost
 BEGIN
   IF v_actor IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
   IF NOT (is_admin() OR is_sales_rep()) THEN
@@ -128,6 +129,12 @@ BEGIN
     END IF;
   END IF;
 
+  -- DELTA-G (Codex r13): is this an existing field invoice? Its job/blend-built lines
+  -- carry quantity=1 + an EXTENDED cost_cents (transfer_job_to_invoice /
+  -- create_invoice_from_blend_ticket); the product-cost refresh in the loop must be
+  -- skipped for them, else DELTA-E persists per_unit*1 and understates cost/margin.
+  v_is_field := (SELECT invoice_type FROM invoices WHERE id = v_invoice_id) = 'field_application';
+
   -- DELTA-C (Codex): only a SINGLE-grower, non-override field invoice has
   -- total = SUM(line items) that an item-driven save can edit correctly. A
   -- MULTI-grower split (each share = chemical split + a fixed per-grower machine
@@ -165,7 +172,14 @@ BEGIN
       v_extended := ROUND(v_qty * v_unit_price)::bigint;
     END IF;
     v_cost_cents := COALESCE((v_item->>'cost_cents')::bigint, 0);
-    IF (v_item->>'product_id') IS NOT NULL THEN
+    -- DELTA-G (Codex r13): refresh a product line's cost from products.current_cost
+    -- (a PER-UNIT figure) ONLY for non-field invoices. A field invoice's chemical line
+    -- is stored as quantity=1 with cost_cents = the FULL EXTENDED job/blend cost; if we
+    -- overwrote it with the per-unit cost, DELTA-E (cost x quantity, quantity=1) would
+    -- persist per_unit instead of the extended cost and massively understate margin.
+    -- So field invoices PRESERVE the incoming (extended) cost_cents; the price side is
+    -- already symmetric (unit_price holds the extended amount, x quantity=1).
+    IF (v_item->>'product_id') IS NOT NULL AND NOT v_is_field THEN
       SELECT * INTO v_product FROM products WHERE id = (v_item->>'product_id')::uuid;
       IF FOUND AND v_product.current_cost IS NOT NULL THEN
         v_cost_cents := (v_product.current_cost * 100)::bigint;
@@ -300,6 +314,11 @@ BEGIN
   IF v_src NOT LIKE '%DELTA-F%'
      OR v_src NOT LIKE '%OR COALESCE(p_invoice->>''invoice_type'', invoice_type) = ''field_application''%' THEN
     RAISE EXCEPTION 'save_invoice: DELTA-F invoice_type lock missing';
+  END IF;
+  -- DELTA-G: field invoices preserve incoming (extended) line cost (skip per-unit product refresh)
+  IF v_src NOT LIKE '%DELTA-G%'
+     OR v_src NOT LIKE '%IS NOT NULL AND NOT v_is_field%' THEN
+    RAISE EXCEPTION 'save_invoice: DELTA-G field line-cost preserve missing';
   END IF;
   -- the original order/blend new-invoice guard must remain (not weakened)
   IF v_src NOT LIKE '%Invoices must link to an order or blend ticket%' THEN

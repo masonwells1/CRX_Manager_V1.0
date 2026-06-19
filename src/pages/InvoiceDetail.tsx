@@ -251,7 +251,7 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
     // row is fetched. Mirrors FieldApplicationInvoice's minimal preflight. (Codex R5/R11)
     const pre = await supabase
       .from('invoices')
-      .select('invoice_type, job_id, status')
+      .select('invoice_type, job_id, blend_ticket_id, status')
       .eq('id', invoiceId)
       .maybeSingle();
     if (isStale()) return;
@@ -271,12 +271,15 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         navigate(`/field-invoices/${invoiceId}`, { replace: true });
         return;
       }
-      // A field invoice with NO job_id is ENGINE-built (per-acre, has
-      // field_app_locations) — keep an editable one in the per-acre editor, not
-      // this quantity-based one, even if reached by a direct URL / bookmark (Codex).
+      // A field invoice with NEITHER job_id NOR blend_ticket_id is ENGINE-built
+      // (per-acre, has field_app_locations) — keep an editable one in the per-acre
+      // editor, not this quantity-based one, even if reached by a direct URL /
+      // bookmark. A blend-ticket field invoice (blend_ticket_id set, job_id NULL)
+      // is quantity-based with no locations, so it STAYS in this editor. (Codex r13)
       const fieldJobId = (pre.data as { job_id?: string | null }).job_id;
+      const fieldBlendId = (pre.data as { blend_ticket_id?: string | null }).blend_ticket_id;
       const fieldStatus = (pre.data as { status?: string }).status;
-      if (routeArea === 'field' && invType === 'field_application' && !fieldJobId
+      if (routeArea === 'field' && invType === 'field_application' && !fieldJobId && !fieldBlendId
           && (fieldStatus === 'draft' || fieldStatus === 'unposted')) {
         navigate(`/invoices/field-app/${invoiceId}`, { replace: true });
         return;

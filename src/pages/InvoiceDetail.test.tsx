@@ -191,6 +191,35 @@ describe('InvoiceDetail — route-area segregation preflight (no full-row leak)'
     expect(fullSelectRan).toBe(false);
   });
 
+  it('field route + blend-ticket field invoice: STAYS in the generic editor (does NOT bounce to the per-acre engine)', async () => {
+    let invoicesCalls = 0;
+    let fullSelectRan = false;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoicesCalls += 1;
+        if (invoicesCalls === 1) {
+          // blend-ticket field invoice: job_id NULL but blend_ticket_id SET (no field_app_locations)
+          return buildChain({ data: { invoice_type: 'field_application', job_id: null, blend_ticket_id: 'blend-1', status: 'draft' }, error: null });
+        }
+        fullSelectRan = true;
+        return buildChain({ data: { id: 'inv-bt', invoice_number: 'INV-BT', status: 'draft' }, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/field-invoices/inv-bt']}>
+        <Routes>
+          <Route path="/field-invoices/:id" element={<InvoiceDetail routeArea="field" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // It proceeds to the full fetch (stays here) and never bounces to the per-acre engine editor.
+    await waitFor(() => { expect(fullSelectRan).toBe(true); });
+    expect(mockNavigate).not.toHaveBeenCalledWith('/invoices/field-app/inv-bt', { replace: true });
+  });
+
   it('chemical route + field invoice: redirects to /field-invoices/:id and never runs the full select(*)', async () => {
     let invoicesCalls = 0;
     let fullSelectRan = false;
