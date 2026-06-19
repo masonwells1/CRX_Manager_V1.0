@@ -8,8 +8,8 @@ when every Phase-1 key is drained.
 
 | Key | Subsystem | Status |
 |---|---|---|
-| `invoices-core` | post/create/void invoice, save_field_app_invoice, delete_invoices, finance charges | queued |
-| `jobs-to-billing` | transfer_job_to_invoice, job-mix calculator, recipe pricing, per-acre machine fee | queued |
+| `invoices-core` | post/create/void invoice, save_field_app_invoice, delete_invoices, finance charges | hunted ×2 (c1 broad + c2 focused) — still finding (3 new c2); NOT drained, needs 1 dry cycle |
+| `jobs-to-billing` | transfer_job_to_invoice, job-mix calculator, recipe pricing, per-acre machine fee | hunted ×2 (c1 broad + c2 focused) — still finding (1 new c2 + reconfirms); NOT drained, needs 1 dry cycle |
 | `field-app-invoices` | FieldApplicationInvoice + save_field_app_invoice + field/acre split + override-grower shares | queued |
 | `commissions` | commission_split, per-order records, recompute-on-edit, commission_payments batch | queued |
 | `deliveries-billing` | confirm/complete/quick/cancel/void delivery + inventory txn types | queued |
