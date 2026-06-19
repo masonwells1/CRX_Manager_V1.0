@@ -701,7 +701,9 @@ export default function JobDetail() {
       if (error) throw error;
       transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
-      if (profile) logActivity({ event: 'job_invoiced', description: `Job ${jobNumber} → Invoice ${result.invoice_number}`, performedBy: profile.id });
+      // transfer_job_to_invoice writes the 'job_invoiced' activity_feed row
+      // server-side (DELTA-5); a second client-side log here just double-logged
+      // the same event (Codex LOW, As-Applied Phase 1c). Removed.
       toast('success', `Invoice ${result.invoice_number} created`);
       setIsDirty(false);
       navigate(`/invoices/${result.invoice_id}`);
