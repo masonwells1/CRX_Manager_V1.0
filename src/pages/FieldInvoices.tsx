@@ -100,13 +100,18 @@ export default function FieldInvoices() {
     return true;
   });
 
-  // Summary stats (scoped to field invoices only)
+  // Summary stats (scoped to field invoices only).
+  // "Posted-like" = posted OR overdue: mark_overdue_invoices flips a posted
+  // invoice to overdue as it ages, but both remain posted receivables — CRX
+  // treats them the same for AR, so they count toward Posted Total + Outstanding.
+  const isPostedLike = (s: string) => s === 'posted' || s === 'overdue';
   const unpostedCount = invoices.filter((i) => i.status === 'draft' || i.status === 'unposted').length;
+  const postedCount = invoices.filter((i) => isPostedLike(i.status)).length;
   const postedTotal = invoices
-    .filter((i) => i.status === 'posted')
+    .filter((i) => isPostedLike(i.status))
     .reduce((s, i) => s + i.total_amount_cents, 0);
   const outstandingBalance = invoices
-    .filter((i) => i.status === 'posted' && i.balance_cents > 0)
+    .filter((i) => isPostedLike(i.status) && i.balance_cents > 0)
     .reduce((s, i) => s + i.balance_cents, 0);
 
   const handleExportPDF = async () => {
@@ -285,7 +290,7 @@ export default function FieldInvoices() {
           </div>
           <p className="text-2xl font-semibold font-heading text-crx-green">{fmt(postedTotal)}</p>
           <p className="text-xs text-secondary mt-1">
-            {invoices.filter((i) => i.status === 'posted').length} posted field invoices
+            {postedCount} posted &amp; overdue field invoices
           </p>
         </Card>
         <Card>
@@ -296,7 +301,7 @@ export default function FieldInvoices() {
             <span className="text-sm text-secondary">Outstanding</span>
           </div>
           <p className="text-2xl font-semibold font-heading text-red-600">{fmt(outstandingBalance)}</p>
-          <p className="text-xs text-secondary mt-1">unpaid balance on posted field invoices</p>
+          <p className="text-xs text-secondary mt-1">unpaid balance on posted &amp; overdue field invoices</p>
         </Card>
       </div>
 
@@ -309,7 +314,17 @@ export default function FieldInvoices() {
             searchable
             searchPlaceholder="Search field invoices..."
             searchKeys={['invoice_number', 'customer_name', 'applicator_name']}
-            onRowClick={(row) => navigate(`/invoices/${row.id}`)}
+            onRowClick={(row) =>
+              navigate(
+                // Draft/unposted field invoices open the field-app editor
+                // (locations / customer shares / application service /
+                // applied-info + the field-app save+post RPCs). Posted/overdue/
+                // voided land on the generic invoice detail for AR/payment view.
+                row.status === 'draft' || row.status === 'unposted'
+                  ? `/invoices/field-app/${row.id}`
+                  : `/invoices/${row.id}`
+              )
+            }
             emptyTitle="No field invoices yet"
             emptyDescription="Field invoices come from a completed spray job, or start one with New Field Application."
             emptyAction={
