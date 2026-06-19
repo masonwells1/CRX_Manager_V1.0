@@ -134,6 +134,14 @@ export default function FieldApplicationInvoice() {
       return;
     }
 
+    // A JOB-built field invoice (job_id set) is quantity-based with a machine-fee
+    // line and NO field_app_locations — it must use the generic field-invoice
+    // editor, not this per-acre one, even by direct URL / bookmark (Codex).
+    if ((inv as { job_id?: string | null }).job_id) {
+      navigate(`/field-invoices/${id}`, { replace: true });
+      return;
+    }
+
     const invoice = inv as Record<string, unknown>;
     setInvoiceNumber((invoice.invoice_number as string) || '');
     setTransactionDate((invoice.invoice_date as string) || '');

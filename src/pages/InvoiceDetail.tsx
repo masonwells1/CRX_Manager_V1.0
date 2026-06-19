@@ -271,6 +271,16 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
         navigate(`/field-invoices/${invoiceId}`, { replace: true });
         return;
       }
+      // A field invoice with NO job_id is ENGINE-built (per-acre, has
+      // field_app_locations) — keep an editable one in the per-acre editor, not
+      // this quantity-based one, even if reached by a direct URL / bookmark (Codex).
+      const fieldJobId = (data as { job_id?: string | null }).job_id;
+      const fieldStatus = (data as { status?: string }).status;
+      if (routeArea === 'field' && invType === 'field_application' && !fieldJobId
+          && (fieldStatus === 'draft' || fieldStatus === 'unposted')) {
+        navigate(`/invoices/field-app/${invoiceId}`, { replace: true });
+        return;
+      }
     }
 
     let salesman: { full_name: string } | null = null;
