@@ -60,6 +60,11 @@
       "chain": "smoke-create-direct-order-po.sql",
       "description": "Customer-PO param (migration 20260614130000): a REAL active sales_rep creates a direct order WITH p_customer_po_number and the PO persists on orders (the bug: the old frontend post-create orders.update() hit the admin-only orders_update RLS and failed for sales_rep). Asserts order/order_items/inventory-prebook created, status confirmed; whitespace PO normalizes to NULL; idempotency replay returns the same order with no duplicate; plus the auth probes (no-auth -> Authentication required, driver -> INSUFFICIENT_ROLE, forged actor -> Actor mismatch).",
       "covers": ["create_direct_order"]
+    },
+    "transfer_job_to_invoice": {
+      "chain": "smoke-field-invoice-loop.sql",
+      "description": "As-Applied / Field-Invoice FULL LOOP (Phase 1b, REQUIRES migration 20260618220000): schedule job -> start_job -> complete_job (writes the application_record + weather + job_applied_info, idempotent replay makes no 2nd record) -> transfer_job_to_invoice (unposted field invoice, links application_records.invoice_id, job->invoiced; the UNRATED Chem B line yields NULL gl_lb instead of the pre-fix 55000 'record v_conversion not assigned yet' crash) -> edit while unposted -> post_invoice (posted, balance set, audit row) -> void_invoice (voided, totals zeroed, audit row). Pre-apply this chain crashes at transfer (the documented bug).",
+      "covers": ["transfer_job_to_invoice", "start_job", "complete_job", "post_invoice", "void_invoice"]
     }
   }
 }
