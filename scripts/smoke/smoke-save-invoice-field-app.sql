@@ -20,7 +20,7 @@
 DO $smoke$
 DECLARE
   v_admin uuid; v_sfx text := substr(gen_random_uuid()::text,1,8); v_cust uuid; v_prod uuid;
-  v_inv uuid; v_chem_inv uuid; v_fee_flag boolean; v_share_amt bigint; v_inv_total bigint; v_fee_ext bigint;
+  v_inv uuid; v_chem_inv uuid; v_inv3 uuid; v_cust2 uuid; v_fee_flag boolean; v_share_amt bigint; v_inv_total bigint; v_fee_ext bigint; v_a bigint; v_b bigint;
 BEGIN
   SELECT id INTO v_admin FROM profiles WHERE role='admin' AND is_active=true ORDER BY created_at LIMIT 1;
   IF v_admin IS NULL THEN RAISE EXCEPTION 'SMOKE_SETUP: no admin'; END IF;
@@ -67,6 +67,25 @@ BEGIN
   IF v_share_amt <> 999 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical_sale share touched by DELTA-B (% exp 999)', v_share_amt; END IF;
   SELECT total_amount_cents INTO v_inv_total FROM invoices WHERE id=v_chem_inv;
   IF v_inv_total <> 1000 THEN RAISE EXCEPTION 'SMOKE_FAIL: chemical product line not recomputed (% exp 1000, the lied extended_cents=1 must be ignored)', v_inv_total; END IF;
+
+  -- OVERRIDE: a price-override (share-only, NOT itemized) grower's charge is
+  -- PRESERVED on edit; only the non-override (itemized) shares re-balance (Codex P1).
+  INSERT INTO customers (farm_name) VALUES ('[SMOKE] OvB '||v_sfx) RETURNING id INTO v_cust2;
+  INSERT INTO invoices (invoice_number, customer_id, invoice_type, status, invoice_date, due_date, total_amount_cents, created_by, season)
+    VALUES ('[SMOKE] OINV-'||v_sfx, v_cust, 'field_application', 'draft', CURRENT_DATE, CURRENT_DATE+30, 0, v_admin, 2026) RETURNING id INTO v_inv3;
+  INSERT INTO invoice_items (invoice_id, product_id, description, quantity, unit_price_cents, extended_cents, cost_cents, sort_order, is_application_fee) VALUES (v_inv3, v_prod, 'Chem (A itemized)', 1, 1000, 1000, 0, 1, false);
+  UPDATE invoices SET total_amount_cents=151000, status='unposted' WHERE id=v_inv3;
+  INSERT INTO invoice_shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order, price_per_acre_cents) VALUES (v_inv3, v_cust,  'A', 100.0, 1,  1000,   true,  1, NULL);
+  INSERT INTO invoice_shares (invoice_id, customer_id, customer_name, split_percentage, acres, amount_cents, is_primary, sort_order, price_per_acre_cents) VALUES (v_inv3, v_cust2, 'B', 100.0, 30, 150000, false, 2, 5000);
+  PERFORM save_invoice(
+    jsonb_build_object('id', v_inv3, 'customer_id', v_cust, 'invoice_type','field_application', 'invoice_date', CURRENT_DATE::text),
+    jsonb_build_array(jsonb_build_object('product_id', v_prod, 'description','Chem (A itemized)', 'quantity', 3, 'unit_price_cents', 1000, 'extended_cents', 3000, 'sort_order', 1, 'is_application_fee', false)), NULL);
+  SELECT amount_cents INTO v_b FROM invoice_shares WHERE invoice_id=v_inv3 AND customer_id=v_cust2;
+  IF v_b <> 150000 THEN RAISE EXCEPTION 'SMOKE_FAIL: override grower share dropped to % (exp preserved 150000)', v_b; END IF;
+  SELECT amount_cents INTO v_a FROM invoice_shares WHERE invoice_id=v_inv3 AND customer_id=v_cust;
+  IF v_a <> 3000 THEN RAISE EXCEPTION 'SMOKE_FAIL: itemized grower share % (exp 3000)', v_a; END IF;
+  SELECT total_amount_cents INTO v_inv_total FROM invoices WHERE id=v_inv3;
+  IF v_inv_total <> 153000 THEN RAISE EXCEPTION 'SMOKE_FAIL: header % (exp 153000 = 3000 items + 150000 override)', v_inv_total; END IF;
 
   RAISE EXCEPTION 'SMOKE_PASS_ROLLBACK';
 END $smoke$;

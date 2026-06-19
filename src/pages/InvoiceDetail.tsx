@@ -1059,7 +1059,11 @@ export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'ch
                   className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="chemical_sale">Chemical Sale</option>
-                  <option value="field_application">Field Application</option>
+                  {/* field_application is NOT selectable here — this editable
+                      selector only renders on the chemical route (the field route
+                      is read-only), and a chemical invoice must not be reclassified
+                      into the segregated field area (Codex). Field invoices are
+                      created from jobs / the field-app editor, never here. */}
                   <option value="misc_charge">Misc Charge</option>
                 </select>
               ) : (
