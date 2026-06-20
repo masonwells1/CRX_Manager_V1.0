@@ -250,3 +250,8 @@ traps that would bite once invoices/jobs start flowing. Worst-first.
 | # | Plain-English issue | Why it matters | Severity |
 |---|---|---|---|
 | W | **A documentation count is out of date** (says 47 database triggers, there are 49). | Purely cosmetic — nothing behaves differently. Best fixed by the routine "sync the docs" task so all the places that mention the count update together. | LOW |
+
+### Cycle 18 — 2026-06-20 — sole driver: 2nd pass on security + frontend safety — **clean (nothing new)**
+- **Found:** nothing new. The one item that surfaced was **already on your list** (the blend-ticket "who did it" function from cycle 14) — re-checked, still real, still parked. The frontend-safety re-check came back empty.
+- These two areas (security/permissions and frontend write-safety) are now **confirmed checked twice** with no new issues.
+- **This is the 1st of the 3 consecutive quiet cycles** that wrap up the hunt. **Found:** 0 new. **Fixed:** 0. Nothing pushed or touched live.
