@@ -47,6 +47,22 @@ Each has a clear, small fix already written down in its ledger entry. The rest (
 
 ---
 
+## 🔁 Codex independent re-review of ALL findings (2026-06-20, at Mason's request)
+
+After the hunt, I sent the **entire parked list to Codex (a different AI model) for a fresh, holistic second opinion** — on top of the per-finding Codex check each one already passed when it was found. Codex read the actual database code and judged each: is it real? is the severity right? is the proposed fix correct *and complete*? **Verdict: it backs up the findings almost entirely**, with a few useful refinements:
+
+- **The 6 high-attention items:** Codex confirms **5 of 6 as HIGH**. It **downgraded the 6th** (the job→invoice "who did it" forgery) to **MEDIUM** — which now matches my own assessment, settling a long-standing split. So you really have **5 clear high-priority items**, not 6.
+- **The 8 medium items:** Codex **agreed with all 8** (severity and fix both sound).
+- **The 17 low items:** Codex agreed **16 of 17** are correctly low, and flagged **1 as droppable** (a sub-penny acre-rounding tally that isn't a real money bug — I'd already marked it as droppable).
+- **Two fixes Codex says need to be done *more completely* than first written (important when you approve them):**
+  1. **Field-application invoice protection (HIGH #5):** the database guard must block the generic editor from touching *or re-typing* a field-app invoice **and** the screen should route those edits to the proper editor — not just one of the two.
+  2. **The prepay / blend / commission fixes (HIGHs):** each needs its specific completeness detail — the prepay fix must consume credits through the proper ledger with locking; the blend fix must check no *other* live invoice remains; the commission fix must hard-block the cancel and guard the payout to pending-only. (All already noted in the fix write-ups — Codex just confirmed they're necessary.)
+- **Codex's recommended fix order:** the **two prepay money bugs first** (they share the prepaid-balance ledger), then the **commission payout**, then the **blend double-billing and field-app** ones.
+
+**Net:** an independent model agrees this is a solid, real, well-prioritized list — **5 clear HIGHs + 8 MEDs + 16 LOWs**, all latent, with one low item droppable. Nothing was over-stated except the one HIGH→MEDIUM downgrade. You can approve with confidence.
+
+---
+
 ## ✅ Committed this run (green — safe, reversible, already verified)
 
 **1. Cancelled commissions no longer show up when you go to pay commissions** — `commit 6ded5ce`
