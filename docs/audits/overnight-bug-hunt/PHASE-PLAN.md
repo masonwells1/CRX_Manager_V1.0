@@ -26,8 +26,8 @@ when every Phase-1 key is drained.
 | `migration-drift` | overload collisions, CHECK regressions, column drift, updated_at violations | queued |
 | `types-drift` | src/types/index.ts vs live schema | queued |
 | `frontend-safety` | checkMutationResult / assertRpcResult / confirm()/alert() / Sentry / service_role / logActivity | hunted ×1 (c14) — 1 new (checkMutationResult has no coverage-gate, LOW prevention-infra; re-tiered green->park because a correct gate needs a proximity-scan, not the equality ratchet). 1 more confirming pass |
-| `lifecycle-invariants` | status vs live CHECK, unenforced transitions, delivery two-step, Net-Free | queued |
-| `edge-and-pdf` | 6 edge fns (CORS/JWT/admin/idempotency/drift) + customer PDFs | queued |
+| `lifecycle-invariants` | status vs live CHECK, unenforced transitions, delivery two-step, Net-Free | hunted ×1 (c15) — 1 new (jobs enforcer accepts cancel-from-any-status, LOW; DB-layer gap, frontend-guarded) + 2 transfer_job re-confirms + 1 refuted doc-nit. 1 more confirming pass |
+| `edge-and-pdf` | 6 edge fns (CORS/JWT/admin/idempotency/drift) + customer PDFs | hunted ×1 (c15) — **CLEAN (0 findings)**: the 6 edge fns (CORS/JWT/admin/idempotency) + customer PDFs all passed. A 2nd clean pass would drain it |
 | `docs-deps-tests` | doc-drift counts, npm audit, test-coverage gaps | queued |
 
 ## Suggested cycle ordering (Phase 1)

@@ -214,3 +214,16 @@ traps that would bite once invoices/jobs start flowing. Worst-first.
 |---|---|---|---|
 | T | **A blend-ticket status function lets the caller fake "who did it."** The same actor-check already on its sibling functions wasn't applied here. | Affects only the activity log (not the money ledger), has no screen that calls it, and no blend data exists live — so very low impact. Needs a one-line database fix. | LOW |
 | U | **Missing automatic safety net for database writes.** There's a strong auto-check for one type of call but not the matching one for writes; a future sloppy write could falsely show "success" on a blocked permission. | Nothing wrong today (all current writes are correct) — it's a "prevent a future mistake" guardrail. I parked the correct approach to add it carefully (the quick version would mis-flag good code). | LOW |
+
+### Cycle 15 — 2026-06-20 — sole driver: lifecycle rules + the edge functions
+- **The reassuring headline:** I checked the **6 background services** (the email sender, file/document upload, user-creation, password reset, blend-ticket processing) and the **customer PDFs** — for permission checks, login enforcement, admin-only gating, and duplicate protection — and found **nothing wrong**. That's a real attack surface, and it came back clean.
+- **One new small issue (LOW, item V):** the database doesn't stop a *job* from being cancelled out of any state (e.g. cancelling an already-invoiced job) — only the screen prevents it. The matching rule *is* enforced in the database for orders and deliveries; jobs just missed it. Can't happen through the app today, and there are no completed/invoiced jobs live — it's a "tighten the rule at the database level" defense fix. Codex confirmed; needs a database fix → parked.
+- **Two known job→invoice items resurfaced** (the "who did it" forgery and the missing audit-log row) — already on your list, not new.
+- **One doc note (not a bug):** the written order-lifecycle summary implies a "cancelled → voided" step that the code correctly doesn't allow. The code is right; the doc summary is just compressed. I left it alone (it's a core file and a borderline wording nit) — flagging in case you want it clarified.
+- **Fixed (green):** 0. **Parked (yellow):** 1 (item V). Nothing pushed or touched live.
+
+### Parked — added in Cycle 15 (latent today)
+
+| # | Plain-English issue | Why it matters | Severity |
+|---|---|---|---|
+| V | **A job can be cancelled from any state at the database level** (e.g. an already-invoiced job), with only the screen stopping it. | The matching guard already exists for orders and deliveries; jobs missed it. Can't happen through the app, and no completed/invoiced jobs exist live — it's a defense fix to enforce the rule in the database too. | LOW |
