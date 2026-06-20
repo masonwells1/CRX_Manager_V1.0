@@ -199,3 +199,18 @@ traps that would bite once invoices/jobs start flowing. Worst-first.
 | # | Plain-English issue | Why it matters | Severity |
 |---|---|---|---|
 | S | **Deleting a draft blend-ticket invoice strands the ticket as "billed" forever.** Deleting the invoice doesn't reset the ticket's billing status, so it stays "billed" with no actual invoice — and the system then refuses to bill it again. | You'd lose the ability to bill that blend ticket without a developer fixing the database by hand. Harmless today (no blend tickets live). Fix bundles with the related blend-ticket fix already on your list. | MEDIUM |
+
+### Cycle 14 — 2026-06-20 — sole driver: **first whole-app (non-billing) cycle** — security + frontend safety
+- **Found:** 2 small issues (both LOW) + 1 false alarm (correctly dismissed). This was the first pass over the *rest* of the app now that the billing engine is wrapped.
+- **Item T (LOW, security):** one blend-ticket function lets a caller fake "who did it" on a status-change log entry (the same fix already applied to its two sibling functions just wasn't applied to this one). Low impact — it only affects an activity log (not the money ledger), there's no screen that calls it, and there's no blend-ticket data live. Codex rated it slightly higher (medium); I've kept both views. Needs a database fix → parked.
+- **Item U (LOW, safety-net):** the app has a strong automatic safety net for one kind of database call but **not** the matching net for database *writes* — so a future write written a certain sloppy way could silently report "success" even when permissions blocked it. **Every current write is correctly written**, so nothing is wrong today; this is about preventing a future mistake.
+  - **Why I didn't auto-fix this one:** it's the kind of thing I normally *can* safely fix on my own (it's just a test). But the obvious quick version would be **wrong** — it would falsely flag dozens of correct files. Doing it right needs a more careful approach, and that's a change to the whole team's automated checks, so it shouldn't be rushed in unattended at 1 AM. Codex agreed. I've parked it with the exact correct approach written down, to do properly later.
+- **The false alarm:** a function that *looked* like it skipped a permission check, but the check is actually enforced (and any violation is fully rolled back) by the function it calls. No bug.
+- **Fixed (green):** 0. **Parked (yellow):** 2 (items T & U). Nothing pushed or touched live.
+
+### Parked — added in Cycle 14 (latent today)
+
+| # | Plain-English issue | Why it matters | Severity |
+|---|---|---|---|
+| T | **A blend-ticket status function lets the caller fake "who did it."** The same actor-check already on its sibling functions wasn't applied here. | Affects only the activity log (not the money ledger), has no screen that calls it, and no blend data exists live — so very low impact. Needs a one-line database fix. | LOW |
+| U | **Missing automatic safety net for database writes.** There's a strong auto-check for one type of call but not the matching one for writes; a future sloppy write could falsely show "success" on a blocked permission. | Nothing wrong today (all current writes are correct) — it's a "prevent a future mistake" guardrail. I parked the correct approach to add it carefully (the quick version would mis-flag good code). | LOW |

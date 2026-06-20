@@ -22,10 +22,10 @@ when every Phase-1 key is drained.
 
 | Key | Subsystem | Status |
 |---|---|---|
-| `rls-security` | RLS coverage, NEW anon-exec SECDEF mutators, search_path, actor-forgery | queued |
+| `rls-security` | RLS coverage, NEW anon-exec SECDEF mutators, search_path, actor-forgery | hunted ×1 (c14) — 1 new (update_blend_ticket_billing_status forgeable-actor, LOW/MED split; the blend RPC a3ba49c missed) + 1 refuted (create_order_from_blend_ticket — protected by downstream link txn-abort). 1 more confirming pass |
 | `migration-drift` | overload collisions, CHECK regressions, column drift, updated_at violations | queued |
 | `types-drift` | src/types/index.ts vs live schema | queued |
-| `frontend-safety` | checkMutationResult / assertRpcResult / confirm()/alert() / Sentry / service_role / logActivity | queued |
+| `frontend-safety` | checkMutationResult / assertRpcResult / confirm()/alert() / Sentry / service_role / logActivity | hunted ×1 (c14) — 1 new (checkMutationResult has no coverage-gate, LOW prevention-infra; re-tiered green->park because a correct gate needs a proximity-scan, not the equality ratchet). 1 more confirming pass |
 | `lifecycle-invariants` | status vs live CHECK, unenforced transitions, delivery two-step, Net-Free | queued |
 | `edge-and-pdf` | 6 edge fns (CORS/JWT/admin/idempotency/drift) + customer PDFs | queued |
 | `docs-deps-tests` | doc-drift counts, npm audit, test-coverage gaps | queued |
