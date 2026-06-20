@@ -8,8 +8,8 @@ when every Phase-1 key is drained.
 
 | Key | Subsystem | Status |
 |---|---|---|
-| `invoices-core` | post/create/void invoice, save_field_app_invoice, delete_invoices, finance charges | hunted ×2 (c1 broad + c2 focused) — still finding (3 new c2); NOT drained, needs 1 dry cycle |
-| `jobs-to-billing` | transfer_job_to_invoice, job-mix calculator, recipe pricing, per-acre machine fee | hunted ×2 (c1 broad + c2 focused) — still finding (1 new c2 + reconfirms); NOT drained, needs 1 dry cycle |
+| `invoices-core` | post/create/void invoice, save_field_app_invoice, delete_invoices, finance charges | hunted ×3 (c1/c2/c6) — c6 surfaced only re-confirms here + 1 new shared with jobs; new-rate dropping (c1 many → c2 3 → c6 ~1). NOT drained, 1 more re-run likely dry |
+| `jobs-to-billing` | transfer_job_to_invoice, job-mix calculator, recipe pricing, per-acre machine fee | hunted ×3 (c1/c2/c6) — c6 was 6/7 re-confirms of 3 parked transfer_job_to_invoice items + 1 new (header≠sum(lines), LOW). New-rate dropping. NOT drained, 1 more re-run likely dry |
 | `field-app-invoices` | FieldApplicationInvoice + save_field_app_invoice + field/acre split + override-grower shares | hunted ×1 (c3) — DRY (0 new; 1 re-confirm of cycle-1 generic-editor-bypass, kept parked-coordinate). Needs 1 more dry cycle to mark drained, but signal looks exhausted (the open defect is parked pending feat/as-applied-invoices) |
 | `commissions` | commission_split, per-order records, recompute-on-edit, commission_payments batch | hunted ×1 (c4) — 1 new (edit-recompute rounding doesn't reconcile, LOW) + 1 refuted. NOT drained, needs 1 more cycle |
 | `deliveries-billing` | confirm/complete/quick/cancel/void delivery + inventory txn types | hunted ×1 (c4) — 1 new (complete_delivery partial re-bill leaves cost stale, MED) + 1 re-confirm (quick-delivery dup oversell). NOT drained, needs 1 more cycle |
