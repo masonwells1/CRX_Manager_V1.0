@@ -168,6 +168,20 @@ Setting `updated_at = now()` in an UPDATE on these tables will crash the RPC. Th
 
 ---
 
+## Money-Integrity Invariants (overnight bug hunt — parked HIGHs, 2026-06-19)
+
+These are **latent** today (the prepay & blend-ticket subsystems are dormant on live), but each is a confirmed HIGH that will corrupt money the moment the subsystem is exercised. Fixes are **parked** for Mason in `docs/audits/overnight-bug-hunt/REPORT.md`. Whoever writes those migrations: preserve these invariants and don't reintroduce the bug.
+
+| Area | Invariant that must hold | The bug to avoid |
+|------|--------------------------|------------------|
+| **Prepay apply (any path)** | Every spend of prepay must INSERT a `prepay_applications` row (which is what drives `prepay_credits.balance_cents` via `trg_recompute_prepay_credit_balance`) **and** decrement `customers.prepay_balance_cents` in lockstep — exactly like `apply_prepay_to_invoice`. | `apply_remaining_prepayments` / `batch_apply_all_prepayments` decrement only the customer aggregate and write **no** `prepay_applications` row → each credit's `balance_cents` stays stale-HIGH → the **same dollars can be applied a second time** (double-spend). Never adjust only the denormalized aggregate. |
+| **Prepay apply → invoice status** | When a prepay application drives an invoice's `balance_cents` to 0, the RPC must also flip `status` to `'paid'` (mirror the `CASE WHEN (...)<=0 THEN 'paid'` in `apply_prepay_to_invoice`). No trigger derives `status` from `balance_cents`. | `apply_remaining_prepayments` updates only `prepay_applied_cents`, leaving a fully-settled invoice stuck at `'posted'` with balance 0 → status-keyed AR/aging misreads it as open. |
+| **Blend-ticket re-bill guard** | A grouped (multi-customer) blend ticket fans out into **multiple** invoices sharing one `blend_ticket_id`. Only reset `blend_tickets.payment_status` to `'unbilled'` when **NO** non-voided/non-cancelled invoice remains for that ticket: `... AND NOT EXISTS (SELECT 1 FROM invoices WHERE blend_ticket_id = NEW.blend_ticket_id AND status NOT IN ('voided','cancelled'))`. | `sync_blend_ticket_payment_status` resets the **whole** ticket to `'unbilled'` when **one** of its invoices is voided → the ticket becomes re-billable while siblings stay posted → `create_invoice_from_blend_ticket` generates a **second full set of invoices** = double-billing every customer on the ticket. |
+
+> Regression tests are deferred until the fixes land (a "fails-before / passes-after" test needs the fix to exist). When you write each parked migration, add the matching test then.
+
+---
+
 ## Source
 
 This file consolidates lessons from `~/.claude/projects/.../memory/feedback.md` and historical debugging sessions. Add new entries here whenever a non-obvious quirk causes a bug.

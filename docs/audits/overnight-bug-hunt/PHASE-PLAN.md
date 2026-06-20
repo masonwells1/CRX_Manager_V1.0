@@ -13,8 +13,8 @@ when every Phase-1 key is drained.
 | `field-app-invoices` | FieldApplicationInvoice + save_field_app_invoice + field/acre split + override-grower shares | hunted ×1 (c3) — DRY (0 new; 1 re-confirm of cycle-1 generic-editor-bypass, kept parked-coordinate). Needs 1 more dry cycle to mark drained, but signal looks exhausted (the open defect is parked pending feat/as-applied-invoices) |
 | `commissions` | commission_split, per-order records, recompute-on-edit, commission_payments batch | hunted ×1 (c4) — 1 new (edit-recompute rounding doesn't reconcile, LOW) + 1 refuted. NOT drained, needs 1 more cycle |
 | `deliveries-billing` | confirm/complete/quick/cancel/void delivery + inventory txn types | hunted ×1 (c4) — 1 new (complete_delivery partial re-bill leaves cost stale, MED) + 1 re-confirm (quick-delivery dup oversell). NOT drained, needs 1 more cycle |
-| `prepay-blend` | prepay apply/earmark + blend-ticket invoice/payment-status/actor | queued |
-| `splits-shares-allocation` | order_item_field_allocations, create_split_invoices_from_order, dormant shares subsystems, allocate_payment, write-offs | queued |
+| `prepay-blend` | prepay apply/earmark + blend-ticket invoice/payment-status/actor | hunted ×1 (c5) — 3 new (prepay batch double-spend escalated to HIGH; prepay status-not-paid MED; blend grouped-ticket double-unbill HIGH) + 2 refuted. NOT drained, needs 1 more cycle |
+| `splits-shares-allocation` | order_item_field_allocations, create_split_invoices_from_order, dormant shares subsystems, allocate_payment, write-offs | hunted ×1 (c5) — 2 new (update_allocation_set no-sum-validation LOW/dead; field-app acre-rounding LOW) + 2 refuted. NOT drained, needs 1 more cycle |
 
 ## Phase 2 — Broad whole-app sweep (after Phase 1 drains)
 
