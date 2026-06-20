@@ -282,10 +282,12 @@
       "dedupeKey": "blend:create_invoice_from_blend_ticket:prepaid-rebill-gap",
       "severity": "LOW",
       "tier": "yellow",
-      "status": "parked",
+      "status": "built-pending-apply",
       "fixKind": "migration",
       "cycle": 1,
-      "note": "Re-bill guard only blocks payment_status='billed'; a ticket manually set to 'prepaid'/'no_charge' can still generate a second invoice. Widen guard to allow billing only from 'unbilled'."
+      "note": "Re-bill guard only blocks payment_status='billed'; a ticket manually set to 'prepaid'/'no_charge' can still generate a second invoice. Widen guard to allow billing only from 'unbilled'.",
+      "migration": "20260620240000_blend_invoice_rebill_guard_unbilled_only.sql",
+      "buildDecision2026-06-20": "BUILT. Widened the re-bill guard from payment_status='billed' to IS DISTINCT FROM 'unbilled', so a prepaid/no_charge/NULL ticket can no longer generate a second invoice. CHECK confirms states = unbilled|billed|prepaid|no_charge. Re-bill-after-void still works (trg_sync_blend_ticket_payment resets to unbilled). Verbatim 16.7KB body + the 2-line guard change only; rolled-back validated vs the file's exact text: plpgsql_check 0, REMOVED = exactly the 2 old guard lines, ADDED = only the new guard + comments. INSERT-only fn; no interaction with the field-app type-lock trigger. NOT applied."
     },
     {
       "dedupeKey": "concurrency:save_field_app_invoice:no-row-lock",
