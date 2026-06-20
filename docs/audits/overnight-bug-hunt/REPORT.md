@@ -186,3 +186,16 @@ traps that would bite once invoices/jobs start flowing. Worst-first.
 | # | Plain-English issue | Why it matters | Severity |
 |---|---|---|---|
 | R | **The late-fee preview and the actual late-fee run count different invoices.** The preview skips already-"overdue" invoices and ignores the grace period; the real run includes them. | The late-fee amount you approve in the preview can be **less than what's actually billed** to a customer who appears in the preview. Can't bill a customer the preview didn't show at all. Harmless today (no overdue invoices / late fees live). Fix: make preview and generate share one identical rule. | MEDIUM |
+
+### Cycle 13 — 2026-06-20 — sole driver: final prepay/blend + split pass — **1 new, billing engine wrapped**
+- **One new issue (MEDIUM, item S):** if you **delete a draft blend-ticket invoice**, the blend ticket gets **stuck as "billed" with no invoice** — and then it can never be billed again (you'd need a developer to fix it in the database). It's the mirror image of the multi-customer blend bug already on your list. Harmless today (no blend tickets live). Codex confirmed it; fix is to reset the ticket when its invoice is deleted.
+- **Good news on a HIGH:** a fresh review independently **re-confirmed** the multi-customer blend double-billing issue is real (the same one a faulty review tried to dismiss last cycle) — so it's solidly on your list, no doubt about it.
+- **Three false alarms, all correctly dismissed** (I checked each — a known unused function, a misread on an allocation function that's actually fine, and a "what if a future caller misuses it" that no current code does).
+- **Milestone — the billing engine is now thoroughly checked.** 13 cycles, every billing subsystem hunted; the serious money issues were all found early and are on your list. **From here the hunt moves to the rest of the app** (security/permissions, data-type drift, frontend safety, edge functions, etc.) — fresh ground that hasn't been examined yet.
+- **Fixed (green):** 0. **Parked (yellow):** 1 new (item S). Nothing pushed or touched live.
+
+### Parked — added in Cycle 13 (need a migration; latent today)
+
+| # | Plain-English issue | Why it matters | Severity |
+|---|---|---|---|
+| S | **Deleting a draft blend-ticket invoice strands the ticket as "billed" forever.** Deleting the invoice doesn't reset the ticket's billing status, so it stays "billed" with no actual invoice — and the system then refuses to bill it again. | You'd lose the ability to bill that blend ticket without a developer fixing the database by hand. Harmless today (no blend tickets live). Fix bundles with the related blend-ticket fix already on your list. | MEDIUM |
