@@ -27,8 +27,8 @@ when every Phase-1 key is drained.
 | `types-drift` | src/types/index.ts vs live schema | hunted ×1 (c16) — effectively CLEAN: 0 real findings; 3 type-accuracy nits all refuted (guarded/unreachable/by-design). A 2nd pass drains |
 | `frontend-safety` | checkMutationResult / assertRpcResult / confirm()/alert() / Sentry / service_role / logActivity | hunted ×1 (c14) — 1 new (checkMutationResult has no coverage-gate, LOW prevention-infra; re-tiered green->park because a correct gate needs a proximity-scan, not the equality ratchet). 1 more confirming pass |
 | `lifecycle-invariants` | status vs live CHECK, unenforced transitions, delivery two-step, Net-Free | hunted ×1 (c15) — 1 new (jobs enforcer accepts cancel-from-any-status, LOW; DB-layer gap, frontend-guarded) + 2 transfer_job re-confirms + 1 refuted doc-nit. 1 more confirming pass |
-| `edge-and-pdf` | 6 edge fns (CORS/JWT/admin/idempotency/drift) + customer PDFs | hunted ×1 (c15) — **CLEAN (0 findings)**: the 6 edge fns (CORS/JWT/admin/idempotency) + customer PDFs all passed. A 2nd clean pass would drain it |
-| `docs-deps-tests` | doc-drift counts, npm audit, test-coverage gaps | queued |
+| `edge-and-pdf` | 6 edge fns (CORS/JWT/admin/idempotency/drift) + customer PDFs | **DRAINED** (c15 + c17, two clean passes — 0 findings both times). The edge-fn attack surface (CORS/JWT/admin/idempotency) + customer PDFs are solid |
+| `docs-deps-tests` | doc-drift counts, npm audit, test-coverage gaps | hunted ×1 (c17) — 1 new (trigger-count doc drift 47->49, LOW cosmetic, parked for /update-docs) + 4 refuted (E2E-not-in-CI + dompurify-dead-code + 2 test-coverage nits — all out-of-scope/hygiene notes). 1 more pass |
 
 ## Suggested cycle ordering (Phase 1)
 

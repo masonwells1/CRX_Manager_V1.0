@@ -235,3 +235,18 @@ traps that would bite once invoices/jobs start flowing. Worst-first.
   - The code's data definitions match the live database (a few spots where the code is slightly *looser* than the database — saying a value is always present when it can occasionally be empty — but every one of those is already safely handled, so nothing can break).
 - **Found:** 0 new issues. **Fixed:** 0. **Parked:** 0. Nothing pushed or touched live.
 - This is the **1st of 3 consecutive quiet cycles** that would end the hunt. One area left to check first (project docs/dependencies/test gaps), then a couple of confirming passes.
+
+### Cycle 17 — 2026-06-20 — sole driver: project docs / dependencies / tests (+ 2nd edge-function pass)
+- **One tiny new item (LOW, item W):** a documentation count is stale — the docs say there are 47 automatic database triggers, but there are now **49** (2 were added recently). Purely cosmetic — nothing runs differently — but I parked it rather than auto-fix it, because the count lives in a few places including the main instructions file and an auto-generated file, so it's cleaner to update them all together properly (a routine "sync the docs" task) than to hand-edit one spot at 4 AM.
+- **The edge functions passed a 2nd clean check** — that whole area (email, uploads, admin services, PDFs) is now marked fully checked.
+- **A few things looked concerning but checked out fine** (all dismissed after verification):
+  - A flagged security advisory in a PDF library — but the vulnerable part is **never used** (we build PDFs a different way), so it can't be exploited.
+  - The full end-to-end test suite doesn't run automatically in the build pipeline — **but** that's a known, deliberate setup (it can't safely run against the live site, and the heavy financial tests weren't in the automated set anyway). Flagging for your awareness, not as a bug.
+- **Found:** 1 cosmetic doc item. **Fixed:** 0. **Parked:** 1 (item W). Nothing pushed or touched live.
+- **The whole app has now been swept** — billing engine + security, permissions, lifecycle rules, edge functions, type/schema consistency, docs/dependencies/tests. From here it's a couple of confirming passes to wrap up.
+
+### Parked — added in Cycle 17 (cosmetic)
+
+| # | Plain-English issue | Why it matters | Severity |
+|---|---|---|---|
+| W | **A documentation count is out of date** (says 47 database triggers, there are 49). | Purely cosmetic — nothing behaves differently. Best fixed by the routine "sync the docs" task so all the places that mention the count update together. | LOW |
