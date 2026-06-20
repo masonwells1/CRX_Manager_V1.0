@@ -20,7 +20,7 @@
 - ✅ order_item_field_allocations edit-lock LOW — `20260620180000_oifa_post_invoice_edit_lock.sql`.
 - ✅ create_invoice_for_unbilled_delivery invoice_created MED + create_invoice_from_order total_cost_cents LOW — `20260620190000_invoice_creator_provenance_totals.sql`.
 
-**MEDs/LOWs — REMAINING (next session; all surgical, build the same proven way):**
+**MEDs/LOWs — ALL SURGICAL MIGRATIONS BUILT 2026-06-20 (only the 3 DEFERRED-tier items below remain — they need their own non-migration passes):**
 - ✅ **complete_delivery cluster** — BUILT (`20260620220000_complete_delivery_audit_and_partial_cost.sql`): invoice_created audit row (MED) in the auto-invoice block + total_cost_cents recompute (LOW) in the partial-rebill branch. Verbatim body + 2 deltas; rolled-back validated (plpgsql_check 0, line-diff only-additive). NOT applied.
 - ✅ **create_quick_delivery** duplicate-line aggregate — BUILT (`20260620230000_quick_delivery_aggregate_dup_lines.sql`): validation loop now aggregates by product_id (SUM qty) before the net-available check; loop yields a jsonb object so the body is byte-identical. Rolled-back validated vs the file's exact text (plpgsql_check 0, REMOVED=(none), aggregation sums dup lines). NOT applied.
 - ✅ **create_invoice_from_blend_ticket** prepaid-rebill-gap — BUILT (`20260620240000_blend_invoice_rebill_guard_unbilled_only.sql`): widened the re-bill guard from `payment_status='billed'` to `IS DISTINCT FROM 'unbilled'` (blocks prepaid/no_charge/NULL; re-bill-after-void still works). Verbatim 16.7KB body + 2-line guard change; rolled-back validated vs file's exact text (plpgsql_check 0, REMOVED = the 2 old guard lines, ADDED = only the new guard). NOT applied.
