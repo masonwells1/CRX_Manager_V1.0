@@ -22,7 +22,7 @@
 
 **MEDs/LOWs — REMAINING (next session; all surgical, build the same proven way):**
 - ✅ **complete_delivery cluster** — BUILT (`20260620220000_complete_delivery_audit_and_partial_cost.sql`): invoice_created audit row (MED) in the auto-invoice block + total_cost_cents recompute (LOW) in the partial-rebill branch. Verbatim body + 2 deltas; rolled-back validated (plpgsql_check 0, line-diff only-additive). NOT applied.
-- ⬜ **create_quick_delivery** duplicate-line aggregate (LOW, ~13.2KB fn): aggregate by product_id before the net-available check.
+- ✅ **create_quick_delivery** duplicate-line aggregate — BUILT (`20260620230000_quick_delivery_aggregate_dup_lines.sql`): validation loop now aggregates by product_id (SUM qty) before the net-available check; loop yields a jsonb object so the body is byte-identical. Rolled-back validated vs the file's exact text (plpgsql_check 0, REMOVED=(none), aggregation sums dup lines). NOT applied.
 - ⬜ **create_invoice_from_blend_ticket** prepaid-rebill-gap (LOW, ~16.7KB fn, own migration): widen the re-bill guard from `payment_status='billed'` to "only bill from 'unbilled'".
 - ⬜ **update_allocation_set DROP** (LOW) — DEFERRED-tier: dead RPC (0 app callers; only generated types + rpcFixtureLiveDiff.test.ts). DROP needs the migration + remove from the fixture test + regenerate supabase types — multi-file churn, do via a deliberate pass, not a lone migration.
 - ⬜ **checkMutationResult proximity-scan test** (frontend) — DEFERRED-tier: fragile CI meta-tooling; author deliberately via /ship (the equality mirror is wrong; needs an AST/proximity scan). NOT a quick fix.

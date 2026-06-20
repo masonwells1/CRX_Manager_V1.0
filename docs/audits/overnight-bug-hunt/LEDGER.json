@@ -270,11 +270,13 @@
       "dedupeKey": "concurrency:create_quick_delivery:duplicate-line-oversell",
       "severity": "LOW",
       "tier": "yellow",
-      "status": "parked",
+      "status": "built-pending-apply",
       "fixKind": "migration",
       "cycle": 1,
       "reConfirmedCycle": 4,
-      "note": "create_quick_delivery validates inventory per-line independently, so duplicate product lines in one call can over-prebook. Aggregate by product_id before the net-available check. Defense-in-depth (UI already dedupes). CYCLE-4 RE-CONFIRM (alt dedupeKey concurrency:create_quick_delivery:duplicate-product-oversell; verifier LOW): grounded against the live fn — two-loop structure, the validation loop reads quantity_prebooked WITHOUT per-product accumulation and FOR UPDATE locks against other txns only; the prebook UPDATE is only in the 2nd loop; so one call listing the same product_id twice passes both checks then deducts both -> net-free negative. UI-mitigated: QuickDeliveryModal.tsx:174 merges duplicate products into one summed line; the sole prod caller QuickDeliveryModal.tsx:232 passes the deduped array. Insider-only reachable (admin/sales_rep/driver hand-crafting a raw RPC payload). Same finding as cycle 1 — enriched, not re-parked."
+      "note": "create_quick_delivery validates inventory per-line independently, so duplicate product lines in one call can over-prebook. Aggregate by product_id before the net-available check. Defense-in-depth (UI already dedupes). CYCLE-4 RE-CONFIRM (alt dedupeKey concurrency:create_quick_delivery:duplicate-product-oversell; verifier LOW): grounded against the live fn — two-loop structure, the validation loop reads quantity_prebooked WITHOUT per-product accumulation and FOR UPDATE locks against other txns only; the prebook UPDATE is only in the 2nd loop; so one call listing the same product_id twice passes both checks then deducts both -> net-free negative. UI-mitigated: QuickDeliveryModal.tsx:174 merges duplicate products into one summed line; the sole prod caller QuickDeliveryModal.tsx:232 passes the deduped array. Insider-only reachable (admin/sales_rep/driver hand-crafting a raw RPC payload). Same finding as cycle 1 — enriched, not re-parked.",
+      "migration": "20260620230000_quick_delivery_aggregate_dup_lines.sql",
+      "buildDecision2026-06-20": "BUILT. Aggregated the validation (first) loop by product_id (SUM quantity) BEFORE the net-available check, exactly the ledger prescription. Loop yields a jsonb object so the body is byte-identical; only the loop SOURCE changed. The prebook (second) loop stays per-line. Verbatim body + this one change; rolled-back validated against the FILE's exact text: plpgsql_check 0, line-diff REMOVED=(none) / ADDED=only the aggregation block, prebook-loop header count=1, and the GROUP BY aggregation behaviorally sums dup lines (60+60+5 -> 2 rows / 125). NOT applied."
     },
     {
       "dedupeKey": "blend:create_invoice_from_blend_ticket:prepaid-rebill-gap",
