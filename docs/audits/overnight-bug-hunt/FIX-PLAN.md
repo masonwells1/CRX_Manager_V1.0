@@ -21,7 +21,7 @@
 - ✅ create_invoice_for_unbilled_delivery invoice_created MED + create_invoice_from_order total_cost_cents LOW — `20260620190000_invoice_creator_provenance_totals.sql`.
 
 **MEDs/LOWs — REMAINING (next session; all surgical, build the same proven way):**
-- ⬜ **complete_delivery cluster** (1 migration, ~12.6KB fn): missing invoice_created audit row (MED) + total_cost_cents recompute in the partial-rebill branch (LOW). NOT touched by feat — safe here.
+- ✅ **complete_delivery cluster** — BUILT (`20260620220000_complete_delivery_audit_and_partial_cost.sql`): invoice_created audit row (MED) in the auto-invoice block + total_cost_cents recompute (LOW) in the partial-rebill branch. Verbatim body + 2 deltas; rolled-back validated (plpgsql_check 0, line-diff only-additive). NOT applied.
 - ⬜ **create_quick_delivery** duplicate-line aggregate (LOW, ~13.2KB fn): aggregate by product_id before the net-available check.
 - ⬜ **create_invoice_from_blend_ticket** prepaid-rebill-gap (LOW, ~16.7KB fn, own migration): widen the re-bill guard from `payment_status='billed'` to "only bill from 'unbilled'".
 - ⬜ **update_allocation_set DROP** (LOW) — DEFERRED-tier: dead RPC (0 app callers; only generated types + rpcFixtureLiveDiff.test.ts). DROP needs the migration + remove from the fixture test + regenerate supabase types — multi-file churn, do via a deliberate pass, not a lone migration.
