@@ -174,3 +174,15 @@ traps that would bite once invoices/jobs start flowing. Worst-first.
 | # | Plain-English issue | Why it matters | Severity |
 |---|---|---|---|
 | Q | **Order field/acre allocations aren't locked after invoicing.** The older "bill split" records get frozen once an order is invoiced; the newer field/acre allocation records don't. | Low risk: a re-bill guard already prevents a live double-charge. The only gap is that voiding the invoices, editing the allocations, then re-billing would bill the *edited* split instead of what was originally billed (a records/audit mismatch). One-line-equivalent: add the same lock the sibling table already has. | LOW |
+
+### Cycle 12 — 2026-06-19 — sole driver: confirming pass on invoices + job→invoice — **1 new (finance charges)**
+- **Found:** 5 confirmed — but after de-duplicating, **4 were already on your list** (the job→invoice function's four known quirks) and **1 was genuinely new.**
+- **The new one (MEDIUM, item R):** the **finance-charge "preview" and the actual "generate" don't count the same invoices.** When you review late-fee charges before applying them, the *preview* leaves out invoices already marked "overdue" and ignores the grace-period offset — but the real *generate* step includes them. So the number you approve in the preview can be **lower than what actually gets billed** to a customer. It can't surprise a customer who wasn't on the preview at all (the screen only generates for customers it showed you), but for a customer who *is* shown, the billed amount can differ from the previewed one. Harmless today (no late fees or overdue invoices exist live). Codex agreed it's real and MEDIUM. Fix: make the preview and the generate use the exact same rule (ideally one shared definition so they can't drift apart again).
+- **One half-claim I threw out:** an agent suggested the generic invoice editor should write to the money audit ledger on every draft edit — but that's **not** a bug (the ledger is for posted/voided money events, and draft edits aren't money events yet). Correctly logged as a non-issue.
+- **Fixed (green):** 0. **Parked (yellow):** 1 new (item R). Nothing pushed or touched live.
+
+### Parked — added in Cycle 12 (need a migration; latent today)
+
+| # | Plain-English issue | Why it matters | Severity |
+|---|---|---|---|
+| R | **The late-fee preview and the actual late-fee run count different invoices.** The preview skips already-"overdue" invoices and ignores the grace period; the real run includes them. | The late-fee amount you approve in the preview can be **less than what's actually billed** to a customer who appears in the preview. Can't bill a customer the preview didn't show at all. Harmless today (no overdue invoices / late fees live). Fix: make preview and generate share one identical rule. | MEDIUM |
