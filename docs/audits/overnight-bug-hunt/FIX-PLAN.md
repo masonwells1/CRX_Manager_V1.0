@@ -13,9 +13,27 @@
 - ⚠️ **prepay double-spend (`apply_remaining_prepayments`/`batch_apply_all_prepayments`) — NOT built; FLAGGED for Mason.** It is the EXACT Mechanism-A-vs-B collision that got the earmark engine SHELVED ([[project_earmark-engine-shelved-2026-06-14]]). The finding's fix (route bulk-apply through the per-credit `prepay_applications` FIFO ledger) is the architectural reserved-pool redesign, not a patch. Live-confirmed: `apply_remaining_prepayments` decrements only `customers.prepay_balance_cents`, writes no ledger rows; `reconcile_prepay_balances` re-creates the spent balance. Fully DORMANT (0 prepay_credits/applications live). RECOMMENDATION: defer to the prepay reserved-pool redesign, OR (cheap interim, since dormant) block the bulk-apply RPCs until that lands. Mason's call.
 - ⚠️ **field-app segregation HIGH — NOT built; FLAGGED for Mason (defer to `feat/as-applied-invoices`).** Live-confirmed the hole is real (live `save_invoice` flips invoice_type via COALESCE, re-inserts only generic items, no field-app guard) but DORMANT (0 field_application invoices). The COMPREHENSIVE fix already exists on `feat/as-applied-invoices` (migration `20260619160000_save_invoice_field_app_aware.sql` DELTAs A-H + `FieldInvoices.tsx` + preflight routing) — NOT on this branch, NOT applied live. A standalone guard here would collide with that rewrite on merge + make blend-backed field-app invoices uneditable. RECOMMENDATION: land `feat/as-applied-invoices` (carries the proper fix). (Lesson logged: an Explore subagent misreported it as 'already fixed here' — it had read the parent checkout `C:\CRX_Manager`, which is on `feat/as-applied-invoices`; corrected by direct git+live verification.)
 
-**MEDs/LOWs:**
-- ✅ jobs cancel-from-any-status MED — BUILT (`2b500521`, migration `20260620150000_job_cancel_gate.sql`). Rolled-back validated.
-- ⬜ REMAINING (build next, all surgical): void_payment partial-void status (MED) · finance charges preview/generate shared overdue-set (MED) · audit-log invoice_created on create_invoice_for_unbilled_delivery + complete_delivery (MED×2, 1 migration) · transfer_job_to_invoice cluster (coordinate w/ feat/as-applied-invoices — actor fix already parked there, don't double-fix) · derived totals total_cost_cents (save_invoice + create_invoice_from_order + complete_delivery partial-rebill + load_recipe_into_job, 1 migration) · create_quick_delivery duplicate-line (LOW) · order_item_field_allocations edit-lock trigger (LOW) · update_allocation_set DROP (LOW, verify 0 callers at apply) · blend prepaid-rebill-gap (`create_invoice_from_blend_ticket`, ~16KB fn — own migration) · checkMutationResult proximity-scan test (frontend) · doc-count drift (/update-docs). DROP: derive_customer_shares_from_fields acre-rounding (not a real bug).
+**MEDs/LOWs — BUILT this session (all rolled-back validated, NOT applied):**
+- ✅ jobs cancel-from-any-status MED — `2b500521`, `20260620150000_job_cancel_gate.sql`.
+- ✅ void_payment partial-void status MED — `20260620160000_void_payment_partial_void_status.sql`.
+- ✅ finance-charge preview/generate overdue-set MED — `20260620170000_finance_charge_preview_match_generate.sql`.
+- ✅ order_item_field_allocations edit-lock LOW — `20260620180000_oifa_post_invoice_edit_lock.sql`.
+- ✅ create_invoice_for_unbilled_delivery invoice_created MED + create_invoice_from_order total_cost_cents LOW — `20260620190000_invoice_creator_provenance_totals.sql`.
+
+**MEDs/LOWs — REMAINING (next session; all surgical, build the same proven way):**
+- ⬜ **complete_delivery cluster** (1 migration, ~12.6KB fn): missing invoice_created audit row (MED) + total_cost_cents recompute in the partial-rebill branch (LOW). NOT touched by feat — safe here.
+- ⬜ **create_quick_delivery** duplicate-line aggregate (LOW, ~13.2KB fn): aggregate by product_id before the net-available check.
+- ⬜ **create_invoice_from_blend_ticket** prepaid-rebill-gap (LOW, ~16.7KB fn, own migration): widen the re-bill guard from `payment_status='billed'` to "only bill from 'unbilled'".
+- ⬜ **update_allocation_set DROP** (LOW) — DEFERRED-tier: dead RPC (0 app callers; only generated types + rpcFixtureLiveDiff.test.ts). DROP needs the migration + remove from the fixture test + regenerate supabase types — multi-file churn, do via a deliberate pass, not a lone migration.
+- ⬜ **checkMutationResult proximity-scan test** (frontend) — DEFERRED-tier: fragile CI meta-tooling; author deliberately via /ship (the equality mirror is wrong; needs an AST/proximity scan). NOT a quick fix.
+- ⬜ **doc-count drift** (trigger 47->49, callable-RPC 227->226) — DEFERRED-tier: cosmetic, run /update-docs (spans CLAUDE.md + rpc-functions.md + AGENTS regen).
+
+**DEFERRED to feat/as-applied-invoices (would collide — that branch reworks these fns):**
+- transfer_job_to_invoice cluster (actor MED + invoice_created LOW + invoice_shares penny LOW + save_job header LOW) — feat has the parked actor/machine-fee/conversion fixes (20260618220000 / 20260619140000).
+- save_invoice total_cost_cents LOW — feat's 20260619160000 DELTA-E already syncs it.
+- load_recipe_into_job job-totals LOW — feat recipe-pricing rework (20260618230000 / 20260619150000).
+
+**DROP from list (not a real bug):** derive_customer_shares_from_fields acre-rounding.
 
 **Proven pipeline reminder:** read live body via read-only Supabase MCP → write migration (verbatim + surgical delta, header MUST NOT contain the literal `pg_get_functiondef(` or the sql-safety hook blocks the Write) → validate rolled-back in ONE execute_sql ending in `RAISE` (capture old def to temp → CREATE OR REPLACE the FILE's exact body → plpgsql_check + Postgres-normalized line-diff `regexp_replace(btrim(line),'\s+',' ','g')` → RAISE the report) → commit migration + LEDGER edit (mark `status: built-pending-apply`). Validate using the FILE's EXACT body text (a re-typed/compacted paste diffs against live formatting and gives noise). DO NOT apply live; Mason batch-approves; reviewers+Codex+apply-guard gate the apply.
 
