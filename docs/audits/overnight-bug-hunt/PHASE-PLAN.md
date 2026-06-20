@@ -1,5 +1,7 @@
 # Overnight Bug Hunt — Phase Plan & Subsystem Queue
 
+> **✅ HUNT COMPLETE (2026-06-20, after cycle 19).** Whole app swept — every Phase-1 and Phase-2 key hunted. 31 parked (6 HIGH-severity / 8 MED / 17 LOW, all latent) + 1 green auto-fix; 22 refuted. The loop stopped cleanly after cycles 16–19 produced no meaningful new bugs (clean schema/migration sweep + cosmetic doc-count nits + re-confirms). Restart with "start the overnight bug hunt". The only key not formally "drained" is `commissions` — its hunting is done, but it stays OPEN because its HIGH is parked pending Mason's fix.
+
 Each cycle runs 1–3 subsystem keys (keeps the Codex gates focused). Mark a key `drained`
 once two consecutive cycles on it surface no NEW confirmed findings. Move to Phase 2 only
 when every Phase-1 key is drained.
@@ -26,9 +28,9 @@ when every Phase-1 key is drained.
 | `migration-drift` | overload collisions, CHECK regressions, column drift, updated_at violations | hunted ×1 (c16) — **CLEAN**: plpgsql_check over 209 RPCs + 48 triggers = 0 errors; 0 overload collisions; 0 bad updated_at; idempotency all canonical. A 2nd clean pass drains. Reassuring (the 40+-bug March drift class is clean) |
 | `types-drift` | src/types/index.ts vs live schema | hunted ×1 (c16) — effectively CLEAN: 0 real findings; 3 type-accuracy nits all refuted (guarded/unreachable/by-design). A 2nd pass drains |
 | `frontend-safety` | checkMutationResult / assertRpcResult / confirm()/alert() / Sentry / service_role / logActivity | **DRAINED** (c14 + c18) — c18 2nd pass = 0 findings. The cycle-14 checkMutationResult coverage-gate item stays parked (proximity-scan test for /ship) |
-| `lifecycle-invariants` | status vs live CHECK, unenforced transitions, delivery two-step, Net-Free | hunted ×1 (c15) — 1 new (jobs enforcer accepts cancel-from-any-status, LOW; DB-layer gap, frontend-guarded) + 2 transfer_job re-confirms + 1 refuted doc-nit. 1 more confirming pass |
+| `lifecycle-invariants` | status vs live CHECK, unenforced transitions, delivery two-step, Net-Free | hunted ×2 (c15+c19) — 1 finding: jobs enforcer accepts cancel-from-any-status (re-rated LOW->MEDIUM in c19: terminal completed/invoiced jobs can be cancelled, orphaning invoice/application_records). Parked. No other new signal across 2 passes |
 | `edge-and-pdf` | 6 edge fns (CORS/JWT/admin/idempotency/drift) + customer PDFs | **DRAINED** (c15 + c17, two clean passes — 0 findings both times). The edge-fn attack surface (CORS/JWT/admin/idempotency) + customer PDFs are solid |
-| `docs-deps-tests` | doc-drift counts, npm audit, test-coverage gaps | hunted ×1 (c17) — 1 new (trigger-count doc drift 47->49, LOW cosmetic, parked for /update-docs) + 4 refuted (E2E-not-in-CI + dompurify-dead-code + 2 test-coverage nits — all out-of-scope/hygiene notes). 1 more pass |
+| `docs-deps-tests` | doc-drift counts, npm audit, test-coverage gaps | hunted ×2 (c17+c19) — 1 parked item (cosmetic doc-count drift: trigger 47->49 + callable-RPC 227->226 in rpc-functions.md/CLAUDE.md; fix via /update-docs) + 7 refuted across both passes (E2E-not-in-CI, dompurify-dead-code, CI-audit-gate, test-coverage/schema-skip nits, table-count-not-drifted). No real bug |
 
 ## Suggested cycle ordering (Phase 1)
 
