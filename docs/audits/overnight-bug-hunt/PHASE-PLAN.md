@@ -23,8 +23,8 @@ when every Phase-1 key is drained.
 | Key | Subsystem | Status |
 |---|---|---|
 | `rls-security` | RLS coverage, NEW anon-exec SECDEF mutators, search_path, actor-forgery | hunted ×1 (c14) — 1 new (update_blend_ticket_billing_status forgeable-actor, LOW/MED split; the blend RPC a3ba49c missed) + 1 refuted (create_order_from_blend_ticket — protected by downstream link txn-abort). 1 more confirming pass |
-| `migration-drift` | overload collisions, CHECK regressions, column drift, updated_at violations | queued |
-| `types-drift` | src/types/index.ts vs live schema | queued |
+| `migration-drift` | overload collisions, CHECK regressions, column drift, updated_at violations | hunted ×1 (c16) — **CLEAN**: plpgsql_check over 209 RPCs + 48 triggers = 0 errors; 0 overload collisions; 0 bad updated_at; idempotency all canonical. A 2nd clean pass drains. Reassuring (the 40+-bug March drift class is clean) |
+| `types-drift` | src/types/index.ts vs live schema | hunted ×1 (c16) — effectively CLEAN: 0 real findings; 3 type-accuracy nits all refuted (guarded/unreachable/by-design). A 2nd pass drains |
 | `frontend-safety` | checkMutationResult / assertRpcResult / confirm()/alert() / Sentry / service_role / logActivity | hunted ×1 (c14) — 1 new (checkMutationResult has no coverage-gate, LOW prevention-infra; re-tiered green->park because a correct gate needs a proximity-scan, not the equality ratchet). 1 more confirming pass |
 | `lifecycle-invariants` | status vs live CHECK, unenforced transitions, delivery two-step, Net-Free | hunted ×1 (c15) — 1 new (jobs enforcer accepts cancel-from-any-status, LOW; DB-layer gap, frontend-guarded) + 2 transfer_job re-confirms + 1 refuted doc-nit. 1 more confirming pass |
 | `edge-and-pdf` | 6 edge fns (CORS/JWT/admin/idempotency/drift) + customer PDFs | hunted ×1 (c15) — **CLEAN (0 findings)**: the 6 edge fns (CORS/JWT/admin/idempotency) + customer PDFs all passed. A 2nd clean pass would drain it |

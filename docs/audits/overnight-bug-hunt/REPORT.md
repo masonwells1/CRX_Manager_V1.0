@@ -227,3 +227,11 @@ traps that would bite once invoices/jobs start flowing. Worst-first.
 | # | Plain-English issue | Why it matters | Severity |
 |---|---|---|---|
 | V | **A job can be cancelled from any state at the database level** (e.g. an already-invoiced job), with only the screen stopping it. | The matching guard already exists for orders and deliveries; jobs missed it. Can't happen through the app, and no completed/invoiced jobs exist live — it's a defense fix to enforce the rule in the database too. | LOW |
+
+### Cycle 16 — 2026-06-20 — sole driver: code-vs-database consistency — **all clean (nothing new)**
+- **A clean, reassuring result.** This cycle checked the category that caused **40+ bugs back in spring** — where the database functions or the code's data definitions drift out of sync with the real database. It came back **clean**:
+  - Every one of the **209 database functions and 48 automatic triggers** passed an automated correctness check with **zero errors**.
+  - No duplicate/conflicting function definitions, no functions writing to columns that don't exist, and the duplicate-protection plumbing is all correct.
+  - The code's data definitions match the live database (a few spots where the code is slightly *looser* than the database — saying a value is always present when it can occasionally be empty — but every one of those is already safely handled, so nothing can break).
+- **Found:** 0 new issues. **Fixed:** 0. **Parked:** 0. Nothing pushed or touched live.
+- This is the **1st of 3 consecutive quiet cycles** that would end the hunt. One area left to check first (project docs/dependencies/test gaps), then a couple of confirming passes.
