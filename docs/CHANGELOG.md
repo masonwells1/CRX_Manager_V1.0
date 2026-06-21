@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-20 — Overnight bug-hunt remediation: all 13 surgical fix migrations applied live
+
+Applied **all 13** overnight bug-hunt fix migrations to production (Supabase project `rhyzpcqhnizqbxphqdkr`), live stamps `20260621022206`–`20260621030145` (evening of 2026-06-20 CT = 2026-06-21 UTC). Branch `claude/overnight-bug-hunt`. Each is a verbatim-live-body + surgical guard.
+
+- **5 HIGH money-guards:** prepay **bulk-apply hard-block** (`apply_remaining_prepayments` + `batch_apply_all_prepayments` → `PREPAY_BULK_APPLY_DISABLED`; Mason approved disabling the bulk buttons; per-invoice apply unaffected) · field-application **invoice_type lock trigger** (`enforce_field_application_type_lock` — a trigger, not a `save_invoice` rewrite, to avoid colliding with `feat/as-applied-invoices`) · **commission batch-freeze** (`cancel_order`/`void_order`/`cancel_delivery` block when a pending commission is in a non-voided payout batch; `BATCH_COMMISSION_DRIFT` guard) · **cross-customer prepay guard** (`apply_prepay_to_invoice` → `CUSTOMER_MISMATCH`) · **blend double-bill / orphan guard** (blend ticket only resets to `unbilled` when no live sibling invoice remains).
+- **8 MED/LOW:** job cancel gate (`_enforce_job_status_transition`) · `void_payment` partial-void status derived from balance · `preview_finance_charges` realigned to `generate_finance_charges` · OIFA post-invoice edit lock (`prevent_oifa_edit_after_post` trigger) · invoice-creator provenance/totals (`total_cost_cents` + `invoice_created` audit rows) · `complete_delivery` audit row + partial-rebill cost recompute · `create_quick_delivery` aggregates duplicate product lines by uuid · `create_invoice_from_blend_ticket` re-bill guard widened to `IS DISTINCT FROM 'unbilled'`.
+- **Two NEW trigger functions** added (`prevent_oifa_edit_after_post`, `enforce_field_application_type_lock`); no new callable RPCs. Doc counts bumped: migrations on disk **482 → 495**, trigger functions **47 → 51**, callable RPCs unchanged (226).
+- **Validation:** each gated by the **rls-security + migration-drift** reviewers + an independent **Codex** read-only review + the migration **apply-guard**; post-apply per-function `plpgsql_check = 0` errors / `overload = 1`, and the global overloads + `plpgsql_check` sweeps are clean. See `docs/audits/overnight-bug-hunt/` for the FIX-PLAN + LEDGER.
+
 ## 2026-06-17 — Retired dead `create_invoice_from_delivery` (Lane B delivery_id follow-up)
 
 Resolved the `delivery_id` duplicate-guard follow-up by **retiring the function** rather than patching it. **Migration `20260617210000`** (applied live, stamp `20260617210043`, Mason approved the retire).

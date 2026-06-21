@@ -26,6 +26,19 @@
       "scope": "5 fix migrations 20260620200000-240000 (the 2 HIGH guards + 3 MED/LOW)",
       "result": "4 PASS / 1 CONCERN(LOW) — quick_delivery text-vs-uuid grouping, FOLDED IN + re-validated",
       "verdict": "all 5 clean after the one LOW fold-in; NOT applied (awaiting Mason batch-apply approval)"
+    },
+    "appliedLive_2026_06_21": {
+      "approvedBy": "Mason: 'Start applying the overnight fixes' (3 batches, keep working, Codex-review each batch before applying, prepay bulk-block YES)",
+      "appliedAt": "2026-06-21 UTC (evening 2026-06-20 CT)",
+      "scope": "ALL 13 surgical fix migrations 20260620120000-240000 applied live to rhyzpcqhnizqbxphqdkr in 3 batches",
+      "batches": "B1=120000/130000/140000 (3 HIGH money-guards); B2=150000/160000/170000/180000/190000 (MED/LOW); B3=200000/210000/220000/230000/240000 (prepay bulk-block + field-app type-lock + 3 LOW)",
+      "gatesPerMigration": "rls-security-reviewer + migration-drift-reviewer (all CLEAN) -> Codex read-only batch gate (PASS all 3 batches) -> apply-guard proof with queryHash byte-binding -> apply_migration -> post-apply plpgsql_check=0 + overload=1 + guard-sentinel-present",
+      "sweepsAfterEachBatch": "global overloads predicate = 0 rows; global plpgsql_check(errors) = 0 rows",
+      "advisors": "security advisors unchanged (1 accepted ERROR profile_public_view; new prevent_oifa_edit_after_post is accepted trigger-fn grant-debt, inert on direct call)",
+      "liveVersionStamps": "20260621022206-030145 (names retain the 20260620* file stamp)",
+      "180000edit": "added DROP TRIGGER IF EXISTS before the bare CREATE TRIGGER (migration-drift-reviewer recommendation, parity with prevent_order_shares_edit_after_post)",
+      "stillOpen": "3 DEFERRED-tier non-migration items (update_allocation_set DROP, checkMutationResult proximity test, any residual doc-count nits); branch NOT yet merged to main / pushed (Mason to OK)",
+      "resultFiles": ".claude/session-state/migration-review-*.json (proofs, gitignored)"
     }
   },
   "cycles": [

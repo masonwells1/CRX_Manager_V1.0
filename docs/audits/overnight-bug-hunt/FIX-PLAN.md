@@ -1,5 +1,16 @@
 # Overnight Bug Hunt — FIX PLAN (build handoff for a fresh session)
 
+> ## ✅ APPLIED LIVE 2026-06-21 UTC (= evening 2026-06-20 CT) — ALL 13 SURGICAL FIX MIGRATIONS ARE LIVE.
+> Mason approved the batch-apply ("Start applying the overnight fixes"). All 13 migrations
+> (`20260620120000`–`240000`) applied to prod (rhyzpcqhnizqbxphqdkr) in 3 batches, each gated by
+> rls-security-reviewer + migration-drift-reviewer + a Codex read-only batch gate + the apply-guard proof
+> (queryHash byte-binding) + post-apply `plpgsql_check`=0 / overload=1 / guard-present checks. Global
+> overloads + plpgsql_check sweeps clean after every batch; security advisors unchanged (1 accepted ERROR,
+> the new `prevent_oifa_edit_after_post` is accepted trigger-fn grant-debt). Live version stamps
+> `20260621022206`–`030145` (names retain the file stamp). Branch `claude/overnight-bug-hunt`; NOT yet
+> merged to `main` (Mason to OK the merge/push). The 3 DEFERRED-tier non-migration items below remain open.
+> Original build handoff preserved below for history.
+
 > **Mason approved (2026-06-20): "Build ALL of them, then approve in batches."** Build every parked-finding
 > fix as a migration/change on `claude/overnight-bug-hunt`, validate each rolled-back against live (zero
 > footprint), commit to the branch — **but DO NOT apply anything to the live database.** Mason approves the

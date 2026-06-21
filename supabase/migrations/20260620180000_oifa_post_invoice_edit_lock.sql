@@ -58,6 +58,7 @@ BEGIN
 END;
 $function$;
 
+DROP TRIGGER IF EXISTS trg_oifa_lock_when_posted ON public.order_item_field_allocations;
 CREATE TRIGGER trg_oifa_lock_when_posted
   BEFORE INSERT OR DELETE OR UPDATE ON public.order_item_field_allocations
   FOR EACH ROW EXECUTE FUNCTION prevent_oifa_edit_after_post();
