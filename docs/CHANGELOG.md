@@ -4,6 +4,12 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-21 — Cleanup: retire dead `update_allocation_set` RPC + doc-count sync
+
+Deferred-item cleanup pass (Mason approved):
+- **Retired the dead `update_allocation_set` RPC** — `DROP FUNCTION` migration `20260621160000` (live stamp `20260621233102`) for a confirmed-dead function: 0 callers, 0 dependent objects, 0 rows; was admin-gated + audited, so never a security hole — pure dead-code hygiene. Gated pipeline: rls-security + migration-drift reviewers CLEAN, independent **Codex review PASS** (no findings), rolled-back live DROP smoke `SMOKE_PASS_ROLLBACK`. Companion edits in the same commit: removed from `src/types/supabase.ts` + the `rpcFixtureLiveDiff` snapshot (265→264), callable-RPC count **226→225** in CLAUDE.md + `docs/reference/rpc-functions.md`. The allocation tables stay (`invoice_line_allocations` is still written by `allocate_payment`). Precedent: the `create_invoice_from_delivery` retire (`20260617210000`).
+- **Doc-count drift synced** (earlier commit `9eb12b11`): `rpc-functions.md` (227/47 → live) + AGENTS.md regenerated.
+
 ## 2026-06-21 — As-Applied / Field Invoices: 4 parked migrations applied live + feature merged
 
 Finished the As-Applied / Field-Invoice feature: applied the **4 remaining parked migrations** to production (Supabase project `rhyzpcqhnizqbxphqdkr`) and merged the full feature (the new Field Invoices screens) from `feat/as-applied-invoices` into `main`.

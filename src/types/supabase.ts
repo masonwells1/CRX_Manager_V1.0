@@ -8986,15 +8986,6 @@ export type Database = {
         }
         Returns: undefined
       }
-      update_allocation_set: {
-        Args: {
-          p_entity_id: string
-          p_entity_type: string
-          p_reason_note?: string
-          p_splits: Json
-        }
-        Returns: string
-      }
       update_blend_ticket_billing_status: {
         Args: {
           p_blend_ticket_id: string

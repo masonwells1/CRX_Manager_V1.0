@@ -1,6 +1,6 @@
-# RPC Functions Reference (226 callable RPCs + 51 trigger/internal functions — live as of 2026-06-21)
+# RPC Functions Reference (225 callable RPCs + 51 trigger/internal functions — live as of 2026-06-21)
 
-> Live function inventory (Supabase `pg_proc`, 2026-06-21): **226 callable RPCs**, **51 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here). The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
+> Live function inventory (Supabase `pg_proc`, 2026-06-21): **225 callable RPCs**, **51 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here). The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -320,7 +320,6 @@ These are NOT called directly from the frontend. They power triggers, guards, an
 - `update_blend_ticket_updated_at()` — blend ticket timestamp trigger
 - `update_fields_updated_at()` — fields timestamp trigger
 - `update_note_comment_timestamp()` — note/comment timestamp trigger
-- `update_allocation_set()` — update allocation set on payment changes
 
 ### Activity Logging Triggers
 - `log_comment_activity()` — log comment activity to activity feed
