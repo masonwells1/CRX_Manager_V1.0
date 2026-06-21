@@ -1,10 +1,14 @@
 # Overnight Bug Hunt — Phase Plan & Subsystem Queue
 
-> **✅ HUNT COMPLETE (2026-06-20, after cycle 19).** Whole app swept — every Phase-1 and Phase-2 key hunted. 31 parked (6 HIGH-severity / 8 MED / 17 LOW, all latent) + 1 green auto-fix; 22 refuted. The loop stopped cleanly after cycles 16–19 produced no meaningful new bugs (clean schema/migration sweep + cosmetic doc-count nits + re-confirms). Restart with "start the overnight bug hunt". The only key not formally "drained" is `commissions` — its hunting is done, but it stays OPEN because its HIGH is parked pending Mason's fix.
+> **✅ HUNT COMPLETE (2026-06-20, after cycle 19).** Whole app swept — every Phase-1 and Phase-2 key hunted. 31 parked (6 HIGH-severity / 8 MED / 17 LOW, all latent) + 1 green auto-fix; 22 refuted. The loop stopped cleanly after cycles 16–19 produced no meaningful new bugs (clean schema/migration sweep + cosmetic doc-count nits + re-confirms). Restart with "start the overnight bug hunt".
+>
+> **✅ FIX BUILD PHASE COMPLETE (2026-06-20).** All surgical fixes are now BUILT + rolled-back-validated + committed (13 migrations, `20260620120000`–`20260620240000`, NOT applied/pushed) — including the commissions HIGH (`20260620130000`) and both formerly-deferred HIGHs as guards (prepay bulk-apply block `20260620200000`; field-app invoice_type lock trigger `20260620210000`). So every "not drained / pending Mason's fix" note in the rows below is **mid-hunt bookkeeping, now historical** — the hunt did NOT use the literal two-dry-pass drain rule to stop; it stopped on clean-completion at cycle 19. The remaining work is Mason's batched **apply** approval, not more hunting or fixing. (Codex 2026-06-20 LOW: this wording reconciliation.)
 
-Each cycle runs 1–3 subsystem keys (keeps the Codex gates focused). Mark a key `drained`
-once two consecutive cycles on it surface no NEW confirmed findings. Move to Phase 2 only
-when every Phase-1 key is drained.
+Each cycle ran 1–3 subsystem keys (kept the Codex gates focused). The original `drained`
+rule was: a key drains once two consecutive cycles on it surface no NEW confirmed findings,
+and Phase 2 opens only when every Phase-1 key is drained. In practice the loop reached
+effective completion (clean sweeps + only cosmetic nits) before every key hit the literal
+two-pass bar, so it stopped on that basis — see the FIX BUILD note above.
 
 ## Phase 1 — Billing engine (Mason's priority — where ~80% of the last 20 days' bugs lived)
 
@@ -18,9 +22,9 @@ when every Phase-1 key is drained.
 | `prepay-blend` | prepay apply/earmark + blend-ticket invoice/payment-status/actor | hunted ×4 (c5/c9/c11/c13) — HUNTING COMPLETE for now. c13: 1 NEW (blend delete_invoices ticket-orphan, MED) + independent re-confirm of the over-reset HIGH (re-verified the multi-customer fan-out). The blend payment_status state machine has multiple parked gaps (over-reset HIGH, orphan MED, prepaid-rebill LOW) — all dormant. Recent yield is MED/LOW only; deprioritized vs Phase 2 |
 | `splits-shares-allocation` | order_item_field_allocations, create_split_invoices_from_order, dormant shares subsystems, allocate_payment, write-offs | hunted ×4 (c5/c10/c11/c13) — c13: 0 new (3 refuted, all valid). 1 dry pass since c11's new LOW. Effectively exhausted; deprioritized vs Phase 2 |
 
-## Phase 2 — Broad whole-app sweep — **OPEN as of cycle 14 (2026-06-20)**
+## Phase 2 — Broad whole-app sweep — **✅ COMPLETE (swept cycles 14–19, 2026-06-20)**
 
-> Phase-1 HUNTING is declared complete after cycle 13: the billing engine was hunted exhaustively (cycles 1–13, 27 parked findings incl. 5 HIGH-attention). Remaining Phase-1 yield is MED/LOW/dormant + re-confirms; the money HIGHs were all found by c9. `commissions` stays OPEN (its HIGH is parked pending Mason's fix — hunting there is done, it just can't "drain" until fixed). Phase 2 is fresh ground (never hunted) and higher-value now. Pick 1–2 keys per cycle.
+> Phase-1 hunting completed after cycle 13 (billing engine hunted exhaustively, cycles 1–13, 27 parked incl. 5 HIGH-attention; remaining yield was MED/LOW/dormant + re-confirms; the money HIGHs were all found by c9). Phase 2 then swept fresh ground across cycles 14–19 and reached clean completion. All keys below were hunted; the per-row "a 2nd pass drains" notes are historical (the loop stopped on clean-completion, not the literal two-pass rule).
 
 | Key | Subsystem | Status |
 |---|---|---|
@@ -32,7 +36,7 @@ when every Phase-1 key is drained.
 | `edge-and-pdf` | 6 edge fns (CORS/JWT/admin/idempotency/drift) + customer PDFs | **DRAINED** (c15 + c17, two clean passes — 0 findings both times). The edge-fn attack surface (CORS/JWT/admin/idempotency) + customer PDFs are solid |
 | `docs-deps-tests` | doc-drift counts, npm audit, test-coverage gaps | hunted ×2 (c17+c19) — 1 parked item (cosmetic doc-count drift: trigger 47->49 + callable-RPC 227->226 in rpc-functions.md/CLAUDE.md; fix via /update-docs) + 7 refuted across both passes (E2E-not-in-CI, dompurify-dead-code, CI-audit-gate, test-coverage/schema-skip nits, table-count-not-drifted). No real bug |
 
-## Suggested cycle ordering (Phase 1)
+## Suggested cycle ordering (Phase 1) — *historical (hunt complete; kept for re-run reference)*
 
 1. `invoices-core` + `jobs-to-billing` — the hottest cluster
 2. `field-app-invoices` — the single biggest source of the last 2 days' churn
