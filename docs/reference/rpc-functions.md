@@ -1,6 +1,6 @@
-# RPC Functions Reference (227 callable RPCs + 47 trigger/internal functions — live as of 2026-06-16)
+# RPC Functions Reference (226 callable RPCs + 51 trigger/internal functions — live as of 2026-06-21)
 
-> Live function inventory (Supabase `pg_proc`, 2026-06-16): **227 callable RPCs**, **47 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here).
+> Live function inventory (Supabase `pg_proc`, 2026-06-21): **226 callable RPCs**, **51 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here). The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
