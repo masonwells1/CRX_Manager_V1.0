@@ -4,6 +4,10 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-21 — New hard guard: `require-check-mutation-result` ESLint rule
+
+Closed the second deferred bug-hunt item (a CI guard for CLAUDE.md Architecture Rule #3) as a robust **AST ESLint local rule** instead of the fragile proximity-scan test it was originally scoped as. New `eslint-local-rules/rules/require-check-mutation-result.cjs` flags a fire-and-forget supabase `.update()`/`.delete()` whose result is discarded without `checkMutationResult()` — the gap the existing `handle-supabase-error` (destructured-error) and `require-assert-rpc-result` (rpc) rules leave open. Conservative by design (only clearly-discarded results; defers the destructured-error shape to `handle-supabase-error`) → **0 false positives across `src/`**; RuleTester cases prove it catches the violation. Enabled `'error'` on `src/**/*.{ts,tsx}`, `'off'` for test/mock files. No application code changed (codebase already compliant). Registered in `eslint-local-rules/index.cjs`; tests in `src/lib/eslintLocalRules.test.ts`.
+
 ## 2026-06-21 — Cleanup: retire dead `update_allocation_set` RPC + doc-count sync
 
 Deferred-item cleanup pass (Mason approved):

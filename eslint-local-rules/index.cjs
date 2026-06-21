@@ -7,6 +7,7 @@ const noDirectSentryImport = require('./rules/no-direct-sentry-import.cjs');
 const assertRpcResultArgShape = require('./rules/assert-rpc-result-arg-shape.cjs');
 const idempotencyKeyFromHook = require('./rules/idempotency-key-from-hook.cjs');
 const handleSupabaseError = require('./rules/handle-supabase-error.cjs');
+const requireCheckMutationResult = require('./rules/require-check-mutation-result.cjs');
 
 module.exports = {
   'require-assert-rpc-result': requireAssertRpcResult,
@@ -14,4 +15,5 @@ module.exports = {
   'assert-rpc-result-arg-shape': assertRpcResultArgShape,
   'idempotency-key-from-hook': idempotencyKeyFromHook,
   'handle-supabase-error': handleSupabaseError,
+  'require-check-mutation-result': requireCheckMutationResult,
 };

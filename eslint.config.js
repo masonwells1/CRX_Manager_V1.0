@@ -105,6 +105,8 @@ export default tseslint.config(
       'local-rules/idempotency-key-from-hook': 'error',
       // destructured supabase .from()/.storage `error` swallowed (Field Mode F4/F6 / C3)
       'local-rules/handle-supabase-error': 'error',
+      // fire-and-forget supabase .update()/.delete() whose result is discarded (Architecture Rule #3)
+      'local-rules/require-check-mutation-result': 'error',
     },
   },
   {
@@ -118,6 +120,7 @@ export default tseslint.config(
       'local-rules/assert-rpc-result-arg-shape': 'off',
       'local-rules/idempotency-key-from-hook': 'off',
       'local-rules/handle-supabase-error': 'off',
+      'local-rules/require-check-mutation-result': 'off',
     },
   },
   {

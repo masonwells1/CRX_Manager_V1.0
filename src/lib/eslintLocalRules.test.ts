@@ -21,6 +21,7 @@ const require = createRequire(import.meta.url);
 const argShapeRule = require('../../eslint-local-rules/rules/assert-rpc-result-arg-shape.cjs');
 const idemKeyRule = require('../../eslint-local-rules/rules/idempotency-key-from-hook.cjs');
 const handleSupabaseErrorRule = require('../../eslint-local-rules/rules/handle-supabase-error.cjs');
+const requireCheckMutationResultRule = require('../../eslint-local-rules/rules/require-check-mutation-result.cjs');
 
 // Wire RuleTester into vitest's describe/it
 RuleTester.describe = describe;
@@ -282,6 +283,104 @@ ruleTester.run('handle-supabase-error', handleSupabaseErrorRule, {
         toast('deleted');
       }`,
       errors: [{ messageId: 'unhandled' }],
+    },
+  ],
+});
+
+// -------------------------------------------------------------------------
+// require-check-mutation-result — CLAUDE.md Architecture Rule #3
+// (fire-and-forget supabase .update()/.delete() whose result is discarded;
+//  the gap handle-supabase-error leaves open — no destructure, no check).
+// -------------------------------------------------------------------------
+
+ruleTester.run('require-check-mutation-result', requireCheckMutationResultRule, {
+  valid: [
+    // canonical: captured + passed to checkMutationResult by name
+    `async function f() {
+      const result = await supabase.from('orders').update({ x: 1 }).eq('id', id).select();
+      checkMutationResult(result, 'update order');
+    }`,
+    // canonical: delete captured + checked
+    `async function f() {
+      const result = await supabase.from('overrides').delete().eq('id', id).select();
+      checkMutationResult(result, 'delete override');
+    }`,
+    // inline: checkMutationResult wrapping the awaited mutation
+    `async function f() {
+      checkMutationResult(await supabase.from('orders').update({ x: 1 }).eq('id', id).select(), 'update order');
+    }`,
+    // destructured { data, error } — handle-supabase-error owns this, do NOT double-report
+    `async function f() {
+      const { data, error } = await supabase.from('orders').update({ x: 1 }).eq('id', id).select();
+      if (error) throw error;
+      return data;
+    }`,
+    // destructured { error } only — also handle-supabase-error's
+    `async function f() {
+      const { error } = await supabase.from('orders').delete().eq('id', id);
+      if (error) throw error;
+    }`,
+    // return await — caller checks
+    `async function f() {
+      return await supabase.from('orders').update({ x: 1 }).eq('id', id).select();
+    }`,
+    // arrow-body return — caller checks
+    `const f = (id) => supabase.from('orders').delete().eq('id', id);`,
+    // captured then handled via member access (Notifications/Rebates zero-rows-valid pattern)
+    `async function f() {
+      const result = await supabase.from('notifications').update({ is_read: true }).eq('id', id).select();
+      if (result.error) throw result.error;
+    }`,
+    // captured then passed to another function (used in a larger expression)
+    `async function f() {
+      const result = await supabase.from('orders').update({ x: 1 }).eq('id', id).select();
+      logIt(result);
+    }`,
+    // rpc() is NOT this rule's concern (require-assert-rpc-result owns it)
+    `async function f() {
+      await supabase.rpc('void_order', { p_order_id: id });
+    }`,
+    // a plain JS Map/Set .delete() — no .from(), so never matched
+    `function f(map, id) {
+      map.delete(id);
+    }`,
+    // a non-supabase client .update() — root identifier isn't 'supabase'
+    `async function f() {
+      await store.from('orders').update({ x: 1 });
+    }`,
+    // a supabase .select() (read, not a mutation) — not flagged
+    `async function f() {
+      await supabase.from('orders').select('*').eq('id', id);
+    }`,
+  ],
+  invalid: [
+    // THE fire-and-forget bug: bare-statement mutation, result discarded
+    {
+      code: `async function f() {
+        await supabase.from('orders').update({ x: 1 }).eq('id', id);
+      }`,
+      errors: [{ messageId: 'discarded' }],
+    },
+    // fire-and-forget delete
+    {
+      code: `async function f() {
+        await supabase.from('orders').delete().eq('id', id);
+      }`,
+      errors: [{ messageId: 'discarded' }],
+    },
+    // fire-and-forget with a trailing .select() (still discarded as a bare statement)
+    {
+      code: `async function f() {
+        await supabase.from('orders').update({ x: 1 }).eq('id', id).select();
+      }`,
+      errors: [{ messageId: 'discarded' }],
+    },
+    // captured to a var that is NEVER read at all (a dead capture)
+    {
+      code: `async function f() {
+        const result = await supabase.from('orders').update({ x: 1 }).eq('id', id).select();
+      }`,
+      errors: [{ messageId: 'discarded' }],
     },
   ],
 });
