@@ -1,4 +1,4 @@
-# CRX Manager — TODO (as of 2026-06-15)
+# CRX Manager — TODO (as of 2026-06-21)
 
 What's still **open**, what's **deferred on purpose**, and what's **out of scope**.
 Everything that's been shipped lives in `docs/CHANGELOG.md` and the `CLAUDE.md`
@@ -59,6 +59,21 @@ These are blocked on something only you can provide or do.
   hand-decrements the prepay balance while a trigger also recomputes it (same end
   state). Safe to drop the hand-decrement after a few more weeks of watching the
   trigger in prod.
+- **Retire dead `update_allocation_set` RPC** (overnight bug-hunt DEFERRED-tier) —
+  confirmed dead: zero real callers (only the generated `src/types/supabase.ts` and
+  the `rpcFixtureLiveDiff` fixture reference it). Harmless as-is (admin-gated, writes
+  to `financial_audit_log`, 0 rows live), so left in place. Retiring it cleanly is a
+  *coordinated, gated* change — NOT a lone migration: (1) a `DROP FUNCTION` migration
+  (live → needs Mason's apply OK), (2) remove it from `src/lib/rpcFixtureLiveDiff.test.ts`,
+  (3) regenerate `src/types/supabase.ts`, (4) decrement the RPC count (226→225) in
+  CLAUDE.md + `docs/reference/rpc-functions.md` + AGENTS.md. Do as a deliberate
+  write-up in a quiet window; precedent = the `create_invoice_from_delivery` retire
+  (`20260617210000`).
+- **`checkMutationResult` proximity-scan test** (overnight bug-hunt DEFERRED-tier) —
+  a CI guard that flags any `.update()`/`.delete()` not followed by a
+  `checkMutationResult()` near it. The naive "equality mirror" approach is wrong; it
+  needs a real AST / line-proximity scan, so it's fragile meta-tooling — author it
+  carefully via `/ship`, not a quick patch.
 
 ---
 
