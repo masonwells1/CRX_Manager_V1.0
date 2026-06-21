@@ -10,6 +10,7 @@ import DataTable, { type Column } from '../components/ui/DataTable';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase, checkMutationResult, assertRpcResult } from '../lib/db';
+import { parseDollarsToCents } from '../lib/parseCents';
 import { runCriticalAction } from '../lib/criticalAction';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
@@ -31,6 +32,7 @@ interface RecipeItemDbRow {
   quantity: number;
   unit: string;
   rate_per_acre: number | null;
+  price_per_unit_cents?: number | null;
   sort_order: number;
   notes?: string | null;
   product?: { product_name: string } | null;
@@ -46,6 +48,9 @@ interface EditItem {
   quantity: number;
   unit: string;
   rate_per_acre: number | null;
+  /** Optional per-unit price typed as a raw dollar string (decimal-friendly so
+   *  "1.2" doesn't collapse to "12"); converted to bigint cents in the save payload. */
+  price_input: string;
   sort_order: number;
   notes: string;
 }
@@ -171,6 +176,7 @@ export default function BlendRecipes() {
           quantity: item.quantity,
           unit: item.unit,
           rate_per_acre: item.rate_per_acre,
+          price_input: item.price_per_unit_cents ? (item.price_per_unit_cents / 100).toString() : '',
           sort_order: item.sort_order,
           notes: item.notes || '',
         }))
@@ -209,6 +215,7 @@ export default function BlendRecipes() {
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
+            price_per_unit_cents: parseDollarsToCents(item.price_input),
             notes: item.notes || null,
           })),
           p_description: form.description || undefined,
@@ -234,43 +241,38 @@ export default function BlendRecipes() {
   const handleDuplicate = async (recipe: RecipeRow) => {
     await runCriticalAction({
       action: async () => {
-        const { data: newRecipe, error } = await supabase
-          .from('blend_recipes')
-          .insert({
-            name: `${recipe.name} (Copy)`,
-            description: recipe.description,
-            recipe_type: recipe.recipe_type,
-            crop_type: recipe.crop_type,
-            timing: recipe.timing,
-          })
-          .select()
-          .single();
-        if (error) throw error;
-
+        // Duplicate via save_blend_recipe (atomic recipe+items) rather than a
+        // direct blend_recipe_items insert. The RPC is backward-compatible with
+        // the price column: the pre-migration body ignores price_per_unit_cents in
+        // p_items, the post-migration body carries it — so a frontend deploy that
+        // races ahead of migration 20260618230000 can't fail on a missing column
+        // (PostgREST schema break). Codex P2.
         const { data: items, error: itemsErr } = await supabase
           .from('blend_recipe_items')
           .select('*')
           .eq('recipe_id', recipe.id)
           .order('sort_order');
-        if (itemsErr) {
-          Sentry.captureException(itemsErr);
-        }
+        if (itemsErr) throw itemsErr;
 
-        if (items && items.length > 0) {
-          const copies = (items as RecipeItemDbRow[]).map((item) => ({
-            recipe_id: newRecipe.id,
+        const { data, error } = await supabase.rpc('save_blend_recipe', {
+          p_recipe_id: null as unknown as string,
+          p_name: `${recipe.name} (Copy)`,
+          p_recipe_type: recipe.recipe_type,
+          p_items: (items as RecipeItemDbRow[] | null || []).map((item) => ({
             product_id: item.product_id,
             product_name: item.product_name,
             quantity: item.quantity,
             unit: item.unit,
             rate_per_acre: item.rate_per_acre,
-            sort_order: item.sort_order,
-            notes: item.notes,
-          }));
-          const copyItemsResult = await supabase.from('blend_recipe_items').insert(copies).select();
-          if (copyItemsResult.error) throw copyItemsResult.error;
-          checkMutationResult(copyItemsResult, 'Insert duplicated blend recipe items');
-        }
+            price_per_unit_cents: item.price_per_unit_cents ?? 0,
+            notes: item.notes ?? null,
+          })),
+          p_description: recipe.description || undefined,
+          p_crop_type: recipe.recipe_type === 'crop_specific' ? recipe.crop_type || undefined : undefined,
+          p_timing: recipe.recipe_type === 'crop_specific' ? recipe.timing || undefined : undefined,
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'save_blend_recipe');
       },
       toast,
       successMessage: 'Recipe duplicated',
@@ -305,7 +307,7 @@ export default function BlendRecipes() {
   const addItem = () => {
     setEditItems([
       ...editItems,
-      { product_id: '', product_name: '', quantity: 0, unit: 'gal', rate_per_acre: null, sort_order: editItems.length, notes: '' },
+      { product_id: '', product_name: '', quantity: 0, unit: 'gal', rate_per_acre: null, price_input: '', sort_order: editItems.length, notes: '' },
     ]);
   };
 
@@ -555,6 +557,15 @@ export default function BlendRecipes() {
                     value={item.rate_per_acre ?? ''}
                     onChange={(e) => updateItem(idx, 'rate_per_acre', e.target.value ? parseFloat(e.target.value) : null)}
                     placeholder="Rate/ac"
+                    className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
+                  />
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={item.price_input}
+                    onChange={(e) => updateItem(idx, 'price_input', e.target.value)}
+                    placeholder="$/unit"
+                    title="Price per unit (optional) — seeds the job's chemical price when this recipe is loaded"
                     className="w-24 px-2 py-1.5 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green"
                   />
                   <button onClick={() => removeItem(idx)} className="text-red-400 hover:text-red-600 p-1">

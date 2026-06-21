@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">73 routes · 175 RPC calls · 0 issues · Updated Jun 20, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">76 routes · 175 RPC calls · 0 issues · Updated Jun 21, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -614,6 +614,22 @@ const NODES = [
       "type": "page-sales",
       "group": "Sales",
       "path": "/invoices/:id",
+      "problem": false
+    },
+    {
+      "id": "field-invoices",
+      "label": "FieldInvoices",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/field-invoices",
+      "problem": false
+    },
+    {
+      "id": "unbilled-applications",
+      "label": "UnbilledApplications",
+      "type": "page-sales",
+      "group": "Customers",
+      "path": "/field-invoices/unbilled",
       "problem": false
     },
     {
@@ -1384,7 +1400,12 @@ const EDGES = [
     },
     {
       "s": "field-application-invoice",
-      "t": "invoices",
+      "t": "field-invoices",
+      "type": "nav"
+    },
+    {
+      "s": "field-application-invoice",
+      "t": "invoice-detail",
       "type": "nav"
     },
     {
@@ -1395,6 +1416,21 @@ const EDGES = [
     {
       "s": "field-dashboard",
       "t": "field-setup",
+      "type": "nav"
+    },
+    {
+      "s": "field-invoices",
+      "t": "customer-detail",
+      "type": "nav"
+    },
+    {
+      "s": "field-invoices",
+      "t": "unbilled-applications",
+      "type": "nav"
+    },
+    {
+      "s": "field-invoices",
+      "t": "field-application-invoice",
       "type": "nav"
     },
     {
@@ -1480,6 +1516,16 @@ const EDGES = [
     {
       "s": "invoice-detail",
       "t": "invoices",
+      "type": "nav"
+    },
+    {
+      "s": "invoice-detail",
+      "t": "field-invoices",
+      "type": "nav"
+    },
+    {
+      "s": "invoice-detail",
+      "t": "field-application-invoice",
       "type": "nav"
     },
     {
@@ -1675,6 +1721,11 @@ const EDGES = [
     {
       "s": "receiving-log",
       "t": "quick-receive",
+      "type": "nav"
+    },
+    {
+      "s": "unbilled-applications",
+      "t": "field-invoices",
       "type": "nav"
     },
     {

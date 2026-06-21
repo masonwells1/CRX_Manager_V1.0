@@ -993,6 +993,10 @@ export interface BlendRecipeItem {
   rate_per_acre: number | null;
   sort_order: number;
   notes: string | null;
+  // Optional per-unit price (bigint cents) seeded into job_chemicals.price_per_unit_cents
+  // by load_recipe_into_job (Phase 4 / migration 20260618230000 — recipe pricing).
+  // Defaults 0; only populated once the recipe-editor price UI lands.
+  price_per_unit_cents?: number;
   created_at: string;
   // Joined
   product?: Product;

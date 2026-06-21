@@ -38,7 +38,8 @@ const STATUS_OPTIONS: { value: InvoiceStatus | ''; label: string }[] = [
 const TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: 'All Types' },
   { value: 'chemical_sale', label: 'Chemical Sale' },
-  { value: 'field_application', label: 'Field Application' },
+  // 'field_application' intentionally omitted — field invoices are filtered out
+  // of this Chemical Sales list (see fetch .neq). They live at /field-invoices.
   { value: 'misc_charge', label: 'Misc Charge' },
 ];
 
@@ -113,6 +114,10 @@ export default function Invoices() {
       .from('invoices')
       .select('*, customer:customers!invoices_customer_id_fkey(farm_name)')
       .is('deleted_at', null)
+      // Segregation (Mason 2026-06-19): field-application invoices live in their
+      // own area (/field-invoices). This Chemical Sales list excludes them so a
+      // field invoice no longer shows in BOTH lists.
+      .neq('invoice_type', 'field_application')
       .gte('created_at', seasonStart)
       .lte('created_at', seasonEnd + 'T23:59:59')
       .order('created_at', { ascending: false })

@@ -108,6 +108,7 @@ function makeFromMock(perTable: Record<string, { data: unknown; error?: unknown 
     chain.insert = vi.fn().mockReturnValue(chain);
     chain.delete = vi.fn().mockReturnValue(chain);
     chain.single = single;
+    chain.maybeSingle = single;
     // The page awaits chains terminated by .order(...) (returning array data).
     // Make .order() ALSO be thenable so `await query.eq(...).order(...)` resolves.
     const thenable = (resolve: (v: { data: unknown; error: unknown }) => void) =>
@@ -217,6 +218,7 @@ describe('FieldApplicationInvoice — existing single invoice (no group)', () =>
             {
               id: 'inv-solo',
               invoice_number: 'INV-1001',
+              invoice_type: 'field_application',
               invoice_date: '2026-04-29',
               header_notes: '',
               status: 'draft',
@@ -260,6 +262,7 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
     const invoiceRow = {
       id: 'inv-grp-1',
       invoice_number: 'INV-2001',
+      invoice_type: 'field_application',
       invoice_date: '2026-04-29',
       header_notes: '',
       status: 'draft',
@@ -322,5 +325,27 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
     expect(screen.queryByRole('button', { name: /^Post$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Post Group/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Delete$/i })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Codex r13 — segregation routing: only an ENGINE-built field invoice (neither job_id
+ * nor blend_ticket_id) belongs in this per-acre editor. A blend-ticket-built field
+ * invoice (blend_ticket_id set, job_id NULL) has quantity lines and no
+ * field_app_locations, so it must be bounced to the generic /field-invoices editor —
+ * otherwise this page loads zero locations and its save raises "At least one field".
+ */
+describe('FieldApplicationInvoice — blend-ticket field invoice is bounced to the generic editor', () => {
+  it('redirects a blend_ticket_id field invoice to /field-invoices/:id', async () => {
+    mockUseParams.mockReturnValue({ id: 'inv-bt' });
+    mockFrom.mockImplementation(
+      makeFromMock({
+        invoices: { data: { id: 'inv-bt', invoice_type: 'field_application', job_id: null, blend_ticket_id: 'blend-1' } },
+      }),
+    );
+    await renderPage();
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/field-invoices/inv-bt', { replace: true });
+    });
   });
 });

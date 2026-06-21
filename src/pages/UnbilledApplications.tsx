@@ -1,0 +1,234 @@
+import { useEffect, useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { RefreshCw, Tractor, ClipboardCheck, ArrowRight } from 'lucide-react';
+import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import { useToast } from '../components/ui/Toast';
+import { supabase } from '../lib/db';
+import { Sentry } from '../lib/sentry';
+import { SkeletonCard } from '../components/ui/Skeleton';
+
+// Phase 2 of the As-Applied / Field-Invoice build (read-only reconciliation).
+// Surfaces the TWO reliable, actionable "applied but not yet billed" backlogs so
+// nothing sprayed slips through unbilled:
+//   1. Completed jobs with no invoice yet (jobs.status='completed', invoice_id NULL)
+//   2. Approved blend tickets not yet billed (review_status='approved',
+//      payment_status='unbilled')
+//
+// NOTE (Codex Phase-2 review): we deliberately do NOT add a third
+// "application_records WHERE invoice_id IS NULL" section. application_records are
+// DERIVED rows (source_type is only 'job' or 'blend_ticket'), so they would
+// double-count the two backlogs above; worse, the blend-ticket billing rail
+// updates blend_tickets.payment_status rather than reliably filling
+// application_records.invoice_id, so billed/no-charge work could still show as
+// "unbilled". The two source-of-truth backlogs above are the correct view.
+//
+// READ-ONLY: it lists and links out to the source screens — it writes nothing.
+// (Lives under /field-invoices/* so it inherits the Field Invoices permission.)
+
+const QUERY_LIMIT = 500;
+
+interface UnbilledRow {
+  id: string;
+  ref: string;        // job_number / ticket_number
+  date: string | null;
+  acres: number | null;
+  customer_name: string;
+}
+
+interface Section {
+  key: string;
+  title: string;
+  subtitle: string;
+  icon: React.ReactNode;
+  rows: UnbilledRow[];
+  refLabel: string;
+  parentPath: string;   // where the "View all" / row click goes
+}
+
+type RawRow = Record<string, unknown> & { customer?: { farm_name?: string } | null };
+
+function mapRows(data: RawRow[] | null, refKey: string, dateKey: string): UnbilledRow[] {
+  return (data || []).map((r) => ({
+    id: r.id as string,
+    ref: (r[refKey] as string) || '—',
+    date: (r[dateKey] as string | null) ?? null,
+    acres: (r.total_acres as number | null) ?? null,
+    customer_name: r.customer?.farm_name || 'Unknown',
+  }));
+}
+
+export default function UnbilledApplications() {
+  const navigate = useNavigate();
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [jobs, setJobs] = useState<UnbilledRow[]>([]);
+  const [tickets, setTickets] = useState<UnbilledRow[]>([]);
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+
+    const [jobsRes, ticketsRes] = await Promise.all([
+      supabase
+        .from('jobs')
+        .select('id, job_number, job_date, total_acres, customer:customers(farm_name)')
+        .eq('status', 'completed')
+        .is('invoice_id', null)
+        .is('deleted_at', null)
+        .order('job_date', { ascending: false })
+        .limit(QUERY_LIMIT),
+      supabase
+        .from('blend_tickets')
+        .select('id, ticket_number, ticket_date, total_acres, customer:customers(farm_name)')
+        .eq('review_status', 'approved')
+        .eq('payment_status', 'unbilled')
+        .is('deleted_at', null)
+        .order('ticket_date', { ascending: false })
+        .limit(QUERY_LIMIT),
+    ]);
+
+    const firstError = jobsRes.error || ticketsRes.error;
+    if (firstError) {
+      Sentry.captureException(firstError, { tags: { source: 'fetch', page: 'unbilled-applications' } });
+      toast('error', 'Failed to load unbilled applications');
+      setLoading(false);
+      return;
+    }
+
+    setJobs(mapRows(jobsRes.data as RawRow[], 'job_number', 'job_date'));
+    setTickets(mapRows(ticketsRes.data as RawRow[], 'ticket_number', 'ticket_date'));
+    setLoading(false);
+  }, [toast]);
+
+  useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
+
+  const sections: Section[] = [
+    {
+      key: 'jobs',
+      title: 'Completed jobs — not billed',
+      subtitle: 'Spray jobs finished but no field invoice created yet',
+      icon: <Tractor className="w-5 h-5 text-crx-green" />,
+      rows: jobs,
+      refLabel: 'Job #',
+      parentPath: '/jobs',
+    },
+    {
+      key: 'tickets',
+      title: 'Approved blend tickets — not billed',
+      subtitle: 'Approved tickets still marked unbilled',
+      icon: <ClipboardCheck className="w-5 h-5 text-crx-green" />,
+      rows: tickets,
+      refLabel: 'Ticket #',
+      parentPath: '/blend-tickets',
+    },
+  ];
+
+  const totalUnbilled = jobs.length + tickets.length;
+
+  const fmtDate = (d: string | null) =>
+    d ? new Date(d + 'T00:00:00').toLocaleDateString() : '—';
+
+  if (loading) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold font-heading text-nav-dark">Unbilled Applications</h2>
+          <p className="text-xs text-secondary mt-0.5">
+            Applied work that has not been turned into a field invoice yet — {totalUnbilled} item(s) across 2 billing backlogs.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={() => navigate('/field-invoices')}>
+            Field Invoices
+          </Button>
+          <Button variant="secondary" size="sm" icon={<RefreshCw className="w-4 h-4" />} onClick={fetchAll}>
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {sections.map((s) => (
+          <Card key={`card-${s.key}`}>
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-lg bg-crx-green-light flex items-center justify-center">{s.icon}</div>
+              <span className="text-sm text-secondary">{s.title}</span>
+            </div>
+            <p className="text-2xl font-semibold font-heading text-nav-dark">{s.rows.length}</p>
+          </Card>
+        ))}
+      </div>
+
+      {/* Sections */}
+      {sections.map((s) => (
+        <Card key={`section-${s.key}`} padding={false}>
+          <div className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="text-sm font-semibold text-nav-dark">{s.title}</h3>
+                <p className="text-xs text-secondary">{s.subtitle}</p>
+              </div>
+              <button
+                onClick={() => navigate(s.parentPath)}
+                className="text-xs text-crx-green hover:underline flex items-center gap-1"
+              >
+                View all <ArrowRight className="w-3 h-3" />
+              </button>
+            </div>
+
+            {s.rows.length === 0 ? (
+              <p className="text-sm text-secondary py-6 text-center">Nothing unbilled here — all caught up.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-secondary border-b border-gray-100">
+                      <th className="py-2 pr-4 font-medium">{s.refLabel}</th>
+                      <th className="py-2 pr-4 font-medium">Customer</th>
+                      <th className="py-2 pr-4 font-medium">Date</th>
+                      <th className="py-2 pr-4 font-medium text-right">Acres</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {s.rows.map((row) => (
+                      <tr
+                        key={row.id}
+                        onClick={() => navigate(s.parentPath)}
+                        className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer"
+                      >
+                        <td className="py-2 pr-4 font-medium text-nav-dark">{row.ref}</td>
+                        <td className="py-2 pr-4">{row.customer_name}</td>
+                        <td className="py-2 pr-4">{fmtDate(row.date)}</td>
+                        <td className="py-2 pr-4 text-right">{row.acres != null ? row.acres : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {s.rows.length === QUERY_LIMIT && (
+                  <p className="text-xs text-secondary mt-2">
+                    Showing the first {QUERY_LIMIT} — open “View all” for the full list.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}

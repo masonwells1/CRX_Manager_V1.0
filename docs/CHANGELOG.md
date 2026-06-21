@@ -4,6 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-21 — As-Applied / Field Invoices: 4 parked migrations applied live + feature merged
+
+Finished the As-Applied / Field-Invoice feature: applied the **4 remaining parked migrations** to production (Supabase project `rhyzpcqhnizqbxphqdkr`) and merged the full feature (the new Field Invoices screens) from `feat/as-applied-invoices` into `main`.
+
+- **4 migrations applied (live stamps):** `20260618230000` recipe per-unit pricing — column + `load_recipe_into_job` (stamp `20260621133017`) → `20260619150000` `save_blend_recipe` carry-price (`20260621133240`) → `20260619140000` `transfer_job_to_invoice` per-acre machine fee (G1) + strict-actor (G3) (`20260621133452`) → `20260619160000` `save_invoice` field-application aware (`20260621133654`). Each verbatim-live-body + surgical delta; applied in bundle order with Mason's explicit OK.
+- **New UI shipped:** `/field-invoices` (segregated Field Invoices area), `/field-invoices/unbilled` (Unbilled Applications reconciliation), the editable field-invoice screen (`/field-invoices/:id`), the 3-way rate/acres/quantity job-mix calculator, and the recipe $/unit price input.
+- **Validation:** each migration gated by the **rls-security + migration-drift** reviewers + an independent **Codex** read-only review (PASS, no blocker/high) + the migration **apply-guard** (byte-fidelity proof); post-apply per-function `plpgsql_check = 0` / `overload = 1` / `anon EXECUTE = false`; global overloads + `plpgsql_check` sweeps clean; **3 functional smoke tests** (recipe bundle, machine-fee 4-scenario, `save_invoice` field-app) all `SMOKE_PASS_ROLLBACK` against live; security advisors unchanged. Full status: `docs/audits/2026-06-18-as-applied-overnight-handoff.md`.
+
 ## 2026-06-20 — Overnight bug-hunt remediation: all 13 surgical fix migrations applied live
 
 Applied **all 13** overnight bug-hunt fix migrations to production (Supabase project `rhyzpcqhnizqbxphqdkr`), live stamps `20260621022206`–`20260621030145` (evening of 2026-06-20 CT = 2026-06-21 UTC). Branch `claude/overnight-bug-hunt`. Each is a verbatim-live-body + surgical guard.
@@ -12,7 +20,13 @@ Applied **all 13** overnight bug-hunt fix migrations to production (Supabase pro
 - **8 MED/LOW:** job cancel gate (`_enforce_job_status_transition`) · `void_payment` partial-void status derived from balance · `preview_finance_charges` realigned to `generate_finance_charges` · OIFA post-invoice edit lock (`prevent_oifa_edit_after_post` trigger) · invoice-creator provenance/totals (`total_cost_cents` + `invoice_created` audit rows) · `complete_delivery` audit row + partial-rebill cost recompute · `create_quick_delivery` aggregates duplicate product lines by uuid · `create_invoice_from_blend_ticket` re-bill guard widened to `IS DISTINCT FROM 'unbilled'`.
 - **Two NEW trigger functions** added (`prevent_oifa_edit_after_post`, `enforce_field_application_type_lock`); no new callable RPCs. Doc counts bumped: migrations on disk **482 → 495**, trigger functions **47 → 51**, callable RPCs unchanged (226).
 - **Validation:** each gated by the **rls-security + migration-drift** reviewers + an independent **Codex** read-only review + the migration **apply-guard**; post-apply per-function `plpgsql_check = 0` errors / `overload = 1`, and the global overloads + `plpgsql_check` sweeps are clean. See `docs/audits/overnight-bug-hunt/` for the FIX-PLAN + LEDGER.
+## 2026-06-19 — As-Applied: live billing crash fixed + Field-Invoice segregation
 
+Continued the As-Applied / Field-Invoice work on `feat/as-applied-invoices` (overnight build → Mason's morning review). Branch carries Phases 1a/1b/2/4 (Field Invoices area + reconciliation view + parked recipe-pricing migration); nothing else deployed.
+
+- **Live billing crash FIXED (applied to prod) — migration `20260618220000`.** Proving the applied→invoice loop end-to-end surfaced a latent crash: `transfer_job_to_invoice` raised `55000 record "v_conversion" is not assigned yet` for any job with a chemical line lacking a per-acre rate (the whole job→field-invoice rail died). Never surfaced because no field jobs have been billed (0 field invoices live). Fix: call `convert_to_gl_lb` unconditionally (single delta; unrated lines yield NULL gl/lb, no crash). Reviewers + Codex clean; applied with Mason's OK; **re-ran the full flow against the live fixed function → `SMOKE_PASS_ROLLBACK`**; post-apply invariants clean.
+- **Field-invoice segregation completed** (`18c5432`): the Chemical Sales `/invoices` list now excludes `invoice_type='field_application'` (fetch `.neq` + dropped type-filter option) so a field invoice no longer appears in both lists.
+- **Decisions captured (Mason 2026-06-19):** recipe pricing = **per-unit** (parked migration `20260618230000` confirmed; ships as a bundle with `save_blend_recipe` wiring + a recipe price UI); machine-fee + actor = **targeted fixes** (G1 per-acre `is_application_fee` line + G3 strict-actor — built in a focused follow-up). Both are non-urgent (the crash that mattered is fixed). Full status: `docs/audits/2026-06-18-as-applied-overnight-handoff.md`.
 ## 2026-06-17 — Retired dead `create_invoice_from_delivery` (Lane B delivery_id follow-up)
 
 Resolved the `delivery_id` duplicate-guard follow-up by **retiring the function** rather than patching it. **Migration `20260617210000`** (applied live, stamp `20260617210043`, Mason approved the retire).

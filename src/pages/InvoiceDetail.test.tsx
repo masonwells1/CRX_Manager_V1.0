@@ -128,8 +128,9 @@ describe('InvoiceDetail', () => {
     mockFrom.mockImplementation((table: string) => {
       if (table === 'invoices') {
         invoiceCallCount++;
-        // First call: fetch invoice (single), subsequent: sibling invoices (array)
-        if (invoiceCallCount === 1) {
+        // Call 1 = segregation preflight (invoice_type/job_id/status), call 2 = full
+        // invoice fetch — both need the invoice row; later calls = sibling invoices (array).
+        if (invoiceCallCount <= 2) {
           return buildChain({ data: invoiceData, error: null });
         }
         return buildChain({ data: [], error: null });
@@ -142,6 +143,110 @@ describe('InvoiceDetail', () => {
       const matches = screen.getAllByText('INV-0042');
       expect(matches.length).toBeGreaterThan(0);
     });
+  });
+});
+
+/**
+ * Codex R11 — segregation PREFLIGHT: the field-vs-chemical route guard must run on a
+ * MINIMAL preflight row BEFORE the full select('*'), so a cross-permission URL (a
+ * field-invoices-only user opening a chemical invoice id, or the inverse) never
+ * receives the forbidden full invoice row in the network response.
+ */
+describe('InvoiceDetail — route-area segregation preflight (no full-row leak)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRpc.mockImplementation(() => Promise.resolve({ data: null, error: null }));
+  });
+
+  it('field route + chemical invoice: redirects to /field-invoices and never runs the full select(*)', async () => {
+    let invoicesCalls = 0;
+    let fullSelectRan = false;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoicesCalls += 1;
+        if (invoicesCalls === 1) {
+          // preflight: minimal row revealing a CHEMICAL invoice on a FIELD route
+          return buildChain({ data: { invoice_type: 'chemical_sale', job_id: 'ord-1', status: 'draft' }, error: null });
+        }
+        // any further 'invoices' fetch is the full select('*') we must NOT reach
+        fullSelectRan = true;
+        return buildChain({ data: { id: 'inv-x', invoice_number: 'LEAKED' }, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/field-invoices/inv-x']}>
+        <Routes>
+          <Route path="/field-invoices/:id" element={<InvoiceDetail routeArea="field" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/field-invoices', { replace: true });
+    });
+    expect(mockToast).toHaveBeenCalledWith('error', 'Not a field invoice');
+    // The security property: the forbidden full row was never fetched.
+    expect(fullSelectRan).toBe(false);
+  });
+
+  it('field route + blend-ticket field invoice: STAYS in the generic editor (does NOT bounce to the per-acre engine)', async () => {
+    let invoicesCalls = 0;
+    let fullSelectRan = false;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoicesCalls += 1;
+        if (invoicesCalls === 1) {
+          // blend-ticket field invoice: job_id NULL but blend_ticket_id SET (no field_app_locations)
+          return buildChain({ data: { invoice_type: 'field_application', job_id: null, blend_ticket_id: 'blend-1', status: 'draft' }, error: null });
+        }
+        fullSelectRan = true;
+        return buildChain({ data: { id: 'inv-bt', invoice_number: 'INV-BT', status: 'draft' }, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/field-invoices/inv-bt']}>
+        <Routes>
+          <Route path="/field-invoices/:id" element={<InvoiceDetail routeArea="field" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // It proceeds to the full fetch (stays here) and never bounces to the per-acre engine editor.
+    await waitFor(() => { expect(fullSelectRan).toBe(true); });
+    expect(mockNavigate).not.toHaveBeenCalledWith('/invoices/field-app/inv-bt', { replace: true });
+  });
+
+  it('chemical route + field invoice: redirects to /field-invoices/:id and never runs the full select(*)', async () => {
+    let invoicesCalls = 0;
+    let fullSelectRan = false;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'invoices') {
+        invoicesCalls += 1;
+        if (invoicesCalls === 1) {
+          return buildChain({ data: { invoice_type: 'field_application', job_id: 'job-1', status: 'draft' }, error: null });
+        }
+        fullSelectRan = true;
+        return buildChain({ data: { id: 'inv-y', invoice_number: 'LEAKED' }, error: null });
+      }
+      return buildChain({ data: [], error: null });
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/invoices/inv-y']}>
+        <Routes>
+          <Route path="/invoices/:id" element={<InvoiceDetail routeArea="chemical" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/field-invoices/inv-y', { replace: true });
+    });
+    expect(fullSelectRan).toBe(false);
   });
 });
 
@@ -162,7 +267,8 @@ describe('InvoiceDetail — Phase 1 group-aware Post routing', () => {
     mockFrom.mockImplementation((table: string) => {
       if (table === 'invoices') {
         n += 1;
-        return buildChain({ data: n === 1 ? invoice : [], error: null });
+        // Call 1 = segregation preflight, call 2 = full fetch; both need the row.
+        return buildChain({ data: n <= 2 ? invoice : [], error: null });
       }
       return buildChain({ data: [], error: null });
     });

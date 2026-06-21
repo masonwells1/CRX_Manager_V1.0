@@ -47,6 +47,16 @@ interface LineItem {
   tote_number: string | null;
   price_source: 'quoted' | 'tier' | 'manual' | null;
   quoted_price_cents: number | null;
+  // Field-application detail — preserved through edits so the machine-fee flag,
+  // applied amounts and EPA/form survive a "bill actual" edit (#3 edit-path).
+  is_application_fee: boolean;
+  rate_unit: string | null;
+  total_applied: number | null;
+  total_applied_unit: string | null;
+  total_applied_gl_lb: number | null;
+  gl_lb_unit: string | null;
+  epa_registration: string | null;
+  product_form: string | null;
 }
 
 const statusBadge = (status: InvoiceStatus) => {
@@ -63,7 +73,7 @@ const statusBadge = (status: InvoiceStatus) => {
   return <Badge variant={s.variant}>{s.label}</Badge>;
 };
 
-export default function InvoiceDetail() {
+export default function InvoiceDetail({ routeArea }: { routeArea?: 'field' | 'chemical' } = {}) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { profile } = useAuth();
@@ -231,6 +241,51 @@ export default function InvoiceDetail() {
     // in-flight fetch must not render the previous invoice's amounts.
     const isStale = () => activeInvoiceIdRef.current !== invoiceId;
     setLoading(true);
+
+    // #3 segregation PREFLIGHT (Codex r11): resolve the route-area redirect from a
+    // MINIMAL row (invoice_type/job_id/status) BEFORE the full select('*') below, so
+    // a cross-permission URL never leaks the forbidden full invoice row in the
+    // network response. field invoices live under the field-invoices permission,
+    // chemical sales under invoices; a field-invoices-only user opening a chemical
+    // invoice id via /field-invoices/:id (or the inverse) must be bounced BEFORE the
+    // row is fetched. Mirrors FieldApplicationInvoice's minimal preflight. (Codex R5/R11)
+    const pre = await supabase
+      .from('invoices')
+      .select('invoice_type, job_id, blend_ticket_id, status')
+      .eq('id', invoiceId)
+      .maybeSingle();
+    if (isStale()) return;
+    if (pre.error || !pre.data) {
+      toast('error', 'Invoice not found');
+      navigate('/invoices');
+      return;
+    }
+    {
+      const invType = (pre.data as { invoice_type?: string }).invoice_type;
+      if (routeArea === 'field' && invType !== 'field_application') {
+        toast('error', 'Not a field invoice');
+        navigate('/field-invoices', { replace: true });
+        return;
+      }
+      if (routeArea === 'chemical' && invType === 'field_application') {
+        navigate(`/field-invoices/${invoiceId}`, { replace: true });
+        return;
+      }
+      // A field invoice with NEITHER job_id NOR blend_ticket_id is ENGINE-built
+      // (per-acre, has field_app_locations) — keep an editable one in the per-acre
+      // editor, not this quantity-based one, even if reached by a direct URL /
+      // bookmark. A blend-ticket field invoice (blend_ticket_id set, job_id NULL)
+      // is quantity-based with no locations, so it STAYS in this editor. (Codex r13)
+      const fieldJobId = (pre.data as { job_id?: string | null }).job_id;
+      const fieldBlendId = (pre.data as { blend_ticket_id?: string | null }).blend_ticket_id;
+      const fieldStatus = (pre.data as { status?: string }).status;
+      if (routeArea === 'field' && invType === 'field_application' && !fieldJobId && !fieldBlendId
+          && (fieldStatus === 'draft' || fieldStatus === 'unposted')) {
+        navigate(`/invoices/field-app/${invoiceId}`, { replace: true });
+        return;
+      }
+    }
+
     // PR-07 follow-up: dropped salesman FK embed; resolve via profile_public_view.
     const { data, error } = await supabase
       .from('invoices')
@@ -355,6 +410,14 @@ export default function InvoiceDetail() {
           tote_number: (it.tote_number as string) ?? null,
           price_source: (it.price_source as LineItem['price_source']) ?? null,
           quoted_price_cents: it.quoted_price_cents != null ? Number(it.quoted_price_cents) : null,
+          is_application_fee: Boolean((it as Record<string, unknown>).is_application_fee),
+          rate_unit: ((it as Record<string, unknown>).rate_unit as string) ?? null,
+          total_applied: (it as Record<string, unknown>).total_applied != null ? Number((it as Record<string, unknown>).total_applied) : null,
+          total_applied_unit: ((it as Record<string, unknown>).total_applied_unit as string) ?? null,
+          total_applied_gl_lb: (it as Record<string, unknown>).total_applied_gl_lb != null ? Number((it as Record<string, unknown>).total_applied_gl_lb) : null,
+          gl_lb_unit: ((it as Record<string, unknown>).gl_lb_unit as string) ?? null,
+          epa_registration: ((it as Record<string, unknown>).epa_registration as string) ?? null,
+          product_form: ((it as Record<string, unknown>).product_form as string) ?? null,
         })) as LineItem[]
       );
     }
@@ -377,7 +440,7 @@ export default function InvoiceDetail() {
     setWriteOffs((woData || []) as Array<{ id: string; amount_cents: number; reason: string; created_at: string; reversed_at: string | null }>);
 
     setLoading(false);
-  }, [toast, navigate]);
+  }, [toast, navigate, routeArea]);
 
   // Fetch existing invoice
   useEffect(() => {
@@ -436,6 +499,14 @@ export default function InvoiceDetail() {
         tote_number: null,
         price_source: null,
         quoted_price_cents: null,
+        is_application_fee: false,
+        rate_unit: null,
+        total_applied: null,
+        total_applied_unit: null,
+        total_applied_gl_lb: null,
+        gl_lb_unit: null,
+        epa_registration: null,
+        product_form: null,
       },
     ]);
     setShowProductModal(false);
@@ -478,7 +549,11 @@ export default function InvoiceDetail() {
         const payload = {
           id: isNew ? undefined : id,
           customer_id: invoice.customer_id,
-          invoice_type: invoice.invoice_type || 'chemical_sale',
+          // #3 segregation: on the field-invoices route the type is LOCKED to
+          // field_application — never let an edit reclassify a field invoice into
+          // Chemical Sales (which would move it out of a field-invoices-only
+          // user's reach), regardless of the selector (Codex P2).
+          invoice_type: routeArea === 'field' ? 'field_application' : (invoice.invoice_type || 'chemical_sale'),
           status: invoice.status || 'draft',
           season: invoice.season,
           salesman_id: invoice.salesman_id || null,
@@ -501,6 +576,18 @@ export default function InvoiceDetail() {
           acres: it.acres,
           unit_size: it.unit_size,
           notes: it.notes,
+          // Field-application detail preserved through the edit (#3 edit-path) —
+          // null/false on chemical-sale lines, so save_invoice stays a no-op for them.
+          is_application_fee: it.is_application_fee,
+          rate_unit: it.rate_unit,
+          total_applied: it.total_applied,
+          total_applied_unit: it.total_applied_unit,
+          total_applied_gl_lb: it.total_applied_gl_lb,
+          gl_lb_unit: it.gl_lb_unit,
+          epa_registration: it.epa_registration,
+          product_form: it.product_form,
+          price_source: it.price_source,
+          quoted_price_cents: it.quoted_price_cents,
         }));
 
         const idemKey = saveIdem.getKey();
@@ -731,7 +818,7 @@ export default function InvoiceDetail() {
         product_form: it.product_form || it.product?.product_form || null,
       })) as InvoicePdfItem[],
       total_amount_cents: invoice.total_amount_cents ?? items.reduce((s, i) => s + i.extended_cents, 0),
-      total_cost_cents: invoice.total_cost_cents ?? items.reduce((s, i) => s + Math.round(i.cost_cents * i.quantity), 0),
+      total_cost_cents: invoice.total_cost_cents ?? items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : Math.round(i.cost_cents * i.quantity)), 0),
       paid_amount_cents: invoice.paid_amount_cents ?? 0,
       prepay_applied_cents: invoice.prepay_applied_cents ?? 0,
       balance_cents: invoice.balance_cents ?? 0,
@@ -814,7 +901,11 @@ export default function InvoiceDetail() {
   };
 
   const totalCents = items.reduce((s, i) => s + i.extended_cents, 0);
-  const totalCostCents = items.reduce((s, i) => s + (i.cost_cents * i.quantity), 0);
+  // Mirror save_invoice DELTA-E: a machine-fee line stores its EXACT extended cost
+  // (its quantity is acres, not a multiplier), so add it as-is; product lines store a
+  // per-unit cost -> x quantity. Using x quantity for the fee line would inflate the
+  // displayed Total Cost/Margin by a factor of acres.
+  const totalCostCents = items.reduce((s, i) => s + (i.is_application_fee ? i.cost_cents : i.cost_cents * i.quantity), 0);
   const editable = isNew || ['draft', 'unposted'].includes(invoice.status || '');
 
   // Customer filtered list
@@ -945,10 +1036,12 @@ export default function InvoiceDetail() {
         <Card className="md:col-span-2">
           <h2 className="text-sm font-semibold text-nav-dark mb-4">Invoice Details</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {/* Customer */}
+            {/* Customer — read-only on the segregated field route (Codex): a field
+                 invoice's customer is job-derived and mirrored in the share ledger;
+                 it can't be changed here (save_invoice also locks it server-side). */}
             <div className="col-span-2 relative">
               <label className="text-sm font-medium text-nav-dark">Customer *</label>
-              {editable ? (
+              {editable && routeArea !== 'field' ? (
                 <div className="relative mt-1">
                   <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
@@ -987,17 +1080,23 @@ export default function InvoiceDetail() {
               )}
             </div>
 
-            {/* Type */}
+            {/* Type — locked to a read-only label on the segregated field route
+                 (Codex P2): a field invoice must not be reclassified to Chemical
+                 Sales from the field-invoices area. */}
             <div>
               <label className="text-sm font-medium text-nav-dark">Invoice Type</label>
-              {editable ? (
+              {editable && routeArea !== 'field' ? (
                 <select
                   value={invoice.invoice_type || 'chemical_sale'}
                   onChange={(e) => setInvoice((prev) => ({ ...prev, invoice_type: e.target.value as InvoiceType }))}
                   className="mt-1 w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >
                   <option value="chemical_sale">Chemical Sale</option>
-                  <option value="field_application">Field Application</option>
+                  {/* field_application is NOT selectable here — this editable
+                      selector only renders on the chemical route (the field route
+                      is read-only), and a chemical invoice must not be reclassified
+                      into the segregated field area (Codex). Field invoices are
+                      created from jobs / the field-app editor, never here. */}
                   <option value="misc_charge">Misc Charge</option>
                 </select>
               ) : (

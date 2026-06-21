@@ -19,6 +19,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
+import { applyChemEdit, recomputeChemRowForAcres, sumAcres } from '../lib/chemCalculator';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -100,6 +101,11 @@ interface ChemRow {
   cost_per_unit_cents: string;
   price_per_unit_cents: string;
   sort_order: number;
+  /** UI-only (NOT persisted): which field the user last drove — so an acreage
+   *  change re-derives the OTHER field and never silently rewrites a
+   *  hand-entered quantity (Codex P2). 'rate' = quantity follows; 'qty' = rate
+   *  follows; undefined = untouched (a loaded line follows its rate if it has one). */
+  driver?: 'rate' | 'qty';
 }
 
 interface FieldRow {
@@ -701,10 +707,15 @@ export default function JobDetail() {
       if (error) throw error;
       transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
-      if (profile) logActivity({ event: 'job_invoiced', description: `Job ${jobNumber} → Invoice ${result.invoice_number}`, performedBy: profile.id });
+      // transfer_job_to_invoice writes the 'job_invoiced' activity_feed row
+      // server-side (DELTA-5); a second client-side log here just double-logged
+      // the same event (Codex LOW, As-Applied Phase 1c). Removed.
       toast('success', `Invoice ${result.invoice_number} created`);
       setIsDirty(false);
-      navigate(`/invoices/${result.invoice_id}`);
+      // A job transfers to a field_application invoice -> open it under the
+      // field-invoices area (its quantity-based editor), not the Chemical Sales
+      // route which a field-invoices-only user is denied (Codex R5 P2).
+      navigate(`/field-invoices/${result.invoice_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
       toast('error', err instanceof Error ? err.message : 'Failed to transfer to invoice');
@@ -737,10 +748,25 @@ export default function JobDetail() {
   };
 
   // Field row handlers
+  // 3-way calculator (rate/ac <-> total acres <-> quantity): quantity = rate/ac ×
+  // total acres applied. Acres are summed from the job's fields. Editing a field's
+  // acres (or its selection) re-derives each rate-driven chemical's quantity, so
+  // "keep the rate, change acres -> quantity changes" just works. Flat/quantity-
+  // only lines (no rate) are left alone.
+  const recomputeChemQtyFromAcres = (rows: FieldRow[]) => {
+    // NB: no acres<=0 early return — removing the last field must re-derive rate-driven
+    // lines to a 0 quantity so the job can't save/bill a stale derived amount. (Codex r16)
+    const acres = sumAcres(rows);
+    setChemRows(prev => prev.map(c => recomputeChemRowForAcres(c, acres)));
+  };
   const addFieldRow = () => {
     setFieldRows([...fieldRows, { field_id: '', field_name: '', acres_to_treat: '', sort_order: fieldRows.length }]);
   };
-  const removeFieldRow = (i: number) => setFieldRows(fieldRows.filter((_, idx) => idx !== i));
+  const removeFieldRow = (i: number) => {
+    const updated = fieldRows.filter((_, idx) => idx !== i);
+    setFieldRows(updated);
+    recomputeChemQtyFromAcres(updated);
+  };
   const updateFieldRow = (i: number, key: keyof FieldRow, value: string) => {
     const updated = [...fieldRows];
     updated[i] = { ...updated[i], [key]: value };
@@ -752,6 +778,9 @@ export default function JobDetail() {
       }
     }
     setFieldRows(updated);
+    if (key === 'acres_to_treat' || key === 'field_id') {
+      recomputeChemQtyFromAcres(updated);
+    }
   };
 
   // Chem row handlers
@@ -773,6 +802,11 @@ export default function JobDetail() {
         updated[i].cost_per_unit_cents = Math.round((p.current_cost || 0) * 100).toString();
       }
     }
+    // 3-way calculator (rate ⇄ quantity via total acres). The driver flag is recorded
+    // even with no fields chosen yet (acres === 0), so a rate/total entered before fields
+    // are added is filled in by recomputeChemQtyFromAcres once acres exist rather than
+    // being dropped to a 0 quantity. Pure logic + tests in lib/chemCalculator. (Codex r15)
+    updated[i] = applyChemEdit(updated[i], key, value, sumAcres(fieldRows));
     setChemRows(updated);
   };
 

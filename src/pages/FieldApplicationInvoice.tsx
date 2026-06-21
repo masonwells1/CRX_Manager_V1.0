@@ -113,6 +113,34 @@ export default function FieldApplicationInvoice() {
 
   const fetchInvoice = useCallback(async () => {
     if (!id) return;
+    // #3 segregation: validate the invoice belongs in THIS (per-acre, field-app)
+    // editor BEFORE pulling the full row, so a denied / wrong-editor URL doesn't
+    // expose invoice data — only the type + job_id/blend_ticket_id discriminators are
+    // read first (Codex P1). Then redirect: a non-field invoice -> field list; a
+    // JOB-built (job_id) OR BLEND-TICKET-built (blend_ticket_id) field invoice has
+    // quantity lines + no field_app_locations -> the generic editor. Only an
+    // ENGINE-built field invoice (NEITHER set) belongs here. (Codex r13)
+    const { data: chk, error: chkErr } = await supabase
+      .from('invoices')
+      .select('invoice_type, job_id, blend_ticket_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (chkErr || !chk) {
+      toast('error', 'Failed to load invoice');
+      navigate('/field-invoices');
+      return;
+    }
+    if ((chk as { invoice_type?: string }).invoice_type !== 'field_application') {
+      toast('error', 'Not a field invoice');
+      navigate('/field-invoices');
+      return;
+    }
+    if ((chk as { job_id?: string | null }).job_id
+        || (chk as { blend_ticket_id?: string | null }).blend_ticket_id) {
+      navigate(`/field-invoices/${id}`, { replace: true });
+      return;
+    }
+
     const { data: inv, error } = await supabase
       .from('invoices')
       .select('*')
@@ -121,7 +149,7 @@ export default function FieldApplicationInvoice() {
 
     if (error || !inv) {
       toast('error', 'Failed to load invoice');
-      navigate('/invoices');
+      navigate('/field-invoices');
       return;
     }
 
@@ -541,7 +569,7 @@ export default function FieldApplicationInvoice() {
       });
 
       toast('success', 'Invoice deleted');
-      navigate('/invoices');
+      navigate('/field-invoices');
     } catch (err) {
       Sentry.captureException(err, { tags: { action: 'delete_field_app_invoice' } });
       toast('error', `Delete failed: ${sanitizeError(err)}`);
@@ -559,7 +587,7 @@ export default function FieldApplicationInvoice() {
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate('/invoices')} className="p-1 rounded hover:bg-gray-100">
+          <button onClick={() => navigate('/field-invoices')} className="p-1 rounded hover:bg-gray-100">
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
