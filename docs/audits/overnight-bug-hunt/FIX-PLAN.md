@@ -5,6 +5,12 @@
 > footprint), commit to the branch — **but DO NOT apply anything to the live database.** Mason approves the
 > live applies in batches AFTER everything is built. Nothing is pushed to `main` either.
 
+## CODEX FIX-GATE — 2026-06-20 (read-only, `codex exec --sandbox read-only`, 2 batches)
+All 5 this-session migrations (`20260620200000`–`240000`) reviewed by Codex. **Verdict: 4 PASS / 1 LOW CONCERN (folded in).**
+- HIGH guards (prepay block `200000` + field-app trigger `210000`): **PASS, 0 findings** — Codex confirmed the RAISE-first block + SECDEF/search_path preserved + only-caller handles the error; trigger blocks both directions, fires only on real type changes, SECURITY INVOKER, low collision risk vs feat.
+- `complete_delivery 220000` + `blend rebill 240000`: **PASS, 0 findings.**
+- `quick_delivery 230000`: **CONCERN (LOW) → FOLDED IN.** Aggregation grouped by raw `product_id` TEXT; non-canonical UUID text variants of the same product would slip the net-available check. Hardened to `GROUP BY (elem->>'product_id')::uuid`; re-validated (plpgsql_check 0; case-variant payload: 3 groups OLD → 2 groups NEW, dup collapses to 120). Earlier Claude reviewers (rls-security + migration-drift) ran on the 2 HIGHs = 0-BLOCKER.
+
 ## BUILD PROGRESS — 2026-06-20 (update as you go)
 **HIGHs — all 5 BUILT (Mason 2026-06-20: "fix the 2x high issue, need guards on" → both flagged HIGHs now have guards built):**
 - ✅ prepay cross-customer (`apply_prepay_to_invoice`) — BUILT prior (`9df55ac`, migration `20260620120000`).

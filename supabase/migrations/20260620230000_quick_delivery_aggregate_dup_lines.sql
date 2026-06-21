@@ -67,17 +67,21 @@ BEGIN
     RAISE EXCEPTION 'At least one item is required';
   END IF;
 
-  -- Overnight bug-hunt LOW (20260620): aggregate duplicate product_id lines BEFORE
+  -- Overnight bug-hunt LOW (20260620): aggregate duplicate product lines BEFORE
   -- the net-available check so two lines of the same product can't each pass against
-  -- the same prebooked baseline and then both prebook (over-prebook). The loop yields
-  -- a jsonb object, so the body below is unchanged.
+  -- the same prebooked baseline and then both prebook (over-prebook). Group by the
+  -- UUID VALUE, not the raw text, so non-canonical text variants of the same
+  -- product_id (case / braces / hyphens) collapse into one group — they cast to the
+  -- same uuid in the body + prebook loop, so text-grouping would let them slip the
+  -- check (Codex fix-gate hardening). The loop yields a jsonb object (product_id as
+  -- canonical uuid text), so the body below is unchanged.
   FOR v_item IN
-    SELECT jsonb_build_object('product_id', sub.product_id, 'quantity', sub.quantity) AS item
+    SELECT jsonb_build_object('product_id', sub.product_id::text, 'quantity', sub.quantity) AS item
       FROM (
-        SELECT (elem->>'product_id') AS product_id,
+        SELECT (elem->>'product_id')::uuid AS product_id,
                SUM((elem->>'quantity')::numeric) AS quantity
           FROM jsonb_array_elements(p_items) elem
-         GROUP BY (elem->>'product_id')
+         GROUP BY (elem->>'product_id')::uuid
       ) sub
   LOOP
     SELECT * INTO v_product FROM products WHERE id = (v_item->>'product_id')::uuid AND is_active = true;
