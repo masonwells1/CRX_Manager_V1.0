@@ -97,7 +97,13 @@ export default function NotificationsPanel() {
         .eq('user_id', profile.id)
         .eq('is_read', false)
         .select();
-      checkMutationResult(result, 'Mark all notifications as read');
+      // Zero rows is a valid outcome for this filtered bulk update — a realtime
+      // or other-tab read may have already cleared the unread rows after the
+      // unreadCount>0 button guard. Only a real error counts as failure; do NOT
+      // use checkMutationResult here, which treats an empty result array as
+      // denial and would surface a false "Failed to update" toast on a no-op.
+      // Mirrors src/pages/Notifications.tsx markAllRead.
+      if (result.error) throw result.error;
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'Failed to mark all notifications as read' } });
       toast('error', 'Failed to update notification');
