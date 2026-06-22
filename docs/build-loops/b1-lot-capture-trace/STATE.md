@@ -1,10 +1,12 @@
 # STATE — B1 Lot Capture & Trace build loop
 
 > The loop reads this at the start of every turn and updates it after every phase. Status values: `PENDING` · `IN-PROGRESS` · `DONE` · `BLOCKED` · `AWAITING-OWNER-APPROVAL`.
+> **The loop runs ONLY the first `PENDING` phase each turn, and STOPS (does not run) on `BLOCKED`, `IN-PROGRESS`, or `AWAITING-OWNER-APPROVAL`.**
 > Keep the log append-only; never delete history (record what happened so a resume/owner can trust it).
 
 **Overall status:** PENDING (not started)
 **Branch:** feat/application-lot-capture (create off latest origin/main in Phase 0)
+**Supabase dev branch ID (migration proof target — `apply_migration` ONLY here; NEVER prod `rhyzpcqhnizqbxphqdkr`):** — (set in Phase 1)
 **Started:** —
 **Last updated:** —
 
