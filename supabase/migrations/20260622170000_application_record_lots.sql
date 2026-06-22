@@ -45,12 +45,17 @@ CREATE TABLE IF NOT EXISTS public.application_record_lots (
   created_at timestamptz NOT NULL DEFAULT now(),
   created_by uuid REFERENCES public.profiles(id),
   -- No updated_at: rows are REPLACED (delete + reinsert) by the save RPC, never edited in place.
-  CONSTRAINT application_record_lots_lot_number_not_blank CHECK (btrim(lot_number) <> '')
+  CONSTRAINT application_record_lots_lot_number_not_blank CHECK (btrim(lot_number) <> ''),
+  -- quantity_from_lot is "how much from this lot" — a negative would corrupt the compliance
+  -- trace; reject it (NULL = not recorded, which is fine).
+  CONSTRAINT application_record_lots_quantity_non_negative CHECK (quantity_from_lot IS NULL OR quantity_from_lot >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_arl_application_record ON public.application_record_lots(application_record_id);
 CREATE INDEX IF NOT EXISTS idx_arl_product ON public.application_record_lots(product_id);
-CREATE INDEX IF NOT EXISTS idx_arl_lot_lower ON public.application_record_lots(lower(lot_number));
+-- Indexes the EXACT normalized expression get_lot_application_trace filters on
+-- (lower(btrim(lot_number))) so recall lookups by lot use this index instead of seq-scanning.
+CREATE INDEX IF NOT EXISTS idx_arl_lot_lower ON public.application_record_lots(lower(btrim(lot_number)));
 -- One row per (application record, product, normalized lot) — the SOW invariant. Case-insensitive
 -- so the recall trace (which matches case-insensitively) can never double-list the same applied lot.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_arl_unique_record_product_lot
@@ -58,10 +63,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_arl_unique_record_product_lot
 
 ALTER TABLE public.application_record_lots ENABLE ROW LEVEL SECURITY;
 
--- RLS mirrors application_records: admin/sales insert, admin update/delete, and SELECT for
--- admin/sales OR an applicator on their OWN records (explicit join to the parent's applicator_id —
--- the lot row has no applicator_id of its own). Writes go through the SECURITY DEFINER RPCs below
--- (which bypass RLS); these policies are the backstop for any direct PostgREST access.
+-- RLS: WRITES ARE RPC-ONLY. All legitimate inserts/updates/deletes go through the
+-- SECURITY DEFINER RPCs below (set_application_record_lots + the blend-ticket propagation),
+-- which run as the table owner and bypass RLS while enforcing product-on-record, source-receipt,
+-- duplicate-lot, and quantity validation. There is intentionally NO client INSERT/UPDATE/DELETE
+-- policy, so a direct PostgREST write (even by admin/sales) is denied by RLS default-deny — that
+-- closes the bypass where a direct write could push an unvalidated row into the compliance trace
+-- (Codex P2). Clients get a SELECT policy only: admin/sales, OR an applicator on their OWN records
+-- (explicit join to the parent's applicator_id — the lot row has no applicator_id of its own).
+-- DROP-then-CREATE so the migration is re-runnable after a partial apply (DATABASE_CHANGE_CHECKLIST);
+-- the arl_insert/update/delete drops also retire those policies if an earlier draft created them.
+DROP POLICY IF EXISTS arl_select ON public.application_record_lots;
+DROP POLICY IF EXISTS arl_insert ON public.application_record_lots;
+DROP POLICY IF EXISTS arl_update ON public.application_record_lots;
+DROP POLICY IF EXISTS arl_delete ON public.application_record_lots;
+
 CREATE POLICY arl_select ON public.application_record_lots
   FOR SELECT TO authenticated
   USING (
@@ -73,19 +89,6 @@ CREATE POLICY arl_select ON public.application_record_lots
       )
     )
   );
-
-CREATE POLICY arl_insert ON public.application_record_lots
-  FOR INSERT TO authenticated
-  WITH CHECK (is_admin() OR is_sales_rep());
-
-CREATE POLICY arl_update ON public.application_record_lots
-  FOR UPDATE TO authenticated
-  USING (is_admin())
-  WITH CHECK (is_admin());
-
-CREATE POLICY arl_delete ON public.application_record_lots
-  FOR DELETE TO authenticated
-  USING (is_admin());
 
 -- ============================================================================
 -- 2. RPC: set_application_record_lots — replace-the-lots save for one record
