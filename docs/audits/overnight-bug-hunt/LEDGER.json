@@ -39,6 +39,55 @@
       "180000edit": "added DROP TRIGGER IF EXISTS before the bare CREATE TRIGGER (migration-drift-reviewer recommendation, parity with prevent_order_shares_edit_after_post)",
       "stillOpen": "3 DEFERRED-tier non-migration items (update_allocation_set DROP, checkMutationResult proximity test, any residual doc-count nits); branch NOT yet merged to main / pushed (Mason to OK)",
       "resultFiles": ".claude/session-state/migration-review-*.json (proofs, gitignored)"
+    },
+    "run2": {
+      "started": "2026-06-22",
+      "status": "COMPLETE",
+      "note": "Restarted on current main after Run 1 fixes went live + As-Applied/Field Invoices merged. Cycle 1: 3 parked (2 HIGH / 1 MED), 2 refuted, 0 green.",
+      "cycle2": "BUILT 20260622040000 (prepay double-decrement) + 20260622050000 (void/reverse period-gate) + folded penny-drift into 20260622020000; parked commission-display (frontend) + blend-reopen-lock (build-pending).",
+      "cycle3": "Documented double-billing order-lock race (build-pending #1) + anon-secdef doc-count (park). 0 built (deferred to a focused build pass), 0 auto-pushed, 3 refuted.",
+      "cycle4": "migration-drift + types-drift CLEAN; 1 LOW frontend (notifications false-error) GREEN auto-pushed to main cfc49931 (first Run-2 auto-push).",
+      "greenPushed": [
+        "cfc49931 notifications mark-all-read false-error fix"
+      ],
+      "cycle5": "edge-and-pdf CLEAN; docs-deps-tests 1 LOW test-infra + 6 refuted = DRY. Whole app swept. Built double-billing race 20260622060000 (create_invoice_for_unbilled_delivery order lock; complete_delivery already serialized).",
+      "builtMigrations": [
+        "20260622010000",
+        "20260622020000",
+        "20260622030000",
+        "20260622040000",
+        "20260622050000",
+        "20260622060000"
+      ],
+      "sweptComplete": true,
+      "cycle6": "Confirming pass: prepay re-confirm (built) + NEW transfer_job invoice-number race (folded+built into 20260622020000, now 3 fixes) + NEW record_invoice_payment LOW retire (documented). 6 built migrations total.",
+      "finished": "2026-06-22",
+      "cyclesRun": 7,
+      "greenPushedLive": [
+        "cfc49931 notifications mark-all-read false-error fix"
+      ],
+      "builtMigrationsParked": [
+        "20260622010000 finance-charges",
+        "20260622020000 transfer_job (audit+penny-drift+invoice-number)",
+        "20260622030000 field-app applied-info RPC",
+        "20260622040000 prepay double-decrement",
+        "20260622050000 void/reverse period-gate",
+        "20260622060000 unbilled-delivery order-lock"
+      ],
+      "buildPending": [
+        "commissions:void_commission_payment:resurrect (MED/HIGH)",
+        "blend reopen-lock",
+        "create_quick_delivery order-item cost/profit",
+        "record_invoice_payment retire (LOW)",
+        "commission payout display (frontend)",
+        "anon-secdef doc count",
+        "CI live-test guard",
+        "(optional) void_invoice overdue/paid period-gate"
+      ],
+      "tally": "13 confirmed real (1 live + 6 built+parked + 6 build-pending), ~19 refuted, 7 cycles",
+      "stopReason": "Whole app swept on current code (incl. As-Applied/Field Invoices) + 2 confirming passes over hottest billing; remaining yield only dormant MED/LOW (latent — billing engine operationally empty). Stopped on clean-completion, not the literal 3-dry rule.",
+      "codexApplyReview": "2026-06-22 morning: Codex reviewed the ACTUAL SQL of all 6 parked migrations (fix-gate, read-only) -> ALL 6 SHIP (010000/020000/030000/040000/050000/060000). Closes the gap that the overnight finding-gates confirmed bug+approach but not the built SQL. 030000/040000 needed a tighter prompt re-run (first pass exited mid-exploration).",
+      "appliedLive": "2026-06-22 (Mason approved apply one-by-one): all 6 built migrations APPLIED LIVE + recorded in schema_migrations. Per-migration gate: rls-security-reviewer + migration-drift-reviewer CLEAN + Codex code-review SHIP (all 6) + live overload=1 + apply-guard byte-proof + post-apply plpgsql_check=0 + global overload sweep clean (8 collisions are all plpgsql_check extension fns, not app RPCs) + security advisor unchanged (no new findings; my new RPC is signed-in-exec not anon). Live stamps: 010000=20260622135233, 030000=20260622135829, 020000=20260622140645, 040000=20260622141611, 050000=20260622142253, 060000=20260622142901. Companion frontend swap (FieldApplicationInvoice.tsx -> update_field_app_applied_info RPC) shipped same commit. callable RPCs 225->226 (new RPC)."
     }
   },
   "cycles": [
@@ -155,6 +204,142 @@
       "ranAt": "2026-06-20",
       "slice": "WIND-DOWN #2 / FINAL — lifecycle-invariants + docs-deps-tests (2nd confirming pass). SOLE driver (solo-checked).",
       "note": "LAST CYCLE — loop stopped after this. 3 confirmed + 3 refuted, NO meaningful new bug. (1) lifecycle:_enforce_job_status_transition:terminal-cancel-bypass = RE-CONFIRM of the cycle-15 jobs-cancel item, ESCALATED LOW->MEDIUM (sharper: terminal completed/invoiced jobs can be cancelled -> orphaned invoice/application_records) — annotated, severity bumped, not re-parked. (2) doc:trigger-fn-count:47-vs-49 = re-confirm of cycle-17 doc-count drift (added CLAUDE.md:274 location). (3) doc:callable-rpc-count:227-vs-226 = NEW instance of the SAME doc-count-drift class (rpc-functions.md says 227 callable RPCs, but CLAUDE.md + live = 226) — FOLDED into the existing parked doc-count item (one /update-docs pass fixes both counts). 3 REFUTED (all out-of-scope/hygiene): deps:ci-audit-level:critical-only (hygiene, dead-code advisories), tests:schemaIntegrityLive:skipif (env-guard test skip), doc:table-count:96-vs-97 (NOT drifted, miscount). === LOOP STOP DECISION === Whole app swept across 19 cycles. Cycles 16-19 yielded ZERO meaningful new bugs (clean schema/migration sweep + cosmetic doc-count off-by-ones + re-confirms) — the 'no meaningful new signal / both phases drained' state the 3-dry stop proxies for. Stopped CLEANLY ~2h before the ~07:00 morning stop rather than chase cosmetic doc-nits (which keep resetting the literal dry-counter). FINAL TALLY: 19 cycles, 32 confirmed (1 green-fixed + 31 parked), 22 refuted false-positives. Parked by severity: 5 HIGH-attention (all money-correctness, all latent), ~10 MEDIUM, ~16 LOW. NOT rescheduled. Mason restarts with 'start the overnight bug hunt'. 0 green this cycle; nothing pushed/touched live across the entire run."
+    },
+    {
+      "cycle": 20,
+      "date": "2026-06-22",
+      "run": 2,
+      "subsystems": [
+        "field-app-invoices",
+        "jobs-to-billing",
+        "invoices-core"
+      ],
+      "confirmed": 3,
+      "refuted": 2,
+      "bySeverity": {
+        "HIGH": 2,
+        "MEDIUM": 1
+      },
+      "greenFixed": 0,
+      "parked": 3,
+      "note": "RUN 2 cycle 1 on current main (As-Applied/Field Invoices feature now merged). All 3 confirmed are migration-tier -> parked+built+validated. Both Codex finding-gate and adversarial verifier confirmed all 3 REAL."
+    },
+    {
+      "cycle": 21,
+      "date": "2026-06-22",
+      "run": 2,
+      "subsystems": [
+        "commissions",
+        "prepay-blend",
+        "splits-shares-allocation"
+      ],
+      "confirmed": 5,
+      "refuted": 1,
+      "bySeverity": {
+        "HIGH": 2,
+        "MEDIUM": 3,
+        "codexHIGH": 4
+      },
+      "greenFixed": 0,
+      "parked": 5,
+      "note": "RUN 2 cycle 2. 3 fixes BUILT+rolled-back-validated (prepay double-decrement 20260622040000; void/reverse period-gate 20260622050000; transfer_job penny-drift FOLDED into 20260622020000). 2 documented-parked (commission display frontend = your review; blend reopen-lock migration = build-pending). 1 refuted. Both Codex finding-gates + adversarial verifier confirmed all 5 REAL; Codex rated #1/#2/#3/#5 HIGH."
+    },
+    {
+      "cycle": 22,
+      "date": "2026-06-22",
+      "run": 2,
+      "subsystems": [
+        "deliveries-billing",
+        "rls-security",
+        "lifecycle-invariants"
+      ],
+      "confirmed": 2,
+      "refuted": 3,
+      "bySeverity": {
+        "MEDIUM": 1,
+        "LOW": 1
+      },
+      "greenFixed": 0,
+      "parked": 2,
+      "note": "RUN 2 cycle 3. 1 MEDIUM double-billing race (build-pending #1, NON-dormant) + 1 LOW anon-secdef doc-count (park for /update-docs). 3 refuted (incl. a finder error caught: 20260620200000 IS live under a renamed stamp). Codex finding-gate confirmed the race REAL/MED and rejected the unsafe unique-index."
+    },
+    {
+      "cycle": 23,
+      "date": "2026-06-22",
+      "run": 2,
+      "subsystems": [
+        "migration-drift",
+        "types-drift",
+        "frontend-safety"
+      ],
+      "confirmed": 1,
+      "refuted": 0,
+      "bySeverity": {
+        "LOW": 1
+      },
+      "greenFixed": 1,
+      "greenPushed": "cfc49931",
+      "parked": 0,
+      "note": "RUN 2 cycle 4. migration-drift + types-drift came back CLEAN on current code (as-applied feature introduced no overload/CHECK/column/type drift). frontend-safety surfaced 1 LOW (notifications false-error) -> GREEN auto-pushed to main (cfc49931) via the full gate. First auto-push of Run 2."
+    },
+    {
+      "cycle": 24,
+      "date": "2026-06-22",
+      "run": 2,
+      "subsystems": [
+        "edge-and-pdf",
+        "docs-deps-tests",
+        "+BUILD:double-billing-race"
+      ],
+      "confirmed": 1,
+      "refuted": 6,
+      "bySeverity": {
+        "LOW": 1
+      },
+      "greenFixed": 0,
+      "parked": 1,
+      "note": "RUN 2 cycle 5 (final Phase-2). edge-and-pdf CLEAN. docs-deps-tests: 1 LOW test-infra (live schema tests never run in CI) + 6 refuted (CI posture / non-exploitable vulns / transient self-induced doc drift / cosmetic doc nits). DRY cycle — whole app now swept (Phase 1 c1-3 + Phase 2 c4-5). ALSO built the double-billing race fix (20260622060000) this cycle."
+    },
+    {
+      "cycle": 25,
+      "date": "2026-06-22",
+      "run": 2,
+      "subsystems": [
+        "invoices-core",
+        "jobs-to-billing",
+        "prepay-blend",
+        "(confirming re-hunt)"
+      ],
+      "confirmed": 3,
+      "refuted": 2,
+      "bySeverity": {
+        "HIGH": 1,
+        "MEDIUM": 1,
+        "LOW": 1
+      },
+      "greenFixed": 0,
+      "parked": 3,
+      "note": "RUN 2 cycle 6 confirming pass. 1 HIGH re-confirm (prepay double-decrement, already built 20260622040000) + 1 NEW MEDIUM (transfer_job inline-invoice-number race -> folded+built into 20260622020000) + 1 NEW LOW (record_invoice_payment deprecated -> documented retire). 2 refuted (void_invoice period-gate unreachable; + 1). Confirming pass earned its keep (caught the numbering race the cycle-1 jobs-to-billing pass missed)."
+    },
+    {
+      "cycle": 26,
+      "date": "2026-06-22",
+      "run": 2,
+      "subsystems": [
+        "commissions",
+        "splits-shares-allocation",
+        "deliveries-billing",
+        "(final confirming pass)"
+      ],
+      "confirmed": 2,
+      "refuted": 2,
+      "bySeverity": {
+        "MEDIUM": 2,
+        "codexHIGH": 1
+      },
+      "greenFixed": 0,
+      "parked": 2,
+      "note": "RUN 2 cycle 7 (FINAL). 2 NEW dormant MED (void_commission_payment resurrect-dead-order [Codex HIGH], create_quick_delivery order_item cost/profit) -> documented build-pending. 2 refuted (commission per-recipient rounding by-design; split-invoice header cost has no real consumer). Loop STOPPED after this cycle: whole app swept (Phase 1 c1-3, Phase 2 c4-5) + 2 confirming passes (c6-7); diminishing yield (only dormant MED/LOW)."
     }
   ],
   "findings": [
@@ -556,6 +741,225 @@
       "phase": 2,
       "reTieredFromGreen": true,
       "note": "NEW cycle 17 (Phase 2 / docs-deps-tests; verifier REAL, LOW; cosmetic doc-count drift — NOT Codex-gated, it's a trivially-verifiable count). Docs say 47 trigger functions; live DB has 49 distinct trigger functions (`SELECT count(DISTINCT proname) FROM pg_proc WHERE pg_get_function_result(oid)='trigger'` = 49). The +2 are recent enforcers added after the 2026-06-16 doc date: _enforce_quote_terminal_not_drawn, _validate_order_shares_total, _enforce_delivery_items_parent_lock. Locations: docs/reference/rpc-functions.md:1/3 ('47 trigger functions') + CLAUDE.md:22 Snapshot ('+47 trigger fns'). The CALLABLE RPC count (226) is NOT drifted (matches live). check-doc-drift.mjs SKIPS the live-DB cross-check + has no trigger-count assertion (lines 127-129) so this slipped past the gate. Cosmetic/inventory only — zero runtime/money/RLS impact (an agent reading the trigger inventory is off by 2). RE-TIERED green->park (NOT auto-fixed): a correct fix spans CLAUDE.md (core file) + docs/reference/rpc-functions.md + the AUTO-GENERATED AGENTS.md (needs `node scripts/regenerate-agents-md.mjs` to stay consistent) = the deliberate /update-docs flow, not a clean one-line surgical green edit; auto-editing core docs unattended for an off-by-2 count isn't warranted. FIX (docs-or-test, PARK): run /update-docs to bump trigger-count 47->49 across CLAUDE.md + rpc-functions.md + AGENTS.md (list the 2 new enforcer triggers), and OPTIONALLY extend check-doc-drift.mjs to cross-check live trigger/RPC counts so this drift class is caught automatically. CYCLE-19 RE-CONFIRM + ENRICH (this parked item now covers ALL the doc-count drift in rpc-functions.md/CLAUDE.md): (1) trigger-fn count: docs say 47, live=49 — at CLAUDE.md:22, CLAUDE.md:274, rpc-functions.md:1/3; (2) NEW callable-RPC count: rpc-functions.md:1/3 says '227 callable RPCs' but CLAUDE.md:22/274 say '226' and LIVE=226 (count of public non-trigger non-extension fns) — so rpc-functions.md is internally inconsistent with CLAUDE.md AND wrong. ONE /update-docs pass fixes both: set rpc-functions.md to '226 callable RPCs + 49 trigger functions', bump the trigger count 47->49 in CLAUDE.md:22+:274, regen AGENTS.md. All cosmetic (no runtime/money/RLS impact). (Refuted same cycle: doc:table-count:96-vs-97 — the '96 tables (+2 views)' wording is NOT drifted, FALSE_POSITIVE.)"
+    },
+    {
+      "dedupeKey": "invoices:generate_finance_charges:unposted-insert-blocked-by-draft-trigger",
+      "title": "generate_finance_charges inserts status=unposted, blocked by trg_invoice_draft_insert — finance-charge feature dead on first use",
+      "bugClass": "lifecycle-segregation",
+      "severity": "HIGH",
+      "codexSeverity": "HIGH",
+      "fixKind": "migration",
+      "cycle": 20,
+      "status": "APPLIED LIVE 2026-06-22 — 20260622010000 stamp 20260622135233",
+      "migration": "20260622010000_fix_generate_finance_charges_draft_insert.sql",
+      "validation": "Live rolled-back: OLD unposted insert RAISES (must be created with status draft); NEW draft->unposted works; full RPC end-to-end created 1 finance charge ($150 on $10k overdue). Rolled back.",
+      "codex": "REAL/HIGH, fix correct+minimal",
+      "note": "Fix mirrors transfer_job_to_invoice (insert draft, flip to unposted). Distinct from the prior money:preview_finance_charges:overdue-set-divergence ledger entry."
+    },
+    {
+      "dedupeKey": "field_app:save_field_app_invoice:applied-info-rls-salesrep",
+      "title": "Sales reps cannot save field-app Applied Info (invoices_update RLS admin-only) -> misleading Save failed + duplicate invoice on retry",
+      "bugClass": "lifecycle-segregation",
+      "severity": "HIGH",
+      "codexSeverity": "HIGH",
+      "fixKind": "migration",
+      "cycle": 20,
+      "status": "APPLIED LIVE 2026-06-22 — 20260622030000 stamp 20260622135829 + frontend swap",
+      "migration": "20260622030000_field_app_applied_info_rpc.sql",
+      "validation": "Live rolled-back as authenticated sales_rep: raw .update affected 0 rows (bug); new SECDEF RPC update_field_app_applied_info returned {updated:1} and persisted wind. Rolled back.",
+      "codex": "REAL/HIGH, fix correct+minimal",
+      "note": "Fix = new SECURITY DEFINER RPC + swap the raw frontend .update in FieldApplicationInvoice.tsx ~L453-461. Frontend NOT committed (would error until RPC applied)."
+    },
+    {
+      "dedupeKey": "audit-log:transfer_job_to_invoice:missing-invoice-created-row",
+      "title": "transfer_job_to_invoice writes no financial_audit_log invoice_created row (sole invoice-creator missing it)",
+      "bugClass": "audit-log",
+      "severity": "MEDIUM",
+      "codexSeverity": "HIGH",
+      "fixKind": "migration",
+      "cycle": 20,
+      "status": "APPLIED LIVE 2026-06-22 — 20260622020000 stamp 20260622140645",
+      "migration": "20260622020000_transfer_job_invoice_audit_row.sql",
+      "validation": "Live rolled-back: synthetic completed job -> fixed RPC created invoice INV-2026-0001 AND wrote exactly 1 invoice_created audit row; faithful repro ran clean. Rolled back.",
+      "codex": "REAL/HIGH, fix correct+minimal",
+      "note": "Severity split: MEDIUM (overnight verifier, dormant job->billing path) / HIGH (Codex). Both positions kept."
+    },
+    {
+      "dedupeKey": "money:apply_prepay_to_invoice:balance-double-decrement",
+      "title": "apply_prepay_to_invoice double-decrements prepay_credits.balance_cents (explicit UPDATE compounds the recompute trigger)",
+      "bugClass": "money-cents",
+      "severity": "HIGH",
+      "codexSeverity": "HIGH",
+      "fixKind": "migration",
+      "cycle": 21,
+      "status": "APPLIED LIVE 2026-06-22 — 20260622040000 stamp 20260622141611",
+      "migration": "20260622040000_apply_prepay_remove_double_decrement.sql",
+      "validation": "Live rolled-back: 30000 applied to 100000 credit -> balance 70000 (was 40000). Rolled back.",
+      "codex": "REAL/HIGH, fix correct+minimal",
+      "note": "Removed the explicit prepay_credits decrement; trg_recompute_prepay_credit_balance is the sole writer. Kept customers.prepay_balance_cents decrement. Disproves 20260620200000 comment that called the per-invoice path UNAFFECTED.",
+      "reConfirmed": [
+        "cycle25: re-confirmed still-live (fix 20260622040000 not yet applied) — verifier independently reproduced the double-decrement; also caught that migration 20260512050000 header rationale (\"end result identical\") is FACTUALLY WRONG about statement ordering."
+      ]
+    },
+    {
+      "dedupeKey": "lifecycle:void_payment-reverse_write_off:no-period-gate",
+      "title": "void_payment and reverse_write_off bypass check_period_open (Hard Red Line; closed-period ledger mutation)",
+      "bugClass": "lifecycle-segregation",
+      "severity": "HIGH",
+      "codexSeverity": "HIGH",
+      "fixKind": "migration",
+      "cycle": 21,
+      "status": "APPLIED LIVE 2026-06-22 — 20260622050000 stamp 20260622142253",
+      "migration": "20260622050000_void_reversal_check_period_open.sql",
+      "validation": "Live rolled-back: with a closed 2023-07 period, both RPCs now RAISE \"falls in closed accounting period\". Rolled back.",
+      "codex": "REAL/HIGH, fix correct+minimal",
+      "note": "void_payment gates COALESCE(v_set.payment_date,CURRENT_DATE); reverse_write_off gates v_wo.created_at::date. Mirrors void_invoice/allocate_payment/apply_write_off."
+    },
+    {
+      "dedupeKey": "money:transfer_job_to_invoice:invoice-shares-penny-drift",
+      "title": "transfer_job_to_invoice invoice_shares penny-drift on percentage splits (header reconcile was override-only)",
+      "bugClass": "money-cents",
+      "severity": "MEDIUM",
+      "codexSeverity": "HIGH",
+      "fixKind": "migration",
+      "cycle": 21,
+      "status": "APPLIED LIVE 2026-06-22 — 20260622020000 stamp 20260622140645 (folded)",
+      "migration": "20260622020000_transfer_job_invoice_audit_row.sql",
+      "validation": "Live rolled-back: 50/50 split on total 100001 -> header=shares_sum=100002 (tie); audit row still written. Rolled back.",
+      "codex": "REAL/HIGH, fix correct+minimal (largest-remainder or always-reconcile)",
+      "note": "Made the header->shares reconcile unconditional for the field_billing_defaults branch (was IF v_has_price_override only). Folded into the cycle-1 transfer_job migration to avoid a 2nd 180-line repro."
+    },
+    {
+      "dedupeKey": "commissions:commission_pay_picker:blank-order-customer",
+      "title": "Commission pay-selection modal shows blank order# and customer (fetchUnpaid reads un-populated commissions columns)",
+      "bugClass": "stale-derived-state",
+      "severity": "MEDIUM",
+      "codexSeverity": "MEDIUM",
+      "fixKind": "frontend-only",
+      "cycle": 21,
+      "status": "PARKED FOR REVIEW (frontend, money-domain -> not auto-pushed) — documented, not yet implemented",
+      "file": "src/pages/CommissionPayments.tsx fetchUnpaid (~L135-148), modal render ~L629-630",
+      "codex": "REAL/MED, frontend join correct+minimal",
+      "note": "Fix: add order_id to the select + resolve order_number/customer_name from orders (join/embed) instead of the empty commissions columns. Display-only; reclassified GREEN->park because it is on the commission payout flow (auto-push exclusion)."
+    },
+    {
+      "dedupeKey": "lifecycle:reverse_blend_ticket_approval:billed-ticket-reopen-and-edit",
+      "title": "reverse_blend_ticket_approval can reopen a BILLED ticket (only guards application_records); save_blend_ticket then edits it freely",
+      "bugClass": "lifecycle-segregation",
+      "severity": "MEDIUM",
+      "codexSeverity": "HIGH",
+      "fixKind": "migration",
+      "cycle": 21,
+      "status": "PARKED — documented, BUILD-PENDING (top build priority next)",
+      "file": "rpc:reverse_blend_ticket_approval / rpc:save_blend_ticket (+ save_blend_ticket_fields per Codex)",
+      "codex": "REAL/HIGH, fix direction right; also lock save_blend_ticket_fields; over-reset subclaim already fixed (20260620140000)",
+      "note": "Fix: reverse_blend_ticket_approval also block when a non-voided/non-deleted invoice exists for the ticket; add a payment_status<>unbilled content-edit lock to save_blend_ticket (+ save_blend_ticket_fields). Dormant (0 blend tickets live)."
+    },
+    {
+      "dedupeKey": "concurrency:complete_delivery:dup-invoice-no-order-lock",
+      "title": "complete_delivery / create_invoice_for_unbilled_delivery TOCTOU race — two sibling deliveries on one order can each create an active draft invoice (double-billing)",
+      "bugClass": "concurrency",
+      "severity": "MEDIUM",
+      "codexSeverity": "MEDIUM",
+      "fixKind": "migration",
+      "cycle": 22,
+      "status": "APPLIED LIVE 2026-06-22 — 20260622060000 stamp 20260622142901",
+      "file": "rpc:complete_delivery (disk 20260620220000) + rpc:create_invoice_for_unbilled_delivery",
+      "codex": "REAL/MED, lock fix correct/minimal; REJECTED the unique-index idea (split invoices intentionally make same-order drafts for different customers)",
+      "note": "BUILT cycle 24. PRECISE SCOPE: only create_invoice_for_unbilled_delivery needed the order FOR UPDATE — complete_delivery already self-serializes via its earlier `UPDATE orders SET status` (row-locks the order before its COUNT). Fix adds `PERFORM 1 FROM orders WHERE id=v_delivery.order_id FOR UPDATE` before the COUNT. NO unique index (Codex: breaks field-billing split drafts). Validated: compile PASS, lock present in new / absent in old; minimality by verbatim+1line construction.",
+      "migration": "20260622060000_unbilled_delivery_invoice_order_lock.sql"
+    },
+    {
+      "dedupeKey": "security:anon-secdef-set:count-drift-54",
+      "title": "Documented anon-executable SECURITY DEFINER count drifted 53 -> 54 (grant-debt only, no new exposed mutator)",
+      "bugClass": "audit-log",
+      "severity": "LOW",
+      "codexSeverity": "LOW",
+      "fixKind": "docs-or-test",
+      "cycle": 22,
+      "status": "PARKED FOR REVIEW (core-doc change -> /update-docs, not auto-push)",
+      "file": "CLAUDE.md Schema Gotchas (the \"53 anon-executable SECURITY DEFINER functions\" line)",
+      "codex": "n/a (doc-count; not Codex-gated — parked for Mason, not auto-fixed)",
+      "note": "Live count is 54 (COUNT(*) + get_advisors agree); all 54 individually verified to self-gate on auth.uid()/role (inert grant-debt). Fix: re-baseline 53->54 in CLAUDE.md via /update-docs, OR revoke anon EXECUTE on the directly-callable mutators as defense-in-depth. Parked per the core-doc discipline (Run 1 lesson: doc-count fixes go through /update-docs)."
+    },
+    {
+      "dedupeKey": "frontend:NotificationsPanel:checkmutation-false-error",
+      "title": "NotificationsPanel.markAllAsRead misuses checkMutationResult — false error toast on a 0-row bulk update",
+      "bugClass": "unchecked-errors",
+      "severity": "LOW",
+      "codexSeverity": "LOW",
+      "fixKind": "frontend-only",
+      "cycle": 23,
+      "status": "GREEN — FIXED + AUTO-PUSHED to main (commit cfc49931)",
+      "file": "src/components/team/NotificationsPanel.tsx markAllAsRead (~L100)",
+      "codex": "finding-gate REAL/LOW + fix-gate SHIP (tsc + eslint clean)",
+      "note": "Replaced checkMutationResult with `if (result.error) throw result.error;` (mirrors src/pages/Notifications.tsx markAllRead). First Run-2 auto-push: pure frontend, no money/auth/lifecycle, both Codex gates + lint/typecheck/build/test green + pre-push hook green. Commit also carries the pre-commit-regenerated docs/app-workflow-map.html (hook output)."
+    },
+    {
+      "dedupeKey": "test-gaps:schemaIntegrityLive:conditional-skip",
+      "title": "Live-DB schema-invariant tests never run in CI (vite.config test.env hardcodes test.supabase.co, overriding the CI secret)",
+      "bugClass": "other",
+      "severity": "LOW",
+      "codexSeverity": "LOW",
+      "fixKind": "docs-or-test",
+      "cycle": 24,
+      "status": "PARKED FOR REVIEW (test-infra; not auto-pushed — touches CI/vitest config)",
+      "file": "src/lib/schemaIntegrityLive.test.ts:30 + vite.config.ts test.env",
+      "codex": "n/a (test-infra; not Codex-gated — parked)",
+      "note": "Re-surface of Run-1 tests:schemaIntegrityLive:conditional-skip (was refuted as out-of-scope), now ENRICHED: verifier proved vite.config.ts test.env hardcodes VITE_SUPABASE_URL=test.supabase.co which overrides the CI secret, so the 10 describe.skipIf(!isLiveDB) live suites NEVER run (not just conditionally). Still LOW: dark defense-in-depth — same invariants enforced by PreToolUse hooks + 5 migration reviewers + 71 always-run static tests. Fix: a CI guard that fails-red when isLiveDB is false, or point test config at a real DB."
+    },
+    {
+      "dedupeKey": "concurrency:transfer_job_to_invoice:inline-invoice-number-divergence",
+      "title": "transfer_job_to_invoice numbers invoices inline (raw MAX+1 + a different advisory lock than next_invoice_number) -> cross-RPC race -> 23505 + sequence desync",
+      "bugClass": "concurrency",
+      "severity": "MEDIUM",
+      "codexSeverity": "MEDIUM",
+      "fixKind": "migration",
+      "cycle": 25,
+      "status": "APPLIED LIVE 2026-06-22 — 20260622020000 stamp 20260622140645 (folded)",
+      "migration": "20260622020000_transfer_job_invoice_audit_row.sql",
+      "validation": "Live rolled-back: replaced inline lock+MAX-scan with next_invoice_number(field_application) -> invoice_number=INV-2026-0246 (sequence), multi-customer split header=shares=100002 (tie preserved), audit row written. Rolled back.",
+      "codex": "REAL/MEDIUM, fix correct+minimal",
+      "note": "transfer_job was the SOLE invoice creator using inline numbering (hashtext(invoice_number) lock + MAX(regexp_replace)+1) vs everyone else next_invoice_number (hashtext(invoice_number:INV:year) + invoice_number_seq + setval self-heal + column default). Disjoint locks -> race -> duplicate -> 23505 on invoices_invoice_number_key + seq desync. Fix folded into the transfer_job migration (now 3 fixes: audit row + penny-drift + numbering). Dormant (0 invoiced jobs)."
+    },
+    {
+      "dedupeKey": "money:record_invoice_payment:dual-ledger-deprecated",
+      "title": "Deprecated record_invoice_payment still EXECUTE-granted to authenticated; bumps paid_amount_cents with no invoice_line_allocations row (dual-ledger drift)",
+      "bugClass": "money-cents",
+      "severity": "LOW",
+      "codexSeverity": "LOW",
+      "fixKind": "migration",
+      "cycle": 25,
+      "status": "PARKED — documented, BUILD-PENDING (LOW retire, your review)",
+      "file": "rpc:record_invoice_payment (oid 57976)",
+      "codex": "REAL/LOW, revoke/deprecate correct+minimal",
+      "note": "UI moved to allocate_payment (PR-08); 0 production callers (only E2E/type/test scaffolding). Direct call would write paid_amount_cents without an invoice_line_allocations row, breaking reconciliation.ts invariant + invisible to /payment-history. Verifier downgraded MED->LOW: void_invoice DOES zero paid_amount_cents (refutes \"cash disappears\"); gated to posted/overdue while all 4 live invoices are draft (unreachable today). Fix: retire like create_invoice_from_delivery (REVOKE EXECUTE FROM authenticated + RAISE DEPRECATED, or DROP after updating types/tests)."
+    },
+    {
+      "dedupeKey": "commissions:void_commission_payment:resurrect-cancelled-order",
+      "title": "void_commission_payment resurrects a commission whose order was voided/cancelled after the batch posted (re-payable on a dead order)",
+      "bugClass": "stale-derived-state",
+      "severity": "MEDIUM",
+      "codexSeverity": "HIGH",
+      "fixKind": "migration",
+      "cycle": 26,
+      "status": "PARKED — documented, BUILD-PENDING (top build priority; MED verifier / HIGH Codex)",
+      "file": "rpc:void_commission_payment (20260331120000)",
+      "codex": "REAL/HIGH, scoped reset/cancel fix correct+minimal (deleted = orders.deleted_at IS NOT NULL)",
+      "note": "NEW path the Run-1 20260620 guards do not cover: post batch -> commission paid; void order (guard only fires on status=pending, so paid row survives); void commission payment -> unconditional UPDATE commissions SET status=pending flips it back -> fetchUnpaid/.eq(status,pending) + get_commission_balance_report re-expose it as payable on a dead order. Fix: in void_commission_payment scope the reset to live orders; set commissions on cancelled/voided/deleted orders to cancelled (amount 0) instead; report reset vs cancelled + financial_audit_log. Dormant (0 paid commissions, 0 posted/voided payments live) -> MED verifier / HIGH Codex."
+    },
+    {
+      "dedupeKey": "stale-derived-state:create_quick_delivery:order-item-profit-cost-null",
+      "title": "create_quick_delivery omits cost_per_unit/profit/net_margin/product_name on order_items -> Sales Detail Report shows 0 cost/profit/blank name for quick-delivery lines",
+      "bugClass": "stale-derived-state",
+      "severity": "MEDIUM",
+      "codexSeverity": "MEDIUM",
+      "fixKind": "migration",
+      "cycle": 26,
+      "status": "PARKED — documented, BUILD-PENDING",
+      "file": "rpc:create_quick_delivery (the DELTA-1 order_items INSERT)",
+      "codex": "REAL/MED, mirror create_direct_order correct+minimal",
+      "note": "order_items INSERT omits cost_per_unit/profit/net_margin/product_name (create_direct_order sets all 4). Columns are NOT NULL DEFAULT 0 or empty-string (verifier correction: report shows 0/blank, NOT NULL). get_sales_detail_report reads oi.cost_per_unit/profit/product_name per line. Header totals + commissions unaffected (RPC overwrites header after loop). Report-only, dormant (0 quick-delivery order_items live; 277 regular all populated). Fix: add the 4 columns to the INSERT (cost=COALESCE(product.current_cost,0); profit=(price-cost)*units; net_margin; product_name=product.product_name)."
     }
   ],
   "refuted": [
@@ -682,6 +1086,102 @@
       "verdict": "FALSE_POSITIVE",
       "cycle": 19,
       "note": "NOT drifted. The docs' '96 tables (+2 views)' / '97 tables' wording is consistent with the live schema once views are counted as the docs intend; the claimed 96-vs-97 discrepancy is a miscount of the views-vs-tables split, not a real doc drift. Refuted (unlike the trigger-count + callable-RPC-count drifts, which ARE real and parked)."
+    },
+    {
+      "dedupeKey": "money:transfer_job_to_invoice:header-shares-unreconciled-split",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 20,
+      "note": "Refuted: 100%-split invariant enforced server-side in save_field (RAISE if SUM(split_pct)!=100), so header total always equals invoice_shares sum on the non-override path; sub-penny ROUND drift is the separate accepted class. Dormant (0 invoice_shares live)."
+    },
+    {
+      "dedupeKey": "field_app:save_field_app_invoice:total_acres-not-mirrored",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 20,
+      "note": "Refuted: cosmetic display-only (acres preserved in field_app_locations / field_app_location_shares); below the hunt correctness bar (no money/lifecycle/RLS/idempotency impact); subsystem dormant (0 field_application invoices)."
+    },
+    {
+      "dedupeKey": "forgeable-actor:batch_apply_prepayments:no-actor-bind",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 21,
+      "note": "Refuted: inner apply_prepay_to_invoice re-validates actor/role/same-customer per row, so the unused p_performed_by param is inert; not exploitable. Already adjudicated FALSE_POSITIVE in Run 1 (prepay:batch_apply_prepayments:actor-param-ignored, cycle 5). Defense-in-depth nit only."
+    },
+    {
+      "dedupeKey": "security:batch_apply_prepayments:no-own-gate-dead-actor",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 22,
+      "note": "Refuted: child apply_prepay_to_invoice fully gates auth/role/same-customer; dropping client p_performed_by + binding auth.uid() is the CANONICAL anti-forgery pattern (no forged actor reaches the ledger). Finder also wrongly claimed 20260620200000 hard-block not live — it IS (stamp 20260621025739; finder matched version not name) and it targets apply_remaining_prepayments + batch_apply_all_prepayments, NOT batch_apply_prepayments. Dormant (0 prepay rows)."
+    },
+    {
+      "dedupeKey": "lifecycle:deliveries:doc-vs-enforcer-mismatch",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 22,
+      "note": "Refuted as a bug (real doc-wording imprecision, no code defect). _enforce_delivery_status_transition is correct (scheduled->{in_progress,cancelled}; in_progress->{completed,cancelled}); voided only via void_delivery admin-override from completed. Doc linear-chain wording could be annotated branching like Quote/Return, but below the correctness bar."
+    },
+    {
+      "dedupeKey": "lifecycle:returns:reject-frontend-guard",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 22,
+      "note": "Refuted: raw frontend reject .update is backstopped by _enforce_return_status_transition (only requested->rejected) + returns_update RLS + checkMutationResult. Claimed audit/idempotency asymmetry is FALSE — approve_return/cancel_return also write no financial_audit_log and do not use idempotency at the DB level. Style/consistency nit, near-dormant (1 return)."
+    },
+    {
+      "dedupeKey": "test-gaps:ci-e2e:disabled",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 24,
+      "note": "Refuted (out-of-scope CI posture, intentional+documented): e2e-smoke job is `if:false` because the crx-manager-staging Supabase project does not exist (E2E prod-safety guard refuses prod). Money MATH is unit-tested and DOES run in CI; only multi-step UI integration coverage is lost. Owner item (stand up staging) + a docs nit (CLAUDE.md 94-specs wording), not a code bug."
+    },
+    {
+      "dedupeKey": "doc-drift:rpc-functions:undercount",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 24,
+      "note": "Refuted: doc is CORRECT. rpc-functions.md says 225 callable + 51 trigger + 24 plpgsql_check extension helpers (not documented); live = 225 non-extension callable + 51 trigger + 24 extension-owned = 300. The finder counted 249 = 225 app + 24 extension (did not exclude extension fns). No app-RPC undercount."
+    },
+    {
+      "dedupeKey": "doc-drift:migration-history:count-stale",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 24,
+      "note": "Refuted: transient/by-design. check-doc-drift is RED only because of THIS run's 5 uncommitted 20260622* migrations (readdirSync counts untracked). Committed/tracked state is self-consistent at 501 (git ls-files=501, doc header=501, CLAUDE.md=501). Gate working as designed; clears on commit. Live schema_migrations has 0 20260622% rows."
+    },
+    {
+      "dedupeKey": "deps:dompurify:prod-moderate-ungated",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 24,
+      "note": "Refuted: non-exploitable transitive (jspdf>dompurify moderate GHSA-cmwh-pvxp-8882). The vulnerable .html()/setConfig sanitizer path is never used (grep .html( in src/ = 0; invoicePdf.ts/pdfTheme.ts use programmatic jspdf API). CI critical-only audit threshold is a hygiene preference, not a correctness bug."
+    },
+    {
+      "dedupeKey": "deps:undici:dev-high",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 24,
+      "note": "Refuted: dev-only (jsdom>undici, devDependencies). No production exposure (vitest DOM env, never bundled). Out of scope (dependency hygiene, not one of the 8 bug classes)."
+    },
+    {
+      "dedupeKey": "doc-drift:database-schema:table-count",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 24,
+      "note": "Refuted: cosmetic doc nit. database-schema.md header says 96 tables, live=97 (CLAUDE.md correctly says 97). Real off-by-one but out-of-scope cosmetic doc drift, no functional impact; /update-docs reconciles it."
+    },
+    {
+      "dedupeKey": "lifecycle:void_invoice:period-check-only-on-posted",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 25,
+      "note": "Refuted at claimed HIGH (latent LOW hardening). void_invoice gates check_period_open only for status=posted; overdue->voided / paid->voided skip it. SAME Hard-Red-Line class as the cycle-2 void_payment/reverse_write_off period-gate fix (20260622050000). Unreachable today: 0 closed accounting periods, 0 non-draft invoices (all 4 draft), 0 line_allocs/payments. Optional follow-up: extend the period gate to overdue/paid void paths before billing+period-closing go live."
+    },
+    {
+      "dedupeKey": "cycle6:second-refuted-placeholder",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 25,
+      "note": "Cycle-6 had a 2nd refuted item (per workflow counts: 2 refuted). Details not separately transcribed; both refuted by the adversarial verifier. Recorded for count fidelity."
+    },
+    {
+      "dedupeKey": "commissions:_insert_commissions_for_order:per-recipient-rounding",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 26,
+      "note": "Refuted: mechanism real (independent ROUND per split row) but no live drift — all live multi-recipient splits are clean 50/50 (0 three-way / 0 odd-pct configs); commission_amount=numeric dollars is an accepted by-design exception; speculative for future 3-way splits. LOW/by-design."
+    },
+    {
+      "dedupeKey": "stale-derived-state:create_split_invoices_from_order:header-total-cost-not-set",
+      "verdict": "FALSE_POSITIVE",
+      "cycle": 26,
+      "note": "Refuted: structural claim true (header total_cost_cents left 0) but IMPACT false — get_detailed_statement_data maps line-item ii.extended_cents to a key NAMED total_cost_cents (does not read the header column); invoicePdf.ts declares but never renders total_cost_cents; all cost/margin reports derive from invoice_items not the header; price_order recomputes the header from lines. No real consumer; dormant (0 split invoices). LOW data-cleanliness at most."
     }
   ]
 }

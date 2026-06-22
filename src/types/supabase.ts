@@ -9004,6 +9004,17 @@ export type Database = {
         }
         Returns: Json
       }
+      update_field_app_applied_info: {
+        Args: {
+          p_applicator_name?: string
+          p_idempotency_key?: string
+          p_invoice_ids: string[]
+          p_performed_by?: string
+          p_temperature_text?: string
+          p_wind_direction?: string
+        }
+        Returns: Json
+      }
       update_order_items: {
         Args: {
           p_idempotency_key?: string

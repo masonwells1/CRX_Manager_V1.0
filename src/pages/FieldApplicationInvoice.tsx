@@ -8,7 +8,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, assertRpcResult, checkMutationResult } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
@@ -450,15 +450,20 @@ export default function FieldApplicationInvoice() {
       // the user the financial save succeeded but Applied Info did not.
       let appliedInfoOk = true;
       if (ids.length > 0) {
-        const appliedResult = await supabase
-          .from('invoices')
-          .update({
-            wind_direction:   windDirection || null,
-            temperature_text: temperature   || null,
-            applicator_name:  applicator    || null,
-          })
-          .in('id', ids)
-          .select('id');
+        // Persist via the SECURITY DEFINER RPC (migration 20260622030000), NOT a raw
+        // invoices UPDATE: the invoices_update RLS policy is admin-only, so a raw update
+        // silently matched 0 rows for a sales_rep and surfaced a false "Save failed" +
+        // a duplicate invoice on retry. The RPC re-gates on admin/sales_rep, binds the
+        // actor, and restricts the write to editable field-application invoices.
+        const appliedResult = await supabase.rpc('update_field_app_applied_info', {
+          p_invoice_ids: ids,
+          // Omit (undefined) when blank → the RPC's NULL default clears the column,
+          // preserving the "blank fields intentionally clear stale Applied Info" behavior.
+          p_wind_direction: windDirection || undefined,
+          p_temperature_text: temperature || undefined,
+          p_applicator_name: applicator || undefined,
+          p_performed_by: profile.id,
+        });
         if (appliedResult.error) {
           appliedInfoOk = false;
           Sentry.captureException(appliedResult.error, {
@@ -466,7 +471,7 @@ export default function FieldApplicationInvoice() {
             extra: { context: 'field_app_applied_info_persist', invoice_ids: ids },
           });
         } else {
-          checkMutationResult(appliedResult, 'Persist field-app applied info');
+          assertRpcResult(appliedResult.data, 'update_field_app_applied_info');
         }
       }
 
