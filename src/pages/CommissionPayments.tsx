@@ -134,10 +134,14 @@ export default function CommissionPayments() {
 
   const fetchUnpaid = async () => {
     // PR-07 follow-up: dropped recipient FK embed; resolve via profile_public_view.
+    // commissions.order_number / customer_name are denormalized columns that
+    // _insert_commissions_for_order never populates (always NULL), so the payout
+    // modal showed a blank order # and blank customer. Select the FK ids instead and
+    // resolve order # / farm name live (same pattern as recipient resolution below).
     const { data, error } = await supabase
       .from('commissions')
       .select(`
-        id, order_number, customer_name, order_date, commission_amount,
+        id, order_id, customer_id, order_date, commission_amount,
         recipient_user_id
       `)
       // Only PENDING commissions are payable. `.neq('status','paid')` also leaked
@@ -152,11 +156,16 @@ export default function CommissionPayments() {
       return;
     }
 
-    const recipientUserIds = [...new Set(
-      ((data || []) as Array<{ recipient_user_id?: string | null }>)
-        .map((c) => c.recipient_user_id)
-        .filter(Boolean) as string[]
-    )];
+    const rowsRaw = (data || []) as Array<Record<string, unknown> & {
+      recipient_user_id?: string | null;
+      order_id?: string | null;
+      customer_id?: string | null;
+    }>;
+
+    const recipientUserIds = [...new Set(rowsRaw.map((c) => c.recipient_user_id).filter(Boolean) as string[])];
+    const orderIds = [...new Set(rowsRaw.map((c) => c.order_id).filter(Boolean) as string[])];
+    const customerIds = [...new Set(rowsRaw.map((c) => c.customer_id).filter(Boolean) as string[])];
+
     const recipientMap: Record<string, string> = {};
     if (recipientUserIds.length > 0) {
       const { data: recipients } = await supabase
@@ -166,9 +175,29 @@ export default function CommissionPayments() {
       (recipients || []).forEach((r: { id: string | null; full_name: string | null }) => { if (r.id) recipientMap[r.id] = r.full_name ?? ''; });
     }
 
+    const orderMap: Record<string, string> = {};
+    if (orderIds.length > 0) {
+      const { data: orders } = await supabase
+        .from('orders')
+        .select('id, order_number')
+        .in('id', orderIds);
+      (orders || []).forEach((o: { id: string | null; order_number: string | null }) => { if (o.id) orderMap[o.id] = o.order_number ?? ''; });
+    }
+
+    const customerMap: Record<string, string> = {};
+    if (customerIds.length > 0) {
+      const { data: customers } = await supabase
+        .from('customers')
+        .select('id, farm_name')
+        .in('id', customerIds);
+      (customers || []).forEach((c: { id: string | null; farm_name: string | null }) => { if (c.id) customerMap[c.id] = c.farm_name ?? ''; });
+    }
+
     setUnpaidCommissions(
-      ((data || []) as Array<Record<string, unknown> & { recipient_user_id?: string | null }>).map((c) => ({
+      rowsRaw.map((c) => ({
         ...c,
+        order_number: c.order_id ? orderMap[c.order_id as string] || '' : '',
+        customer_name: c.customer_id ? customerMap[c.customer_id as string] || '' : '',
         recipient_name: c.recipient_user_id ? recipientMap[c.recipient_user_id] || 'Unknown' : 'Unknown',
       })) as unknown as UnpaidCommission[],
     );

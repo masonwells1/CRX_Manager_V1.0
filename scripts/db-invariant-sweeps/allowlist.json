@@ -3,6 +3,18 @@
   "entries": [
     {
       "predicate": "anon-exec-secdef",
+      "violation_key": "enforce_blend_ticket_products_billed_lock()",
+      "justification": "Trigger function (content-lock on blend_ticket_products when the parent ticket has an active linked invoice); anon EXECUTE inert — a direct call errors because it references TG_OP/OLD/NEW. SECURITY DEFINER + search_path=public,pg_temp set. Added by migration 20260622080000.",
+      "dated": "2026-06-22"
+    },
+    {
+      "predicate": "anon-exec-secdef",
+      "violation_key": "prevent_oifa_edit_after_post()",
+      "justification": "Trigger function (locks order_item_field_allocations once its invoice is posted); anon EXECUTE inert (direct call errors). SECURITY DEFINER + search_path set. From the as-applied/split-invoices work; surfaced unallowlisted during the 2026-06-22 sweep.",
+      "dated": "2026-06-22"
+    },
+    {
+      "predicate": "anon-exec-secdef",
       "violation_key": "_guard_inventory_transactions_immutable()",
       "justification": "Trigger function; anon EXECUTE is inert (errors on a direct call, only fires via the trigger). RLS/immutability-guard set.",
       "dated": "2026-06-10"

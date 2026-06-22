@@ -19,7 +19,7 @@ separately by scripts/regenerate-agents-md.mjs and does not parse this file.
 
 ## Snapshot (2026-06-21)
 
-**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 70 pages · 97 tables (+2 views) · 226 callable RPCs (+51 trigger fns) · **507 migrations** on disk · 6 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
+**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 70 pages · 97 tables (+2 views) · 226 callable RPCs (+52 trigger fns) · **510 migrations** on disk · 6 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
 
 - **`main` = production** (croprxsolutions.app). **Auto-push is authorized** (Mason, 2026-06-16): push regular code to `main` once the `/ship` pipeline is green (review clean + tests + the pre-push hook's typecheck/build) — no approval click; Vercel rollback is one click if needed. STILL get Mason's explicit OK before **applying a live migration, deploying an edge function, or deleting data**, and never commit unrelated files.
 - **Where history lives now** (so this file stays lean): sprint log → [`docs/CHANGELOG.md`](docs/CHANGELOG.md); detailed per-topic narrative → the `memory/` files (auto-loaded each session); the old multi-month "Current State" block → [`docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md`](docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md).
@@ -229,7 +229,7 @@ All require `ALLOWED_ORIGIN` env var for CORS.
 
 ## Schema Gotchas
 - `profile_public_view` uses `security_invoker = off` (SECURITY DEFINER semantics) **by design** — exposes only non-PII profile columns (id, full_name, role, is_active) so non-admin UIs can display user names without leaking email/phone. Supabase security advisor flags this as ERROR; it is an accepted finding. Do NOT switch to `security_invoker = on` without auditing every UI that reads through this view. (Migration: `20260510070000_tighten_customer_profile_rls.sql`)
-- The **53 anon-executable SECURITY DEFINER functions** (live count as of 2026-06-15) the Supabase advisor flags (`Public Can Execute SECURITY DEFINER Function`) are **accepted/inert grant-debt, NOT a hole**: each self-gates on `auth.uid()`/`require_admin()` as its first executable statement (runtime-proven 2026-06-08 the `anon` role is rejected — e.g. `admin_update_profile`→"requires admin role", `get_ar_aging`→"Admin access required"), and the trigger functions in the set error on a direct call. Migration `20260529214355` revoked anon EXECUTE on the **37 report/dashboard** RPCs that were leaking PII; the remaining 53 are a *different* set whose real gate is the in-body check, not the EXECUTE grant. Revoking them is optional defense-in-depth (migration gate + `get_advisors` re-check). (2026-06-08 workflow review LOW #6.)
+- The **55 anon-executable SECURITY DEFINER functions** (live count as of 2026-06-22) the Supabase advisor flags (`Public Can Execute SECURITY DEFINER Function`) are **accepted/inert grant-debt, NOT a hole**: each self-gates on `auth.uid()`/`require_admin()` as its first executable statement (runtime-proven 2026-06-08 the `anon` role is rejected — e.g. `admin_update_profile`→"requires admin role", `get_ar_aging`→"Admin access required"), and the trigger functions in the set error on a direct call. Migration `20260529214355` revoked anon EXECUTE on the **37 report/dashboard** RPCs that were leaking PII; the remaining 55 are a *different* set whose real gate is the in-body check, not the EXECUTE grant. Revoking them is optional defense-in-depth (migration gate + `get_advisors` re-check). (2026-06-08 workflow review LOW #6.)
 - `commissions.commission_amount` is `numeric` dollars (NOT `_cents bigint`)
 - `returns`: `requested_by` (not `created_by`), status `'requested'` (not `'pending'`)
 - `return_items`: references `order_item_id` only (not `delivery_item_id`)
@@ -271,7 +271,7 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 | Doc | Contents |
 |-----|----------|
 | `docs/reference/database-schema.md` | 96 tables (+2 views) + RLS matrix |
-| `docs/reference/rpc-functions.md` | 226 callable RPCs + 51 trigger functions |
+| `docs/reference/rpc-functions.md` | 226 callable RPCs + 52 trigger functions |
 | `docs/reference/migration-history.md` | 458 migrations |
 | `docs/reference/pages-routes.md` | 68 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |
