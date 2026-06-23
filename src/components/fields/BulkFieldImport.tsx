@@ -307,13 +307,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       // Strict parse (strips thousands separators; rejects "40 ac"/junk) so a formatted string
       // like "1,234.5" can't become a 1-acre bill via parseFloat's partial parse.
       const acresFromAttr = parseAcreInput(getValue('total_acres'));
-      // The acreage the FILE reported. It drives the billable override ONLY when it comes from an
-      // ACRE-denominated column — a GIS area column (area/shape_area, in square meters) must never
-      // set money (a 1-ac field's shape_area ≈ 4047 would bill as 4047 ac). null → bill measured.
-      const statedAcres =
-        isAcreDenominatedColumn(acreAttrKey) && acresFromAttr != null && acresFromAttr > 0
-          ? acresFromAttr
-          : null;
+      // The acreage the FILE reported, but ONLY from an ACRE-denominated column — a GIS area
+      // column (area/shape_area, square meters) must never set money (a 1-ac field's shape_area
+      // ≈ 4047 would bill as 4047 ac). The value is PRESERVED even when 0/negative/out-of-band so
+      // the review flags it (isAcreInBand decides whether it can actually bill); null only when
+      // the column is non-acre or unparseable.
+      const statedAcres = isAcreDenominatedColumn(acreAttrKey) ? acresFromAttr : null;
 
       fields.push({
         index: i + 1,
@@ -322,7 +321,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         legal_description: getValue('legal_description'),
         county: getValue('county'),
         state: getValue('state') || 'IL',
-        total_acres: statedAcres ?? acres,
+        total_acres: statedAcres != null && statedAcres > 0 ? statedAcres : acres,
         crop_type: getValue('crop_type'),
         fsa_farm_number: getValue('fsa_farm_number'),
         fsa_tract_number: getValue('fsa_tract_number'),
