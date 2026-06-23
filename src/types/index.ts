@@ -1462,6 +1462,11 @@ export interface ParsedImportField {
   // boundary_geojson above is the largest-ring display polygon. (migration 20260623130000)
   full_boundary_geojson: object;
   full_acres: number;   // geodesic acres of the FULL geometry — pre-checked against the band on import
+  // The acreage the FILE itself reported (the mapped "Acres" attribute), if any. On import this
+  // becomes the field's billable override (owner choice 2026-06-23) so the bill matches the
+  // grower's own records; measured map acres (full_acres) are kept underneath for the divergence
+  // check. null when the file carried no acreage column → the field bills on the measured acres.
+  stated_acres: number | null;
   centroid_geojson: object;
   calculated_acres: number;
   raw_properties: Record<string, unknown>;

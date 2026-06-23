@@ -33,3 +33,39 @@ export function billableAcres(
 ): number | null {
   return override ?? measured ?? total ?? null;
 }
+
+/**
+ * Billable/entered acres are "divergent" from the measured map acres when they
+ * differ by this percentage or more — in EITHER direction (over or under). It is a
+ * review flag, never a hard block: a field can legitimately bill on a different
+ * number than the map, but a gap this large is worth a human look — a fat-fingered
+ * entry, a stale boundary, or (the owner's case) an applicator who sprayed part of
+ * one field under the wrong field's name.
+ */
+export const ACRE_DIVERGENCE_THRESHOLD_PCT = 10;
+
+/**
+ * Absolute percentage gap between a billable/entered acreage and the measured map
+ * acreage, relative to measured. Returns null when there is nothing to compare
+ * (no entered value, no measured value, or measured is 0). Always non-negative —
+ * the caller decides how to phrase an over- vs under-statement.
+ */
+export function acreDivergencePct(
+  entered: number | null | undefined,
+  measured: number | null | undefined,
+): number | null {
+  if (entered == null || measured == null || measured === 0) return null;
+  return (Math.abs(entered - measured) / measured) * 100;
+}
+
+/**
+ * True when the entered acreage diverges from the measured map acreage by at least
+ * the review threshold, in either direction. False when there is nothing to compare.
+ */
+export function isAcreDivergent(
+  entered: number | null | undefined,
+  measured: number | null | undefined,
+): boolean {
+  const pct = acreDivergencePct(entered, measured);
+  return pct != null && pct >= ACRE_DIVERGENCE_THRESHOLD_PCT;
+}

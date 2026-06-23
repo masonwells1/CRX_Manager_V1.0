@@ -23,6 +23,7 @@ import {
   geometryAcres,
   type ParseResult,
 } from '../../lib/fieldImportParser';
+import { acreDivergencePct, isAcreDivergent, ACRE_DIVERGENCE_THRESHOLD_PCT } from '../../lib/fieldGeometry';
 import type { Polygon, MultiPolygon } from 'geojson';
 import ImportPreviewMap from './ImportPreviewMap';
 import AttributeMappingStep from './AttributeMappingStep';
@@ -85,7 +86,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
 
   // Step 7: Results
-  const [results, setResults] = useState<{ success: number; failed: number; errors: string[] } | null>(null);
+  const [results, setResults] = useState<{ success: number; failed: number; errors: string[]; warnings: string[] } | null>(null);
 
   // Fetch customers for step 4
   useEffect(() => {
@@ -295,6 +296,9 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
       const parsedAcres = getValue('total_acres');
       const acresFromAttr = parsedAcres ? parseFloat(parsedAcres) : null;
+      // The acreage the FILE reported (mapped "Acres" column). On save this becomes the
+      // billable override so the bill matches the grower's records; null → bill the measured acres.
+      const statedAcres = acresFromAttr != null && acresFromAttr > 0 ? acresFromAttr : null;
 
       fields.push({
         index: i + 1,
@@ -303,7 +307,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         legal_description: getValue('legal_description'),
         county: getValue('county'),
         state: getValue('state') || 'IL',
-        total_acres: (acresFromAttr && acresFromAttr > 0) ? acresFromAttr : acres,
+        total_acres: statedAcres ?? acres,
         crop_type: getValue('crop_type'),
         fsa_farm_number: getValue('fsa_farm_number'),
         fsa_tract_number: getValue('fsa_tract_number'),
@@ -316,6 +320,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         // the server measures the whole field, not just the largest-ring display polygon.
         full_boundary_geojson: parseResult.fullGeometries[i],
         full_acres: fullAcres,
+        stated_acres: statedAcres,
         centroid_geojson: centroid,
         calculated_acres: acres,
         raw_properties: props as Record<string, unknown>,
@@ -339,6 +344,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     let success = 0;
     let failed = 0;
     const errors: string[] = [];
+    const warnings: string[] = [];
 
     for (const pf of validFields) {
       try {
@@ -406,7 +412,29 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
             failed++;
             errors.push(`"${pf.field_name}": Field created but boundary measurement failed — ${msg}`);
           }
-          if (boundaryOk) success++;
+          if (boundaryOk) {
+            // Bill on the FILE's stated acreage (owner choice 2026-06-23): set it as the billable
+            // override. measured_acres still holds the true map measure underneath, so the field
+            // screen can show the gap. A junk / out-of-band stated value is rejected by
+            // set_field_override_acres' 0.1–5000 band — we keep the field (billing falls back to
+            // the measured acres) and record a non-fatal warning rather than failing the import.
+            if (pf.stated_acres != null) {
+              try {
+                const { data: ovData, error: ovErr } = await supabase.rpc('set_field_override_acres', {
+                  p_field_id: fieldId,
+                  p_override_acres: pf.stated_acres,
+                  p_performed_by: profile!.id,
+                  p_idempotency_key: crypto.randomUUID(),
+                });
+                if (ovErr) throw ovErr;
+                assertRpcResult(ovData, 'set_field_override_acres');
+              } catch (ovError: unknown) {
+                const msg = ovError instanceof Error ? ovError.message : String(ovError);
+                warnings.push(`"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
+              }
+            }
+            success++;
+          }
         }
       } catch (err: unknown) {
         failed++;
@@ -416,7 +444,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       setUploadProgress((prev) => ({ ...prev, current: prev.current + 1 }));
     }
 
-    setResults({ success, failed, errors });
+    setResults({ success, failed, errors, warnings });
     setStep(7);
     setUploading(false);
 
@@ -477,6 +505,13 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
   const validCount = parsedFields.filter((f) => f.isValid).length;
   const invalidCount = parsedFields.filter((f) => !f.isValid).length;
+
+  // Fields whose FILE acreage differs from the MAP-measured acreage by >= the review threshold
+  // (over OR under) — surfaced so the owner can eyeball "something's off" before importing
+  // (e.g. an applicator sprayed part of one field under another field's name).
+  const flaggedFields = parsedFields.filter(
+    (f) => f.isValid && f.stated_acres != null && isAcreDivergent(f.stated_acres, f.full_acres),
+  );
 
   const sampleProperties = parseResult?.featureCollection.features[0]?.properties || null;
 
@@ -709,23 +744,62 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               </div>
             </div>
 
+            {/* Fields to review — the file's acreage differs materially from the map measurement
+                (over OR under). They still import on the file's number; this just flags them. */}
+            {flaggedFields.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg max-h-40 overflow-y-auto">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <p className="text-xs font-medium text-amber-700">
+                    {flaggedFields.length} field{flaggedFields.length > 1 ? 's' : ''} to review — the file's acreage differs from the map by {ACRE_DIVERGENCE_THRESHOLD_PCT}% or more
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  {flaggedFields.map((pf) => {
+                    const pct = acreDivergencePct(pf.stated_acres, pf.full_acres);
+                    const dir = (pf.stated_acres ?? 0) > pf.full_acres ? 'over' : 'under';
+                    return (
+                      <p key={pf.index} className="text-xs text-amber-700">
+                        <span className="font-medium">{pf.field_name}</span>: bills {pf.stated_acres} ac (file) vs {pf.full_acres} ac (map) — {pct != null ? Math.round(pct) : 0}% {dir}
+                      </p>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-amber-600 mt-1.5">These still import on the file's acreage; open a field afterward to adjust if it looks wrong.</p>
+              </div>
+            )}
+
             {/* Preview of valid fields */}
             {validCount > 0 && (
               <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
                 <p className="text-xs font-medium text-secondary mb-2">Preview (first 5):</p>
                 <div className="space-y-2">
-                  {parsedFields.filter((f) => f.isValid).slice(0, 5).map((pf) => (
-                    <div key={pf.index} className="text-xs bg-white p-2 rounded border border-gray-100">
-                      <p className="font-medium text-nav-dark">{pf.field_name}</p>
-                      <p className="text-gray-500">
-                        {/* full measured acres = what set_field_boundary saves + bills */}
-                        {pf.full_acres} acres
-                        {pf.full_acres !== pf.calculated_acres && ` (multi-part — ${pf.calculated_acres} ac in the largest piece)`}
-                        {pf.county && ` • ${pf.county}`}
-                        {pf.crop_type && ` • ${pf.crop_type}`}
-                      </p>
-                    </div>
-                  ))}
+                  {parsedFields.filter((f) => f.isValid).slice(0, 5).map((pf) => {
+                    const divergent = pf.stated_acres != null && isAcreDivergent(pf.stated_acres, pf.full_acres);
+                    return (
+                      <div key={pf.index} className="text-xs bg-white p-2 rounded border border-gray-100">
+                        <p className="font-medium text-nav-dark">{pf.field_name}</p>
+                        <p className="text-gray-500">
+                          {pf.stated_acres != null ? (
+                            <>Bills <span className="font-medium">{pf.stated_acres} ac</span> (file) · map measures {pf.full_acres} ac</>
+                          ) : (
+                            <>
+                              {/* no file acreage → bills the measured acres set_field_boundary computes */}
+                              Bills <span className="font-medium">{pf.full_acres} ac</span> (map measured)
+                              {pf.full_acres !== pf.calculated_acres && ` — multi-part, ${pf.calculated_acres} ac in the largest piece`}
+                            </>
+                          )}
+                          {pf.county && ` • ${pf.county}`}
+                          {pf.crop_type && ` • ${pf.crop_type}`}
+                        </p>
+                        {divergent && (
+                          <p className="text-amber-600 mt-0.5">
+                            ⚠ {Math.round(acreDivergencePct(pf.stated_acres, pf.full_acres) ?? 0)}% {(pf.stated_acres ?? 0) > pf.full_acres ? 'over' : 'under'} the map measurement
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
                   {validCount > 5 && (
                     <p className="text-xs text-secondary text-center pt-1">
                       + {validCount - 5} more fields
@@ -798,6 +872,15 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                 <p className="text-xs font-medium text-secondary mb-1">Errors:</p>
                 {results.errors.map((err, i) => (
                   <p key={i} className="text-xs text-secondary">{err}</p>
+                ))}
+              </div>
+            )}
+
+            {results.warnings.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-100 rounded-lg max-h-32 overflow-y-auto">
+                <p className="text-xs font-medium text-amber-700 mb-1">Imported, with notes:</p>
+                {results.warnings.map((w, i) => (
+                  <p key={i} className="text-xs text-amber-600">{w}</p>
                 ))}
               </div>
             )}

@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { Feature, Polygon } from 'geojson';
-import { buildBoundaryGeometry, billableAcres } from './fieldGeometry';
+import {
+  buildBoundaryGeometry,
+  billableAcres,
+  acreDivergencePct,
+  isAcreDivergent,
+  ACRE_DIVERGENCE_THRESHOLD_PCT,
+} from './fieldGeometry';
 
 const poly = (ring: number[][]): Feature<Polygon> => ({
   type: 'Feature',
@@ -49,4 +55,30 @@ describe('billableAcres', () => {
   it('is null when all absent', () => expect(billableAcres(null, null, null)).toBeNull());
   it('treats a 0 override as a real value (not nullish)', () => expect(billableAcres(0, 40, 25)).toBe(0));
   it('handles undefined like null', () => expect(billableAcres(undefined, undefined, 25)).toBe(25));
+});
+
+describe('acreDivergencePct', () => {
+  it('is 0 when entered equals measured', () => expect(acreDivergencePct(40, 40)).toBe(0));
+  it('measures an OVER-statement relative to measured', () => expect(acreDivergencePct(44, 40)).toBeCloseTo(10));
+  it('measures an UNDER-statement relative to measured (the owner case)', () =>
+    expect(acreDivergencePct(36, 40)).toBeCloseTo(10));
+  it('is always non-negative (absolute)', () => expect(acreDivergencePct(20, 40)).toBeCloseTo(50));
+  it('is null when there is no entered value', () => expect(acreDivergencePct(null, 40)).toBeNull());
+  it('is null when there is no measured value', () => expect(acreDivergencePct(40, null)).toBeNull());
+  it('is null when measured is 0 (no divide-by-zero)', () => expect(acreDivergencePct(40, 0)).toBeNull());
+});
+
+describe('isAcreDivergent', () => {
+  it('flags an over-statement at the threshold', () => expect(isAcreDivergent(44, 40)).toBe(true));
+  it('flags an under-statement at the threshold (over AND under)', () =>
+    expect(isAcreDivergent(36, 40)).toBe(true));
+  it('does not flag a small gap below the threshold', () => expect(isAcreDivergent(43, 40)).toBe(false));
+  it('does not flag when there is nothing to compare', () => {
+    expect(isAcreDivergent(40, null)).toBe(false);
+    expect(isAcreDivergent(null, 40)).toBe(false);
+  });
+  it('uses the shared threshold constant', () => {
+    const justOver = 40 * (1 + ACRE_DIVERGENCE_THRESHOLD_PCT / 100);
+    expect(isAcreDivergent(justOver, 40)).toBe(true);
+  });
 });
