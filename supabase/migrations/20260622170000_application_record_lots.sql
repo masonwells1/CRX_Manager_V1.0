@@ -333,13 +333,19 @@ BEGIN
         WHERE arf.application_record_id = ar.id),
       (SELECT f2.field_name FROM fields f2 WHERE f2.id = ar.field_id)
     ) AS field_names,
-    -- Invoiced status. application_records.invoice_id is only set for source_type='job'
-    -- (transfer_job_to_invoice); blend-sourced records link via invoices.blend_ticket_id
-    -- (create_invoice_from_blend_ticket never stamps ar.invoice_id), so a billed blend ticket
-    -- would otherwise read as not-invoiced. Fall back to the most recent ACTIVE blend invoice
-    -- so the compliance trace reflects real billing (Codex P2).
+    -- Invoiced status — report "invoiced" ONLY when an ACTIVE invoice still exists.
+    --   * Job-sourced records stamp application_records.invoice_id (transfer_job_to_invoice),
+    --     but void_invoice flips invoices.status WITHOUT clearing ar.invoice_id — so returning
+    --     ar.invoice_id raw would show Invoiced=Yes for a voided/cancelled/soft-deleted invoice
+    --     on a recall trace. Filter it through invoices with the active predicate (Codex P2).
+    --   * Blend-sourced records never stamp ar.invoice_id (create_invoice_from_blend_ticket
+    --     links via invoices.blend_ticket_id), so fall back to the most recent ACTIVE blend
+    --     invoice so a billed blend ticket isn't misreported as not-invoiced (Codex P2).
     COALESCE(
-      ar.invoice_id,
+      (SELECT i.id FROM invoices i
+         WHERE i.id = ar.invoice_id
+           AND i.status NOT IN ('voided', 'cancelled')
+           AND i.deleted_at IS NULL),
       CASE WHEN ar.source_type = 'blend_ticket' THEN (
         SELECT i.id FROM invoices i
         WHERE i.blend_ticket_id = ar.source_id
