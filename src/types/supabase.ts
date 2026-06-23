@@ -2669,6 +2669,10 @@ export type Database = {
           soil_type: string | null
           state: string | null
           total_acres: number | null
+          measured_acres: number | null
+          override_acres: number | null
+          boundary_geom: unknown
+          acres_source: string
           updated_at: string
         }
         Insert: {
@@ -2691,6 +2695,9 @@ export type Database = {
           soil_type?: string | null
           state?: string | null
           total_acres?: number | null
+          measured_acres?: number | null
+          override_acres?: number | null
+          boundary_geom?: unknown
           updated_at?: string
         }
         Update: {
@@ -2713,6 +2720,9 @@ export type Database = {
           soil_type?: string | null
           state?: string | null
           total_acres?: number | null
+          measured_acres?: number | null
+          override_acres?: number | null
+          boundary_geom?: unknown
           updated_at?: string
         }
         Relationships: [
@@ -8875,6 +8885,31 @@ export type Database = {
           p_polygons: Json
         }
         Returns: undefined
+      }
+      set_field_boundary: {
+        Args: {
+          p_boundary_geojson: string
+          p_field_id: string
+          p_idempotency_key?: string
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
+      set_field_override_acres: {
+        Args: {
+          p_field_id: string
+          p_idempotency_key?: string
+          p_override_acres: number | null
+          p_performed_by?: string
+        }
+        Returns: Json
+      }
+      find_overlapping_fields: {
+        Args: {
+          p_boundary_geojson: string
+          p_customer_id?: string
+        }
+        Returns: Json
       }
       save_idempotency: {
         Args: { p_key: string; p_operation: string; p_result: Json }
