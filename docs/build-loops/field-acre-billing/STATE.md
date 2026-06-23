@@ -3,13 +3,21 @@
 > The loop reads this at the start of every turn and updates it after every phase. Status: `PENDING` · `IN-PROGRESS` · `DONE` · `BLOCKED` · `AWAITING-OWNER-APPROVAL`.
 > **The loop runs ONLY the first `PENDING` phase each turn, and STOPS (does not run) on `BLOCKED` / `IN-PROGRESS` / `AWAITING-OWNER-APPROVAL`.** Append-only log; never delete history.
 
-**Overall status:** STOPPED at A4 (round-cap reached — owner action needed). A1–A3 clean/proven/pushed; A4 core built + 4-Codex-round-hardened but has 2 narrow save-flow edges that need the LIVE-UI proof (which can't run without an app-connectable DB carrying the migrations). A5–A7 not started.
+**Overall status:** IN-PROGRESS — owner chose "keep building A5–A7" (live-proof of A4's 2 edges + the import bundled into the final owner gate). A1–A3 clean/proven/pushed; A4 core built (2 documented edges E1/E2 → live proof). **Resuming at A5.**
 **Worktree:** C:/CRX_FieldMapping
 **Branch:** feat/field-acre-billing (off main c2f83c2f)
 **Proof target (owner chose LOCAL):** standalone Docker container **`crx-fa-proof`** = PostgreSQL 15.4 + PostGIS 3.3.4 (in `extensions` schema, mirrors prod PG15/PostGIS3.3.7). The full 510-migration cold-apply is INFEASIBLE (pre-existing ordering drift — `20260207090000` indexes `payments` before it exists), so the proof env is a **faithful schema-slice scaffold** (`fields`/`field_polygons`/`idempotency_keys`/`activity_feed`/`profiles` copied verbatim from the real migrations + an actor-simulating `auth.uid()`), at `/tmp/crx-fa-proof/scaffold.sql`. Migrations are applied + smoke-tested there via `docker exec` (NEVER prod `rhyzpcqhnizqbxphqdkr`). **DEFERRED (low-risk for additive Track A, will confirm at Mason's live-apply gate):** schema-registry refresh + prod-column-existence confirm (needs read-OAuth; the 4 new columns are confirmed absent on-disk).
 **Parallel session to avoid:** feat/as-applied-invoices — **ALREADY MERGED to main** (20260622030000 on origin/main; no remote branch). Track A has no live collision. Track B stays BLOCKED until the OWNER unblocks it.
 **Started:** 2026-06-23
 **Last updated:** 2026-06-23 (Phase 0 grounding complete; stopped at proof-tooling gate)
+
+## A5 plan (focused — grounded 2026-06-23; build next)
+Owner chose keep-building. Scope A5 TIGHT to avoid an A4-style multi-round saga:
+1. **.zip importer** — add `parseShapefileZip(zipBuffer)` to `src/lib/fieldImportParser.ts` (shpjs default `shp()` handles a zip ArrayBuffer + embedded .prj). Wire `.zip` into `BulkFieldImport.tsx`: `ACCEPTED_EXTENSIONS` (:48), input `accept` (:516), `detectFileType` (:131-137), `handleParse` (:212-233) — pass `.arrayBuffer()` (binary, not `.text()`). Keep MAX_FEATURES/25MB caps.
+2. **Multi-part via full-geometry (correct measure, no parser type ripple)** — `normalizeToPolygons` KEEPS returning largest-ring `Polygon` for DISPLAY (no break to ImportPreviewMap/validateFeatureGeometry/calculateFieldMetrics or the test at fieldImportParser.test.ts:113), but ALSO returns the ORIGINAL full geometry per kept feature (add `fullGeometries: (Polygon|MultiPolygon)[]` to `ParseResult`, built in lockstep with the kept features; thread through the 3 callers). `ParsedImportField` gets a `full_boundary_geojson`. The SAVE sends the FULL geometry to `set_field_boundary` (correct multi-part acres); display stays largest-ring.
+3. **Repoint save → set_field_boundary** (round-4 P1) — in `handleUpload` (:316-390) replace the per-field `save_field_geometry` call with `set_field_boundary` (reuse `buildBoundaryGeometry` from `src/lib/fieldGeometry.ts` on the full geometry; stable idempotency key per row — NOT a fresh randomUUID per retry). Keep `save_field` first (creates the row).
+4. **DEFER (documented follow-ups, not regressions):** the Skip/Replace/New dedupe UI via `find_overlapping_fields` (advisory, v1) and any ParsedImportField/FieldLocation extras — note in handoff.
+Proof: extend `fieldImportParser.test.ts` (.zip parse with a fixture if feasible; multi-part fullGeometries captured; largest-ring display unchanged) + typecheck/lint/build; the geometry→set_field_boundary path is already proven (A2 smoke + A4 helper). Live `.zip`/Ops-Center/FieldView import proof → owner gate.
 
 ## Phase checklist
 | Phase | Status | Commit SHA | Codex verdict | Notes |
