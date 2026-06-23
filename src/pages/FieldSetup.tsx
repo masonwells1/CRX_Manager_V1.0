@@ -17,7 +17,15 @@ import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import { computeBounds } from '../hooks/useFitBounds';
 import { parseDollarsToCents } from '../lib/parseCents';
-import { buildBoundaryGeometry, billableAcres } from '../lib/fieldGeometry';
+import {
+  buildBoundaryGeometry,
+  billableAcres,
+  isAcreDivergent,
+  acreDivergencePct,
+  isAcreInBand,
+  ACRE_BAND_MIN,
+  ACRE_BAND_MAX,
+} from '../lib/fieldGeometry';
 import turfCentroid from '@turf/centroid';
 import type { Feature, Polygon } from 'geojson';
 import type { Field, Customer } from '../types';
@@ -309,8 +317,10 @@ export default function FieldSetup() {
       return;
     }
 
-    if (field.override_acres != null && field.override_acres <= 0) {
-      toast('error', 'Billable acres override must be greater than 0 (leave blank to bill the measured acres).');
+    // Same 0.1–5000 band the import + the measured-boundary path enforce — so a typed override
+    // (e.g. "what the monitor showed", with no map drawn) goes through the same safety gate.
+    if (field.override_acres != null && !isAcreInBand(field.override_acres)) {
+      toast('error', `Billable acres must be between ${ACRE_BAND_MIN} and ${ACRE_BAND_MAX} (leave blank to bill the measured acres).`);
       return;
     }
 
@@ -602,16 +612,26 @@ export default function FieldSetup() {
                   step={0.01}
                   value={field.override_acres ?? ''}
                   onChange={(e) => update('override_acres', e.target.value ? parseFloat(e.target.value) : null)}
-                  placeholder={measuredPreview != null ? `Defaults to measured (${measuredPreview} ac)` : 'Acres to bill'}
+                  placeholder={measuredPreview != null ? `Defaults to measured (${measuredPreview} ac)` : 'Acres to bill (e.g. what the monitor showed)'}
                 />
                 <p className="text-xs text-secondary mt-1">
                   {measuredPreview != null
                     ? `Measured: ${measuredPreview} ac`
-                    : (field.total_acres != null ? `Legacy total: ${field.total_acres} ac` : 'Draw a boundary to measure acres')}
+                    : (field.total_acres != null ? `Legacy total: ${field.total_acres} ac` : 'No map — type the acres your monitor or records show to bill without drawing or importing')}
                   {billable != null && ` · Will bill ${billable} ac`}
                 </p>
-                {field.override_acres != null && field.override_acres <= 0 && (
-                  <p className="text-xs text-red-600 mt-1">Override must be greater than 0.</p>
+                {field.override_acres != null && !isAcreInBand(field.override_acres) && (
+                  <p className="text-xs text-red-600 mt-1">
+                    Billable acres must be between {ACRE_BAND_MIN} and {ACRE_BAND_MAX}.
+                  </p>
+                )}
+                {billable != null && measuredPreview != null && isAcreDivergent(billable, measuredPreview) && (
+                  <p className="text-xs text-amber-600 mt-1 flex items-start gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      Billable is {Math.round(acreDivergencePct(billable, measuredPreview) ?? 0)}% {billable > measuredPreview ? 'above' : 'below'} the measured acres — double-check this field.
+                    </span>
+                  </p>
                 )}
               </div>
             </div>
