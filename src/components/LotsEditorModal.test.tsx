@@ -190,4 +190,28 @@ describe('LotsEditorModal', () => {
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('more than once')));
     expect(mockSaveRecordLots).not.toHaveBeenCalled();
   });
+
+  it('blocks every modal close path while a save is in flight (no lost edits on a switched record)', async () => {
+    const onClose = vi.fn();
+    let resolveSave: (v: { success: boolean; count: number }) => void = () => {};
+    mockSaveRecordLots.mockReturnValueOnce(new Promise((r) => { resolveSave = r; }));
+
+    render(<LotsEditorModal open record={RECORD} onClose={onClose} />);
+    await waitFor(() => expect(screen.getByDisplayValue('EXIST-1')).toBeInTheDocument());
+
+    // Start a save; the deferred promise keeps the modal in its `saving` state.
+    fireEvent.click(screen.getByRole('button', { name: /save lots/i }));
+    await waitFor(() => expect(mockSaveRecordLots).toHaveBeenCalled());
+
+    // While saving, the X button and Escape (and the backdrop, same onClose) must NOT close the
+    // modal — otherwise the user could switch records and this save's completion would close/
+    // overwrite the new one, dropping its unsaved lot edits.
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Once the save completes, the success path closes the modal normally (exactly once).
+    resolveSave({ success: true, count: 1 });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
 });

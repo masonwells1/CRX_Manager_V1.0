@@ -214,10 +214,19 @@ export default function LotsEditorModal({ open, onClose, record, onSaved }: Lots
     }
   };
 
+  // While a save is in flight, block ALL modal dismiss paths (Escape / backdrop / X), not just the
+  // footer Cancel. Otherwise a user could close THIS record mid-save, open/edit a DIFFERENT record,
+  // and have this save's completion (onClose) close that record and drop its unsaved lot edits.
+  // The save-success path calls onClose() directly (intentional close), bypassing this guard.
+  const handleClose = useCallback(() => {
+    if (saving) return;
+    onClose();
+  }, [saving, onClose]);
+
   if (!record) return null;
 
   return (
-    <Modal open={open} onClose={onClose} title="Lots —" accent={record.record_number} size="large">
+    <Modal open={open} onClose={handleClose} title="Lots —" accent={record.record_number} size="large">
       <div className="space-y-5">
         <p className="text-sm text-secondary">
           Record which product lot(s) were applied, so a lot can later be traced to its fields, dates, and customers.
