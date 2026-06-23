@@ -23,7 +23,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [~] To-Ship stream: By Product / By Customer ✓, owed vs free vs inbound-PO ✓, Ready-vs-Blocked ✓, $ to ship ✓, aging ✓ — TODO: By Date grouping
 - [x] Findability v1: product/customer search + Short-only filter + view toggle + remember-last-view (localStorage) — TODO: more filter chips
 - [x] Visible TopBar Search button (⌘K) + Dashboard "To-Ship" quick-action → /to-ship
-- [ ] Today/▷ deliveries stream
+- [x] Deliveries stream (open scheduled/in-progress; overdue + unassigned flags; links to /deliveries/:id)
 - [ ] Inbound POs stream (ordered − received, by arrival)
 - [ ] Delivery remainders stream (age + tier)
 - [x] Low-stock / inventory-pressure stream (To-Ship | Low stock section switcher; net vs reorder vs owed; "Reorder"/"Low" badges) — reuses get_inventory_position already fetched
@@ -70,6 +70,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet)_
 
 ## Commit log (newest first)
+- Deliveries section added to command center (3rd tab): open deliveries, overdue/unassigned flags. Live data 11 open/7 overdue/7 unassigned. lint+typecheck+build+2123 tests green. Autonomous-loop iteration 3.
 - Command center becomes multi-section: added Low Stock / reorder-pressure section (section switcher To-Ship | Low stock). Reuses inventory position; zero new query. lint+typecheck+build+2123 tests green. Autonomous-loop iteration 2.
 - To-Ship remembers last view + Short-only across visits (localStorage). Autonomous-loop iteration 1. lint+typecheck+build+2123 tests green.
 - Discoverability: visible TopBar Search button (opens ⌘K palette) + Dashboard To-Ship quick-action. lint+typecheck+build+2123 tests green.

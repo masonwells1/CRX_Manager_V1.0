@@ -64,6 +64,16 @@ type ItemRow = {
   unit_size: string | null;
 };
 
+type DeliveryRow = {
+  id: string;
+  delivery_number: string | null;
+  scheduled_date: string | null;
+  status: string;
+  assigned_driver: string | null;
+  customer: { farm_name: string | null } | { farm_name: string | null }[] | null;
+  order: { order_number: string | null } | { order_number: string | null }[] | null;
+};
+
 const fmtUnits = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
 const fmtMoney = (n: number) => '$' + Math.round(n).toLocaleString();
 const daysAgo = (d: string) => (d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : 0);
@@ -77,10 +87,23 @@ export default function ToShip() {
   const [view, setView] = useState<'product' | 'customer'>(() => (localStorage.getItem('toship.view') === 'customer' ? 'customer' : 'product'));
   const [search, setSearch] = useState('');
   const [shortOnly, setShortOnly] = useState(() => localStorage.getItem('toship.shortOnly') === '1');
-  const [section, setSection] = useState<'to-ship' | 'low-stock'>(() => (localStorage.getItem('toship.section') === 'low-stock' ? 'low-stock' : 'to-ship'));
+  const [section, setSection] = useState<'to-ship' | 'low-stock' | 'deliveries'>(() => {
+    const s = localStorage.getItem('toship.section');
+    return s === 'low-stock' || s === 'deliveries' ? s : 'to-ship';
+  });
+  const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    // 0. Open deliveries (scheduled / in progress) — independent of order demand
+    const { data: delivRaw } = await supabase
+      .from('deliveries')
+      .select('id, delivery_number, scheduled_date, status, assigned_driver, customer:customers(farm_name), order:orders(order_number)')
+      .in('status', ['scheduled', 'in_progress'])
+      .order('scheduled_date', { ascending: true })
+      .limit(500);
+    setDeliveries((delivRaw || []) as unknown as DeliveryRow[]);
+
     // 1. Open orders (the booking still owes product)
     const { data: ordersRaw, error: oErr } = await supabase
       .from('orders')
@@ -255,6 +278,22 @@ export default function ToShip() {
   }, [supply, lines]);
   const visibleLowStock = lowStock.filter((p) => !q || p.product_name.toLowerCase().includes(q));
 
+  const visibleDeliveries = deliveries
+    .map((d) => {
+      const cust = Array.isArray(d.customer) ? d.customer[0] : d.customer;
+      const ord = Array.isArray(d.order) ? d.order[0] : d.order;
+      return {
+        id: d.id,
+        delivery_number: d.delivery_number ?? '—',
+        scheduled_date: d.scheduled_date ?? '',
+        status: d.status,
+        unassigned: !d.assigned_driver,
+        customer_name: cust?.farm_name ?? 'Unknown',
+        order_number: ord?.order_number ?? null,
+      };
+    })
+    .filter((d) => !q || d.customer_name.toLowerCase().includes(q));
+
   const statusBadge = (status: string, shortBy: number) => {
     if (status === 'ready') return <Badge variant="success">Ready to ship</Badge>;
     if (status === 'po') return <Badge variant="warning">Short now · PO inbound</Badge>;
@@ -289,6 +328,12 @@ export default function ToShip() {
           className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${section === 'low-stock' ? 'bg-crx-green text-white' : 'bg-white text-secondary hover:bg-gray-50'}`}
         >
           <AlertTriangle className="w-4 h-4" /> Low stock
+        </button>
+        <button
+          onClick={() => setSection('deliveries')}
+          className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${section === 'deliveries' ? 'bg-crx-green text-white' : 'bg-white text-secondary hover:bg-gray-50'}`}
+        >
+          <Truck className="w-4 h-4" /> Deliveries
         </button>
       </div>
 
@@ -509,6 +554,63 @@ export default function ToShip() {
                 </table>
                 {visibleLowStock.length === 0 && (
                   <p className="text-center text-secondary py-8 text-sm">No low-stock products. Inventory is keeping up with demand.</p>
+                )}
+              </div>
+            </Card>
+          </>
+        )
+      )}
+
+      {section === 'deliveries' && (
+        loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <>
+            <div className="relative max-w-md">
+              <Search className="w-4 h-4 text-secondary absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search a customer…"
+                aria-label="Search deliveries"
+                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+            </div>
+            <p className="text-sm text-secondary">Open deliveries (scheduled or in progress). Overdue and unassigned are flagged.</p>
+            <Card padding={false}>
+              <div className="overflow-x-auto p-4">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-secondary border-b border-gray-100">
+                      <th className="font-normal py-1.5">Date</th>
+                      <th className="font-normal">Customer</th>
+                      <th className="font-normal">Delivery</th>
+                      <th className="font-normal">Order</th>
+                      <th className="font-normal text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleDeliveries.map((d) => {
+                      const overdue = daysAgo(d.scheduled_date) > 0 && d.status === 'scheduled';
+                      return (
+                        <tr key={d.id} className="border-b border-gray-50 last:border-0">
+                          <td className="py-2">
+                            {d.scheduled_date ? new Date(d.scheduled_date).toLocaleDateString() : '—'}
+                            {overdue && <span className="ml-2 align-middle"><Badge variant="error">Overdue</Badge></span>}
+                          </td>
+                          <td>{d.customer_name}{d.unassigned && <span className="text-amber-600 text-xs ml-1">· unassigned</span>}</td>
+                          <td><button onClick={() => navigate(`/deliveries/${d.id}`)} className="text-crx-green hover:underline">{d.delivery_number}</button></td>
+                          <td className="text-secondary">{d.order_number || '—'}</td>
+                          <td className="text-right"><Badge variant={d.status === 'in_progress' ? 'info' : 'default'}>{d.status.replace('_', ' ')}</Badge></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {visibleDeliveries.length === 0 && (
+                  <p className="text-center text-secondary py-8 text-sm">No open deliveries.</p>
                 )}
               </div>
             </Card>
