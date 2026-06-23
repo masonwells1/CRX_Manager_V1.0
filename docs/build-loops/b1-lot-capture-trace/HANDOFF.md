@@ -87,8 +87,13 @@ the `lotRpc.ts` shim to direct typed calls; optional feature-flag on the "Lots" 
 
 ## 6. EXACT ordered steps to go live (each needs Mason's explicit OK)
 
+> **First, work from the feature branch:** `git fetch origin && git checkout feat/application-lot-capture`
+> (or add a worktree on it). The migration file + this handoff live there. Confirm the branch is at
+> origin's tip (`git rev-parse HEAD` == `git rev-parse origin/feat/application-lot-capture`).
+>
 > These are the hard gates the build loop did NOT cross. Do them in order. Steps 1, 4, 5 are the
-> dangerous ones (live DB / merge to prod / deploy).
+> dangerous ones (live DB / merge to prod / deploy). This requires a **write-enabled** Supabase MCP —
+> the build-loop session was read-only by design, so the apply runs from a normal session.
 
 1. **Apply the migration to the live DB** — `apply_migration` on project `rhyzpcqhnizqbxphqdkr`,
    name `20260622170000_application_record_lots`, query = the **exact bytes** of
