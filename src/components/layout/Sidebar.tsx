@@ -92,6 +92,16 @@ const navigation: NavEntry[] = [
   {
     type: 'standalone',
     link: {
+      id: 'to-ship',
+      path: '/to-ship',
+      label: 'To-Ship',
+      icon: <PackageSearch className="w-5 h-5" />,
+      roles: ['admin', 'sales_rep'],
+    },
+  },
+  {
+    type: 'standalone',
+    link: {
       id: 'getting-started',
       path: '/getting-started',
       label: 'Getting Started',

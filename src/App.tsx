@@ -85,6 +85,7 @@ const Vendors = lazy(() => import('./pages/Vendors'));
 const SalesReports = lazy(() => import('./pages/SalesReports'));
 const GettingStarted = lazy(() => import('./pages/GettingStarted'));
 const FieldApplicationInvoice = lazy(() => import('./pages/FieldApplicationInvoice'));
+const ToShip = lazy(() => import('./pages/ToShip'));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -182,6 +183,7 @@ const router = createBrowserRouter([
           { path: 'orders', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Orders /></ProtectedRoute> },
           { path: 'orders/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><NewOrder /></ProtectedRoute> },
           { path: 'orders/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><OrderDetail /></ProtectedRoute> },
+          { path: 'to-ship', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ToShip /></ProtectedRoute> },
           { path: 'inventory', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InventoryPage /></ProtectedRoute> },
           { path: 'invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Invoices /></ProtectedRoute> },
           { path: 'invoices/field-app/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoice /></ProtectedRoute> },

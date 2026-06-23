@@ -43,6 +43,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'deliveries', label: 'Deliveries', category: 'Operations', roles: ['admin', 'sales_rep', 'driver'] },
   { key: 'my-route', label: 'My Route', category: 'Operations', roles: ['admin', 'sales_rep', 'driver'] },
   { key: 'delivery-remainders', label: 'Remainders', category: 'Operations', roles: ['admin', 'sales_rep'] },
+  { key: 'to-ship', label: 'To-Ship', category: 'Operations', roles: ['admin', 'sales_rep'] },
   { key: 'vehicles', label: 'Vehicles', category: 'Operations', roles: ['admin'] },
   { key: 'blend-tickets', label: 'Blend Tickets', category: 'Operations', roles: ['admin', 'sales_rep'] },
   { key: 'application-records', label: 'App Records', category: 'Operations', roles: ['admin', 'sales_rep', 'applicator'] },

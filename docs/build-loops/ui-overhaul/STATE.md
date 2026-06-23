@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul` · Started: 2026-06-23 · Mode: hold-for-review (NO d
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (committed, screenshot-proven) · `[!]` Needs Mason.
 
 ## Current focus
-> Phase 0 — design-system foundation. Not started yet.
+> Phase 1 Build A — Operations Command Center. To-Ship core stream LANDED (page + route + nav, By Product/By Customer, owed-vs-free-vs-inbound, Ready/Short, $ to ship, aging, search + Short-only). Next: dashboard card + TopBar search, then more streams (deliveries / inbound POs / remainders / low-stock / holds). Phase 0 design-system refresh still pending.
 
 ---
 
@@ -19,15 +19,16 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 
 ## Phase 1 — 🚩 Operations Command Center (route `/ops`)
 ### Build A — read-only board (autonomous, zero DB)
-- [ ] New hub page + route + nav entry + dashboard card + visible TopBar Search
-- [ ] To-Ship stream: By Product / By Customer / By Date, owed vs free vs inbound-PO, Ready-vs-Blocked, $ to ship, aging
+- [x] New To-Ship page (`src/pages/ToShip.tsx`, route `/to-ship`) + nav link + `pagePermissions` entry
+- [~] To-Ship stream: By Product / By Customer ✓, owed vs free vs inbound-PO ✓, Ready-vs-Blocked ✓, $ to ship ✓, aging ✓ — TODO: By Date grouping
+- [x] Findability v1: product/customer search + Short-only filter + view toggle — TODO: more chips + remember-last-view
+- [ ] Dashboard card + visible TopBar Search button → /to-ship
 - [ ] Today/▷ deliveries stream
 - [ ] Inbound POs stream (ordered − received, by arrival)
 - [ ] Delivery remainders stream (age + tier)
 - [ ] Low-stock / inventory-pressure stream (% owed; reorder triggers)
 - [ ] Expiring holds stream
-- [ ] Findability: product/customer search + filter chips + group/sort + remember-last-view
-- [ ] Proof: each stream screenshotted; remaining-qty cross-checked vs OrderDetail
+- [!] Authenticated visual proof = Mason's in-app login smoke (compile + 2123 tests + live data $541k/23 orders proven; preview boots clean but app is behind auth wall)
 ### Build B — act-in-place (REVIEW-GATED, human-tested, zero migration)
 - [!] Schedule delivery from owed list (`create_delivery_with_items`) — reviewed build
 - [!] Reorder / create PO from short product — reviewed build
@@ -69,7 +70,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet)_
 
 ## Commit log (newest first)
-- _(none yet)_
+- To-Ship command-center page (Build A core): By Product / By Customer, shortfall vs inbound, $ to ship, aging, search. Read-only, zero DB. lint+typecheck+build+2123 tests green; live data confirmed.
 
 ## Morning summary
 - _(written when the loop pauses)_
