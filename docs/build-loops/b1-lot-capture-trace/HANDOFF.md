@@ -71,19 +71,17 @@ later wave). This is the keystone the future grower portal and compliance-packet
 
 ---
 
-## 5. ⚠️ OPEN FOLLOW-UP before/at go-live (deferred at the Codex round cap)
+## 5. ✅ RESOLVED (post-loop, commit `95dbc78`) — LotsEditorModal save/close race
 
-**LotsEditorModal save/close race (P2, not yet fixed).** On a *slow* `set_application_record_lots`
-save, the modal's Escape / backdrop / X can still close it (the footer Cancel is disabled, but those
-paths aren't) — so a user could close record A, open/edit record B, and then A's save-completion
-closes B and drops B's unsaved lot edits. **Fix is small** (block all close paths while `saving`, or
-ignore save-completions whose `record.id` is no longer current — the same guard already applied to
-the trace page). It was deferred because it was the 4th consecutive *same-class* stale-async race and
-the round cap was reached; the editor is not live until the migration is applied, so **fixing it in
-the gated pre-apply window means no user can hit it.** Recommend a quick deliberate pass over the B1
-UI for this whole class before merge. (Other minor post-apply followups: regenerate
-`src/types/supabase.ts` then simplify the `lotRpc.ts` shim to direct typed calls; optional
-feature-flag on the "Lots" button.)
+**Fixed** — Codex review of the commit found no actionable bugs. The modal now passes a guarded
+`handleClose` to `<Modal>` that no-ops while `saving`, so Escape / backdrop / X can't dismiss it
+mid-save (the save-success path still calls `onClose()` directly, so a finished save closes normally).
+A regression test (save in flight → X + Escape don't close; completion closes exactly once) was
+proven to fail on the pre-fix code. *Original issue, for the record:* on a slow save a user could
+close record A, open/edit record B, and have A's save-completion close B and drop B's unsaved edits.
+
+**Remaining (post-apply, non-blocking) followups:** regenerate `src/types/supabase.ts` then simplify
+the `lotRpc.ts` shim to direct typed calls; optional feature-flag on the "Lots" button.
 
 ---
 
@@ -111,8 +109,8 @@ feature-flag on the "Lots" button.)
    `invoice_id = NULL`**), confirm blend-ticket lot auto-propagation end-to-end, then
    `node scripts/db-invariant-sweeps/run-sweeps.mjs` (execute each query via MCP; every one must
    return ZERO rows). `get_advisors` should be unchanged.
-4. **Fix the §5 editor race**, then **merge `feat/application-lot-capture` → `main`** (the UI calls
-   the new RPCs, so code and migration must land together).
+4. **Merge `feat/application-lot-capture` → `main`** (the §5 editor race is already fixed; the UI
+   calls the new RPCs, so code and migration must land together).
 5. **Deploy** — pushing the merge to `main` auto-deploys to Vercel (croprxsolutions.app). Then do the
    **live UI walkthrough**: open `/lot-trace`, trace a known lot; open a record's Lots editor, add 2
    lots to one product, save, reload, confirm persisted; screenshot.
