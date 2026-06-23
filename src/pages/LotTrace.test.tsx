@@ -85,4 +85,39 @@ describe('LotTrace', () => {
     await waitFor(() => expect(mockToast).toHaveBeenCalledWith('error', expect.stringContaining('Enter a lot number')));
     expect(mockTraceLot).not.toHaveBeenCalled();
   });
+
+  it('clears the prior lot results while a re-search is loading (no stale rows under the new lot)', async () => {
+    const rowA = { ...ROW, product_name: 'Alpha Herb', lot_number: 'LOT-A' };
+    const rowB = { ...ROW, product_name: 'Beta Chem', lot_number: 'LOT-B' };
+    let resolveSecond: (v: Array<typeof ROW>) => void = () => {};
+    mockTraceLot
+      .mockResolvedValueOnce([rowA])
+      .mockReturnValueOnce(new Promise<Array<typeof ROW>>((r) => { resolveSecond = r; }));
+
+    render(<LotTrace />);
+
+    // First search resolves with lot A's results.
+    fireEvent.change(screen.getByLabelText('Lot number'), { target: { value: 'lot-a' } });
+    fireEvent.click(screen.getByRole('button', { name: /trace lot/i }));
+    expect(await screen.findByText('Alpha Herb')).toBeInTheDocument();
+
+    // Re-search for a different lot. While the 2nd lookup is still pending, the result
+    // summary must NOT remain on screen showing the PRIOR lot's count under the new lot
+    // label — the recall-count bug Codex flagged. (The DataTable hides its own rows while
+    // loading, but the summary <p> above it is not gated by the table's loading state, so
+    // it's the summary that leaks the stale count.)
+    const staleSummary = () =>
+      screen.queryByText(
+        (_t, el) => el?.tagName.toLowerCase() === 'p' && /used lot/i.test(el.textContent ?? '')
+      );
+    fireEvent.change(screen.getByLabelText('Lot number'), { target: { value: 'lot-b' } });
+    fireEvent.click(screen.getByRole('button', { name: /trace lot/i }));
+    await waitFor(() => expect(staleSummary()).not.toBeInTheDocument());
+
+    // Resolving the second search shows lot B's results + a summary labeled with the
+    // searched query (the page echoes the query string the user typed, 'lot-b').
+    resolveSecond([rowB]);
+    expect(await screen.findByText('Beta Chem')).toBeInTheDocument();
+    expect(staleSummary()).toHaveTextContent('lot-b');
+  });
 });

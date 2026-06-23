@@ -40,6 +40,14 @@ export default function LotTrace() {
     setLoading(true);
     setSearchedLot(lot);
     setSearchError(null);
+    // Drop the previous lot's results before the async lookup resolves. Without this, a
+    // re-search (when a prior search already populated results) leaves the prior lot's
+    // summary count on screen under the NEW lot's label until traceLot resolves — a wrong
+    // count on a recall/compliance page. The whole results block is hidden until this
+    // search completes (the DataTable hides its rows while loading, but its summary <p>
+    // does not, so we drop both the rows and the searched flag here).
+    setSearched(false);
+    setRows([]);
     try {
       const result = await traceLot(lot);
       setRows(result);
