@@ -6,6 +6,9 @@ import {
   acreDivergencePct,
   isAcreDivergent,
   ACRE_DIVERGENCE_THRESHOLD_PCT,
+  isAcreInBand,
+  ACRE_BAND_MIN,
+  ACRE_BAND_MAX,
 } from './fieldGeometry';
 
 const poly = (ring: number[][]): Feature<Polygon> => ({
@@ -55,6 +58,24 @@ describe('billableAcres', () => {
   it('is null when all absent', () => expect(billableAcres(null, null, null)).toBeNull());
   it('treats a 0 override as a real value (not nullish)', () => expect(billableAcres(0, 40, 25)).toBe(0));
   it('handles undefined like null', () => expect(billableAcres(undefined, undefined, 25)).toBe(25));
+});
+
+describe('isAcreInBand (the 0.1–5000 safety floor the override RPC lacks)', () => {
+  it('rejects a tiny value below the 0.1 floor (the Codex P2 gap)', () => {
+    expect(isAcreInBand(0.05)).toBe(false);
+  });
+  it('accepts exactly the floor', () => expect(isAcreInBand(ACRE_BAND_MIN)).toBe(true));
+  it('accepts a normal field size', () => expect(isAcreInBand(40)).toBe(true));
+  it('accepts exactly the ceiling', () => expect(isAcreInBand(ACRE_BAND_MAX)).toBe(true));
+  it('rejects above the ceiling', () => expect(isAcreInBand(5001)).toBe(false));
+  it('rejects zero and negatives', () => {
+    expect(isAcreInBand(0)).toBe(false);
+    expect(isAcreInBand(-5)).toBe(false);
+  });
+  it('rejects null/undefined', () => {
+    expect(isAcreInBand(null)).toBe(false);
+    expect(isAcreInBand(undefined)).toBe(false);
+  });
 });
 
 describe('acreDivergencePct', () => {

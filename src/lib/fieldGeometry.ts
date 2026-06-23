@@ -35,6 +35,21 @@ export function billableAcres(
 }
 
 /**
+ * The acreage band the server enforces on a MEASURED boundary (set_field_boundary's
+ * 0.1–5000 `AREA_OUT_OF_BAND` check). The billable-override RPC only rejects `<= 0` /
+ * `> 5000` — it has no 0.1 floor — so the UI applies this same band to a typed or
+ * imported override BEFORE sending it, keeping a tiny (0 < x < 0.1) value from billing
+ * below the safety floor and giving a clear message instead of a raw RPC error.
+ */
+export const ACRE_BAND_MIN = 0.1;
+export const ACRE_BAND_MAX = 5000;
+
+/** True when an acreage is within the [0.1, 5000] safety band (null/undefined → false). */
+export function isAcreInBand(acres: number | null | undefined): boolean {
+  return acres != null && acres >= ACRE_BAND_MIN && acres <= ACRE_BAND_MAX;
+}
+
+/**
  * Billable/entered acres are "divergent" from the measured map acres when they
  * differ by this percentage or more — in EITHER direction (over or under). It is a
  * review flag, never a hard block: a field can legitimately bill on a different

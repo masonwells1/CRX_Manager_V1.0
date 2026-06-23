@@ -23,7 +23,14 @@ import {
   geometryAcres,
   type ParseResult,
 } from '../../lib/fieldImportParser';
-import { acreDivergencePct, isAcreDivergent, ACRE_DIVERGENCE_THRESHOLD_PCT } from '../../lib/fieldGeometry';
+import {
+  acreDivergencePct,
+  isAcreDivergent,
+  ACRE_DIVERGENCE_THRESHOLD_PCT,
+  isAcreInBand,
+  ACRE_BAND_MIN,
+  ACRE_BAND_MAX,
+} from '../../lib/fieldGeometry';
 import type { Polygon, MultiPolygon } from 'geojson';
 import ImportPreviewMap from './ImportPreviewMap';
 import AttributeMappingStep from './AttributeMappingStep';
@@ -415,22 +422,28 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           if (boundaryOk) {
             // Bill on the FILE's stated acreage (owner choice 2026-06-23): set it as the billable
             // override. measured_acres still holds the true map measure underneath, so the field
-            // screen can show the gap. A junk / out-of-band stated value is rejected by
-            // set_field_override_acres' 0.1–5000 band — we keep the field (billing falls back to
-            // the measured acres) and record a non-fatal warning rather than failing the import.
+            // screen can show the gap. Apply the SAME 0.1–5000 band the measured path enforces
+            // BEFORE sending it — set_field_override_acres only rejects <= 0 / > 5000 (no 0.1
+            // floor), so a tiny stated value would otherwise bill below the safety floor. An
+            // out-of-band or RPC-rejected stated value is a non-fatal warning: the field still
+            // imports, billing on the measured acres.
             if (pf.stated_acres != null) {
-              try {
-                const { data: ovData, error: ovErr } = await supabase.rpc('set_field_override_acres', {
-                  p_field_id: fieldId,
-                  p_override_acres: pf.stated_acres,
-                  p_performed_by: profile!.id,
-                  p_idempotency_key: crypto.randomUUID(),
-                });
-                if (ovErr) throw ovErr;
-                assertRpcResult(ovData, 'set_field_override_acres');
-              } catch (ovError: unknown) {
-                const msg = ovError instanceof Error ? ovError.message : String(ovError);
-                warnings.push(`"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
+              if (!isAcreInBand(pf.stated_acres)) {
+                warnings.push(`"${pf.field_name}": the file's ${pf.stated_acres} ac is outside the allowed ${ACRE_BAND_MIN}–${ACRE_BAND_MAX} acre range — billing on the measured ${pf.full_acres} ac instead.`);
+              } else {
+                try {
+                  const { data: ovData, error: ovErr } = await supabase.rpc('set_field_override_acres', {
+                    p_field_id: fieldId,
+                    p_override_acres: pf.stated_acres,
+                    p_performed_by: profile!.id,
+                    p_idempotency_key: crypto.randomUUID(),
+                  });
+                  if (ovErr) throw ovErr;
+                  assertRpcResult(ovData, 'set_field_override_acres');
+                } catch (ovError: unknown) {
+                  const msg = ovError instanceof Error ? ovError.message : String(ovError);
+                  warnings.push(`"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
+                }
               }
             }
             success++;
