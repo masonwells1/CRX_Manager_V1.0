@@ -11,7 +11,7 @@
  */
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, Search, AlertTriangle, CheckCircle2, Truck, Users, DollarSign } from 'lucide-react';
+import { Package, Search, AlertTriangle, CheckCircle2, Truck, Users, DollarSign, Inbox } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
 import HelpTip from '../components/ui/HelpTip';
@@ -74,6 +74,16 @@ type DeliveryRow = {
   order: { order_number: string | null } | { order_number: string | null }[] | null;
 };
 
+type POItem = { id: string; product_name: string | null; product_id: string; quantity_ordered: number; quantity_received: number; unit_size: string | null };
+type PORow = {
+  id: string;
+  po_number: string | null;
+  vendor: string | null;
+  status: string;
+  expected_delivery_date: string | null;
+  items: POItem[] | null;
+};
+
 const fmtUnits = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 1 });
 const fmtMoney = (n: number) => '$' + Math.round(n).toLocaleString();
 const daysAgo = (d: string) => (d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400000) : 0);
@@ -87,11 +97,12 @@ export default function ToShip() {
   const [view, setView] = useState<'product' | 'customer'>(() => (localStorage.getItem('toship.view') === 'customer' ? 'customer' : 'product'));
   const [search, setSearch] = useState('');
   const [shortOnly, setShortOnly] = useState(() => localStorage.getItem('toship.shortOnly') === '1');
-  const [section, setSection] = useState<'to-ship' | 'low-stock' | 'deliveries'>(() => {
+  const [section, setSection] = useState<'to-ship' | 'low-stock' | 'deliveries' | 'inbound'>(() => {
     const s = localStorage.getItem('toship.section');
-    return s === 'low-stock' || s === 'deliveries' ? s : 'to-ship';
+    return s === 'low-stock' || s === 'deliveries' || s === 'inbound' ? s : 'to-ship';
   });
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
+  const [pos, setPos] = useState<PORow[]>([]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -103,6 +114,15 @@ export default function ToShip() {
       .order('scheduled_date', { ascending: true })
       .limit(500);
     setDeliveries((delivRaw || []) as unknown as DeliveryRow[]);
+
+    // 0b. Open purchase orders (inbound stock on the way)
+    const { data: poRaw } = await supabase
+      .from('purchase_orders')
+      .select('id, po_number, vendor, status, expected_delivery_date, items:purchase_order_items(id, product_name, product_id, quantity_ordered, quantity_received, unit_size)')
+      .in('status', ['submitted', 'partially_received'])
+      .order('expected_delivery_date', { ascending: true, nullsFirst: false })
+      .limit(500);
+    setPos((poRaw || []) as unknown as PORow[]);
 
     // 1. Open orders (the booking still owes product)
     const { data: ordersRaw, error: oErr } = await supabase
@@ -294,6 +314,14 @@ export default function ToShip() {
     })
     .filter((d) => !q || d.customer_name.toLowerCase().includes(q));
 
+  const visiblePOs = pos
+    .map((po) => {
+      const openItems = (po.items || []).filter((it) => it.quantity_ordered > it.quantity_received);
+      return { id: po.id, po_number: po.po_number ?? '—', vendor: po.vendor ?? 'Unknown', expected_delivery_date: po.expected_delivery_date ?? '', openItems };
+    })
+    .filter((po) => po.openItems.length > 0)
+    .filter((po) => !q || po.vendor.toLowerCase().includes(q) || po.po_number.toLowerCase().includes(q) || po.openItems.some((it) => (it.product_name || '').toLowerCase().includes(q)));
+
   const statusBadge = (status: string, shortBy: number) => {
     if (status === 'ready') return <Badge variant="success">Ready to ship</Badge>;
     if (status === 'po') return <Badge variant="warning">Short now · PO inbound</Badge>;
@@ -334,6 +362,12 @@ export default function ToShip() {
           className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${section === 'deliveries' ? 'bg-crx-green text-white' : 'bg-white text-secondary hover:bg-gray-50'}`}
         >
           <Truck className="w-4 h-4" /> Deliveries
+        </button>
+        <button
+          onClick={() => setSection('inbound')}
+          className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${section === 'inbound' ? 'bg-crx-green text-white' : 'bg-white text-secondary hover:bg-gray-50'}`}
+        >
+          <Inbox className="w-4 h-4" /> Inbound
         </button>
       </div>
 
@@ -614,6 +648,71 @@ export default function ToShip() {
                 )}
               </div>
             </Card>
+          </>
+        )
+      )}
+
+      {section === 'inbound' && (
+        loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <>
+            <div className="relative max-w-md">
+              <Search className="w-4 h-4 text-secondary absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search vendor or product…"
+                aria-label="Search inbound"
+                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+            </div>
+            <p className="text-sm text-secondary">Open purchase orders — stock on the way, soonest arrival first. Overdue arrivals flagged.</p>
+            <div className="space-y-3">
+              {visiblePOs.map((po) => {
+                const overdue = daysAgo(po.expected_delivery_date) > 0;
+                return (
+                  <Card key={po.id}>
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="font-medium text-nav-dark">
+                        {po.vendor} <span className="text-secondary font-normal">· PO {po.po_number}</span>
+                      </div>
+                      <div className="text-sm text-secondary">
+                        {po.expected_delivery_date ? `arrives ${new Date(po.expected_delivery_date).toLocaleDateString()}` : 'no arrival date'}
+                        {overdue && <span className="ml-2 align-middle"><Badge variant="error">Overdue</Badge></span>}
+                      </div>
+                    </div>
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs text-secondary border-b border-gray-100">
+                            <th className="font-normal py-1.5">Product</th>
+                            <th className="font-normal text-right">Ordered</th>
+                            <th className="font-normal text-right">Received</th>
+                            <th className="font-normal text-right">Remaining</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {po.openItems.map((it) => (
+                            <tr key={it.id} className="border-b border-gray-50 last:border-0">
+                              <td className="py-1.5">{it.product_name || '—'}{it.unit_size && <span className="text-secondary"> · {it.unit_size}</span>}</td>
+                              <td className="text-right">{fmtUnits(it.quantity_ordered)}</td>
+                              <td className="text-right text-secondary">{fmtUnits(it.quantity_received)}</td>
+                              <td className="text-right font-medium text-amber-600">{fmtUnits(it.quantity_ordered - it.quantity_received)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Card>
+                );
+              })}
+              {visiblePOs.length === 0 && (
+                <Card><p className="text-center text-secondary py-8 text-sm">No inbound purchase orders.</p></Card>
+              )}
+            </div>
           </>
         )
       )}
