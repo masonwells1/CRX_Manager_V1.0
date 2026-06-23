@@ -28,6 +28,7 @@ import {
   isAcreDivergent,
   ACRE_DIVERGENCE_THRESHOLD_PCT,
   isAcreInBand,
+  isAcreDenominatedColumn,
   ACRE_BAND_MIN,
   ACRE_BAND_MAX,
 } from '../../lib/fieldGeometry';
@@ -301,11 +302,16 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         errors.push('No customer assigned');
       }
 
+      const acreAttrKey = columnMapping['total_acres'] ?? null;
       const parsedAcres = getValue('total_acres');
       const acresFromAttr = parsedAcres ? parseFloat(parsedAcres) : null;
-      // The acreage the FILE reported (mapped "Acres" column). On save this becomes the
-      // billable override so the bill matches the grower's records; null → bill the measured acres.
-      const statedAcres = acresFromAttr != null && acresFromAttr > 0 ? acresFromAttr : null;
+      // The acreage the FILE reported. It drives the billable override ONLY when it comes from an
+      // ACRE-denominated column — a GIS area column (area/shape_area, in square meters) must never
+      // set money (a 1-ac field's shape_area ≈ 4047 would bill as 4047 ac). null → bill measured.
+      const statedAcres =
+        isAcreDenominatedColumn(acreAttrKey) && acresFromAttr != null && acresFromAttr > 0
+          ? acresFromAttr
+          : null;
 
       fields.push({
         index: i + 1,
@@ -519,11 +525,22 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   const validCount = parsedFields.filter((f) => f.isValid).length;
   const invalidCount = parsedFields.filter((f) => !f.isValid).length;
 
-  // Fields whose FILE acreage differs from the MAP-measured acreage by >= the review threshold
-  // (over OR under) — surfaced so the owner can eyeball "something's off" before importing
+  // A field bills on the FILE's acreage only when it is present AND within the 0.1–5000 band —
+  // exactly what handleUpload enforces. Otherwise it bills on the measured map acres. The review
+  // shows this real basis so the owner never approves one basis and gets another after import.
+  const billsOnFileAcres = (f: ParsedImportField) => f.stated_acres != null && isAcreInBand(f.stated_acres);
+
+  // Fields that WILL bill on the file acreage but differ from the MAP measure by >= the threshold
+  // (over OR under) — flagged so the owner can eyeball "something's off" before importing
   // (e.g. an applicator sprayed part of one field under another field's name).
   const flaggedFields = parsedFields.filter(
-    (f) => f.isValid && f.stated_acres != null && isAcreDivergent(f.stated_acres, f.full_acres),
+    (f) => f.isValid && billsOnFileAcres(f) && isAcreDivergent(f.stated_acres, f.full_acres),
+  );
+
+  // Fields whose file acreage is OUT OF the 0.1–5000 band → they bill on the measured map acres
+  // instead. Surfaced at review so the displayed basis matches what actually imports.
+  const outOfBandFields = parsedFields.filter(
+    (f) => f.isValid && f.stated_acres != null && !isAcreInBand(f.stated_acres),
   );
 
   const sampleProperties = parseResult?.featureCollection.features[0]?.properties || null;
@@ -782,19 +799,40 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               </div>
             )}
 
+            {/* File acreage out of the 0.1–5000 band → bills on the measured map acres instead.
+                Shown so the review basis matches what actually imports (Codex P2). */}
+            {outOfBandFields.length > 0 && (
+              <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg max-h-40 overflow-y-auto">
+                <p className="text-xs font-medium text-blue-700 mb-1">
+                  {outOfBandFields.length} field{outOfBandFields.length > 1 ? 's' : ''} will bill on the map measurement — the file's acreage is outside {ACRE_BAND_MIN}–{ACRE_BAND_MAX} ac
+                </p>
+                <div className="space-y-1">
+                  {outOfBandFields.map((pf) => (
+                    <p key={pf.index} className="text-xs text-blue-700">
+                      <span className="font-medium">{pf.field_name}</span>: file says {pf.stated_acres} ac → bills the measured {pf.full_acres} ac
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Preview of valid fields */}
             {validCount > 0 && (
               <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
                 <p className="text-xs font-medium text-secondary mb-2">Preview (first 5):</p>
                 <div className="space-y-2">
                   {parsedFields.filter((f) => f.isValid).slice(0, 5).map((pf) => {
-                    const divergent = pf.stated_acres != null && isAcreDivergent(pf.stated_acres, pf.full_acres);
+                    const onFile = billsOnFileAcres(pf);
+                    const outOfBand = pf.stated_acres != null && !isAcreInBand(pf.stated_acres);
+                    const divergent = onFile && isAcreDivergent(pf.stated_acres, pf.full_acres);
                     return (
                       <div key={pf.index} className="text-xs bg-white p-2 rounded border border-gray-100">
                         <p className="font-medium text-nav-dark">{pf.field_name}</p>
                         <p className="text-gray-500">
-                          {pf.stated_acres != null ? (
+                          {onFile ? (
                             <>Bills <span className="font-medium">{pf.stated_acres} ac</span> (file) · map measures {pf.full_acres} ac</>
+                          ) : outOfBand ? (
+                            <>Bills <span className="font-medium">{pf.full_acres} ac</span> (map) · file's {pf.stated_acres} ac is out of range</>
                           ) : (
                             <>
                               {/* no file acreage → bills the measured acres set_field_boundary computes */}

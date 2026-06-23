@@ -50,6 +50,20 @@ export function isAcreInBand(acres: number | null | undefined): boolean {
 }
 
 /**
+ * True when an import attribute NAME denotes ACRES, so its value is safe to drive the
+ * billable override. EXCLUDES ambiguous geometry-area columns — `area`, `shape_area`,
+ * `st_area` — which GIS exports record in the projection's square meters/feet, NOT acres
+ * (a 1-acre field's `shape_area` ≈ 4047 would otherwise become a 4047-"acre" bill). The
+ * test is name-based on purpose: a raw area value silently mapped as "Acres" must never
+ * set money. Accepts acres / total_acres / gis_acres / calc_acres / acreage / `ac`.
+ */
+export function isAcreDenominatedColumn(name: string | null | undefined): boolean {
+  if (!name) return false;
+  const n = name.toLowerCase().trim();
+  return n.includes('acre') || n === 'ac';
+}
+
+/**
  * Billable/entered acres are "divergent" from the measured map acres when they
  * differ by this percentage or more — in EITHER direction (over or under). It is a
  * review flag, never a hard block: a field can legitimately bill on a different

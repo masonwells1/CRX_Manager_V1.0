@@ -7,6 +7,7 @@ import {
   isAcreDivergent,
   ACRE_DIVERGENCE_THRESHOLD_PCT,
   isAcreInBand,
+  isAcreDenominatedColumn,
   ACRE_BAND_MIN,
   ACRE_BAND_MAX,
 } from './fieldGeometry';
@@ -75,6 +76,23 @@ describe('isAcreInBand (the 0.1–5000 safety floor the override RPC lacks)', ()
   it('rejects null/undefined', () => {
     expect(isAcreInBand(null)).toBe(false);
     expect(isAcreInBand(undefined)).toBe(false);
+  });
+});
+
+describe('isAcreDenominatedColumn (acres may set money; raw GIS area may not)', () => {
+  it('accepts acre-named columns', () => {
+    for (const n of ['Acres', 'ACRES', 'total_acres', 'gis_acres', 'Calc_Acres', 'acreage'])
+      expect(isAcreDenominatedColumn(n)).toBe(true);
+  });
+  it('accepts the bare "ac" abbreviation', () => expect(isAcreDenominatedColumn('AC')).toBe(true));
+  it('REJECTS GIS geometry-area columns (square meters, not acres) — the Codex P1 gap', () => {
+    for (const n of ['area', 'Shape_Area', 'SHAPE_AREA', 'st_area', 'Shape_Length'])
+      expect(isAcreDenominatedColumn(n)).toBe(false);
+  });
+  it('rejects null/undefined/empty', () => {
+    expect(isAcreDenominatedColumn(null)).toBe(false);
+    expect(isAcreDenominatedColumn(undefined)).toBe(false);
+    expect(isAcreDenominatedColumn('')).toBe(false);
   });
 });
 
