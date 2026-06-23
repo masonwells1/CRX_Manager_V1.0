@@ -82,8 +82,15 @@ describe('isAcreInBand (the 0.1–5000 safety floor the override RPC lacks)', ()
 
 describe('parseAcreInput (no partial-parse mis-bills)', () => {
   it('parses a plain decimal string', () => expect(parseAcreInput('40.5')).toBe(40.5));
-  it('strips a thousands separator (the Codex P2 gap — parseFloat would return 1)', () =>
-    expect(parseAcreInput('1,234.5')).toBe(1234.5));
+  it('strips a WELL-FORMED thousands separator (the Codex P2 gap — parseFloat would return 1)', () => {
+    expect(parseAcreInput('1,234.5')).toBe(1234.5);
+    expect(parseAcreInput('12,345,678')).toBe(12345678);
+  });
+  it('REJECTS malformed comma grouping instead of normalizing it to a wrong number', () => {
+    expect(parseAcreInput('12,34')).toBeNull();   // would become 1234 if blindly stripped
+    expect(parseAcreInput('1,2,3')).toBeNull();
+    expect(parseAcreInput('1234,5')).toBeNull();   // decimal comma
+  });
   it('accepts a real number unchanged', () => expect(parseAcreInput(38.5)).toBe(38.5));
   it('rejects a partially-numeric string rather than truncating it', () => {
     expect(parseAcreInput('40 ac')).toBeNull();
@@ -106,6 +113,14 @@ describe('isAcreDenominatedColumn (acres may set money; raw GIS area may not)', 
       expect(isAcreDenominatedColumn(n)).toBe(true);
   });
   it('accepts the bare "ac" abbreviation', () => expect(isAcreDenominatedColumn('AC')).toBe(true));
+  it('accepts "ac" as a token in a longer DBF name (TOTAL_AC, GIS AC, FIELD-AC)', () => {
+    for (const n of ['TOTAL_AC', 'GIS AC', 'FIELD-AC', 'AC_TOTAL'])
+      expect(isAcreDenominatedColumn(n)).toBe(true);
+  });
+  it('does NOT match "ac" buried inside another word', () => {
+    for (const n of ['tract', 'capacity', 'place', 'fraction'])
+      expect(isAcreDenominatedColumn(n)).toBe(false);
+  });
   it('REJECTS GIS geometry-area columns (square meters, not acres) — the Codex P1 gap', () => {
     for (const n of ['area', 'Shape_Area', 'SHAPE_AREA', 'st_area', 'Shape_Length'])
       expect(isAcreDenominatedColumn(n)).toBe(false);

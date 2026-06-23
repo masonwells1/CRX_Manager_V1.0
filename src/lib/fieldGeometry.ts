@@ -61,8 +61,19 @@ export function isAcreInBand(acres: number | null | undefined): boolean {
 export function parseAcreInput(raw: string | number | null | undefined): number | null {
   if (raw == null) return null;
   if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
-  const cleaned = raw.trim().replace(/,/g, '');
-  if (cleaned === '' || !/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(cleaned)) return null;
+  const s = raw.trim();
+  if (s === '') return null;
+  let cleaned: string;
+  if (s.includes(',')) {
+    // Accept commas ONLY as well-formed US thousands grouping (1,234 · 1,234.5 · 12,345,678).
+    // Anything else — "12,34", "1,2,3", a decimal comma "1234,5" — is ambiguous and would mis-bill
+    // if we blindly stripped the comma, so reject it (→ field falls back to the measured acres).
+    if (!/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) return null;
+    cleaned = s.replace(/,/g, '');
+  } else {
+    cleaned = s;
+  }
+  if (!/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(cleaned)) return null;
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 }
@@ -78,7 +89,11 @@ export function parseAcreInput(raw: string | number | null | undefined): number 
 export function isAcreDenominatedColumn(name: string | null | undefined): boolean {
   if (!name) return false;
   const n = name.toLowerCase().trim();
-  return n.includes('acre') || n === 'ac';
+  if (n.includes('acre')) return true;
+  // `ac` as a standalone token — bare `ac`, or suffixed/prefixed like `TOTAL_AC` / `GIS AC` /
+  // `FIELD-AC` (the 10-char DBF abbreviation ag shapefiles use) — but NOT `ac` buried inside
+  // another word (tract, area, capacity, place).
+  return /(^|[^a-z])ac($|[^a-z])/.test(n);
 }
 
 /**
