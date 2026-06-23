@@ -1343,6 +1343,29 @@ export interface Field {
   billing_defaults?: FieldBillingDefault[];
 }
 
+// Result shapes for the two-acre RPCs (migration 20260623130000)
+export interface SetFieldBoundaryResult {
+  field_id: string;
+  measured_acres: number;
+  billable_acres: number;
+  acres_source: 'measured' | 'override';
+}
+
+export interface SetFieldOverrideAcresResult {
+  field_id: string;
+  override_acres: number | null;
+  billable_acres: number | null;
+  acres_source: 'measured' | 'override' | 'legacy';
+}
+
+export interface OverlappingField {
+  field_id: string;
+  field_name: string | null;
+  customer_id: string | null;
+  measured_acres: number | null;
+  overlap_pct: number;
+}
+
 export interface FieldBillingDefault {
   id: string;
   field_id: string;
