@@ -71,9 +71,9 @@ export default function ToShip() {
   const [lines, setLines] = useState<OpenLine[]>([]);
   const [supply, setSupply] = useState<Map<string, Supply>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'product' | 'customer'>('product');
+  const [view, setView] = useState<'product' | 'customer'>(() => (localStorage.getItem('toship.view') === 'customer' ? 'customer' : 'product'));
   const [search, setSearch] = useState('');
-  const [shortOnly, setShortOnly] = useState(false);
+  const [shortOnly, setShortOnly] = useState(() => localStorage.getItem('toship.shortOnly') === '1');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -164,6 +164,10 @@ export default function ToShip() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Remember the user's last view + short-only filter across visits.
+  useEffect(() => { localStorage.setItem('toship.view', view); }, [view]);
+  useEffect(() => { localStorage.setItem('toship.shortOnly', shortOnly ? '1' : '0'); }, [shortOnly]);
 
   // Shortfall classification for a product's owed quantity vs supply.
   const classify = useCallback(

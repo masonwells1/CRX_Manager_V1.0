@@ -21,7 +21,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 ### Build A — read-only board (autonomous, zero DB)
 - [x] New To-Ship page (`src/pages/ToShip.tsx`, route `/to-ship`) + nav link + `pagePermissions` entry
 - [~] To-Ship stream: By Product / By Customer ✓, owed vs free vs inbound-PO ✓, Ready-vs-Blocked ✓, $ to ship ✓, aging ✓ — TODO: By Date grouping
-- [x] Findability v1: product/customer search + Short-only filter + view toggle — TODO: more chips + remember-last-view
+- [x] Findability v1: product/customer search + Short-only filter + view toggle + remember-last-view (localStorage) — TODO: more filter chips
 - [x] Visible TopBar Search button (⌘K) + Dashboard "To-Ship" quick-action → /to-ship
 - [ ] Today/▷ deliveries stream
 - [ ] Inbound POs stream (ordered − received, by arrival)
@@ -70,6 +70,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet)_
 
 ## Commit log (newest first)
+- To-Ship remembers last view + Short-only across visits (localStorage). Autonomous-loop iteration 1. lint+typecheck+build+2123 tests green.
 - Discoverability: visible TopBar Search button (opens ⌘K palette) + Dashboard To-Ship quick-action. lint+typecheck+build+2123 tests green.
 - To-Ship command-center page (Build A core): By Product / By Customer, shortfall vs inbound, $ to ship, aging, search. Read-only, zero DB. lint+typecheck+build+2123 tests green; live data confirmed.
 
