@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseGeoJSONFile, parseKMLFile, validateFeatureGeometry, calculateFieldMetrics } from './fieldImportParser';
-import type { Feature, Polygon } from 'geojson';
+import { parseGeoJSONFile, parseKMLFile, validateFeatureGeometry, validateFullGeometry, calculateFieldMetrics, geometryAcres } from './fieldImportParser';
+import type { Feature, Polygon, MultiPolygon } from 'geojson';
 
 // ---- Helper: create a simple polygon feature ----
 function makePolygonFeature(
@@ -113,6 +113,23 @@ describe('parseGeoJSONFile', () => {
     const result = parseGeoJSONFile(JSON.stringify(multi));
     expect(result.featureCount).toBe(1);
     expect(result.warnings.some((w: string) => w.includes('MultiPolygon'))).toBe(true);
+    // DISPLAY stays largest-ring Polygon (no regression to the preview/validators)...
+    expect(result.featureCollection.features[0].geometry.type).toBe('Polygon');
+    // ...but the FULL multi-part geometry is preserved for set_field_boundary to measure all parts.
+    expect(result.fullGeometries).toHaveLength(1);
+    expect(result.fullGeometries[0].type).toBe('MultiPolygon');
+  });
+
+  it('preserves a single Polygon as-is in fullGeometries', () => {
+    const fc = {
+      type: 'FeatureCollection',
+      features: [makePolygonFeature(kansasSquare)],
+    };
+    const result = parseGeoJSONFile(JSON.stringify(fc));
+    expect(result.fullGeometries).toHaveLength(1);
+    expect(result.fullGeometries[0].type).toBe('Polygon');
+    // index-aligned with the display features
+    expect(result.fullGeometries.length).toBe(result.featureCollection.features.length);
   });
 
   it('extracts all unique attribute keys', () => {
@@ -126,6 +143,45 @@ describe('parseGeoJSONFile', () => {
     const result = parseGeoJSONFile(JSON.stringify(fc));
     expect(result.attributeKeys).toEqual(expect.arrayContaining(['name', 'crop', 'soil']));
     expect(result.attributeKeys).toHaveLength(3);
+  });
+});
+
+describe('geometryAcres', () => {
+  const box = (x0: number, y0: number, dx: number, dy: number): number[][] => [
+    [x0, y0], [x0, y0 + dy], [x0 + dx, y0 + dy], [x0 + dx, y0], [x0, y0],
+  ];
+
+  it('measures a single Polygon', () => {
+    const a = geometryAcres({ type: 'Polygon', coordinates: [box(-100, 40, 0.0045, 0.0036)] });
+    expect(a).toBeGreaterThan(25);
+    expect(a).toBeLessThan(60);
+  });
+
+  it('sums ALL parts of a MultiPolygon (not just the largest)', () => {
+    const large: Polygon = { type: 'Polygon', coordinates: [box(-100, 40, 0.0045, 0.0036)] };
+    const small: Polygon = { type: 'Polygon', coordinates: [box(-99.99, 40, 0.00225, 0.0036)] };
+    const mp: MultiPolygon = { type: 'MultiPolygon', coordinates: [large.coordinates, small.coordinates] };
+    const largeAcres = geometryAcres(large);
+    const fullAcres = geometryAcres(mp);
+    // the multi-part total is strictly greater than its largest single part
+    expect(fullAcres).toBeGreaterThan(largeAcres + 1);
+    expect(fullAcres).toBeCloseTo(largeAcres + geometryAcres(small), 0);
+  });
+});
+
+describe('validateFullGeometry', () => {
+  const goodBox = [[-100, 40], [-100, 40.01], [-99.99, 40.01], [-99.99, 40], [-100, 40]];
+  it('passes a valid Polygon', () => {
+    expect(validateFullGeometry({ type: 'Polygon', coordinates: [goodBox] })).toHaveLength(0);
+  });
+  it('passes a valid MultiPolygon (every part)', () => {
+    expect(validateFullGeometry({ type: 'MultiPolygon', coordinates: [[goodBox], [goodBox]] })).toHaveLength(0);
+  });
+  it('flags a SMALLER part with out-of-range coords (largest-only validation would miss it)', () => {
+    const bad = [[-200, 40], [-200, 40.01], [-199.99, 40.01], [-199.99, 40], [-200, 40]]; // lng -200 invalid
+    const errs = validateFullGeometry({ type: 'MultiPolygon', coordinates: [[goodBox], [bad]] });
+    expect(errs.length).toBeGreaterThan(0);
+    expect(errs.some((e) => e.includes('WGS84'))).toBe(true);
   });
 });
 

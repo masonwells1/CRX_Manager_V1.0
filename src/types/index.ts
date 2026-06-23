@@ -1458,6 +1458,10 @@ export interface ParsedImportField {
   irrigation: boolean;
   notes: string | null;
   boundary_geojson: object;
+  // Full original geometry (multi-part preserved) sent to set_field_boundary on save;
+  // boundary_geojson above is the largest-ring display polygon. (migration 20260623130000)
+  full_boundary_geojson: object;
+  full_acres: number;   // geodesic acres of the FULL geometry — pre-checked against the band on import
   centroid_geojson: object;
   calculated_acres: number;
   raw_properties: Record<string, unknown>;

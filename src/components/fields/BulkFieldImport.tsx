@@ -15,12 +15,15 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
 import {
   parseShapefileBundle,
+  parseShapefileZip,
   parseGeoJSONFile,
   parseKMLFile,
   calculateFieldMetrics,
-  validateFeatureGeometry,
+  validateFullGeometry,
+  geometryAcres,
   type ParseResult,
 } from '../../lib/fieldImportParser';
+import type { Polygon, MultiPolygon } from 'geojson';
 import ImportPreviewMap from './ImportPreviewMap';
 import AttributeMappingStep from './AttributeMappingStep';
 import type { Customer, ParsedImportField } from '../../types';
@@ -33,7 +36,7 @@ interface BulkFieldImportProps {
 }
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7;
-type FileType = 'shapefile' | 'geojson' | 'kml' | null;
+type FileType = 'shapefile' | 'shapefile-zip' | 'geojson' | 'kml' | null;
 
 const STEP_LABELS = [
   'Upload',
@@ -45,7 +48,7 @@ const STEP_LABELS = [
   'Done',
 ];
 
-const ACCEPTED_EXTENSIONS = ['.shp', '.dbf', '.shx', '.prj', '.geojson', '.json', '.kml'];
+const ACCEPTED_EXTENSIONS = ['.zip', '.shp', '.dbf', '.shx', '.prj', '.geojson', '.json', '.kml'];
 const MAX_SIZE = 25 * 1024 * 1024; // 25MB
 
 export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldImportProps) {
@@ -130,6 +133,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
   const detectFileType = (fileList: File[]): FileType => {
     const names = fileList.map((f) => f.name.toLowerCase());
+    if (names.some((n) => n.endsWith('.zip'))) return 'shapefile-zip';
     if (names.some((n) => n.endsWith('.shp'))) return 'shapefile';
     if (names.some((n) => n.endsWith('.geojson') || n.endsWith('.json'))) return 'geojson';
     if (names.some((n) => n.endsWith('.kml'))) return 'kml';
@@ -145,7 +149,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       return !ACCEPTED_EXTENSIONS.includes(ext);
     });
     if (invalidFiles.length > 0) {
-      toast('error', `Unsupported file type: ${invalidFiles[0].name}. Accepted: .shp, .dbf, .prj, .geojson, .json, .kml`);
+      toast('error', `Unsupported file type: ${invalidFiles[0].name}. Accepted: .zip, .shp, .dbf, .prj, .geojson, .json, .kml`);
       return;
     }
 
@@ -158,7 +162,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
     const type = detectFileType(fileArray);
     if (!type) {
-      toast('error', 'Could not detect file type. Please upload .shp, .geojson, or .kml files.');
+      toast('error', 'Could not detect file type. Please upload a .zip shapefile, loose .shp/.dbf, .geojson, or .kml.');
       return;
     }
 
@@ -219,6 +223,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         const prjText = prjFile ? await prjFile.text() : null;
 
         result = await parseShapefileBundle(shpBuffer, dbfBuffer, prjText);
+      } else if (fileType === 'shapefile-zip') {
+        const zipFile = files.find((f) => f.name.toLowerCase().endsWith('.zip'));
+        const zipBuffer = await zipFile!.arrayBuffer();   // binary — a zip, not text
+        result = await parseShapefileZip(zipBuffer);
       } else if (fileType === 'geojson') {
         const jsonFile = files.find(
           (f) => f.name.toLowerCase().endsWith('.geojson') || f.name.toLowerCase().endsWith('.json')
@@ -254,17 +262,21 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       const props = feature.properties || {};
       const errors: string[] = [];
 
-      // Geometry validation
-      const geoErrors = validateFeatureGeometry(feature);
+      // Geometry validation — validate ALL parts of the full geometry (the import sends the full
+      // multi-part geometry to set_field_boundary), not just the largest display polygon.
+      const geoErrors = validateFullGeometry(parseResult.fullGeometries[i] as Polygon | MultiPolygon);
       errors.push(...geoErrors);
 
       // Calculate metrics
       let acres = 0;
+      let fullAcres = 0;
       let centroid = { type: 'Point' as const, coordinates: [0, 0] as [number, number] };
       if (geoErrors.length === 0) {
         const metrics = calculateFieldMetrics(feature);
         acres = metrics.acres;
         centroid = metrics.centroid;
+        // Only after validation passes — geometryAcres (turf) can throw on a malformed geometry.
+        fullAcres = geometryAcres(parseResult.fullGeometries[i] as Polygon | MultiPolygon);
       }
 
       // Map attributes
@@ -300,6 +312,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         irrigation: false,
         notes: getValue('notes'),
         boundary_geojson: feature.geometry,
+        // The full original geometry (multi-part preserved) — sent to set_field_boundary so
+        // the server measures the whole field, not just the largest-ring display polygon.
+        full_boundary_geojson: parseResult.fullGeometries[i],
+        full_acres: fullAcres,
         centroid_geojson: centroid,
         calculated_acres: acres,
         raw_properties: props as Record<string, unknown>,
@@ -326,6 +342,17 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
     for (const pf of validFields) {
       try {
+        // Pre-validate the FULL multi-part acreage against the server's 0.1–5000 band BEFORE
+        // creating the field. Otherwise an out-of-band import creates a field that
+        // set_field_boundary then rejects, leaving an orphan a sales_rep cannot delete
+        // (fields_delete RLS is admin-only).
+        if (pf.full_acres < 0.1 || pf.full_acres > 5000) {
+          failed++;
+          errors.push(`"${pf.field_name}": ${pf.full_acres} ac is outside the allowed 0.1–5000 acre range; not imported.`);
+          setUploadProgress((prev) => ({ ...prev, current: prev.current + 1 }));
+          continue;
+        }
+
         const fieldPayload = {
           customer_id: pf.customer_id,
           field_name: pf.field_name,
@@ -355,22 +382,31 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           failed++;
           errors.push(`"${pf.field_name}": ${saveError.message}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
-          // Save geometry — save_field_geometry RETURNS void so we use
-          // .throwOnError() (the regex coverage check doesn't count this
-          // as a capture, and Supabase converts the error to a throw).
+          // Persist the boundary via the server-authoritative acreage RPC — it measures the
+          // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
+          // legacy boundary/centroid in sync, and sets measured_acres (the billable default).
+          let boundaryOk = false;
           try {
-            await supabase.rpc('save_field_geometry', {
+            const { data: bData, error: bErr } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
-              p_centroid_geojson: JSON.stringify(pf.centroid_geojson),
-              p_boundary_geojson: JSON.stringify(pf.boundary_geojson),
+              p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
+              p_performed_by: profile!.id,
               p_idempotency_key: crypto.randomUUID(),
-            }).throwOnError();
+            });
+            if (bErr) throw bErr;
+            assertRpcResult(bData, 'set_field_boundary');
+            boundaryOk = true;
           } catch (geoError: unknown) {
-            // Field was created but geometry failed — count as partial success
+            // Acreage was pre-validated above, so set_field_boundary rejecting here is a rare
+            // residual (degenerate geometry / a DB error). The field exists with an in-band
+            // client total_acres; count it as failed (an admin can remove it — a sales_rep
+            // delete is RLS-blocked). A fully-atomic create_field_with_boundary RPC is the
+            // documented follow-up that would also avoid this residual.
             const msg = geoError instanceof Error ? geoError.message : String(geoError);
-            errors.push(`"${pf.field_name}": Field created but boundary save failed — ${msg}`);
+            failed++;
+            errors.push(`"${pf.field_name}": Field created but boundary measurement failed — ${msg}`);
           }
-          success++;
+          if (boundaryOk) success++;
         }
       } catch (err: unknown) {
         failed++;
@@ -480,7 +516,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               <h4 className="text-sm font-medium text-nav-dark mb-2">How to Import Fields</h4>
               <ol className="text-xs text-secondary space-y-1 list-decimal list-inside">
                 <li>Export field boundaries from ChemMan, FieldView, or AgFiniti</li>
-                <li>For shapefiles: select ALL files (.shp, .dbf, .shx, .prj) at once</li>
+                <li>Easiest: a single <strong>.zip</strong> shapefile (John Deere Operations Center / Climate FieldView export)</li>
+                <li>Or loose shapefile parts: select ALL files (.shp, .dbf, .shx, .prj) at once</li>
                 <li>For GeoJSON or KML: select the single file</li>
                 <li>Preview on map, map columns, assign customer, and import</li>
               </ol>
@@ -507,13 +544,13 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                 Drop files here or click to browse
               </p>
               <p className="text-xs text-secondary mt-1">
-                .shp, .dbf, .prj, .geojson, .json, .kml — Max 25MB
+                .zip, .shp, .dbf, .prj, .geojson, .json, .kml — Max 25MB
               </p>
               <input
                 id="field-import-input"
                 type="file"
                 multiple
-                accept=".shp,.dbf,.shx,.prj,.geojson,.json,.kml"
+                accept=".zip,.shp,.dbf,.shx,.prj,.geojson,.json,.kml"
                 onChange={handleInputChange}
                 className="hidden"
               />
@@ -681,7 +718,9 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                     <div key={pf.index} className="text-xs bg-white p-2 rounded border border-gray-100">
                       <p className="font-medium text-nav-dark">{pf.field_name}</p>
                       <p className="text-gray-500">
-                        {pf.calculated_acres} acres
+                        {/* full measured acres = what set_field_boundary saves + bills */}
+                        {pf.full_acres} acres
+                        {pf.full_acres !== pf.calculated_acres && ` (multi-part — ${pf.calculated_acres} ac in the largest piece)`}
                         {pf.county && ` • ${pf.county}`}
                         {pf.crop_type && ` • ${pf.crop_type}`}
                       </p>
