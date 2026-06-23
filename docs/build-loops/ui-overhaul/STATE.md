@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul` · Started: 2026-06-23 · Mode: hold-for-review (NO d
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (committed, screenshot-proven) · `[!]` Needs Mason.
 
 ## Current focus
-> Phase 1 Build A — Operations Command Center, autonomous loop running. DONE: To-Ship core (By Product/By Customer) + TopBar search + dashboard shortcut + remember-last-view + Low Stock section. NEXT streams: today/upcoming deliveries, inbound POs, delivery remainders, expiring holds; then By-Date grouping; then Phase 0 visual refresh. All behind auth wall → Mason's login smoke for visuals. Branch only, nothing deployed.
+> ⏸️ LOOP PAUSED at a clean milestone (see Morning summary at bottom). Build A read-only command center = 4 sections DONE (To-Ship, Low Stock, Deliveries, Inbound) + TopBar search + dashboard shortcut + remember-last-view. Next = whole-app visual refresh (PAUSE for Mason's direction) + Build B act-in-place (review-gated). All on feat/ui-overhaul, nothing deployed. Awaiting Mason's review.
 
 ---
 
@@ -25,9 +25,9 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [x] Visible TopBar Search button (⌘K) + Dashboard "To-Ship" quick-action → /to-ship
 - [x] Deliveries stream (open scheduled/in-progress; overdue + unassigned flags; links to /deliveries/:id)
 - [x] Inbound POs stream (open POs by arrival; ordered/received/remaining per line; overdue-arrival flag) — live 10 POs / 18 lines
-- [ ] Delivery remainders stream (age + tier)
+- [defer] Delivery remainders stream — dedicated `/delivery-remainders` page already covers this; add a light hub summary + link later if wanted (low value, skipped to avoid duplication)
 - [x] Low-stock / inventory-pressure stream (To-Ship | Low stock section switcher; net vs reorder vs owed; "Reorder"/"Low" badges) — reuses get_inventory_position already fetched
-- [ ] Expiring holds stream
+- [skip] Expiring holds stream — SKIPPED: 9 active holds but 0 carry an `expires_at`, so the section would always render empty. Revisit if holds start getting expiry dates.
 - [!] Authenticated visual proof = Mason's in-app login smoke (compile + 2123 tests + live data $541k/23 orders proven; preview boots clean but app is behind auth wall)
 ### Build B — act-in-place (REVIEW-GATED, human-tested, zero migration)
 - [!] Schedule delivery from owed list (`create_delivery_with_items`) — reviewed build
@@ -70,6 +70,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet)_
 
 ## Commit log (newest first)
+- Loop paused at milestone: skipped empty Expiring-holds (no expiry dates) + deferred redundant remainders; wrote Morning Summary. Autonomous-loop iteration 5 (stop).
 - Inbound POs section added to command center (4th tab): open POs by arrival, ordered/received/remaining, overdue flag. Live 10 POs/18 lines/~14.7k units. lint+typecheck+build+2123 tests green. Autonomous-loop iteration 4.
 - Deliveries section added to command center (3rd tab): open deliveries, overdue/unassigned flags. Live data 11 open/7 overdue/7 unassigned. lint+typecheck+build+2123 tests green. Autonomous-loop iteration 3.
 - Command center becomes multi-section: added Low Stock / reorder-pressure section (section switcher To-Ship | Low stock). Reuses inventory position; zero new query. lint+typecheck+build+2123 tests green. Autonomous-loop iteration 2.
@@ -77,5 +78,23 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - Discoverability: visible TopBar Search button (opens ⌘K palette) + Dashboard To-Ship quick-action. lint+typecheck+build+2123 tests green.
 - To-Ship command-center page (Build A core): By Product / By Customer, shortfall vs inbound, $ to ship, aging, search. Read-only, zero DB. lint+typecheck+build+2123 tests green; live data confirmed.
 
-## Morning summary
-- _(written when the loop pauses)_
+## Morning summary — loop paused 2026-06-23 at a clean milestone (NOT stuck)
+
+**Built tonight on `feat/ui-overhaul` (7 commits, NOTHING deployed, NOTHING on main):**
+- **Operations Command Center** at `/to-ship` — one screen, 4 sections via a top switcher:
+  1. **To-Ship** — what you owe customers, By Product / By Customer; owed vs free stock vs inbound-PO; Ready-to-ship vs Short; $ to ship; line aging; product/customer search + Short-only filter.
+  2. **Low Stock** — reorder pressure (free vs reorder point vs open demand).
+  3. **Deliveries** — open deliveries, overdue + unassigned flagged.
+  4. **Inbound** — open POs by arrival, ordered/received/remaining.
+- Visible **Search** box in the top bar (opens the ⌘K palette) + a **To-Ship** shortcut on the home dashboard.
+- Remembers your last section/view/filter between visits.
+
+**Proof:** every commit passed lint + typecheck + build + **2123 tests**; live data confirms real content ($541k to ship across 23 orders/58 products, 11 open deliveries, 10 inbound POs). The one gap: the authenticated screen sits behind your login, so the final "does it look right" check is yours.
+
+**How to review:** ask me to **push the branch** (a non-prod preview — safe, separate URL, nothing touches croprxsolutions.app) so you can log in and click through the real thing. Or I can walk you through running it locally.
+
+**Paused here on purpose** — the next planned work is the whole-app **visual refresh** (restyles shared components across all 80 pages). That's a "look first / approve the direction" decision, not a build-blind one. Also still waiting on you: the **act-in-place buttons** (Schedule delivery / Reorder / Pick list) — they create real records, so they're built with review, never overnight.
+
+**Skipped / deferred (low value, on purpose):** Expiring-holds section (no holds have expiry dates → always empty); delivery-remainders hub section (dedicated page already exists); By-Date grouping (minor polish).
+
+**Your move when back:** review the 4-section command center, then tell me to (a) push the branch so you can preview it, (b) wire the action buttons (reviewed build), (c) start the visual refresh, or (d) ship it to production once you're happy.
