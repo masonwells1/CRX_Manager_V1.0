@@ -333,7 +333,22 @@ BEGIN
         WHERE arf.application_record_id = ar.id),
       (SELECT f2.field_name FROM fields f2 WHERE f2.id = ar.field_id)
     ) AS field_names,
-    ar.invoice_id,
+    -- Invoiced status. application_records.invoice_id is only set for source_type='job'
+    -- (transfer_job_to_invoice); blend-sourced records link via invoices.blend_ticket_id
+    -- (create_invoice_from_blend_ticket never stamps ar.invoice_id), so a billed blend ticket
+    -- would otherwise read as not-invoiced. Fall back to the most recent ACTIVE blend invoice
+    -- so the compliance trace reflects real billing (Codex P2).
+    COALESCE(
+      ar.invoice_id,
+      CASE WHEN ar.source_type = 'blend_ticket' THEN (
+        SELECT i.id FROM invoices i
+        WHERE i.blend_ticket_id = ar.source_id
+          AND i.status NOT IN ('voided', 'cancelled')
+          AND i.deleted_at IS NULL
+        ORDER BY i.created_at DESC
+        LIMIT 1
+      ) END
+    ) AS invoice_id,
     arl.source_receiving_record_id
   FROM application_record_lots arl
   JOIN application_records ar ON ar.id = arl.application_record_id
