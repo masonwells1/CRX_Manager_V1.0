@@ -17,14 +17,23 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [ ] Polish `Sidebar`, `TopBar`, `AppLayout` shell
 - [ ] Proof: before/after screenshots — Dashboard, Orders, OrderDetail
 
-## Phase 1 — 🚩 Search + To-Ship command center
-- [ ] Visible `Search…` button in `TopBar` (⌘K) wired to CommandPalette
-- [ ] Product hit in CommandPalette links to `/to-ship?product={id}`
-- [ ] New `ToShip.tsx` page + route `/to-ship` (admin+sales_rep)
-- [ ] By-Product tab (frontend query; qty remaining + on-hand vs prebooked)
-- [ ] By-Customer tab (to-ship value + products owed)
-- [ ] Nav entry + dashboard card → To-Ship
-- [ ] Proof: both tabs screenshotted; remaining-qty cross-checked vs OrderDetail
+## Phase 1 — 🚩 Operations Command Center (route `/ops`)
+### Build A — read-only board (autonomous, zero DB)
+- [ ] New hub page + route + nav entry + dashboard card + visible TopBar Search
+- [ ] To-Ship stream: By Product / By Customer / By Date, owed vs free vs inbound-PO, Ready-vs-Blocked, $ to ship, aging
+- [ ] Today/▷ deliveries stream
+- [ ] Inbound POs stream (ordered − received, by arrival)
+- [ ] Delivery remainders stream (age + tier)
+- [ ] Low-stock / inventory-pressure stream (% owed; reorder triggers)
+- [ ] Expiring holds stream
+- [ ] Findability: product/customer search + filter chips + group/sort + remember-last-view
+- [ ] Proof: each stream screenshotted; remaining-qty cross-checked vs OrderDetail
+### Build B — act-in-place (REVIEW-GATED, human-tested, zero migration)
+- [!] Schedule delivery from owed list (`create_delivery_with_items`) — reviewed build
+- [!] Reorder / create PO from short product — reviewed build
+- [!] Print day pick list (`orderPickListPdf`) — reviewed build
+- [!] Assign driver / priority / note (`reassign_delivery` + `team_notes`) — reviewed build
+- [!] Bulk-select to act — reviewed build
 
 ## Phase 2 — Navigation backbone
 - [ ] New `src/lib/routesConfig.ts` (single source of truth)

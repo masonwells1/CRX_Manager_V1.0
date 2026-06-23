@@ -59,6 +59,20 @@ Mason chose **"hold everything for review"** and a full visual refresh. Therefor
    session collisions have bitten this repo before.)
 8. **Small commits.** One task ≈ one commit, clear message. Update `STATE.md` in the same commit.
 
+### Write-actions addendum (2026-06-23 scope change — Mason chose "actions are the point" + "ops command center")
+The flagship now includes buttons that **create real records** (a delivery via `create_delivery_with_items`,
+a PO via the existing New-PO flow, a driver assignment via `reassign_delivery`, a pick-list PDF). These
+reuse EXISTING RPCs/flows — **still zero migrations** — but they MUTATE the live database. Therefore:
+- **Read-only tasks** (the board, reporting, search, filters) follow the normal loop: build → screenshot →
+  green checks → commit. These can run autonomously.
+- **Write-action tasks are review-gated and human-tested — NOT done blind.** The loop may write the *code*
+  and run lint/typecheck/build/test + the review subagents (`rls-security-reviewer`, `compliance-reviewer`),
+  but it must **NOT auto-click the action in the live preview** (that would create a real delivery/PO in prod).
+  Prove these either against clearly-prefixed `[E2E]` test data per the E2E protocol, or leave them for
+  Mason to exercise during review. Every write path must carry idempotency (`useIdempotencyKey`) +
+  `assertRpcResult`/`checkMutationResult` + actor binding per CLAUDE.md. When a write-action task is the
+  next item, mark it `[!]` for a reviewed build rather than silently shipping an untested mutation.
+
 ---
 
 ## Visual Language (the refresh direction)
@@ -102,20 +116,38 @@ Restyle the shared library so the refresh lands everywhere at once.
 - `src/components/layout/`: `Sidebar`, `TopBar`, `AppLayout` shell polish.
 - Proof: before/after screenshots of Dashboard, one list page (Orders), one detail page (OrderDetail).
 
-### Phase 1 — 🚩 Flagship: visible Search + "To-Ship" command center
-- `TopBar.tsx`: add a visible **Search…** button with ⌘K hint, wired to the existing `CommandPalette`.
-- `CommandPalette.tsx`: ensure product/customer/order search is prominent; a product hit links to the
-  new To-Ship view filtered to that product.
-- **New page `ToShip.tsx`** (route `/to-ship`, admin+sales_rep), two tabs:
-  - **By Product:** search/type a product → every open order line owing it, grouped by product, with
-    customer, order #, qty remaining, and on-hand vs prebooked from inventory. Answers "how much more of
-    Product X do I owe, and to whom" on one screen.
-  - **By Customer:** each customer with open fulfillment → total to-ship value + the products owed.
-  - Data: **frontend query only** — `order_items` where `quantity_remaining > 0` joined to `orders`
-    (status in confirmed/partially_fulfilled), `customers`, `products`, and `inventory`. No migration.
-    The existing `get_customer_delivery_remainders` RPC is a secondary source; do not change it.
-- Add a "To-Ship" entry to nav + a dashboard card linking into it.
-- Proof: screenshots of both tabs with real data; verify a known order's remaining qty matches OrderDetail.
+### Phase 1 — 🚩 Flagship: Operations Command Center (route `/ops` or `/command-center`)
+Mason's expanded ask (2026-06-23): better **reporting** + **finding** + **acting in place**, grown into a
+unified **operations hub**. Built in two layers so the safe read-only half can ship first and the
+write-actions get review.
+
+**Build A — read-only board (autonomous loop, frontend-query only, zero DB):**
+- New page (admin+sales_rep), unified streams as filterable sections/cards:
+  1. **To-Ship** (the core): demand from `order_items.quantity_remaining > 0` on confirmed/partially_fulfilled
+     orders, grouped By Product / By Customer / By Delivery date. Per product: owed vs **free stock** vs
+     **inbound-on-PO + arrival date**; **Ready-to-ship vs Blocked** split; **$ to ship**; **aging** of oldest
+     waiting lines.
+  2. **Today/▷ deliveries** — `deliveries` scheduled today/this week + status.
+  3. **Inbound POs** — open `purchase_order_items` (ordered − received) grouped by expected arrival.
+  4. **Delivery remainders** — `delivery_remainders` by age + tier.
+  5. **Low stock / inventory pressure** — `% of stock already owed` per product (prebooked vs available),
+     and reorder triggers (free < open demand AND no covering PO).
+  6. **Expiring holds** — active `inventory_holds` with expiry countdown + linked quote status.
+- **Findability:** visible product/customer search (lands on demand); filter chips (Short only · This week ·
+  My customers · Ready now · Tier); group + sort; remember-last-view (localStorage). Also add the visible
+  **Search…** button to `TopBar` + a dashboard card linking into the hub.
+- Data: **frontend queries only** against existing columns/RPCs (`get_inventory_position`,
+  `get_customer_delivery_remainders` as read sources — do not change them). No migration. If aggregation
+  perf is poor, a read-only RPC is a SEPARATE gated item — flag it, don't write SQL in the loop.
+- Proof: screenshots of each stream with real data; cross-check a known order's remaining qty vs OrderDetail.
+
+**Build B — act-in-place (REVIEW-GATED, human-tested, still zero migration — see Write-actions addendum):**
+- **Schedule delivery** from a customer's owed list → pre-fill `create_delivery_with_items` with remaining items.
+- **Reorder / create PO** from a short product → existing New-PO flow, pre-filled qty (demand − free).
+- **Print pick list** for the day → existing `orderPickListPdf` (extend to a batch/day variant if needed).
+- **Assign driver / set priority / add note** → `reassign_delivery` + `team_notes`.
+- **Bulk-select rows to act.** Each path: idempotency + `assertRpcResult`/`checkMutationResult` + actor bind.
+- Built with the review subagents; tested with `[E2E]` data or by Mason — never auto-fired against live.
 
 ### Phase 2 — Navigation backbone (kills sidebar/search drift)
 - **New `src/lib/routesConfig.ts`** — single source of truth `{ path, label, icon, roles, palette,
