@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-23 — Field mapping + per-acre billing (Track A: A1–A5 built, parked for the owner's live-apply gate)
+
+Built the field-mapping → per-acre-billing foundation on branch `feat/field-acre-billing` (autonomous Codex-gated build loop; proven on a local PostGIS 3.3 scaffold — **NOTHING applied to prod**). The keystone fix: a redraw can no longer silently change a billed acre.
+
+- **A1 (migration `20260623120000`, parked):** two-acre model on `fields` — `measured_acres`/`override_acres` numeric, `boundary_geom geometry(MultiPolygon,4326)`, GENERATED `acres_source`; GIST index; bill-preserving backfill (`override_acres = total_acres` for existing boundaried fields → current bills UNCHANGED; clearing the override adopts the server-measured acres).
+- **A2 (migration `20260623130000`, parked):** server-authoritative acreage RPCs — `set_field_boundary` (the only writer of `measured_acres`: robust PostGIS pipeline, geodesic measure, 0.1–5000 band, strict-actor, idempotency, `field_polygons` sync) + `set_field_override_acres` + `find_overlapping_fields`, plus a `fields_acre_authority` trigger so only the RPCs may write the acre columns. 4 Codex rounds → SHIP.
+- **A3 (types):** typed Supabase function map for the 3 RPCs + the new `fields` columns.
+- **A4 (UI):** `FieldSetup` — removed the redraw clobber (#1 defect), "Billable Acres (override)" input + Measured/Will-bill display + 0-reject, repointed the draw save to the new RPCs. New tested helper `src/lib/fieldGeometry.ts`. 2 save-flow edges documented for the live-UI proof.
+- **A5 (import):** `.zip` shapefile importer (`parseShapefileZip` — the John Deere Ops Center / Climate FieldView export format) + multi-part acreage preserved (the full geometry is measured by `set_field_boundary`, not just the largest ring) + repointed the import save to the server RPC. 5 Codex rounds → SHIP.
+
+Apply-gate smoke registered: `scripts/smoke/smoke-set_field_boundary.sql`. Migrations parked (512 on disk; 2 not yet applied). Track B (billing-engine hardening + bill tie-in) stays separate. The owner runs the live-apply gate (apply → regen registry → smoke + sweeps → merge → deploy → in-app proof with real export files) per the build-loop handoff.
+
 ## 2026-06-21 — New hard guard: `require-check-mutation-result` ESLint rule
 
 Closed the second deferred bug-hunt item (a CI guard for CLAUDE.md Architecture Rule #3) as a robust **AST ESLint local rule** instead of the fragile proximity-scan test it was originally scoped as. New `eslint-local-rules/rules/require-check-mutation-result.cjs` flags a fire-and-forget supabase `.update()`/`.delete()` whose result is discarded without `checkMutationResult()` — the gap the existing `handle-supabase-error` (destructured-error) and `require-assert-rpc-result` (rpc) rules leave open. Conservative by design (only clearly-discarded results; defers the destructured-error shape to `handle-supabase-error`) → **0 false positives across `src/`**; RuleTester cases prove it catches the violation. Enabled `'error'` on `src/**/*.{ts,tsx}`, `'off'` for test/mock files. No application code changed (codebase already compliant). Registered in `eslint-local-rules/index.cjs`; tests in `src/lib/eslintLocalRules.test.ts`.
