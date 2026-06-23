@@ -1320,6 +1320,12 @@ export interface Field {
   county: string | null;
   state: string | null;
   total_acres: number | null;
+  // Two-acre model (migration 20260623120000): measured = server-computed from the
+  // boundary; override = human-typed billable acres (survives a redraw). Billable acres =
+  // override_acres ?? measured_acres ?? total_acres. acres_source is GENERATED (never written).
+  measured_acres?: number | null;
+  override_acres?: number | null;
+  acres_source?: 'measured' | 'override' | 'legacy';
   fsa_farm_number: string | null;
   fsa_tract_number: string | null;
   fsa_field_number: string | null;
