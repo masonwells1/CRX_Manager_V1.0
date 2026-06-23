@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul` · Started: 2026-06-23 · Mode: hold-for-review (NO d
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (committed, screenshot-proven) · `[!]` Needs Mason.
 
 ## Current focus
-> Phase 1 Build A — Operations Command Center. To-Ship core stream LANDED (page + route + nav, By Product/By Customer, owed-vs-free-vs-inbound, Ready/Short, $ to ship, aging, search + Short-only). Next: dashboard card + TopBar search, then more streams (deliveries / inbound POs / remainders / low-stock / holds). Phase 0 design-system refresh still pending.
+> Phase 1 Build A — Operations Command Center, autonomous loop running. DONE: To-Ship core (By Product/By Customer) + TopBar search + dashboard shortcut + remember-last-view + Low Stock section. NEXT streams: today/upcoming deliveries, inbound POs, delivery remainders, expiring holds; then By-Date grouping; then Phase 0 visual refresh. All behind auth wall → Mason's login smoke for visuals. Branch only, nothing deployed.
 
 ---
 
@@ -26,7 +26,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [ ] Today/▷ deliveries stream
 - [ ] Inbound POs stream (ordered − received, by arrival)
 - [ ] Delivery remainders stream (age + tier)
-- [ ] Low-stock / inventory-pressure stream (% owed; reorder triggers)
+- [x] Low-stock / inventory-pressure stream (To-Ship | Low stock section switcher; net vs reorder vs owed; "Reorder"/"Low" badges) — reuses get_inventory_position already fetched
 - [ ] Expiring holds stream
 - [!] Authenticated visual proof = Mason's in-app login smoke (compile + 2123 tests + live data $541k/23 orders proven; preview boots clean but app is behind auth wall)
 ### Build B — act-in-place (REVIEW-GATED, human-tested, zero migration)
@@ -70,6 +70,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet)_
 
 ## Commit log (newest first)
+- Command center becomes multi-section: added Low Stock / reorder-pressure section (section switcher To-Ship | Low stock). Reuses inventory position; zero new query. lint+typecheck+build+2123 tests green. Autonomous-loop iteration 2.
 - To-Ship remembers last view + Short-only across visits (localStorage). Autonomous-loop iteration 1. lint+typecheck+build+2123 tests green.
 - Discoverability: visible TopBar Search button (opens ⌘K palette) + Dashboard To-Ship quick-action. lint+typecheck+build+2123 tests green.
 - To-Ship command-center page (Build A core): By Product / By Customer, shortfall vs inbound, $ to ship, aging, search. Read-only, zero DB. lint+typecheck+build+2123 tests green; live data confirmed.

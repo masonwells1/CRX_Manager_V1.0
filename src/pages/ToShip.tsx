@@ -38,9 +38,12 @@ interface OpenLine {
 }
 
 interface Supply {
+  product_name: string;
   available: number;
   prebooked: number;
   on_order: number;
+  net: number;
+  reorder: number;
 }
 
 type OrderRow = {
@@ -74,6 +77,7 @@ export default function ToShip() {
   const [view, setView] = useState<'product' | 'customer'>(() => (localStorage.getItem('toship.view') === 'customer' ? 'customer' : 'product'));
   const [search, setSearch] = useState('');
   const [shortOnly, setShortOnly] = useState(() => localStorage.getItem('toship.shortOnly') === '1');
+  const [section, setSection] = useState<'to-ship' | 'low-stock'>(() => (localStorage.getItem('toship.section') === 'low-stock' ? 'low-stock' : 'to-ship'));
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -125,11 +129,16 @@ export default function ToShip() {
           prev.available += r.quantity_available;
           prev.prebooked += r.quantity_prebooked;
           prev.on_order += r.quantity_on_order;
+          prev.net += r.net_position;
+          prev.reorder += r.reorder_point;
         } else {
           supplyMap.set(r.product_id, {
+            product_name: r.product_name,
             available: r.quantity_available,
             prebooked: r.quantity_prebooked,
             on_order: r.quantity_on_order,
+            net: r.net_position,
+            reorder: r.reorder_point,
           });
         }
       }
@@ -168,6 +177,7 @@ export default function ToShip() {
   // Remember the user's last view + short-only filter across visits.
   useEffect(() => { localStorage.setItem('toship.view', view); }, [view]);
   useEffect(() => { localStorage.setItem('toship.shortOnly', shortOnly ? '1' : '0'); }, [shortOnly]);
+  useEffect(() => { localStorage.setItem('toship.section', section); }, [section]);
 
   // Shortfall classification for a product's owed quantity vs supply.
   const classify = useCallback(
@@ -233,6 +243,18 @@ export default function ToShip() {
   );
   const visibleCustomers = customers.filter((c) => !q || c.customer_name.toLowerCase().includes(q));
 
+  // Low-stock / inventory pressure: products at/below reorder point OR where open
+  // demand exceeds free stock. Reuses the inventory position already fetched.
+  const lowStock = useMemo(() => {
+    const owedByProduct = new Map<string, number>();
+    for (const l of lines) owedByProduct.set(l.product_id, (owedByProduct.get(l.product_id) || 0) + l.quantity_remaining);
+    return [...supply.entries()]
+      .map(([pid, s]) => ({ product_id: pid, ...s, owed: owedByProduct.get(pid) || 0 }))
+      .filter((p) => p.net <= p.reorder || (p.owed > 0 && p.net < p.owed))
+      .sort((a, b) => (a.net - Math.max(a.reorder, a.owed)) - (b.net - Math.max(b.reorder, b.owed)));
+  }, [supply, lines]);
+  const visibleLowStock = lowStock.filter((p) => !q || p.product_name.toLowerCase().includes(q));
+
   const statusBadge = (status: string, shortBy: number) => {
     if (status === 'ready') return <Badge variant="success">Ready to ship</Badge>;
     if (status === 'po') return <Badge variant="warning">Short now · PO inbound</Badge>;
@@ -254,6 +276,24 @@ export default function ToShip() {
         <p className="text-sm text-secondary mt-0.5">What you still owe customers — search a product to see who's waiting.</p>
       </div>
 
+      {/* Section switcher */}
+      <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+        <button
+          onClick={() => setSection('to-ship')}
+          className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${section === 'to-ship' ? 'bg-crx-green text-white' : 'bg-white text-secondary hover:bg-gray-50'}`}
+        >
+          <Truck className="w-4 h-4" /> To-Ship
+        </button>
+        <button
+          onClick={() => setSection('low-stock')}
+          className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 ${section === 'low-stock' ? 'bg-crx-green text-white' : 'bg-white text-secondary hover:bg-gray-50'}`}
+        >
+          <AlertTriangle className="w-4 h-4" /> Low stock
+        </button>
+      </div>
+
+      {section === 'to-ship' && (
+        <>
       {/* Stat strip */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Card>
@@ -419,6 +459,61 @@ export default function ToShip() {
             <Card><p className="text-center text-secondary py-8 text-sm">No customers match your search.</p></Card>
           )}
         </div>
+      )}
+        </>
+      )}
+
+      {section === 'low-stock' && (
+        loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-4 border-crx-green border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <>
+            <div className="relative max-w-md">
+              <Search className="w-4 h-4 text-secondary absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search a product…"
+                aria-label="Search low stock"
+                className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+            </div>
+            <p className="text-sm text-secondary">Products at or below reorder point, or where open orders exceed free stock.</p>
+            <Card padding={false}>
+              <div className="overflow-x-auto p-4">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-secondary border-b border-gray-100">
+                      <th className="font-normal py-1.5">Product</th>
+                      <th className="font-normal text-right">Free (net)</th>
+                      <th className="font-normal text-right">On order</th>
+                      <th className="font-normal text-right">Reorder pt</th>
+                      <th className="font-normal text-right">Owed</th>
+                      <th className="font-normal text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleLowStock.map((p) => (
+                      <tr key={p.product_id} className="border-b border-gray-50 last:border-0">
+                        <td className="py-2">{p.product_name}</td>
+                        <td className={`text-right font-medium ${p.net < 0 ? 'text-red-600' : ''}`}>{fmtUnits(p.net)}</td>
+                        <td className="text-right">{p.on_order > 0 ? fmtUnits(p.on_order) : '—'}</td>
+                        <td className="text-right text-secondary">{p.reorder > 0 ? fmtUnits(p.reorder) : '—'}</td>
+                        <td className="text-right">{p.owed > 0 ? fmtUnits(p.owed) : '—'}</td>
+                        <td className="text-right">{p.owed > p.net ? <Badge variant="error">Reorder</Badge> : <Badge variant="warning">Low</Badge>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {visibleLowStock.length === 0 && (
+                  <p className="text-center text-secondary py-8 text-sm">No low-stock products. Inventory is keeping up with demand.</p>
+                )}
+              </div>
+            </Card>
+          </>
+        )
       )}
     </div>
   );
