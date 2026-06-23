@@ -1,4 +1,4 @@
-# Pages & Routes Reference (68 pages, 70 routes)
+# Pages & Routes Reference (69 pages, 71 routes)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -59,6 +59,7 @@
 | `/brand-vs-generic` | BrandVsGeneric | Ingredient mapping: branded vs generic |
 | `/crop-programs` | CropPrograms | Seasonal crop program management |
 | `/compliance` | Compliance | Applicator license tracking, RUP product list, RUP Sales Register (auto-generated from invoices, filterable, CSV export) |
+| `/lot-trace` | LotTrace | **B1 Lot Capture & Trace** — recall/compliance lookup: enter a lot number → every application that used it (product, field(s), date, customer, applicator, record #, invoice, source). Admin/sales. UI ships in this branch; the `get_lot_application_trace` RPC is pending the B1 migration apply. |
 | `/rebates` | Rebates | Manufacturer rebate programs and claim management |
 | `/team-board` | TeamBoard | Team communication hub: notes/todos/announcements with entity linking (delivery, order, customer, job, PO, quote), today's deliveries bulletin (role-aware), yesterday's recap, photo attachments, comments, activity log, search/filter, real-time. 8 sub-components in `src/components/team/` |
 | `/notifications` | Notifications | User notification center |

@@ -52,6 +52,7 @@
 ## Application Records
 - `application_records` - Single source of truth for "what was applied, where, when, by whom." Fed from completed jobs AND approved blend tickets. JSONB for products and weather.
 - `application_record_fields` - Per-field rows linked to an application_record (application_record_id, field_id, acres, sort_order) — normalizes the fields covered by a single application event
+- ⏳ `application_record_lots` *(B1 — pending migration `20260622170000` apply; NOT in the live table count above until applied)* — one row per (application record, product, lot); **multiple lots per product allowed**. Cols: `application_record_id`→application_records (ON DELETE CASCADE), `product_id`→products, `lot_number` (NOT NULL, non-blank CHECK), `source_receiving_record_id`→receiving_records (ON DELETE SET NULL; set when chosen from a received lot), `quantity_from_lot numeric` (non-negative CHECK; informational, no inventory math), `unit`, `notes`, `created_at`, `created_by`. **No `updated_at`** (rows are replaced, not edited). UNIQUE (application_record_id, product_id, lower(btrim(lot_number))). RLS: SELECT admin/sales or applicator-on-own-record; **writes are RPC-only** (no client write policy — direct PostgREST writes are RLS-denied). Source of truth for the lot recall/compliance trace.
 
 ## OCR / Blend Tickets
 - `blend_tickets` - OCR ticket records (ticket_number, status, review_status, ocr_confidence_score, raw_ocr_text, job_id, application_service_id)
