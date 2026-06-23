@@ -50,6 +50,24 @@ export function isAcreInBand(acres: number | null | undefined): boolean {
 }
 
 /**
+ * Parse an acreage from an imported attribute (string from GeoJSON/KML, or a number
+ * from a shapefile DBF) into a number safe to bill on. Strips thousands separators
+ * (`"1,234.5"` → 1234.5 — `parseFloat` alone STOPS at the comma and returns 1, silently
+ * mis-billing) and whitespace, then accepts the result ONLY if the ENTIRE cleaned string
+ * is a finite number. Returns null for blank, non-numeric, or partially-numeric input
+ * (e.g. `"40 ac"`), so junk never becomes a billable override — the field falls back to
+ * the measured map acres instead.
+ */
+export function parseAcreInput(raw: string | number | null | undefined): number | null {
+  if (raw == null) return null;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  const cleaned = raw.trim().replace(/,/g, '');
+  if (cleaned === '' || !/^[+-]?(\d+(\.\d+)?|\.\d+)$/.test(cleaned)) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * True when an import attribute NAME denotes ACRES, so its value is safe to drive the
  * billable override. EXCLUDES ambiguous geometry-area columns — `area`, `shape_area`,
  * `st_area` — which GIS exports record in the projection's square meters/feet, NOT acres

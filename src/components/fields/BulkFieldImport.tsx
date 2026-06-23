@@ -29,6 +29,7 @@ import {
   ACRE_DIVERGENCE_THRESHOLD_PCT,
   isAcreInBand,
   isAcreDenominatedColumn,
+  parseAcreInput,
   ACRE_BAND_MIN,
   ACRE_BAND_MAX,
 } from '../../lib/fieldGeometry';
@@ -303,8 +304,9 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       }
 
       const acreAttrKey = columnMapping['total_acres'] ?? null;
-      const parsedAcres = getValue('total_acres');
-      const acresFromAttr = parsedAcres ? parseFloat(parsedAcres) : null;
+      // Strict parse (strips thousands separators; rejects "40 ac"/junk) so a formatted string
+      // like "1,234.5" can't become a 1-acre bill via parseFloat's partial parse.
+      const acresFromAttr = parseAcreInput(getValue('total_acres'));
       // The acreage the FILE reported. It drives the billable override ONLY when it comes from an
       // ACRE-denominated column — a GIS area column (area/shape_area, in square meters) must never
       // set money (a 1-ac field's shape_area ≈ 4047 would bill as 4047 ac). null → bill measured.

@@ -8,6 +8,7 @@ import {
   ACRE_DIVERGENCE_THRESHOLD_PCT,
   isAcreInBand,
   isAcreDenominatedColumn,
+  parseAcreInput,
   ACRE_BAND_MIN,
   ACRE_BAND_MAX,
 } from './fieldGeometry';
@@ -77,6 +78,26 @@ describe('isAcreInBand (the 0.1–5000 safety floor the override RPC lacks)', ()
     expect(isAcreInBand(null)).toBe(false);
     expect(isAcreInBand(undefined)).toBe(false);
   });
+});
+
+describe('parseAcreInput (no partial-parse mis-bills)', () => {
+  it('parses a plain decimal string', () => expect(parseAcreInput('40.5')).toBe(40.5));
+  it('strips a thousands separator (the Codex P2 gap — parseFloat would return 1)', () =>
+    expect(parseAcreInput('1,234.5')).toBe(1234.5));
+  it('accepts a real number unchanged', () => expect(parseAcreInput(38.5)).toBe(38.5));
+  it('rejects a partially-numeric string rather than truncating it', () => {
+    expect(parseAcreInput('40 ac')).toBeNull();
+    expect(parseAcreInput('1,234.5 acres')).toBeNull();
+  });
+  it('rejects non-numeric / blank / nullish', () => {
+    expect(parseAcreInput('abc')).toBeNull();
+    expect(parseAcreInput('')).toBeNull();
+    expect(parseAcreInput('   ')).toBeNull();
+    expect(parseAcreInput(null)).toBeNull();
+    expect(parseAcreInput(undefined)).toBeNull();
+  });
+  it('rejects a non-finite number', () => expect(parseAcreInput(Number.POSITIVE_INFINITY)).toBeNull());
+  it('handles a leading-dot decimal', () => expect(parseAcreInput('.5')).toBe(0.5));
 });
 
 describe('isAcreDenominatedColumn (acres may set money; raw GIS area may not)', () => {
