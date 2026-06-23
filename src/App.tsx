@@ -61,6 +61,7 @@ const VehicleDetail = lazy(() => import('./pages/VehicleDetail'));
 const ApplicationServices = lazy(() => import('./pages/ApplicationServices'));
 const ApplicationServiceDetail = lazy(() => import('./pages/ApplicationServiceDetail'));
 const ApplicationRecords = lazy(() => import('./pages/ApplicationRecords'));
+const LotTrace = lazy(() => import('./pages/LotTrace'));
 const ProgramTracker = lazy(() => import('./pages/ProgramTracker'));
 const Jobs = lazy(() => import('./pages/Jobs'));
 const JobDetail = lazy(() => import('./pages/JobDetail'));
@@ -210,6 +211,7 @@ const router = createBrowserRouter([
           { path: 'payment-history', element: <ProtectedRoute allowedRoles={['admin']}><PaymentHistory /></ProtectedRoute> },
           { path: 'ar-aging', element: <ProtectedRoute allowedRoles={['admin']}><ARaging /></ProtectedRoute> },
           { path: 'compliance', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Compliance /></ProtectedRoute> },
+          { path: 'lot-trace', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><LotTrace /></ProtectedRoute> },
           { path: 'rebates', element: <ProtectedRoute allowedRoles={['admin']}><Rebates /></ProtectedRoute> },
           { path: 'vehicles', element: <ProtectedRoute allowedRoles={['admin']}><Vehicles /></ProtectedRoute> },
           { path: 'vehicles/:id', element: <ProtectedRoute allowedRoles={['admin']}><VehicleDetail /></ProtectedRoute> },

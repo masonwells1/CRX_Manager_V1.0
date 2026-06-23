@@ -18,6 +18,7 @@ import { supabase, assertRpcResult } from './db';
 import type {
   ApplicationRecordLot,
   ApplicationRecordLotInput,
+  LotApplicationTraceRow,
   RecentLotForProduct,
   SetApplicationRecordLotsResult,
 } from '../types';
@@ -69,4 +70,11 @@ export async function saveRecordLots(args: SaveRecordLotsArgs): Promise<SetAppli
   const { data, error } = await supabase.rpc('set_application_record_lots' as never, args as never);
   if (error) throw error;
   return assertRpcResult<SetApplicationRecordLotsResult>(data, 'set_application_record_lots');
+}
+
+/** Recall / compliance trace: every application that used a lot (case-insensitive match). */
+export async function traceLot(lotNumber: string): Promise<LotApplicationTraceRow[]> {
+  const { data, error } = await supabase.rpc('get_lot_application_trace' as never, { p_lot_number: lotNumber } as never);
+  if (error) throw error;
+  return assertRpcResult<LotApplicationTraceRow[]>(data, 'get_lot_application_trace');
 }
