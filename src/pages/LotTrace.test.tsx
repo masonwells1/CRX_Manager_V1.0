@@ -120,4 +120,36 @@ describe('LotTrace', () => {
     expect(await screen.findByText('Beta Chem')).toBeInTheDocument();
     expect(staleSummary()).toHaveTextContent('lot-b');
   });
+
+  it('ignores a superseded out-of-order trace response (older lookup resolving last)', async () => {
+    const rowA = { ...ROW, product_name: 'Alpha Herb', lot_number: 'LOT-A' };
+    const rowB = { ...ROW, product_name: 'Beta Chem', lot_number: 'LOT-B' };
+    let resolveA: (v: Array<typeof ROW>) => void = () => {};
+    let resolveB: (v: Array<typeof ROW>) => void = () => {};
+    mockTraceLot
+      .mockReturnValueOnce(new Promise<Array<typeof ROW>>((r) => { resolveA = r; }))
+      .mockReturnValueOnce(new Promise<Array<typeof ROW>>((r) => { resolveB = r; }));
+
+    const { container } = render(<LotTrace />);
+    const form = container.querySelector('form') as HTMLFormElement;
+    const input = screen.getByLabelText('Lot number');
+
+    // Two lookups in flight at once. The button disables while loading, so drive the form
+    // directly — the handler must be robust to concurrent submits, not lean on the disabled
+    // button as a correctness guard. Search A, then B before A resolves.
+    fireEvent.change(input, { target: { value: 'lot-a' } });
+    fireEvent.submit(form);
+    fireEvent.change(input, { target: { value: 'lot-b' } });
+    fireEvent.submit(form);
+
+    // B (the newer search) resolves first and is shown.
+    resolveB([rowB]);
+    expect(await screen.findByText('Beta Chem')).toBeInTheDocument();
+
+    // A (the older search) resolves LAST; its stale response must be IGNORED — the page must
+    // keep lot B, never swap in lot A's row under lot B's label (a false trace).
+    resolveA([rowA]);
+    await waitFor(() => expect(screen.getByText('Beta Chem')).toBeInTheDocument());
+    expect(screen.queryByText('Alpha Herb')).not.toBeInTheDocument();
+  });
 });

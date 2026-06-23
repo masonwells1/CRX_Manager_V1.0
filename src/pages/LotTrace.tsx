@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useState, useRef, type FormEvent } from 'react';
 import { Search } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Badge from '../components/ui/Badge';
@@ -29,6 +29,11 @@ export default function LotTrace() {
   // A FAILED lookup must never read as "nothing found" — for a recall/compliance search that
   // false negative is dangerous. On error we surface this instead of the empty-results state.
   const [searchError, setSearchError] = useState<string | null>(null);
+  // Monotonic id for the in-flight lookup. A search claims the next id; any completion whose
+  // id is no longer current is a superseded (out-of-order) response and is ignored — otherwise
+  // a slow lookup for lot A that resolves AFTER a newer lookup for lot B would write A's rows
+  // (or error) under lot B's label, a false trace on a recall/compliance screen.
+  const reqIdRef = useRef(0);
 
   const handleSearch = async (e: FormEvent) => {
     e.preventDefault();
@@ -37,29 +42,28 @@ export default function LotTrace() {
       toast('error', 'Enter a lot number to trace');
       return;
     }
+    const reqId = ++reqIdRef.current;
     setLoading(true);
     setSearchedLot(lot);
     setSearchError(null);
-    // Drop the previous lot's results before the async lookup resolves. Without this, a
-    // re-search (when a prior search already populated results) leaves the prior lot's
-    // summary count on screen under the NEW lot's label until traceLot resolves — a wrong
-    // count on a recall/compliance page. The whole results block is hidden until this
-    // search completes (the DataTable hides its rows while loading, but its summary <p>
-    // does not, so we drop both the rows and the searched flag here).
+    // Drop the previous lot's results synchronously so the summary <p> (which the DataTable's
+    // loading state does NOT gate) can't show the prior count under the new lot while loading.
     setSearched(false);
     setRows([]);
     try {
       const result = await traceLot(lot);
+      if (reqId !== reqIdRef.current) return; // superseded by a newer search — ignore stale rows
       setRows(result);
       setSearched(true);
     } catch (err) {
+      if (reqId !== reqIdRef.current) return; // superseded by a newer search — ignore stale error
       Sentry.captureException(err, { tags: { source: 'rpc', action: 'get_lot_application_trace' } });
       const msg = sanitizeError(err);
       toast('error', msg);
       setRows([]);
       setSearchError(msg); // do NOT mark as a completed (empty) search — it failed
     } finally {
-      setLoading(false);
+      if (reqId === reqIdRef.current) setLoading(false); // only the latest search controls loading
     }
   };
 
