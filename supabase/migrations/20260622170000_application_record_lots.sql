@@ -208,6 +208,17 @@ BEGIN
     v_count := v_count + 1;
   END LOOP;
 
+  -- Audit trail: lot assignments are recall-critical and this is a replace-all edit (the DELETE
+  -- above cleared the prior rows). Record it in the activity feed so a later recall investigation
+  -- can see who changed a record's lots and when — created_by on the new rows alone misses edits
+  -- (and a clear-to-zero leaves no row at all).
+  INSERT INTO activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id, customer_id)
+  VALUES (
+    'application_record_lots_updated',
+    'Lots updated on application record ' || v_rec.record_number || ' — ' || v_count || ' lot(s)',
+    v_actor, 'application_record', p_application_record_id, v_rec.customer_id
+  );
+
   v_result := jsonb_build_object('success', true, 'count', v_count);
 
   IF p_idempotency_key IS NOT NULL THEN
