@@ -1,12 +1,12 @@
 {
   "_meta": {
     "registry_version": 2,
-    "generated_at": "2026-06-22",
+    "generated_at": "2026-06-23",
     "generated_from": "Supabase project rhyzpcqhnizqbxphqdkr — public schema introspection",
     "regenerate_with": "node scripts/regenerate-schema-registry.mjs --from-introspection <queries.json> (queries documented in the script header)",
     "purpose": "Single source of truth for hooks: generated columns, status enums, ALL parseable CHECK IN-lists, NOT NULL columns, full column lists, sequences, tables-with/without updated_at, applied-migration high water.",
     "note": "For a fresh refresh from the live DB, ask Claude Code: 'regenerate the schema-registry from Supabase' (/regen-schema-registry). skipped_constraints lists every CHECK the hooks can NOT validate — review it when touching those tables.",
-    "migrations_high_water": "20260622165336"
+    "migrations_high_water": "20260623181444"
   },
   "generated_columns": [
     {
@@ -170,6 +170,7 @@
   "tables_without_updated_at": [
     "activity_feed",
     "application_record_fields",
+    "application_record_lots",
     "ar_reminder_tracking",
     "blend_recipe_items",
     "blend_ticket_fields",
@@ -932,6 +933,18 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "application_record_lots",
+      "constraint": "application_record_lots_lot_number_not_blank",
+      "def": "CHECK ((btrim(lot_number) <> ''::text))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
+      "table": "application_record_lots",
+      "constraint": "application_record_lots_quantity_non_negative",
+      "def": "CHECK (((quantity_from_lot IS NULL) OR (quantity_from_lot >= (0)::numeric)))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "applicator_licenses",
       "constraint": "applicator_licenses_holder_check",
       "def": "CHECK (((customer_id IS NOT NULL) <> (profile_id IS NOT NULL)))",
@@ -1004,6 +1017,12 @@
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
+      "table": "inventory_holds",
+      "constraint": "inventory_holds_quantity_check",
+      "def": "CHECK ((quantity >= (0)::numeric))",
+      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
+    },
+    {
       "table": "inventory",
       "constraint": "chk_inventory_qty_on_order",
       "def": "CHECK ((quantity_on_order >= (0)::numeric))",
@@ -1013,12 +1032,6 @@
       "table": "inventory",
       "constraint": "chk_inventory_qty_prebooked",
       "def": "CHECK ((quantity_prebooked >= (0)::numeric))",
-      "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
-    },
-    {
-      "table": "inventory_holds",
-      "constraint": "inventory_holds_quantity_check",
-      "def": "CHECK ((quantity >= (0)::numeric))",
       "reason": "range/comparison — not an IN-list; hooks do NOT validate this constraint"
     },
     {
@@ -1233,6 +1246,17 @@
       "with_default": [
         "id",
         "sort_order",
+        "created_at"
+      ]
+    },
+    "application_record_lots": {
+      "no_default": [
+        "application_record_id",
+        "product_id",
+        "lot_number"
+      ],
+      "with_default": [
+        "id",
         "created_at"
       ]
     },
@@ -2468,6 +2492,18 @@
       "acres",
       "sort_order",
       "created_at"
+    ],
+    "application_record_lots": [
+      "id",
+      "application_record_id",
+      "product_id",
+      "lot_number",
+      "source_receiving_record_id",
+      "quantity_from_lot",
+      "unit",
+      "notes",
+      "created_at",
+      "created_by"
     ],
     "application_records": [
       "id",
