@@ -19,11 +19,11 @@ separately by scripts/regenerate-agents-md.mjs and does not parse this file.
 
 ## Snapshot (2026-06-21)
 
-**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 71 pages · 97 tables (+2 views) · 226 callable RPCs (+52 trigger fns) · **511 migrations** on disk · 6 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
+**Live counts — verify with `node scripts/check-doc-drift.mjs`, don't trust them blind:** 71 pages · 98 tables (+2 views) · 229 callable RPCs (+52 trigger fns) · **511 migrations** on disk · 6 Edge Functions · ~2,005 unit tests + 70 skipped / 94 E2E specs.
 
 - **`main` = production** (croprxsolutions.app). **Auto-push is authorized** (Mason, 2026-06-16): push regular code to `main` once the `/ship` pipeline is green (review clean + tests + the pre-push hook's typecheck/build) — no approval click; Vercel rollback is one click if needed. STILL get Mason's explicit OK before **applying a live migration, deploying an edge function, or deleting data**, and never commit unrelated files.
 - **Where history lives now** (so this file stays lean): sprint log → [`docs/CHANGELOG.md`](docs/CHANGELOG.md); detailed per-topic narrative → the `memory/` files (auto-loaded each session); the old multi-month "Current State" block → [`docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md`](docs/archive/2026-spring/claude-md-session-log-pre-2026-06-15.md).
-- **Open owner items (need Mason, not code):** Stripe pay-now keys (A1) · 10 real vendor bills for the AP-AI accuracy gate (D1) · physical counts to re-base 17 negative-inventory products (H1) · Supabase leaked-password protection toggle (L4) · grower-portal label CSV (0/604 products have REI/PHI/signal_word) · **B1 Lot Capture & Trace** apply+merge (built + parked on `feat/application-lot-capture`; migration `20260622170000` not yet applied — see `docs/build-loops/b1-lot-capture-trace/`).
+- **Open owner items (need Mason, not code):** Stripe pay-now keys (A1) · 10 real vendor bills for the AP-AI accuracy gate (D1) · physical counts to re-base 17 negative-inventory products (H1) · Supabase leaked-password protection toggle (L4) · grower-portal label CSV (0/604 products have REI/PHI/signal_word).
 - **Money/AR audits are still "vacuously clean"** (≈0 posted invoices/payments live) → re-run `/foundation-ultra-review` after the first real billing cycle.
 
 ## Working Principles
@@ -270,8 +270,8 @@ These tables have NO `updated_at` column. Setting it in an UPDATE will crash the
 
 | Doc | Contents |
 |-----|----------|
-| `docs/reference/database-schema.md` | 96 tables (+2 views) + RLS matrix |
-| `docs/reference/rpc-functions.md` | 226 callable RPCs + 52 trigger functions |
+| `docs/reference/database-schema.md` | 97 tables (+2 views) + RLS matrix |
+| `docs/reference/rpc-functions.md` | 229 callable RPCs + 52 trigger functions |
 | `docs/reference/migration-history.md` | 458 migrations |
 | `docs/reference/pages-routes.md` | 68 pages with routes |
 | `docs/reference/code-patterns.md` | Number formats, UI patterns, build notes |

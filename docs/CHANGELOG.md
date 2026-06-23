@@ -4,6 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-23 — B1 Lot Capture & Trace: APPLIED LIVE + merged + deployed
+
+Owner approved go-live. Migration `20260622170000_application_record_lots` applied to the live DB (project `rhyzpcqhnizqbxphqdkr`) and `feat/application-lot-capture` fast-forward-merged to `main` + deployed to croprxsolutions.app. B1 is now live: chemical **LOT/batch numbers** are captured per application and traceable for recall/compliance (which lot → which field/date/customer). Capture-and-trace only; no per-lot inventory math (Wave C).
+
+- **Apply pipeline (proven before apply):** fresh `rls-security-reviewer` + `migration-drift-reviewer` (both 0/0/0); section-5 `create_application_record_from_blend_ticket` reproduction proven **byte-identical to live** (minus the added lot-propagation INSERT) via a rolled-back `pg_get_functiondef` diff; apply-guard proof bound to the exact applied bytes.
+- **Post-apply verification (all rolled back, zero prod footprint):** structural (table + RLS + 1 SELECT policy, 3 RPCs each single-overload, blend fn still 1 overload now carrying the lot INSERT, 5 indexes); `plpgsql_check` clean (only the benign shared `:= '{}'` init warning); functional smoke of all 3 RPCs incl. replace-all, idempotency replay, duplicate/product-not-on-record rejection, and the Phase-5 invoice filter (**active/draft/posted → reported; voided/cancelled/soft-deleted → NULL**); blend-ticket lot auto-propagation end-to-end (case-dedup, blank/null skip). Invariant sweeps green (no B1 object flagged; SECDEF/overload/actor/anon classes clean). `get_advisors` unchanged (still 1 accepted ERROR = `profile_public_view`; B1 RPCs only under the by-design `authenticated_security_definer_function_executable` WARN, none anon-executable; 2 INFO unindexed-FK + 2 INFO unused-index on the new empty table).
+- **Open follow-ups (non-blocking):** regenerate `src/types/supabase.ts` then simplify the `src/lib/lotRpc.ts` shim to direct typed calls; refresh `.claude/schema-registry.json` from live (pre-existing staleness, now incl. `application_record_lots`); Mason's in-app smoke of `/lot-trace` + the Lots editor.
+
 ## 2026-06-23 — B1 Lot Capture & Trace: Phase 5 (tests + docs); feature built + parked for apply
 
 Autonomous Codex-gated build loop (`docs/build-loops/b1-lot-capture-trace/`), Phase 5 of 6. B1 brings chemical **LOT/batch numbers** into the system and links them to what was applied, so the business can answer the recall question: *which lot of which product went on which field, on what date, for which customer?* Capture-and-trace only — no per-lot inventory math (deferred Wave C).
