@@ -321,7 +321,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         legal_description: getValue('legal_description'),
         county: getValue('county'),
         state: getValue('state') || 'IL',
-        total_acres: statedAcres != null && statedAcres > 0 ? statedAcres : acres,
+        // Seed the legacy total_acres from the file ONLY when it's in-band; an out-of-band value
+        // bills on measured anyway, and seeding it here could fail the create or leave a bad legacy
+        // acreage on an orphaned field if the boundary RPC later fails.
+        total_acres: isAcreInBand(statedAcres) ? statedAcres : acres,
         crop_type: getValue('crop_type'),
         fsa_farm_number: getValue('fsa_farm_number'),
         fsa_tract_number: getValue('fsa_tract_number'),
