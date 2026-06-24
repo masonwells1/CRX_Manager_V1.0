@@ -31,6 +31,7 @@ import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { logActivity } from '../lib/activityLogger';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
+import { notifyDeliveryCompleted } from '../lib/notificationTriggers';
 import BatchCancelModal from '../components/deliveries/BatchCancelModal';
 import QuickDeliveryModal from '../components/deliveries/QuickDeliveryModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
@@ -365,6 +366,11 @@ export default function Deliveries() {
       sentryTag: 'complete_delivery',
       onSuccess: () => {
         completeIdem.resetKey();
+        // Fire the same in-app completion notification the detail page sends
+        // (driver/admins/sales). The customer EMAIL receipt is sent from the
+        // delivery's page (rich HTML w/ items+photos the list doesn't load) —
+        // see the modal note. Fire-and-forget; never blocks the success path.
+        notifyDeliveryCompleted(target.id, target.delivery_number, target.customer_name, target.assigned_driver, target.order_id, false).catch(() => { /* non-critical */ });
         setCompleteTarget(null);
         setSignedBy('');
         fetchDeliveries();
@@ -1025,7 +1031,7 @@ export default function Deliveries() {
       render: (row) =>
         row.status === 'in_progress' ? (
           <button
-            onClick={(e) => { e.stopPropagation(); setCompleteTarget(row); setSignedBy(''); }}
+            onClick={(e) => { e.stopPropagation(); completeIdem.resetKey(); setCompleteTarget(row); setSignedBy(''); }}
             title="Mark this delivery complete"
             aria-label={`Mark delivery ${row.delivery_number} complete`}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-crx-green border border-crx-green/30 hover:bg-crx-green-light transition-colors"
@@ -1396,7 +1402,7 @@ export default function Deliveries() {
           <p className="text-sm text-secondary">
             Complete delivery <span className="font-medium text-nav-dark">{completeTarget?.delivery_number}</span> for{' '}
             <span className="font-medium text-nav-dark">{completeTarget?.customer_name}</span> — all items delivered in full.
-            For a partial delivery, open the delivery instead.
+            For a partial delivery, or to email the customer their receipt, open the delivery instead.
           </p>
           <div>
             <label htmlFor="complete-signed-by" className="block text-xs font-medium text-secondary mb-1">Signed by</label>

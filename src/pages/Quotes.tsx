@@ -376,7 +376,7 @@ export default function Quotes() {
         <div className="flex items-center gap-1">
           {(row.status === 'sent' || row.status === 'revised') && (
             <button
-              onClick={(e) => { e.stopPropagation(); setConvertTarget(row); }}
+              onClick={(e) => { e.stopPropagation(); convertQuoteIdem.resetKey(); setConvertTarget(row); }}
               className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
               title="Convert to order"
               aria-label={`Convert quote ${row.quote_number} to an order`}

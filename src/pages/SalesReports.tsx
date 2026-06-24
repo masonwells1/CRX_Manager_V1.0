@@ -58,13 +58,12 @@ export default function SalesReports() {
   const { role: _role } = useAuth();
   const { toast } = useToast();
 
-  // ── Tab state (deep-linkable via ?tab= so the ⌘K palette can jump straight to a report) ──
-  const [searchParams] = useSearchParams();
-  const initialTab: Tab = (() => {
-    const t = searchParams.get('tab');
-    return t && (VALID_TABS as string[]).includes(t) ? (t as Tab) : 'detail';
-  })();
-  const [tab, setTab] = useState<Tab>(initialTab);
+  // ── Tab state — URL-driven (?tab=) so the ⌘K palette can switch reports even when
+  // SalesReports is already mounted (Codex P2). The tab buttons write the URL. ──
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab: Tab = rawTab && (VALID_TABS as string[]).includes(rawTab) ? (rawTab as Tab) : 'detail';
+  const setTab = (t: Tab) => setSearchParams({ tab: t }, { replace: true });
   const [customerView, setCustomerView] = useState(false);
 
   // ── Filter state ──

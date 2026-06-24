@@ -286,7 +286,7 @@ export default function ReceivingHub() {
                             <td className="px-2 py-1.5 text-right font-mono font-semibold text-amber-600">{fmtUnits(l.remaining)}</td>
                             <td className="px-2 py-1.5 text-right whitespace-nowrap">
                               <button
-                                onClick={() => { setReceiveTarget({ line: l, product_name: g.product_name }); setReceiveQty(String(l.remaining)); }}
+                                onClick={() => { receiveIdem.resetKey(); setReceiveTarget({ line: l, product_name: g.product_name }); setReceiveQty(String(l.remaining)); }}
                                 className="inline-flex items-center gap-1 px-2 py-1 mr-2 rounded-lg bg-crx-green text-white text-xs font-medium hover:bg-crx-green/90 transition-colors"
                                 title="Receive this line"
                               >
