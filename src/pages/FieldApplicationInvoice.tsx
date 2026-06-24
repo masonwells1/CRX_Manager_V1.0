@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  Save, Send, Trash2, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye,
+  Save, Send, Trash2, MapPin, FlaskConical, Users, ClipboardList, ArrowLeft, Eye, AlertTriangle,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -14,6 +14,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
 import { formatCents as fmt } from '../lib/money';
+import { billableAcres, acreDivergence } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
@@ -43,6 +44,9 @@ interface FieldLocation {
   field_name: string;
   map_number: number | null;
   total_acres: number | null;
+  /** Billable acreage on file for this field: override ?? measured ?? legacy total.
+   *  The reference the applied-acres divergence flag compares against. */
+  system_acres: number | null;
   planted_acres: number | null;
   applied_acres: number | null;
   crop_type: string | null;
@@ -103,6 +107,13 @@ export default function FieldApplicationInvoice() {
 
   const totalAppliedAcres = useMemo(
     () => locations.reduce((sum, l) => sum + (l.applied_acres || l.total_acres || 0), 0),
+    [locations]
+  );
+
+  // Applicator-mix-up review flag: locations whose applied acres are 10%+ off (over OR under)
+  // the field's billable acreage on file. Advisory only — never blocks billing.
+  const divergentCount = useMemo(
+    () => locations.filter((l) => acreDivergence(l.applied_acres, l.system_acres) !== null).length,
     [locations]
   );
 
@@ -197,7 +208,7 @@ export default function FieldApplicationInvoice() {
     // otherwise by invoice_id.
     const locQuery = supabase
       .from('field_app_locations')
-      .select('*, field:fields!field_app_locations_field_id_fkey(field_name, crop_type, total_acres, customer:customers!fields_customer_id_fkey(farm_name))')
+      .select('*, field:fields!field_app_locations_field_id_fkey(field_name, crop_type, total_acres, measured_acres, override_acres, customer:customers!fields_customer_id_fkey(farm_name))')
       .order('sort_order');
     const { data: locs } = groupId
       ? await locQuery.eq('invoice_group_id', groupId)
@@ -206,12 +217,13 @@ export default function FieldApplicationInvoice() {
     if (locs) {
       setLocations(
         (locs as Array<Record<string, unknown>>).map((l) => {
-          const field = l.field as { field_name: string; crop_type: string | null; total_acres: number | null; customer: { farm_name: string } | null } | null;
+          const field = l.field as { field_name: string; crop_type: string | null; total_acres: number | null; measured_acres: number | null; override_acres: number | null; customer: { farm_name: string } | null } | null;
           return {
             field_id: l.field_id as string,
             field_name: field?.field_name || 'Unknown',
             map_number: l.map_number as number | null,
             total_acres: (l.total_acres as number | null) ?? field?.total_acres ?? null,
+            system_acres: billableAcres(field?.override_acres, field?.measured_acres, field?.total_acres),
             planted_acres: l.planted_acres as number | null,
             applied_acres: l.applied_acres as number | null,
             crop_type: (l.crop_type as string | null) ?? field?.crop_type ?? null,
@@ -310,6 +322,7 @@ export default function FieldApplicationInvoice() {
       field_name: f.field_name,
       map_number: idx + 1,
       total_acres: f.total_acres,
+      system_acres: billableAcres(f.override_acres, f.measured_acres, f.total_acres),
       planted_acres: null,
       applied_acres: f.total_acres,
       crop_type: f.crop_type,
@@ -739,6 +752,18 @@ export default function FieldApplicationInvoice() {
               </Button>
             </div>
 
+            {divergentCount > 0 && (
+              <div className="mb-3 flex items-start gap-2 px-3 py-2 bg-amber-50 border-l-4 border-amber-400 text-sm text-amber-800 rounded">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>
+                  <strong>{divergentCount} field{divergentCount > 1 ? 's' : ''}</strong>{' '}
+                  {divergentCount > 1 ? 'have' : 'has'} applied acres 10%+ off the acreage on file
+                  (over or under). Review before billing &mdash; an applicator may have sprayed part of one
+                  field under another field&apos;s name.
+                </span>
+              </div>
+            )}
+
             {locations.length > 0 ? (
               <table className="w-full text-sm">
                 <thead>
@@ -747,35 +772,49 @@ export default function FieldApplicationInvoice() {
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Field Name</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Crop</th>
                     <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Customer</th>
-                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Total Acres</th>
+                    <th
+                      className="px-3 py-2 text-right text-xs font-medium text-gray-500"
+                      title="Billable acreage on file for this field (your typed override, else the measured map acres, else the legacy acreage)."
+                    >
+                      System Acres
+                    </th>
                     <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Applied Acres</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {locations.map((loc) => (
-                    <tr key={loc.field_id} className="hover:bg-gray-50">
-                      <td className="px-3 py-2 tabular-nums">{loc.map_number}</td>
-                      <td className="px-3 py-2 font-medium">{loc.field_name}</td>
-                      <td className="px-3 py-2 text-gray-600">{loc.crop_type || '\u2014'}</td>
-                      <td className="px-3 py-2 text-gray-600">{loc.customer_name || '\u2014'}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{loc.total_acres?.toFixed(1) || '\u2014'}</td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={loc.applied_acres ?? ''}
-                          onChange={(e) => updateLocationAcres(loc.field_id, Number(e.target.value))}
-                          className="w-24 ml-auto px-2 py-1 border rounded text-right text-sm tabular-nums"
-                        />
-                      </td>
-                    </tr>
-                  ))}
+                  {locations.map((loc) => {
+                    const div = acreDivergence(loc.applied_acres, loc.system_acres);
+                    return (
+                      <tr key={loc.field_id} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 tabular-nums">{loc.map_number}</td>
+                        <td className="px-3 py-2 font-medium">{loc.field_name}</td>
+                        <td className="px-3 py-2 text-gray-600">{loc.crop_type || '\u2014'}</td>
+                        <td className="px-3 py-2 text-gray-600">{loc.customer_name || '\u2014'}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{loc.system_acres?.toFixed(1) ?? '\u2014'}</td>
+                        <td className="px-3 py-2">
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={loc.applied_acres ?? ''}
+                            onChange={(e) => updateLocationAcres(loc.field_id, Number(e.target.value))}
+                            className={`w-24 ml-auto px-2 py-1 border rounded text-right text-sm tabular-nums ${div ? 'border-amber-400 bg-amber-50' : ''}`}
+                          />
+                          {div && (
+                            <div className="mt-1 flex items-center justify-end gap-1 text-xs font-medium text-amber-700">
+                              <AlertTriangle className="w-3 h-3" />
+                              {Math.round(div.pct)}% {div.direction} &mdash; review
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
                 <tfoot>
                   <tr className="bg-gray-50 font-semibold border-t">
                     <td colSpan={4} className="px-3 py-2">Totals</td>
                     <td className="px-3 py-2 text-right tabular-nums">
-                      {locations.reduce((s, l) => s + (l.total_acres || 0), 0).toFixed(1)}
+                      {locations.reduce((s, l) => s + (l.system_acres || 0), 0).toFixed(1)}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">
                       {totalAppliedAcres.toFixed(1)}

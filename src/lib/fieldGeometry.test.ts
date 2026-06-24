@@ -5,6 +5,7 @@ import {
   billableAcres,
   acreDivergencePct,
   isAcreDivergent,
+  acreDivergence,
   ACRE_DIVERGENCE_THRESHOLD_PCT,
   isAcreInBand,
   isAcreDenominatedColumn,
@@ -155,5 +156,37 @@ describe('isAcreDivergent', () => {
   it('uses the shared threshold constant', () => {
     const justOver = 40 * (1 + ACRE_DIVERGENCE_THRESHOLD_PCT / 100);
     expect(isAcreDivergent(justOver, 40)).toBe(true);
+  });
+});
+
+describe('acreDivergence (the applicator-mix-up review flag: magnitude + direction)', () => {
+  it('flags an over-statement with direction "over"', () => {
+    const d = acreDivergence(48, 40); // 20% over
+    expect(d).not.toBeNull();
+    expect(d?.direction).toBe('over');
+    expect(d?.pct).toBeCloseTo(20);
+  });
+  it('flags an under-statement with direction "under"', () => {
+    const d = acreDivergence(32, 40); // 20% under
+    expect(d?.direction).toBe('under');
+    expect(d?.pct).toBeCloseTo(20);
+  });
+  it('flags a zero as-applied against a real field as 100% under (a likely mix-up)', () => {
+    const d = acreDivergence(0, 40);
+    expect(d?.direction).toBe('under');
+    expect(d?.pct).toBeCloseTo(100);
+  });
+  it('returns null within the threshold (no flag for a small honest difference)', () => {
+    expect(acreDivergence(43, 40)).toBeNull(); // 7.5%
+    expect(acreDivergence(40, 40)).toBeNull(); // exact
+  });
+  it('returns null when there is no system acreage on file to compare against', () => {
+    expect(acreDivergence(40, null)).toBeNull();
+    expect(acreDivergence(40, 0)).toBeNull();
+    expect(acreDivergence(null, 40)).toBeNull();
+  });
+  it('flags exactly at the threshold (boundary is inclusive, matching isAcreDivergent)', () => {
+    const atThreshold = 40 * (1 + ACRE_DIVERGENCE_THRESHOLD_PCT / 100); // 44
+    expect(acreDivergence(atThreshold, 40)?.direction).toBe('over');
   });
 });

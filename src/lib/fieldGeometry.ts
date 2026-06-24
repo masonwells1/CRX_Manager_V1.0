@@ -131,3 +131,23 @@ export function isAcreDivergent(
   const pct = acreDivergencePct(entered, measured);
   return pct != null && pct >= ACRE_DIVERGENCE_THRESHOLD_PCT;
 }
+
+/**
+ * Whether an entered acreage (e.g. an applicator's as-applied acres) diverges from the
+ * reference acreage (the field's billable acres on file) by at least the review threshold,
+ * and if so by how much and in which direction. Returns null when within threshold or when
+ * there is nothing to compare (no entered value, or no reference acreage on file). `pct` is
+ * the non-negative magnitude; `direction` is 'over' when entered exceeds the reference,
+ * 'under' when it falls short. Powers the applicator-mix-up review flag on the billing page.
+ */
+export type AcreDivergence = { pct: number; direction: 'over' | 'under' };
+
+export function acreDivergence(
+  entered: number | null | undefined,
+  reference: number | null | undefined,
+): AcreDivergence | null {
+  const pct = acreDivergencePct(entered, reference);
+  if (pct == null || pct < ACRE_DIVERGENCE_THRESHOLD_PCT) return null;
+  // acreDivergencePct already guaranteed both are non-null and reference !== 0.
+  return { pct, direction: (entered as number) > (reference as number) ? 'over' : 'under' };
+}
