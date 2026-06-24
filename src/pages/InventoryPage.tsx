@@ -1,5 +1,6 @@
 import { useEffect, useState , useCallback } from 'react';
-import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2, Download, FileText, TrendingUp } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Package, ArrowDownToLine, Pencil, Plus, AlertTriangle, ChevronDown, ChevronUp, Trash2, Download, FileText, TrendingUp, ShoppingCart } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import EditableDataTable, { type EditableColumn } from '../components/ui/EditableDataTable';
@@ -52,6 +53,7 @@ interface HoldWithRelations extends InventoryHold {
 }
 
 export default function InventoryPage() {
+  const navigate = useNavigate();
   const { role, profile } = useAuth();
   const receivePoIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
   const adjustIdem = useIdempotencyKey('adjust_inventory', profile?.id || '');
@@ -1058,6 +1060,15 @@ export default function InventoryPage() {
                             {Math.max(0, item.reorder_point - item.quantity_available - item.quantity_on_order)}
                           </p>
                         </div>
+                        <button
+                          onClick={() => navigate(`/purchase-orders/new?product=${item.product_id}`)}
+                          title="Create a purchase order for this product"
+                          aria-label={`Reorder ${item.product_name}`}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-crx-green text-white text-xs font-medium hover:bg-crx-green/90 transition-colors flex-shrink-0"
+                        >
+                          <ShoppingCart className="w-3.5 h-3.5" />
+                          Reorder
+                        </button>
                       </div>
                     </div>
                   ))}
