@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> ✅ ALL BUILD WORK DONE (F1–F7) **+ Codex review gate CLEAN** (10 passes, 15 findings — 1 P1 / 12 P2 / 2 P3 — all fixed; pass #10 = zero findings). Branch `feat/ui-overhaul-v2` tip `781c8eb3`: review-clean + gate-green (lint+typecheck+build+2179 tests), nothing on main, nothing deployed. Loop STOPPED. Only `[!]` Mason-gated items remain: preview click-test of the 3 write buttons (Convert / Complete / Receive) + per-feature "ship it"; the deferred follow-ups. See Morning Summary below.
+> 🚀 **SHIPPED LIVE 2026-06-24** (Mason: "push it all live"). All F1–F7 merged to `main` (`083c4087`, FF over the parallel field-map work; only conflict = the generated `app-workflow-map.html`, regenerated) + deployed to croprxsolutions.app. Codex gate CLEAN (10 passes, 15 findings — 1 P1 / 12 P2 / 2 P3 — all fixed). Merged tree gate-green: lint+typecheck+build+**2210 tests**. **ZERO database changes.** Rollback = prior prod `dpl_14oxe2t8AGL7GxJGVcgTF5wEfSKc` (commit `c480191e`), one click. Only open item is Mason's in-app click-test of the 3 write buttons (Convert / Complete / Receive) against real data.
 
 ---
 

@@ -4,6 +4,19 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-24 — UI/workflow overhaul v2: 7 features SHIPPED LIVE (frontend-only, zero DB)
+
+Owner asked to de-clutter the app ("very clicky / spread out"); after a grounded 8-agent UX audit he chose 7 improvements, built autonomously on `feat/ui-overhaul-v2` under hold-for-review, then **"push it all live."** Merged to `main` (`083c4087`, FF over the parallel field-map work — only conflict was the generated `app-workflow-map.html`, regenerated) + deployed. **Pure frontend, ZERO database changes.** Rollback = prior prod `dpl_14oxe2t8AGL7GxJGVcgTF5wEfSKc` (commit `c480191e`).
+
+- **F1 Search by product everywhere** — Orders/Quotes lists + ⌘K palette now match on product name, not just customer/number.
+- **F2 Customer 360** — clickable customer summary cards + a slide-over "peek" drawer on Orders/Invoices/Deliveries.
+- **F3 Act from the list** — confirm-popup writes reusing the detail page's exact RPCs: Quotes→Convert-to-Order, Deliveries→Mark-Complete, Inventory→Reorder.
+- **F4 One AR workspace** — `/accounts-receivable` merges the 4 money pages into tabs + a Net Money Position card (`/payments` kept separate per the role red-line).
+- **F5 Receiving Hub** — `/receiving-hub` PO-lines-by-product board + a full-receipt quick-Receive.
+- **F6 Dashboard Finance Snapshot** (admin) · **F7 quick wins** (Invoices Order# column + balance filter, sidebar label fix).
+- **Independent Codex review gate: 10 passes → 15 findings (1 P1 / 12 P2 / 2 P3), all fixed.** The P1 was a real role data-leak (a driver could see customer AR/credit via the F2 peek drawer on `/deliveries`) — caught and closed on the branch, never live. Each fix re-gated (lint+typecheck+build) + committed; pass #10 = zero findings. Final merged tree: **2210 tests pass**.
+- Open: Mason's in-app click-test of the 3 write buttons (Convert / Complete / Receive) against real data.
+
 ## 2026-06-23 (night) — Field-acre-billing Track B (B1+B2): per-acre billing tie-in + billing-engine hardening (SHIPPED LIVE)
 
 Owner approved "go all the way live overnight" (gated on every automated review/Codex/smoke gate). Migration `20260623140000_field_app_per_acre_billing_and_hardening.sql` reproduces `save_field_app_invoice` + `preview_field_app_invoice_split` + `post_invoice_group` byte-faithful (rolled-back function-definition diffs = only-intended-changes) then patches the field-application invoice engine. Pushed to `main` (`1ee5c6aa`) + deployed (`dpl_y86Jrno85srQsCBa41zfxDNAuyCH`; rollback = prior prod `dpl_B3xaihLgbSTRemmDqf4NHmrANkJi`).
