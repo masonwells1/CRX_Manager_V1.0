@@ -1,6 +1,6 @@
 import { useEffect, useState , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, FileText, Check, Send, Ban, Printer, Mail, Zap, Trash2, Download } from 'lucide-react';
+import { Plus, FileText, Check, Send, Ban, Printer, Mail, Zap, Trash2, Download, PanelRightOpen } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
@@ -16,6 +16,7 @@ import { downloadReportPdf } from '../lib/reportPdf';
 import BatchVoidModal from '../components/invoices/BatchVoidModal';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
+import CustomerDrawer from '../components/customers/CustomerDrawer';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
 import { generateBatchInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
@@ -104,6 +105,8 @@ export default function Invoices() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
+  // Customer 360 peek drawer (F2) — view a customer's numbers without leaving the list.
+  const [drawerCustomer, setDrawerCustomer] = useState<{ id: string; name: string } | null>(null);
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
@@ -472,15 +475,27 @@ export default function Invoices() {
       header: 'Customer',
       sortable: true,
       render: (row) => (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            navigate(`/customers/${row.customer_id}`);
-          }}
-          className="text-crx-green hover:underline"
-        >
-          {row.customer_name}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/customers/${row.customer_id}`);
+            }}
+            className="text-crx-green hover:underline"
+          >
+            {row.customer_name}
+          </button>
+          {row.customer_id && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setDrawerCustomer({ id: row.customer_id, name: row.customer_name }); }}
+              title="Peek customer"
+              aria-label={`Peek ${row.customer_name}`}
+              className="p-0.5 rounded text-gray-300 hover:text-crx-green hover:bg-crx-green-light transition-colors"
+            >
+              <PanelRightOpen className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
       ),
     },
     {
@@ -771,6 +786,13 @@ export default function Invoices() {
         entityName="invoice"
         onConfirm={handleBatchDelete}
         loading={deleting}
+      />
+
+      <CustomerDrawer
+        open={!!drawerCustomer}
+        customerId={drawerCustomer?.id ?? ''}
+        customerName={drawerCustomer?.name ?? ''}
+        onClose={() => setDrawerCustomer(null)}
       />
     </div>
   );
