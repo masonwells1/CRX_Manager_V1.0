@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, Bell, History, BookmarkPlus } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, Bell, History, BookmarkPlus, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -21,6 +21,7 @@ import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { applyChemEdit, recomputeChemRowForAcres, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
+import { moveItem, moveUp, moveDown } from '../lib/routeOrder';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -322,6 +323,9 @@ export default function JobDetail() {
 
   // Sub-collections
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
+  // Field-app parity #5: index of the field row currently being dragged to set
+  // the applicator route order (null when no drag is in progress).
+  const [dragFieldIndex, setDragFieldIndex] = useState<number | null>(null);
   const [chemRows, setChemRows] = useState<ChemRow[]>([]);
   // Per-field customer shares, keyed by field. Empty until a field is added /
   // shares are loaded — then defaulted from field_billing_defaults.
@@ -477,16 +481,23 @@ export default function JobDetail() {
     }
 
     setFieldRows(
-      (j.job_fields || []).map((f) => ({
-        field_id: f.field_id,
-        field_name: f.field?.field_name || '',
-        acres_to_treat: f.acres_to_treat?.toString() || '',
-        planted_acres: f.planted_acres?.toString() || '',
-        crop: f.crop || '',
-        strip: f.strip || '',
-        pests: f.pests || '',
-        sort_order: f.sort_order,
-      }))
+      // Field-app parity #5: sort_order is the deliberate applicator route order.
+      // PostgREST does not guarantee embedded-row order, so sort explicitly here
+      // (stable index tiebreak) — the field list, save (index -> sort_order), and
+      // downstream printouts/map all read this single ordering.
+      (j.job_fields || [])
+        .map((f, idx) => ({ f, idx }))
+        .sort((a, b) => (a.f.sort_order - b.f.sort_order) || (a.idx - b.idx))
+        .map(({ f }) => ({
+          field_id: f.field_id,
+          field_name: f.field?.field_name || '',
+          acres_to_treat: f.acres_to_treat?.toString() || '',
+          planted_acres: f.planted_acres?.toString() || '',
+          crop: f.crop || '',
+          strip: f.strip || '',
+          pests: f.pests || '',
+          sort_order: f.sort_order,
+        }))
     );
 
     // Load saved shares; then SEED defaults for any field that has no saved
@@ -1100,6 +1111,39 @@ export default function JobDetail() {
     }
   };
 
+  // ── Field route-ordering (field-app parity #5) ──────────────────────────
+  // The field order IS the applicator's drive/route order. Reordering only
+  // changes the in-memory array order; on Save, fieldsPayload maps each row to
+  // sort_order = array index, so the new route order persists via the normal
+  // save path. Acreage totals and chemical quantities are order-independent, so
+  // a reorder needs no recompute.
+  const reorderFieldRows = (from: number, to: number) => {
+    if (!canEdit || from === to) return;
+    setFieldRows((prev) => moveItem(prev, from, to));
+  };
+  const moveFieldUp = (i: number) => {
+    if (!canEdit || i <= 0) return;
+    setFieldRows((prev) => moveUp(prev, i));
+  };
+  const moveFieldDown = (i: number) => {
+    if (!canEdit) return;
+    setFieldRows((prev) => (i >= prev.length - 1 ? prev : moveDown(prev, i)));
+  };
+  const handleFieldDragStart = (i: number) => {
+    if (!canEdit) return;
+    setDragFieldIndex(i);
+  };
+  const handleFieldDragOver = (e: React.DragEvent, i: number) => {
+    if (!canEdit || dragFieldIndex === null || dragFieldIndex === i) return;
+    e.preventDefault(); // allow drop
+  };
+  const handleFieldDrop = (i: number) => {
+    if (!canEdit || dragFieldIndex === null) return;
+    reorderFieldRows(dragFieldIndex, i);
+    setDragFieldIndex(null);
+  };
+  const handleFieldDragEnd = () => setDragFieldIndex(null);
+
   // ── Per-field customer share handlers ───────────────────────────────────
   const addShareRow = (fieldId: string) => {
     setShareRows([...shareRows, { field_id: fieldId, customer_id: '', split_pct: '', is_primary: false }]);
@@ -1393,7 +1437,7 @@ export default function JobDetail() {
 
           {/* Fields + per-field agronomy + customer shares */}
           <Card>
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-1">
               <h2 className="text-lg font-semibold text-nav-dark">Fields ({fieldRows.length})</h2>
               {canEdit && (
                 <Button size="sm" variant="secondary" onClick={addFieldRow} disabled={!customerId}>
@@ -1401,6 +1445,13 @@ export default function JobDetail() {
                 </Button>
               )}
             </div>
+            {fieldRows.length > 1 && (
+              <p className="text-xs text-secondary mb-4 flex items-center gap-1">
+                <GripVertical className="w-3.5 h-3.5 text-gray-400" />
+                Drag the handle (or use the up/down arrows) to set the applicator&rsquo;s drive order. Stop&nbsp;1 is visited first.
+              </p>
+            )}
+            {fieldRows.length <= 1 && <div className="mb-4" />}
             {fieldRows.length === 0 ? (
               <p className="text-sm text-secondary text-center py-4">
                 {customerId ? 'No fields added. Click "Add Field" to assign fields.' : 'Select a customer first.'}
@@ -1413,8 +1464,64 @@ export default function JobDetail() {
                     .filter((s) => f.field_id && s.field_id === f.field_id);
                   const shareSum = fieldShares.reduce((sum, s) => sum + (parseFloat(s.split_pct) || 0), 0);
                   const shareOk = fieldShares.length === 0 || Math.abs(shareSum - 100) < 0.01;
+                  const isDragging = dragFieldIndex === i;
+                  const isDropTarget = dragFieldIndex !== null && dragFieldIndex !== i;
                   return (
-                    <div key={i} className="border border-gray-200 rounded-lg p-3 space-y-3">
+                    <div
+                      key={i}
+                      onDragOver={(e) => handleFieldDragOver(e, i)}
+                      onDrop={() => handleFieldDrop(i)}
+                      className={`flex gap-2 border rounded-lg p-3 transition-colors ${
+                        isDragging ? 'border-crx-green bg-crx-green/5 opacity-60' : 'border-gray-200'
+                      } ${isDropTarget ? 'border-dashed border-crx-green/60' : ''}`}
+                    >
+                      {/* Route-order rail (field-app parity #5): drag handle, stop
+                          number, and keyboard/touch up-down fallback. */}
+                      <div className="flex flex-col items-center gap-1 pt-5 shrink-0">
+                        <span
+                          draggable={canEdit && fieldRows.length > 1}
+                          onDragStart={() => handleFieldDragStart(i)}
+                          onDragEnd={handleFieldDragEnd}
+                          className={`${canEdit && fieldRows.length > 1 ? 'cursor-grab active:cursor-grabbing text-gray-400 hover:text-crx-green' : 'text-gray-300'}`}
+                          title={canEdit && fieldRows.length > 1 ? 'Drag to set route order' : undefined}
+                          aria-hidden="true"
+                        >
+                          <GripVertical className="w-4 h-4" />
+                        </span>
+                        <span
+                          className="text-xs font-semibold text-secondary tabular-nums"
+                          title={`Route stop ${i + 1} of ${fieldRows.length}`}
+                        >
+                          {i + 1}
+                        </span>
+                        {canEdit && fieldRows.length > 1 && (
+                          <div className="flex flex-col">
+                            <button
+                              type="button"
+                              onClick={() => moveFieldUp(i)}
+                              disabled={i === 0}
+                              className="text-gray-400 enabled:hover:text-crx-green disabled:opacity-30 disabled:cursor-not-allowed"
+                              title="Move earlier in route"
+                              aria-label={`Move ${f.field_name || `field ${i + 1}`} earlier in the route`}
+                            >
+                              <ChevronUp className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveFieldDown(i)}
+                              disabled={i === fieldRows.length - 1}
+                              className="text-gray-400 enabled:hover:text-crx-green disabled:opacity-30 disabled:cursor-not-allowed"
+                              title="Move later in route"
+                              aria-label={`Move ${f.field_name || `field ${i + 1}`} later in the route`}
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Field content (selection + agronomy + shares) */}
+                      <div className="flex-1 min-w-0 space-y-3">
                       {/* Field selection + agronomy grid */}
                       <div className="grid grid-cols-2 md:grid-cols-7 gap-2 items-end">
                         <div className="col-span-2 md:col-span-2">
@@ -1515,6 +1622,7 @@ export default function JobDetail() {
                           )}
                         </div>
                       )}
+                      </div>
                     </div>
                   );
                 })}
