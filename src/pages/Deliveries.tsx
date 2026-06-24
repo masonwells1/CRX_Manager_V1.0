@@ -16,8 +16,10 @@ import {
   Users,
   List,
   CalendarDays,
+  PanelRightOpen,
 } from 'lucide-react';
 import Card from '../components/ui/Card';
+import CustomerDrawer from '../components/customers/CustomerDrawer';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -104,6 +106,8 @@ export default function Deliveries() {
   /* Lookup data */
   const [drivers, setDrivers] = useState<Profile[]>([]);
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  // Customer 360 peek drawer (F2) — view a customer's numbers without leaving the list.
+  const [drawerCustomer, setDrawerCustomer] = useState<{ id: string; name: string } | null>(null);
 
   /* Batch selection */
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -905,7 +909,19 @@ export default function Deliveries() {
       sortable: true,
       render: (row) => (
         <div>
-          <span>{row.customer_name}</span>
+          <div className="flex items-center gap-1.5">
+            <span>{row.customer_name}</span>
+            {row.customer_id && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setDrawerCustomer({ id: row.customer_id, name: row.customer_name }); }}
+                title="Peek customer"
+                aria-label={`Peek ${row.customer_name}`}
+                className="p-0.5 rounded text-gray-300 hover:text-crx-green hover:bg-crx-green-light transition-colors"
+              >
+                <PanelRightOpen className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
           {row.farm_group_name && (
             <div className="flex items-center gap-1 mt-0.5">
               <Users className="w-3 h-3 text-blue-500 flex-shrink-0" />
@@ -1306,6 +1322,13 @@ export default function Deliveries() {
       <QuickDeliveryModal
         open={quickDeliveryOpen}
         onClose={() => setQuickDeliveryOpen(false)}
+      />
+
+      <CustomerDrawer
+        open={!!drawerCustomer}
+        customerId={drawerCustomer?.id ?? ''}
+        customerName={drawerCustomer?.name ?? ''}
+        onClose={() => setDrawerCustomer(null)}
       />
     </div>
   );
