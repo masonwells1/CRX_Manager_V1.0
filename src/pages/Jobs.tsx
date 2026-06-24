@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -25,6 +25,7 @@ import JobTagsBulkModal from '../components/jobs/JobTagsBulkModal';
 import GroundCrewsManager from '../components/jobs/GroundCrewsManager';
 import JobBatchesManager from '../components/jobs/JobBatchesManager';
 import JobBatchAssignModal from '../components/jobs/JobBatchAssignModal';
+import JobMassEditModal from '../components/jobs/JobMassEditModal';
 import MultiSelectDropdown, { type MultiSelectOption } from '../components/jobs/MultiSelectDropdown';
 import {
   type JobFilters,
@@ -174,6 +175,7 @@ export default function Jobs() {
   const [manageCrewsOpen, setManageCrewsOpen] = useState(false);
   const [manageBatchesOpen, setManageBatchesOpen] = useState(false);
   const [assignBatchOpen, setAssignBatchOpen] = useState(false);
+  const [massEditOpen, setMassEditOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -607,6 +609,7 @@ export default function Jobs() {
   };
 
   const bulkActions = [
+    { key: 'mass-edit', label: 'Mass Edit', icon: <Pencil className="w-4 h-4" />, onClick: () => setMassEditOpen(true) },
     { key: 'batch', label: 'Add to Batch', icon: <Layers className="w-4 h-4" />, onClick: () => setAssignBatchOpen(true) },
     { key: 'tags', label: 'Edit Job Tags', icon: <Tag className="w-4 h-4" />, onClick: () => setBulkTagsOpen(true) },
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
@@ -1140,6 +1143,18 @@ export default function Jobs() {
         batches={allBatches}
         batchByJob={batchByJob}
         onManageBatches={() => { setAssignBatchOpen(false); setManageBatchesOpen(true); }}
+        onApplied={() => { fetchBatches(); fetchJobs(); }}
+      />
+
+      {/* Field-app parity #7: Mass Edit (dates / status / applicator / batch) over
+          the filtered+selected jobs. Loader-worksheet bulk fields are deferred to
+          section #10 (see the insertion point inside JobMassEditModal). */}
+      <JobMassEditModal
+        open={massEditOpen}
+        onClose={() => setMassEditOpen(false)}
+        selectedJobs={selectedRows.map((j) => ({ id: j.id, job_number: j.job_number, status: j.status }))}
+        applicators={applicators}
+        batches={allBatches.map((b) => ({ id: b.id, name: b.name }))}
         onApplied={() => { fetchBatches(); fetchJobs(); }}
       />
     </div>
