@@ -19,7 +19,8 @@ improvements Mason chose on 2026-06-23** from the grounded UX audit (54 findings
 
 ---
 
-## The five features (priority order — lowest-risk / highest-value first)
+## The features (priority order — lowest-risk / highest-value first)
+> Original five (F1–F5) + two appended 2026-06-23 eve from the audit (F6 dashboard alerts, F7 quick wins).
 
 > Each feature is independently reviewable and independently shippable. Build F1 fully, prove it,
 > commit, push; then F2; etc. Verify every file target against live code before editing (names below
@@ -98,6 +99,37 @@ RPC name + args — do NOT guess), wrapped in a confirm popup. Every write path 
   already-fetched `get_inventory_position()`.
 - Add a nav link + a Dashboard/Inventory entry point.
 - Same Write-actions rule as F3: build + review + Mason-tests; never auto-receive against live prod.
+
+### F6 — At-a-glance numbers + alerts on the home Dashboard  ·  frontend · reuses existing RPCs · AUTONOMOUS
+**Pain:** the home Dashboard shows counts, not money; finance numbers + warnings hide on other pages.
+(Added 2026-06-23 eve — Mason picked this from the audit; not one of the original five.)
+- **`Dashboard.tsx`** — add an admin-only **"Finance Snapshot"** card that calls the EXISTING
+  **`financial_dashboard_summary`** RPC (the same one `FinancialDashboard.tsx` uses — read it for the exact
+  returned field names; reuse them, never guess) and shows overdue AR (60+/90+), bills due this week, prepay
+  balance, and MTD profit. Each number is a **clickable deep-link** to its page
+  (`/ar-aging`, `/accounts-payable`, `/prepayments`, `/financial-dashboard`).
+  🚩 Only fetch/show this for `role === 'admin'` — `financial_dashboard_summary` is admin-only and errors for
+  others. Do NOT widen its access.
+- **Alerts:** surface the buried warnings as small clickable cards — overdue **bills**, blend tickets
+  **awaiting approval**, AR **60+**. FIRST check whether `operational_dashboard_summary` /
+  `financial_dashboard_summary` already return these counts (read what `Dashboard.tsx` already fetches); if a
+  count has no existing source, mark that one `[!]` and skip it — do NOT add a DB query/RPC.
+- **Proof:** green gate + read-only SQL cross-check (the card's numbers vs the live source) + push for preview.
+
+### F7 — Quick wins batch  ·  frontend · tiny · low-risk · AUTONOMOUS
+Each is small and independent — one commit each (or a tight batch). (Added 2026-06-23 eve.)
+- **`Invoices.tsx`** — add a clickable **Order #** column (the invoice carries `order_id`; join/lookup the
+  `order_number`) so you see + jump to the source order without opening the invoice.
+- **`Invoices.tsx`** — add a **"Has a balance"** filter toggle (uses `balance_cents > 0`), like the existing
+  Quick-Deliveries-style toggles.
+- **`ARaging.tsx`** — make the summary cards (Total · Current · 30–89 · 90+) **sticky** so they stay visible
+  while scrolling the long list.
+- **`Sidebar.tsx`** — rename the home link label **"Operations" → "Dashboard"** (it currently collides with
+  the "Operations" nav category) and auto-close the mobile drawer after a nav tap. Label-only; routes unchanged.
+- (Skip "report names in ⌘K" — already shipped in F1c. Skip the low-stock "Reorder" button — covered by F3 /
+  To-Ship.)
+- **Proof:** green gate + (for the Order# column) a read-only SQL cross-check that invoices carry order_id;
+  push for preview.
 
 ---
 

@@ -40,6 +40,16 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [ ] Per-product Commitment Snapshot (On Floor · On Hold · On Order · Spoken-For · Available) via get_inventory_position()
 - [!] Live exercise of receive → Mason tests (loop must NOT auto-receive against live prod)
 
+## F6 — Dashboard at-a-glance numbers + alerts  (frontend, reuses existing RPCs — added 2026-06-23 eve)
+- [ ] `Dashboard.tsx` — admin-only "Finance Snapshot" card via existing `financial_dashboard_summary` RPC (overdue AR 60+/90+, bills due this week, prepay balance, MTD profit), each a clickable deep-link; gate on role==='admin'
+- [ ] Alert cards: overdue bills · blend tickets awaiting approval · AR 60+ (only if the count already comes from operational/financial summary; else mark `[!]` that one, no new query)
+
+## F7 — Quick wins batch  (tiny, low-risk — added 2026-06-23 eve)
+- [ ] `Invoices.tsx` — clickable Order # column (join order_number off order_id)
+- [ ] `Invoices.tsx` — "Has a balance" filter toggle (balance_cents > 0)
+- [ ] `ARaging.tsx` — sticky summary cards (Total/Current/30-89/90+) on scroll
+- [ ] `Sidebar.tsx` — rename home link "Operations" → "Dashboard" (fixes label collision) + auto-close mobile drawer after tap
+
 ---
 
 ## Needs Mason (gated — the loop will NOT do these)
