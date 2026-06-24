@@ -121,6 +121,24 @@ export default tseslint.config(
       'local-rules/idempotency-key-from-hook': 'off',
       'local-rules/handle-supabase-error': 'off',
       'local-rules/require-check-mutation-result': 'off',
+      'local-rules/require-supabase-error-capture': 'off',
+    },
+  },
+  {
+    // require-supabase-error-capture — HARD-enforce capturing `error` (not just `data`)
+    // from supabase .from()/.storage reads on the MONEY screens, where a failed read
+    // silently shown as $0/empty costs real money (the AccountsReceivable "Unused
+    // Prepay" + Receiving Hub "nothing on order" bug class, 2026-06-24). Scoped as a
+    // RATCHET: these files are clean today; widen this glob as the ~130 legacy reads
+    // elsewhere are individually triaged. NOT global — most of those legacy reads are
+    // benign list loads, so a blanket block would be churn + noise.
+    files: [
+      'src/pages/AccountsReceivable.tsx',
+      'src/pages/ReceivingHub.tsx',
+      'src/components/dashboard/FinanceSnapshotCard.tsx',
+    ],
+    rules: {
+      'local-rules/require-supabase-error-capture': 'error',
     },
   },
   {

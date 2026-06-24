@@ -4,6 +4,14 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-24 — Error-prevention guards from the UI-overhaul review (2 hard guards)
+
+Turned the two highest-value recurring classes from the 10-pass Codex review of UI overhaul v2 into deterministic guards (HARD scaffolding > prose). Frontend + tooling only, zero DB.
+
+- **Money never silently reads $0** — new local ESLint rule `require-supabase-error-capture` flags a `supabase.from()/.storage` read that destructures `data` but never captures `error` (the AccountsReceivable "Unused Prepay" + Receiving Hub "nothing on order" bug class, where a failed query renders as $0/empty). It closes the half its sibling `handle-supabase-error` leaves open. The pattern exists in ~130 mostly-benign legacy reads across 51 files, so it is **scoped as a hard `error` only on the money screens** (`AccountsReceivable`, `ReceivingHub`, `FinanceSnapshotCard` — clean today) and a ratchet to widen as legacy reads are triaged. Unit-tested (catches both bug shapes, allows the `{ data, error }` + handle pattern).
+- **Customer finances can't leak from the peek drawer** — `CustomerDrawer` now **self-guards**: it calls `hasPageAccess(role, deniedPages, 'customers')` itself and renders nothing if the viewer lacks access, so a driver (or a sales_rep denied `/customers`) can never see AR balance + credit tier no matter which list mounts it. Structural fix for the round-5 P1; the per-callsite gates stay as the first line. Unit-tested (driver/denied → nothing; admin/sales → renders).
+- Gate green: lint + typecheck + build + 2222 tests. Deferred (recorded): patterns 3–6 (shared-flow extraction, notification de-dupe, race/data-shape) + widening the lint ratchet over the ~130 legacy reads.
+
 ## 2026-06-24 — UI/workflow overhaul v2: 7 features SHIPPED LIVE (frontend-only, zero DB)
 
 Owner asked to de-clutter the app ("very clicky / spread out"); after a grounded 8-agent UX audit he chose 7 improvements, built autonomously on `feat/ui-overhaul-v2` under hold-for-review, then **"push it all live."** Merged to `main` (`083c4087`, FF over the parallel field-map work — only conflict was the generated `app-workflow-map.html`, regenerated) + deployed. **Pure frontend, ZERO database changes.** Rollback = prior prod `dpl_14oxe2t8AGL7GxJGVcgTF5wEfSKc` (commit `c480191e`).

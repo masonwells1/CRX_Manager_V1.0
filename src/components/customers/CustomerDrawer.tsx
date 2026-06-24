@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { X, ArrowRight } from 'lucide-react';
 import CustomerSummaryBar from './CustomerSummaryBar';
+import { useAuth } from '../../contexts/AuthContext';
+import { hasPageAccess } from '../../lib/pagePermissions';
 
 interface CustomerDrawerProps {
   open: boolean;
@@ -17,6 +19,13 @@ interface CustomerDrawerProps {
  */
 export default function CustomerDrawer({ open, customerId, customerName, onClose }: CustomerDrawerProps) {
   const navigate = useNavigate();
+  const { role, deniedPages } = useAuth();
+  // Self-guard (defense-in-depth): this drawer renders CustomerSummaryBar, which
+  // exposes AR balance + credit tier. Callers gate the open-button, but gate it HERE
+  // too so the finance data can NEVER render to someone without customers-page access
+  // (a driver, or a sales_rep denied /customers) regardless of which list mounts it.
+  // This is the structural fix for the round-5 P1 leak — safe by construction.
+  const canViewCustomer = hasPageAccess(role, deniedPages, 'customers');
   // `shown` drives the slide-in: mount off-screen (translate-x-full), then flip on next frame.
   const [shown, setShown] = useState(false);
 
@@ -39,7 +48,7 @@ export default function CustomerDrawer({ open, customerId, customerName, onClose
     };
   }, [open, onClose]);
 
-  if (!open || !customerId) return null;
+  if (!open || !customerId || !canViewCustomer) return null;
 
   const openProfile = () => {
     onClose();

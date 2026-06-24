@@ -22,6 +22,7 @@ const argShapeRule = require('../../eslint-local-rules/rules/assert-rpc-result-a
 const idemKeyRule = require('../../eslint-local-rules/rules/idempotency-key-from-hook.cjs');
 const handleSupabaseErrorRule = require('../../eslint-local-rules/rules/handle-supabase-error.cjs');
 const requireCheckMutationResultRule = require('../../eslint-local-rules/rules/require-check-mutation-result.cjs');
+const requireSupabaseErrorCaptureRule = require('../../eslint-local-rules/rules/require-supabase-error-capture.cjs');
 
 // Wire RuleTester into vitest's describe/it
 RuleTester.describe = describe;
@@ -381,6 +382,70 @@ ruleTester.run('require-check-mutation-result', requireCheckMutationResultRule, 
         const result = await supabase.from('orders').update({ x: 1 }).eq('id', id).select();
       }`,
       errors: [{ messageId: 'discarded' }],
+    },
+  ],
+});
+
+// -------------------------------------------------------------------------
+// require-supabase-error-capture — the OTHER half of handle-supabase-error:
+// `data` taken from a .from()/.storage read but `error` never even captured
+// (the AccountsReceivable prepay + Receiving Hub $0/empty bug class, 2026-06-24).
+// -------------------------------------------------------------------------
+
+ruleTester.run('require-supabase-error-capture', requireSupabaseErrorCaptureRule, {
+  valid: [
+    // both captured — handle-supabase-error then owns whether `error` is handled
+    `async function f() {
+      const { data, error } = await supabase.from('prepay_credits').select('balance_cents');
+      if (error) throw error;
+      return data;
+    }`,
+    // aliased data + error both captured
+    `async function f() {
+      const { data: rows, error: err } = await supabase.from('orders').select('*');
+      if (err) throw err;
+      return rows;
+    }`,
+    // error-only destructure (a mutation check) — nothing dropped
+    `async function f() {
+      const { error } = await supabase.from('orders').delete().eq('id', id);
+      if (error) throw error;
+    }`,
+    // rpc() is out of scope (require-assert-rpc-result owns it)
+    `async function f() {
+      const { data } = await supabase.rpc('get_inventory_position');
+      return assertRpcResult(data, 'get_inventory_position');
+    }`,
+    // not the supabase client
+    `async function f() {
+      const { data } = await fetchThing();
+      return data;
+    }`,
+  ],
+  invalid: [
+    // the AccountsReceivable prepay bug: data taken, error dropped → silent $0
+    {
+      code: `async function f() {
+        const { data: prepayRows } = await supabase.from('prepay_credits').select('balance_cents');
+        return (prepayRows || []).reduce((s, r) => s + r.balance_cents, 0);
+      }`,
+      errors: [{ messageId: 'missingError' }],
+    },
+    // the Receiving Hub bug: a failed PO load looks like "nothing on order"
+    {
+      code: `async function f() {
+        const { data } = await supabase.from('purchase_orders').select('*').in('status', ['submitted']);
+        return data || [];
+      }`,
+      errors: [{ messageId: 'missingError' }],
+    },
+    // storage read with data-only
+    {
+      code: `async function f() {
+        const { data } = await supabase.storage.from('sigs').createSignedUrl(p, 60);
+        return data;
+      }`,
+      errors: [{ messageId: 'missingError' }],
     },
   ],
 });
