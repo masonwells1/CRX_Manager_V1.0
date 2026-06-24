@@ -17,8 +17,8 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
 | #  | Feature                         | Risk                         | Status        | Ship (commit / deploy / rollback) |
 |----|---------------------------------|------------------------------|---------------|-----------------------------------|
 | F1 | Guided map drawing              | frontend-only                | ✅ SHIPPED LIVE | af43b4ad / dpl_p4bBKSNZ… / dpl_4XMB3Uti… |
-| F3 | Per-field customer on import    | frontend-only                | IN PROGRESS   |                                   |
-| F2 | Applicator mix-up flag          | frontend-only + investigate  | TODO          |                                   |
+| F3 | Per-field customer on import    | frontend-only                | GREEN — SHIPPING |                                |
+| F2 | Applicator mix-up flag (Branch B display) | frontend-only + investigate | IN PROGRESS  |                       |
 
 ## Session / worktree
 - Running in worktree `C:\CRX_Manager\.claude\worktrees\modest-chatelet-7b2c74` on branch **`feat/field-map-ux`**
@@ -44,8 +44,35 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
   tap to retry"** error state to `CRXMap.tsx` (only before first `load`; transient tile errors after load are
   ignored). Frontend-only — no DB/RPC/migration. Files: NEW `DrawingHud.tsx`, edit `DrawControl.tsx`,
   `CRXMap.tsx`, `fieldGeometry.ts`; tests: NEW `DrawingHud.test.tsx`, extend `fieldGeometry.test.ts`.
-- **F3 plan:** _(…)_
-- **F2 investigation result + build-or-park decision:** _(…)_
+- **F3 plan (CONFIRMED — SOW assumptions hold, verified read-only):** The field importer
+  (`BulkFieldImport.tsx`) is a 7-step wizard; step 4 ("Customer") today forces ALL imported fields onto
+  ONE chosen customer (`selectedCustomerId`), and the per-field save loop already calls `save_field` with
+  a per-field `pf.customer_id` (the customer rides inside the `p_field_payload` jsonb — verified the live
+  RPC signature: `save_field(p_field_id, p_field_payload jsonb, p_billing_defaults jsonb, p_performed_by,
+  p_idempotency_key)`, no separate customer arg). So F3 is a pure UI step that lets each parsed field's
+  `customer_id` differ; the save path is untouched. Plan: a NEW presentational `FieldCustomerAssignment.tsx`
+  (testable in isolation, F1's DrawingHud pattern) rendered in step 4 — an **"Apply to all"** customer
+  picker (keeps today's one-click single-customer fast path) plus a per-field table (field name + acreage +
+  a per-row customer picker that defaults to the applied customer; only the open row renders its option list
+  so a 500-field county/co-op file stays snappy). `BulkFieldImport` holds a `fieldCustomerAssignments`
+  (index→customer_id) map; `buildParsedFields()` resolves `customer_id = assignment[i] ?? selectedCustomerId`;
+  `canAdvance(4)` requires every field to resolve to a customer; a field left without one stays invalid via
+  the existing "No customer assigned" path (shown + skipped). Optional preview-map color-by-customer SKIPPED
+  (not cheap — out of envelope). Frontend-only, no DB/RPC/migration. Files: NEW `FieldCustomerAssignment.tsx`
+  (+ test), edit `BulkFieldImport.tsx`; small pure resolution helper + its test.
+- **F2 investigation result + build-or-park decision → BRANCH B (display only; auto-nudge PARKED).**
+  Verified read-only against the live schema + `FieldApplicationInvoice.tsx`: at billing time there is **no
+  independent "acres actually applied" signal** that can differ from the field's system acres. The field-
+  application invoice is built from FIELD SELECTIONS on the billing page; each row's `applied_acres` is
+  *defaulted to the field's billable/system acres* (`handleLocationsSelected`, line 343) and is the only
+  place it is ever entered. The `field_app_locations` table also has a `planted_acres` column, but it is
+  never captured in this flow (always null). `application_records.total_acres` / `jobs.total_acres` exist
+  but feed the separate generic (job/blend) editor, which this page redirects away — they are not an applied-
+  vs-system signal here. So "applied == system" is just the normal expected case, and an auto-nudge on every
+  full-field job would be noise. → **Build the safe DISPLAY improvement** (an explicit "matches the acres on
+  file (full field)" vs "edited" badge beside the applied-acres input, so the biller can SEE at a glance
+  whether they accepted the auto-fill or changed it — the existing ≥10% divergence flag never fires on the
+  auto-fill case). **PARK the auto-nudge** (below) for Mason.
 
 ## Owner gates / parked items
 - **(F1 review — confirmed + fixed, not parked)** The review caught a real footgun: because the field
@@ -72,6 +99,15 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
   - Files: NEW `src/components/map/DrawingHud.tsx` (+ test), edited `DrawControl.tsx` / `CRXMap.tsx`,
     NEW pure helper `fieldGeometry.drawingRingMetrics` (+ tests).
   - Mason still does the in-app click-test (auth wall → no logged-in browser smoke possible here).
+- **F3 — Per-field customer on import. SHIPPING (frontend-only).** Step 4 of the field importer now
+  assigns a customer PER FIELD (county/co-op files cover many growers) with an "Apply to all" fast path
+  (one pick = single-customer one-click, unchanged). Save path untouched (save_field already takes the
+  customer inside `p_field_payload`; no DB change). Review fan-out (correctness/regression/conventions +
+  verify): **0 confirmed findings**; 3 LOWs addressed anyway — adopted a single-source design (apply-to-all
+  sets only the fallback + clears overrides; the UI, the step gate, and the save all resolve via one
+  `resolveFieldCustomerId`) and added aria-labels to the per-row pickers. NEW pure helpers
+  `lib/fieldImportCustomers.ts` (+ tests) + `components/fields/FieldCustomerAssignment.tsx` (+ tests);
+  edited `BulkFieldImport.tsx`. _(commit sha / deploy / rollback filled after push.)_
 
 ## Final summary
 - _(fill at end: what shipped, what parked, what Mason still needs to do - in-app click-tests, any
