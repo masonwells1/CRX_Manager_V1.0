@@ -4,12 +4,12 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> Scaffolding committed. Loop ready to start at F1. Two owner decisions baked in: hold-for-review + confirm-popup-in-place writes.
+> F1 in progress. Orders list now searchable by product name (proven: gate green + 277/277 order_items have names). Next: Quotes list, then CommandPalette report names.
 
 ---
 
 ## F1 — Search by product everywhere  (frontend, zero DB, autonomous)
-- [ ] `Orders.tsx` — product-name search box (denormalize `order_items` names via the ToShip two-query pattern)
+- [x] `Orders.tsx` — product-name search box (added `product_name` to the existing order_items query → searchable `product_names` field + searchKey; placeholder "Search orders or products…")
 - [ ] `Quotes.tsx` — product-name search box over `quote_items`
 - [ ] `CommandPalette.tsx` — add report names (AR Aging, Product Mix, Customer Profitability, Commissions)
 - [ ] (stretch) `FieldInvoices.tsx`/`UnbilledApplications.tsx` — by-product filter (skip → `[!]` if it needs more than a frontend filter)
@@ -46,6 +46,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F1a: Orders list searchable by product name. Reused the existing per-order order_items query (added product_name col), built a `product_names` string per order, added it to DataTable searchKeys. Zero DB. Gate green (lint+typecheck+build+2179 tests); cross-checked 277/277 order_items carry product_name (94 distinct).
 - Scaffolding: PLAN.md + STATE.md + LOOP_PROMPT.md for the 5-feature v2 loop. Branch off prod db9b32ea.
 
 ## Morning summary

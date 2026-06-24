@@ -33,6 +33,7 @@ interface OrderWithFulfillment extends Order {
   customer_name: string;
   active_delivery_count: number;
   earliest_delivery_date: string | null;
+  product_names: string;
 }
 
 export default function Orders() {
@@ -90,7 +91,7 @@ export default function Orders() {
     const [itemsResult, invoiceResult, parentsResult, deliveryResult] = await Promise.all([
       supabase
         .from('order_items')
-        .select('order_id, total_units_needed, quantity_delivered, price_per_unit')
+        .select('order_id, total_units_needed, quantity_delivered, price_per_unit, product_name')
         .in('order_id', orderIds.length > 0 ? orderIds : ['__none__']),
       supabase
         .from('invoices')
@@ -116,6 +117,8 @@ export default function Orders() {
 
     // H16: Use value-based fulfillment (weighted by price_per_unit) instead of item-count-based
     const itemsByOrder: Record<string, { neededValue: number; deliveredValue: number }> = {};
+    // Collect product names per order so the list is searchable by product (F1).
+    const productNamesByOrder: Record<string, Set<string>> = {};
     (itemsData || []).forEach((item) => {
       if (!itemsByOrder[item.order_id]) {
         itemsByOrder[item.order_id] = { neededValue: 0, deliveredValue: 0 };
@@ -123,6 +126,10 @@ export default function Orders() {
       const price = Number(item.price_per_unit) || 0;
       itemsByOrder[item.order_id].neededValue += (Number(item.total_units_needed) || 0) * price;
       itemsByOrder[item.order_id].deliveredValue += (Number(item.quantity_delivered) || 0) * price;
+      const pname = item.product_name;
+      if (pname) {
+        (productNamesByOrder[item.order_id] ??= new Set()).add(pname);
+      }
     });
 
     // Fetch invoice totals per order for invoiced %
@@ -174,6 +181,7 @@ export default function Orders() {
         customer_name: customerName,
         active_delivery_count: delInfo.count,
         earliest_delivery_date: delInfo.earliestDate,
+        product_names: Array.from(productNamesByOrder[o.id] || []).join(', '),
       } as OrderWithFulfillment;
     });
 
@@ -558,8 +566,8 @@ export default function Orders() {
             data={filtered}
             columns={columns}
             searchable
-            searchPlaceholder="Search orders..."
-            searchKeys={['order_number', 'farm_group_name', 'customer_name']}
+            searchPlaceholder="Search orders or products…"
+            searchKeys={['order_number', 'farm_group_name', 'customer_name', 'product_names']}
             onRowClick={(row) => navigate(`/orders/${row.id}`)}
             emptyTitle="No orders yet"
             emptyDescription="Start by creating a quote in Sales → Quotes, then convert it to an order. Or create a direct order below."
