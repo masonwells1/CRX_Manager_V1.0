@@ -86,6 +86,10 @@ export default function ReceivingHub() {
           .in('status', ['submitted', 'partially_received'])
           .order('expected_delivery_date', { ascending: true, nullsFirst: false })
           .limit(500);
+        // A failed PO load must NOT look like "nothing on order" — surface it.
+        // (Codex P2: poRes.data || [] below would silently swallow an RLS/drift
+        // error and render an empty board.)
+        if (poRes.error) throw poRes.error;
 
         // get_inventory_position is its own `= await supabase.rpc(...)` (not inside a
         // Promise.all) so the assert-rpc-result lint rule tracks the destructured `data`.

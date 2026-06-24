@@ -22,6 +22,9 @@ import { sanitizeError } from '../lib/errorSanitizer';
 import { Sentry } from '../lib/sentry';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import HelpTip from '../components/ui/HelpTip';
+import { notifyLargeOrder, notifyCreditLimitExceeded } from '../lib/notificationTriggers';
+import { sendOrderConfirmedEmail } from '../lib/orderConfirmedEmail';
+import { trackBusinessEvent } from '../lib/metrics';
 import type { Quote, BookingRolloverRow } from '../types';
 
 const DELETABLE = ['draft', 'sent', 'revised'];
@@ -129,6 +132,31 @@ export default function Quotes() {
       }
       if (result.warnings && result.warnings.length > 0) {
         result.warnings.forEach((w) => toast('warning', `Inventory: ${w}`));
+      }
+      // Mirror QuoteBuilder's post-conversion side effects (Codex P2): orders are
+      // born 'confirmed' with no later transition to gate on, so the creation site
+      // is the ONLY place these fire. Skip on idempotent replay (already ran once).
+      if (result.status !== 'already_converted' && result.order_id) {
+        trackBusinessEvent('quote_converted_to_order', {
+          message: `Quote converted → Order ${result.order_number || ''}`,
+          data: { orderId: result.order_id, orderNumber: result.order_number ?? '', quoteId: convertTarget.id },
+        });
+        // Customer "Order Confirmed" email — fire-and-forget, swallows its own errors.
+        sendOrderConfirmedEmail(result.order_id);
+        // Large-order admin alert (self-guards under its $50k threshold).
+        notifyLargeOrder(result.order_id, result.order_number || '', convertTarget.customer_name || 'customer', convertTarget.total_price || 0);
+        // Credit-limit warning — non-blocking, must not prevent navigation.
+        try {
+          const { data: creditCheck } = await supabase.rpc('check_customer_credit_limit', { p_customer_id: convertTarget.customer_id });
+          const cl = assertRpcResult<{ exceeded?: boolean; outstanding_ar?: number; credit_limit?: number } | null>(creditCheck, 'check_customer_credit_limit');
+          if (cl && cl.exceeded) {
+            const fmtCl = (n: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+            toast('warning', `Credit limit warning: ${convertTarget.customer_name || 'Customer'} outstanding AR ${fmtCl(cl.outstanding_ar ?? 0)} exceeds limit ${fmtCl(cl.credit_limit ?? 0)}`);
+            notifyCreditLimitExceeded(convertTarget.customer_name || 'Customer', cl.outstanding_ar ?? 0, cl.credit_limit ?? 0, convertTarget.customer_id);
+          }
+        } catch {
+          // Non-blocking — credit limit check should not prevent navigation.
+        }
       }
       setConvertTarget(null);
       if (result.order_id) navigate(`/orders/${result.order_id}`);
