@@ -168,6 +168,11 @@ const ALL_PAGES: { path: string; label: string }[] = [
   { path: '/rebates', label: 'Rebates' },
   { path: '/reports', label: 'Reports' },
   { path: '/sales-reports', label: 'Sales Reports' },
+  // Individual reports, deep-linked so typing the report name jumps straight to it (F1c).
+  { path: '/sales-reports?tab=by_product', label: 'Sales by Product (Product Mix)' },
+  { path: '/sales-reports?tab=by_customer', label: 'Sales by Customer (Customer Profitability)' },
+  { path: '/sales-reports?tab=by_sales_rep', label: 'Sales by Sales Rep' },
+  { path: '/sales-reports?tab=by_month', label: 'Sales by Month' },
   { path: '/compliance', label: 'Compliance' },
   { path: '/lot-trace', label: 'Lot Trace' },
   { path: '/team-board', label: 'Team Board' },
@@ -190,9 +195,11 @@ function fuzzyMatch(query: string, text: string): boolean {
 }
 
 function getPageIcon(path: string): React.ReactNode {
+  // Strip any query string (deep-link report entries) before matching.
+  const clean = path.split('?')[0];
   // Try exact match first, then try the base path
-  if (PAGE_ICON_MAP[path]) return PAGE_ICON_MAP[path];
-  const base = '/' + path.split('/').filter(Boolean)[0];
+  if (PAGE_ICON_MAP[clean]) return PAGE_ICON_MAP[clean];
+  const base = '/' + clean.split('/').filter(Boolean)[0];
   return PAGE_ICON_MAP[base] || <ArrowRight className="w-4 h-4" />;
 }
 

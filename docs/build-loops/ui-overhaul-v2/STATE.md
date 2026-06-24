@@ -4,14 +4,14 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> F1 in progress. Orders + Quotes lists now searchable by product (and Quotes by customer too — that searchKey was a latent no-op). Next: CommandPalette report names.
+> F1 nearly done. Orders + Quotes product search live; ⌘K palette now deep-links to individual Sales reports (Product Mix / Customer Profitability / by Rep / by Month) via a new `?tab=` reader on SalesReports. Next: evaluate the stretch field-apps-by-product filter, else start F2 (Customer 360).
 
 ---
 
 ## F1 — Search by product everywhere  (frontend, zero DB, autonomous)
 - [x] `Orders.tsx` — product-name search box (added `product_name` to the existing order_items query → searchable `product_names` field + searchKey; placeholder "Search orders or products…")
 - [x] `Quotes.tsx` — product search (join quote_items.product_id → products.product_name into a `product_names` searchKey) + fixed the pre-existing dead `customer_name` searchKey (now denormalized off the customer join). Placeholder "Search quotes, customers, or products…"
-- [ ] `CommandPalette.tsx` — add report names (AR Aging, Product Mix, Customer Profitability, Commissions)
+- [x] `CommandPalette.tsx` — deep-link entries for individual Sales reports (Product Mix→by_product, Customer Profitability→by_customer, by Rep, by Month); added a `?tab=` reader to SalesReports.tsx; getPageIcon strips query strings. AR Aging + Commissions already reachable (/ar-aging, /commission-payments). Unique paths so the list keys don't collide.
 - [ ] (stretch) `FieldInvoices.tsx`/`UnbilledApplications.tsx` — by-product filter (skip → `[!]` if it needs more than a frontend filter)
 
 ## F2 — One customer = one screen (Customer 360)  (frontend, reuses existing components)
@@ -46,6 +46,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F1c: ⌘K palette jumps to individual Sales reports. Added a `?tab=` reader to SalesReports.tsx (mount-time, validated against the Tab union) + 4 deep-link entries in CommandPalette ALL_PAGES (Product Mix/Customer Profitability/by Rep/by Month) + getPageIcon strips `?query`. AR Aging + Commissions already reachable. Routing-only, zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F1b: Quotes list searchable by product. quote_items only has product_id → join to products.product_name, denormalize a `product_names` string per quote. Also fixed the latent `customer_name` searchKey (was undefined on every row) by denormalizing the customer join. Zero DB. Gate green (lint+typecheck+build+2179 tests); cross-checked 10/10 quote_items join to a product.
 - F1a: Orders list searchable by product name. Reused the existing per-order order_items query (added product_name col), built a `product_names` string per order, added it to DataTable searchKeys. Zero DB. Gate green (lint+typecheck+build+2179 tests); cross-checked 277/277 order_items carry product_name (94 distinct).
 - Scaffolding: PLAN.md + STATE.md + LOOP_PROMPT.md for the 5-feature v2 loop. Branch off prod db9b32ea.

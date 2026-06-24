@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Download, FileText, Eye, EyeOff, Users, X } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -15,6 +16,7 @@ import type { SalesDetailRow, SalesSummaryRow, FarmGroupMember } from '../types'
 
 // ─── Types ──────────────────────────────────────────────────
 type Tab = 'detail' | 'by_product' | 'by_customer' | 'by_month' | 'by_sales_rep';
+const VALID_TABS: Tab[] = ['detail', 'by_product', 'by_customer', 'by_month', 'by_sales_rep'];
 
 interface FilterOption { id: string; name: string }
 
@@ -56,8 +58,13 @@ export default function SalesReports() {
   const { role: _role } = useAuth();
   const { toast } = useToast();
 
-  // ── Tab state ──
-  const [tab, setTab] = useState<Tab>('detail');
+  // ── Tab state (deep-linkable via ?tab= so the ⌘K palette can jump straight to a report) ──
+  const [searchParams] = useSearchParams();
+  const initialTab: Tab = (() => {
+    const t = searchParams.get('tab');
+    return t && (VALID_TABS as string[]).includes(t) ? (t as Tab) : 'detail';
+  })();
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [customerView, setCustomerView] = useState(false);
 
   // ── Filter state ──
