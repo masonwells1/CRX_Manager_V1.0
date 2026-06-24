@@ -25,10 +25,16 @@ import type { Quote, BookingRolloverRow } from '../types';
 
 const DELETABLE = ['draft', 'sent', 'revised'];
 
+// Row shape with denormalized, searchable strings (F1: search by product/customer).
+interface QuoteRow extends Quote {
+  customer_name: string;
+  product_names: string;
+}
+
 export default function Quotes() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [quotes, setQuotes] = useState<QuoteRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [plannedFilter, setPlannedFilter] = useState(false);
@@ -107,7 +113,43 @@ export default function Quotes() {
       setLoading(false);
       return;
     }
-    setQuotes((data || []) as Quote[]);
+
+    // Seed rows with searchable strings; customer name is denormalized off the join.
+    const quoteList: QuoteRow[] = (data || []).map((q) => ({
+      ...(q as Quote),
+      customer_name: (q as { customer?: { farm_name?: string } | null }).customer?.farm_name || '',
+      product_names: '',
+    }));
+
+    // quote_items only carries product_id, so join through products for the name (F1: search by product).
+    const quoteIds = quoteList.map((q) => q.id);
+    if (quoteIds.length > 0) {
+      const { data: itemRows, error: itemErr } = await supabase
+        .from('quote_items')
+        .select('quote_id, product_id')
+        .in('quote_id', quoteIds);
+      if (itemErr) {
+        Sentry.captureException(itemErr, { tags: { source: 'fetch', action: 'load_quote_items' } });
+      } else if (itemRows && itemRows.length > 0) {
+        const productIds = [...new Set(itemRows.map((r) => r.product_id).filter(Boolean) as string[])];
+        const { data: prodRows } = await supabase
+          .from('products')
+          .select('id, product_name')
+          .in('id', productIds.length > 0 ? productIds : ['__none__']);
+        const nameById: Record<string, string> = {};
+        (prodRows || []).forEach((p) => { nameById[p.id] = p.product_name; });
+        const namesByQuote: Record<string, Set<string>> = {};
+        itemRows.forEach((r) => {
+          const nm = r.product_id ? nameById[r.product_id] : undefined;
+          if (nm) (namesByQuote[r.quote_id] ??= new Set()).add(nm);
+        });
+        quoteList.forEach((q) => {
+          q.product_names = Array.from(namesByQuote[q.id] || []).join(', ');
+        });
+      }
+    }
+
+    setQuotes(quoteList);
     setLoading(false);
   }, [toast]);
 
@@ -132,7 +174,7 @@ export default function Quotes() {
     });
 
   const checkboxCol = useMemo(
-    () => createCheckboxColumn<Quote>(selected, toggleSelect, (q) => q.id, (q) => DELETABLE.includes(q.status)),
+    () => createCheckboxColumn<QuoteRow>(selected, toggleSelect, (q) => q.id, (q) => DELETABLE.includes(q.status)),
     [selected, toggleSelect]
   );
 
@@ -227,7 +269,7 @@ export default function Quotes() {
     { key: 'delete', label: 'Delete Quotes', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
   ];
 
-  const dataColumns: Column<Quote>[] = [
+  const dataColumns: Column<QuoteRow>[] = [
     {
       key: 'quote_number',
       header: 'Quote #',
@@ -400,12 +442,12 @@ export default function Quotes() {
 
       <Card padding={false}>
         <div className="p-5">
-          <DataTable<Quote>
+          <DataTable<QuoteRow>
             data={filtered}
             columns={columns}
             searchable
-            searchPlaceholder="Search by quote # or customer..."
-            searchKeys={['quote_number', 'customer_name']}
+            searchPlaceholder="Search quotes, customers, or products…"
+            searchKeys={['quote_number', 'customer_name', 'product_names']}
             onRowClick={(row) => navigate(`/quotes/${row.id}`)}
             emptyTitle="No quotes yet"
             emptyDescription="Quotes are the first step — build a quote, send it to your customer, then convert it to an order."
