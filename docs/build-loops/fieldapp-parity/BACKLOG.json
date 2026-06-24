@@ -1,0 +1,1077 @@
+{
+  "summary": "Draft the ChemMan-parity backlog (per-area acceptance criteria) for the CRX field-application autonomous build loop",
+  "agentCount": 5,
+  "logs": [],
+  "result": [
+    {
+      "area": "Job Scheduling (Manage Job Scheduling command center)",
+      "sections": [
+        {
+          "name": "Job list + create/edit job parity",
+          "why": "This is the one screen where the office sees every spray job at a glance and opens any job to set up the fields, chemicals, and crew that get sprayed.",
+          "chemman_target": "ChemMan's 'Manage Job Scheduling' (Scheduled Jobs) is a single filterable job list. Each row shows: checkbox, color tag chips, Job Nbr, Customers (with IDs), Locations/fields, Applicators, Crops, Chemicals (each product with rate + unit), Tot. ac, Rem. ac (remaining acres), Scheduled date, Status (Pending/Active), Created By, Updated By, and Printed status. A bottom totals row sums Tot. ac and Rem. ac across all jobs. A 'Click for full list' expander appears when a job has many customers/locations. An ADD button opens the job editor, which auto-assigns the next Job # and is a tabbed editor: LOCATIONS (select fields, per-field acres/planted acres/crop/strip/pests, per-field customer share %, scheduling fields like Call Date, Date Proposed, Time Proposed, Schedule Date, Date Expires, Consultant), CHEMICAL/CHARGES (per product: chemical search, warehouse, vendor, rate/ac, unit, total applied with gallon conversion, plus Diluent Rate, REI, PHI), LOADER WORKSHEET, APPLIED INFO, and NOTIFICATIONS, with memo fields (Loader Comment, Additional Info, Internal Memo Not Printed) and SAVE JOB #.",
+          "acceptance_criteria": [
+            "The Manage Job Scheduling page shows a single job list where each row displays, at minimum: selection checkbox, color tag chips, Job #, customer(s), field/location(s), applicator(s), crop(s), chemical(s) with rate + unit, total acres, remaining acres, scheduled date, status, created-by, updated-by, and printed status.",
+            "A totals row at the bottom of the list sums total acres and remaining acres across all currently-listed jobs and the figure changes when filters change the visible set.",
+            "When a job has more customers or locations than fit inline, a 'Click for full list' expander reveals the rest without leaving the page.",
+            "An ADD action opens a new-job editor that auto-assigns the next sequential job number, shown before save.",
+            "The job editor has tabbed sections for Locations, Chemicals/Charges, Loader Worksheet, Applied Info, and Notifications (each tab present even if some are covered in their own sections below).",
+            "On the Locations tab a user can select fields, set per-field acres, planted acres, crop, strip, and pests, and set per-field customer share percentages that total to 100%.",
+            "The Locations tab captures scheduling fields: Call Date, Date Proposed, Time Proposed, Schedule Date, Date Expires, and Consultant.",
+            "On the Chemicals/Charges tab, picking a chemical auto-fills its warehouse, vendor, default rate/acre and unit, and computes Total Applied (rate x total acres) plus a gallon/lb-equivalent conversion.",
+            "Each chemical line can record Diluent Rate, Hours Re-entry (REI), and Days Pre-harvest (PHI).",
+            "The job editor has memo fields for Loader Comment, Additional Info, and an Internal Job/Invoice Memo flagged as not printed.",
+            "Saving a job persists all of the above and the saved job appears correctly in the list."
+          ],
+          "subtasks": [
+            "Audit the existing Jobs list and JobDetail editor against this row/column and tab set; list missing fields.",
+            "Ensure the list row renders every required column (tags, customers w/ IDs, locations, applicators, crops, chemicals+rate+unit, tot ac, rem ac, scheduled, status, created/updated/printed).",
+            "Add the all-jobs totals row (total acres + remaining acres) that recomputes on filter change.",
+            "Add the 'Click for full list' expander for jobs with many customers/locations.",
+            "Confirm new-job auto-numbering shows the next job # before save.",
+            "Confirm the editor has all five tabs and the Locations scheduling fields (Call Date, Date Proposed, Time Proposed, Schedule Date, Date Expires, Consultant).",
+            "Confirm per-field crop/strip/pests/acres/planted-acres and per-field customer share % entry exist and shares validate to 100%.",
+            "Confirm chemical auto-fill (warehouse/vendor/rate/unit + total applied + gallon/lb conversion) and the REI/PHI/Diluent fields.",
+            "Confirm the three memo fields incl. the internal-not-printed memo.",
+            "Run the app, create a job end-to-end, and confirm it lists with correct columns and totals."
+          ],
+          "needs_migration": true,
+          "depends_on": [],
+          "notes": "Consultant and remaining-acres need verification as real job columns (gap doc flagged Consultant as possibly not on jobs and remaining-acres tracking as flow-uncertain) — needs_migration set true to cover any missing scheduling-field columns (Date Proposed/Time Proposed/Date Expires/Call Date/Consultant) or remaining-acres derivation. Skip any aerial fields (flights/starts/airport strips) and Mixmate — out of scope per owner."
+        },
+        {
+          "name": "Recipes (save/reuse tank mixes on a job)",
+          "why": "Lets the office load a saved spray mix into a job in one click instead of re-typing the same chemicals every time.",
+          "chemman_target": "On the job editor's Chemical/Charges tab, ChemMan offers SELECT RECIPE, USE LAST USED RECIPE, and a 'New Recipe Name + SAVE AS RECIPE' control. A recipe is a reusable tank-mix (set of products with rates/units) that can be loaded into a job and re-saved.",
+          "acceptance_criteria": [
+            "The job editor's chemicals area has a way to pick a saved recipe and load its products (with rates/units) into the current job.",
+            "There is a 'use last used recipe' shortcut that loads the most recently used recipe into the job.",
+            "A user can name and save the current set of chemical lines as a new recipe, and it then appears in the recipe picker.",
+            "Loading a recipe populates the chemical lines with the recipe's products, rates, and units, and they remain editable afterward.",
+            "Saving and re-loading a recipe round-trips: products/rates/units match what was saved."
+          ],
+          "subtasks": [
+            "Verify the existing recipe load path (load_recipe_into_job) works in the job editor.",
+            "Add a 'select recipe' picker and a 'use last used recipe' shortcut if not present.",
+            "Add 'save current chemicals as new recipe' with a name field.",
+            "Confirm loaded recipe lines stay editable and don't overwrite unrelated job data.",
+            "Run the app: save a recipe, open a new job, load it, confirm products/rates match."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Job list + create/edit job parity"
+          ],
+          "notes": "Gap doc verified recipes as Built (JobDetail load_recipe_into_job) and blend_recipes table exists; this section is mostly confirm-and-fill-gaps (last-used + save-as may be missing). No new tables expected if blend_recipes/recipe_id already cover it."
+        },
+        {
+          "name": "Job batches (group jobs into named batches)",
+          "why": "Lets the office bundle a set of jobs together so they can be processed or printed as one named group.",
+          "chemman_target": "ChemMan has a JOB BATCHES toolbar action on the job list that groups checkbox-selected jobs into named batches for batch processing/printing.",
+          "acceptance_criteria": [
+            "From the job list, a user can select multiple jobs via their checkboxes and add them to a named batch.",
+            "A user can create a new batch (with a name) and assign selected jobs to it.",
+            "Jobs in a batch can be identified/filtered or viewed as a group (the batch is visible somewhere, not just stored).",
+            "A job can be removed from a batch.",
+            "Creating a batch and assigning jobs persists and survives a page reload."
+          ],
+          "subtasks": [
+            "Verify jobs.batch_id and any existing batch UI in JobDetail.",
+            "Add a 'Job Batches' toolbar action that operates on checkbox-selected jobs.",
+            "Add create-named-batch and assign-selected-to-batch flows.",
+            "Make batch membership visible (filter or label) and removable.",
+            "Run the app: select jobs, batch them, reload, confirm membership."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "Job list + create/edit job parity",
+            "Full filter set (AND-combined)"
+          ],
+          "notes": "Gap doc: jobs.batch_id exists and JobDetail references batch_id (Built), but a list-level batch *manager* (named batches, multi-select assign) is the parity gap. Migration flagged in case a batches table/name column is needed beyond the single batch_id field."
+        },
+        {
+          "name": "Color-coded job tags (create/edit/delete + chips + filter)",
+          "why": "Lets the owner label jobs with colored tags (like Fungicide or Y-Drop) so the whole list can be color-scanned and filtered at a glance.",
+          "chemman_target": "ChemMan's EDIT JOB TAGS modal is a full tag manager: each tag row has a Tag Name (text) + Tag Color (dropdown: Blue/Green/Teal/Red/Black/Yellow/etc.) with SAVE and DELETE, plus an add-new row. Tags are unlimited and custom (existing set: Fungicide, Foliar Feed, Pre-Emerge, Post-Emerge Chemical, Other, Y-Drop Toolbar, Y-Drop). These tags render as color chips on each job row and drive a 'Job Tags' multi-select filter on the list. An EDIT JOB TAGS toolbar action does bulk tag management on selected jobs.",
+          "acceptance_criteria": [
+            "A tag manager lets a user create a new tag with a name and a color chosen from a color set, and the new tag appears immediately.",
+            "A user can edit an existing tag's name and color and the change reflects on every job that uses it.",
+            "A user can delete a tag, and it is removed from the manager and from job rows (with a sane handling of jobs that had it).",
+            "Tags assigned to a job render as color-coded chips on that job's row in the list.",
+            "A job can have multiple tags, and each chip uses its tag's chosen color.",
+            "The list has a Job Tags multi-select filter that narrows the list to jobs carrying the selected tag(s).",
+            "A bulk 'edit job tags' action can add/remove tags on multiple checkbox-selected jobs at once.",
+            "Tag create/edit/delete and assignments persist across reload."
+          ],
+          "subtasks": [
+            "Design tag storage: a job_tags table (name + color) and a job-to-tag link (many-to-many) — confirm vs existing unused jobs.tags field.",
+            "Build the tag manager modal (add row, name, color dropdown, SAVE, DELETE).",
+            "Render color chips on each job row from a job's assigned tags.",
+            "Add the Job Tags multi-select filter to the filter bar.",
+            "Add the bulk 'edit job tags' toolbar action over selected jobs.",
+            "Run the app: create tags, assign to jobs, see chips, filter by tag, bulk-tag, delete a tag."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "Job list + create/edit job parity"
+          ],
+          "notes": "Gap doc VERIFIED: job tags UI is Missing (the existing jobs.tags schema field is unused; the only tag UI is for team notes, not jobs). Likely needs a proper job_tags table + a job_tag link table rather than a single text/array column, to support per-tag color and clean editing. Bulk tag mgmt overlaps with Mass Edit but is its own ChemMan action."
+        },
+        {
+          "name": "Field/location route-ordering (drag to set applicator drive order)",
+          "why": "Lets the office put a job's fields in the order the applicator should drive to them, so the field sheet lists stops in a sensible route.",
+          "chemman_target": "ChemMan has a per-row 'Job Locations Order' action that sets the applicator route order of a job's fields/locations. The order is the sequence the applicator follows; map pins are numbered (#) per location.",
+          "acceptance_criteria": [
+            "From a job, a user can open a 'field/location order' view listing all the job's fields.",
+            "The user can reorder fields by dragging them into the desired sequence (drag-and-drop), not only by typing numbers.",
+            "The chosen order persists and is reflected wherever the job's fields are listed (and on any applicator printout once built).",
+            "Reordering one job does not change the order of fields on any other job.",
+            "The order survives a page reload."
+          ],
+          "subtasks": [
+            "Confirm job_fields.sort_order exists and is honored on read.",
+            "Build a drag-and-drop reorder UI for a job's fields (per-row 'Locations Order' action).",
+            "Persist new sort_order on drop.",
+            "Ensure list/printout reads fields in sort_order.",
+            "Run the app: reorder a job's fields by dragging, reload, confirm order held."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Job list + create/edit job parity"
+          ],
+          "notes": "Gap doc VERIFIED: order persists (job_fields.sort_order) but there is no drag UI — only manual numeric order. So this is a UI build on an existing column; no migration expected. Map pin numbering aligns with this order."
+        },
+        {
+          "name": "Full filter set (AND-combined)",
+          "why": "Lets the office instantly narrow the job list to exactly the jobs they care about by any combination of who, what, where, and when.",
+          "chemman_target": "ChemMan's filter bar has Job Nbr (text), Select Customers (multi), Select Applicator (multi), Schedule Date From/To (range), Job Tags (multi), and a MORE expander revealing: Type, Vehicle, Ground Crews, Crop, Strip, County, State, Chemical Search, Status, Field Name. SEARCH and CLEAR ALL FILTERS controls. Filters are AND-combined: the list only shows jobs matching ALL filter options used.",
+          "acceptance_criteria": [
+            "The filter bar supports, at minimum: Job # (text), Customer (multi-select), Applicator (multi-select), Schedule Date From/To (range), Job Tags (multi-select), Type, Vehicle, Ground Crew, Crop, County, State, Chemical, Status, and Field Name.",
+            "All active filters combine with AND logic: the list shows only jobs matching every filter currently applied.",
+            "A SEARCH/apply action runs the filter set and a CLEAR ALL action resets every filter back to empty.",
+            "Less-common filters are tucked behind a MORE/expand control so the bar isn't cluttered, matching ChemMan's layout.",
+            "Each filter measurably changes the result set when applied (a tester can pick a value and see the list shrink to matching jobs).",
+            "The totals row reflects only the filtered set."
+          ],
+          "subtasks": [
+            "Inventory current filters (status/date/customer per gap doc) vs the full target set.",
+            "Add missing filters: applicator, job tags, type, vehicle, ground crew, crop, county, state, chemical, field name, job #.",
+            "Implement AND-combine across all filters server-side/query-side.",
+            "Add MORE expander for secondary filters and a CLEAR ALL control.",
+            "Wire the totals row to the filtered set.",
+            "Run the app: apply several filters together, confirm AND behavior and clear-all."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "Job list + create/edit job parity",
+            "Color-coded job tags (create/edit/delete + chips + filter)"
+          ],
+          "notes": "Gap doc VERIFIED: filters are Partial (status/date/customer only). 'Strip' and 'Ground Crew' had no schema in the first pass — needs_migration true to cover adding Ground Crew (and optionally Strip) as filterable data. Type/vehicle/crop/county/state/chemical/field exist in data per gap doc. Strip may be deferred if it maps to an aerial concept; Ground Crew is a real new entity also needed by Mass Edit/applied-info."
+        },
+        {
+          "name": "Mass edit selected jobs (dates / status / loader worksheets)",
+          "why": "Lets the office change a setting on many jobs at once — like pushing a whole day's jobs to a new date — instead of opening each job one by one.",
+          "chemman_target": "ChemMan's MASS EDIT toolbar action opens a modal that says 'You are about to edit N jobs' and offers checkboxes: Edit Schedule Dates, Edit Job Status, Edit Loader Worksheets. The chosen change is bulk-applied across all checkbox-selected jobs at once.",
+          "acceptance_criteria": [
+            "From the job list, a user can select multiple jobs by checkbox and open a Mass Edit action that states how many jobs are selected.",
+            "Mass Edit can set/change the Schedule Date on all selected jobs.",
+            "Mass Edit can set/change the Status on all selected jobs.",
+            "Mass Edit can update the Loader Worksheet settings on all selected jobs (at minimum the loader worksheet fields that make sense to bulk-set).",
+            "The user picks which of these to change (the others are left untouched on the selected jobs).",
+            "Applying Mass Edit updates every selected job and the list reflects the change without a manual refresh.",
+            "Mass Edit does not alter jobs that were not selected."
+          ],
+          "subtasks": [
+            "Add a Mass Edit toolbar action enabled when 1+ jobs are checkbox-selected.",
+            "Build the modal with the N-jobs count and three opt-in sections (dates, status, loader worksheets).",
+            "Implement a bulk update that applies only the chosen sections to the selected job IDs.",
+            "Refresh the list after apply.",
+            "Run the app: select several jobs, bulk-change date and status, confirm only those jobs changed."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Job list + create/edit job parity",
+            "Loader worksheet (bulk-editable fields)"
+          ],
+          "notes": "Gap doc VERIFIED: Mass Edit is Missing (only bulk delete/export exist). No new tables expected — it writes existing job/loader fields. Loader-worksheet bulk fields depend on the loader worksheet section existing on jobs (already an editor tab per capture doc)."
+        },
+        {
+          "name": "Customizable list columns (List Settings)",
+          "why": "Lets each user choose which columns show on the job list so they see the info they care about and hide the rest.",
+          "chemman_target": "ChemMan's LIST SETTINGS gear opens a Job List Settings panel with toggles. Job-List-only toggles include: Show Wind Direction, Created By, Job Tags, Status, Updated By, Call Date, Remaining Acres, Scheduled Date, Last Printed By, Completed Jobs, Customer Phone Number. Shared (both Job and Invoice list) toggles: Show Customers, Applicators, Locations, Crops, Total Acres, Chemical Appl. The chosen columns persist per user and are shared between the job list and the invoice list for the shared toggles.",
+          "acceptance_criteria": [
+            "A List Settings control on the job list opens a panel of column on/off toggles.",
+            "Toggling a column on/off immediately adds/removes it from the visible job list.",
+            "The toggle set includes at least: Wind Direction, Created By, Job Tags, Status, Updated By, Call Date, Remaining Acres, Scheduled Date, Last Printed By, Show Completed Jobs, Customer Phone, Customers, Applicators, Locations, Crops, Total Acres, Chemical Application.",
+            "A user's chosen column configuration persists across sessions (reopening the page keeps their layout).",
+            "The shared columns (Customers, Applicators, Locations, Crops, Total Acres, Chemical Appl.) use the same setting on both the job list and the field-application invoice list.",
+            "A 'Show Completed Jobs' toggle controls whether completed jobs appear in the list."
+          ],
+          "subtasks": [
+            "Define a per-user column-preferences store (which columns visible).",
+            "Build the List Settings panel with the full toggle set.",
+            "Make the job list render columns from the user's preferences.",
+            "Share the common toggles between job list and invoice list.",
+            "Add the 'Show Completed Jobs' visibility toggle.",
+            "Run the app: toggle columns, reload, confirm layout persisted per user."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "Job list + create/edit job parity"
+          ],
+          "notes": "Gap doc VERIFIED: customizable columns are Missing (fixed columns, no per-user settings). Needs a per-user preferences store (new table or JSON column on the user/profile). SKIP the Mixmate Status toggle and the Airport Strips toggle (aerial/Mixmate out of scope). Wind Direction toggle ties to weather capture (Open-Meteo) covered elsewhere."
+        }
+      ]
+    },
+    {
+      "area": "Printouts & field paperwork",
+      "sections": [
+        {
+          "name": "Applicator Field Sheet (Original / Custom / Enhanced)",
+          "why": "This is the paper the crew physically carries to the field telling them exactly what to spray on which field, so without it nobody knows the job.",
+          "chemman_target": "ChemMan generates a printable Applicator Report per job in three selectable layouts: Original Applicator Report, Custom Applicator Report, and Enhanced Applicator Report. Reached from each job row via the APPL. button and the row dropdown (Original Applicator Report / Custom Applicator Report / Enhanced Applicator Report). The sheet shows the job number, customer(s) and IDs, every field/location with acres, crop(s) and pest(s), the full chemical/charge list with rate-per-acre and unit, total applied per product (incl. gallon/lb conversion), applicator and vehicle, scheduled date, REI (hours re-entry) and PHI (days pre-harvest) per product, wind/weather capture spaces, and a place to record as-applied actuals in the field. Printing a job records who printed it and when (the job list 'Printed' column).",
+          "acceptance_criteria": [
+            "From a field job, the user can open a print action and choose among three named formats: Original, Custom, and Enhanced applicator field sheets.",
+            "Each format renders to a print-ready PDF that opens/downloads and visibly prints on paper without layout breakage.",
+            "The Original format is a compact single-job sheet listing: job number, customer name(s) + customer ID(s), each field/location with acres, crop and pest, and the chemical list with rate/acre + unit.",
+            "The Enhanced format additionally shows: total applied per product with the gallon/lb-equivalent conversion, applicator name, vehicle, scheduled date, and per-product REI (re-entry hours) and PHI (pre-harvest days).",
+            "The Custom format is identical in data but uses the configurable header/layout/logo defined in settings (see Custom-format configuration criterion below); when no custom config is set it falls back to a sensible default without erroring.",
+            "Every format includes blank field-fillable areas for the crew to write as-applied acres and start/end weather (wind direction, wind mph, temp, humidity) by hand.",
+            "Printing/generating an applicator sheet stamps the job with who generated it and a timestamp, and that 'last printed by/when' is visible on the job list.",
+            "A tester can take one real multi-field, multi-product job and produce all three formats and confirm every chemical, rate, acre figure, and total matches the job's saved data exactly.",
+            "Custom-format configuration is a settings screen (company name/address/logo, optional footer text, toggle which optional columns appear) — it never invents pricing or billing content; it is layout only."
+          ],
+          "subtasks": [
+            "Define a shared field-job print data model (one function that gathers job + customers + fields + chemicals + applicator + vehicle + compliance fields) so all three formats read identical source data.",
+            "Build the Original applicator-sheet PDF layout.",
+            "Build the Enhanced applicator-sheet PDF layout (adds totals, conversions, REI/PHI, applicator/vehicle/date).",
+            "Build the Custom applicator-sheet PDF layout driven by a print-settings record (header/logo/footer/optional-column toggles).",
+            "Add a print/format-picker entry point on the job (button + dropdown matching ChemMan's APPL. + row menu) listing Original / Custom / Enhanced.",
+            "Record and display 'last printed by / printed at' on the job and surface it in the job list column.",
+            "Verify end-to-end on one real job: generate all three PDFs, eyeball every value against the job record."
+          ],
+          "needs_migration": true,
+          "depends_on": [],
+          "notes": "needs_migration is true for: (1) a per-job print-audit field (last_printed_by / last_printed_at) and (2) a company print-settings record for the Custom layout, if these do not already exist. SKIP all aerial content — do NOT include Flights/Starts/airport-strip fields on the sheet. Weather on these sheets is just blank hand-fill space; the auto-pulled Open-Meteo weather belongs to the as-applied capture area, not here."
+        },
+        {
+          "name": "Loader Worksheet PDF wired to FIELD JOBS",
+          "why": "This tells the person mixing the spray tank exactly how many tank loads to make and how much of each chemical goes in each load, so the mix is right and nothing is wasted or under/over-applied.",
+          "chemman_target": "ChemMan has a LOADER WORKSHEET tab on the job editor and a 'Loader' printout reachable from each job row's dropdown. The worksheet takes the applicator + vehicle + vehicle capacity (gallons) + rate + acres and computes the number of loads and the total job acres, then produces a loader printout describing what to mix per load. Mass-Edit can bulk-set Loader Worksheets across many jobs. The job editor also carries a 'Loader Comment' free-text memo that prints on the loader sheet.",
+          "acceptance_criteria": [
+            "A field job has a Loader Worksheet section where the user selects applicator, vehicle, and the vehicle's tank capacity in gallons (auto-filled from the vehicle record when present), plus rate and acres.",
+            "Given a capacity and the job's total spray volume (total acres x carrier/diluent rate per acre), the worksheet computes and displays the number of full loads + any partial last load, and the total job acres.",
+            "For each product on the job, the worksheet computes the per-load quantity (product total / number of loads, or capacity-proportional) so the loader knows how much of each chemical goes into one tank.",
+            "Until a valid capacity is entered the loads figure shows a clear 'Invalid'/'enter capacity' state rather than a wrong number or a crash (matches ChemMan behavior).",
+            "A 'Loader' print action on the field job produces a print-ready PDF Loader Worksheet showing: job number, applicator, vehicle, capacity, number of loads, per-load mix for every product (with units), total job acres, and the job's Loader Comment.",
+            "The loader PDF is reachable directly from the job (a Loader button/menu item on the job and on the job-list row), not only from deliveries.",
+            "A tester can take one real job with a known vehicle capacity and confirm by hand-math that loads count and per-load product amounts on the printed PDF are arithmetically correct.",
+            "A free-text Loader Comment entered on the job appears verbatim on the printed loader worksheet."
+          ],
+          "subtasks": [
+            "Add/confirm a Loader Worksheet section on the field job (applicator, vehicle, capacity-gallons, rate, acres inputs).",
+            "Implement the loads + per-load-mix calculation (total volume / capacity = loads; per-product split per load), including the 'Invalid until capacity entered' guard.",
+            "Build (or repoint the existing loader-sheet PDF engine to) a field-job loader worksheet layout including per-load product breakdown and Loader Comment.",
+            "Add a 'Loader' print entry point on the job and on the job-list row dropdown.",
+            "Support bulk-setting Loader Worksheets across selected jobs (Mass Edit) — at minimum the same per-load config applied to many jobs.",
+            "Verify on one real job: hand-check loads and per-load amounts against the PDF."
+          ],
+          "needs_migration": true,
+          "depends_on": [],
+          "notes": "needs_migration true if the job does not already store loader-worksheet inputs (applicator/vehicle/capacity/rate per job) and a Loader Comment. Vehicle tank capacity (gallons) must exist on the vehicle record; add it if missing. This is calculation + layout only — no billing/money rule involved."
+        },
+        {
+          "name": "Chemical Application Report (per job)",
+          "why": "This is the official record of exactly what chemical was put on a field — the document you hand to a customer or regulator to prove the application.",
+          "chemman_target": "ChemMan offers a 'Chemical Application Report' from each job row's dropdown (alongside the applicator and loader printouts). It is a per-job chemical-focused document listing every product applied with its rate, unit, total applied (incl. gallon/lb conversion), the field(s)/acres it was applied to, crop/pest, applicator, date, and compliance details (REI/PHI; product registration where available).",
+          "acceptance_criteria": [
+            "A 'Chemical Application Report' print action exists on the field job (button or row dropdown) and produces a print-ready PDF.",
+            "The report lists, for the job: each chemical/product, rate per acre + unit, total applied quantity with gallon/lb-equivalent conversion, and the field(s)/acres covered.",
+            "The report shows crop, pest, applicator, application date, and per-product REI and PHI.",
+            "Where the product record carries an EPA registration number, it appears on the report line (do not block the report when absent).",
+            "A tester can produce the report for one real multi-product job and confirm every product, rate, total, and conversion matches the job data.",
+            "The report renders cleanly to PDF and prints on paper without truncation."
+          ],
+          "subtasks": [
+            "Define the per-job chemical-application report layout (chemical-centric rather than crew-centric).",
+            "Reuse the shared field-job print data gatherer so figures match the applicator sheet.",
+            "Add a 'Chemical Application Report' entry point on the job and job-list row.",
+            "Verify on one real job against saved data."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Applicator Field Sheet (Original / Custom / Enhanced)"
+          ],
+          "notes": "Reuses the shared print data model from the applicator-sheet section, so no new DB fields needed if REI/PHI/EPA-reg already live on the chemical/product or job-chemical records. SKIP aerial fields."
+        },
+        {
+          "name": "Chemical Summary Report (across selected jobs)",
+          "why": "This adds up how much of each chemical was used across a whole batch of jobs at once, so you can see total product usage without opening each job.",
+          "chemman_target": "ChemMan exposes a standalone CHEMICAL SUMMARY REPORT button on the job-list toolbar that operates across the checkbox-selected jobs (and a 'Chemicals' option under MORE REPORT OPTIONS). It aggregates total quantity of each chemical/product across all selected jobs, with totals.",
+          "acceptance_criteria": [
+            "From the job list, the user can checkbox-select multiple jobs and click a 'Chemical Summary Report' action.",
+            "The report aggregates, across all selected jobs, the total applied quantity per chemical/product (summed rate x acres) shown in its unit plus gallon/lb-equivalent.",
+            "The report shows the count/list of jobs included and a grand total, and renders to a print-ready PDF (and ideally CSV export).",
+            "Selecting one job produces that job's chemical totals; selecting many produces correctly summed totals (a tester can hand-verify the sum of two jobs equals the report's combined figure).",
+            "If no jobs are selected the action prompts the user to select jobs rather than producing an empty/erroring report."
+          ],
+          "subtasks": [
+            "Add a multi-select-aware 'Chemical Summary Report' action to the job-list toolbar.",
+            "Implement the cross-job aggregation query (sum applied quantity by product across selected job IDs).",
+            "Build the summary PDF (and CSV export) layout with per-product totals + grand total + included-jobs list.",
+            "Add the no-selection guard.",
+            "Verify by selecting two known jobs and confirming the per-product totals equal the manual sum."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Chemical Application Report (per job)"
+          ],
+          "notes": "Pure aggregation over existing job/chemical data; no schema change. Requires the job list to support multi-job checkbox selection (if that selection mechanism doesn't exist yet it is a prerequisite, but it is shared with other bulk actions outside this area)."
+        },
+        {
+          "name": "Projected Use Report",
+          "why": "This forecasts how much of each chemical you'll need for upcoming scheduled jobs, so you can order product ahead of time and not run out mid-season.",
+          "chemman_target": "ChemMan lists a 'Projected Use Report' under the job-list MORE REPORT OPTIONS dropdown. It projects expected chemical/product usage based on scheduled (not-yet-applied) jobs — i.e. planned rate x planned acres summed per product across the selected/filtered jobs — to support purchasing/inventory planning.",
+          "acceptance_criteria": [
+            "A 'Projected Use Report' action is available from the job list (toolbar reports menu).",
+            "The report sums planned product usage (planned rate x planned/scheduled acres) per chemical across the in-scope jobs (selected jobs, or jobs matching the current filter/date range).",
+            "Each product line shows projected total quantity in its unit plus gallon/lb-equivalent, and the report shows the date range / jobs it is based on.",
+            "The report distinguishes projected (scheduled, not yet applied) usage from already-applied usage so the number is genuinely a forecast.",
+            "Output renders to a print-ready PDF (and ideally CSV).",
+            "A tester can confirm that for two scheduled jobs the projected per-product totals equal planned rate x planned acres summed by hand."
+          ],
+          "subtasks": [
+            "Add a 'Projected Use Report' action to the job-list reports menu.",
+            "Implement the projection query (planned rate x scheduled acres, summed by product, scoped to selected/filtered jobs, restricted to not-fully-applied jobs).",
+            "Build the report PDF/CSV layout with date range + per-product projected totals.",
+            "Verify against two known scheduled jobs by hand-math."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Chemical Summary Report (across selected jobs)"
+          ],
+          "notes": "Same aggregation engine as Chemical Summary but scoped to scheduled/planned figures; no schema change expected. SKIP aerial."
+        },
+        {
+          "name": "Master Mix Summary",
+          "why": "This shows the combined tank-mix recipe across a group of jobs — the total of each product to mix — so a single big batch can be prepared at once.",
+          "chemman_target": "ChemMan lists 'Master Mix Summary' under the job-list MORE REPORT OPTIONS dropdown. It is a consolidated mix sheet across the selected/batched jobs: the combined total of each product to be mixed and (with capacities) the overall loads/mix picture, so a loader can prepare the whole batch from one document.",
+          "acceptance_criteria": [
+            "A 'Master Mix Summary' action is available from the job list and operates across the checkbox-selected jobs (or a job batch).",
+            "The summary consolidates, across all selected jobs, the total quantity of each product to mix (summed), presented as a single combined mix sheet.",
+            "Where vehicle capacities are known, the summary also presents the combined loads / per-load picture for the batch (reusing the loader-worksheet calculation).",
+            "Output renders to a print-ready PDF.",
+            "A tester can select two jobs sharing products and confirm the master mix totals equal the sum of each job's product quantities.",
+            "If selected jobs use different vehicles/capacities, the report handles the mix sensibly (e.g. groups or notes per-vehicle) rather than silently averaging."
+          ],
+          "subtasks": [
+            "Add a 'Master Mix Summary' action to the job-list reports menu (multi-select / batch aware).",
+            "Implement combined per-product mix aggregation across selected jobs.",
+            "Reuse the loader per-load calculation to present batch loads where capacities exist.",
+            "Build the master-mix PDF layout.",
+            "Verify on two product-sharing jobs by hand-math."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Loader Worksheet PDF wired to FIELD JOBS",
+            "Chemical Summary Report (across selected jobs)"
+          ],
+          "notes": "Builds on the loader calculation and the cross-job aggregation; no schema change expected. Ties to Job Batches if batches exist, but multi-select is sufficient for parity."
+        },
+        {
+          "name": "Print the job list",
+          "why": "This prints the on-screen list of jobs as-filtered, so the office or a manager can carry or file a paper copy of the day's/week's work.",
+          "chemman_target": "ChemMan's Manage Job Scheduling screen has a PRINT button that prints the current job list reflecting the active filters and the columns chosen in LIST SETTINGS, including the bottom totals row (e.g. total and remaining acres summed across all listed jobs).",
+          "acceptance_criteria": [
+            "A PRINT action on the job-list screen produces a print-ready PDF of the currently displayed list.",
+            "The printed list reflects the active filters/search (only the jobs currently shown are printed) and the same columns visible on screen.",
+            "The printout includes the footer totals row (e.g. total acres and remaining acres summed across the listed jobs).",
+            "The printout is legible in landscape for wide column sets and does not truncate columns off the page.",
+            "A tester can apply a filter (e.g. a date range), print, and confirm the PDF contains exactly the filtered jobs and a correct acre total."
+          ],
+          "subtasks": [
+            "Add a PRINT action to the job-list toolbar.",
+            "Generate a PDF from the current filtered result set + visible columns + totals row.",
+            "Handle wide tables (landscape / column fit).",
+            "Verify filtered print matches on-screen rows and totals."
+          ],
+          "needs_migration": false,
+          "depends_on": [],
+          "notes": "No schema change. Column choices come from the (separate) list-settings feature; this section just needs to print whatever columns are currently shown."
+        },
+        {
+          "name": "Map / Logs per job + attach log files",
+          "why": "This lets a job hold its field map and the machine's GPS/coverage log files (and other proof documents) so everything for that application lives in one place.",
+          "chemman_target": "Each ChemMan job row has a dropdown 'Map / Logs' option and an 'Attach Log Files' option. Map/Logs shows the job's field locations on a map; Attach Log Files lets the user attach application log files (e.g. equipment/GPS coverage logs) to the job, kept with that job's record.",
+          "acceptance_criteria": [
+            "Each field job has a 'Map / Logs' view reachable from the job and the job-list row that plots the job's field locations on a map.",
+            "Each field job has an 'Attach Log Files' capability: the user can upload one or more files (PDF/image/common log formats) and they are stored against that specific job.",
+            "Attached files are listed on the job with name, size, upload date, and uploader, and can be downloaded and deleted.",
+            "Attachments persist (survive reload) and are scoped to the job (one job's logs never appear on another).",
+            "A tester can attach a file to one job, reload, download it back identical, and confirm it does not show on a different job.",
+            "The map view shows the correct field boundaries/pins for the job's selected locations (or a clear 'no boundary on file' state when a field has no geometry)."
+          ],
+          "subtasks": [
+            "Add a per-job map view that plots the job's field locations/boundaries.",
+            "Create job-attachment storage (file store + a job_attachments table linking file -> job, with name/size/uploaded_at/uploaded_by).",
+            "Build the Attach Log Files UI (upload, list, download, delete) on the job and a Map/Logs entry on the job-list row.",
+            "Enforce job-scoping and access control on attachments.",
+            "Verify: attach -> reload -> download-identical -> confirm not on another job; verify map renders job fields."
+          ],
+          "needs_migration": true,
+          "depends_on": [],
+          "notes": "needs_migration true: a new job_attachments table (and file storage bucket) is required to hold per-job log files. The map portion may reuse existing field-boundary geometry if present; if a field has no geometry, show a graceful empty state rather than erroring. No aerial-specific content."
+        }
+      ]
+    },
+    {
+      "area": "As-applied capture & compliance",
+      "sections": [
+        {
+          "name": "As-applied entry record (applicator, vehicle, application date)",
+          "why": "This is the legal proof of who did the spraying, with what machine, and on what day — the record you hand a regulator or an angry customer.",
+          "chemman_target": "ChemMan's 'Add Applied Info' modal (off each job row, and carried into the invoice's APPLIED INFO tab) records, per entry: Applicator (dropdown), Vehicle (auto-fills from the chosen applicator/loader, e.g. Rogator 1100C), and Application Date. Multiple applied-info entries are allowed per job (one job can have several applications on different days/by different people). Each entry rolls up into a per-location applied summary line.",
+          "acceptance_criteria": [
+            "On a field-application job/invoice there is an 'Applied Info' area where a user can add one or more applied-info entries.",
+            "Each entry captures Applicator (selected from the existing applicator list), Vehicle (defaults from the chosen applicator/vehicle but is editable), and Application Date.",
+            "A single job/invoice supports multiple applied-info entries (add, edit, delete each independently) — not just one.",
+            "Each saved entry is persisted to the database and reloads correctly when the job/invoice is reopened.",
+            "Applicator and Vehicle selections reference real records (a chosen applicator who later changes name updates by reference; a free-typed name is rejected or stored as a record).",
+            "A tester can create two entries on one job (different applicator + date each) and see both listed."
+          ],
+          "subtasks": [
+            "Confirm/define the applied-info table that holds one row per applied-info entry, linked to the job and/or field-app invoice.",
+            "Build the 'Add Applied Info' form/modal with Applicator picker, Vehicle field (auto-default from applicator/vehicle, editable), and Application Date picker.",
+            "Support listing, editing, and deleting multiple entries per job/invoice.",
+            "Wire save/load so entries persist and reappear on reopen.",
+            "Verify end-to-end by adding two entries to one job and reopening."
+          ],
+          "needs_migration": true,
+          "depends_on": [],
+          "notes": "ChemMan's Applied Info lives on BOTH the job editor (APPLIED INFO tab) and the invoice editor (APPLIED INFO tab carries over). Target should let one applied-info record flow from job to its transferred invoice rather than being re-entered. Source: capture doc lines 117-126, 197-198."
+        },
+        {
+          "name": "Applied acres per location + remaining-acres tracking (partial / multi-day)",
+          "why": "Lets the crew record how much of each field actually got sprayed today and shows at a glance how much is still left, so a job sprayed over two days or in pieces is tracked accurately and billed for exactly what was done.",
+          "chemman_target": "In ChemMan's Add Applied Info, each entry records applied acres per location (e.g. 'All Locations [100%] applied for a total of [245.40 ac]', or a partial subset), with a live 'Job Total Remaining Acres: X of Y' counter. Applied acres accumulate across multiple entries so a job can be applied partially now and the rest later (multi-day). There is a SELECT LOCATIONS BY MAP option to pick which fields an entry covers. The job list shows 'Tot. ac' and 'Rem. ac' (remaining acres) columns with bottom totals.",
+          "acceptance_criteria": [
+            "Each applied-info entry can record applied acres for one or more specific locations (not just a single whole-job number).",
+            "The system tracks, per job, Total acres vs Applied acres vs Remaining acres, where Remaining = Total planned − sum of applied across all entries.",
+            "A live remaining-acres indicator (e.g. 'X of Y remaining') is visible while entering an applied-info entry and on the job summary.",
+            "Applying part of a job (e.g. 148.5 of 245.4 ac) leaves the correct remaining acres; a second entry can apply the rest and drive remaining to zero.",
+            "Remaining acres cannot silently go negative without a warning (over-application is flagged).",
+            "Applied acres per location persist and feed the existing applied-acres divergence alert (do not duplicate or replace that alert — reuse it).",
+            "A tester can split a job across two applied-info entries on two dates and see remaining acres go from full → partial → zero."
+          ],
+          "subtasks": [
+            "Add applied-acres-per-location capture to each applied-info entry (link entry → location with an acres value).",
+            "Compute and display Total / Applied / Remaining acres at the job level (sum across all entries).",
+            "Show a live remaining-acres counter in the applied-info form and on the job/invoice summary.",
+            "Add an over-application warning when applied would exceed planned acres.",
+            "Confirm the existing applied-acres divergence alert reads from these applied acres (the alert already exists in CRX — wire to it, don't rebuild).",
+            "Verify a two-entry, multi-day partial application drives remaining acres correctly."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "As-applied entry record (applicator, vehicle, application date)"
+          ],
+          "notes": "The applied-acres divergence alert ALREADY EXISTS in CRX (per task brief) — this section feeds it, it does not rebuild it. 'SELECT LOCATIONS BY MAP' is a convenience; the load-bearing requirement is per-location applied acres + remaining tracking. Map-pick is nice-to-have if a job map already exists. Source: capture doc lines 44-45, 191, 198."
+        },
+        {
+          "name": "START + END weather pair on field-app invoices (Open-Meteo auto-pull)",
+          "why": "Regulators want the weather at the start AND end of a spray to prove conditions were legal (e.g. wind wasn't too high), and pulling it automatically saves the crew from writing it down by hand.",
+          "chemman_target": "ChemMan's Applied Info records a START weather set and an END weather set, each with: Time (with a 'NOW' button to stamp the current time), Temp (°F), Wind Direction, Wind mph, and Humidity. It also computes Total Time (end − start) and has a GET WEATHER button that auto-fills the values from a weather service by date + field location. (ChemMan uses paid Visual Crossing; CRX TARGET keeps the existing FREE Open-Meteo auto-pull instead — same behavior, different provider.)",
+          "acceptance_criteria": [
+            "An applied-info entry captures a full START weather set: Time, Temp (°F), Wind Direction, Wind mph (speed), and Humidity.",
+            "It also captures a full END weather set with the same five fields, stored separately from start (this is a PAIR, not one snapshot).",
+            "Each time field has a 'NOW' control that stamps the current time.",
+            "The system shows Total Time computed as end time minus start time.",
+            "A 'Get Weather' action auto-pulls temp / wind direction / wind speed / humidity from Open-Meteo using the application date and the field location's coordinates, and fills the start (and/or end) set — KEEP Open-Meteo; do NOT switch to Visual Crossing or any paid provider.",
+            "Auto-pulled values are editable by the user after fetch (the crew can correct them).",
+            "Both start and end weather sets persist to the database and reload on reopen of the field-app invoice.",
+            "If Open-Meteo is unreachable or returns no data, the user gets a clear message and can still type values manually (auto-pull failure does not block saving).",
+            "A tester can open a field-app invoice, click Get Weather, see start values populate from Open-Meteo, enter end values, and see Total Time computed."
+          ],
+          "subtasks": [
+            "Extend the applied-info data model to store TWO weather sets (start + end), each with time, temp, wind direction, wind mph, humidity.",
+            "Build the start/end weather UI with paired fields and a 'NOW' button on each time field.",
+            "Compute and display Total Time (end − start).",
+            "Wire the existing Open-Meteo weather-capture function (already in CRX at src/lib/weatherCapture.ts) into the field-app invoice's Get Weather action, keyed by application date + field coordinates.",
+            "Make auto-pulled values editable and handle the no-data / offline case gracefully.",
+            "Verify a full start+end capture with one auto-pull on a real field-app invoice."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "As-applied entry record (applicator, vehicle, application date)"
+          ],
+          "notes": "CRX already has an Open-Meteo auto-pull at JOB level (src/lib/weatherCapture.ts) and the field-app invoice currently uses free-text single-snapshot weather. Target = bring Open-Meteo auto-pull to the field-app invoice AND make weather a start+end PAIR. Explicitly KEEP Open-Meteo (free) over ChemMan's paid Visual Crossing per task rules. Source: capture doc lines 126, 191, 210-211 of GAP doc."
+        },
+        {
+          "name": "Tach hours (beginning / end / net engine hours)",
+          "why": "Records the machine's engine-hour meter before and after a job so the operation can track equipment usage per application for maintenance and cost allocation.",
+          "chemman_target": "ChemMan's Add Applied Info captures Beg. Tach, End Tach, and Net Tach (engine-hours meter on the application equipment). Net Tach is the difference (End − Beg). These are part of the per-application record alongside applicator/vehicle/date.",
+          "acceptance_criteria": [
+            "An applied-info entry captures Beginning Tach and End Tach as numeric engine-hour values.",
+            "Net Tach is shown as End Tach − Beginning Tach (computed, not hand-entered, or auto-filled and override-warned if edited).",
+            "Tach values are optional (a job without tach tracking still saves) but when both beg and end are present, net is correct.",
+            "An end-tach lower than beg-tach is flagged as a likely error.",
+            "Tach values persist to the database and reload on reopen.",
+            "A tester can enter Beg 1200.0 and End 1206.5 and see Net 6.5."
+          ],
+          "subtasks": [
+            "Add beg_tach, end_tach (and a computed/derived net) to the applied-info data model.",
+            "Add the three tach fields to the applied-info form with net auto-computed.",
+            "Validate end ≥ beg (warn on violation) and allow empty/optional.",
+            "Persist and reload.",
+            "Verify net computes correctly from a sample entry."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "As-applied entry record (applicator, vehicle, application date)"
+          ],
+          "notes": "Net can be stored or computed on the fly; either is acceptable as long as it always reflects End − Beg. SKIP Flights / Starts — those are aerial-only and explicitly out of scope per task rules. Source: capture doc lines 126, 198."
+        },
+        {
+          "name": "Ground crew + ground crew members",
+          "why": "Captures the extra hands on the ground for a job (the crew name and the individual people), so the record shows everyone involved in the application, not just the lead applicator.",
+          "chemman_target": "ChemMan's Applied Info captures a Ground Crew and a Ground Crew Member on the application record. Ground Crew Member is also a filter on the Posted Field Application Report (so crew membership is a reportable/queryable field, implying a managed list of crews and members rather than free text).",
+          "acceptance_criteria": [
+            "There is a managed list of Ground Crews (create / rename / deactivate a crew) and Ground Crew Members (people belonging to a crew).",
+            "An applied-info entry can record a Ground Crew and one or more Ground Crew Members from those managed lists.",
+            "Ground crew / member selections reference real records (so a renamed crew updates everywhere; free-typed names are not silently created as orphans).",
+            "Ground crew + members persist on the applied-info entry and reload on reopen.",
+            "Ground Crew Member is available as a filter/column where applied-info or field-application data is reported (parity with ChemMan's report filter).",
+            "A tester can define a crew with two members, attach it to an applied-info entry, and later filter applied records by one of those members."
+          ],
+          "subtasks": [
+            "Add Ground Crew and Ground Crew Member tables (crew has many members).",
+            "Build a small management UI to create/edit crews and their members.",
+            "Add crew + member selectors to the applied-info form (member supports one or many per task brief — multiple members per entry).",
+            "Link selected crew/members to the applied-info entry and persist.",
+            "Expose Ground Crew Member as a filter in the relevant field-application report.",
+            "Verify create-crew → attach-to-entry → filter-by-member end to end."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "As-applied entry record (applicator, vehicle, application date)"
+          ],
+          "notes": "Task brief says 'ground crew + ground crew members' (plural members) — model crew → many members, and allow multiple members per applied-info entry. ChemMan surfaces Ground Crew Member as a report filter (capture doc line 150), so make it queryable, not just stored. Source: capture doc lines 126, 150."
+        }
+      ]
+    },
+    {
+      "area": "Field-application invoicing",
+      "sections": [
+        {
+          "name": "Unposted invoice list (working list parity)",
+          "why": "This is the daily work tray where field-application bills wait before they are finalized, so the office can see every job that still needs billing at a glance.",
+          "chemman_target": "ChemMan's 'Enter Unposted Field Application Invoices' page (/#/invoices/unposted) titled 'Unposted Invoices'. It mirrors the job list layout and shares the same LIST SETTINGS columns. Filters: Inv. Nbr, Select Customers, Transaction Date From/To, MORE (expand), SEARCH, PRINT. An ADD button creates a new invoice directly. Table columns: checkbox | Job Nbr | Customers | Locations | Applicators | Crops | Chemicals | Acres | Total ($) | Transaction (date) | LIST SETTINGS gear. Footer totals: total acres, total $, and 'Invoices Displayed: N'. Bottom bulk action bar: PRINT ALL, OLD PRINT ALL, PRINT INVOICE REPORT, POST ALL. Per-row buttons: PRINT, OLD PRINT, email/print icon, dropdown, EDIT.",
+          "acceptance_criteria": [
+            "An 'Unposted Field Application Invoices' page exists, listing only invoices that have NOT yet been posted.",
+            "A filter bar provides: Invoice Number, Customer (multi-select), and Transaction Date From / Transaction Date To, plus a working Search and Clear.",
+            "The list table shows, per invoice row: Job Number, Customer(s), Location(s), Applicator(s), Crop(s), Chemical(s), Acres, Total dollars, and Transaction Date.",
+            "A footer row shows total acres across the list, total dollar amount across the list, and a count of invoices displayed.",
+            "A bottom bulk-action bar provides Print All, Print Invoice Report, and Post All (Post All posts every invoice currently in the list after a confirm).",
+            "An ADD button lets the user create a new field-application invoice directly (not only via transfer from a job).",
+            "Each invoice row has per-row actions: Print, Email, Edit (open editor).",
+            "Tester can filter to one customer and one date range and see only matching unposted invoices with correct footer totals."
+          ],
+          "subtasks": [
+            "Confirm/define the unposted invoice query (status = unposted/draft, type = field application).",
+            "Build the filter bar (invoice #, customer multi-select, transaction date range) wired to the query.",
+            "Build the list table with the specified columns and a footer totals row (acres, dollars, count).",
+            "Add the bottom bulk-action bar (Print All, Print Invoice Report, Post All) with a confirm on Post All.",
+            "Wire per-row Print / Email / Edit actions.",
+            "Wire the ADD button to create a blank field-application invoice and open the editor."
+          ],
+          "needs_migration": false,
+          "depends_on": [],
+          "notes": "CRX already has FieldInvoices.tsx per the gap doc; this section defines the unposted half to full ChemMan parity. Per-customer column-config (LIST SETTINGS) is intentionally OUT of scope here (it is a Scheduling/job-list area item)."
+        },
+        {
+          "name": "Posted invoice list (committed list parity)",
+          "why": "This is the record of bills that have been finalized and counted in the books, so the owner can look back at what was billed without risk of accidental edits.",
+          "chemman_target": "ChemMan's 'Review Posted Field Application Invoices' page (/#/invoices/posted) titled 'Posted Invoices'. Same list layout as Unposted, for invoices already committed to the ledger/month batch. Filters add a Season/Batch/MTD dropdown vs the unposted list. A warning banner reads: 'Posted records are from the most recent month roll. Modifications will cause the previous batch totals to update in which any applicable reports will need to be reprinted.' Same columns + LIST SETTINGS + footer totals. Bottom action bar: PRINT ALL, OLD PRINT ALL, PRINT INVOICE REPORT, UNPOST ALL.",
+          "acceptance_criteria": [
+            "A 'Posted Field Application Invoices' page exists, listing only invoices that HAVE been posted.",
+            "Same column set and footer totals as the unposted list (acres, dollars, count).",
+            "The filter bar includes the unposted filters PLUS a Season/Batch/Month-to-date scope selector.",
+            "A visible warning banner explains that editing a posted invoice will change a prior batch total and reports may need reprinting.",
+            "A bottom action bar provides Print All, Print Invoice Report, and Unpost All.",
+            "Posted invoices tie into the month-end / accounting-period batch totals (a posted field-app invoice is reflected in the period it belongs to).",
+            "Tester can open the posted list, see a real posted invoice, and confirm it does not appear on the unposted list."
+          ],
+          "subtasks": [
+            "Build the posted-invoice query (status = posted, type = field application).",
+            "Reuse the list table component from the unposted list with the posted-only data source.",
+            "Add the Season/Batch/MTD scope selector to the filter bar.",
+            "Add the posted-records warning banner.",
+            "Add the bottom action bar (Print All, Print Invoice Report, Unpost All) with confirms.",
+            "Verify posted totals roll into the existing accounting-period / month-end batch."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Unposted invoice list (working list parity)"
+          ],
+          "notes": "Relies on the existing posted_by/posted_at fields and accounting_periods table noted in the gap doc."
+        },
+        {
+          "name": "Invoice editor parity (tabs, locations, applied info, notifications)",
+          "why": "This is the single screen where a field bill is built and checked line by line, so what the customer is charged is correct before it goes out.",
+          "chemman_target": "ChemMan invoice editor (/#/invoices/editInvoice/<id>) mirrors the job editor with pricing added. Tabs: LOCATIONS, CHEMICAL/CHARGES, CUSTOMERS, APPLIED INFO, NOTIFICATIONS. Header: Invoice # (e.g. 230568-001), Transaction Date, Consultant. Locations tab: Select Locations, Toggle Location Details, Edit/Show Maps, Open Manage Field Locations, Total Applied Acres. Applied Info tab carries over from the job (as-applied: applicator, vehicle, application date; weather). Notifications tab shows customer notification history. Bottom actions: DELETE INVOICE, TRANSFER TO SCHEDULING (push back to a job), POST INVOICE, SEND POST-NOTIFICATION, PRINT, CANCEL WITHOUT SAVING, SAVE INVOICE #.",
+          "acceptance_criteria": [
+            "The field-application invoice editor presents tabbed sections: Locations, Chemical/Charges, Customers, Applied Info, Notifications.",
+            "The header shows the invoice number, an editable Transaction Date, and a Consultant selector.",
+            "The Locations tab lets the user select/show field locations and shows Total Applied Acres.",
+            "The Applied Info tab shows the as-applied data carried over from the source job (applicator, vehicle, application date, weather).",
+            "The Notifications tab shows the history of notifications sent to the customer for this invoice/job.",
+            "Bottom actions include: Save, Cancel Without Saving, Delete Invoice, Post Invoice, Print, and Transfer Back to Scheduling (reverse the transfer to a job).",
+            "Tester can open an invoice, switch through all five tabs, edit the transaction date, save, and see the change persist."
+          ],
+          "subtasks": [
+            "Audit the existing FieldApplicationInvoice.tsx editor against the five-tab ChemMan layout and add any missing tab.",
+            "Add the header Consultant selector and editable Transaction Date if missing.",
+            "Ensure the Locations tab surfaces Total Applied Acres and location selection.",
+            "Ensure the Applied Info and Notifications tabs read carried-over job data.",
+            "Add/confirm the full bottom action set including Transfer Back to Scheduling and Delete Invoice.",
+            "Verify save/cancel/delete behavior end to end."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Unposted invoice list (working list parity)"
+          ],
+          "notes": "Consultant on a job/invoice was flagged in the gap doc as 'verify if column exists' — if there is no consultant field on invoices, this overlaps with the migration in the per-acre pricing / header section; check before assuming false."
+        },
+        {
+          "name": "Per-acre pricing from price book (Chemical/Charges tab)",
+          "why": "This makes the bill calculate itself from your standard rates, so a job's chemicals and service automatically turn into the right dollar amounts instead of being typed in by hand.",
+          "chemman_target": "ChemMan Chemical/Charges tab adds pricing to each line. Per product line: Chemical/Charge, Warehouse, Vendor, Rate/acre, UM, Total Applied (with a gallon conversion), Price (per unit), UM, line Total $. Recipes can be saved/reused. Footer shows Price/Acre and Invoice Total. Pricing is auto-derived from a price book: e.g. glyphosate priced at $17.23/GL produced a $519.73 line on 148.5 acres = $3.50/ac. Product list prices flow from a price book into the invoice automatically; picking a chemical auto-fills warehouse, vendor, default rate/ac + UM, computes total applied (rate x acres) and a gallon-equivalent conversion (26 FL OZ/ac x 245.4 ac = 6380.4 FL OZ = 49.85 GL).",
+          "acceptance_criteria": [
+            "Each chemical/charge line shows: product, warehouse, vendor, rate per acre, unit of measure, total applied (with gallon/lb conversion), unit price, and line total dollars.",
+            "When a product is selected, its default unit price is pulled automatically from a price book (no manual entry required for the standard case).",
+            "Line total dollars are computed automatically from price x quantity (consistent with rate/acre x acres), and recompute when acres or rate change.",
+            "The editor footer shows Price/Acre and the Invoice Total, both auto-calculated.",
+            "A separate per-acre service/application charge can be added from a price list (application_services), distinct from the chemical lines.",
+            "Tester can pick a priced product on a known acreage and see the line total and invoice total match the expected per-acre math (verify against a worked example like 148.5 ac at a known $/ac)."
+          ],
+          "subtasks": [
+            "Confirm the price-book source (per-product unit price and per-acre application service price) and how a line resolves its price.",
+            "Wire product selection to auto-fill warehouse, vendor, default rate/ac, UM, and unit price from the price book.",
+            "Compute total applied with gallon/lb conversion and the line total dollars.",
+            "Compute and display footer Price/Acre and Invoice Total.",
+            "Verify the math against a documented worked example."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Invoice editor parity (tabs, locations, applied info, notifications)"
+          ],
+          "notes": "Gap doc says application_services + invoice_items.rate_per_acre/price_source already exist and the ApplicationServicePicker is built; this section is about proving full parity of the price-book auto-fill + conversion + footer math, not building from zero. price_source tracks where each price came from."
+        },
+        {
+          "name": "Auto-split one job into per-customer invoices by share",
+          "why": "When one field is farmed or paid for by more than one customer, this automatically makes a separate correct bill for each one, so nobody is over- or under-charged.",
+          "chemman_target": "In ChemMan, one job auto-splits into multiple invoices by billing/customer grouping. Job 230568 (245.4 ac) split into invoice 230568-001 (A17-Mcammon 40, 148.50 ac, $519.73) and 230568-002 (L10-N Robinson East, 96.90 ac, $339.14). The invoice number convention is <jobnumber>-<NNN> per split. The Customers tab uses 'Customer Shares By: Locations' (a dropdown) to control how the invoice charges split across multiple customers (by location / share %). Customers tab table columns: Name, Total Shares, Total acres, Discount Earned, Invoice Total — a per-customer split of one invoice. Shares are set on the job per location (e.g. 100% Wells, or split with Clayton/Chad on shared fields).",
+          "acceptance_criteria": [
+            "When a job with more than one billing customer is turned into invoices, the system produces one invoice per billing customer/group automatically.",
+            "Split invoices are numbered with a consistent convention tying them back to the source job (e.g. job-number plus a sequence suffix).",
+            "The split honors per-location customer shares (percentage / acres) defined on the job or field billing defaults.",
+            "A 'Customer Shares By' control lets the user choose the basis for the split (by location / by share).",
+            "The Customers tab shows per customer: Name, Total Shares, Total acres, Discount Earned, and that customer's Invoice Total.",
+            "The sum of the split invoices' acres and dollars equals the source job's totals (no acres or dollars lost or duplicated).",
+            "Tester can take a multi-customer job, generate invoices, and confirm each customer gets a separate invoice whose acres+dollars reconcile to the whole job."
+          ],
+          "subtasks": [
+            "Confirm the share model (field_app_location_shares / invoice_shares / invoice_group_id) and the split-preview that already exists.",
+            "Ensure the split groups by billing customer and produces one invoice per group with the numbering convention.",
+            "Surface the 'Customer Shares By' basis selector on the Customers tab.",
+            "Render the Customers tab table (Name, Total Shares, Total acres, Discount Earned, Invoice Total).",
+            "Add a reconciliation check that split totals equal the source job totals.",
+            "Verify with a real multi-customer job end to end."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Per-acre pricing from price book (Chemical/Charges tab)",
+            "TRANSFER JOB to INVOICE button and flow"
+          ],
+          "notes": "Gap doc: invoice_shares, field_app_location_shares, invoice_group_id already model this and the split preview + group save are built. Discount Earned column links to the discount-earned section."
+        },
+        {
+          "name": "TRANSFER JOB to INVOICE button and flow",
+          "why": "This is the one-click step that turns a finished field job into a bill, so the office never has to re-enter what was already recorded in the field.",
+          "chemman_target": "ChemMan generates invoices from jobs via 'Transfer to Invoice'. On the job editor (/#/jobSchedules/editJob) the bottom actions include TRANSFER TO INVOICE (alongside Cancel Without Saving and Save Job #). Transfer also happens via Add Applied Info -> transfer. When a job is transferred, it is consumed (its status flips to 'Invoice') and the resulting invoice(s) appear on the Unposted list. The reverse exists too: the invoice editor has TRANSFER TO SCHEDULING to push it back to a job.",
+          "acceptance_criteria": [
+            "The job editor has a visible 'Transfer to Invoice' button that creates the field-application invoice(s) for that job.",
+            "After transfer, the resulting invoice(s) appear on the Unposted Field Application Invoices list.",
+            "After transfer, the source job's status reflects that it has been invoiced (e.g. status = Invoice), so it is not double-billed.",
+            "If the job has multiple billing customers, the transfer produces the auto-split per-customer invoices (links to the split section).",
+            "The reverse action 'Transfer to Scheduling' on the invoice editor returns the invoice to a job (undo the transfer).",
+            "Tester can click Transfer to Invoice on a real job, then find the new unposted invoice(s) and confirm the job is marked invoiced."
+          ],
+          "subtasks": [
+            "Wire the existing transfer_job_to_invoice RPC to a real 'Transfer to Invoice' button on the job editor.",
+            "On success, flip the job status to invoiced and route to / refresh the unposted invoice list.",
+            "Ensure transfer triggers the per-customer auto-split when applicable.",
+            "Implement / confirm the reverse 'Transfer to Scheduling' on the invoice editor.",
+            "Add a guard so a job already invoiced cannot be transferred again by mistake.",
+            "Verify the full job -> invoice -> (reverse) loop end to end."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Unposted invoice list (working list parity)",
+            "Invoice editor parity (tabs, locations, applied info, notifications)"
+          ],
+          "notes": "Gap doc calls this the HIGHEST priority: the transfer_job_to_invoice RPC exists but is not wired to a button. This is the spine of the whole pipeline."
+        },
+        {
+          "name": "POST and UNPOST on the field-app invoice screen",
+          "why": "Posting locks a bill into the books for the month; unposting safely reverses it — both need to be doable right where you are editing the field bill.",
+          "chemman_target": "ChemMan POST INVOICE is a per-invoice action with a confirm that moves an invoice from the Unposted list to the Posted list and commits it to the month batch (verified: 230568-001 posted, $519.73). POST ALL posts the whole unposted list. On the Posted list, UNPOST ALL reverses postings (and an individual unpost path exists: open posted invoice -> Unpost -> then Delete). Posting ties into month-end batch accounting; the warning banner notes that modifying posted records updates prior batch totals.",
+          "acceptance_criteria": [
+            "The field-application invoice editor has a 'Post Invoice' button (with a confirm) that posts the current invoice.",
+            "Posting moves the invoice off the Unposted list and onto the Posted list and reflects it in the correct month/accounting-period batch.",
+            "The field-application invoice screen also exposes 'Unpost' for a posted invoice (not only on the general invoice screen).",
+            "Posting a split group posts the whole group consistently (no half-posted group).",
+            "Unposting returns the invoice to editable/unposted state and reverses its effect on batch totals.",
+            "Tester can post an unposted field-app invoice, see it appear on the Posted list, then unpost it and see it return to Unposted."
+          ],
+          "subtasks": [
+            "Confirm the existing group-aware handlePost on the field-app invoice screen covers single + split-group posting.",
+            "Expose an Unpost action on the field-app invoice screen for posted invoices (currently missing per gap doc).",
+            "Ensure post/unpost correctly update the accounting-period batch totals.",
+            "Add confirms and guard against posting an invoice with zero total or no customer.",
+            "Verify post then unpost round-trip end to end."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Posted invoice list (committed list parity)",
+            "Invoice editor parity (tabs, locations, applied info, notifications)"
+          ],
+          "notes": "Gap doc: Post is built (handlePost, group-aware); Unpost is 'partial — not exposed on the field-app invoice screen.' Parity = surface unpost here too."
+        },
+        {
+          "name": "VOID on the field-app invoice screen",
+          "why": "When a bill is wrong but already posted, voiding cancels it with a recorded reason instead of quietly deleting it, keeping a clean paper trail.",
+          "chemman_target": "ChemMan's documented removal path is Unpost then Delete Invoice. CRX is ahead here: it already models a true Void with reason. Parity-plus target: a Void action with a required reason, available on the field-application invoice screen itself (not only the general invoice screen), that cancels the invoice while preserving the audit record.",
+          "acceptance_criteria": [
+            "The field-application invoice screen has a 'Void' action that requires a void reason before completing.",
+            "Voiding records who voided it, when, and the reason (voided_by / voided_at / void_reason).",
+            "A voided invoice is visibly marked as void and is excluded from active/open totals, but remains visible for audit (not hard-deleted).",
+            "Void is available from the field-app screen, not just the general invoice screen.",
+            "Tester can void a field-app invoice, is forced to enter a reason, and afterward sees it flagged void with the reason recorded."
+          ],
+          "subtasks": [
+            "Surface the existing void action (with reason) on the field-application invoice screen.",
+            "Ensure voided invoices drop out of open/AR totals but stay queryable for audit.",
+            "Display a clear 'VOID' state with the reason on the invoice.",
+            "Verify void flow end to end on a field-app invoice."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Invoice editor parity (tabs, locations, applied info, notifications)"
+          ],
+          "notes": "Gap doc: void exists on the general invoice screen with voided_by/voided_at/void_reason; parity here is exposing it on the field-app screen."
+        },
+        {
+          "name": "PRINT invoice (current + legacy format)",
+          "why": "Customers and the office need a clean printed/PDF bill, and some customers are used to the old format, so both layouts must be available.",
+          "chemman_target": "ChemMan offers two print formats per invoice: PRINT (current invoice format) and OLD PRINT (legacy format). A row dropdown also offers Print / Old Print / Old Print All. The bottom bulk bar offers PRINT ALL, OLD PRINT ALL, and PRINT INVOICE REPORT. The printed field-application invoice reflects the locations, chemicals with rates, per-acre pricing, shares, and totals.",
+          "acceptance_criteria": [
+            "A single field-application invoice can be printed/exported to PDF in the current format from both the list row and the editor.",
+            "A legacy ('Old Print') format is also available for the same invoice.",
+            "Bulk Print All and Old Print All produce a combined output of all invoices in the current list.",
+            "A 'Print Invoice Report' summary output is available from the list.",
+            "The printed invoice includes: customer(s), field locations, chemical lines with rate/acre and unit, per-acre price, share split, line totals, and invoice total (and EPA registration where present).",
+            "Tester can print one invoice in current format, print the same invoice in legacy format, and confirm both render the correct totals."
+          ],
+          "subtasks": [
+            "Confirm the existing field_application layout in invoicePdf.ts and reach it from the field-app list row and editor (not only the general invoice view).",
+            "Add the legacy 'Old Print' layout variant.",
+            "Wire Print All / Old Print All / Print Invoice Report on the list bottom bar.",
+            "Verify both formats render correct totals for a split and a non-split invoice."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Unposted invoice list (working list parity)",
+            "Per-acre pricing from price book (Chemical/Charges tab)"
+          ],
+          "notes": "Gap doc: invoicePdf.ts already has a full field_application layout + InvoicePrintDialog, reachable from the general invoice view. Parity = reach it from the field-app screens + add the legacy format + bulk print."
+        },
+        {
+          "name": "EMAIL invoice to customer from the field-app screen",
+          "why": "Sending the bill straight to the customer by email from the same screen saves a manual export-and-attach step and gets paid faster.",
+          "chemman_target": "ChemMan has a per-invoice email icon on each row that emails the invoice straight to the customer, alongside the print actions. The capture confirms 'email invoice straight to customer' as a per-row action on the unposted/posted lists.",
+          "acceptance_criteria": [
+            "Each field-application invoice (from the list row and from the editor toolbar) has an 'Email to Customer' action.",
+            "The email attaches the invoice PDF and pre-fills the customer's email address from their record.",
+            "The send is logged (who, when, to which address) in the existing email/notification log.",
+            "If the customer has no email on file, the action gives a clear message instead of failing silently.",
+            "Tester can click Email on a field-app invoice, see the customer address pre-filled and the PDF attached, send it, and find a log entry."
+          ],
+          "subtasks": [
+            "Wire the existing invoice-email capability (from InvoiceDetail) into the field-app editor toolbar and list rows.",
+            "Pre-fill recipient from the customer record and attach the current/legacy PDF.",
+            "Record the send in email_log / notifications.",
+            "Handle the missing-email case gracefully.",
+            "Verify a real send end to end and confirm the log entry."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "PRINT invoice (current + legacy format)"
+          ],
+          "notes": "Gap doc: email exists on the general invoice screen (email_log, notifications) but is not wired into the field-app editor toolbar/rows. Parity = surface it on the field-app screens."
+        },
+        {
+          "name": "FUEL SURCHARGE (configurable setting, OFF by default)",
+          "why": "When diesel spikes you may want to add a fuel surcharge to field bills, so the app needs a switch and a place to set the rule — but the actual rate is your business decision to fill in later.",
+          "chemman_target": "ChemMan's invoice editor includes 'Current Fuel Price' and 'Diluent Per acre' fields in the Chemical/Charges footer area, supporting a fuel-surcharge concept tied to the current fuel price. CRX has no fuel-price field today. Because the surcharge rate/formula is a billing rule only the owner can set, the target is to BUILD THE MECHANISM as a configurable setting that is OFF by default with the formula left blank for the owner — never invent a rate.",
+          "acceptance_criteria": [
+            "A Fuel Surcharge setting exists at the company/settings level, defaulting to OFF.",
+            "When OFF (the default), no fuel surcharge appears on any invoice and nothing about invoice totals changes from today.",
+            "The setting provides empty inputs for the owner to define the rule (e.g. a current fuel price and/or a per-acre or percentage surcharge) — these ship blank, with NO pre-filled rate or formula.",
+            "When the owner turns it ON and supplies a rule, the surcharge appears as its own clearly-labeled line on the field-application invoice and is included in the invoice total.",
+            "The surcharge line is visible on the printed invoice and in the share split when enabled.",
+            "Tester can confirm: with the setting OFF, invoices are unchanged; after entering a rule and turning it ON, a labeled surcharge line appears and totals update."
+          ],
+          "subtasks": [
+            "Add a fuel-surcharge configuration (enabled flag default false, plus blank fields for fuel price and surcharge rate/formula) to company settings.",
+            "Add the surcharge as an optional, clearly-labeled invoice line driven entirely by the setting.",
+            "Ensure totals, print, and share-split include the surcharge only when enabled.",
+            "Add a guard/test proving OFF = no change to existing invoice totals.",
+            "Leave the formula blank and document for the owner where to set the rate.",
+            "Verify both OFF and a sample ON configuration end to end."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "Per-acre pricing from price book (Chemical/Charges tab)"
+          ],
+          "notes": "DO NOT invent the rate or formula. Mechanism only, OFF by default, blank formula for the owner. Needs new settings columns and likely an invoice-line type/flag, hence migration."
+        },
+        {
+          "name": "Header/footer notes, PO ref, due date, terms, discount-earned",
+          "why": "These are the standard billing details — a PO number, when it's due, the payment terms, an early-pay discount, and any notes — that make the invoice look professional and get paid on the customer's terms.",
+          "chemman_target": "ChemMan invoices carry header/footer notes, a PO reference, due date, and payment terms. The Customers tab tracks 'Discount Earned' per customer (early-pay discount). The Customer Invoice Summary screen captures Terms (text), Discount Date, and an Invoice Comment. The invoice editor also has an Internal Job/Invoice Memo (Not Printed) — an internal-only note that stays off the printed invoice.",
+          "acceptance_criteria": [
+            "The field-application invoice supports: header notes, footer notes, a purchase-order reference, a due date, and payment terms.",
+            "An early-pay 'Discount Earned' (and/or discount date) is captured and shown per customer on the Customers tab.",
+            "An internal memo field exists that is saved with the invoice but is explicitly NOT printed on the customer copy.",
+            "Header/footer notes, PO ref, due date, and terms all appear on the printed invoice; the internal memo does not.",
+            "Tester can set a PO number, due date, terms, header note, and internal memo, print the invoice, and confirm the internal memo is absent while the rest appear."
+          ],
+          "subtasks": [
+            "Confirm/expose header_notes, footer_notes, purchase_order_ref, and due_date on the field-app invoice editor (gap doc says these fields exist).",
+            "Add/confirm payment terms and discount-earned/discount-date capture (per-customer where applicable).",
+            "Add an internal, non-printed memo field on the invoice if not present.",
+            "Ensure the print layout includes the printed fields and excludes the internal memo.",
+            "Verify each field round-trips through save and print."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Invoice editor parity (tabs, locations, applied info, notifications)",
+            "PRINT invoice (current + legacy format)"
+          ],
+          "notes": "Gap doc says header_notes/footer_notes/purchase_order_ref/due_date already exist on invoices. Terms, discount_earned/discount_date, and the internal non-printed memo MAY need new fields — verify before assuming; if missing, set needs_migration handling in build. Marked false because the core fields already exist; flag any missing column during build."
+        },
+        {
+          "name": "Customer Invoice Summary (combined chem sales + field-app statement)",
+          "why": "This gives a customer one combined bill covering both their chemical purchases and their field-application work, instead of two separate statements, which is cleaner for them and for you.",
+          "chemman_target": "ChemMan's 'Customer Invoice Summary' (/reportCondensedUnpostedInvoice.php) is titled 'Customer Invoice Summary' and explicitly 'Includes unposted chemical sales and unposted field application invoices.' It is a consolidated customer statement combining BOTH unposted chemical sales AND unposted field-application invoices into one customer-facing document. Fields: Customer (selector), Heading Date (default today), Discount Date, Terms (text), Invoice Comment (text). Output: View Report.",
+          "acceptance_criteria": [
+            "A 'Customer Invoice Summary' screen exists that, for a selected customer, combines that customer's unposted chemical sales AND unposted field-application invoices into one statement.",
+            "The screen offers inputs for: Customer, Heading Date (default today), Discount Date, Terms (text), and an Invoice Comment (text).",
+            "The output statement lists both invoice types with a combined total for the customer.",
+            "The statement can be viewed and printed/exported as a PDF.",
+            "Tester can pick a customer who has both an unposted chemical sale and an unposted field-app invoice and see both on one combined statement with a correct combined total."
+          ],
+          "subtasks": [
+            "Build a Customer Invoice Summary screen with the customer selector and the heading date / discount date / terms / comment inputs.",
+            "Query the selected customer's unposted chemical sales and unposted field-application invoices.",
+            "Render a combined statement with both sections and a combined total.",
+            "Provide view + print/PDF output.",
+            "Verify with a customer who has both invoice types."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Unposted invoice list (working list parity)"
+          ],
+          "notes": "Gap doc: both invoice types live in one invoices table (strong basis); ARaging.tsx is a general statement but not this field-app-specific combined unposted summary. Heading date / discount date / terms / comment are report inputs, likely not stored — confirm during build whether any need persistence."
+        }
+      ]
+    },
+    {
+      "area": "Dispatch & mobile applicator view",
+      "sections": [
+        {
+          "name": "Dispatch board parity (dedicated field/tablet mode)",
+          "why": "Gives your dispatcher one purpose-built screen to see every job and hand it to the right applicator, instead of working out of the office job list.",
+          "chemman_target": "ChemMan has a separate dark-themed, field/tablet-optimized 'Dispatch & Applicator View' (URL /#/alt/jobList), distinct from the desktop office job list. Left nav groups into Jobs (View Map / View List) and Dispatch (Dispatch Jobs / View Dispatched List). Job rows show Job Nbr + name, applied-of-total acres (e.g. '153.88 of 153.88 ac'), status (PENDING/ACTIVE), and 'Assigned To: <name>' when dispatched. An OPTIONS menu offers: Filter Jobs By Recipe, More Search Options, Switch View, Add New Job, Reload List.",
+          "acceptance_criteria": [
+            "A dedicated dispatch view exists at its own route, visually distinct (dark, high-contrast, touch-friendly) and separate from the office Jobs list.",
+            "A left/primary nav exposes two groups: Jobs (with 'View Map' and 'View List' choices) and Dispatch (with 'Dispatch Jobs' and 'View Dispatched List' choices).",
+            "Each job row displays at minimum: job number + name, applied-of-total acres in the form 'X of Y ac', and status (e.g. PENDING / ACTIVE).",
+            "A job row that has been dispatched shows 'Assigned To: <applicator/crew name>'; an undispatched job shows no assignee.",
+            "An OPTIONS (or equivalent) menu on the view provides: Filter Jobs By Recipe, More Search Options, Switch View (map/list), Add New Job, and Reload/Refresh List.",
+            "Switching between map and list keeps the same active filter set.",
+            "A tester can open the dispatch view, see live jobs with correct acres and status, and confirm assigned jobs are labeled with the assignee name."
+          ],
+          "subtasks": [
+            "Add a dedicated dispatch route/screen separate from the office Jobs list, with a field-optimized dark theme.",
+            "Build the nav with Jobs (Map/List) and Dispatch (Dispatch Jobs / Dispatched List) groupings.",
+            "Render job rows with job#, name, applied-of-total acres, status badge, and assignee label when present.",
+            "Wire the OPTIONS menu actions (recipe filter, more search, switch view, add job, reload).",
+            "Confirm map and list share one filter state."
+          ],
+          "needs_migration": false,
+          "depends_on": [],
+          "notes": "CRX already has a DispatchBoard.tsx (desktop/tablet, map + click-to-select) per the verified audit — parity here is about matching ChemMan's view structure (the two nav groups, the applied-of-total acres display, the assignee label) and OPTIONS menu, not building from zero. Re-audit current code before building to avoid duplicating what exists."
+        },
+        {
+          "name": "Per-location dispatch + assignment (3-step wizard)",
+          "why": "Lets you hand out individual fields to different applicators on the same job, so two crews can split one big job instead of one person owning the whole thing.",
+          "chemman_target": "ChemMan's 'Dispatch Jobs' is a 3-step wizard: (1) Select Locations, (2) Assign Selections, (3) Finish Dispatching. Dispatch can target individual field *locations* (not just the whole job) and assign each to specific applicators/crews.",
+          "acceptance_criteria": [
+            "Starting a dispatch opens a 3-step flow with clear steps: Step 1 Select Locations, Step 2 Assign Selections, Step 3 Finish Dispatching.",
+            "Step 1 lets the dispatcher pick one or more individual field locations across jobs (selection is at the location level, not only whole-job).",
+            "Step 2 lets the dispatcher assign the selected locations to a chosen applicator or crew; different selected locations can be assigned to different applicators within the same dispatch session.",
+            "Step 3 confirms and commits the dispatch; on finish, each assigned location is recorded as dispatched to its applicator/crew with a dispatch timestamp.",
+            "After finishing, the dispatched locations appear on the Dispatched List and the job row shows the correct 'Assigned To' name(s).",
+            "A job whose locations are assigned to two different applicators reflects both assignees correctly (no single-assignee-only limitation).",
+            "A tester can run the wizard end to end on a multi-location job, assign two locations to two different applicators, and see both reflected in the dispatched list and on the job."
+          ],
+          "subtasks": [
+            "Add data structures to record per-location assignment: which applicator/crew, dispatched-at timestamp, and dispatch status per location.",
+            "Build Step 1 location-selection UI (list and/or map selection of individual locations).",
+            "Build Step 2 assignment UI (assign selected locations to applicator/crew; support different assignees per location).",
+            "Build Step 3 confirm/commit, writing per-location assignment records.",
+            "Update job rows and dispatched list to read per-location assignments and show all assignees.",
+            "Verify multi-applicator split on a single job persists and displays correctly."
+          ],
+          "needs_migration": true,
+          "depends_on": [
+            "Dispatch board parity (dedicated field/tablet mode)"
+          ],
+          "notes": "Verified audit confirms CRX currently assigns the whole job only (jobs.applicator_id) with no per-location dispatch. This is the central new build in this area and needs new per-location assignment fields/table (location id, applicator/crew id, dispatched_at, dispatch status). Crew vs single applicator: support assigning to either an individual applicator or a ground crew."
+        },
+        {
+          "name": "Assigned-to tracking + Dispatched-Jobs list",
+          "why": "Gives you a running list of what has been handed out and to whom, so nothing falls through the cracks during a busy day.",
+          "chemman_target": "ChemMan shows 'Assigned To: <name>' on dispatched job rows and provides a 'View Dispatched List' under the Dispatch nav group — a tracker of jobs/locations that have been dispatched and who they went to.",
+          "acceptance_criteria": [
+            "A 'Dispatched List' view lists all currently-dispatched jobs/locations with the assignee name and the job/location identity.",
+            "Each dispatched entry shows status (e.g. pending/active) and applied-of-total acres so progress is visible.",
+            "An assignee filter lets the dispatcher see only the jobs/locations assigned to a given applicator/crew.",
+            "Undispatching (or reassigning) a location updates both the Dispatched List and the job row's 'Assigned To' label.",
+            "A tester can dispatch a job, see it appear on the Dispatched List with the right assignee, reassign it, and see the list and job row update."
+          ],
+          "subtasks": [
+            "Build the Dispatched List view querying per-location assignment records.",
+            "Show assignee, job/location, status, and applied-of-total acres per row.",
+            "Add an assignee filter.",
+            "Support undispatch/reassign and confirm both views update.",
+            "Verify the 'Assigned To' label on job rows stays in sync with assignments."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Per-location dispatch + assignment (3-step wizard)"
+          ],
+          "notes": "Reads from the per-location assignment data created in the wizard section — no new tables, just the read/filter views and the reassign/undispatch path."
+        },
+        {
+          "name": "Phone/mobile applicator field view (clean job cards, map/list)",
+          "why": "Gives the person actually spraying a simple phone screen showing only their jobs, so they can see what to do and where without digging through the office app.",
+          "chemman_target": "ChemMan's Dispatch & Applicator View doubles as the applicator's field view: clean read-only job cards. Expanding a job shows an applicator-friendly card with Customers, Locations, Chemicals/Charges, Crops, and Scheduled Date. Jobs are viewable as a Map or a List. The whole mode is field/tablet-optimized.",
+          "acceptance_criteria": [
+            "An applicator opening the field view on a phone sees a clean, touch-friendly list of job cards sized for a small screen (no horizontal scrolling of the office table).",
+            "An applicator sees the jobs assigned to them (their own dispatched locations) without having to filter manually.",
+            "Tapping a job card expands a read-only card showing: Customers, Locations, Chemicals/Charges, Crops, and Scheduled Date.",
+            "The applicator can switch between a List view and a Map view of their jobs.",
+            "The Map view plots the job locations and the applicator can open/identify a location from the map.",
+            "The field view is read-only for job details (it does not let the applicator edit pricing/job setup), matching ChemMan's clean-card behavior.",
+            "A tester can load the view on a phone-width viewport, see assigned jobs as cards, expand one to read the five fields, and toggle map/list."
+          ],
+          "subtasks": [
+            "Build a phone-width responsive layout for the dispatch/applicator view (card list, not a wide table).",
+            "Default the field view to the signed-in applicator's assigned jobs/locations.",
+            "Build the expandable read-only job card (Customers, Locations, Chemicals/Charges, Crops, Scheduled Date).",
+            "Add List/Map toggle on phone with location pins.",
+            "Verify on an actual phone-width viewport."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Per-location dispatch + assignment (3-step wizard)"
+          ],
+          "notes": "Verified audit: CRX's dispatch is desktop/tablet split-screen and NOT phone-optimized; a phone applicator view is missing. 'Show only my jobs' depends on the per-location assignment data. Read-only card mirrors ChemMan; do not expose invoice/pricing edits here."
+        },
+        {
+          "name": "Filter jobs by recipe in the field",
+          "why": "Lets a crew quickly pull up every field getting the same tank mix, so they can knock out all the same-spray jobs in one pass.",
+          "chemman_target": "ChemMan's Dispatch & Applicator View OPTIONS menu includes 'Filter Jobs By Recipe' — narrows the job list/map to jobs using a chosen saved tank-mix recipe.",
+          "acceptance_criteria": [
+            "The dispatch/field view offers a 'Filter Jobs By Recipe' control that lists the saved tank-mix recipes.",
+            "Selecting a recipe narrows the job list AND the map to only jobs using that recipe.",
+            "Clearing the recipe filter restores the full (otherwise-filtered) job set.",
+            "The recipe filter combines with other active filters (e.g. assignee, date) rather than replacing them.",
+            "A tester can pick a recipe and confirm only jobs with that recipe remain in both list and map."
+          ],
+          "subtasks": [
+            "Surface saved recipes in a filter control on the dispatch/field view.",
+            "Filter both list and map results by selected recipe.",
+            "Ensure recipe filter is additive with other filters and is clearable.",
+            "Verify against jobs that do/do not use the chosen recipe."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Dispatch board parity (dedicated field/tablet mode)"
+          ],
+          "notes": "CRX already has recipes (jobs.recipe_id, blend_recipes; recipe loading in JobDetail). This is a filter over existing recipe data, no schema change."
+        },
+        {
+          "name": "Pre-notification to customer (before application), wired to jobs",
+          "why": "Lets you tell the grower 'we're coming to spray' straight from the job, creating a record that they were warned ahead of time.",
+          "chemman_target": "ChemMan exposes a per-row 'PRE = Send Pre-Notification' action that notifies the customer ahead of application, and the job/invoice editor has a NOTIFICATIONS tab that logs notifications sent to the customer ('No notifications have been sent yet' until one is sent).",
+          "acceptance_criteria": [
+            "A 'Send Pre-Notification' action is available on a job (row action and/or job editor) and sends a before-application notice to the job's customer(s).",
+            "The notification targets the correct customer contact(s) for the job's locations/shares.",
+            "Each sent pre-notification is recorded in a per-job Notifications log with type = pre, recipient, timestamp, and delivery channel.",
+            "The Notifications log shows 'no notifications sent yet' (or equivalent) when none exist, then shows the entry after sending.",
+            "Sending uses an editable message/template the owner can configure (so wording is not hard-coded).",
+            "A tester can trigger a pre-notification on a test job and see (a) the message go out via the chosen channel and (b) a logged pre entry on the job."
+          ],
+          "subtasks": [
+            "Add a notifications log structure tied to jobs (type pre/post, recipient, timestamp, channel, status).",
+            "Add a 'Send Pre-Notification' action on the job row and/or job editor Notifications tab.",
+            "Resolve recipient(s) from the job's customers/location shares.",
+            "Use a configurable message template for the pre-notice wording.",
+            "Render a per-job Notifications log with empty-state and sent entries.",
+            "Verify end to end: send on a test job, confirm delivery and the logged entry."
+          ],
+          "needs_migration": true,
+          "depends_on": [],
+          "notes": "Verified audit: notification infra exists (email_log, notifications) but job-level pre-notify is unconfirmed/likely unwired. May need a job_notifications log (or reuse notifications with a job link + pre/post type) — mark migration true since a job-linked pre/post notification record is likely needed. No billing rule involved. Use the existing CRX email/notification channel; do not invent a paid SMS service without owner sign-off."
+        },
+        {
+          "name": "Post-notification to customer (after application), wired to jobs",
+          "why": "Lets you tell the grower 'your field has been sprayed' from the job/invoice, creating proof you reported the completed work.",
+          "chemman_target": "ChemMan's field-application invoice editor has a 'SEND POST-NOTIFICATION' bottom action and the NOTIFICATIONS tab carries the customer notification history over from the job — i.e. an after-application notice to the customer, logged.",
+          "acceptance_criteria": [
+            "A 'Send Post-Notification' action is available after application (on the job and/or the field-application invoice editor) and sends an after-application notice to the customer(s).",
+            "Each sent post-notification is recorded in the same per-job/invoice Notifications log with type = post, recipient, timestamp, and channel.",
+            "The Notifications history is shared/continuous between the job and its resulting invoice (history carries over, matching ChemMan).",
+            "Post-notification wording uses an editable, owner-configurable template.",
+            "A tester can trigger a post-notification on a test job/invoice and see the message sent and a logged post entry that is visible from both the job and the invoice."
+          ],
+          "subtasks": [
+            "Reuse the job notifications log (pre/post type) for post entries.",
+            "Add a 'Send Post-Notification' action on the job and on the field-application invoice editor.",
+            "Ensure the notifications history is shared between a job and its invoice.",
+            "Use a configurable post-notice template.",
+            "Verify end to end on a test job/invoice and confirm the logged post entry appears in both places."
+          ],
+          "needs_migration": false,
+          "depends_on": [
+            "Pre-notification to customer (before application), wired to jobs"
+          ],
+          "notes": "Shares the notifications log built in the pre-notification section (so no additional migration beyond that). The key parity detail is that job and invoice show one continuous notification history."
+        }
+      ]
+    }
+  ]
+}

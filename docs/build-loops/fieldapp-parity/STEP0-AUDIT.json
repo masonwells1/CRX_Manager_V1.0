@@ -1,0 +1,1047 @@
+{
+  "audited_at": "2026-06-24",
+  "tally": {
+    "DONE": 0,
+    "PARTIAL": 19,
+    "TODO": 22
+  },
+  "sections": [
+    {
+      "area": "Job Scheduling (Manage Job Scheduling command center)",
+      "n": 1,
+      "name": "Job list + create/edit job parity",
+      "verdict": "PARTIAL",
+      "criteria_total": 11,
+      "criteria_met_count": 2,
+      "met": [
+        "Job list exists with a subset of columns (Job#, Date, Status, Customer, Applicator, field count, Acres, Vehicle, Price)",
+        "ADD action ('New Job') opens an editor that auto-assigns the next sequential job number (next_job_number())"
+      ],
+      "missing": [
+        "Row is MISSING most required columns: no color tag chips, no chemicals+rate+unit, no crop(s), no remaining acres, no created-by/updated-by, no printed status; customers shown as single farm_name not multi w/ IDs; locations shown only as a field-count badge",
+        "No totals row summing total acres + remaining acres across the list",
+        "No 'Click for full list' expander for jobs with many customers/locations",
+        "Job # auto-number is NOT shown before save (jobNumber state stays empty for a new job; only assigned server-side)",
+        "Editor is a single scrolling page, NOT tabbed — no Locations/Chemicals/Loader/Applied/Notifications tabs",
+        "Locations tab fields missing: no per-field crop, strip, pests, planted acres, or per-field customer share % (only field select + acres_to_treat); job_fields schema lacks these columns",
+        "No scheduling fields: Call Date, Date Proposed, Time Proposed, Schedule Date, Date Expires, Consultant (no columns and no UI)",
+        "Chemical pick auto-fills only unit + cost; does NOT auto-fill warehouse, vendor, default rate/acre; no Total Applied display nor gallon/lb conversion shown per line",
+        "No Diluent Rate, REI, or PHI per chemical line (job_chemicals lacks these columns)",
+        "Memo fields missing: only one generic Notes field; no Loader Comment, Additional Info, or Internal-not-printed memo"
+      ],
+      "evidence": [
+        "src/pages/Jobs.tsx:242-306 (fixed 9-column DataTable, no tags/chemicals/crops/remaining-acres/created-updated-printed)",
+        "src/pages/JobDetail.tsx:909-998 (flat single-page header, not tabbed)",
+        "src/pages/JobDetail.tsx:1016-1044 (field rows = select + acres only)",
+        "src/pages/JobDetail.tsx:794-811 (chem product pick fills unit+cost only)",
+        "supabase/migrations/20260215200000_job_scheduling_tables.sql:60-86 (job_fields/job_chemicals lack crop/strip/pests/planted/share/REI/PHI/diluent)",
+        "supabase/migrations/20260215200000_job_scheduling_tables.sql:220-250 (next_job_number assigns server-side at save)"
+      ],
+      "confidence": "high",
+      "notes": "A working job list + single-page editor exists and saves jobs, but it is far from ChemMan parity: list is missing most columns/totals/expander; editor is not tabbed and lacks the per-field agronomy fields, scheduling dates, chemical warehouse/vendor/REI/PHI/diluent autofill, and the three memo fields. Needs migrations for the missing columns."
+    },
+    {
+      "area": "Job Scheduling (Manage Job Scheduling command center)",
+      "n": 2,
+      "name": "Recipes (save/reuse tank mixes on a job)",
+      "verdict": "PARTIAL",
+      "criteria_total": 5,
+      "criteria_met_count": 2,
+      "met": [
+        "Job editor has a 'Load Recipe' picker that loads a saved recipe's products/rates/units into the job (load_recipe_into_job RPC)",
+        "Saving a recipe + reloading round-trips (BlendRecipes manager uses save_blend_recipe; load_recipe_into_job copies products/rates/units back)"
+      ],
+      "missing": [
+        "No 'use last used recipe' shortcut in the job editor (no last_used/lastUsed concept anywhere in src)",
+        "No 'save current job chemicals as a new recipe' control in the job editor — save_blend_recipe is only wired into the standalone BlendRecipes page, not JobDetail's chemical area",
+        "Loaded recipe lines: load_recipe_into_job DELETEs all existing job_chemicals first (replaces, not merges) and sets price to 0; lines are editable after but the 'don't overwrite unrelated job data' intent is only partly met"
+      ],
+      "evidence": [
+        "src/pages/JobDetail.tsx:726-748 (handleLoadRecipe via load_recipe_into_job)",
+        "src/pages/JobDetail.tsx:1222-1245 (Load Recipe modal — pick + load only)",
+        "supabase/migrations/20260215200000_job_scheduling_tables.sql:662-719 (load_recipe_into_job clears then copies items)",
+        "src/pages/BlendRecipes.tsx:208 (save_blend_recipe lives only on the recipes manager page)"
+      ],
+      "confidence": "high",
+      "notes": "Recipe LOAD into a job works, but the two ChemMan extras are missing: there is no 'use last used recipe' shortcut and no 'save the current job's chemicals as a new recipe' control inside the job editor."
+    },
+    {
+      "area": "Job Scheduling (Manage Job Scheduling command center)",
+      "n": 3,
+      "name": "Job batches (group jobs into named batches)",
+      "verdict": "TODO",
+      "criteria_total": 5,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No multi-select-to-batch from the job list (the only bulk actions are CSV/PDF/Delete)",
+        "No create-named-batch flow — jobs.batch_id is a single free-text field on the editor, there is no batches table and no name",
+        "Batches are not viewable/filterable as a group anywhere",
+        "No remove-from-batch action",
+        "No batch persistence beyond typing a free-text batch_id string per job"
+      ],
+      "evidence": [
+        "src/pages/Jobs.tsx:236-240 (bulkActions = csv/pdf/delete only; no batch action)",
+        "src/pages/JobDetail.tsx:979-985 (Batch ID is a free-text Input, placeholder 'Group related jobs')",
+        "supabase/migrations/20260215200000_job_scheduling_tables.sql:32 (batch_id text — no job_batches table exists)"
+      ],
+      "confidence": "high",
+      "notes": "Only a free-text batch_id field exists on a job. There is no named-batch manager, no multi-select assign from the list, no group view/filter, and no batches table — essentially none of the section exists."
+    },
+    {
+      "area": "Job Scheduling (Manage Job Scheduling command center)",
+      "n": 4,
+      "name": "Color-coded job tags (create/edit/delete + chips + filter)",
+      "verdict": "TODO",
+      "criteria_total": 8,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No job tag manager (create tag w/ name + color)",
+        "No edit-tag (name/color) flow for jobs",
+        "No delete-tag flow for jobs",
+        "No color chips rendered on job rows",
+        "Multiple-tags-per-job with per-tag color not implemented for jobs",
+        "No Job Tags multi-select filter on the list",
+        "No bulk 'edit job tags' toolbar action over selected jobs",
+        "No persistence: jobs.tags text[] column exists but is unused (no UI reads/writes it; save_job passes it through only if present)"
+      ],
+      "evidence": [
+        "src/components/team/TagsManager.tsx:1-30 (the ONLY tag manager is for note_tags / team notes, imported only by TeamBoard.tsx)",
+        "src/pages/Jobs.tsx:242-306 (no tag chip column, no tags filter)",
+        "supabase/migrations/20260215200000_job_scheduling_tables.sql:31 (jobs.tags text[] present but unused; no job_tags table / link table)"
+      ],
+      "confidence": "high",
+      "notes": "Job tags are entirely missing. The existing TagsManager is for team-note tags, not jobs, and the jobs.tags array column is dead. Needs a job_tags table (+name/color), a job-tag link table, a manager modal, chips, a filter, and a bulk action."
+    },
+    {
+      "area": "Job Scheduling (Manage Job Scheduling command center)",
+      "n": 5,
+      "name": "Field/location route-ordering (drag to set applicator drive order)",
+      "verdict": "PARTIAL",
+      "criteria_total": 5,
+      "criteria_met_count": 3,
+      "met": [
+        "A job's fields are listed in a 'field/location order' view (the Fields card in JobDetail)",
+        "Order persists via job_fields.sort_order (written on save as the row index, read back ordered)",
+        "Reordering is per-job (job_fields is scoped by job_id) and survives reload (sort_order persisted)"
+      ],
+      "missing": [
+        "No drag-and-drop reorder UI — fields can only be added/removed; order is implicitly the add order (sort_order = array index at save). No DnD library is installed (no @dnd-kit/react-beautiful-dnd/sortable in package.json)",
+        "Order is NOT reflected on any applicator printout / map pin numbering as a deliberate route (no reorder control exists; sort_order is just insertion order)"
+      ],
+      "evidence": [
+        "src/pages/JobDetail.tsx:540-544 (sort_order written as the array index i on save)",
+        "src/pages/JobDetail.tsx:1016-1044 (Fields list — select + acres + delete, no drag handles)",
+        "supabase/migrations/20260215200000_job_scheduling_tables.sql:65 (job_fields.sort_order column exists)",
+        "package.json (no drag-and-drop dependency present)"
+      ],
+      "confidence": "high",
+      "notes": "The sort_order column exists and is honored, but there is no drag-to-reorder UI (and no DnD library installed). Order today is just the order fields were added. This is a UI build on an existing column, as the gap doc predicted."
+    },
+    {
+      "area": "Job Scheduling (Manage Job Scheduling command center)",
+      "n": 6,
+      "name": "Full filter set (AND-combined)",
+      "verdict": "PARTIAL",
+      "criteria_total": 6,
+      "criteria_met_count": 2,
+      "met": [
+        "Active filters AND-combine (each is chained as a .eq/.gte/.lte on the same query)",
+        "Less-common filters concept partly present via date presets, but only 4 filters total exist"
+      ],
+      "missing": [
+        "Filter bar supports only Status, Customer (single-select, not multi), Start/End date — MISSING: Job # text, Applicator, Job Tags, Type, Vehicle, Ground Crew, Crop, County, State, Chemical, Field Name (most of the required set)",
+        "No explicit SEARCH/apply button (filters auto-run) and no CLEAR ALL control that resets every filter",
+        "No MORE/expand control for secondary filters",
+        "Totals row does not reflect the filtered set because there IS no totals row (see section 1)"
+      ],
+      "evidence": [
+        "src/pages/Jobs.tsx:104-107 (only status/job_date range/customer_id applied to query)",
+        "src/pages/Jobs.tsx:339-407 (filter Card: Start Date, End Date, Status select, Customer single-select, date presets)",
+        "src/pages/Jobs.tsx:380-388 (Customer is a single <select>, not multi-select)"
+      ],
+      "confidence": "high",
+      "notes": "Only status, single-customer, and a date range exist and they do AND-combine, but ~11 of the required filters (job#, applicator, tags, type, vehicle, ground crew, crop, county, state, chemical, field name) and the CLEAR ALL / MORE controls are missing. Needs a Ground Crew entity per the gap doc."
+    },
+    {
+      "area": "Job Scheduling (Manage Job Scheduling command center)",
+      "n": 7,
+      "name": "Mass edit selected jobs (dates / status / loader worksheets)",
+      "verdict": "TODO",
+      "criteria_total": 7,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No Mass Edit toolbar action (bulk actions are only Export CSV, Download PDF, Delete Jobs)",
+        "No Mass Edit modal stating 'N jobs selected'",
+        "No bulk set/change Schedule Date",
+        "No bulk set/change Status",
+        "No bulk update of Loader Worksheet settings",
+        "No opt-in section selection",
+        "No bulk-apply-then-refresh behavior (depends on Mass Edit existing at all)"
+      ],
+      "evidence": [
+        "src/pages/Jobs.tsx:236-240 (bulkActions array = csv, pdf, delete only — no mass-edit)",
+        "src/pages/Jobs.tsx:162-172 (row selection exists and is reused only for export/delete)"
+      ],
+      "confidence": "high",
+      "notes": "Checkbox selection exists (used for export/delete), but there is no Mass Edit action or modal at all. None of the bulk date/status/loader-worksheet editing exists."
+    },
+    {
+      "area": "Job Scheduling (Manage Job Scheduling command center)",
+      "n": 8,
+      "name": "Customizable list columns (List Settings)",
+      "verdict": "TODO",
+      "criteria_total": 6,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No List Settings control / gear on the job list",
+        "No per-column on/off toggles (columns are hard-coded in dataColumns)",
+        "Toggle set absent: no Wind Direction, Created By, Job Tags, Updated By, Call Date, Remaining Acres, Last Printed By, Customer Phone, Chemical Application, Show Completed Jobs toggles (many of these columns/fields don't even exist yet)",
+        "No per-user persistence of column config (no column-prefs table or JSON column found anywhere)",
+        "No shared toggles between job list and field-application invoice list",
+        "No 'Show Completed Jobs' visibility toggle (status filter exists but is not a settings toggle)"
+      ],
+      "evidence": [
+        "src/pages/Jobs.tsx:242-308 (columns hard-coded; canBulkAction only prepends a checkbox col)",
+        "src/pages/Jobs.tsx:409-432 (DataTable rendered with a fixed columns array; no settings panel)",
+        "grep for column_prefs/list_settings/column_visibility across repo: no matches in src"
+      ],
+      "confidence": "high",
+      "notes": "The job list has fixed columns and no per-user List Settings panel, no persistence store, and no shared-toggle link to the invoice list. Needs a per-user column-preferences store plus the settings UI — essentially none of it exists."
+    },
+    {
+      "area": "Printouts & field paperwork",
+      "n": 9,
+      "name": "Applicator Field Sheet (Original / Custom / Enhanced)",
+      "verdict": "TODO",
+      "criteria_total": 9,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No print action offering three named formats (Original/Custom/Enhanced) on the job",
+        "No applicator-sheet PDF generator at all (only a WPS pre-application notice PDF exists)",
+        "No Original compact single-job sheet layout",
+        "No Enhanced layout with totals/gallon-lb conversion/applicator/vehicle/date/REI/PHI",
+        "No Custom layout driven by a print-settings record",
+        "No blank as-applied / start-end weather hand-fill areas on a sheet",
+        "No 'last printed by / printed at' stamp — Job type has no last_printed_by/last_printed_at; no migration adds them",
+        "No shared field-job print data model gathering job+customers+fields+chemicals",
+        "No Custom-format settings screen (company name/address/logo/footer/column toggles)"
+      ],
+      "evidence": [
+        "src/pages/JobDetail.tsx:164-240 (handleWpsNotice — only a WPS notice, not applicator formats)",
+        "src/lib/wpsNoticePdf.ts (the only job-related PDF generator present)",
+        "src/types/index.ts:1899-1935 (Job interface has no last_printed_by/last_printed_at)"
+      ],
+      "confidence": "high",
+      "notes": "Only a single WPS pre-application notice PDF exists. None of the three named applicator formats, no print-settings record, no format picker, and no last-printed audit field exist. Essentially unbuilt."
+    },
+    {
+      "area": "Printouts & field paperwork",
+      "n": 10,
+      "name": "Loader Worksheet PDF wired to FIELD JOBS",
+      "verdict": "PARTIAL",
+      "criteria_total": 8,
+      "criteria_met_count": 1,
+      "met": [
+        "Job has a Loader Worksheet section with applicator/vehicle/capacity inputs and a loads-needed calc; vehicle tank capacity (capacity_gallons) exists on the vehicle record"
+      ],
+      "missing": [
+        "No per-product per-load quantity breakdown (only a single total-gallons / loads-needed figure)",
+        "No 'Invalid'/'enter capacity' guard state — when capacity missing the worksheet card is simply hidden (selectedVehicle && totalGallons>0), not an explicit invalid state",
+        "No 'Loader' print action / PDF for field jobs — loadSheetPdf.ts is delivery-centric (LoadSheetStop = delivery_number/driver/contact), not job-centric",
+        "No Loader print entry point on the job or on the job-list row",
+        "No free-text Loader Comment field on the job (Job type has no loader_comment; no migration adds it) and it does not print",
+        "No Mass-Edit bulk-set of loader worksheets across jobs",
+        "loads calc only counts gallon-unit chemicals, not total spray volume = total acres x carrier rate (per spec)",
+        "Not hand-verified end-to-end against a real job PDF (no PDF exists)"
+      ],
+      "evidence": [
+        "src/pages/JobDetail.tsx:415-423 (loadsNeeded = ceil(totalGallons / capacity_gallons))",
+        "src/pages/JobDetail.tsx:1133-1154 (Loader Worksheet display card)",
+        "src/types/index.ts:1702-1703 (vehicles capacity_gallons / capacity_unit)",
+        "src/lib/loadSheetPdf.ts:21-33 (LoadSheetStop is delivery-centric, not job-centric)"
+      ],
+      "confidence": "high",
+      "notes": "An on-screen loads-needed calculator exists and vehicles carry tank capacity, but there is no per-load product breakdown, no Loader Comment, no field-job loader PDF, no print entry point, and no mass-edit. The existing loadSheetPdf is for deliveries, not field jobs."
+    },
+    {
+      "area": "Printouts & field paperwork",
+      "n": 11,
+      "name": "Chemical Application Report (per job)",
+      "verdict": "TODO",
+      "criteria_total": 6,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No 'Chemical Application Report' print action on the job or job-list row",
+        "No per-job chemical-centric PDF listing rate/acre + unit + total applied + gallon/lb conversion + fields/acres",
+        "No crop/pest/applicator/date/REI/PHI report rendering",
+        "No EPA registration number on report lines (label data lookup exists only inside the WPS notice path)",
+        "Not verifiable against a real job (no report exists)",
+        "No clean PDF render for this report"
+      ],
+      "evidence": [
+        "src/lib/(no chemical-application-report generator present)",
+        "src/pages/JobDetail.tsx:1-1307 (no Chemical Application Report action)"
+      ],
+      "confidence": "high",
+      "notes": "Depends on the (unbuilt) shared applicator print data model. No chemical application report PDF or action exists anywhere. Unbuilt."
+    },
+    {
+      "area": "Printouts & field paperwork",
+      "n": 12,
+      "name": "Chemical Summary Report (across selected jobs)",
+      "verdict": "TODO",
+      "criteria_total": 5,
+      "criteria_met_count": 1,
+      "met": [
+        "Job list supports multi-job checkbox selection (useRowSelection + BulkActionBar), the selection mechanism the report would build on"
+      ],
+      "missing": [
+        "No 'Chemical Summary Report' action — bulk actions are only Export CSV, Download PDF (generic job-schedule columns), Delete",
+        "No cross-job per-chemical aggregation (sum rate x acres by product) — the PDF/CSV export lists job rows, never chemical totals",
+        "No per-product totals + grand total + included-jobs list output, no gallon/lb-equivalent",
+        "No hand-verifiable summed-totals report",
+        "No no-selection guard tied to a chemical-summary action (action does not exist)"
+      ],
+      "evidence": [
+        "src/pages/Jobs.tsx:236-240 (bulkActions = csv / pdf / delete only)",
+        "src/pages/Jobs.tsx:191-214 (handleExportPDF prints job-schedule columns, not chemical aggregates)",
+        "src/pages/Jobs.tsx:162-172 (multi-select plumbing exists)"
+      ],
+      "confidence": "high",
+      "notes": "The prerequisite multi-select exists, but the actual chemical-summary aggregation report is not built — the existing bulk PDF is just a list of job rows, not summed product totals."
+    },
+    {
+      "area": "Printouts & field paperwork",
+      "n": 13,
+      "name": "Projected Use Report",
+      "verdict": "TODO",
+      "criteria_total": 6,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No 'Projected Use Report' action in the job-list toolbar/reports menu",
+        "No projection query (planned rate x scheduled acres summed per product)",
+        "No per-product projected totals with unit + gallon/lb-equivalent + date range output",
+        "No distinction of scheduled/not-yet-applied vs already-applied usage",
+        "No PDF/CSV output for projected use",
+        "No hand-verifiable projection"
+      ],
+      "evidence": [
+        "src/pages/Jobs.tsx:236-240 (no projected-use action among bulk actions)"
+      ],
+      "confidence": "high",
+      "notes": "No projected-use report, action, or projection query exists anywhere. Unbuilt."
+    },
+    {
+      "area": "Printouts & field paperwork",
+      "n": 14,
+      "name": "Master Mix Summary",
+      "verdict": "TODO",
+      "criteria_total": 6,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No 'Master Mix Summary' action on the job list",
+        "No combined per-product mix aggregation across selected jobs",
+        "No combined loads / per-load batch picture (depends on unbuilt loader calc)",
+        "No master-mix PDF output",
+        "No hand-verifiable combined totals",
+        "No per-vehicle/capacity grouping handling"
+      ],
+      "evidence": [
+        "src/pages/Jobs.tsx:236-240 (no master-mix action)"
+      ],
+      "confidence": "high",
+      "notes": "No master mix summary report, action, or aggregation exists. Depends on the unbuilt loader calc and cross-job aggregation. Unbuilt."
+    },
+    {
+      "area": "Printouts & field paperwork",
+      "n": 15,
+      "name": "Print the job list",
+      "verdict": "PARTIAL",
+      "criteria_total": 5,
+      "criteria_met_count": 2,
+      "met": [
+        "A 'Download PDF' action produces a print-ready PDF of job rows via reportPdf (generateReportPdf)",
+        "PDF renders in landscape, suitable for wide column sets"
+      ],
+      "missing": [
+        "Prints only the checkbox-SELECTED rows, not the currently displayed/filtered list (no 'print current filtered list' action)",
+        "Columns are a fixed hardcoded set (Job#/Date/Status/Customer/Applicator/Acres/Price), not the columns visible on screen / list-settings",
+        "No footer totals row (total acres / remaining acres summed) — reportPdf only has a free-text footerNote, no aggregated totals row",
+        "Not verified that a date-filtered print contains exactly the filtered jobs + a correct acre total (it prints selection, and has no acre total)"
+      ],
+      "evidence": [
+        "src/pages/Jobs.tsx:191-214 (handleExportPDF builds a fixed-column landscape PDF of selectedRows)",
+        "src/lib/reportPdf.ts:33-41 (landscape default), reportPdf.ts:23-31 (only footerNote, no totals row)",
+        "src/pages/Jobs.tsx:236-240 (PDF is a bulk action on selection, not a list PRINT)"
+      ],
+      "confidence": "high",
+      "notes": "A landscape PDF export of selected job rows exists, but it prints the selection (not the active filter), uses fixed columns, and has no totals/remaining-acres footer row, so it does not meet the 'print the filtered list with totals' spec."
+    },
+    {
+      "area": "Printouts & field paperwork",
+      "n": 16,
+      "name": "Map / Logs per job + attach log files",
+      "verdict": "TODO",
+      "criteria_total": 6,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No per-job 'Map / Logs' view plotting the job's field locations (map components exist for fields but none are wired to a job)",
+        "No 'Attach Log Files' capability on a job — no upload UI, no storage usage in JobDetail/Jobs",
+        "No job_attachments table (no migration) and no attachment list with name/size/date/uploader/download/delete",
+        "No persisted, job-scoped attachments",
+        "No attach->reload->download->scoping flow verifiable",
+        "No job map view with field boundaries/pins or 'no boundary' empty state"
+      ],
+      "evidence": [
+        "src/components/map/ (CRXMap/FieldBoundaryLayer/FieldMarkers exist but contain no 'job' references)",
+        "src/pages/JobDetail.tsx (no storage.from / upload / attach usage)",
+        "supabase/migrations/ (no job_attachments table migration present)"
+      ],
+      "confidence": "high",
+      "notes": "Generic field-map components exist for the Fields feature, but there is no per-job Map/Logs view and no attachment storage (no job_attachments table, no upload UI). Unbuilt."
+    },
+    {
+      "area": "As-applied capture & compliance",
+      "n": 17,
+      "name": "As-applied entry record (applicator, vehicle, application date)",
+      "verdict": "PARTIAL",
+      "criteria_total": 6,
+      "criteria_met_count": 1,
+      "met": [
+        "An 'Applied Info' area exists on the field-app invoice (the 'Applied Info' tab) capturing applicator + (date via invoice header)"
+      ],
+      "missing": [
+        "Applicator is a free-text input, NOT selected from the applicator/profile list (FieldApplicationInvoice.tsx line 929-936 is a plain text box; job-level uses a real dropdown but the invoice does not)",
+        "No Vehicle field at all on the field-app invoice, and no auto-default-from-applicator",
+        "No per-entry Application Date (invoice only has a single header 'Transaction Date'); not part of an applied-info entry",
+        "Single snapshot only — cannot add/edit/delete MULTIPLE applied-info entries per invoice (the three values are flat columns on the invoices row, persisted via update_field_app_applied_info)",
+        "No dedicated applied-info entry table; applicator stored as free text (applicator_name) so it does not reference a real record and does not update by reference",
+        "Cannot create two entries (different applicator+date) on one invoice and see both listed"
+      ],
+      "evidence": [
+        "src/pages/FieldApplicationInvoice.tsx:103-106 (windDirection/temperature/applicator are scalar state, one set per invoice)",
+        "src/pages/FieldApplicationInvoice.tsx:904-940 (Applied Info tab = three free-text inputs, no vehicle, no per-entry date, no add/list)",
+        "supabase/migrations/20260507100000_field_app_applied_info.sql:26-35 (applied info = flat text columns on invoices, not an entry table)",
+        "supabase/migrations/20260622030000_field_app_applied_info_rpc.sql:71-78 (update_field_app_applied_info writes wind_direction/temperature_text/applicator_name onto the single invoice row)"
+      ],
+      "confidence": "high",
+      "notes": "The field-app INVOICE (the backlog target) has only a single free-text applicator snapshot, no vehicle, no per-entry date, and no multi-entry table. A richer applicator(dropdown)+vehicle+date record exists at the JOB level (JobDetail.tsx + application_records table) but that is a single record, not the multi-entry, by-reference model the spec wants, and it is not on the invoice."
+    },
+    {
+      "area": "As-applied capture & compliance",
+      "n": 18,
+      "name": "Applied acres per location + remaining-acres tracking (partial / multi-day)",
+      "verdict": "PARTIAL",
+      "criteria_total": 7,
+      "criteria_met_count": 2,
+      "met": [
+        "Each location records applied acres per specific location (field_app_locations.applied_acres, editable per row)",
+        "Applied acres feed the existing applied-acres divergence alert (reused, not rebuilt)"
+      ],
+      "missing": [
+        "No Total vs Applied vs REMAINING acres tracking per job (Remaining = planned - sum applied is never computed; the page only sums applied acres and system acres)",
+        "No live 'X of Y remaining' indicator anywhere (grep for remaining-acres in field-app context returns nothing)",
+        "No multi-entry accumulation — applied acres are a single per-location value on one invoice, so a job cannot be applied partially now and the rest later as separate entries",
+        "No over-application warning when applied would exceed planned acres (only a >=10% advisory divergence flag, which is a different, non-blocking check)",
+        "Cannot split a job across two applied-info entries on two dates and drive remaining full -> partial -> zero"
+      ],
+      "evidence": [
+        "src/pages/FieldApplicationInvoice.tsx:99,119-122 (locations + totalAppliedAcres sum only; no remaining)",
+        "src/pages/FieldApplicationInvoice.tsx:126-129 (divergentCount uses acreDivergence — the existing divergence alert, reused)",
+        "src/pages/FieldApplicationInvoice.tsx:784-794,856-866 (UI shows System Acres + Applied Acres totals only, no Remaining column/counter)",
+        "src/lib/fieldGeometry.ts (billableAcres/acreDivergence/appliedMatchesSystem — the reused divergence alert)"
+      ],
+      "confidence": "high",
+      "notes": "Per-location applied acres exist and correctly feed the pre-existing divergence alert (two criteria met). But the load-bearing requirement — Total/Applied/Remaining tracking with a live remaining counter, multi-day accumulation across entries, and an over-application warning — is entirely absent."
+    },
+    {
+      "area": "As-applied capture & compliance",
+      "n": 19,
+      "name": "START + END weather pair on field-app invoices (Open-Meteo auto-pull)",
+      "verdict": "TODO",
+      "criteria_total": 9,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No START weather set with Time/Temp/WindDir/WindMph/Humidity — the invoice has only two free-text boxes (Wind Direction, Temperature) and no humidity/wind-speed/time",
+        "No END weather set at all (no pair — single snapshot only)",
+        "No 'NOW' control on any time field",
+        "No Total Time (end - start) computation",
+        "No 'Get Weather' / Open-Meteo auto-pull on the field-app invoice (weatherCapture.ts is wired only into JobDetail.tsx, not the invoice)",
+        "No editable post-fetch values on the invoice (nothing is fetched there)",
+        "Weather not stored as two structured sets — only free-text wind_direction + temperature columns persist",
+        "No graceful offline/no-data handling on the invoice (no fetch exists)",
+        "Tester cannot click Get Weather on a field-app invoice, populate start, enter end, and see Total Time"
+      ],
+      "evidence": [
+        "src/pages/FieldApplicationInvoice.tsx:904-940 (Applied Info tab = only Wind Direction + Temperature free-text + Applicator; no humidity/time/end/Get Weather)",
+        "src/lib/weatherCapture.ts:40 (fetchCurrentWeather exists — current conditions only, no historical-by-date)",
+        "src/pages/JobDetail.tsx:19,457-474 (the ONLY Open-Meteo wiring is on the JOB, single snapshot, not the invoice and not a start/end pair)",
+        "supabase/migrations/20260507100000_field_app_applied_info.sql:26-28 (only wind_direction + temperature text columns persist on the invoice)"
+      ],
+      "confidence": "high",
+      "notes": "The field-app invoice has a single free-text weather snapshot and zero Open-Meteo wiring. Open-Meteo exists only at the job level as a single current-conditions fetch. None of the start/end pair, NOW button, Total Time, or invoice-level auto-pull requirements are met. The reusable fetchCurrentWeather helper is a starting point but is current-conditions, not date-keyed."
+    },
+    {
+      "area": "As-applied capture & compliance",
+      "n": 20,
+      "name": "Tach hours (beginning / end / net engine hours)",
+      "verdict": "TODO",
+      "criteria_total": 6,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No Beginning Tach field anywhere (no beg_tach column, no UI)",
+        "No End Tach field anywhere",
+        "No Net Tach computation (End - Beg)",
+        "No optional/empty handling for tach (nothing exists)",
+        "No end<beg validation/flag",
+        "No persistence/reload of tach values; tester cannot enter Beg 1200.0 / End 1206.5 / see Net 6.5"
+      ],
+      "evidence": [
+        "No matches for net_tach/beg_tach/end_tach/engine_hours in supabase/migrations or src (all 'tach' hits are substrings of attach/dispatch)",
+        "src/types/index.ts:1973-1986 (JobAppliedInfo has no tach fields)",
+        "src/pages/FieldApplicationInvoice.tsx:904-940 (Applied Info tab has no tach inputs)"
+      ],
+      "confidence": "high",
+      "notes": "No tach concept exists anywhere in the codebase — no column, no field, no computation. Entirely unbuilt."
+    },
+    {
+      "area": "As-applied capture & compliance",
+      "n": 21,
+      "name": "Ground crew + ground crew members",
+      "verdict": "TODO",
+      "criteria_total": 6,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No managed Ground Crews list (no crews table, no create/rename/deactivate UI)",
+        "No Ground Crew Members list/table (crew has-many members)",
+        "No crew/member selectors on the applied-info entry",
+        "No reference integrity (renamed crew updates everywhere) — nothing exists",
+        "No persistence/reload of crew+members on applied info",
+        "Ground Crew Member is not available as a report filter/column; tester cannot define a crew, attach it, and filter by member"
+      ],
+      "evidence": [
+        "No matches for ground_crew/groundcrew/crew_member/crews in supabase/migrations or src (grep returned zero hits)",
+        "src/types/index.ts:1973-1986 (JobAppliedInfo has no crew fields)",
+        "src/pages/FieldApplicationInvoice.tsx:904-940 (Applied Info tab has no crew/member selectors)"
+      ],
+      "confidence": "high",
+      "notes": "No ground-crew or crew-member tables, UI, or report filter exist anywhere in the codebase. Entirely unbuilt."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 22,
+      "name": "Unposted invoice list (working list parity)",
+      "verdict": "PARTIAL",
+      "criteria_total": 8,
+      "criteria_met_count": 2,
+      "met": [
+        "A field-application invoice list page exists (FieldInvoices.tsx) scoped to invoice_type='field_application'",
+        "An ADD button creates a new field-app invoice directly (New Field Application -> /invoices/field-app/new)"
+      ],
+      "missing": [
+        "No dedicated 'Unposted' page listing ONLY un-posted invoices (it is one combined list with a status dropdown + card filters)",
+        "No ChemMan filter bar: missing Invoice-Number filter, Customer multi-select, and Transaction Date From/To (only a status <select> + DataTable text search)",
+        "Table lacks Job Number, Location(s), Crop(s), Chemical(s) columns (it shows Invoice#, Customer, Applicator, Acres, Date, Total, Balance, Status)",
+        "No footer totals row (total acres, total dollars, count of invoices displayed)",
+        "No bottom bulk-action bar (Print All / Print Invoice Report / Post All with confirm)",
+        "No per-row Print / Email / Edit action buttons (whole row is click-to-open only)",
+        "Cannot filter to one customer + one date range with matching footer totals"
+      ],
+      "evidence": [
+        "src/pages/FieldInvoices.tsx:69 (.eq('invoice_type','field_application'))",
+        "src/pages/FieldInvoices.tsx:278 (New Field Application -> /invoices/field-app/new)",
+        "src/pages/FieldInvoices.tsx:380-394 (only a status select as filter)",
+        "src/pages/FieldInvoices.tsx:147-215 (column set, no Job#/Locations/Crops/Chemicals, no footer)",
+        "src/App.tsx:204 (single /field-invoices route, no /unposted)"
+      ],
+      "confidence": "high",
+      "notes": "A field-app invoice list exists with status filtering and an ADD button, but it is the combined list, not the ChemMan 'Unposted' page: no dedicated unposted route, no invoice#/customer-multiselect/date-range filter bar, no Job#/Locations/Crops/Chemicals columns, no footer totals, no bulk bar, no per-row print/email/edit."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 23,
+      "name": "Posted invoice list (committed list parity)",
+      "verdict": "TODO",
+      "criteria_total": 7,
+      "criteria_met_count": 1,
+      "met": [
+        "Posted field-app invoices are viewable via the combined list (status='posted' filter / 'Posted Total' card) and tie to accounting periods via post_invoice/check_period_open"
+      ],
+      "missing": [
+        "No dedicated 'Posted Field Application Invoices' page",
+        "No Season/Batch/Month-to-date scope selector on a posted filter bar",
+        "No 'posted records modification will change a prior batch total' warning banner",
+        "No bottom action bar with Print All / Print Invoice Report / Unpost All",
+        "Same-column-set + footer-totals requirement unmet (no footer totals exist on the list at all)",
+        "No verified separation guaranteeing a posted invoice 'does not appear on the unposted list' (single combined list)"
+      ],
+      "evidence": [
+        "src/pages/FieldInvoices.tsx:101-103 (cardFilter posted/outstanding within one combined list)",
+        "src/App.tsx:204 (no /field-invoices/posted route)"
+      ],
+      "confidence": "high",
+      "notes": "Posted field-app invoices can be seen through a status filter on the combined list, but the dedicated Posted page with batch/season selector, warning banner, footer totals, and Unpost All bulk bar does not exist."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 24,
+      "name": "Invoice editor parity (tabs, locations, applied info, notifications)",
+      "verdict": "PARTIAL",
+      "criteria_total": 7,
+      "criteria_met_count": 3,
+      "met": [
+        "Tabbed editor exists with Locations, Chemicals/Charges, Customers, Applied Info tabs",
+        "Header shows Invoice # and an editable Transaction Date; Locations tab shows Total Applied Acres and location selection (SelectLocationsModal)",
+        "Applied Info tab shows wind/temperature/applicator and persists (update_field_app_applied_info)"
+      ],
+      "missing": [
+        "No Notifications tab (only 4 tabs; the 5th ChemMan 'Notifications' tab is absent)",
+        "No Consultant selector in the header (salesman_id is set implicitly to profile.id; not user-selectable)",
+        "Applied Info does not carry over vehicle or weather from the source job (engine-built editor only)",
+        "Bottom actions missing Print and 'Transfer to Scheduling' (reverse transfer); Cancel is only an unsaved-changes guard, not an explicit button"
+      ],
+      "evidence": [
+        "src/pages/FieldApplicationInvoice.tsx:58-65 (TabKey: locations|chemicals|customers|applied_info — no notifications)",
+        "src/pages/FieldApplicationInvoice.tsx:700-738 (header: Invoice#, Transaction Date, Application Service, Notes — no Consultant)",
+        "src/pages/FieldApplicationInvoice.tsx:119-122,856-866 (Total Applied Acres)",
+        "src/pages/FieldApplicationInvoice.tsx:650-671 (bottom actions: Delete, Post, Preview, Save — no Print, no Transfer to Scheduling)"
+      ],
+      "confidence": "high",
+      "notes": "Four of the five tabs exist with editable transaction date, locations + total applied acres, and applied info; missing the Notifications tab, a Consultant selector, vehicle/weather carry-over, and the Print + Transfer-to-Scheduling bottom actions."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 25,
+      "name": "Per-acre pricing from price book (Chemical/Charges tab)",
+      "verdict": "PARTIAL",
+      "criteria_total": 6,
+      "criteria_met_count": 4,
+      "met": [
+        "Chemical line shows product, rate/acre, UM, total applied, unit price (Price), price UM, and line total",
+        "Selecting a product auto-fills unit price from the tier price book (tierPrice) and default rate_per_acre",
+        "Line total auto-computes (rate x acres -> quantity, quantity x unit_price) and recomputes on acre/rate change",
+        "Footer shows Est. $/Acre and Estimated total; a separate per-acre application service charge is added via ApplicationServicePicker / application_services"
+      ],
+      "missing": [
+        "Chemical line lacks Warehouse and Vendor columns (ChemMan shows both per line)",
+        "No explicit gallon-equivalent / lb conversion display on Total Applied (e.g. FL OZ -> GL); a convert_to_gl_lb RPC exists in DB but is not surfaced in this line UI"
+      ],
+      "evidence": [
+        "src/components/field-app/FieldAppChemicalEntry.tsx:191-198 (headers: Product, Rate/Acre, UM, Total Applied, Price, Price UM, Line Total — no Warehouse/Vendor)",
+        "src/components/field-app/FieldAppChemicalEntry.tsx:145-163 (auto-compute quantity/extended + tierPrice auto-fill)",
+        "src/components/field-app/FieldAppChemicalEntry.tsx:321-336 (footer Est. $/Acre + Estimated total)",
+        "src/pages/FieldApplicationInvoice.tsx:721-727 (ApplicationServicePicker for per-acre service charge)"
+      ],
+      "confidence": "high",
+      "notes": "Per-acre price-book auto-fill, line math, footer $/acre and invoice total, and a separate application-service charge are all built and server-authoritative; the gaps are the Warehouse/Vendor per-line columns and an explicit gallon/lb conversion display."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 26,
+      "name": "Auto-split one job into per-customer invoices by share",
+      "verdict": "PARTIAL",
+      "criteria_total": 7,
+      "criteria_met_count": 4,
+      "met": [
+        "One invoice per billing customer/group is produced (invoice_group_id + sibling invoices) via preview_field_app_invoice_split / save_field_app_invoice",
+        "Per-location customer shares are honored (field_app_location_shares, invoice_shares, derive_customer_shares_from_fields)",
+        "A sibling banner links the split invoices and a Customers tab renders the per-customer split with amounts (CustomerSharesTable)",
+        "Server is source of truth for split totals (preview returns customer_count + grand_total_cents)"
+      ],
+      "missing": [
+        "No '<jobnumber>-<NNN>' split numbering convention verified in the engine-built editor path (numbering convention tying splits to source job not confirmed in code)",
+        "No 'Customer Shares By' basis selector (by location / by share) control on the Customers tab",
+        "Customers tab table lacks the ChemMan columns Total Shares and Discount Earned (it shows Line/Qty/Unit Price/Amount per customer)",
+        "No explicit reconciliation check that split acres+dollars equal the source job totals"
+      ],
+      "evidence": [
+        "src/pages/FieldApplicationInvoice.tsx:380-425 (preview_field_app_invoice_split, group split)",
+        "src/pages/FieldApplicationInvoice.tsx:298-329 (derive_customer_shares_from_fields)",
+        "src/components/field-app/CustomerSharesTable.tsx:44-47 (columns Line/Qty/Unit Price/Amount — no Total Shares/Discount Earned)",
+        "src/pages/FieldApplicationInvoice.tsx:675-695 (sibling split banner)"
+      ],
+      "confidence": "high",
+      "notes": "The share model and per-customer split (group id, shares, preview, sibling banner) are built and working; missing are the 'Customer Shares By' selector, the Total Shares + Discount Earned columns on the Customers tab, an explicit job-number split convention, and a totals-reconciliation check."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 27,
+      "name": "TRANSFER JOB to INVOICE button and flow",
+      "verdict": "PARTIAL",
+      "criteria_total": 6,
+      "criteria_met_count": 4,
+      "met": [
+        "Job editor has a real 'Transfer to Invoice' button wired to the transfer_job_to_invoice RPC",
+        "On success it routes to the new field invoice (/field-invoices/:id) which appears on the field-app list",
+        "Transfer flips the job to invoiced (job lifecycle ...-> invoiced; server writes job_invoiced activity row) so it is not double-billed",
+        "Transfer is idempotent (useIdempotencyKey + confirm modal guard)"
+      ],
+      "missing": [
+        "No reverse 'Transfer to Scheduling' action on the invoice editor (push the invoice back to a job) — not found anywhere in src",
+        "Per-customer auto-split on transfer not confirmed in the transfer path code read (split is proven for the engine-built editor, not verified as fired by transfer_job_to_invoice)"
+      ],
+      "evidence": [
+        "src/pages/JobDetail.tsx:888 ('Transfer to Invoice' button)",
+        "src/pages/JobDetail.tsx:698-724 (handleTransferToInvoice -> transfer_job_to_invoice -> navigate /field-invoices/:id)",
+        "src/pages/JobDetail.tsx:1294-1301 (transfer confirm modal)",
+        "grep: no 'Transfer to Scheduling' / transfer_invoice_to_job in src or migrations"
+      ],
+      "confidence": "high",
+      "notes": "The highest-priority transfer is fully wired: a real button on the job editor calls transfer_job_to_invoice, marks the job invoiced, and lands on the new field invoice; the reverse Transfer-to-Scheduling does not exist and the split-on-transfer is unverified."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 28,
+      "name": "POST and UNPOST on the field-app invoice screen",
+      "verdict": "PARTIAL",
+      "criteria_total": 6,
+      "criteria_met_count": 4,
+      "met": [
+        "The field-app invoice editor has a Post button (group-aware: post_invoice_group for groups, post_invoice for singles)",
+        "Posting commits to the accounting period (post_invoice -> check_period_open)",
+        "A split group posts as a whole via post_invoice_group (no half-posted group)",
+        "Post is idempotent + guarded by canPost (edit lock across the group)"
+      ],
+      "missing": [
+        "No 'Unpost' action exposed on the field-app invoice screen (FieldApplicationInvoice has Post but no Unpost)",
+        "No unpost capability anywhere — no unpost_invoice RPC found in migrations or src (so unpost round-trip cannot be performed)"
+      ],
+      "evidence": [
+        "src/pages/FieldApplicationInvoice.tsx:549-579 (handlePost: post_invoice_group / post_invoice)",
+        "src/pages/FieldApplicationInvoice.tsx:656-660 (Post / Post Group button)",
+        "grep: no unpost_invoice RPC in supabase/migrations or src (only the 'unposted' status string)"
+      ],
+      "confidence": "high",
+      "notes": "Post (single + group-aware) is built on the field-app screen and ties into period accounting; Unpost is entirely missing — neither surfaced on the field-app screen nor backed by an unpost RPC, so the post->unpost round-trip is not possible."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 29,
+      "name": "VOID on the field-app invoice screen",
+      "verdict": "PARTIAL",
+      "criteria_total": 5,
+      "criteria_met_count": 3,
+      "met": [
+        "A Void action with a required reason exists (InvoiceDetail handleVoid -> void_invoice with p_void_reason)",
+        "Void records who/when/reason and marks the invoice voided (void_invoice RPC; voided status badge)",
+        "Field-route invoices (/field-invoices/:id, job/blend-built + posted) reach this Void via InvoiceDetail routeArea='field'"
+      ],
+      "missing": [
+        "Void is NOT exposed on the per-acre FieldApplicationInvoice editor (engine-built field invoices) — that screen has Delete + Post only, no Void with reason",
+        "Tester cannot void from the dedicated field-app (per-acre) screen and be forced to enter a reason there"
+      ],
+      "evidence": [
+        "src/pages/InvoiceDetail.tsx:653-671 (handleVoid -> void_invoice, p_void_reason)",
+        "src/pages/InvoiceDetail.tsx:144-147 (void modal + voidReason state)",
+        "src/pages/FieldApplicationInvoice.tsx:650-671 (no Void action on the field-app editor)"
+      ],
+      "confidence": "high",
+      "notes": "A true Void-with-reason exists and field-route invoices reach it through the generic InvoiceDetail screen, but the per-acre FieldApplicationInvoice editor itself only has Delete/Post — Void is not surfaced there, which is exactly the parity gap this section calls out."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 30,
+      "name": "PRINT invoice (current + legacy format)",
+      "verdict": "PARTIAL",
+      "criteria_total": 6,
+      "criteria_met_count": 2,
+      "met": [
+        "A full current-format field_application PDF layout exists (invoicePdf.ts drawFieldApplicationLayout) with locations, chemical lines + rates, per-acre price, shares, totals, EPA reg",
+        "InvoicePrintDialog (current format, with shares / price-per-acre / EPA toggles) is reachable from InvoiceDetail and Invoices"
+      ],
+      "missing": [
+        "Current-format print is NOT reachable from the per-acre FieldApplicationInvoice editor toolbar nor from the FieldInvoices list rows",
+        "No legacy 'Old Print' format variant exists (invoicePdf has only field_application/chemical_sale/misc layouts)",
+        "No bulk Print All / Old Print All from the list",
+        "No 'Print Invoice Report' summary output from the list"
+      ],
+      "evidence": [
+        "src/lib/invoicePdf.ts:256,~345 (drawFieldApplicationLayout — full field-app layout)",
+        "src/components/invoices/InvoicePrintDialog.tsx (current-format options only; no legacy mode)",
+        "src/pages/InvoiceDetail.tsx:1554 + src/pages/Invoices.tsx:817 (InvoicePrintDialog rendered here only)",
+        "src/pages/FieldApplicationInvoice.tsx:650-671 + FieldInvoices.tsx:147-215 (no print action on field-app editor/list rows)"
+      ],
+      "confidence": "high",
+      "notes": "A complete current-format field-app PDF + print dialog exists but only on the generic invoice screens; it is not wired into the field-app per-acre editor or the field-app list rows, there is no legacy Old-Print variant, and no bulk Print All / Print Invoice Report on the list."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 31,
+      "name": "EMAIL invoice to customer from the field-app screen",
+      "verdict": "PARTIAL",
+      "criteria_total": 5,
+      "criteria_met_count": 3,
+      "met": [
+        "An Email-to-customer action exists (InvoiceDetail handleEmailInvoice -> sendEmail with PDF attachment), pre-filling the customer's email from their record",
+        "The send is logged (logActivity 'invoice_emailed'; sendEmail/send-email Edge Function records to email/notification log)",
+        "Missing-email case is handled gracefully ('Customer does not have an email address on file')"
+      ],
+      "missing": [
+        "Email is NOT wired into the FieldApplicationInvoice editor toolbar",
+        "Email is NOT a per-row action on the FieldInvoices list rows",
+        "Email on InvoiceDetail is gated to status='posted' AND isAdmin, so it is not available for unposted field invoices or to sales reps from the field-app screens"
+      ],
+      "evidence": [
+        "src/pages/InvoiceDetail.tsx:849-901 (handleEmailInvoice: sendEmail + PDF attach + logActivity + missing-email guard)",
+        "src/pages/InvoiceDetail.tsx:995-1001 (Email button gated invoice.status==='posted' && isAdmin)",
+        "src/pages/FieldApplicationInvoice.tsx:650-671 (no Email action) + FieldInvoices.tsx:147-215 (no per-row Email)"
+      ],
+      "confidence": "high",
+      "notes": "Invoice email (PDF attach, recipient pre-fill, logging, missing-email guard) is built on the generic InvoiceDetail screen but only for posted invoices and admins; it is not surfaced on the field-app per-acre editor toolbar or the field-app list rows."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 32,
+      "name": "FUEL SURCHARGE (configurable setting, OFF by default)",
+      "verdict": "TODO",
+      "criteria_total": 6,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No Fuel Surcharge company/settings flag (default OFF) — no fuel/surcharge/diluent columns in any migration or app_settings",
+        "No blank owner inputs for current fuel price / per-acre or percentage surcharge rule",
+        "No surcharge invoice line type/flag",
+        "Surcharge not included in totals, print, or share split (because it does not exist)",
+        "No guard/test proving OFF = no change to existing totals"
+      ],
+      "evidence": [
+        "grep 'fuel|surcharge|diluent' across src/ and supabase/migrations/ returns no fuel-surcharge implementation (only unrelated app_settings table)",
+        "src/pages/SettingsPage.tsx (no fuel-surcharge setting)"
+      ],
+      "confidence": "high",
+      "notes": "Nothing for a fuel surcharge exists anywhere — no settings flag, no blank rule inputs, no invoice line, no print/share inclusion. This section is entirely unbuilt and (correctly) requires a migration."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 33,
+      "name": "Header/footer notes, PO ref, due date, terms, discount-earned",
+      "verdict": "PARTIAL",
+      "criteria_total": 5,
+      "criteria_met_count": 2,
+      "met": [
+        "The invoices table carries header_notes, footer_notes, purchase_order_ref, due_date, payment_terms, and internal_notes columns",
+        "The PDF prints footer_notes (and the layout supports header notes), so printed notes are supported"
+      ],
+      "missing": [
+        "The field-app FieldApplicationInvoice editor only exposes header_notes (labeled 'Notes'); it has no UI for footer notes, PO reference, due date, payment terms, or an internal non-printed memo",
+        "No early-pay 'Discount Earned' / discount-date capture per customer on the Customers tab (no discount_earned/discount_date column found in migrations; CustomerSharesTable has no such column)",
+        "Internal memo is not shown as an explicitly non-printed field on the field-app editor",
+        "End-to-end 'set PO/due/terms/header/internal memo, print, confirm internal memo absent' cannot be exercised from the field-app editor"
+      ],
+      "evidence": [
+        "src/types/index.ts:1041-1044 (due_date, purchase_order_ref, header_notes, footer_notes), :114 payment_terms, :69 internal_notes",
+        "src/pages/FieldApplicationInvoice.tsx:728-738 (only a single 'Notes' = header_notes input on the field-app editor)",
+        "grep: no discount_earned/discount_date column in supabase/migrations",
+        "src/components/field-app/CustomerSharesTable.tsx:44-47 (no Discount Earned column)"
+      ],
+      "confidence": "medium",
+      "notes": "The core columns (header/footer notes, PO ref, due date, terms, internal notes) exist in the schema and footer notes print, but the field-app editor surfaces only header notes; PO/due/terms/internal-memo UI and per-customer Discount Earned (no such column) are missing."
+    },
+    {
+      "area": "Field-application invoicing",
+      "n": 34,
+      "name": "Customer Invoice Summary (combined chem sales + field-app statement)",
+      "verdict": "TODO",
+      "criteria_total": 5,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No 'Customer Invoice Summary' screen combining a customer's unposted chemical sales AND unposted field-application invoices",
+        "No inputs for Customer / Heading Date / Discount Date / Terms / Invoice Comment",
+        "No combined-statement output listing both invoice types with a combined total",
+        "No view + print/PDF for such a combined statement",
+        "Cannot be tested with a customer having both invoice types"
+      ],
+      "evidence": [
+        "grep 'Customer Invoice Summary|CustomerInvoiceSummary|condensedUnposted' across src returns nothing",
+        "src/pages/ has no Summary page; ARaging.tsx is a general AR statement, not this combined unposted field-app+chem summary"
+      ],
+      "confidence": "high",
+      "notes": "The combined unposted chemical-sales + field-app Customer Invoice Summary statement does not exist; only a general AR aging/statement exists, which is a different artifact. Both invoice types do live in one invoices table, so the data basis is present but no screen is built."
+    },
+    {
+      "area": "Dispatch & mobile applicator view",
+      "n": 35,
+      "name": "Dispatch board parity (dedicated field/tablet mode)",
+      "verdict": "PARTIAL",
+      "criteria_total": 7,
+      "criteria_met_count": 1,
+      "met": [
+        "A dispatch view exists at its own route (/dispatch) separate from the office Jobs list"
+      ],
+      "missing": [
+        "Not a dedicated DARK/high-contrast/touch-friendly field-tablet mode — it is a light split-screen desktop board reusing standard Card/Badge UI",
+        "No left nav with Jobs (View Map/View List) and Dispatch (Dispatch Jobs/View Dispatched List) groups — Sidebar has a single 'Dispatch Board' link",
+        "Job rows show plain 'X ac' (total only), NOT 'X of Y ac' applied-of-total",
+        "No 'Assigned To: <name>' label on dispatched rows — applicator_name is computed but never rendered; only an assignment dropdown is shown",
+        "No OPTIONS menu (no Filter Jobs By Recipe, More Search Options, Switch View map/list, Add New Job, Reload List)",
+        "No map/list view toggle at all (map and list are shown side-by-side, not switchable views sharing a filter set)",
+        "Tester acceptance (assignee name visible on assigned rows) cannot pass — no assignee label rendered"
+      ],
+      "evidence": [
+        "src/pages/DispatchBoard.tsx:36 (DispatchBoard component)",
+        "src/App.tsx:249 (/dispatch route, roles admin/sales_rep/applicator)",
+        "src/pages/DispatchBoard.tsx:355-359 (renders '{total_acres} ac', no applied-of-total)",
+        "src/pages/DispatchBoard.tsx:362-375 (assignment dropdown, no 'Assigned To:' label)",
+        "src/components/layout/Sidebar.tsx:166 (single 'Dispatch Board' nav link, no Jobs/Dispatch groups)"
+      ],
+      "confidence": "high",
+      "notes": "A desktop split-screen map+list dispatch board exists with status/priority/applicator/date filters and an assign-applicator dropdown, but it does NOT match ChemMan parity: no dark touch field-mode, no Jobs/Dispatch nav groups, no 'X of Y ac', no 'Assigned To: name' label, no OPTIONS menu, no map/list switch. Closer to TODO than DONE."
+    },
+    {
+      "area": "Dispatch & mobile applicator view",
+      "n": 36,
+      "name": "Per-location dispatch + assignment (3-step wizard)",
+      "verdict": "TODO",
+      "criteria_total": 7,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No 3-step dispatch flow (Select Locations / Assign Selections / Finish Dispatching) — no DispatchWizard/step components exist",
+        "No per-location selection for dispatch (the existing SelectLocationsModal is for as-applied invoicing, not dispatch)",
+        "No per-location assignment data: jobs has only a single whole-job applicator_id; no per-location applicator/crew, dispatched_at, or dispatch_status columns/table",
+        "No crew vs single-applicator assignment concept",
+        "No commit step writing per-location dispatch records",
+        "Multi-applicator split on one job is impossible (single applicator_id only)",
+        "Tester cannot run the wizard — it does not exist"
+      ],
+      "evidence": [
+        "src/types/index.ts (Job interface: single 'applicator_id: string | null', no per-location fields)",
+        "src/components/field-app/SelectLocationsModal.tsx:22 (location picker, but used for invoicing not dispatch; no assignment step)",
+        "supabase/migrations/ (grep for dispatch/location_assignment/crew tables returned NONE)"
+      ],
+      "confidence": "high",
+      "notes": "Nothing here exists. CRX assigns the whole job via jobs.applicator_id only. No per-location assignment table/columns, no crew, no 3-step wizard. This is the central new build for the area (needs_migration=true)."
+    },
+    {
+      "area": "Dispatch & mobile applicator view",
+      "n": 37,
+      "name": "Assigned-to tracking + Dispatched-Jobs list",
+      "verdict": "TODO",
+      "criteria_total": 5,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No 'Dispatched List' view listing currently-dispatched jobs/locations with assignee and identity",
+        "No per-row status + applied-of-total acres on a dispatched tracker",
+        "No assignee filter scoped to a dispatched list (DispatchBoard has an applicator filter on the live board, but there is no dispatched-list view)",
+        "No undispatch/reassign path that syncs a dispatched list and an 'Assigned To' label",
+        "Tester cannot dispatch->see->reassign->observe sync — the dispatched list and assignee label do not exist"
+      ],
+      "evidence": [
+        "src/components/layout/Sidebar.tsx:166 (no 'View Dispatched List' nav item)",
+        "src/pages/ (no DispatchedList page; grep for DispatchedList/Dispatched Jobs returned NONE)",
+        "src/pages/DispatchBoard.tsx:121-128 (filters operate on the live day board, not a dispatched tracker)"
+      ],
+      "confidence": "high",
+      "notes": "No Dispatched List view exists and depends on the per-location assignment data from #36 which also does not exist. Only a live dispatch board with an applicator filter is present."
+    },
+    {
+      "area": "Dispatch & mobile applicator view",
+      "n": 38,
+      "name": "Phone/mobile applicator field view (clean job cards, map/list)",
+      "verdict": "TODO",
+      "criteria_total": 7,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No phone-width applicator job-card view for application JOBS — FieldRoute ('My Route') is for delivery DRIVERS (deliveries table), not applicators/jobs",
+        "No 'show only my assigned jobs' for applicators (depends on per-location assignment from #36, which is absent)",
+        "No expandable read-only job card showing Customers, Locations, Chemicals/Charges, Crops, Scheduled Date",
+        "No List/Map toggle on a phone applicator view",
+        "No map plotting of the applicator's job locations with open-from-map",
+        "Read-only field card behavior not implemented",
+        "Tester cannot load assigned job cards on a phone viewport — view does not exist"
+      ],
+      "evidence": [
+        "src/pages/FieldRoute.tsx:1-12 (header doc: 'driver mobile workspace My Route' over the deliveries table, not application jobs)",
+        "src/App.tsx:243-244 (/my-route + /my-route/:id are delivery-driver routes)",
+        "src/pages/DispatchBoard.tsx (the only job dispatch UI is desktop split-screen, not phone job cards)"
+      ],
+      "confidence": "high",
+      "notes": "The mobile 'My Route' surface is for delivery drivers, not spray applicators/jobs. No phone-optimized applicator job-card view exists, and 'my jobs' needs the per-location assignment that #36 has not built."
+    },
+    {
+      "area": "Dispatch & mobile applicator view",
+      "n": 39,
+      "name": "Filter jobs by recipe in the field",
+      "verdict": "TODO",
+      "criteria_total": 5,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No 'Filter Jobs By Recipe' control on the dispatch/field view (no recipe references in DispatchBoard.tsx)",
+        "No recipe-based narrowing of list and map",
+        "No additive combination of recipe filter with other filters (recipe filter absent)",
+        "No clear-recipe-filter behavior",
+        "Tester cannot pick a recipe to narrow jobs — control does not exist"
+      ],
+      "evidence": [
+        "src/pages/DispatchBoard.tsx (grep for recipe/blend_recipe returned No matches — no recipe in the dispatch query or filters)",
+        "src/pages/DispatchBoard.tsx:284-314 (filter controls are status/priority/applicator only)",
+        "src/types/index.ts (jobs.recipe_id exists, so the data is available — but no UI filter uses it on dispatch)"
+      ],
+      "confidence": "high",
+      "notes": "Recipe data exists on jobs (jobs.recipe_id) and in JobDetail, but the dispatch/field view has no recipe filter control at all. Pure TODO that only needs a filter over existing data."
+    },
+    {
+      "area": "Dispatch & mobile applicator view",
+      "n": 40,
+      "name": "Pre-notification to customer (before application), wired to jobs",
+      "verdict": "TODO",
+      "criteria_total": 6,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No 'Send Pre-Notification' action on a job row or job editor",
+        "No recipient resolution from the job's customers/location shares for a pre-notice",
+        "No per-job Notifications log (type=pre, recipient, timestamp, channel) — no job_notifications table/columns and no such RPC",
+        "No empty-state-then-entry Notifications log UI",
+        "No configurable pre-notice message template",
+        "Tester cannot send a pre-notification on a test job — nothing wired"
+      ],
+      "evidence": [
+        "src/pages/FieldApplicationInvoice.tsx (grep for notification/Pre-Notif/Post-Notif returned No matches)",
+        "supabase/ + src/ (grep for send_pre_notif/customer_notification/application_notif returned NONE)",
+        "src/components/team/NotificationsPanel.tsx:35 (reads the 'notifications' table = in-app team notifications, not customer application notices)"
+      ],
+      "confidence": "high",
+      "notes": "Generic email infra exists (send-email edge fn, notifications table for in-app alerts) but there is NO job-linked customer pre-notification: no action, no job_notifications log, no template. needs_migration=true and unbuilt."
+    },
+    {
+      "area": "Dispatch & mobile applicator view",
+      "n": 41,
+      "name": "Post-notification to customer (after application), wired to jobs",
+      "verdict": "TODO",
+      "criteria_total": 5,
+      "criteria_met_count": 0,
+      "met": [],
+      "missing": [
+        "No 'Send Post-Notification' action on the job or the field-application invoice editor",
+        "No post entry recorded in a per-job/invoice Notifications log (no such log exists)",
+        "No shared/continuous notification history between a job and its resulting invoice",
+        "No configurable post-notice template",
+        "Tester cannot trigger a post-notification or see a logged post entry in both job and invoice"
+      ],
+      "evidence": [
+        "src/pages/FieldApplicationInvoice.tsx:652-667 (bottom actions are Delete/Post/Preview/Save only — no Send Post-Notification)",
+        "src/pages/FieldApplicationInvoice.tsx (grep for notification returned No matches)",
+        "supabase/ + src/ (no send_post_notification RPC; grep returned NONE)"
+      ],
+      "confidence": "high",
+      "notes": "No post-notification action exists on the job or the field-application invoice editor, and the shared job<->invoice notifications log it depends on (built in #40) does not exist. Pure TODO."
+    }
+  ]
+}
