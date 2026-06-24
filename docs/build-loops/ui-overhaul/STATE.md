@@ -9,13 +9,14 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 ---
 
 ## Phase 0 — Design-system foundation
-- [ ] Formalize Tailwind theme tokens (spacing/radius/shadow/neutral ramp/status colors)
-- [ ] `PageHeader`, `StatStrip`, `EmptyState` shared components (create if missing)
-- [ ] Restyle `Card`, `Button`, `Badge`
-- [ ] Restyle `DataTable` / `EditableDataTable` (sticky header, zebra/hover, numeric align)
-- [ ] Restyle `Modal`, `Breadcrumbs`, `Combobox`
-- [ ] Polish `Sidebar`, `TopBar`, `AppLayout` shell
-- [ ] Proof: before/after screenshots — Dashboard, Orders, OrderDetail
+- [~] Tailwind tokens: refined card/card-hover shadows. Kept the existing palette on purpose (avoided the risky 80-page gray→surface remap the analysis flagged).
+- [ ] `PageHeader`, `StatStrip`, `EmptyState` shared components — deferred (not needed for Option A)
+- [x] Restyle `Card`, `Button`, `Badge` (+ `Input`, `Select`) — Option A polish: hairline borders, richer status pills (bg-100/text-800 + inset ring), softer shadows
+- [x] Restyle `DataTable` — zebra rows + tinted header + hover + crisper borders. (EditableDataTable TODO)
+- [ ] Restyle `Modal`, `Breadcrumbs`, `Combobox` — follow-up
+- [ ] Polish `Sidebar`, `TopBar`, `AppLayout` shell — follow-up
+- [x] Verification harness: dev-only `/design-preview` component gallery (gated by import.meta.env.DEV, tree-shaken from prod)
+- [!] Visual proof: CANNOT screenshot here — worktree has no `.env` (Supabase keys), so the dev server can't boot the app. Review via a Vercel **preview deploy** of the branch → open `/design-preview` + click the command center.
 
 ## Phase 1 — 🚩 Operations Command Center (route `/ops`)
 ### Build A — read-only board (autonomous, zero DB)
@@ -70,6 +71,8 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet)_
 
 ## Commit log (newest first)
+- Visual refresh Option A (shared components): hairline card borders + softer shadows, richer status badges, zebra/tinted-header tables, crisper inputs. Propagates to all pages, zero page edits. Badge tests updated to new tokens. lint+typecheck+build+2123 tests green.
+- Dev-only /design-preview component gallery (review harness).
 - Loop paused at milestone: skipped empty Expiring-holds (no expiry dates) + deferred redundant remainders; wrote Morning Summary. Autonomous-loop iteration 5 (stop).
 - Inbound POs section added to command center (4th tab): open POs by arrival, ordered/received/remaining, overdue flag. Live 10 POs/18 lines/~14.7k units. lint+typecheck+build+2123 tests green. Autonomous-loop iteration 4.
 - Deliveries section added to command center (3rd tab): open deliveries, overdue/unassigned flags. Live data 11 open/7 overdue/7 unassigned. lint+typecheck+build+2123 tests green. Autonomous-loop iteration 3.

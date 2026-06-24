@@ -117,7 +117,7 @@ export default function DataTable<T extends Record<string, any>>({
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-100">
+              <tr className="border-b border-gray-200 bg-cream-dark/50">
                 {columns.map((col) => (
                   <th
                     key={col.key}
@@ -156,7 +156,7 @@ export default function DataTable<T extends Record<string, any>>({
                   tabIndex={onRowClick ? 0 : undefined}
                   role={onRowClick ? 'button' : undefined}
                   className={`
-                    border-b border-gray-50 transition-colors
+                    border-b border-gray-100 transition-colors even:bg-gray-50/50
                     ${onRowClick ? 'cursor-pointer hover:bg-crx-green-tint focus:outline-none focus:ring-2 focus:ring-crx-green/30' : ''}
                   `}
                 >
