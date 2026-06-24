@@ -15,12 +15,25 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase, assertRpcResult } from '../../lib/db';
 import {
   parseShapefileBundle,
+  parseShapefileZip,
   parseGeoJSONFile,
   parseKMLFile,
   calculateFieldMetrics,
-  validateFeatureGeometry,
+  validateFullGeometry,
+  geometryAcres,
   type ParseResult,
 } from '../../lib/fieldImportParser';
+import {
+  acreDivergencePct,
+  isAcreDivergent,
+  ACRE_DIVERGENCE_THRESHOLD_PCT,
+  isAcreInBand,
+  isAcreDenominatedColumn,
+  parseAcreInput,
+  ACRE_BAND_MIN,
+  ACRE_BAND_MAX,
+} from '../../lib/fieldGeometry';
+import type { Polygon, MultiPolygon } from 'geojson';
 import ImportPreviewMap from './ImportPreviewMap';
 import AttributeMappingStep from './AttributeMappingStep';
 import type { Customer, ParsedImportField } from '../../types';
@@ -33,7 +46,7 @@ interface BulkFieldImportProps {
 }
 
 type Step = 1 | 2 | 3 | 4 | 5 | 6 | 7;
-type FileType = 'shapefile' | 'geojson' | 'kml' | null;
+type FileType = 'shapefile' | 'shapefile-zip' | 'geojson' | 'kml' | null;
 
 const STEP_LABELS = [
   'Upload',
@@ -45,7 +58,7 @@ const STEP_LABELS = [
   'Done',
 ];
 
-const ACCEPTED_EXTENSIONS = ['.shp', '.dbf', '.shx', '.prj', '.geojson', '.json', '.kml'];
+const ACCEPTED_EXTENSIONS = ['.zip', '.shp', '.dbf', '.shx', '.prj', '.geojson', '.json', '.kml'];
 const MAX_SIZE = 25 * 1024 * 1024; // 25MB
 
 export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldImportProps) {
@@ -82,7 +95,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
 
   // Step 7: Results
-  const [results, setResults] = useState<{ success: number; failed: number; errors: string[] } | null>(null);
+  const [results, setResults] = useState<{ success: number; failed: number; errors: string[]; warnings: string[] } | null>(null);
 
   // Fetch customers for step 4
   useEffect(() => {
@@ -130,6 +143,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
   const detectFileType = (fileList: File[]): FileType => {
     const names = fileList.map((f) => f.name.toLowerCase());
+    if (names.some((n) => n.endsWith('.zip'))) return 'shapefile-zip';
     if (names.some((n) => n.endsWith('.shp'))) return 'shapefile';
     if (names.some((n) => n.endsWith('.geojson') || n.endsWith('.json'))) return 'geojson';
     if (names.some((n) => n.endsWith('.kml'))) return 'kml';
@@ -145,7 +159,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       return !ACCEPTED_EXTENSIONS.includes(ext);
     });
     if (invalidFiles.length > 0) {
-      toast('error', `Unsupported file type: ${invalidFiles[0].name}. Accepted: .shp, .dbf, .prj, .geojson, .json, .kml`);
+      toast('error', `Unsupported file type: ${invalidFiles[0].name}. Accepted: .zip, .shp, .dbf, .prj, .geojson, .json, .kml`);
       return;
     }
 
@@ -158,7 +172,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
     const type = detectFileType(fileArray);
     if (!type) {
-      toast('error', 'Could not detect file type. Please upload .shp, .geojson, or .kml files.');
+      toast('error', 'Could not detect file type. Please upload a .zip shapefile, loose .shp/.dbf, .geojson, or .kml.');
       return;
     }
 
@@ -219,6 +233,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         const prjText = prjFile ? await prjFile.text() : null;
 
         result = await parseShapefileBundle(shpBuffer, dbfBuffer, prjText);
+      } else if (fileType === 'shapefile-zip') {
+        const zipFile = files.find((f) => f.name.toLowerCase().endsWith('.zip'));
+        const zipBuffer = await zipFile!.arrayBuffer();   // binary — a zip, not text
+        result = await parseShapefileZip(zipBuffer);
       } else if (fileType === 'geojson') {
         const jsonFile = files.find(
           (f) => f.name.toLowerCase().endsWith('.geojson') || f.name.toLowerCase().endsWith('.json')
@@ -254,17 +272,21 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       const props = feature.properties || {};
       const errors: string[] = [];
 
-      // Geometry validation
-      const geoErrors = validateFeatureGeometry(feature);
+      // Geometry validation — validate ALL parts of the full geometry (the import sends the full
+      // multi-part geometry to set_field_boundary), not just the largest display polygon.
+      const geoErrors = validateFullGeometry(parseResult.fullGeometries[i] as Polygon | MultiPolygon);
       errors.push(...geoErrors);
 
       // Calculate metrics
       let acres = 0;
+      let fullAcres = 0;
       let centroid = { type: 'Point' as const, coordinates: [0, 0] as [number, number] };
       if (geoErrors.length === 0) {
         const metrics = calculateFieldMetrics(feature);
         acres = metrics.acres;
         centroid = metrics.centroid;
+        // Only after validation passes — geometryAcres (turf) can throw on a malformed geometry.
+        fullAcres = geometryAcres(parseResult.fullGeometries[i] as Polygon | MultiPolygon);
       }
 
       // Map attributes
@@ -281,8 +303,16 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         errors.push('No customer assigned');
       }
 
-      const parsedAcres = getValue('total_acres');
-      const acresFromAttr = parsedAcres ? parseFloat(parsedAcres) : null;
+      const acreAttrKey = columnMapping['total_acres'] ?? null;
+      // Strict parse (strips thousands separators; rejects "40 ac"/junk) so a formatted string
+      // like "1,234.5" can't become a 1-acre bill via parseFloat's partial parse.
+      const acresFromAttr = parseAcreInput(getValue('total_acres'));
+      // The acreage the FILE reported, but ONLY from an ACRE-denominated column — a GIS area
+      // column (area/shape_area, square meters) must never set money (a 1-ac field's shape_area
+      // ≈ 4047 would bill as 4047 ac). The value is PRESERVED even when 0/negative/out-of-band so
+      // the review flags it (isAcreInBand decides whether it can actually bill); null only when
+      // the column is non-acre or unparseable.
+      const statedAcres = isAcreDenominatedColumn(acreAttrKey) ? acresFromAttr : null;
 
       fields.push({
         index: i + 1,
@@ -291,7 +321,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         legal_description: getValue('legal_description'),
         county: getValue('county'),
         state: getValue('state') || 'IL',
-        total_acres: (acresFromAttr && acresFromAttr > 0) ? acresFromAttr : acres,
+        // Seed the legacy total_acres from the file ONLY when it's in-band; an out-of-band value
+        // bills on measured anyway, and seeding it here could fail the create or leave a bad legacy
+        // acreage on an orphaned field if the boundary RPC later fails.
+        total_acres: isAcreInBand(statedAcres) ? statedAcres : acres,
         crop_type: getValue('crop_type'),
         fsa_farm_number: getValue('fsa_farm_number'),
         fsa_tract_number: getValue('fsa_tract_number'),
@@ -300,6 +333,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
         irrigation: false,
         notes: getValue('notes'),
         boundary_geojson: feature.geometry,
+        // The full original geometry (multi-part preserved) — sent to set_field_boundary so
+        // the server measures the whole field, not just the largest-ring display polygon.
+        full_boundary_geojson: parseResult.fullGeometries[i],
+        full_acres: fullAcres,
+        stated_acres: statedAcres,
         centroid_geojson: centroid,
         calculated_acres: acres,
         raw_properties: props as Record<string, unknown>,
@@ -323,9 +361,21 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     let success = 0;
     let failed = 0;
     const errors: string[] = [];
+    const warnings: string[] = [];
 
     for (const pf of validFields) {
       try {
+        // Pre-validate the FULL multi-part acreage against the server's 0.1–5000 band BEFORE
+        // creating the field. Otherwise an out-of-band import creates a field that
+        // set_field_boundary then rejects, leaving an orphan a sales_rep cannot delete
+        // (fields_delete RLS is admin-only).
+        if (pf.full_acres < 0.1 || pf.full_acres > 5000) {
+          failed++;
+          errors.push(`"${pf.field_name}": ${pf.full_acres} ac is outside the allowed 0.1–5000 acre range; not imported.`);
+          setUploadProgress((prev) => ({ ...prev, current: prev.current + 1 }));
+          continue;
+        }
+
         const fieldPayload = {
           customer_id: pf.customer_id,
           field_name: pf.field_name,
@@ -355,22 +405,59 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
           failed++;
           errors.push(`"${pf.field_name}": ${saveError.message}`);
         } else if (assertRpcResult(fieldId, 'save_field')) {
-          // Save geometry — save_field_geometry RETURNS void so we use
-          // .throwOnError() (the regex coverage check doesn't count this
-          // as a capture, and Supabase converts the error to a throw).
+          // Persist the boundary via the server-authoritative acreage RPC — it measures the
+          // FULL (multi-part) geometry, enforces the 0.1–5000 acre band, keeps field_polygons +
+          // legacy boundary/centroid in sync, and sets measured_acres (the billable default).
+          let boundaryOk = false;
           try {
-            await supabase.rpc('save_field_geometry', {
+            const { data: bData, error: bErr } = await supabase.rpc('set_field_boundary', {
               p_field_id: fieldId,
-              p_centroid_geojson: JSON.stringify(pf.centroid_geojson),
-              p_boundary_geojson: JSON.stringify(pf.boundary_geojson),
+              p_boundary_geojson: JSON.stringify(pf.full_boundary_geojson),
+              p_performed_by: profile!.id,
               p_idempotency_key: crypto.randomUUID(),
-            }).throwOnError();
+            });
+            if (bErr) throw bErr;
+            assertRpcResult(bData, 'set_field_boundary');
+            boundaryOk = true;
           } catch (geoError: unknown) {
-            // Field was created but geometry failed — count as partial success
+            // Acreage was pre-validated above, so set_field_boundary rejecting here is a rare
+            // residual (degenerate geometry / a DB error). The field exists with an in-band
+            // client total_acres; count it as failed (an admin can remove it — a sales_rep
+            // delete is RLS-blocked). A fully-atomic create_field_with_boundary RPC is the
+            // documented follow-up that would also avoid this residual.
             const msg = geoError instanceof Error ? geoError.message : String(geoError);
-            errors.push(`"${pf.field_name}": Field created but boundary save failed — ${msg}`);
+            failed++;
+            errors.push(`"${pf.field_name}": Field created but boundary measurement failed — ${msg}`);
           }
-          success++;
+          if (boundaryOk) {
+            // Bill on the FILE's stated acreage (owner choice 2026-06-23): set it as the billable
+            // override. measured_acres still holds the true map measure underneath, so the field
+            // screen can show the gap. Apply the SAME 0.1–5000 band the measured path enforces
+            // BEFORE sending it — set_field_override_acres only rejects <= 0 / > 5000 (no 0.1
+            // floor), so a tiny stated value would otherwise bill below the safety floor. An
+            // out-of-band or RPC-rejected stated value is a non-fatal warning: the field still
+            // imports, billing on the measured acres.
+            if (pf.stated_acres != null) {
+              if (!isAcreInBand(pf.stated_acres)) {
+                warnings.push(`"${pf.field_name}": the file's ${pf.stated_acres} ac is outside the allowed ${ACRE_BAND_MIN}–${ACRE_BAND_MAX} acre range — billing on the measured ${pf.full_acres} ac instead.`);
+              } else {
+                try {
+                  const { data: ovData, error: ovErr } = await supabase.rpc('set_field_override_acres', {
+                    p_field_id: fieldId,
+                    p_override_acres: pf.stated_acres,
+                    p_performed_by: profile!.id,
+                    p_idempotency_key: crypto.randomUUID(),
+                  });
+                  if (ovErr) throw ovErr;
+                  assertRpcResult(ovData, 'set_field_override_acres');
+                } catch (ovError: unknown) {
+                  const msg = ovError instanceof Error ? ovError.message : String(ovError);
+                  warnings.push(`"${pf.field_name}": imported, but the file's ${pf.stated_acres} ac couldn't be set as the billable acres (${msg}) — billing on the measured ${pf.full_acres} ac instead.`);
+                }
+              }
+            }
+            success++;
+          }
         }
       } catch (err: unknown) {
         failed++;
@@ -380,7 +467,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       setUploadProgress((prev) => ({ ...prev, current: prev.current + 1 }));
     }
 
-    setResults({ success, failed, errors });
+    setResults({ success, failed, errors, warnings });
     setStep(7);
     setUploading(false);
 
@@ -442,6 +529,24 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   const validCount = parsedFields.filter((f) => f.isValid).length;
   const invalidCount = parsedFields.filter((f) => !f.isValid).length;
 
+  // A field bills on the FILE's acreage only when it is present AND within the 0.1–5000 band —
+  // exactly what handleUpload enforces. Otherwise it bills on the measured map acres. The review
+  // shows this real basis so the owner never approves one basis and gets another after import.
+  const billsOnFileAcres = (f: ParsedImportField) => f.stated_acres != null && isAcreInBand(f.stated_acres);
+
+  // Fields that WILL bill on the file acreage but differ from the MAP measure by >= the threshold
+  // (over OR under) — flagged so the owner can eyeball "something's off" before importing
+  // (e.g. an applicator sprayed part of one field under another field's name).
+  const flaggedFields = parsedFields.filter(
+    (f) => f.isValid && billsOnFileAcres(f) && isAcreDivergent(f.stated_acres, f.full_acres),
+  );
+
+  // Fields whose file acreage is OUT OF the 0.1–5000 band → they bill on the measured map acres
+  // instead. Surfaced at review so the displayed basis matches what actually imports.
+  const outOfBandFields = parsedFields.filter(
+    (f) => f.isValid && f.stated_acres != null && !isAcreInBand(f.stated_acres),
+  );
+
   const sampleProperties = parseResult?.featureCollection.features[0]?.properties || null;
 
   // ─── Render ─────────────────────────────────────────────────────────
@@ -480,7 +585,8 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               <h4 className="text-sm font-medium text-nav-dark mb-2">How to Import Fields</h4>
               <ol className="text-xs text-secondary space-y-1 list-decimal list-inside">
                 <li>Export field boundaries from ChemMan, FieldView, or AgFiniti</li>
-                <li>For shapefiles: select ALL files (.shp, .dbf, .shx, .prj) at once</li>
+                <li>Easiest: a single <strong>.zip</strong> shapefile (John Deere Operations Center / Climate FieldView export)</li>
+                <li>Or loose shapefile parts: select ALL files (.shp, .dbf, .shx, .prj) at once</li>
                 <li>For GeoJSON or KML: select the single file</li>
                 <li>Preview on map, map columns, assign customer, and import</li>
               </ol>
@@ -507,13 +613,13 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                 Drop files here or click to browse
               </p>
               <p className="text-xs text-secondary mt-1">
-                .shp, .dbf, .prj, .geojson, .json, .kml — Max 25MB
+                .zip, .shp, .dbf, .prj, .geojson, .json, .kml — Max 25MB
               </p>
               <input
                 id="field-import-input"
                 type="file"
                 multiple
-                accept=".shp,.dbf,.shx,.prj,.geojson,.json,.kml"
+                accept=".zip,.shp,.dbf,.shx,.prj,.geojson,.json,.kml"
                 onChange={handleInputChange}
                 className="hidden"
               />
@@ -672,21 +778,83 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
               </div>
             </div>
 
+            {/* Fields to review — the file's acreage differs materially from the map measurement
+                (over OR under). They still import on the file's number; this just flags them. */}
+            {flaggedFields.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg max-h-40 overflow-y-auto">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <p className="text-xs font-medium text-amber-700">
+                    {flaggedFields.length} field{flaggedFields.length > 1 ? 's' : ''} to review — the file's acreage differs from the map by {ACRE_DIVERGENCE_THRESHOLD_PCT}% or more
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  {flaggedFields.map((pf) => {
+                    const pct = acreDivergencePct(pf.stated_acres, pf.full_acres);
+                    const dir = (pf.stated_acres ?? 0) > pf.full_acres ? 'over' : 'under';
+                    return (
+                      <p key={pf.index} className="text-xs text-amber-700">
+                        <span className="font-medium">{pf.field_name}</span>: bills {pf.stated_acres} ac (file) vs {pf.full_acres} ac (map) — {pct != null ? Math.round(pct) : 0}% {dir}
+                      </p>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-amber-600 mt-1.5">These still import on the file's acreage; open a field afterward to adjust if it looks wrong.</p>
+              </div>
+            )}
+
+            {/* File acreage out of the 0.1–5000 band → bills on the measured map acres instead.
+                Shown so the review basis matches what actually imports (Codex P2). */}
+            {outOfBandFields.length > 0 && (
+              <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg max-h-40 overflow-y-auto">
+                <p className="text-xs font-medium text-blue-700 mb-1">
+                  {outOfBandFields.length} field{outOfBandFields.length > 1 ? 's' : ''} will bill on the map measurement — the file's acreage is outside {ACRE_BAND_MIN}–{ACRE_BAND_MAX} ac
+                </p>
+                <div className="space-y-1">
+                  {outOfBandFields.map((pf) => (
+                    <p key={pf.index} className="text-xs text-blue-700">
+                      <span className="font-medium">{pf.field_name}</span>: file says {pf.stated_acres} ac → bills the measured {pf.full_acres} ac
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Preview of valid fields */}
             {validCount > 0 && (
               <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg max-h-48 overflow-y-auto">
                 <p className="text-xs font-medium text-secondary mb-2">Preview (first 5):</p>
                 <div className="space-y-2">
-                  {parsedFields.filter((f) => f.isValid).slice(0, 5).map((pf) => (
-                    <div key={pf.index} className="text-xs bg-white p-2 rounded border border-gray-100">
-                      <p className="font-medium text-nav-dark">{pf.field_name}</p>
-                      <p className="text-gray-500">
-                        {pf.calculated_acres} acres
-                        {pf.county && ` • ${pf.county}`}
-                        {pf.crop_type && ` • ${pf.crop_type}`}
-                      </p>
-                    </div>
-                  ))}
+                  {parsedFields.filter((f) => f.isValid).slice(0, 5).map((pf) => {
+                    const onFile = billsOnFileAcres(pf);
+                    const outOfBand = pf.stated_acres != null && !isAcreInBand(pf.stated_acres);
+                    const divergent = onFile && isAcreDivergent(pf.stated_acres, pf.full_acres);
+                    return (
+                      <div key={pf.index} className="text-xs bg-white p-2 rounded border border-gray-100">
+                        <p className="font-medium text-nav-dark">{pf.field_name}</p>
+                        <p className="text-gray-500">
+                          {onFile ? (
+                            <>Bills <span className="font-medium">{pf.stated_acres} ac</span> (file) · map measures {pf.full_acres} ac</>
+                          ) : outOfBand ? (
+                            <>Bills <span className="font-medium">{pf.full_acres} ac</span> (map) · file's {pf.stated_acres} ac is out of range</>
+                          ) : (
+                            <>
+                              {/* no file acreage → bills the measured acres set_field_boundary computes */}
+                              Bills <span className="font-medium">{pf.full_acres} ac</span> (map measured)
+                              {pf.full_acres !== pf.calculated_acres && ` — multi-part, ${pf.calculated_acres} ac in the largest piece`}
+                            </>
+                          )}
+                          {pf.county && ` • ${pf.county}`}
+                          {pf.crop_type && ` • ${pf.crop_type}`}
+                        </p>
+                        {divergent && (
+                          <p className="text-amber-600 mt-0.5">
+                            ⚠ {Math.round(acreDivergencePct(pf.stated_acres, pf.full_acres) ?? 0)}% {(pf.stated_acres ?? 0) > pf.full_acres ? 'over' : 'under'} the map measurement
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
                   {validCount > 5 && (
                     <p className="text-xs text-secondary text-center pt-1">
                       + {validCount - 5} more fields
@@ -759,6 +927,15 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
                 <p className="text-xs font-medium text-secondary mb-1">Errors:</p>
                 {results.errors.map((err, i) => (
                   <p key={i} className="text-xs text-secondary">{err}</p>
+                ))}
+              </div>
+            )}
+
+            {results.warnings.length > 0 && (
+              <div className="p-3 bg-amber-50 border border-amber-100 rounded-lg max-h-32 overflow-y-auto">
+                <p className="text-xs font-medium text-amber-700 mb-1">Imported, with notes:</p>
+                {results.warnings.map((w, i) => (
+                  <p key={i} className="text-xs text-amber-600">{w}</p>
                 ))}
               </div>
             )}

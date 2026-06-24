@@ -6,6 +6,11 @@
     "spec_contract": "Keys are the primary RPC under test. 'covers' lists every RPC the chain exercises - run-smoke.mjs --spec <rpc> matches keys AND covers entries, so one chain can certify several RPCs. Every migration that touches an RPC must have or extend a spec covering it."
   },
   "specs": {
+    "set_field_boundary": {
+      "chain": "smoke-set_field_boundary.sql",
+      "description": "Field-acre-billing acreage RPCs (migrations 20260623120000/130000): a ~40-ac polygon measures sane geodesic acres (acres_source='measured'); the 0.1-5000 band rejects oversize (AREA_OUT_OF_BAND); a typed override SURVIVES a redraw (set_field_boundary never touches override_acres); idempotent replay returns the same result; the fields_acre_authority trigger blocks a direct measured_acres write.",
+      "covers": ["set_field_boundary", "set_field_override_acres"]
+    },
     "save_quote": {
       "chain": "smoke-save-quote-drawn-guard.sql",
       "description": "Drawn-product edit guard (A4): reducing a booking below its drawn quantity and removing a drawn product both raise BOOKING_OVERDRAWN; a legal reduce keeps booked/drawn/status consistent and the booking still closes at the new total; a no-draws control quote edits freely.",

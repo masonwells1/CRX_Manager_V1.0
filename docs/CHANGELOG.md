@@ -4,6 +4,17 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-23 — Field mapping + per-acre billing (Track A: A1–A8 SHIPPED LIVE)
+
+Field-mapping → per-acre-billing foundation built on `feat/field-acre-billing` (autonomous Codex-gated build loop), then **applied to the live DB, merged to main, and deployed**. The keystone fix: a redraw — or an import — can no longer silently change a billed acre.
+
+- **A1 (migration `20260623120000`, APPLIED):** two-acre model on `fields` — `measured_acres`/`override_acres` numeric, `boundary_geom geometry(MultiPolygon,4326)`, GENERATED `acres_source`; GIST index; bill-preserving backfill (`override_acres = total_acres` for existing boundaried fields → current bills UNCHANGED). Preflight proved **0 at-risk rows live** before apply.
+- **A2 (migration `20260623130000`, APPLIED):** server-authoritative acreage RPCs — `set_field_boundary` (only writer of `measured_acres`: robust PostGIS pipeline, geodesic measure, 0.1–5000 band, strict-actor, idempotency, `field_polygons` sync) + `set_field_override_acres` + `find_overlapping_fields`, plus a `fields_acre_authority` trigger so only the RPCs may write the acre columns.
+- **A3 (types) / A4 (FieldSetup override UI, redraw-clobber removed) / A5 (`.zip` shapefile import, multi-part acreage).**
+- **A8 (owner refinement):** imports bill on the FILE's stated acreage (acre-named columns only — a square-meter `Shape_Area` can't set money; strict thousands-separator parse; 0.1–5000 band; out-of-band → bills measured + warns); manual typed acres (no map) go through the same band gate; a ±10% over/under divergence flag at import review + in the field editor. Frontend-only; 44 `fieldGeometry` unit tests. The import section took 6 Codex fix rounds → clean.
+
+Post-apply proven live (all rolled back / zero footprint): `plpgsql_check` clean ×4; functional smoke `SMOKE_PASS_ROLLBACK` (override-survives-redraw, band reject, idempotent replay, trigger blocks direct writes); **0 bills moved** (all 3 live fields unchanged); advisors unchanged (the 3 RPCs only under the accepted authenticated-SECDEF self-gating class). Track B (billing-engine tie-in — the as-applied-vs-system % alert that catches an applicator spraying part of one field under the wrong name) stays separate.
+
 ## 2026-06-23 — B1 Lot Capture & Trace: APPLIED LIVE + merged + deployed
 
 Owner approved go-live. Migration `20260622170000_application_record_lots` applied to the live DB (project `rhyzpcqhnizqbxphqdkr`) and `feat/application-lot-capture` fast-forward-merged to `main` + deployed to croprxsolutions.app. B1 is now live: chemical **LOT/batch numbers** are captured per application and traceable for recall/compliance (which lot → which field/date/customer). Capture-and-trace only; no per-lot inventory math (Wave C).

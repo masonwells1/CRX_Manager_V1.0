@@ -1320,6 +1320,12 @@ export interface Field {
   county: string | null;
   state: string | null;
   total_acres: number | null;
+  // Two-acre model (migration 20260623120000): measured = server-computed from the
+  // boundary; override = human-typed billable acres (survives a redraw). Billable acres =
+  // override_acres ?? measured_acres ?? total_acres. acres_source is GENERATED (never written).
+  measured_acres?: number | null;
+  override_acres?: number | null;
+  acres_source?: 'measured' | 'override' | 'legacy';
   fsa_farm_number: string | null;
   fsa_tract_number: string | null;
   fsa_field_number: string | null;
@@ -1335,6 +1341,29 @@ export interface Field {
   updated_at: string;
   customer?: Customer;
   billing_defaults?: FieldBillingDefault[];
+}
+
+// Result shapes for the two-acre RPCs (migration 20260623130000)
+export interface SetFieldBoundaryResult {
+  field_id: string;
+  measured_acres: number;
+  billable_acres: number;
+  acres_source: 'measured' | 'override';
+}
+
+export interface SetFieldOverrideAcresResult {
+  field_id: string;
+  override_acres: number | null;
+  billable_acres: number | null;
+  acres_source: 'measured' | 'override' | 'legacy';
+}
+
+export interface OverlappingField {
+  field_id: string;
+  field_name: string | null;
+  customer_id: string | null;
+  measured_acres: number | null;
+  overlap_pct: number;
 }
 
 export interface FieldBillingDefault {
@@ -1429,6 +1458,15 @@ export interface ParsedImportField {
   irrigation: boolean;
   notes: string | null;
   boundary_geojson: object;
+  // Full original geometry (multi-part preserved) sent to set_field_boundary on save;
+  // boundary_geojson above is the largest-ring display polygon. (migration 20260623130000)
+  full_boundary_geojson: object;
+  full_acres: number;   // geodesic acres of the FULL geometry — pre-checked against the band on import
+  // The acreage the FILE itself reported (the mapped "Acres" attribute), if any. On import this
+  // becomes the field's billable override (owner choice 2026-06-23) so the bill matches the
+  // grower's own records; measured map acres (full_acres) are kept underneath for the divergence
+  // check. null when the file carried no acreage column → the field bills on the measured acres.
+  stated_acres: number | null;
   centroid_geojson: object;
   calculated_acres: number;
   raw_properties: Record<string, unknown>;

@@ -13,11 +13,19 @@ import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { supabase, assertRpcResult } from '../lib/db';
-import type { Json } from '../types/supabase';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { Sentry } from '../lib/sentry';
 import { computeBounds } from '../hooks/useFitBounds';
 import { parseDollarsToCents } from '../lib/parseCents';
+import {
+  buildBoundaryGeometry,
+  billableAcres,
+  isAcreDivergent,
+  acreDivergencePct,
+  isAcreInBand,
+  ACRE_BAND_MIN,
+  ACRE_BAND_MAX,
+} from '../lib/fieldGeometry';
 import turfCentroid from '@turf/centroid';
 import type { Feature, Polygon } from 'geojson';
 import type { Field, Customer } from '../types';
@@ -38,7 +46,8 @@ export default function FieldSetup() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const saveFieldIdem = useIdempotencyKey('save_field', profile?.id || '');
-  const saveFieldGeoIdem = useIdempotencyKey('save_field_geometry', profile?.id || '');
+  const saveFieldBoundaryIdem = useIdempotencyKey('set_field_boundary', profile?.id || '');
+  const saveFieldOverrideIdem = useIdempotencyKey('set_field_override_acres', profile?.id || '');
   const isNew = id === 'new';
 
   const [field, setField] = useState<Partial<Field>>({
@@ -65,6 +74,10 @@ export default function FieldSetup() {
   // Map / geo state
   const [boundaryGeoJSON, setBoundaryGeoJSON] = useState<Feature<Polygon> | null>(null);
   const [drawnPolygons, setDrawnPolygons] = useState<DrawnPolygon[]>([]);
+  const [boundaryAcres, setBoundaryAcres] = useState<number | null>(null);   // turf preview for a single drawn boundary
+  const [geometryDirty, setGeometryDirty] = useState(false);                 // boundary drawn/changed this session?
+  const loadedOverrideRef = useRef<number | null>(null);                     // override_acres at load (to detect changes)
+  const loadedHadBoundaryRef = useRef(false);                                // did the loaded field have a saved boundary?
   const [mapCenter, setMapCenter] = useState<[number, number] | undefined>(undefined);
   const [mapZoom, setMapZoom] = useState<number | undefined>(undefined);
 
@@ -127,6 +140,9 @@ export default function FieldSetup() {
     if (data) {
       const { customer: _customer, ...fieldRow } = data;
       setField(fieldRow as Partial<Field>);
+      loadedOverrideRef.current = (fieldRow as Partial<Field>).override_acres ?? null;
+      loadedHadBoundaryRef.current = (fieldRow as Partial<Field>).measured_acres != null; // A1 backfilled measured for every boundaried field
+
       const cust = data.customer as { farm_name: string } | null;
       setOwnerName(cust?.farm_name || '');
 
@@ -169,7 +185,9 @@ export default function FieldSetup() {
         if (polyRows.length > 0) {
           const loaded: DrawnPolygon[] = polyRows.map((p, i) => ({
             drawId: p.id,
-            polygon: { type: 'Feature' as const, properties: {}, geometry: p.polygon_geojson as GeoJSON.Polygon },
+            // id MUST mirror drawId so DrawLayer/MapboxDraw maps a later edit/delete of this
+            // saved polygon back to the right row (it matches by feature.id === drawId).
+            polygon: { type: 'Feature' as const, id: p.id, properties: {}, geometry: p.polygon_geojson as GeoJSON.Polygon },
             acres: p.acres ?? 0,
             label: p.label || `Polygon ${i + 1}`,
           }));
@@ -220,6 +238,14 @@ export default function FieldSetup() {
   const update = (key: string, value: unknown) => setField((f) => ({ ...f, [key]: value }));
 
   const splitTotal = billingSplits.reduce((sum, s) => sum + s.split_pct, 0);
+
+  // Two-acre model: the polygon area is a client preview of the server-measured acres;
+  // the typed override is what actually bills (billable = override ?? measured ?? legacy total).
+  const measuredPreview =
+    drawnPolygons.length > 0
+      ? Math.round(drawnPolygons.reduce((s, p) => s + p.acres, 0) * 100) / 100
+      : (boundaryAcres ?? field.measured_acres ?? null);
+  const billable = billableAcres(field.override_acres, measuredPreview, field.total_acres);
 
   // Duplicate field name check
   const checkDuplicate = useCallback(async (name: string, customerId: string) => {
@@ -291,6 +317,13 @@ export default function FieldSetup() {
       return;
     }
 
+    // Same 0.1–5000 band the import + the measured-boundary path enforce — so a typed override
+    // (e.g. "what the monitor showed", with no map drawn) goes through the same safety gate.
+    if (field.override_acres != null && !isAcreInBand(field.override_acres)) {
+      toast('error', `Billable acres must be between ${ACRE_BAND_MIN} and ${ACRE_BAND_MAX} (leave blank to bill the measured acres).`);
+      return;
+    }
+
     setSaving(true);
     try {
       const fieldPayload = {
@@ -299,6 +332,11 @@ export default function FieldSetup() {
         legal_description: field.legal_description || null,
         county: field.county || null,
         state: field.state || 'IL',
+        // Send the loaded (server-authoritative) total_acres — never a client preview/estimate,
+        // so we can never persist a value the acreage RPC would reject. The acreage RPCs own the
+        // precise total_acres when geometry/override change. KNOWN FOLLOW-UP (for the live-UI
+        // gate): after a successful boundary/override save, sync local total_acres/measured from
+        // the RPC result so a same-page attribute-only re-save can't revert to this loaded value.
         total_acres: field.total_acres ?? null,
         fsa_farm_number: field.fsa_farm_number || null,
         fsa_tract_number: field.fsa_tract_number || null,
@@ -335,48 +373,70 @@ export default function FieldSetup() {
         assertRpcResult(data, 'save_field');
         const savedFieldId = isNew ? data : id;
 
-        // Save polygons (multi-polygon mode) or single boundary (legacy mode)
-        if (drawnPolygons.length > 0 && savedFieldId) {
-          const polygonPayload = drawnPolygons.map((p, i) => ({
-            polygon_geojson: { ...p.polygon.geometry },
-            label: p.label,
-            acres: p.acres,
-            sort_order: i,
-          }));
-          const geoIdemKey = saveFieldGeoIdem.getKey();
-          // save_field_polygons RETURNS void — use .throwOnError() and catch.
-          try {
-            await supabase.rpc('save_field_polygons', {
-              p_field_id: savedFieldId,
-              p_polygons: polygonPayload as Json,
-              p_performed_by: profile!.id,
-              p_idempotency_key: geoIdemKey,
-            }).throwOnError();
-            saveFieldGeoIdem.resetKey();
-          } catch (geoError) {
-            Sentry.captureException(geoError, { tags: { source: 'critical_action', action: 'save_field_polygons' } });
-            toast('error', 'Field saved but polygons could not be saved.');
-          }
-        } else if (boundaryGeoJSON && savedFieldId) {
-          // Legacy single-polygon fallback
-          const centroidResult = turfCentroid(boundaryGeoJSON);
-          const centroidGeoJSON = JSON.stringify(centroidResult.geometry);
-          const boundaryGeoJSONStr = JSON.stringify(boundaryGeoJSON.geometry);
+        // The field record is saved; now persist its acreage. Track whether any acreage RPC
+        // fails so we don't report a misleading success or clear the dirty flag.
+        let persistError = false;
 
-          const geoIdemKey = saveFieldGeoIdem.getKey();
-          // save_field_geometry RETURNS void — use .throwOnError() and catch.
-          try {
-            await supabase.rpc('save_field_geometry', {
-              p_field_id: savedFieldId,
-              p_centroid_geojson: centroidGeoJSON,
-              p_boundary_geojson: boundaryGeoJSONStr,
-              p_idempotency_key: geoIdemKey,
-            }).throwOnError();
-            saveFieldGeoIdem.resetKey();
-          } catch (geoError) {
-            Sentry.captureException(geoError, { tags: { source: 'critical_action', action: 'save_field_geometry' } });
-            toast('error', 'Field saved but boundary could not be saved. Please try re-drawing.');
+        // Persist the boundary via the server-authoritative acreage RPC (measures + 0.1–5000
+        // band + field_polygons sync + audit). Only when the geometry was drawn/changed this
+        // session, so an attribute-only edit doesn't re-measure or re-audit.
+        if (geometryDirty && savedFieldId) {
+          const geom = buildBoundaryGeometry(drawnPolygons.map((p) => p.polygon), boundaryGeoJSON);
+          if (geom) {
+            const boundaryIdemKey = saveFieldBoundaryIdem.getKey();
+            try {
+              const { data: bData, error: bErr } = await supabase.rpc('set_field_boundary', {
+                p_field_id: savedFieldId,
+                p_boundary_geojson: JSON.stringify(geom),
+                p_performed_by: profile!.id,
+                p_idempotency_key: boundaryIdemKey,
+              });
+              if (bErr) throw bErr;
+              assertRpcResult(bData, 'set_field_boundary');
+              saveFieldBoundaryIdem.resetKey();
+              setGeometryDirty(false);   // boundary persisted — don't re-measure on a later attribute-only save
+            } catch (geoError) {
+              Sentry.captureException(geoError instanceof Error ? geoError : new Error(String(geoError)), { tags: { source: 'critical_action', action: 'set_field_boundary' } });
+              toast('error', 'Field saved but the boundary could not be measured. Please re-draw and save.');
+              persistError = true;
+            }
+          } else if (loadedHadBoundaryRef.current) {
+            // A previously-saved measured boundary was deleted down to nothing. v1 cannot clear
+            // a measured boundary (the authority columns are RPC-only) — redraw to replace it.
+            toast('error', 'A measured boundary cannot be removed here — draw a replacement boundary and save.');
+            persistError = true;
           }
+          // else: drew-then-deleted on a field that never had a saved boundary → nothing to persist (no-op).
+        }
+
+        // Persist the billable-acres override (set or clear) only when it changed — it
+        // survives a redraw because set_field_boundary never touches override_acres.
+        if (savedFieldId && (field.override_acres ?? null) !== loadedOverrideRef.current) {
+          const ovIdemKey = saveFieldOverrideIdem.getKey();
+          try {
+            const { data: oData, error: oErr } = await supabase.rpc('set_field_override_acres', {
+              p_field_id: savedFieldId,
+              p_override_acres: field.override_acres ?? null,
+              p_performed_by: profile!.id,
+              p_idempotency_key: ovIdemKey,
+            });
+            if (oErr) throw oErr;
+            assertRpcResult(oData, 'set_field_override_acres');
+            saveFieldOverrideIdem.resetKey();
+            loadedOverrideRef.current = field.override_acres ?? null;
+          } catch (ovError) {
+            Sentry.captureException(ovError instanceof Error ? ovError : new Error(String(ovError)), { tags: { source: 'critical_action', action: 'set_field_override_acres' } });
+            toast('error', 'Field saved but the billable-acres override could not be applied. Please retry.');
+            persistError = true;
+          }
+        }
+
+        if (persistError) {
+          // Keep the form dirty so the user retries. For a brand-new field still navigate to
+          // the created record so a retry edits it instead of creating a duplicate.
+          if (isNew && savedFieldId) navigate(`/fields/${savedFieldId}`, { replace: true });
+          setSaving(false);
+          return;
         }
 
         setIsDirty(false);
@@ -394,17 +454,19 @@ export default function FieldSetup() {
     setSaving(false);
   };
 
-  // Handle boundary changes from DrawLayer
+  // Handle boundary changes from DrawLayer. The polygon area is captured as the measured
+  // PREVIEW only — it never clobbers the billable override (the #1 defect this fixes).
   const handleBoundaryChange = useCallback((boundary: Feature<Polygon>, acres: number, center: [number, number]) => {
     setBoundaryGeoJSON(boundary);
-    if (!field.total_acres) {
-      update('total_acres', acres);
-    }
+    setBoundaryAcres(Math.round(acres * 100) / 100);
+    if (initialLoadDone.current) { setGeometryDirty(true); setIsDirty(true); }
     setMapCenter(center);
-  }, [field.total_acres]);
+  }, []);
 
   const handleBoundaryDelete = useCallback(() => {
     setBoundaryGeoJSON(null);
+    setBoundaryAcres(null);
+    if (initialLoadDone.current) { setGeometryDirty(true); setIsDirty(true); }
   }, []);
 
   // Address search handler — fly map to selected location
@@ -542,12 +604,36 @@ export default function FieldSetup() {
                 value={field.state || ''}
                 onChange={(e) => update('state', e.target.value)}
               />
-              <Input
-                label="Total Acres"
-                type="number"
-                value={field.total_acres ?? ''}
-                onChange={(e) => update('total_acres', e.target.value ? parseFloat(e.target.value) : null)}
-              />
+              <div>
+                <Input
+                  label="Billable Acres (override)"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={field.override_acres ?? ''}
+                  onChange={(e) => update('override_acres', e.target.value ? parseFloat(e.target.value) : null)}
+                  placeholder={measuredPreview != null ? `Defaults to measured (${measuredPreview} ac)` : 'Acres to bill (e.g. what the monitor showed)'}
+                />
+                <p className="text-xs text-secondary mt-1">
+                  {measuredPreview != null
+                    ? `Measured: ${measuredPreview} ac`
+                    : (field.total_acres != null ? `Legacy total: ${field.total_acres} ac` : 'No map — type the acres your monitor or records show to bill without drawing or importing')}
+                  {billable != null && ` · Will bill ${billable} ac`}
+                </p>
+                {field.override_acres != null && !isAcreInBand(field.override_acres) && (
+                  <p className="text-xs text-red-600 mt-1">
+                    Billable acres must be between {ACRE_BAND_MIN} and {ACRE_BAND_MAX}.
+                  </p>
+                )}
+                {billable != null && measuredPreview != null && isAcreDivergent(billable, measuredPreview) && (
+                  <p className="text-xs text-amber-600 mt-1 flex items-start gap-1">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                    <span>
+                      Billable is {Math.round(acreDivergencePct(billable, measuredPreview) ?? 0)}% {billable > measuredPreview ? 'above' : 'below'} the measured acres — double-check this field.
+                    </span>
+                  </p>
+                )}
+              </div>
             </div>
           </Card>
 
@@ -853,8 +939,7 @@ export default function FieldSetup() {
                 initialPolygons={drawnPolygons.length > 0 ? drawnPolygons : undefined}
                 onPolygonsChange={(polys) => {
                   setDrawnPolygons(polys);
-                  const totalAcres = polys.reduce((sum, p) => sum + p.acres, 0);
-                  update('total_acres', Math.round(totalAcres * 100) / 100);
+                  if (initialLoadDone.current) { setGeometryDirty(true); setIsDirty(true); }
                   if (polys.length > 0) {
                     const center = turfCentroid(polys[0].polygon);
                     setMapCenter([center.geometry.coordinates[0], center.geometry.coordinates[1]]);
@@ -872,20 +957,17 @@ export default function FieldSetup() {
                 {drawnPolygons.map((poly, idx) => (
                   <div key={poly.drawId} className="flex items-center gap-3 p-2 border border-gray-100 rounded-lg">
                     <div className="w-3 h-3 rounded-full bg-crx-green flex-shrink-0" />
-                    <input
-                      type="text"
-                      value={poly.label}
-                      onChange={(e) => {
-                        const updated = [...drawnPolygons];
-                        updated[idx] = { ...updated[idx], label: e.target.value };
-                        setDrawnPolygons(updated);
-                      }}
-                      className="flex-1 text-sm px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-crx-green/30"
-                      placeholder={`Polygon ${idx + 1}`}
-                    />
+                    {/* Read-only: parts are auto-labelled; set_field_boundary regenerates
+                        field_polygons from the measured geometry (labels are not persisted). */}
+                    <span className="flex-1 text-sm px-2 py-1 text-nav-dark truncate">{poly.label || `Part ${idx + 1}`}</span>
                     <span className="text-xs text-secondary whitespace-nowrap">{poly.acres.toFixed(2)} ac</span>
                     <button
-                      onClick={() => setDrawnPolygons((prev) => prev.filter((_, i) => i !== idx))}
+                      onClick={() => {
+                        // a side-panel delete changes the geometry → re-measure + warn on unsaved nav
+                        setDrawnPolygons((prev) => prev.filter((_, i) => i !== idx));
+                        setGeometryDirty(true);
+                        setIsDirty(true);
+                      }}
                       className="text-gray-400 hover:text-red-500 p-1"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
