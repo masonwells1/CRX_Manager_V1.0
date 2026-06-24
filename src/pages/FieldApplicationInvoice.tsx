@@ -397,6 +397,9 @@ export default function FieldApplicationInvoice() {
           manual_override: c.manual_override === true,
         })),
         p_application_service_id: (appServiceId || null) as string,
+        // [2026-06-24] pass the invoice being edited so preview excludes deleted split
+        // members exactly like save (group-aware). NULL for a new invoice = no exclusion.
+        p_invoice_id: (id || null) as string,
       });
       if (error) throw error;
       const result = assertRpcResult<PreviewFieldAppSplitResult>(data, 'preview_field_app_invoice_split');
