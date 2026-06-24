@@ -30,12 +30,13 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [x] Low-stock / inventory-pressure stream (To-Ship | Low stock section switcher; net vs reorder vs owed; "Reorder"/"Low" badges) — reuses get_inventory_position already fetched
 - [skip] Expiring holds stream — SKIPPED: 9 active holds but 0 carry an `expires_at`, so the section would always render empty. Revisit if holds start getting expiry dates.
 - [!] Authenticated visual proof = Mason's in-app login smoke (compile + 2123 tests + live data $541k/23 orders proven; preview boots clean but app is behind auth wall)
-### Build B — act-in-place (REVIEW-GATED, human-tested, zero migration)
-- [!] Schedule delivery from owed list (`create_delivery_with_items`) — reviewed build
-- [!] Reorder / create PO from short product — reviewed build
-- [!] Print day pick list (`orderPickListPdf`) — reviewed build
-- [!] Assign driver / priority / note (`reassign_delivery` + `team_notes`) — reviewed build
-- [!] Bulk-select to act — reviewed build
+### Build B — act-in-place (deep-link approach = NO new write path; on branch, awaiting Mason's preview review)
+- [~] **Schedule delivery** — "Schedule" button per By-Customer line → `/deliveries/new?order=ID`. NewDelivery ALREADY read `?order=` (line 53) + pre-fills remaining items. Zero new write; create still happens in the proven confirmed flow. ON BRANCH (commit 27f7701).
+- [~] **Reorder** — "Reorder" button per Low Stock row → `/purchase-orders/new?product=ID`. Added `?product=` pre-fill to NewPurchaseOrder (fills product+cost+unit+vendor; user sets qty + confirms). Zero new write. ON BRANCH (commit 61d202c).
+- [ ] Print day pick list (`orderPickListPdf`) — read-only PDF; next
+- [ ] Assign driver / priority / note — optional
+- [ ] Bulk-select to act — optional
+> Approach note: act-in-place done as DEEP-LINKS into existing trusted flows (NewDelivery/NewPurchaseOrder), NOT embedded writes — so no blind live writes, the actual create stays where the user already confirms it.
 
 ## Phase 2 — Navigation backbone
 - [ ] New `src/lib/routesConfig.ts` (single source of truth)
