@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackageCheck, Search, Truck, ArrowRight, PackagePlus } from 'lucide-react';
+import { PackageCheck, Search, Truck, ArrowRight, PackagePlus, AlertTriangle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Modal from '../components/ui/Modal';
@@ -67,6 +67,10 @@ export default function ReceivingHub() {
   const { profile } = useAuth();
   const [groups, setGroups] = useState<ProductGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  // A failed initial load must show an ERROR state, not the empty "Nothing on
+  // order" board — otherwise an RLS/drift/network failure reads as "no inbound
+  // POs" (Codex P2). The throw on poRes.error lands in the catch below.
+  const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   // F5 inline receive (confirm-popup write, reuses receive_po_items).
@@ -79,6 +83,7 @@ export default function ReceivingHub() {
     let cancelled = false;
     (async () => {
       setLoading(true);
+      setLoadError(false);
       try {
         const poRes = await supabase
           .from('purchase_orders')
@@ -147,7 +152,7 @@ export default function ReceivingHub() {
         if (!cancelled) setGroups(list);
       } catch (err) {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'fetch', page: 'receiving-hub' } });
-        if (!cancelled) toast('error', 'Failed to load inbound purchase orders.');
+        if (!cancelled) { setLoadError(true); toast('error', 'Failed to load inbound purchase orders.'); }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -217,6 +222,21 @@ export default function ReceivingHub() {
         <SkeletonCard />
         <SkeletonCard />
         <SkeletonCard />
+      </div>
+    );
+  }
+
+  // A failed load is NOT an empty board — show an explicit error so an RLS / drift
+  // / network failure never reads as "no inbound POs" (Codex P2).
+  if (loadError) {
+    return (
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold font-heading text-nav-dark">Receiving Hub</h2>
+        <EmptyState
+          icon={<AlertTriangle className="w-6 h-6" />}
+          title="Couldn't load inbound purchase orders"
+          description="Something went wrong loading the data — this does NOT mean there are no open POs. Please refresh to try again."
+        />
       </div>
     );
   }
