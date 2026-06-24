@@ -86,6 +86,8 @@ const SalesReports = lazy(() => import('./pages/SalesReports'));
 const GettingStarted = lazy(() => import('./pages/GettingStarted'));
 const FieldApplicationInvoice = lazy(() => import('./pages/FieldApplicationInvoice'));
 const ToShip = lazy(() => import('./pages/ToShip'));
+// Dev-only design-system gallery (excluded from production builds).
+const DesignPreview = import.meta.env.DEV ? lazy(() => import('./pages/DesignPreview')) : (() => null);
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -146,6 +148,11 @@ function RootLayout() {
 }
 
 const router = createBrowserRouter([
+  // Dev-only design-system gallery — top-level (outside the auth provider) so it
+  // renders standalone for visual verification. Excluded from production builds.
+  ...(import.meta.env.DEV
+    ? [{ path: '/design-preview', element: <Suspense fallback={<PageLoader />}><DesignPreview /></Suspense> }]
+    : []),
   {
     element: <RootLayout />,
     children: [
