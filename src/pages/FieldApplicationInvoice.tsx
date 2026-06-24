@@ -106,7 +106,7 @@ export default function FieldApplicationInvoice() {
   const isNew = !id;
 
   const totalAppliedAcres = useMemo(
-    () => locations.reduce((sum, l) => sum + (l.applied_acres || l.total_acres || 0), 0),
+    () => locations.reduce((sum, l) => sum + (l.applied_acres || 0), 0),
     [locations]
   );
 
@@ -317,26 +317,31 @@ export default function FieldApplicationInvoice() {
   }, [toast]);
 
   const handleLocationsSelected = useCallback((selectedFields: (Field & { customer_name?: string })[]) => {
-    const newLocations: FieldLocation[] = selectedFields.map((f, idx) => ({
-      field_id: f.id,
-      field_name: f.field_name,
-      map_number: idx + 1,
-      total_acres: f.total_acres,
-      system_acres: billableAcres(f.override_acres, f.measured_acres, f.total_acres),
-      planted_acres: null,
-      applied_acres: f.total_acres,
-      crop_type: f.crop_type,
-      wind_direction: null,
-      sort_order: idx,
-      customer_name: f.customer_name,
-    }));
+    const newLocations: FieldLocation[] = selectedFields.map((f, idx) => {
+      // Default applied acres to the field's BILLABLE acreage (override ?? measured ?? legacy
+      // total) — the corrected per-acre number, not the raw full-field total. Editable per row.
+      const billable = billableAcres(f.override_acres, f.measured_acres, f.total_acres);
+      return {
+        field_id: f.id,
+        field_name: f.field_name,
+        map_number: idx + 1,
+        total_acres: f.total_acres,
+        system_acres: billable,
+        planted_acres: null,
+        applied_acres: billable,
+        crop_type: f.crop_type,
+        wind_direction: null,
+        sort_order: idx,
+        customer_name: f.customer_name,
+      };
+    });
     setLocations(newLocations);
     setDirty(true);
 
     const fieldIds = newLocations.map((l) => l.field_id);
     const acresMap: Record<string, number> = {};
     newLocations.forEach((l) => {
-      acresMap[l.field_id] = l.applied_acres || l.total_acres || 0;
+      acresMap[l.field_id] = l.applied_acres || 0;
     });
     deriveShares(fieldIds, acresMap);
   }, [deriveShares]);
@@ -349,7 +354,7 @@ export default function FieldApplicationInvoice() {
 
     const acresMap: Record<string, number> = {};
     locations.forEach((l) => {
-      acresMap[l.field_id] = l.field_id === fieldId ? acres : (l.applied_acres || l.total_acres || 0);
+      acresMap[l.field_id] = l.field_id === fieldId ? acres : (l.applied_acres || 0);
     });
     deriveShares(locations.map((l) => l.field_id), acresMap);
   };
@@ -373,7 +378,7 @@ export default function FieldApplicationInvoice() {
           map_number: l.map_number || idx + 1,
           total_acres: l.total_acres,
           planted_acres: l.planted_acres,
-          applied_acres: l.applied_acres || l.total_acres,
+          applied_acres: l.applied_acres,
           crop_type: l.crop_type,
           wind_direction: l.wind_direction || windDirection || null,
           sort_order: idx,
@@ -406,6 +411,15 @@ export default function FieldApplicationInvoice() {
 
   const handleSave = async () => {
     if (!profile) return;
+    // [B1.1] Never bill 0 / blank applied acres. The server rejects it
+    // (ZERO_APPLIED_ACRES); block here too with a clear message so the user fixes
+    // it before the round-trip rather than seeing a raw RPC error. (The empty-
+    // locations case is handled server-side + by handlePreview's guard.)
+    const missingAcres = locations.find((l) => l.applied_acres == null || l.applied_acres <= 0);
+    if (missingAcres) {
+      toast('error', `Enter applied acres for "${missingAcres.field_name}" (greater than 0), or remove the field.`);
+      return;
+    }
     setSaving(true);
     try {
       const key = saveIdem.getKey();
@@ -424,7 +438,7 @@ export default function FieldApplicationInvoice() {
           map_number: l.map_number || idx + 1,
           total_acres: l.total_acres,
           planted_acres: l.planted_acres,
-          applied_acres: l.applied_acres || l.total_acres,
+          applied_acres: l.applied_acres,
           crop_type: l.crop_type,
           wind_direction: l.wind_direction || windDirection || null,
           sort_order: idx,
