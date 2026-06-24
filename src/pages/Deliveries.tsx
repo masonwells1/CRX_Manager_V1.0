@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
+import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -90,6 +91,11 @@ export default function Deliveries() {
   const batchCancelIdem = useIdempotencyKey('batch_cancel_deliveries', profile?.id || '');
   const batchRescheduleIdem = useIdempotencyKey('batch_reschedule_deliveries', profile?.id || '');
   const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
+  // F3 act-from-list: complete an in_progress delivery in place (signed-by popup).
+  const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
+  const [completeTarget, setCompleteTarget] = useState<DeliveryRow | null>(null);
+  const [signedBy, setSignedBy] = useState('');
+  const [completing, setCompleting] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
@@ -331,6 +337,40 @@ export default function Deliveries() {
 
     setLoading(false);
   }, [isDriver, profile, toast]);
+
+  // F3 act-from-list: complete an in_progress delivery in full, in place.
+  // Uses the same complete_delivery RPC DeliveryDetail calls (in_progress-only,
+  // actor-bound, idempotent). p_quantities omitted = deliver in full; partial
+  // deliveries + signature image + issue flags stay on the detail page.
+  const handleCompleteConfirm = async () => {
+    if (!completeTarget || !profile) return;
+    if (!signedBy.trim()) { toast('error', 'Please enter a signature name'); return; }
+    const target = completeTarget;
+    const idemKey = completeIdem.getKey();
+    // Route through runCriticalAction for parity with this page's other mutations.
+    await runCriticalAction({
+      action: async () => {
+        const { data, error } = await supabase.rpc('complete_delivery', {
+          p_delivery_id: target.id,
+          p_signed_by: signedBy.trim(),
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'complete_delivery');
+      },
+      toast,
+      setLoading: setCompleting,
+      successMessage: `Delivery ${target.delivery_number} completed`,
+      sentryTag: 'complete_delivery',
+      onSuccess: () => {
+        completeIdem.resetKey();
+        setCompleteTarget(null);
+        setSignedBy('');
+        fetchDeliveries();
+      },
+    });
+  };
 
   useEffect(() => {
     fetchDeliveries();
@@ -979,6 +1019,22 @@ export default function Deliveries() {
       header: 'Items',
       sortable: true,
     },
+    {
+      key: 'actions',
+      header: '',
+      render: (row) =>
+        row.status === 'in_progress' ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); setCompleteTarget(row); setSignedBy(''); }}
+            title="Mark this delivery complete"
+            aria-label={`Mark delivery ${row.delivery_number} complete`}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-crx-green border border-crx-green/30 hover:bg-crx-green-light transition-colors"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Complete
+          </button>
+        ) : null,
+    },
   ];
 
   if (loading) {
@@ -1330,6 +1386,37 @@ export default function Deliveries() {
         customerName={drawerCustomer?.name ?? ''}
         onClose={() => setDrawerCustomer(null)}
       />
+
+      <Modal
+        open={!!completeTarget}
+        onClose={() => { setCompleteTarget(null); setSignedBy(''); }}
+        title="Mark Delivery Complete"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Complete delivery <span className="font-medium text-nav-dark">{completeTarget?.delivery_number}</span> for{' '}
+            <span className="font-medium text-nav-dark">{completeTarget?.customer_name}</span> — all items delivered in full.
+            For a partial delivery, open the delivery instead.
+          </p>
+          <div>
+            <label htmlFor="complete-signed-by" className="block text-xs font-medium text-secondary mb-1">Signed by</label>
+            <input
+              id="complete-signed-by"
+              type="text"
+              value={signedBy}
+              onChange={(e) => setSignedBy(e.target.value)}
+              placeholder="Name of person who received"
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => { setCompleteTarget(null); setSignedBy(''); }}>Cancel</Button>
+            <Button icon={<CheckCircle2 className="w-4 h-4" />} onClick={handleCompleteConfirm} loading={completing} disabled={!signedBy.trim()}>
+              Mark Complete
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
