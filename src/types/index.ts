@@ -1952,6 +1952,29 @@ export interface Job {
   job_chemicals?: JobChemical[];
   job_field_shares?: JobFieldShare[];
   applied_info?: JobAppliedInfo;
+  /** Field-app parity #4: colored tags assigned to this job (via job_tag_assignments). */
+  job_tags?: JobTag[];
+}
+
+// Field-app parity #4 (2026-06-24): color-coded job tags.
+// A reusable tag definition (name + hex color). Distinct from team-note tags
+// (note_tags) — these are for the Job Schedule list. The dead jobs.tags text[]
+// column is NOT used.
+export interface JobTag {
+  id: string;
+  name: string;
+  /** Hex color, e.g. '#3b82f6'. DB-constrained to ^#[0-9A-Fa-f]{6}$. */
+  color: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Many-to-many link row between a job and a tag. */
+export interface JobTagAssignment {
+  job_id: string;
+  tag_id: string;
+  created_at: string;
 }
 
 // Phase 4 (2026-04-30): compute_application_service_fee RPC result.

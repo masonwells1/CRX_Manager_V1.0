@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, X } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -19,7 +19,11 @@ import { Sentry } from '../lib/sentry';
 import { getSeasonDates } from '../utils/season';
 import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
 import { SkeletonTable } from '../components/ui/Skeleton';
-import type { Job, JobStatus } from '../types';
+import JobTagChip from '../components/jobs/JobTagChip';
+import JobTagsManager from '../components/jobs/JobTagsManager';
+import JobTagsBulkModal from '../components/jobs/JobTagsBulkModal';
+import { jobMatchesTagFilter } from '../components/jobs/jobTagFilter';
+import type { Job, JobStatus, JobTag } from '../types';
 
 interface JobChemSummary {
   product_name: string;
@@ -49,6 +53,8 @@ type JobRow = Job & {
   chemicals: JobChemSummary[];
   created_by_name: string;
   updated_by_name: string;
+  /** Color-coded tags assigned to this job (field-app parity #4). */
+  jobTags: JobTag[];
 };
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
@@ -133,6 +139,11 @@ export default function Jobs() {
   const [endDate, setEndDate] = useState('');
   const [customerFilter, setCustomerFilter] = useState('');
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
+  // Field-app parity #4: tag catalog + the Job Tags multi-select filter.
+  const [allTags, setAllTags] = useState<JobTag[]>([]);
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [manageTagsOpen, setManageTagsOpen] = useState(false);
+  const [bulkTagsOpen, setBulkTagsOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -158,6 +169,19 @@ export default function Jobs() {
     setCustomers((data || []) as { id: string; farm_name: string }[]);
   }, []);
 
+  // Field-app parity #4: load the full tag catalog for the filter + managers.
+  const fetchTags = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('job_tags')
+      .select('*')
+      .order('name');
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_job_tags' } });
+      return;
+    }
+    setAllTags((data || []) as JobTag[]);
+  }, []);
+
   const fetchJobs = useCallback(async () => {
     setLoading(true);
     // PR-07 follow-up: dropped applicator FK embed; resolve via profile_public_view.
@@ -169,7 +193,8 @@ export default function Jobs() {
         vehicle:vehicles(vehicle_name),
         job_fields(crop, field:fields(field_name, crop_type)),
         job_chemicals(rate_per_acre, rate_unit, product:products(product_name)),
-        job_field_shares(customer_id, split_pct, is_primary, customer:customers(farm_name, account_number))
+        job_field_shares(customer_id, split_pct, is_primary, customer:customers(farm_name, account_number)),
+        job_tag_assignments(tag:job_tags(id, name, color, created_by, created_at, updated_at))
       `)
       .is('deleted_at', null)
       .order('job_date', { ascending: false })
@@ -209,6 +234,7 @@ export default function Jobs() {
       job_fields?: Array<{ crop?: string | null; field?: { field_name?: string; crop_type?: string | null } }>;
       job_chemicals?: Array<{ rate_per_acre?: number | null; rate_unit?: string | null; product?: { product_name?: string } }>;
       job_field_shares?: Array<{ customer_id: string; split_pct: number; is_primary: boolean; customer?: { farm_name?: string; account_number?: string | null } }>;
+      job_tag_assignments?: Array<{ tag?: JobTag | null }>;
       applicator_id?: string | null;
       created_by?: string | null;
       updated_by?: string | null;
@@ -265,6 +291,11 @@ export default function Jobs() {
         rate_unit: c.rate_unit ?? null,
       }));
 
+      const jobTags = (j.job_tag_assignments || [])
+        .map((a) => a.tag)
+        .filter(Boolean) as JobTag[];
+      jobTags.sort((a, b) => a.name.localeCompare(b.name));
+
       return {
         ...(j as unknown as Job),
         customer_name: j.customer?.farm_name || 'Unknown',
@@ -278,6 +309,7 @@ export default function Jobs() {
         chemicals,
         created_by_name: j.created_by ? nameMap[j.created_by] || '-' : '-',
         updated_by_name: j.updated_by ? nameMap[j.updated_by] || '-' : '-',
+        jobTags,
       };
     });
     setJobs(rows);
@@ -286,7 +318,8 @@ export default function Jobs() {
 
   useEffect(() => {
     fetchCustomers();
-  }, [fetchCustomers]);
+    fetchTags();
+  }, [fetchCustomers, fetchTags]);
 
   useEffect(() => {
     fetchJobs();
@@ -303,9 +336,28 @@ export default function Jobs() {
     }
   };
 
+  // Field-app parity #4: the Job Tags filter is applied CLIENT-side (tags ride
+  // along on the joined query) and AND-combines with the server filters above —
+  // a job must already have survived status/customer/date, then carry at least
+  // one selected tag. The table, totals, and selection all read this filtered
+  // view so they never disagree (criterion #6).
+  const visibleJobs = useMemo(
+    () => jobs.filter((j) => jobMatchesTagFilter(j.jobTags.map((t) => t.id), tagFilter)),
+    [jobs, tagFilter]
+  );
+
+  // jobId -> set of assigned tag ids, for the bulk modal's starting state.
+  const assignmentsByJob = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const j of jobs) {
+      map.set(j.id, new Set(j.jobTags.map((t) => t.id)));
+    }
+    return map;
+  }, [jobs]);
+
   const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
     useRowSelection({
-      data: jobs,
+      data: visibleJobs,
       getId: (j) => j.id,
       isSelectable: (j) => DELETABLE.includes(j.status),
     });
@@ -322,7 +374,7 @@ export default function Jobs() {
   // (filtered) jobs. DataTable filters its own search client-side, so we total
   // the fetched/filtered set the page is showing (criterion #2).
   const totals = useMemo(() => {
-    return jobs.reduce(
+    return visibleJobs.reduce(
       (acc, j) => {
         acc.totalAcres += j.total_acres || 0;
         acc.remainingAcres += j.remaining_acres ?? (j.total_acres || 0);
@@ -330,7 +382,7 @@ export default function Jobs() {
       },
       { totalAcres: 0, remainingAcres: 0 }
     );
-  }, [jobs]);
+  }, [visibleJobs]);
 
   const handleExportCSV = () => {
     exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
@@ -394,6 +446,7 @@ export default function Jobs() {
   };
 
   const bulkActions = [
+    { key: 'tags', label: 'Edit Job Tags', icon: <Tag className="w-4 h-4" />, onClick: () => setBulkTagsOpen(true) },
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
     { key: 'delete', label: 'Delete Jobs', icon: <Trash2 className="w-4 h-4" />, onClick: () => setDeleteModalOpen(true), variant: 'danger' as const },
@@ -401,16 +454,24 @@ export default function Jobs() {
 
   const dataColumns: Column<JobRow>[] = [
     {
-      // Color tag chips — SLOT ONLY (section #4 builds the tag manager). Render
-      // any existing free-text tags as neutral chips so the layout is ready.
-      key: 'tags',
-      header: '',
+      // Color-coded job tags (field-app parity #4). Each chip uses its tag's
+      // chosen color; a job can carry multiple tags. Overflow past 3 collapses
+      // to "+N" to keep the row compact.
+      key: 'jobTags',
+      header: 'Tags',
       render: (r) => (
-        <div className="flex flex-wrap gap-0.5 min-w-[1rem]">
-          {(r.tags || []).slice(0, 3).map((t, i) => (
-            <span key={i} className="inline-block w-2.5 h-2.5 rounded-full bg-gray-300" title={t} />
-          ))}
-        </div>
+        r.jobTags.length === 0 ? (
+          <span className="text-secondary">-</span>
+        ) : (
+          <div className="flex flex-wrap gap-1 max-w-[14rem]">
+            {r.jobTags.slice(0, 3).map((t) => (
+              <JobTagChip key={t.id} tag={t} />
+            ))}
+            {r.jobTags.length > 3 && (
+              <span className="text-xs text-secondary self-center">+{r.jobTags.length - 3}</span>
+            )}
+          </div>
+        )
       ),
     },
     {
@@ -558,12 +619,24 @@ export default function Jobs() {
             />
           )}
         </div>
-        <Button
-          icon={<Plus className="w-4 h-4" />}
-          onClick={() => navigate('/jobs/new')}
-        >
-          New Job
-        </Button>
+        <div className="flex items-center gap-2">
+          {canBulkAction && (
+            <Button
+              variant="secondary"
+              icon={<Tags className="w-4 h-4" />}
+              onClick={() => setManageTagsOpen(true)}
+              showChevron={false}
+            >
+              Manage Tags
+            </Button>
+          )}
+          <Button
+            icon={<Plus className="w-4 h-4" />}
+            onClick={() => navigate('/jobs/new')}
+          >
+            New Job
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -617,6 +690,58 @@ export default function Jobs() {
               ))}
             </select>
           </div>
+          {/* Field-app parity #4: Job Tags multi-select. AND-combines with the
+              filters above (a job must pass them all) and narrows to jobs
+              carrying any selected tag. */}
+          <div>
+            <label className="block text-xs font-medium text-secondary mb-1">Job Tags</label>
+            <details className="relative group">
+              <summary className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-200 rounded-lg cursor-pointer list-none hover:border-crx-green min-w-[10rem]">
+                <Tag className="w-3.5 h-3.5 text-secondary" />
+                <span className={tagFilter.length === 0 ? 'text-secondary' : 'text-nav-dark'}>
+                  {tagFilter.length === 0 ? 'All Tags' : `${tagFilter.length} selected`}
+                </span>
+              </summary>
+              <div className="absolute z-20 mt-1 w-56 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg p-2 space-y-0.5">
+                {allTags.length === 0 ? (
+                  <p className="text-xs text-secondary px-2 py-3 text-center">No tags yet</p>
+                ) : (
+                  <>
+                    {tagFilter.length > 0 && (
+                      <button
+                        onClick={() => setTagFilter([])}
+                        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-secondary hover:bg-gray-50 rounded"
+                      >
+                        <X className="w-3 h-3" /> Clear tag filter
+                      </button>
+                    )}
+                    {allTags.map((t) => {
+                      const checked = tagFilter.includes(t.id);
+                      return (
+                        <label
+                          key={t.id}
+                          className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() =>
+                              setTagFilter((prev) =>
+                                checked ? prev.filter((id) => id !== t.id) : [...prev, t.id]
+                              )
+                            }
+                            className="rounded border-gray-300 text-crx-green focus:ring-crx-green/30"
+                          />
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} aria-hidden="true" />
+                          <span className="text-sm text-nav-dark">{t.name}</span>
+                        </label>
+                      );
+                    })}
+                  </>
+                )}
+              </div>
+            </details>
+          </div>
           <div className="flex gap-1.5">
             {[
               { key: 'all', label: 'All' },
@@ -639,7 +764,7 @@ export default function Jobs() {
       <Card padding={false}>
         <div className="p-5">
           <DataTable
-            data={jobs as unknown as Record<string, unknown>[]}
+            data={visibleJobs as unknown as Record<string, unknown>[]}
             columns={columns as unknown as Column<Record<string, unknown>>[]}
             searchable
             searchPlaceholder="Search jobs..."
@@ -648,7 +773,7 @@ export default function Jobs() {
             emptyDescription="Create your first job to get started with scheduling."
             loading={loading}
             filters={
-              canBulkAction && jobs.length > 0 ? (
+              canBulkAction && visibleJobs.length > 0 ? (
                 <button
                   onClick={toggleAll}
                   className="px-3 py-2 text-xs font-medium text-secondary hover:text-nav-dark transition-colors"
@@ -659,9 +784,9 @@ export default function Jobs() {
             }
           />
           {/* Bottom totals row — sums the currently-listed jobs (criterion #2). */}
-          {jobs.length > 0 && (
+          {visibleJobs.length > 0 && (
             <div className="mt-3 flex items-center justify-end gap-6 border-t pt-3 text-sm font-semibold text-nav-dark">
-              <span>{jobs.length} job{jobs.length !== 1 ? 's' : ''}</span>
+              <span>{visibleJobs.length} job{visibleJobs.length !== 1 ? 's' : ''}</span>
               <span>Tot. ac: <span className="tabular-nums">{totals.totalAcres.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></span>
               <span>Rem. ac: <span className="tabular-nums">{totals.remainingAcres.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></span>
             </div>
@@ -676,6 +801,23 @@ export default function Jobs() {
         entityName="job"
         onConfirm={handleDelete}
         loading={deleting}
+      />
+
+      {/* Field-app parity #4: tag catalog manager + bulk tag editor. */}
+      <JobTagsManager
+        open={manageTagsOpen}
+        onClose={() => setManageTagsOpen(false)}
+        tags={allTags}
+        onChanged={() => { fetchTags(); fetchJobs(); }}
+      />
+      <JobTagsBulkModal
+        open={bulkTagsOpen}
+        onClose={() => setBulkTagsOpen(false)}
+        selectedJobIds={selectedRows.map((j) => j.id)}
+        tags={allTags}
+        assignmentsByJob={assignmentsByJob}
+        onManageTags={() => { setBulkTagsOpen(false); setManageTagsOpen(true); }}
+        onApplied={() => fetchJobs()}
       />
     </div>
   );
