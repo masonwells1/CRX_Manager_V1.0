@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, Bell } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, Bell, History, BookmarkPlus } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -20,11 +20,13 @@ import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
 import { applyChemEdit, recomputeChemRowForAcres, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
+import { recipeItemToChemRowSeed, chemRowsToRecipeItems, getLastRecipeId, setLastRecipeId } from '../lib/recipeHelpers';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
 import { Sentry } from '../lib/sentry';
-import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, LinkedEntityType } from '../types';
+import type { JobStatus, Customer, Product, Field, Vehicle, Profile, BlendRecipe, BlendRecipeItem, LinkedEntityType } from '../types';
+import type { Json } from '../types/supabase';
 
 interface JobDbRow {
   id: string;
@@ -105,7 +107,6 @@ interface JobDbRow {
 interface SaveJobResult { job_id: string }
 interface CompleteJobResult { record_number: string }
 interface TransferJobResult { invoice_id: string; invoice_number: string }
-interface LoadRecipeResult { items_loaded: number }
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
   scheduled: 'info',
@@ -178,7 +179,6 @@ export default function JobDetail() {
   const completeJobIdem = useIdempotencyKey('complete_job', profile?.id || '');
   const startJobIdem = useIdempotencyKey('start_job', profile?.id || '');
   const transferJobIdem = useIdempotencyKey('transfer_job_to_invoice', profile?.id || '');
-  const loadRecipeIdem = useIdempotencyKey('load_recipe_into_job', profile?.id || '');
   const isNew = id === 'new';
   const isEditable = role === 'admin' || role === 'sales_rep';
 
@@ -355,6 +355,17 @@ export default function JobDetail() {
   const [showRecipeModal, setShowRecipeModal] = useState(false);
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [loadingRecipe, setLoadingRecipe] = useState(false);
+  // 'replace' wipes the current chem lines; 'append' merges the recipe in (so a
+  // recipe can be loaded WITHOUT discarding hand-entered lines). Client-side, so
+  // it never touches unrelated job data and works on a brand-new unsaved job.
+  const [recipeMode, setRecipeMode] = useState<'replace' | 'append'>('replace');
+  // "Use last used recipe" — per-browser shortcut (localStorage, no DB change).
+  const [lastRecipeId, setLastRecipeIdState] = useState<string | null>(() => getLastRecipeId());
+  // Save-current-chemicals-as-a-new-recipe modal
+  const [showSaveRecipeModal, setShowSaveRecipeModal] = useState(false);
+  const [newRecipeName, setNewRecipeName] = useState('');
+  const [savingRecipe, setSavingRecipe] = useState(false);
+  const saveRecipeIdem = useIdempotencyKey('save_blend_recipe', profile?.id || '');
 
   // A stable string of every editable form field — the unit of dirty comparison.
   const formSnapshot = useCallback(() => JSON.stringify({
@@ -912,28 +923,115 @@ export default function JobDetail() {
     setTransferring(false);
   };
 
-  const handleLoadRecipe = async () => {
-    if (!selectedRecipeId || !id) return;
+  /**
+   * Load a recipe's products into the in-memory chem rows (client-side).
+   *
+   * Unlike the old load_recipe_into_job RPC (which DELETEd all job_chemicals
+   * server-side and required a saved job), this maps the recipe items into the
+   * editable grid and lets the user choose REPLACE or ADD. It never touches
+   * unrelated job data, keeps every line editable, and works on a brand-new
+   * unsaved job — the lines persist on the next Save like any other edit. The
+   * recipe id is remembered as the per-browser "last used recipe" shortcut.
+   */
+  const loadRecipeById = async (recipeId: string, mode: 'replace' | 'append') => {
+    if (!recipeId) return;
     setLoadingRecipe(true);
     try {
-      const idemKey = loadRecipeIdem.getKey();
-      const { data, error } = await supabase.rpc('load_recipe_into_job', {
-        p_job_id: id,
-        p_recipe_id: selectedRecipeId,
-        p_idempotency_key: idemKey,
-      });
+      const { data, error } = await supabase
+        .from('blend_recipe_items')
+        .select('*')
+        .eq('recipe_id', recipeId)
+        .order('sort_order');
       if (error) throw error;
-      loadRecipeIdem.resetKey();
-      const recipeResult = assertRpcResult<LoadRecipeResult>(data, 'load_recipe_into_job');
-      toast('success', `Loaded ${recipeResult.items_loaded} items from recipe`);
+      const items = (data || []) as BlendRecipeItem[];
+      if (items.length === 0) {
+        toast('error', 'That recipe has no products.');
+        setLoadingRecipe(false);
+        return;
+      }
+
+      const cust = customers.find((c) => c.id === customerId);
+      const tier = (cust?.assigned_tier ?? 1) as 1 | 2 | 3;
+      const acres = sumAcres(fieldRows);
+      const seeds: ChemRow[] = items.map((item, idx) => {
+        const product = allProducts.find((p) => p.id === item.product_id);
+        const seed = recipeItemToChemRowSeed(item, product, tier);
+        // With fields on the job, re-derive quantity = rate × acres so the loaded
+        // line reflects THIS job's acreage. With NO fields yet (acres === 0),
+        // keep the recipe's saved quantity instead of zeroing it — it re-derives
+        // automatically once fields are added (recomputeChemQtyFromAcres).
+        const row = acres > 0
+          ? recomputeChemRowForAcres({ ...seed, sort_order: idx }, acres)
+          : { ...seed, sort_order: idx };
+        return row as ChemRow;
+      });
+
+      setChemRows((prev) => {
+        const base = mode === 'append' ? prev : [];
+        const merged = [...base, ...seeds];
+        return merged.map((c, i) => ({ ...c, sort_order: i }));
+      });
+      setRecipeId(recipeId);
+      // Remember as the last-used recipe (per-browser shortcut).
+      setLastRecipeId(recipeId);
+      setLastRecipeIdState(recipeId);
+
+      const verb = mode === 'append' ? 'Added' : 'Loaded';
+      toast('success', `${verb} ${items.length} product${items.length === 1 ? '' : 's'} from recipe — review and Save.`);
       setShowRecipeModal(false);
-      setIsDirty(false);
-      await fetchJob();
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'load_recipe_into_job' } });
       toast('error', err instanceof Error ? err.message : 'Failed to load recipe');
     }
     setLoadingRecipe(false);
+  };
+
+  const handleLoadRecipe = () => loadRecipeById(selectedRecipeId, recipeMode);
+
+  /** One-click "use last used recipe" — loads the per-browser last recipe (replace). */
+  const handleUseLastRecipe = () => {
+    if (!lastRecipeId) return;
+    if (!recipes.some((r) => r.id === lastRecipeId)) {
+      toast('error', 'Your last recipe is no longer available.');
+      return;
+    }
+    loadRecipeById(lastRecipeId, 'replace');
+  };
+
+  /** Save the current chemical lines as a NEW blend recipe via save_blend_recipe. */
+  const handleSaveAsRecipe = async () => {
+    if (!profile) return;
+    if (!newRecipeName.trim()) { toast('error', 'Recipe name is required'); return; }
+    const items = chemRowsToRecipeItems(chemRows);
+    if (items.length === 0) { toast('error', 'Add at least one chemical with a product first.'); return; }
+    setSavingRecipe(true);
+    try {
+      const idemKey = saveRecipeIdem.getKey();
+      const { data, error } = await supabase.rpc('save_blend_recipe', {
+        p_recipe_id: null as unknown as string,
+        p_name: newRecipeName.trim(),
+        p_recipe_type: 'generic',
+        p_items: items as unknown as Json,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      const result = assertRpcResult<{ recipe_id: string; created: boolean }>(data, 'save_blend_recipe');
+      saveRecipeIdem.resetKey();
+      logActivity({ event: 'recipe_created', description: `Recipe "${newRecipeName.trim()}" saved from job ${jobNumber}`, performedBy: profile.id });
+      toast('success', `Recipe "${newRecipeName.trim()}" saved`);
+      // Refresh the picker so the new recipe is selectable, and mark it last-used.
+      await loadLookups();
+      setSelectedRecipeId(result.recipe_id);
+      setRecipeId(result.recipe_id);
+      setLastRecipeId(result.recipe_id);
+      setLastRecipeIdState(result.recipe_id);
+      setShowSaveRecipeModal(false);
+      setNewRecipeName('');
+    } catch (err: unknown) {
+      Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_blend_recipe' } });
+      toast('error', err instanceof Error ? err.message : 'Failed to save recipe');
+    }
+    setSavingRecipe(false);
   };
 
   // ── Field row handlers ──────────────────────────────────────────────────
@@ -1430,12 +1528,26 @@ export default function JobDetail() {
       {/* ─────────────── CHEMICALS / CHARGES TAB ─────────────── */}
       {activeTab === 'chemicals' && (
         <Card>
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
             <h2 className="text-lg font-semibold text-nav-dark">Chemicals / Charges ({chemRows.length})</h2>
-            <div className="flex gap-2">
-              {canEdit && !isNew && (
-                <Button size="sm" variant="secondary" onClick={() => { loadRecipeIdem.resetKey(); setSelectedRecipeId(''); setShowRecipeModal(true); }}>
-                  <Beaker className="w-4 h-4" /> Load Recipe
+            <div className="flex gap-2 flex-wrap">
+              {canEdit && (
+                <Button size="sm" variant="secondary" onClick={() => { setSelectedRecipeId(''); setRecipeMode('replace'); setShowRecipeModal(true); }}>
+                  <Beaker className="w-4 h-4" /> Select Recipe
+                </Button>
+              )}
+              {canEdit && lastRecipeId && recipes.some((r) => r.id === lastRecipeId) && (
+                <Button size="sm" variant="secondary" onClick={handleUseLastRecipe} loading={loadingRecipe}
+                  title={`Load "${recipes.find((r) => r.id === lastRecipeId)?.name || 'last recipe'}" (replaces current chemicals)`}>
+                  <History className="w-4 h-4" /> Use Last Recipe
+                </Button>
+              )}
+              {canEdit && (
+                <Button size="sm" variant="secondary"
+                  disabled={chemRowsToRecipeItems(chemRows).length === 0}
+                  onClick={() => { saveRecipeIdem.resetKey(); setNewRecipeName(''); setShowSaveRecipeModal(true); }}
+                  title="Save the current chemical lines as a reusable recipe">
+                  <BookmarkPlus className="w-4 h-4" /> Save as Recipe
                 </Button>
               )}
               {canEdit && (
@@ -1704,25 +1816,71 @@ export default function JobDetail() {
       </Modal>
 
       {/* Load Recipe Modal */}
-      <Modal open={showRecipeModal} onClose={() => setShowRecipeModal(false)} title="Load Recipe">
+      <Modal open={showRecipeModal} onClose={() => setShowRecipeModal(false)} title="Select Recipe">
         <div className="space-y-4">
           <p className="text-sm text-secondary">
-            Select a blend recipe to load its chemicals into this job. This will replace existing chemicals.
+            Load a saved tank-mix recipe's products (with rates and units) into this job. The lines stay editable — review them and Save the job to keep them.
           </p>
-          <select
-            value={selectedRecipeId}
-            onChange={(e) => setSelectedRecipeId(e.target.value)}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg"
-          >
-            <option value="">Select recipe...</option>
-            {recipes.map((r) => (
-              <option key={r.id} value={r.id}>{r.name}</option>
-            ))}
-          </select>
+          <div>
+            <label className="block text-xs font-medium text-secondary mb-1">Recipe</label>
+            <select
+              value={selectedRecipeId}
+              onChange={(e) => setSelectedRecipeId(e.target.value)}
+              aria-label="Select recipe"
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg"
+            >
+              <option value="">Select recipe...</option>
+              {recipes.map((r) => (
+                <option key={r.id} value={r.id}>{r.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-secondary mb-1">Load mode</label>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-1.5 text-sm text-secondary">
+                <input type="radio" name="recipeMode" checked={recipeMode === 'replace'}
+                  onChange={() => setRecipeMode('replace')} />
+                Replace current chemicals
+              </label>
+              <label className="flex items-center gap-1.5 text-sm text-secondary">
+                <input type="radio" name="recipeMode" checked={recipeMode === 'append'}
+                  onChange={() => setRecipeMode('append')} />
+                Add to current chemicals
+              </label>
+            </div>
+          </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="secondary" onClick={() => setShowRecipeModal(false)}>Cancel</Button>
             <Button onClick={handleLoadRecipe} disabled={!selectedRecipeId} loading={loadingRecipe}>
               <Beaker className="w-4 h-4" /> Load Recipe
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Save As Recipe Modal */}
+      <Modal open={showSaveRecipeModal} onClose={() => setShowSaveRecipeModal(false)} title="Save as Recipe">
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Save this job's chemical lines as a reusable recipe. Products, rates, units and prices are stored so you can load them into another job in one click.
+          </p>
+          <div>
+            <label className="block text-xs font-medium text-secondary mb-1">New Recipe Name *</label>
+            <Input
+              type="text"
+              value={newRecipeName}
+              onChange={(e) => setNewRecipeName(e.target.value)}
+              placeholder="e.g., Corn Pre-Emerge Standard"
+            />
+          </div>
+          <p className="text-xs text-secondary">
+            {chemRowsToRecipeItems(chemRows).length} product{chemRowsToRecipeItems(chemRows).length === 1 ? '' : 's'} will be saved.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="secondary" onClick={() => setShowSaveRecipeModal(false)}>Cancel</Button>
+            <Button onClick={handleSaveAsRecipe} disabled={!newRecipeName.trim()} loading={savingRecipe}>
+              <BookmarkPlus className="w-4 h-4" /> Save Recipe
             </Button>
           </div>
         </div>

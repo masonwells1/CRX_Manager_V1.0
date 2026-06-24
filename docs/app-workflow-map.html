@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">81 routes · 180 RPC calls · 0 issues · Updated Jun 24, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">81 routes · 179 RPC calls · 0 issues · Updated Jun 24, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -1961,6 +1961,11 @@ const EDGES = [
     {
       "s": "job-detail",
       "t": "r-job",
+      "type": "rpc"
+    },
+    {
+      "s": "job-detail",
+      "t": "r-blend",
       "type": "rpc"
     },
     {
