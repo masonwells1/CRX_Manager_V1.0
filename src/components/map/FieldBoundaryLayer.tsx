@@ -1,5 +1,6 @@
 import { useMemo, useEffect } from 'react';
 import { Source, Layer, useMap } from 'react-map-gl/mapbox';
+import { billableAcres } from '../../lib/fieldGeometry';
 import type { Field } from '../../types';
 
 interface FieldWithCustomer extends Field {
@@ -29,11 +30,14 @@ export default function FieldBoundaryLayer({
             typeof f.boundary_geojson === 'string'
               ? JSON.parse(f.boundary_geojson)
               : f.boundary_geojson;
+          const b = billableAcres(f.override_acres, f.measured_acres, f.total_acres);
           return {
             type: 'Feature' as const,
             properties: {
               id: f.id,
               field_name: f.field_name,
+              // Map label shows the field name with its billable acres beneath it.
+              label: b != null ? `${f.field_name}\n${b} ac` : f.field_name,
               total_acres: f.total_acres,
               crop_type: f.crop_type,
               customer_name:
@@ -110,7 +114,7 @@ export default function FieldBoundaryLayer({
           id="field-boundaries-labels"
           type="symbol"
           layout={{
-            'text-field': ['get', 'field_name'],
+            'text-field': ['get', 'label'],
             'text-size': 12,
             'text-anchor': 'center',
             'text-allow-overlap': false,

@@ -10,6 +10,8 @@ import {
   isAcreInBand,
   isAcreDenominatedColumn,
   parseAcreInput,
+  drawingRingMetrics,
+  appliedMatchesSystem,
   ACRE_BAND_MIN,
   ACRE_BAND_MAX,
 } from './fieldGeometry';
@@ -188,5 +190,61 @@ describe('acreDivergence (the applicator-mix-up review flag: magnitude + directi
   it('flags exactly at the threshold (boundary is inclusive, matching isAcreDivergent)', () => {
     const atThreshold = 40 * (1 + ACRE_DIVERGENCE_THRESHOLD_PCT / 100); // 44
     expect(acreDivergence(atThreshold, 40)?.direction).toBe('over');
+  });
+});
+
+describe('drawingRingMetrics (live draw HUD)', () => {
+  // ~0.01° x 0.01° box at 40°N — a real, non-trivial polygon area (~233 acres).
+  const SQUARE = [[-100, 40], [-100, 40.01], [-99.99, 40.01], [-99.99, 40], [-100, 40]];
+  const TRIANGLE = [[-100, 40], [-100, 40.01], [-99.99, 40], [-100, 40]];
+
+  it('returns zeros for null / empty rings', () => {
+    expect(drawingRingMetrics(null)).toEqual({ acres: 0, corners: 0 });
+    expect(drawingRingMetrics(undefined)).toEqual({ acres: 0, corners: 0 });
+    expect(drawingRingMetrics([])).toEqual({ acres: 0, corners: 0 });
+  });
+
+  it('does not count the closing vertex as a corner (closed square = 4 corners)', () => {
+    const m = drawingRingMetrics(SQUARE);
+    expect(m.corners).toBe(4);
+    expect(m.acres).toBeGreaterThan(200);
+    expect(m.acres).toBeLessThan(260);
+  });
+
+  it('measures an open ring the same as the equivalent closed ring', () => {
+    const open = SQUARE.slice(0, -1); // drop the closing coord
+    const m = drawingRingMetrics(open);
+    expect(m.corners).toBe(4);
+    expect(m.acres).toBeGreaterThan(200);
+    expect(m.acres).toBeLessThan(260);
+  });
+
+  it('computes a positive acreage for a 3-corner triangle', () => {
+    const m = drawingRingMetrics(TRIANGLE);
+    expect(m.corners).toBe(3);
+    expect(m.acres).toBeGreaterThan(0);
+  });
+
+  it('reports 0 acres until there are at least 3 distinct corners', () => {
+    expect(drawingRingMetrics([[-100, 40], [-100, 40.01], [-100, 40]])).toEqual({ acres: 0, corners: 2 });
+    expect(drawingRingMetrics([[-100, 40]])).toEqual({ acres: 0, corners: 1 });
+  });
+});
+
+describe('appliedMatchesSystem (F2 full-field vs edited display)', () => {
+  it('true when applied equals system (the auto-filled full-field default)', () => {
+    expect(appliedMatchesSystem(40, 40)).toBe(true);
+    expect(appliedMatchesSystem(40.02, 40)).toBe(true); // within float epsilon
+  });
+
+  it('false when the biller edited applied to a different number', () => {
+    expect(appliedMatchesSystem(30, 40)).toBe(false); // sprayed part of the field
+    expect(appliedMatchesSystem(40.1, 40)).toBe(false);
+  });
+
+  it('false when either value is missing (nothing to compare)', () => {
+    expect(appliedMatchesSystem(null, 40)).toBe(false);
+    expect(appliedMatchesSystem(40, null)).toBe(false);
+    expect(appliedMatchesSystem(undefined, undefined)).toBe(false);
   });
 });

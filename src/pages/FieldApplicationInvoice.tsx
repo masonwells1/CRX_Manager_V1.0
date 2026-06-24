@@ -8,13 +8,13 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
 import { formatCents as fmt } from '../lib/money';
-import { billableAcres, acreDivergence } from '../lib/fieldGeometry';
+import { billableAcres, acreDivergence, appliedMatchesSystem } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
@@ -64,6 +64,17 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: 'applied_info', label: 'Applied Info', icon: <ClipboardList className="w-4 h-4" /> },
 ];
 
+// Translate the field-app server error codes into plain, actionable sentences for
+// non-technical staff (the page surfaces raw codes like ZERO_APPLIED_ACRES otherwise).
+// Falls back to sanitizeError for anything unrecognized.
+function fieldAppError(err: unknown): string {
+  if (hasRpcCode(err, RpcErrorCodes.ZERO_APPLIED_ACRES)) return 'A location has 0 or blank applied acres. Open the Locations tab and enter the acres sprayed for each field.';
+  if (hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)) return 'Your sign-in could not be verified. Refresh the page and try again.';
+  // check_period_open() raises a plain-English sentence ("Date X falls in closed
+  // accounting period (...)"), which sanitizeError passes through readably — no token to match.
+  return sanitizeError(err);
+}
+
 export default function FieldApplicationInvoice() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -106,7 +117,7 @@ export default function FieldApplicationInvoice() {
   const isNew = !id;
 
   const totalAppliedAcres = useMemo(
-    () => locations.reduce((sum, l) => sum + (l.applied_acres || l.total_acres || 0), 0),
+    () => locations.reduce((sum, l) => sum + (l.applied_acres || 0), 0),
     [locations]
   );
 
@@ -187,6 +198,7 @@ export default function FieldApplicationInvoice() {
         .from('invoices')
         .select('id, invoice_number, customer_id, total_amount_cents, status, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
+        .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
       if (sibs) {
         setSiblings(
@@ -317,26 +329,31 @@ export default function FieldApplicationInvoice() {
   }, [toast]);
 
   const handleLocationsSelected = useCallback((selectedFields: (Field & { customer_name?: string })[]) => {
-    const newLocations: FieldLocation[] = selectedFields.map((f, idx) => ({
-      field_id: f.id,
-      field_name: f.field_name,
-      map_number: idx + 1,
-      total_acres: f.total_acres,
-      system_acres: billableAcres(f.override_acres, f.measured_acres, f.total_acres),
-      planted_acres: null,
-      applied_acres: f.total_acres,
-      crop_type: f.crop_type,
-      wind_direction: null,
-      sort_order: idx,
-      customer_name: f.customer_name,
-    }));
+    const newLocations: FieldLocation[] = selectedFields.map((f, idx) => {
+      // Default applied acres to the field's BILLABLE acreage (override ?? measured ?? legacy
+      // total) — the corrected per-acre number, not the raw full-field total. Editable per row.
+      const billable = billableAcres(f.override_acres, f.measured_acres, f.total_acres);
+      return {
+        field_id: f.id,
+        field_name: f.field_name,
+        map_number: idx + 1,
+        total_acres: f.total_acres,
+        system_acres: billable,
+        planted_acres: null,
+        applied_acres: billable,
+        crop_type: f.crop_type,
+        wind_direction: null,
+        sort_order: idx,
+        customer_name: f.customer_name,
+      };
+    });
     setLocations(newLocations);
     setDirty(true);
 
     const fieldIds = newLocations.map((l) => l.field_id);
     const acresMap: Record<string, number> = {};
     newLocations.forEach((l) => {
-      acresMap[l.field_id] = l.applied_acres || l.total_acres || 0;
+      acresMap[l.field_id] = l.applied_acres || 0;
     });
     deriveShares(fieldIds, acresMap);
   }, [deriveShares]);
@@ -349,7 +366,7 @@ export default function FieldApplicationInvoice() {
 
     const acresMap: Record<string, number> = {};
     locations.forEach((l) => {
-      acresMap[l.field_id] = l.field_id === fieldId ? acres : (l.applied_acres || l.total_acres || 0);
+      acresMap[l.field_id] = l.field_id === fieldId ? acres : (l.applied_acres || 0);
     });
     deriveShares(locations.map((l) => l.field_id), acresMap);
   };
@@ -373,7 +390,7 @@ export default function FieldApplicationInvoice() {
           map_number: l.map_number || idx + 1,
           total_acres: l.total_acres,
           planted_acres: l.planted_acres,
-          applied_acres: l.applied_acres || l.total_acres,
+          applied_acres: l.applied_acres,
           crop_type: l.crop_type,
           wind_direction: l.wind_direction || windDirection || null,
           sort_order: idx,
@@ -391,6 +408,9 @@ export default function FieldApplicationInvoice() {
           manual_override: c.manual_override === true,
         })),
         p_application_service_id: (appServiceId || null) as string,
+        // [2026-06-24] pass the invoice being edited so preview excludes deleted split
+        // members exactly like save (group-aware). NULL for a new invoice = no exclusion.
+        p_invoice_id: (id || null) as string,
       });
       if (error) throw error;
       const result = assertRpcResult<PreviewFieldAppSplitResult>(data, 'preview_field_app_invoice_split');
@@ -398,7 +418,7 @@ export default function FieldApplicationInvoice() {
       setActiveTab('customers');
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'preview_field_app_invoice_split' } });
-      toast('error', `Preview failed: ${sanitizeError(err)}`);
+      toast('error', `Preview failed: ${fieldAppError(err)}`);
     } finally {
       setPreviewing(false);
     }
@@ -406,6 +426,15 @@ export default function FieldApplicationInvoice() {
 
   const handleSave = async () => {
     if (!profile) return;
+    // [B1.1] Never bill 0 / blank applied acres. The server rejects it
+    // (ZERO_APPLIED_ACRES); block here too with a clear message so the user fixes
+    // it before the round-trip rather than seeing a raw RPC error. (The empty-
+    // locations case is handled server-side + by handlePreview's guard.)
+    const missingAcres = locations.find((l) => l.applied_acres == null || l.applied_acres <= 0);
+    if (missingAcres) {
+      toast('error', `Enter applied acres for "${missingAcres.field_name}" (greater than 0), or remove the field.`);
+      return;
+    }
     setSaving(true);
     try {
       const key = saveIdem.getKey();
@@ -424,7 +453,7 @@ export default function FieldApplicationInvoice() {
           map_number: l.map_number || idx + 1,
           total_acres: l.total_acres,
           planted_acres: l.planted_acres,
-          applied_acres: l.applied_acres || l.total_acres,
+          applied_acres: l.applied_acres,
           crop_type: l.crop_type,
           wind_direction: l.wind_direction || windDirection || null,
           sort_order: idx,
@@ -511,7 +540,7 @@ export default function FieldApplicationInvoice() {
       }
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'save_field_app_invoice' } });
-      toast('error', `Save failed: ${sanitizeError(err)}`);
+      toast('error', `Save failed: ${fieldAppError(err)}`);
     } finally {
       setSaving(false);
     }
@@ -543,7 +572,7 @@ export default function FieldApplicationInvoice() {
       fetchInvoice();
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: invoiceGroupId ? 'post_invoice_group' : 'post_invoice' } });
-      toast('error', `Post failed: ${sanitizeError(err)}`);
+      toast('error', `Post failed: ${fieldAppError(err)}`);
     } finally {
       setPosting(false);
     }
@@ -613,7 +642,7 @@ export default function FieldApplicationInvoice() {
               {isNew ? 'New Field Application Invoice' : `Field Application ${invoiceNumber}`}
             </h1>
             <p className="text-sm text-gray-500">
-              {totalAppliedAcres.toFixed(1)} acres &middot; {locations.length} locations &middot; {fmt(invoiceTotalCents)}
+              {totalAppliedAcres.toFixed(1)} acres &middot; {locations.length} locations &middot; {fmt(invoiceTotalCents)} <span className="text-gray-400">est.</span>
             </p>
           </div>
           {!isNew && <Badge variant={status === 'draft' ? 'default' : status === 'posted' ? 'success' : 'warning'}>{status}</Badge>}
@@ -804,6 +833,20 @@ export default function FieldApplicationInvoice() {
                               <AlertTriangle className="w-3 h-3" />
                               {Math.round(div.pct)}% {div.direction} &mdash; review
                             </div>
+                          )}
+                          {/* F2 Branch B: make the common auto-fill case visible — the >=10% flag above
+                              never fires when applied == system, so show whether this row still bills the
+                              full field (the unedited default) or was changed. Advisory only. */}
+                          {!div && loc.applied_acres != null && loc.applied_acres > 0 && loc.system_acres != null && (
+                            appliedMatchesSystem(loc.applied_acres, loc.system_acres) ? (
+                              <div className="mt-1 text-right text-xs text-gray-500">
+                                Full field &mdash; matches acres on file
+                              </div>
+                            ) : (
+                              <div className="mt-1 text-right text-xs text-gray-500">
+                                Edited (field is {loc.system_acres.toFixed(1)} ac)
+                              </div>
+                            )
                           )}
                         </td>
                       </tr>

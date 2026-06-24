@@ -1,11 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Upload,
   CheckCircle,
   AlertCircle,
   FileText,
   MapPin,
-  Search,
   AlertTriangle,
 } from 'lucide-react';
 import Modal from '../ui/Modal';
@@ -36,6 +35,12 @@ import {
 import type { Polygon, MultiPolygon } from 'geojson';
 import ImportPreviewMap from './ImportPreviewMap';
 import AttributeMappingStep from './AttributeMappingStep';
+import FieldCustomerAssignment from './FieldCustomerAssignment';
+import {
+  resolveFieldCustomerId,
+  allFieldsAssigned,
+  type AssignableField,
+} from '../../lib/fieldImportCustomers';
 import type { Customer, ParsedImportField } from '../../types';
 
 
@@ -80,12 +85,11 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
   // Step 3: Column mapping
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
 
-  // Step 4: Customer assignment
+  // Step 4: Customer assignment (per-field, with an apply-to-all fast path)
   const [customers, setCustomers] = useState<Customer[]>([]);
+  // The "apply to all" / fallback customer; per-field overrides live in fieldCustomerAssignments.
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
-  const [selectedCustomerName, setSelectedCustomerName] = useState('');
-  const [customerSearch, setCustomerSearch] = useState('');
-  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const [fieldCustomerAssignments, setFieldCustomerAssignments] = useState<Record<number, string>>({});
 
   // Step 5: Validated fields
   const [parsedFields, setParsedFields] = useState<ParsedImportField[]>([]);
@@ -129,9 +133,7 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     setParseError(null);
     setColumnMapping({});
     setSelectedCustomerId('');
-    setSelectedCustomerName('');
-    setCustomerSearch('');
-    setShowCustomerDropdown(false);
+    setFieldCustomerAssignments({});
     setParsedFields([]);
     setUploading(false);
     setUploadProgress({ current: 0, total: 0 });
@@ -219,6 +221,10 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     if (files.length === 0 || !fileType) return;
     setParsing(true);
     setParseError(null);
+    // A fresh parse means a different set of fields — drop any prior per-field customer assignments
+    // so a stale index from a previous file can't silently reattach a customer to the wrong field.
+    setFieldCustomerAssignments({});
+    setSelectedCustomerId('');
 
     try {
       let result: ParseResult;
@@ -297,7 +303,9 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
       };
 
       const fieldName = getValue('field_name') || `Imported Field ${i + 1}`;
-      const customerId = selectedCustomerId || null;
+      // Per-field assignment (a county/co-op file covers many growers), falling back to the
+      // "apply to all" customer. A field still left without one is invalid → surfaced + skipped.
+      const customerId = resolveFieldCustomerId(i + 1, fieldCustomerAssignments, selectedCustomerId);
 
       if (!customerId) {
         errors.push('No customer assigned');
@@ -347,6 +355,40 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     }
 
     setParsedFields(fields);
+  };
+
+  // ─── Step 4 helpers: per-field customer assignment ──────────────────
+
+  // The lightweight per-field list shown on the assignment step (name + acreage). Derived from the
+  // parsed features + the column mapping; acreage is best-effort (a malformed geometry is caught and
+  // shown as 0 here, and flagged for real in the Review step).
+  const assignableFields: AssignableField[] = useMemo(() => {
+    if (!parseResult) return [];
+    return parseResult.featureCollection.features.map((feature, i) => {
+      const props = feature.properties || {};
+      const nameKey = columnMapping['field_name'];
+      const rawName = nameKey && props[nameKey] != null ? String(props[nameKey]).trim() : '';
+      let acres = 0;
+      try {
+        acres = geometryAcres(parseResult.fullGeometries[i] as Polygon | MultiPolygon);
+      } catch {
+        acres = 0;
+      }
+      return { index: i + 1, name: rawName || `Imported Field ${i + 1}`, acres };
+    });
+  }, [parseResult, columnMapping]);
+
+  // Apply-to-all is the single source of truth for the fast path: it sets the fallback customer and
+  // CLEARS per-field overrides, so the per-field map only ever holds true overrides. resolveFieldCustomerId
+  // (used by the UI, the gate, and buildParsedFields alike) then resolves each field to its override or
+  // this fallback — one notion of "assigned" everywhere.
+  const handleApplyToAll = (customerId: string) => {
+    setSelectedCustomerId(customerId);
+    setFieldCustomerAssignments({});
+  };
+
+  const handleAssignField = (index: number, customerId: string) => {
+    setFieldCustomerAssignments((prev) => ({ ...prev, [index]: customerId }));
   };
 
   // ─── Step 6: Upload ─────────────────────────────────────────────────
@@ -515,16 +557,12 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
     if (step === 1) return files.length > 0 && fileType !== null && !parsing;
     if (step === 2) return parseResult !== null;
     if (step === 3) return true; // mapping is optional
-    if (step === 4) return !!selectedCustomerId;
+    if (step === 4) return allFieldsAssigned(assignableFields, fieldCustomerAssignments, selectedCustomerId);
     if (step === 5) return parsedFields.some((f) => f.isValid);
     return false;
   };
 
   // ─── Helpers ────────────────────────────────────────────────────────
-
-  const filteredCustomers = customers.filter((c) =>
-    c.farm_name.toLowerCase().includes(customerSearch.toLowerCase())
-  );
 
   const validCount = parsedFields.filter((f) => f.isValid).length;
   const invalidCount = parsedFields.filter((f) => !f.isValid).length;
@@ -693,67 +731,14 @@ export default function BulkFieldImport({ open, onClose, onSuccess }: BulkFieldI
 
         {/* ─── Step 4: Customer Assignment ─── */}
         {step === 4 && (
-          <div className="space-y-4">
-            <p className="text-sm text-secondary">
-              Choose which customer (grower/farm) these fields belong to.
-            </p>
-
-            <div className="relative">
-              <label className="block text-sm font-medium text-secondary mb-1">
-                Customer <span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  value={showCustomerDropdown ? customerSearch : selectedCustomerName}
-                  onChange={(e) => {
-                    setCustomerSearch(e.target.value);
-                    setShowCustomerDropdown(true);
-                  }}
-                  onFocus={() => {
-                    setCustomerSearch('');
-                    setShowCustomerDropdown(true);
-                  }}
-                  onBlur={() => setTimeout(() => setShowCustomerDropdown(false), 200)}
-                  placeholder="Search customers..."
-                  className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-                />
-              </div>
-              {showCustomerDropdown && (
-                <div className="absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {filteredCustomers.length === 0 ? (
-                    <div className="px-4 py-3 text-sm text-secondary">No customers found</div>
-                  ) : (
-                    filteredCustomers.slice(0, 20).map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => {
-                          setSelectedCustomerId(c.id);
-                          setSelectedCustomerName(c.farm_name);
-                          setShowCustomerDropdown(false);
-                        }}
-                        className="w-full text-left px-4 py-2 text-sm hover:bg-crx-green-tint transition-colors"
-                      >
-                        {c.farm_name}
-                      </button>
-                    ))
-                  )}
-                </div>
-              )}
-            </div>
-
-            {selectedCustomerName && (
-              <div className="p-3 bg-green-50 border border-green-100 rounded-lg flex items-center gap-2">
-                <CheckCircle className="w-5 h-5 text-green-600" />
-                <span className="text-sm text-green-700">
-                  All {parseResult?.featureCount} fields will be assigned to <strong>{selectedCustomerName}</strong>
-                </span>
-              </div>
-            )}
-          </div>
+          <FieldCustomerAssignment
+            fields={assignableFields}
+            customers={customers}
+            assignments={fieldCustomerAssignments}
+            fallbackCustomerId={selectedCustomerId}
+            onAssign={handleAssignField}
+            onApplyToAll={handleApplyToAll}
+          />
         )}
 
         {/* ─── Step 5: Review ─── */}

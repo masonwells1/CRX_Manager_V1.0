@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import Map, { NavigationControl, type MapRef } from 'react-map-gl/mapbox';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import { Loader2, AlertTriangle, RefreshCw } from 'lucide-react';
 import LayerToggle from './LayerToggle';
 import LocateMe from './LocateMe';
 
@@ -58,9 +59,17 @@ export default function CRXMap({
 
   const mapRef = useRef<MapRef | null>(null);
 
+  // Map load lifecycle: show a spinner until the first load, and a retryable error state if
+  // the map never loads. Transient tile/network errors AFTER a successful load are ignored.
+  const [mapStatus, setMapStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [reloadKey, setReloadKey] = useState(0);
+  const loadedRef = useRef(false);
+
   const handleLoad = useCallback(
     (evt: { target: MapRef }) => {
       mapRef.current = evt.target;
+      loadedRef.current = true;
+      setMapStatus('ready');
       onMapLoad?.(evt.target);
       // If bounds were set before map loaded, apply now
       if (bounds) {
@@ -72,6 +81,21 @@ export default function CRXMap({
     },
     [onMapLoad, bounds, boundsOptions]
   );
+
+  const handleError = useCallback((evt?: { sourceId?: string; tile?: unknown }) => {
+    if (loadedRef.current) return;
+    // Ignore transient tile/source-scoped errors before first load (a flaky rural connection can
+    // drop a tile while the map is still coming up). Only a fatal style/auth load failure — which
+    // is NOT source-scoped — should surface the retry overlay; a later successful 'load' clears it.
+    if (evt && (evt.sourceId || evt.tile)) return;
+    setMapStatus('error');
+  }, []);
+
+  const handleRetry = useCallback(() => {
+    loadedRef.current = false;
+    setMapStatus('loading');
+    setReloadKey((k) => k + 1); // remount the Map to retry the style/tile load
+  }, []);
 
   // Re-fit bounds when they change after initial load
   useEffect(() => {
@@ -102,6 +126,7 @@ export default function CRXMap({
   return (
     <div className={`${className} relative rounded-lg overflow-hidden`}>
       <Map
+        key={reloadKey}
         {...viewState}
         onMove={(evt) => setViewState(evt.viewState)}
         mapboxAccessToken={MAPBOX_TOKEN}
@@ -109,6 +134,7 @@ export default function CRXMap({
         style={{ width: '100%', height: '100%' }}
         interactive={interactive}
         onLoad={handleLoad as unknown as (e: unknown) => void}
+        onError={handleError as unknown as (e: unknown) => void}
         attributionControl={false}
       >
         {interactive && <NavigationControl position="top-right" />}
@@ -117,6 +143,28 @@ export default function CRXMap({
       </Map>
       {showLayerToggle && (
         <LayerToggle activeLayer={activeLayer} onChange={setActiveLayer} />
+      )}
+      {mapStatus === 'loading' && (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-gray-100/80 pointer-events-none">
+          <div className="flex items-center gap-2 text-sm text-secondary">
+            <Loader2 className="w-5 h-5 animate-spin text-crx-green" />
+            Loading map...
+          </div>
+        </div>
+      )}
+      {mapStatus === 'error' && (
+        <button
+          type="button"
+          onClick={handleRetry}
+          className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-gray-100 px-4 text-center"
+        >
+          <AlertTriangle className="w-6 h-6 text-amber-500" />
+          <p className="text-sm font-medium text-gray-600">Map could not load</p>
+          <span className="flex items-center gap-1.5 text-xs font-medium text-crx-green">
+            <RefreshCw className="w-3.5 h-3.5" />
+            Tap to retry
+          </span>
+        </button>
       )}
     </div>
   );

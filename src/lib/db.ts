@@ -176,6 +176,8 @@ export const RpcErrorCodes = {
   PRODUCT_NOT_ON_RECORD: 'PRODUCT_NOT_ON_RECORD',
   SOURCE_RECEIPT_MISMATCH: 'SOURCE_RECEIPT_MISMATCH',
   DUPLICATE_LOT: 'DUPLICATE_LOT',
+  // save_field_app_invoice / post_invoice_group — per-acre billing guard (field-acre billing)
+  ZERO_APPLIED_ACRES: 'ZERO_APPLIED_ACRES',
 } as const;
 
 export type RpcErrorCode = (typeof RpcErrorCodes)[keyof typeof RpcErrorCodes];

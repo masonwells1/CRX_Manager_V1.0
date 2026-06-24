@@ -7,6 +7,7 @@ import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { SkeletonCard } from '../components/ui/Skeleton';
+import { formatCents as fmt } from '../lib/money';
 
 // Phase 2 of the As-Applied / Field-Invoice build (read-only reconciliation).
 // Surfaces the TWO reliable, actionable "applied but not yet billed" backlogs so
@@ -33,6 +34,7 @@ interface UnbilledRow {
   ref: string;        // job_number / ticket_number
   date: string | null;
   acres: number | null;
+  amount_cents: number | null;   // estimated bill value (jobs only; blend tickets aren't priced until billed)
   customer_name: string;
 }
 
@@ -43,17 +45,19 @@ interface Section {
   icon: React.ReactNode;
   rows: UnbilledRow[];
   refLabel: string;
-  parentPath: string;   // where the "View all" / row click goes
+  parentPath: string;   // where "View all" goes (the list)
+  rowPath: (id: string) => string;   // where a row click goes (the specific record)
 }
 
 type RawRow = Record<string, unknown> & { customer?: { farm_name?: string } | null };
 
-function mapRows(data: RawRow[] | null, refKey: string, dateKey: string): UnbilledRow[] {
+function mapRows(data: RawRow[] | null, refKey: string, dateKey: string, amountKey?: string): UnbilledRow[] {
   return (data || []).map((r) => ({
     id: r.id as string,
     ref: (r[refKey] as string) || '—',
     date: (r[dateKey] as string | null) ?? null,
     acres: (r.total_acres as number | null) ?? null,
+    amount_cents: amountKey ? ((r[amountKey] as number | null) ?? null) : null,
     customer_name: r.customer?.farm_name || 'Unknown',
   }));
 }
@@ -71,11 +75,11 @@ export default function UnbilledApplications() {
     const [jobsRes, ticketsRes] = await Promise.all([
       supabase
         .from('jobs')
-        .select('id, job_number, job_date, total_acres, customer:customers(farm_name)')
+        .select('id, job_number, job_date, total_acres, total_price_cents, customer:customers(farm_name)')
         .eq('status', 'completed')
         .is('invoice_id', null)
         .is('deleted_at', null)
-        .order('job_date', { ascending: false })
+        .order('job_date', { ascending: true })
         .limit(QUERY_LIMIT),
       supabase
         .from('blend_tickets')
@@ -83,7 +87,7 @@ export default function UnbilledApplications() {
         .eq('review_status', 'approved')
         .eq('payment_status', 'unbilled')
         .is('deleted_at', null)
-        .order('ticket_date', { ascending: false })
+        .order('ticket_date', { ascending: true })
         .limit(QUERY_LIMIT),
     ]);
 
@@ -95,7 +99,7 @@ export default function UnbilledApplications() {
       return;
     }
 
-    setJobs(mapRows(jobsRes.data as RawRow[], 'job_number', 'job_date'));
+    setJobs(mapRows(jobsRes.data as RawRow[], 'job_number', 'job_date', 'total_price_cents'));
     setTickets(mapRows(ticketsRes.data as RawRow[], 'ticket_number', 'ticket_date'));
     setLoading(false);
   }, [toast]);
@@ -113,6 +117,7 @@ export default function UnbilledApplications() {
       rows: jobs,
       refLabel: 'Job #',
       parentPath: '/jobs',
+      rowPath: (id: string) => `/jobs/${id}`,
     },
     {
       key: 'tickets',
@@ -122,10 +127,17 @@ export default function UnbilledApplications() {
       rows: tickets,
       refLabel: 'Ticket #',
       parentPath: '/blend-tickets',
+      rowPath: (id: string) => `/blend-tickets/${id}`,
     },
   ];
 
   const totalUnbilled = jobs.length + tickets.length;
+
+  const daysWaiting = (d: string | null): string => {
+    if (!d) return '—';
+    const days = Math.floor((Date.now() - new Date(d + 'T00:00:00').getTime()) / 86400000);
+    return days <= 0 ? 'today' : `${days}d`;
+  };
 
   const fmtDate = (d: string | null) =>
     d ? new Date(d + 'T00:00:00').toLocaleDateString() : '—';
@@ -202,19 +214,23 @@ export default function UnbilledApplications() {
                       <th className="py-2 pr-4 font-medium">Customer</th>
                       <th className="py-2 pr-4 font-medium">Date</th>
                       <th className="py-2 pr-4 font-medium text-right">Acres</th>
+                      <th className="py-2 pr-4 font-medium text-right">Est. $</th>
+                      <th className="py-2 pr-4 font-medium text-right">Waiting</th>
                     </tr>
                   </thead>
                   <tbody>
                     {s.rows.map((row) => (
                       <tr
                         key={row.id}
-                        onClick={() => navigate(s.parentPath)}
+                        onClick={() => navigate(s.rowPath(row.id))}
                         className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer"
                       >
                         <td className="py-2 pr-4 font-medium text-nav-dark">{row.ref}</td>
                         <td className="py-2 pr-4">{row.customer_name}</td>
                         <td className="py-2 pr-4">{fmtDate(row.date)}</td>
                         <td className="py-2 pr-4 text-right">{row.acres != null ? row.acres : '—'}</td>
+                        <td className="py-2 pr-4 text-right">{row.amount_cents != null ? fmt(row.amount_cents) : '—'}</td>
+                        <td className="py-2 pr-4 text-right text-secondary">{daysWaiting(row.date)}</td>
                       </tr>
                     ))}
                   </tbody>

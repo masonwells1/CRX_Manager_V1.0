@@ -4,6 +4,18 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-23 (night) — Field-acre-billing Track B (B1+B2): per-acre billing tie-in + billing-engine hardening (SHIPPED LIVE)
+
+Owner approved "go all the way live overnight" (gated on every automated review/Codex/smoke gate). Migration `20260623140000_field_app_per_acre_billing_and_hardening.sql` reproduces `save_field_app_invoice` + `preview_field_app_invoice_split` + `post_invoice_group` byte-faithful (rolled-back function-definition diffs = only-intended-changes) then patches the field-application invoice engine. Pushed to `main` (`1ee5c6aa`) + deployed (`dpl_y86Jrno85srQsCBa41zfxDNAuyCH`; rollback = prior prod `dpl_B3xaihLgbSTRemmDqf4NHmrANkJi`).
+
+- **[B1.1/B2] Bill the right acres, never zero.** The engine now defaults applied acres to the field's billable acreage (`override ?? measured ?? legacy total`, via `billableAcres`) instead of the raw full-field total, and **rejects 0 / NULL / negative applied acres** (`ZERO_APPLIED_ACRES`) instead of silently falling back to the whole field — the old `COALESCE(applied, total_acres, 0)` was a real over-bill. Preview clamps un-entered/negative to 0 (shows $0, never over-states). Frontend (`FieldApplicationInvoice.tsx`) pre-fills from `billableAcres`, drops the `|| total_acres` sends, and blocks 0/blank on save with a toast.
+- **[B1.3] Right cost.** Grower-share (override-acre) product lines now carry the per-unit product cost (`cost_cents`) and fold the extended cost into `total_cost_cents` — margin was overstated before (cost line was $0).
+- **[B1.5] Right rep.** `salesman_id` is now bound: a non-admin actor can only attribute an invoice to themselves; admins may set any.
+- **[B1.2] Don't resurrect deleted invoices.** `save_field_app_invoice` AND `post_invoice_group` (all 4 of its `invoice_group_id` loops) + the frontend sibling-load are now `deleted_at`-aware, so a soft-deleted split member isn't reused, re-cancelled, posted, or shown.
+- **Codex found 2 P1s** (B1.3 wrote the extended cost into the per-unit `cost_cents`; B1.2 missed `post_invoice_group`) → both fixed → Codex round 2 CLEAN. 4 reviewers (rls/drift/compliance/types) clean. typecheck/lint/build + 2191 tests green. Post-apply: single overload ×3, `plpgsql_check` clean (only pre-existing warnings), functional smoke `SMOKE_PASS_ROLLBACK` (0/−5/NULL rejected), advisors baseline unchanged.
+- **B3 / B4 / B5 verified already-live** (not rebuilt): `transfer_job_to_invoice` already emits the per-acre service fee + binds the actor; `load_recipe_into_job` already seeds the recipe price; the `UnbilledApplications` page already covers applied-but-unbilled work.
+- Open: Mason's in-app real-file smoke (bill a real spray job, confirm the bill uses applied acres and 0 is rejected; prod operationally empty).
+
 ## 2026-06-23 (night) — Field-acre-billing Track B #1: applicator-mix-up auto-alert (SHIPPED LIVE)
 
 Owner approved "ship to main". The first Track B item on top of the now-live Track A two-acre model. **Frontend-only, no DB change.** Built on `feat/applied-acres-divergence-alert`, merged to `main` (merge `90177c75`) and deployed to croprxsolutions.app (`dpl_8zpi1tbV5cRmKEAPY89U5d2r5ssP`; rollback = prior prod `dpl_7yTXs3oFWDcSoK9PZ7Y5KTM749se`).
