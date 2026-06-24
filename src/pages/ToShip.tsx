@@ -513,6 +513,7 @@ export default function ToShip() {
                       <th className="font-normal">Order</th>
                       <th className="font-normal">Waiting</th>
                       <th className="font-normal text-right">Qty</th>
+                      <th className="font-normal"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -526,6 +527,15 @@ export default function ToShip() {
                           </td>
                           <td className={age >= 14 ? 'text-red-600' : ''}>{age}d</td>
                           <td className="text-right font-medium">{fmtUnits(l.quantity_remaining)}</td>
+                          <td className="text-right">
+                            <button
+                              onClick={() => navigate(`/deliveries/new?order=${l.order_id}`)}
+                              title="Schedule a delivery for this order (pre-fills the remaining items)"
+                              className="text-xs font-medium px-2.5 py-1 rounded-md bg-crx-green text-white hover:bg-crx-green-hover transition-colors"
+                            >
+                              Schedule
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
