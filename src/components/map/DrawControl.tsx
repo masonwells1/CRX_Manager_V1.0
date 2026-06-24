@@ -1,8 +1,10 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef, useState } from 'react';
 import { useControl } from 'react-map-gl/mapbox';
 import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import '@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css';
 import type { GeoJSON } from 'geojson';
+import DrawingHud from './DrawingHud';
+import { drawingRingMetrics } from '../../lib/fieldGeometry';
 
 interface DrawControlProps {
   onDrawCreate?: (feature: GeoJSON.Feature) => void;
@@ -11,12 +13,81 @@ interface DrawControlProps {
   initialGeoJSON?: GeoJSON.Feature | GeoJSON.Feature[] | null;
 }
 
+interface HudState {
+  isDrawing: boolean;
+  partCount: number;
+  acres: number;
+  corners: number;
+}
+
+const EMPTY_HUD: HudState = { isDrawing: false, partCount: 0, acres: 0, corners: 0 };
+
 export default function DrawControl({
   onDrawCreate,
   onDrawUpdate,
   onDrawDelete,
   initialGeoJSON,
 }: DrawControlProps) {
+  const drawRef = useRef<MapboxDraw | null>(null);
+  const [hud, setHud] = useState<HudState>(EMPTY_HUD);
+  const hudRef = useRef<HudState>(EMPTY_HUD);
+  // Stable references for the draw.* listeners so onRemove can actually detach them.
+  const listenersRef = useRef<Record<string, (e: unknown) => void>>({});
+  // react-map-gl registers the useControl onAdd ONCE (its effect has [] deps), so the draw.*
+  // listeners would otherwise close over the FIRST render's parent callbacks. DrawLayer rebuilds
+  // its handlers as the polygon list grows (multi-part fields), so route through a ref kept current
+  // every render — without this, committing a 2nd/3rd part fires a stale handler that overwrites
+  // the earlier parts (the geometry that bills). Single-boundary callbacks are stable, so unaffected.
+  const cbRef = useRef({ onDrawCreate, onDrawUpdate, onDrawDelete });
+  cbRef.current = { onDrawCreate, onDrawUpdate, onDrawDelete };
+
+  // Read the current draw state straight off the mapbox-gl-draw instance and push it to the
+  // HUD. Driven by draw.render (fires on every mouse move while drawing) so the acreage forms
+  // live; the change-guard keeps it from re-rendering when nothing actually changed.
+  const recompute = useCallback((modeOverride?: string) => {
+    const draw = drawRef.current;
+    if (!draw) return;
+    const mode = modeOverride ?? draw.getMode();
+    const fc = draw.getAll();
+    const drawing = mode === 'draw_polygon';
+    const polys = fc.features.filter((f) => f.geometry?.type === 'Polygon');
+
+    let acres = 0;
+    let corners = 0;
+    if (drawing && polys.length > 0) {
+      // While drawing, the in-progress polygon is the most recently added (last) feature.
+      const ring = (polys[polys.length - 1].geometry as GeoJSON.Polygon).coordinates[0];
+      const m = drawingRingMetrics(ring);
+      acres = m.acres; // area of the shape on screen, including the floating mouse-follow point (live preview)
+      // Exclude mapbox-gl-draw's floating mouse-follow vertex from the committed-corner count —
+      // but ONLY when the ring is open (its last point IS that floating vertex). If the cursor
+      // momentarily sits on the first corner the ring reads closed, drawingRingMetrics already
+      // dropped the duplicate, so subtracting again would under-count and flicker the Done gate.
+      const last = ring.length > 0 ? ring[ring.length - 1] : null;
+      const first = ring.length > 0 ? ring[0] : null;
+      const ringClosed = !!first && !!last && first[0] === last[0] && first[1] === last[1];
+      corners = ringClosed ? m.corners : Math.max(0, m.corners - 1);
+    }
+
+    const next: HudState = {
+      isDrawing: drawing,
+      partCount: fc.features.length,
+      acres,
+      corners,
+    };
+    const prev = hudRef.current;
+    if (
+      prev.isDrawing === next.isDrawing &&
+      prev.partCount === next.partCount &&
+      prev.acres === next.acres &&
+      prev.corners === next.corners
+    ) {
+      return;
+    }
+    hudRef.current = next;
+    setHud(next);
+  }, []);
+
   const draw = useControl<MapboxDraw>(
     () =>
       new MapboxDraw({
@@ -77,37 +148,63 @@ export default function DrawControl({
         ],
       }),
     ({ map }) => {
-      map.on('draw.create', (e: { features: GeoJSON.Feature[] }) => {
-        if (e.features?.length > 0) onDrawCreate?.(e.features[0]);
-      });
-      map.on('draw.update', (e: { features: GeoJSON.Feature[] }) => {
-        if (e.features?.length > 0) onDrawUpdate?.(e.features[0]);
-      });
-      map.on('draw.delete', (e: { features: GeoJSON.Feature[] }) => {
-        onDrawDelete?.(e.features?.map((f) => f.id as string) || []);
-      });
+      const onCreate = (e: unknown) => {
+        const features = (e as { features?: GeoJSON.Feature[] }).features;
+        if (features && features.length > 0) cbRef.current.onDrawCreate?.(features[0]);
+        recompute();
+      };
+      const onUpdate = (e: unknown) => {
+        const features = (e as { features?: GeoJSON.Feature[] }).features;
+        if (features && features.length > 0) cbRef.current.onDrawUpdate?.(features[0]);
+        recompute();
+      };
+      const onDelete = (e: unknown) => {
+        const features = (e as { features?: GeoJSON.Feature[] }).features;
+        cbRef.current.onDrawDelete?.(features?.map((f) => f.id as string) || []);
+        recompute();
+      };
+      const onModeChange = (e: unknown) => recompute((e as { mode?: string }).mode);
+      const onRender = () => recompute();
+
+      listenersRef.current = {
+        'draw.create': onCreate,
+        'draw.update': onUpdate,
+        'draw.delete': onDelete,
+        'draw.modechange': onModeChange,
+        'draw.render': onRender,
+      };
+      map.on('draw.create', onCreate);
+      map.on('draw.update', onUpdate);
+      map.on('draw.delete', onDelete);
+      map.on('draw.modechange', onModeChange);
+      map.on('draw.render', onRender);
+      recompute();
     },
     ({ map }) => {
-      map.off('draw.create', () => {});
-      map.off('draw.update', () => {});
-      map.off('draw.delete', () => {});
+      for (const [evt, fn] of Object.entries(listenersRef.current)) {
+        map.off(evt, fn);
+      }
+      listenersRef.current = {};
     },
     { position: 'top-left' }
   );
+  drawRef.current = draw;
 
   // Load initial geometry when available — supports single feature or array
   const loadInitial = useCallback(() => {
-    if (!initialGeoJSON || !draw) return;
+    const d = drawRef.current;
+    if (!initialGeoJSON || !d) return;
     try {
-      draw.deleteAll();
+      d.deleteAll();
       const features = Array.isArray(initialGeoJSON) ? initialGeoJSON : [initialGeoJSON];
       for (const f of features) {
-        draw.add(f as unknown as GeoJSON.FeatureCollection);
+        d.add(f as unknown as GeoJSON.FeatureCollection);
       }
+      recompute();
     } catch {
       // Silently handle invalid GeoJSON
     }
-  }, [initialGeoJSON, draw]);
+  }, [initialGeoJSON, recompute]);
 
   useEffect(() => {
     // Small delay to ensure draw control is fully initialized
@@ -115,5 +212,52 @@ export default function DrawControl({
     return () => clearTimeout(timer);
   }, [loadInitial]);
 
-  return null;
+  // HUD button handlers — these drive the SAME draw.create/draw.delete callbacks the manual
+  // polygon/trash controls do, so the saved geometry + acreage preview stay correct.
+  const handleStartDrawing = useCallback(() => {
+    drawRef.current?.changeMode('draw_polygon');
+  }, []);
+
+  const handleDone = useCallback(() => {
+    const d = drawRef.current;
+    // Leaving draw_polygon mode commits the polygon and fires draw.create (when it has >=3
+    // corners) — the same thing the hidden double-click does, but discoverable.
+    if (d && d.getMode() === 'draw_polygon') d.changeMode('simple_select');
+  }, []);
+
+  const handleStartOver = useCallback(() => {
+    const d = drawRef.current;
+    // Only shown while drawing: abandon JUST the in-progress polygon and restart it. draw.trash()
+    // in draw_polygon mode deletes the current (uncommitted) feature and exits to simple_select;
+    // already-committed parts are untouched. Then re-enter draw mode so the user can redraw.
+    if (d && d.getMode() === 'draw_polygon') {
+      d.trash();
+      d.changeMode('draw_polygon');
+    }
+  }, []);
+
+  const handleReplaceBoundary = useCallback(() => {
+    const d = drawRef.current;
+    if (!d) return;
+    // Only offered when exactly ONE boundary exists (single-boundary fields — the hand-drawn case),
+    // so this clears one part and re-draws it. deleteAll() is silent (no draw.delete) → notify the
+    // parent so it drops the boundary too; then re-enter draw mode for the replacement.
+    const ids = d.getAll().features.map((f) => f.id as string).filter(Boolean);
+    d.deleteAll();
+    if (ids.length > 0) cbRef.current.onDrawDelete?.(ids);
+    d.changeMode('draw_polygon');
+  }, []);
+
+  return (
+    <DrawingHud
+      isDrawing={hud.isDrawing}
+      partCount={hud.partCount}
+      acres={hud.acres}
+      corners={hud.corners}
+      onStartDrawing={handleStartDrawing}
+      onReplace={handleReplaceBoundary}
+      onDone={handleDone}
+      onStartOver={handleStartOver}
+    />
+  );
 }

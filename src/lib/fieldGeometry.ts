@@ -1,4 +1,33 @@
-import type { Feature, Polygon, MultiPolygon } from 'geojson';
+import area from '@turf/area';
+import type { Feature, Polygon, MultiPolygon, Position } from 'geojson';
+
+/**
+ * Live metrics for a polygon ring as it is being drawn on the map: its geodesic acreage
+ * and how many distinct corners it has. Powers the on-map drawing HUD so the acreage that
+ * becomes the bill (override ?? measured ?? legacy) is visible WHILE you draw, not only after
+ * saving. `corners` counts distinct ring vertices (a trailing point that duplicates the first —
+ * the GeoJSON ring closure — is NOT counted). `acres` is 0 until there are at least 3 distinct
+ * corners (no area before that), and uses the SAME `@turf/area` / 4046.8564224 divisor the rest
+ * of the field code uses. Pure + deterministic so it is unit-tested directly. NOTE: the caller
+ * (DrawControl, while in draw_polygon mode) excludes mapbox-gl-draw's floating mouse-follow vertex
+ * from the committed-corner count it shows; this helper just measures the ring it is given.
+ */
+export function drawingRingMetrics(
+  ring: Position[] | null | undefined,
+): { acres: number; corners: number } {
+  if (!ring || ring.length === 0) return { acres: 0, corners: 0 };
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  const isClosed =
+    ring.length > 1 && first[0] === last[0] && first[1] === last[1];
+  const corners = isClosed ? ring.length - 1 : ring.length;
+  if (corners < 3) return { acres: 0, corners };
+  // turf wants a closed ring; close it if the input was open.
+  const closedRing = isClosed ? ring : [...ring, first];
+  const sqMeters = area({ type: 'Polygon', coordinates: [closedRing] });
+  const acres = Math.round((sqMeters / 4046.8564224) * 10) / 10;
+  return { acres, corners };
+}
 
 /**
  * Build the geometry to hand to the `set_field_boundary` RPC. That RPC's input
