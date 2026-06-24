@@ -56,6 +56,7 @@ export default function FieldInvoices() {
   const [invoices, setInvoices] = useState<FieldInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
+  const [cardFilter, setCardFilter] = useState<'unposted' | 'posted' | 'outstanding' | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
 
   const fetchInvoices = useCallback(async () => {
@@ -97,6 +98,9 @@ export default function FieldInvoices() {
 
   const filtered = invoices.filter((inv) => {
     if (statusFilter && inv.status !== statusFilter) return false;
+    if (cardFilter === 'unposted' && !(inv.status === 'draft' || inv.status === 'unposted')) return false;
+    if (cardFilter === 'posted' && !(inv.status === 'posted' || inv.status === 'overdue')) return false;
+    if (cardFilter === 'outstanding' && !((inv.status === 'posted' || inv.status === 'overdue') && inv.balance_cents > 0)) return false;
     return true;
   });
 
@@ -279,6 +283,12 @@ export default function FieldInvoices() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <button
+          type="button"
+          onClick={() => { setCardFilter(cardFilter === 'unposted' ? null : 'unposted'); setStatusFilter(''); }}
+          aria-pressed={cardFilter === 'unposted'}
+          className={`text-left rounded-xl transition ${cardFilter === 'unposted' ? 'ring-2 ring-crx-green' : 'hover:ring-1 hover:ring-gray-200'}`}
+        >
         <Card>
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
@@ -289,6 +299,13 @@ export default function FieldInvoices() {
           <p className="text-2xl font-semibold font-heading text-amber-600">{unpostedCount}</p>
           <p className="text-xs text-secondary mt-1">field invoices awaiting review</p>
         </Card>
+        </button>
+        <button
+          type="button"
+          onClick={() => { setCardFilter(cardFilter === 'posted' ? null : 'posted'); setStatusFilter(''); }}
+          aria-pressed={cardFilter === 'posted'}
+          className={`text-left rounded-xl transition ${cardFilter === 'posted' ? 'ring-2 ring-crx-green' : 'hover:ring-1 hover:ring-gray-200'}`}
+        >
         <Card>
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 rounded-lg bg-crx-green-light flex items-center justify-center">
@@ -301,6 +318,13 @@ export default function FieldInvoices() {
             {postedCount} posted &amp; overdue field invoices
           </p>
         </Card>
+        </button>
+        <button
+          type="button"
+          onClick={() => { setCardFilter(cardFilter === 'outstanding' ? null : 'outstanding'); setStatusFilter(''); }}
+          aria-pressed={cardFilter === 'outstanding'}
+          className={`text-left rounded-xl transition ${cardFilter === 'outstanding' ? 'ring-2 ring-crx-green' : 'hover:ring-1 hover:ring-gray-200'}`}
+        >
         <Card>
           <div className="flex items-center gap-3 mb-2">
             <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center">
@@ -311,7 +335,12 @@ export default function FieldInvoices() {
           <p className="text-2xl font-semibold font-heading text-red-600">{fmt(outstandingBalance)}</p>
           <p className="text-xs text-secondary mt-1">unpaid balance on posted &amp; overdue field invoices</p>
         </Card>
+        </button>
       </div>
+
+      <p className="text-xs text-secondary -mt-1">
+        Showing this season's field invoices (Oct 1 to Sep 30). Tap a card above to filter, or use the status menu.
+      </p>
 
       {/* Data Table */}
       <Card padding={false}>
@@ -352,7 +381,7 @@ export default function FieldInvoices() {
               <div className="flex gap-2 items-center">
                 <select
                   value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  onChange={(e) => { setStatusFilter(e.target.value); setCardFilter(null); }}
                   aria-label="Filter by status"
                   className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
                 >

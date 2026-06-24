@@ -14,6 +14,7 @@ import { supabase, sanitizeError, checkMutationResult, assertRpcResult } from '.
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
+import { billableAcres } from '../lib/fieldGeometry';
 import type { Field } from '../types';
 import CRXMap from '../components/map/CRXMap';
 import FieldBoundaryLayer from '../components/map/FieldBoundaryLayer';
@@ -25,7 +26,7 @@ import Modal from '../components/ui/Modal';
 import { computeBounds } from '../hooks/useFitBounds';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 
-type FieldWithCustomer = Field & { customer_name: string; parent_field_id?: string | null; child_count?: number };
+type FieldWithCustomer = Field & { customer_name: string; parent_field_id?: string | null; child_count?: number; billable_acres?: number | null };
 
 export default function Fields() {
   const navigate = useNavigate();
@@ -58,6 +59,10 @@ export default function Fields() {
   const customerNames = [...new Set(fields.map((f) => f.customer_name).filter(Boolean))].sort() as string[];
 
   const fetchFields = useCallback(async () => {
+    // get_fields_with_geojson returns total_acres only; the two-acre model's
+    // override/measured acres live on the fields table. Pull them alongside (the
+    // fields_select RLS policy allows it) so the list shows the acres that actually
+    // BILL — override ?? measured ?? legacy total — instead of the legacy total alone.
     const { data, error } = await supabase.rpc('get_fields_with_geojson');
 
     if (error) {
@@ -67,10 +72,29 @@ export default function Fields() {
       return;
     }
 
-    const rows = assertRpcResult<FieldWithCustomer[]>(data, 'get_fields_with_geojson').map((f) => ({
-      ...f,
-      customer_name: (f.customer_name as string) || 'Unknown',
-    }));
+    // Pull the two-acre columns separately (kept sequential, not Promise.all, so the
+    // assertRpcResult coverage check still pairs the rpc capture above with its assert).
+    const acreRes = await supabase.from('fields').select('id, override_acres, measured_acres, acres_source');
+    const acreMap = new Map<string, { override_acres: number | null; measured_acres: number | null; acres_source: Field['acres_source'] }>();
+    if (!acreRes.error && acreRes.data) {
+      for (const a of acreRes.data as Array<{ id: string; override_acres: number | null; measured_acres: number | null; acres_source: Field['acres_source'] }>) {
+        acreMap.set(a.id, { override_acres: a.override_acres, measured_acres: a.measured_acres, acres_source: a.acres_source });
+      }
+    }
+
+    const rows = assertRpcResult<FieldWithCustomer[]>(data, 'get_fields_with_geojson').map((f) => {
+      const acre = acreMap.get(f.id);
+      const override_acres = acre?.override_acres ?? null;
+      const measured_acres = acre?.measured_acres ?? null;
+      return {
+        ...f,
+        customer_name: (f.customer_name as string) || 'Unknown',
+        override_acres,
+        measured_acres,
+        acres_source: acre?.acres_source,
+        billable_acres: billableAcres(override_acres, measured_acres, f.total_acres),
+      };
+    });
     setFields(rows);
     setLoading(false);
   }, [toast]);
@@ -88,7 +112,7 @@ export default function Fields() {
     return true;
   });
 
-  const totalAcres = filtered.reduce((sum, f) => sum + (f.total_acres || 0), 0);
+  const totalAcres = filtered.reduce((sum, f) => sum + (f.billable_acres ?? f.total_acres ?? 0), 0);
   const withBoundary = filtered.filter((f) => f.boundary_geojson).length;
 
   // Compute map bounds from all filtered fields with geo data
@@ -156,7 +180,7 @@ export default function Fields() {
     exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
       { key: 'field_name', header: 'Field Name' },
       { key: 'customer_name', header: 'Customer' },
-      { key: 'total_acres', header: 'Acres' },
+      { key: 'billable_acres', header: 'Acres' },
       { key: 'crop_type', header: 'Crop' },
       { key: 'county', header: 'County' },
       { key: 'legal_description', header: 'Legal Description' },
@@ -173,7 +197,7 @@ export default function Fields() {
         columns: [
           { header: 'Field', key: 'field_name' },
           { header: 'Customer', key: 'customer_name' },
-          { header: 'Acres', key: 'total_acres', align: 'right', format: (v) => v ? Number(v).toLocaleString() : '-' },
+          { header: 'Acres', key: 'billable_acres', align: 'right', format: (v) => v ? Number(v).toLocaleString() : '-' },
           { header: 'Crop', key: 'crop_type', format: (v) => v ? String(v) : '-' },
           { header: 'County', key: 'county', format: (v) => v ? String(v) : '-' },
         ],
@@ -291,10 +315,16 @@ export default function Fields() {
       ),
     },
     {
-      key: 'total_acres',
+      key: 'billable_acres',
       header: 'Acres',
       sortable: true,
-      render: (row) => row.total_acres?.toLocaleString() || '-',
+      render: (row) => (
+        <div className="flex items-center gap-1.5">
+          <span>{row.billable_acres != null ? row.billable_acres.toLocaleString() : '-'}</span>
+          {row.acres_source === 'override' && <Badge variant="warning" className="text-[10px]" >typed</Badge>}
+          {row.acres_source === 'measured' && <Badge variant="success" className="text-[10px]">map</Badge>}
+        </div>
+      ),
     },
     {
       key: 'crop_type',
@@ -387,7 +417,7 @@ export default function Fields() {
       {/* Stats Bar */}
       <div className="flex gap-4 text-sm text-secondary">
         <span><strong className="text-nav-dark">{filtered.length}</strong> fields</span>
-        <span><strong className="text-nav-dark">{totalAcres.toLocaleString()}</strong> total acres</span>
+        <span><strong className="text-nav-dark">{totalAcres.toLocaleString()}</strong> billable acres</span>
         <span><strong className="text-nav-dark">{withBoundary}</strong> with boundaries</span>
       </div>
 

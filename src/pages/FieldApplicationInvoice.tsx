@@ -8,7 +8,7 @@ import Button from '../components/ui/Button';
 import Badge from '../components/ui/Badge';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, sanitizeError, assertRpcResult } from '../lib/db';
+import { supabase, sanitizeError, assertRpcResult, hasRpcCode, RpcErrorCodes } from '../lib/db';
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
@@ -63,6 +63,17 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: 'customers', label: 'Customers', icon: <Users className="w-4 h-4" /> },
   { key: 'applied_info', label: 'Applied Info', icon: <ClipboardList className="w-4 h-4" /> },
 ];
+
+// Translate the field-app server error codes into plain, actionable sentences for
+// non-technical staff (the page surfaces raw codes like ZERO_APPLIED_ACRES otherwise).
+// Falls back to sanitizeError for anything unrecognized.
+function fieldAppError(err: unknown): string {
+  if (hasRpcCode(err, RpcErrorCodes.ZERO_APPLIED_ACRES)) return 'A location has 0 or blank applied acres. Open the Locations tab and enter the acres sprayed for each field.';
+  if (hasRpcCode(err, RpcErrorCodes.ACTOR_MISMATCH)) return 'Your sign-in could not be verified. Refresh the page and try again.';
+  // check_period_open() raises a plain-English sentence ("Date X falls in closed
+  // accounting period (...)"), which sanitizeError passes through readably — no token to match.
+  return sanitizeError(err);
+}
 
 export default function FieldApplicationInvoice() {
   const { id } = useParams<{ id: string }>();
@@ -407,7 +418,7 @@ export default function FieldApplicationInvoice() {
       setActiveTab('customers');
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'preview_field_app_invoice_split' } });
-      toast('error', `Preview failed: ${sanitizeError(err)}`);
+      toast('error', `Preview failed: ${fieldAppError(err)}`);
     } finally {
       setPreviewing(false);
     }
@@ -529,7 +540,7 @@ export default function FieldApplicationInvoice() {
       }
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: 'save_field_app_invoice' } });
-      toast('error', `Save failed: ${sanitizeError(err)}`);
+      toast('error', `Save failed: ${fieldAppError(err)}`);
     } finally {
       setSaving(false);
     }
@@ -561,7 +572,7 @@ export default function FieldApplicationInvoice() {
       fetchInvoice();
     } catch (err) {
       Sentry.captureException(err, { tags: { rpc: invoiceGroupId ? 'post_invoice_group' : 'post_invoice' } });
-      toast('error', `Post failed: ${sanitizeError(err)}`);
+      toast('error', `Post failed: ${fieldAppError(err)}`);
     } finally {
       setPosting(false);
     }
@@ -631,7 +642,7 @@ export default function FieldApplicationInvoice() {
               {isNew ? 'New Field Application Invoice' : `Field Application ${invoiceNumber}`}
             </h1>
             <p className="text-sm text-gray-500">
-              {totalAppliedAcres.toFixed(1)} acres &middot; {locations.length} locations &middot; {fmt(invoiceTotalCents)}
+              {totalAppliedAcres.toFixed(1)} acres &middot; {locations.length} locations &middot; {fmt(invoiceTotalCents)} <span className="text-gray-400">est.</span>
             </p>
           </div>
           {!isNew && <Badge variant={status === 'draft' ? 'default' : status === 'posted' ? 'success' : 'warning'}>{status}</Badge>}

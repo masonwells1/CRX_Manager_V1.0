@@ -17,6 +17,7 @@ export default function AddressSearch({ onSelect }: AddressSearchProps) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<GeocodingResult[]>([]);
   const [showResults, setShowResults] = useState(false);
+  const [error, setError] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
   const geocode = useCallback(async (text: string) => {
@@ -25,6 +26,7 @@ export default function AddressSearch({ onSelect }: AddressSearchProps) {
       return;
     }
     try {
+      setError(false);
       const res = await fetch(
         `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(text)}.json?access_token=${MAPBOX_TOKEN}&country=US&limit=5`
       );
@@ -34,6 +36,8 @@ export default function AddressSearch({ onSelect }: AddressSearchProps) {
       setShowResults(true);
     } catch {
       setResults([]);
+      setError(true);
+      setShowResults(true);
     }
   }, []);
 
@@ -100,18 +104,24 @@ export default function AddressSearch({ onSelect }: AddressSearchProps) {
         )}
       </div>
 
-      {showResults && results.length > 0 && (
+      {showResults && (results.length > 0 || error || query.length >= 3) && (
         <div className="mt-1 bg-white rounded-lg shadow-lg border max-h-48 overflow-y-auto">
-          {results.map((r, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => handleSelect(r)}
-              className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 border-b last:border-b-0"
-            >
-              {r.place_name}
-            </button>
-          ))}
+          {error ? (
+            <div className="px-3 py-2 text-sm text-red-600">Search failed - try again.</div>
+          ) : results.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-gray-400">No matches found</div>
+          ) : (
+            results.map((r, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => handleSelect(r)}
+                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 border-b last:border-b-0"
+              >
+                {r.place_name}
+              </button>
+            ))
+          )}
         </div>
       )}
     </div>

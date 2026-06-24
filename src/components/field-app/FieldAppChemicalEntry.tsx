@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, AlertTriangle } from 'lucide-react';
 import Button from '../ui/Button';
 import { supabase } from '../../lib/db';
 import { Sentry } from '../../lib/sentry';
 import type { Product } from '../../types';
 import { formatCents as fmt } from '../../lib/money';
+import { parseDollarsToCents } from '../../lib/parseCents';
 
 export interface ChemicalLine {
   id: string;
@@ -66,10 +67,14 @@ export default function FieldAppChemicalEntry({
   const [searchResults, setSearchResults] = useState<Product[]>([]);
   const [showSearch, setShowSearch] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
 
   const searchProducts = useCallback(async (q: string) => {
-    if (q.length < 2) { setSearchResults([]); return; }
+    if (q.length < 2) { setSearchResults([]); setSearching(false); setSearchError(false); return; }
+    setSearching(true);
+    setSearchError(false);
     const { data, error } = await supabase
       .from('products')
       .select('*')
@@ -77,11 +82,15 @@ export default function FieldAppChemicalEntry({
       .or(`product_name.ilike.%${q}%,epa_registration.ilike.%${q}%`)
       .order('product_name')
       .limit(15);
+    setSearching(false);
 
     if (error) {
       Sentry.captureException(error, { tags: { component: 'FieldAppChemicalEntry' } });
+      setSearchError(true);
+      setSearchResults([]);
       return;
     }
+    setSearchError(false);
     setSearchResults((data || []) as Product[]);
   }, []);
 
@@ -166,6 +175,14 @@ export default function FieldAppChemicalEntry({
 
   return (
     <div className="space-y-4">
+      {/* Warn (don't silently bill $0) when acres are missing but rates are entered */}
+      {totalAppliedAcres <= 0 && chemicals.some((c) => c.rate_per_acre != null && c.rate_per_acre > 0) && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <span>Applied acres are 0, so these lines bill $0.00. Enter the acres sprayed on the Locations tab to price them.</span>
+        </div>
+      )}
+
       {/* Product lines */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -211,9 +228,24 @@ export default function FieldAppChemicalEntry({
                         className="w-full px-2 py-1 border rounded text-sm"
                       />
                     )}
-                    {showSearch && activeLineId === line.id && searchResults.length > 0 && (
+                    {showSearch && activeLineId === line.id && (searchQuery.length >= 2 || searchResults.length > 0) && (
                       <div className="absolute z-20 top-full left-0 w-80 mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-auto">
-                        {searchResults.map((p) => (
+                        {searching && (
+                          <div className="px-3 py-2 text-sm text-gray-400">Searching...</div>
+                        )}
+                        {!searching && searchError && (
+                          <button
+                            type="button"
+                            onClick={() => searchProducts(searchQuery)}
+                            className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+                          >
+                            Search failed - tap to retry
+                          </button>
+                        )}
+                        {!searching && !searchError && searchResults.length === 0 && searchQuery.length >= 2 && (
+                          <div className="px-3 py-2 text-sm text-gray-400">No products match "{searchQuery}"</div>
+                        )}
+                        {!searching && !searchError && searchResults.map((p) => (
                           <button
                             type="button"
                             key={p.id}
@@ -241,14 +273,18 @@ export default function FieldAppChemicalEntry({
                 <td className="px-3 py-2 text-right tabular-nums">{line.quantity.toFixed(2)}</td>
                 <td className="px-3 py-2">
                   <div className="flex items-center gap-1">
-                    <input
-                      type="number"
-                      step="1"
-                      value={line.unit_price_cents}
-                      onChange={(e) => updateLine(line.id, { unit_price_cents: Number(e.target.value) || 0, manual_override: true })}
-                      className="w-full px-2 py-1 border rounded text-right text-sm tabular-nums"
-                      title={line.manual_override ? 'Manual override' : 'Tier preview — final price computed per customer on save'}
-                    />
+                    <div className="relative flex-1">
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">$</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min={0}
+                        value={line.unit_price_cents ? (line.unit_price_cents / 100).toFixed(2) : ''}
+                        onChange={(e) => updateLine(line.id, { unit_price_cents: e.target.value ? parseDollarsToCents(e.target.value) : 0, manual_override: true })}
+                        className="w-full pl-5 pr-2 py-1 border rounded text-right text-sm tabular-nums"
+                        title={line.manual_override ? 'Manual price override' : 'Tier preview - final price computed per customer on save'}
+                      />
+                    </div>
                     {line.manual_override && (
                       <span className="text-[10px] px-1 rounded bg-amber-50 text-amber-700" title="Manual price override — server records as price_source=manual">
                         M
@@ -285,14 +321,14 @@ export default function FieldAppChemicalEntry({
       {/* Summary — preview only, final amounts computed server-side per customer */}
       <div className="flex items-center justify-between gap-6 text-sm pt-2 border-t">
         <div className="text-xs text-gray-400 italic">
-          Preview using tier {primaryCustomerTier} pricing &middot; server computes per-customer totals on save
+          Estimate using tier {primaryCustomerTier} pricing - the server computes each customer's real total on Preview/Save
         </div>
         <div className="flex gap-6">
-          <div className="text-gray-600">
-            Price/Acre: <span className="font-semibold text-gray-900">{fmt(Math.round(pricePerAcre))}</span>
+          <div className="text-gray-500 text-xs">
+            Est. $/Acre: <span className="font-medium text-gray-700">{fmt(Math.round(pricePerAcre))}</span>
           </div>
-          <div className="text-gray-600">
-            Preview Total: <span className="font-semibold text-gray-900 text-base">{fmt(invoiceTotal)}</span>
+          <div className="text-gray-500 text-xs">
+            Estimated total: <span className="font-medium text-gray-700">{fmt(invoiceTotal)}</span>
           </div>
         </div>
       </div>

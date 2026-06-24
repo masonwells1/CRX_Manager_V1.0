@@ -122,8 +122,9 @@ describe('FieldAppChemicalEntry', () => {
     const onChange = vi.fn();
     await renderEntry({ chemicals: [makeLine()], onChemicalsChange: onChange });
 
-    const priceInput = screen.getByDisplayValue('6500');
-    fireEvent.change(priceInput, { target: { value: '7000' } });
+    // Price box now shows/accepts DOLLARS (6500 cents -> "65.00"); typing 70.00 stores 7000 cents.
+    const priceInput = screen.getByDisplayValue('65.00');
+    fireEvent.change(priceInput, { target: { value: '70.00' } });
 
     expect(onChange).toHaveBeenCalled();
     const next = onChange.mock.calls[onChange.mock.calls.length - 1][0] as ChemicalLine[];
@@ -133,7 +134,7 @@ describe('FieldAppChemicalEntry', () => {
 
   it('Phase 1 footer banner reflects primaryCustomerTier prop (tells applicator whose tier is previewed)', async () => {
     const { rerender } = await renderEntry({ primaryCustomerTier: 1 });
-    expect(screen.getByText(/Preview using tier 1 pricing/)).toBeInTheDocument();
+    expect(screen.getByText(/Estimate using tier 1 pricing/)).toBeInTheDocument();
 
     await act(async () => {
       rerender(
@@ -145,8 +146,8 @@ describe('FieldAppChemicalEntry', () => {
         />,
       );
     });
-    expect(screen.getByText(/Preview using tier 3 pricing/)).toBeInTheDocument();
-    expect(screen.getByText(/server computes per-customer totals on save/)).toBeInTheDocument();
+    expect(screen.getByText(/Estimate using tier 3 pricing/)).toBeInTheDocument();
+    expect(screen.getByText(/the server computes each customer's real total/)).toBeInTheDocument();
   });
 
   it('removing a line calls onChemicalsChange with the line filtered out', async () => {

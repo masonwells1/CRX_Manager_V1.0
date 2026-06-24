@@ -7,16 +7,18 @@ interface LocateMeProps {
 
 export default function LocateMe({ onLocate }: LocateMeProps) {
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleLocate = () => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation) { setError('Location is not available on this device.'); return; }
     setLoading(true);
+    setError(null);
     navigator.geolocation.getCurrentPosition(
       (position) => {
         onLocate(position.coords.longitude, position.coords.latitude);
         setLoading(false);
       },
-      () => setLoading(false),
+      () => { setLoading(false); setError("Couldn't get your location - check the location permission for this site."); },
       { enableHighAccuracy: true, timeout: 10000 }
     );
   };
@@ -37,6 +39,9 @@ export default function LocateMe({ onLocate }: LocateMeProps) {
           <LocateFixed className="w-5 h-5" />
         )}
       </button>
+      {error && (
+        <div className="mt-1 max-w-[200px] rounded-md bg-white shadow-md px-2 py-1 text-xs text-red-600">{error}</div>
+      )}
     </div>
   );
 }

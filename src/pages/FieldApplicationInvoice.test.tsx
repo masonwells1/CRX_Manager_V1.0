@@ -41,6 +41,11 @@ vi.mock('../lib/db', () => ({
   assertRpcResult: <T,>(data: T) => data,
   checkMutationResult: () => {},
   sanitizeError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
+  RpcErrorCodes: { ZERO_APPLIED_ACRES: 'ZERO_APPLIED_ACRES', ACTOR_MISMATCH: 'ACTOR_MISMATCH' },
+  hasRpcCode: (err: unknown, code: string) => {
+    const m = err instanceof Error ? err.message : String(err ?? '');
+    return m === code || m.startsWith(`${code}:`) || m.startsWith(`${code} `);
+  },
 }));
 
 vi.mock('../lib/sentry', () => ({

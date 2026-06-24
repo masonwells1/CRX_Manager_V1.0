@@ -606,7 +606,7 @@ export default function FieldSetup() {
               />
               <div>
                 <Input
-                  label="Billable Acres (override)"
+                  label="Acres to bill"
                   type="number"
                   min={0}
                   step={0.01}
@@ -614,12 +614,23 @@ export default function FieldSetup() {
                   onChange={(e) => update('override_acres', e.target.value ? parseFloat(e.target.value) : null)}
                   placeholder={measuredPreview != null ? `Defaults to measured (${measuredPreview} ac)` : 'Acres to bill (e.g. what the monitor showed)'}
                 />
-                <p className="text-xs text-secondary mt-1">
-                  {measuredPreview != null
-                    ? `Measured: ${measuredPreview} ac`
-                    : (field.total_acres != null ? `Legacy total: ${field.total_acres} ac` : 'No map — type the acres your monitor or records show to bill without drawing or importing')}
-                  {billable != null && ` · Will bill ${billable} ac`}
-                </p>
+                {billable != null ? (
+                  <div className="mt-1.5 rounded-lg bg-crx-green-light border border-crx-green/20 px-3 py-2">
+                    <p className="text-sm font-semibold text-crx-green">This field bills {billable} ac</p>
+                    <p className="text-xs text-secondary">
+                      {field.override_acres != null
+                        ? 'from the acres you typed above'
+                        : measuredPreview != null
+                          ? 'from the map you drew'
+                          : 'from the old total on file'}
+                      {field.override_acres != null && measuredPreview != null ? ` (map measured ${measuredPreview} ac)` : ''}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-xs text-secondary mt-1">
+                    No map yet - type the acres your monitor or records show to bill without drawing or importing.
+                  </p>
+                )}
                 {field.override_acres != null && !isAcreInBand(field.override_acres) && (
                   <p className="text-xs text-red-600 mt-1">
                     Billable acres must be between {ACRE_BAND_MIN} and {ACRE_BAND_MAX}.
