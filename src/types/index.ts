@@ -1920,6 +1920,25 @@ export interface Job {
   quote_section_id: string | null;
   /** Phase 4 (2026-04-30): drives per-acre service fee on transfer_job_to_invoice. */
   application_service_id: string | null;
+  // Field-app parity #1 (2026-06-24): ChemMan scheduling + memo fields.
+  call_date: string | null;
+  date_proposed: string | null;
+  time_proposed: string | null;
+  schedule_date: string | null;
+  date_expires: string | null;
+  consultant_id: string | null;
+  loader_comment: string | null;
+  additional_info: string | null;
+  /** Internal Job/Invoice memo — NEVER printed on customer-facing docs. */
+  internal_memo: string | null;
+  /** Acres treated so far (0 until the as-applied sections land). */
+  applied_acres: number;
+  /** GENERATED = GREATEST(total_acres - applied_acres, 0). Read-only. */
+  remaining_acres: number | null;
+  /** Set by save_job to the editing actor (ChemMan "Updated By" column). */
+  updated_by: string | null;
+  /** Stamped when the WPS notice / applicator printout is generated. */
+  printed_at: string | null;
   created_by: string | null;
   deleted_at: string | null;
   created_at: string;
@@ -1931,6 +1950,7 @@ export interface Job {
   recipe?: BlendRecipe;
   job_fields?: JobField[];
   job_chemicals?: JobChemical[];
+  job_field_shares?: JobFieldShare[];
   applied_info?: JobAppliedInfo;
 }
 
@@ -1950,9 +1970,30 @@ export interface JobField {
   job_id: string;
   field_id: string;
   acres_to_treat: number | null;
+  // Field-app parity #1 (2026-06-24): per-field agronomy.
+  planted_acres: number | null;
+  crop: string | null;
+  strip: string | null;
+  pests: string | null;
   sort_order: number;
   // Joined
   field?: Field;
+}
+
+/**
+ * Field-app parity #1 (2026-06-24): per-job, per-field customer share %.
+ * Defaults from field_billing_defaults; section #26 splits a job's cost by these.
+ */
+export interface JobFieldShare {
+  id: string;
+  job_id: string;
+  field_id: string;
+  customer_id: string;
+  split_pct: number;
+  is_primary: boolean;
+  created_at: string;
+  // Joined
+  customer?: Customer;
 }
 
 export interface JobChemical {
@@ -1965,6 +2006,12 @@ export interface JobChemical {
   rate_unit: string | null;
   cost_per_unit_cents: number;
   price_per_unit_cents: number;
+  // Field-app parity #1 (2026-06-24): ChemMan chemical extras.
+  diluent_rate: number | null;
+  rei_hours: number | null;
+  phi_days: number | null;
+  warehouse: string | null;
+  vendor: string | null;
   sort_order: number;
   // Joined
   product?: Product;

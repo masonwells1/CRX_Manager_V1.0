@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun } from 'lucide-react';
+import { Save, Plus, Trash2, Check, FileText, Beaker, Ban, MessageSquarePlus, Printer, CloudSun, MapPin, Truck, ClipboardList, Bell } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -19,7 +19,7 @@ import { overrideSaveApplicatorId, shouldReassignApplicatorAfterSave, canGenerat
 import { fetchCurrentWeather, parseCentroid } from '../lib/weatherCapture';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import { localToday, parseLocalDate } from '../lib/dateUtils';
-import { applyChemEdit, recomputeChemRowForAcres, sumAcres } from '../lib/chemCalculator';
+import { applyChemEdit, recomputeChemRowForAcres, sumAcres, toGallonOrLbEquivalent } from '../lib/chemCalculator';
 import QuickTaskModal from '../components/team/QuickTaskModal';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import RelatedNotes from '../components/team/RelatedNotes';
@@ -38,9 +38,23 @@ interface JobDbRow {
   recipe_id?: string | null;
   notes?: string | null;
   batch_id?: string | null;
+  // Field-app parity #1: scheduling + memo fields.
+  call_date?: string | null;
+  date_proposed?: string | null;
+  time_proposed?: string | null;
+  schedule_date?: string | null;
+  date_expires?: string | null;
+  consultant_id?: string | null;
+  loader_comment?: string | null;
+  additional_info?: string | null;
+  internal_memo?: string | null;
   job_fields?: Array<{
     field_id: string;
     acres_to_treat?: number | null;
+    planted_acres?: number | null;
+    crop?: string | null;
+    strip?: string | null;
+    pests?: string | null;
     sort_order: number;
     field?: { field_name: string } | null;
   }>;
@@ -53,8 +67,19 @@ interface JobDbRow {
     rate_unit?: string | null;
     cost_per_unit_cents?: number | null;
     price_per_unit_cents?: number | null;
+    diluent_rate?: number | null;
+    rei_hours?: number | null;
+    phi_days?: number | null;
+    warehouse?: string | null;
+    vendor?: string | null;
     sort_order: number;
     product?: { product_name: string } | null;
+  }>;
+  job_field_shares?: Array<{
+    field_id: string;
+    customer_id: string;
+    split_pct: number;
+    is_primary: boolean;
   }>;
   applied_info?: Array<{
     wind_speed?: number | null;
@@ -90,6 +115,15 @@ const statusVariant: Record<JobStatus, BadgeVariant> = {
   invoiced: 'success',
 };
 
+type TabKey = 'locations' | 'chemicals' | 'loader' | 'applied' | 'notifications';
+const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
+  { key: 'locations', label: 'Locations', icon: <MapPin className="w-4 h-4" /> },
+  { key: 'chemicals', label: 'Chemicals / Charges', icon: <Beaker className="w-4 h-4" /> },
+  { key: 'loader', label: 'Loader Worksheet', icon: <Truck className="w-4 h-4" /> },
+  { key: 'applied', label: 'Applied Info', icon: <ClipboardList className="w-4 h-4" /> },
+  { key: 'notifications', label: 'Notifications', icon: <Bell className="w-4 h-4" /> },
+];
+
 interface ChemRow {
   id?: string;
   product_id: string;
@@ -100,6 +134,12 @@ interface ChemRow {
   rate_unit: string;
   cost_per_unit_cents: string;
   price_per_unit_cents: string;
+  // Field-app parity #1: chemical extras.
+  diluent_rate: string;
+  rei_hours: string;
+  phi_days: string;
+  warehouse: string;
+  vendor: string;
   sort_order: number;
   /** UI-only (NOT persisted): which field the user last drove — so an acreage
    *  change re-derives the OTHER field and never silently rewrites a
@@ -112,7 +152,20 @@ interface FieldRow {
   field_id: string;
   field_name: string;
   acres_to_treat: string;
+  // Field-app parity #1: per-field agronomy.
+  planted_acres: string;
+  crop: string;
+  strip: string;
+  pests: string;
   sort_order: number;
+}
+
+/** One customer's share of a single field (per-field customer share %). */
+interface ShareRow {
+  field_id: string;
+  customer_id: string;
+  split_pct: string;
+  is_primary: boolean;
 }
 
 export default function JobDetail() {
@@ -131,9 +184,15 @@ export default function JobDetail() {
 
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
+  // Dirty = current form differs from the baseline captured at load/save. This is
+  // CONTENT-based (not a ref-flag armed on a timer), so it is immune to render
+  // timing and React 18 StrictMode's dev mount→remount double-invoke — a freshly
+  // loaded job is never wrongly flagged "unsaved". Baseline is re-captured after
+  // every successful save/start/complete (which re-run fetchJob).
   const [isDirty, setIsDirty] = useState(false);
-  const initialLoadDone = useRef(false);
+  const baselineRef = useRef<string | null>(null);
   const blocker = useUnsavedChanges(isDirty);
+  const [activeTab, setActiveTab] = useState<TabKey>('locations');
 
   // Lookup data
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -152,6 +211,17 @@ export default function JobDetail() {
   const [jobDate, setJobDate] = useState(localToday());
   const [scheduledTime, setScheduledTime] = useState('');
   const [applicatorId, setApplicatorId] = useState('');
+  // Scheduling fields (Locations tab)
+  const [callDate, setCallDate] = useState('');
+  const [dateProposed, setDateProposed] = useState('');
+  const [timeProposed, setTimeProposed] = useState('');
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [dateExpires, setDateExpires] = useState('');
+  const [consultantId, setConsultantId] = useState('');
+  // Memo fields
+  const [loaderComment, setLoaderComment] = useState('');
+  const [additionalInfo, setAdditionalInfo] = useState('');
+  const [internalMemo, setInternalMemo] = useState('');
   // The applicator currently saved on the job — the license gate only fires on a CHANGE
   const [savedApplicatorId, setSavedApplicatorId] = useState<string | null>(null);
   const [showLicenseOverrideConfirm, setShowLicenseOverrideConfirm] = useState(false);
@@ -231,6 +301,12 @@ export default function JobDetail() {
             };
           }),
       });
+      // Stamp the printed status (ChemMan "Printed" column). Best-effort: a failed
+      // stamp must not block the already-generated PDF.
+      if (!isNew && id) {
+        const stampRes = await supabase.from('jobs').update({ printed_at: new Date().toISOString() }).eq('id', id).select();
+        try { checkMutationResult(stampRes, 'Stamp printed_at'); } catch { /* non-blocking */ }
+      }
       if (profile) logActivity({ event: 'wps_notice_printed', description: `WPS pre-application notice generated for job ${jobNumber}`, performedBy: profile.id, entityType: 'job', entityId: id });
     } catch (err) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'wps_notice_pdf' } });
@@ -247,6 +323,9 @@ export default function JobDetail() {
   // Sub-collections
   const [fieldRows, setFieldRows] = useState<FieldRow[]>([]);
   const [chemRows, setChemRows] = useState<ChemRow[]>([]);
+  // Per-field customer shares, keyed by field. Empty until a field is added /
+  // shares are loaded — then defaulted from field_billing_defaults.
+  const [shareRows, setShareRows] = useState<ShareRow[]>([]);
 
   // Applied info (completion)
   const [showCompleteModal, setShowCompleteModal] = useState(false);
@@ -277,10 +356,31 @@ export default function JobDetail() {
   const [selectedRecipeId, setSelectedRecipeId] = useState('');
   const [loadingRecipe, setLoadingRecipe] = useState(false);
 
+  // A stable string of every editable form field — the unit of dirty comparison.
+  const formSnapshot = useCallback(() => JSON.stringify({
+    customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
+    callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId,
+    loaderComment, additionalInfo, internalMemo,
+    fieldRows, chemRows, shareRows,
+  }), [customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
+       callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId,
+       loaderComment, additionalInfo, internalMemo, fieldRows, chemRows, shareRows]);
+
+  // Single dirty engine: when no baseline is set yet, ADOPT the current form as the
+  // clean baseline (but only once the load has settled, so we don't adopt a half-
+  // populated form); thereafter compare. fetchJob / the new-job init reset the
+  // baseline to null so a fresh load (or a post-save refetch) re-adopts cleanly.
   useEffect(() => {
-    if (!initialLoadDone.current) return;
-    setIsDirty(true);
-  }, [customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId, fieldRows, chemRows]);
+    const snap = formSnapshot();
+    if (baselineRef.current === null) {
+      if (!loading) {
+        baselineRef.current = snap;
+        setIsDirty(false);
+      }
+      return;
+    }
+    setIsDirty(snap !== baselineRef.current);
+  }, [formSnapshot, loading]);
 
   const loadLookups = async () => {
     const [custResult, fieldResult, prodResult, vehicleResult, appResult, recipeResult] = await Promise.all([
@@ -312,6 +412,9 @@ export default function JobDetail() {
   };
 
   const fetchJob = useCallback(async () => {
+    // Drop the baseline so the freshly-loaded form is re-adopted as clean once it
+    // settles (also covers post-save refetches where loading stays false).
+    baselineRef.current = null;
     const { data, error } = await supabase
       // PR-07 follow-up: dropped applicator FK embed — full_name isn't read
       // anywhere in this page; only applicator_id is consumed (line 235).
@@ -324,6 +427,7 @@ export default function JobDetail() {
         quote_section:quote_sections!jobs_quote_section_id_fkey(section_name),
         job_fields(*, field:fields(field_name)),
         job_chemicals(*, product:products(product_name)),
+        job_field_shares(*),
         applied_info:job_applied_info(*)
       `)
       .eq('id', id!)
@@ -347,10 +451,17 @@ export default function JobDetail() {
     setRecipeId(j.recipe_id || '');
     setNotes(j.notes || '');
     setBatchId(j.batch_id || '');
+    setCallDate(j.call_date || '');
+    setDateProposed(j.date_proposed || '');
+    setTimeProposed(j.time_proposed || '');
+    setScheduleDate(j.schedule_date || '');
+    setDateExpires(j.date_expires || '');
+    setConsultantId(j.consultant_id || '');
+    setLoaderComment(j.loader_comment || '');
+    setAdditionalInfo(j.additional_info || '');
+    setInternalMemo(j.internal_memo || '');
     // Quote traceability (typed via JobDbRow)
     if (j.quote_id) {
-      
-      
       setQuoteLinkage({ quote_id: j.quote_id, quote_number: j.quote?.quote_number || '', section_name: j.quote_section?.section_name || '' });
     }
 
@@ -359,9 +470,52 @@ export default function JobDetail() {
         field_id: f.field_id,
         field_name: f.field?.field_name || '',
         acres_to_treat: f.acres_to_treat?.toString() || '',
+        planted_acres: f.planted_acres?.toString() || '',
+        crop: f.crop || '',
+        strip: f.strip || '',
+        pests: f.pests || '',
         sort_order: f.sort_order,
       }))
     );
+
+    // Load saved shares; then SEED defaults for any field that has no saved
+    // shares (existing jobs created before this migration, or a field never
+    // touched), so the list/#26 split don't collapse to the primary customer
+    // (Codex). Defaults come from field_billing_defaults, else field owner 100%.
+    const savedShares: ShareRow[] = (j.job_field_shares || []).map((s) => ({
+      field_id: s.field_id,
+      customer_id: s.customer_id,
+      split_pct: s.split_pct?.toString() || '',
+      is_primary: s.is_primary,
+    }));
+    const fieldsWithShares = new Set(savedShares.map((s) => s.field_id));
+    const fieldsNeedingSeed = (j.job_fields || [])
+      .map((f) => f.field_id)
+      .filter((fid) => fid && !fieldsWithShares.has(fid));
+    if (fieldsNeedingSeed.length > 0) {
+      const { data: fbd } = await supabase
+        .from('field_billing_defaults')
+        .select('field_id, customer_id, split_pct, is_primary')
+        .in('field_id', fieldsNeedingSeed);
+      const fbdByField = new Map<string, { customer_id: string; split_pct: number; is_primary: boolean }[]>();
+      ((fbd || []) as { field_id: string; customer_id: string; split_pct: number; is_primary: boolean }[])
+        .forEach((d) => {
+          const list = fbdByField.get(d.field_id) ?? [];
+          list.push(d);
+          fbdByField.set(d.field_id, list);
+        });
+      for (const fid of fieldsNeedingSeed) {
+        const defs = fbdByField.get(fid);
+        if (defs && defs.length > 0) {
+          defs.forEach((d) => savedShares.push({ field_id: fid, customer_id: d.customer_id, split_pct: d.split_pct.toString(), is_primary: d.is_primary }));
+        } else if (j.customer_id) {
+          // No billing default on file — fall back to the job's customer at 100%
+          // (matches the server's derive_customer_shares_from_fields fallback).
+          savedShares.push({ field_id: fid, customer_id: j.customer_id, split_pct: '100', is_primary: true });
+        }
+      }
+    }
+    setShareRows(savedShares);
 
     setChemRows(
       (j.job_chemicals || []).map((c) => ({
@@ -374,6 +528,11 @@ export default function JobDetail() {
         rate_unit: c.rate_unit || '',
         cost_per_unit_cents: c.cost_per_unit_cents?.toString() || '0',
         price_per_unit_cents: c.price_per_unit_cents?.toString() || '0',
+        diluent_rate: c.diluent_rate?.toString() || '',
+        rei_hours: c.rei_hours?.toString() || '',
+        phi_days: c.phi_days?.toString() || '',
+        warehouse: c.warehouse || '',
+        vendor: c.vendor || '',
         sort_order: c.sort_order,
       }))
     );
@@ -391,19 +550,26 @@ export default function JobDetail() {
     }
 
     setLoading(false);
-    setTimeout(() => { initialLoadDone.current = true; }, 0);
+    // initialLoadDone is armed by the loading-settle effect (rAF after loading=false).
   }, [id, toast, navigate]);
 
   useEffect(() => {
-    loadLookups();
-    if (!isNew && id) {
-      fetchJob();
-    } else {
-      // Check for recipe_id from search params
-      const recipeParam = searchParams.get('recipe_id');
-      if (recipeParam) setRecipeId(recipeParam);
-      setTimeout(() => { initialLoadDone.current = true; }, 0);
-    }
+    // Await lookups FIRST so every lookup-driven re-render happens before the job
+    // rows are populated and dirty-tracking is armed — otherwise a late-landing
+    // lookup re-render after arming would mark a freshly-opened job dirty.
+    (async () => {
+      await loadLookups();
+      if (!isNew && id) {
+        await fetchJob();
+      } else {
+        const { data, error } = await supabase.rpc('next_job_number');
+        if (!error && data) setJobNumber(assertRpcResult<string>(data, 'next_job_number'));
+        const recipeParam = searchParams.get('recipe_id');
+        if (recipeParam) setRecipeId(recipeParam);
+        // New job: loading is already false; the loading-settle effect arms
+        // initialLoadDone after the first committed frame.
+      }
+    })();
   }, [id, fetchJob, isNew, searchParams]);
 
   // Computed
@@ -412,21 +578,19 @@ export default function JobDetail() {
   const totalCostCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.cost_per_unit_cents) || 0)), 0);
   const totalPriceCents = chemRows.reduce((sum, c) => sum + Math.round((parseFloat(c.quantity) || 0) * (parseInt(c.price_per_unit_cents) || 0)), 0);
 
-  // Loader worksheet
+  // Loader worksheet — sum each liquid line's GALLON-equivalent (qt/pt/fl oz/gal
+  // all roll up to gallons), so tank-load planning is right for any liquid unit,
+  // not only units whose text literally contains "gal" (Codex P2).
   const selectedVehicle = vehicles.find(v => v.id === vehicleId);
   const totalGallons = chemRows.reduce((sum, c) => {
-    if ((c.unit || '').toLowerCase().includes('gal')) return sum + (parseFloat(c.quantity) || 0);
-    return sum;
+    const conv = toGallonOrLbEquivalent(parseFloat(c.quantity) || 0, c.unit);
+    return conv && conv.unit === 'gal' ? sum + conv.value : sum;
   }, 0);
   const loadsNeeded = selectedVehicle?.capacity_gallons && totalGallons > 0
     ? Math.ceil(totalGallons / selectedVehicle.capacity_gallons)
     : null;
 
   // C4: weather auto-capture at completion (first selected field's centroid).
-  // fields.centroid is a PostGIS geometry — its GeoJSON text is exposed only by
-  // the get_field_geojson RPC (a plain fields.select('*') has NO centroid_geojson
-  // column), so fetch it for the first selected field. Fail-soft: any miss just
-  // hides the weather button, leaving manual entry (weather prefill is never a gate).
   const firstFieldId = fieldRows.find((r) => r.field_id)?.field_id ?? null;
   const [jobFieldCentroid, setJobFieldCentroid] = useState<{ lat: number; lng: number } | null>(null);
   useEffect(() => {
@@ -473,17 +637,33 @@ export default function JobDetail() {
     toast('success', 'Weather filled from current conditions — adjust if needed');
   };
 
+  // ── Per-field customer-share validation: each field's shares must total 100% ──
+  const fieldShareTotals = (() => {
+    const byField: Record<string, number> = {};
+    shareRows.forEach((s) => {
+      byField[s.field_id] = (byField[s.field_id] || 0) + (parseFloat(s.split_pct) || 0);
+    });
+    return byField;
+  })();
+  const sharesValid = fieldRows
+    .filter((f) => f.field_id)
+    .every((f) => {
+      const fieldShares = shareRows.filter((s) => s.field_id === f.field_id);
+      // No explicit shares = single-owner field (server defaults to 100% owner). OK.
+      if (fieldShares.length === 0) return true;
+      return Math.abs((fieldShareTotals[f.field_id] || 0) - 100) < 0.01;
+    });
+
   const handleSave = async () => {
-    // Codex P2 fix (PR #59, 2026-05-16): reset saveJobIdem per save attempt.
-    // The job form is always-editable (no separate edit toggle), so any
-    // change between failed submits is a new intent.
     saveJobIdem.resetKey();
     if (!customerId) { toast('error', 'Customer is required'); return; }
     if (!jobDate) { toast('error', 'Job date is required'); return; }
+    if (!sharesValid) {
+      toast('error', "Each field's customer shares must total 100%. Open the Locations tab to fix.");
+      return;
+    }
 
-    // B5 license gate pre-check — only when assigning or CHANGING the applicator
-    // (editing other fields on a job that already has this applicator stays allowed,
-    // matching the DB trigger's IS NOT DISTINCT FROM skip).
+    // B5 license gate pre-check — only when assigning or CHANGING the applicator.
     if (applicatorId && applicatorId !== (savedApplicatorId || '')) {
       const st = getLicenseStatus(licensesByProfile[applicatorId] || []);
       if (st.status === 'expired') {
@@ -521,12 +701,6 @@ export default function JobDetail() {
         customer_id: customerId,
         job_date: jobDate,
         scheduled_time: scheduledTime || null,
-        // #4 (atomic-safe override): never change the applicator INSIDE save_job. New
-        // job -> create unassigned; existing job -> keep the persisted applicator (a
-        // same-value UPDATE OF applicator_id is a no-op for the license trigger, which
-        // returns early when NEW.applicator_id IS NOT DISTINCT FROM OLD). The override
-        // (re)assignment runs via assign_job_applicator AFTER save_job commits, so a
-        // failed save can never leave a committed applicator change behind.
         applicator_id: overrideSaveApplicatorId({ licenseOverride, isNew, applicatorId, savedApplicatorId }),
         vehicle_id: vehicleId || null,
         recipe_id: recipeId || null,
@@ -535,11 +709,34 @@ export default function JobDetail() {
         total_acres: totalAcres,
         total_cost_cents: totalCostCents,
         total_price_cents: totalPriceCents,
+        // Field-app parity #1: scheduling + memo fields.
+        call_date: callDate || null,
+        date_proposed: dateProposed || null,
+        time_proposed: timeProposed || null,
+        schedule_date: scheduleDate || null,
+        date_expires: dateExpires || null,
+        consultant_id: consultantId || null,
+        loader_comment: loaderComment || null,
+        additional_info: additionalInfo || null,
+        internal_memo: internalMemo || null,
+        // Per-field customer shares (only fields that have explicit shares).
+        field_shares: shareRows
+          .filter((s) => s.field_id && s.customer_id && (parseFloat(s.split_pct) || 0) > 0)
+          .map((s) => ({
+            field_id: s.field_id,
+            customer_id: s.customer_id,
+            split_pct: parseFloat(s.split_pct),
+            is_primary: s.is_primary,
+          })),
       };
 
       const fieldsPayload = fieldRows.map((f, i) => ({
         field_id: f.field_id,
         acres_to_treat: parseFloat(f.acres_to_treat) || 0,
+        planted_acres: f.planted_acres || null,
+        crop: f.crop || null,
+        strip: f.strip || null,
+        pests: f.pests || null,
         sort_order: i,
       }));
 
@@ -551,14 +748,16 @@ export default function JobDetail() {
         rate_unit: c.rate_unit || null,
         cost_per_unit_cents: parseInt(c.cost_per_unit_cents) || 0,
         price_per_unit_cents: parseInt(c.price_per_unit_cents) || 0,
+        diluent_rate: c.diluent_rate || null,
+        rei_hours: c.rei_hours || null,
+        phi_days: c.phi_days || null,
+        warehouse: c.warehouse || null,
+        vendor: c.vendor || null,
         sort_order: i,
       }));
 
       const idemKey = saveJobIdem.getKey();
       const { data, error } = await supabase.rpc('save_job', {
-        // save_job accepts NULL p_job_id to create a new job (live signature is
-        // nullable; generated types narrowed it to string). Cast preserves the
-        // runtime null/id value while satisfying the typed arg.
         p_job_id: (isNew ? null : id) as string,
         p_job_payload: payload,
         p_fields: fieldsPayload,
@@ -571,11 +770,6 @@ export default function JobDetail() {
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
 
-      // #4: the job is now persisted with its applicator UNCHANGED. Flip the
-      // applicator via assign_job_applicator (admin override) ONLY after the save
-      // committed. If THIS fails, the edits are already saved and the applicator is
-      // simply unchanged — a clean, retryable state, never a partial "applicator
-      // changed but the save was lost" (the failure-after-override-assignment case).
       if (shouldReassignApplicatorAfterSave({ licenseOverride, applicatorId, savedApplicatorId })) {
         try {
           await assignWithOverride(isNew ? result.job_id : id!);
@@ -614,6 +808,8 @@ export default function JobDetail() {
         } else {
           toast('error', "This applicator's license has expired — an admin can override if needed.");
         }
+      } else if (err instanceof Error && err.message.includes('SHARE_NOT_100')) {
+        toast('error', "Each field's customer shares must total 100%.");
       } else {
         Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'save_job' } });
         toast('error', err instanceof Error ? err.message : 'Failed to save job');
@@ -671,7 +867,6 @@ export default function JobDetail() {
   };
 
   const handleCancelJob = async () => {
-    // Only scheduled or in_progress jobs can be cancelled
     if (status !== 'scheduled' && status !== 'in_progress') {
       toast('error', `Cannot cancel a job in '${status}' status — only scheduled or in-progress jobs can be cancelled`);
       return;
@@ -707,14 +902,8 @@ export default function JobDetail() {
       if (error) throw error;
       transferJobIdem.resetKey();
       const result = assertRpcResult<TransferJobResult>(data, 'transfer_job_to_invoice');
-      // transfer_job_to_invoice writes the 'job_invoiced' activity_feed row
-      // server-side (DELTA-5); a second client-side log here just double-logged
-      // the same event (Codex LOW, As-Applied Phase 1c). Removed.
       toast('success', `Invoice ${result.invoice_number} created`);
       setIsDirty(false);
-      // A job transfers to a field_application invoice -> open it under the
-      // field-invoices area (its quantity-based editor), not the Chemical Sales
-      // route which a field-invoices-only user is denied (Codex R5 P2).
       navigate(`/field-invoices/${result.invoice_id}`);
     } catch (err: unknown) {
       Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { extra: { context: 'transfer_job_to_invoice' } });
@@ -747,28 +936,52 @@ export default function JobDetail() {
     setLoadingRecipe(false);
   };
 
-  // Field row handlers
-  // 3-way calculator (rate/ac <-> total acres <-> quantity): quantity = rate/ac ×
-  // total acres applied. Acres are summed from the job's fields. Editing a field's
-  // acres (or its selection) re-derives each rate-driven chemical's quantity, so
-  // "keep the rate, change acres -> quantity changes" just works. Flat/quantity-
-  // only lines (no rate) are left alone.
+  // ── Field row handlers ──────────────────────────────────────────────────
   const recomputeChemQtyFromAcres = (rows: FieldRow[]) => {
-    // NB: no acres<=0 early return — removing the last field must re-derive rate-driven
-    // lines to a 0 quantity so the job can't save/bill a stale derived amount. (Codex r16)
     const acres = sumAcres(rows);
     setChemRows(prev => prev.map(c => recomputeChemRowForAcres(c, acres)));
   };
+
+  /** Default a field's customer shares from field_billing_defaults (the canonical
+   *  per-field owner shares); fall back to the field owner at 100%. */
+  const seedSharesForField = async (fieldId: string) => {
+    if (!fieldId) return;
+    // Don't clobber shares already set for this field.
+    if (shareRows.some((s) => s.field_id === fieldId)) return;
+    const { data } = await supabase
+      .from('field_billing_defaults')
+      .select('customer_id, split_pct, is_primary')
+      .eq('field_id', fieldId);
+    let seeded: ShareRow[];
+    if (data && data.length > 0) {
+      seeded = (data as { customer_id: string; split_pct: number; is_primary: boolean }[]).map((d) => ({
+        field_id: fieldId,
+        customer_id: d.customer_id,
+        split_pct: d.split_pct.toString(),
+        is_primary: d.is_primary,
+      }));
+    } else {
+      // Fall back to the field's owner at 100%.
+      const fld = allFields.find((f) => f.id === fieldId);
+      const ownerId = fld?.customer_id || customerId;
+      seeded = ownerId ? [{ field_id: fieldId, customer_id: ownerId, split_pct: '100', is_primary: true }] : [];
+    }
+    if (seeded.length > 0) setShareRows((prev) => [...prev, ...seeded]);
+  };
+
   const addFieldRow = () => {
-    setFieldRows([...fieldRows, { field_id: '', field_name: '', acres_to_treat: '', sort_order: fieldRows.length }]);
+    setFieldRows([...fieldRows, { field_id: '', field_name: '', acres_to_treat: '', planted_acres: '', crop: '', strip: '', pests: '', sort_order: fieldRows.length }]);
   };
   const removeFieldRow = (i: number) => {
+    const removed = fieldRows[i];
     const updated = fieldRows.filter((_, idx) => idx !== i);
     setFieldRows(updated);
+    if (removed?.field_id) setShareRows((prev) => prev.filter((s) => s.field_id !== removed.field_id));
     recomputeChemQtyFromAcres(updated);
   };
   const updateFieldRow = (i: number, key: keyof FieldRow, value: string) => {
     const updated = [...fieldRows];
+    const prevFieldId = updated[i].field_id;
     updated[i] = { ...updated[i], [key]: value };
     if (key === 'field_id') {
       const f = allFields.find(af => af.id === value);
@@ -776,6 +989,12 @@ export default function JobDetail() {
       if (f && f.total_acres && !updated[i].acres_to_treat) {
         updated[i].acres_to_treat = f.total_acres.toString();
       }
+      if (f && f.crop_type && !updated[i].crop) {
+        updated[i].crop = f.crop_type;
+      }
+      // Re-seed shares for the newly chosen field; drop the old field's shares.
+      if (prevFieldId) setShareRows((prev) => prev.filter((s) => s.field_id !== prevFieldId));
+      if (value) seedSharesForField(value);
     }
     setFieldRows(updated);
     if (key === 'acres_to_treat' || key === 'field_id') {
@@ -783,11 +1002,24 @@ export default function JobDetail() {
     }
   };
 
-  // Chem row handlers
+  // ── Per-field customer share handlers ───────────────────────────────────
+  const addShareRow = (fieldId: string) => {
+    setShareRows([...shareRows, { field_id: fieldId, customer_id: '', split_pct: '', is_primary: false }]);
+  };
+  const removeShareRow = (idx: number) => setShareRows(shareRows.filter((_, i) => i !== idx));
+  const updateShareRow = (idx: number, key: keyof ShareRow, value: string | boolean) => {
+    const updated = [...shareRows];
+    updated[idx] = { ...updated[idx], [key]: value } as ShareRow;
+    setShareRows(updated);
+  };
+
+  // ── Chem row handlers ───────────────────────────────────────────────────
   const addChemRow = () => {
     setChemRows([...chemRows, {
       product_id: '', product_name: '', quantity: '0', unit: '', rate_per_acre: '', rate_unit: '',
-      cost_per_unit_cents: '0', price_per_unit_cents: '0', sort_order: chemRows.length,
+      cost_per_unit_cents: '0', price_per_unit_cents: '0',
+      diluent_rate: '', rei_hours: '', phi_days: '', warehouse: '', vendor: '',
+      sort_order: chemRows.length,
     }]);
   };
   const removeChemRow = (i: number) => setChemRows(chemRows.filter((_, idx) => idx !== i));
@@ -798,14 +1030,28 @@ export default function JobDetail() {
       const p = allProducts.find(ap => ap.id === value);
       updated[i].product_name = p?.product_name || '';
       if (p) {
+        // Auto-fill from the product (criterion #8/#9): warehouse has no product
+        // source so it stays whatever the user enters.
         updated[i].unit = p.unit_size || '';
         updated[i].cost_per_unit_cents = Math.round((p.current_cost || 0) * 100).toString();
+        updated[i].vendor = p.vendor || '';
+        updated[i].rei_hours = p.rei_hours != null ? p.rei_hours.toString() : '';
+        updated[i].phi_days = p.phi_days != null ? p.phi_days.toString() : '';
+        if (p.rate_per_acre != null && !updated[i].rate_per_acre) {
+          updated[i].rate_per_acre = p.rate_per_acre.toString();
+          updated[i].driver = 'rate';
+        }
+        if (p.rate_unit && !updated[i].rate_unit) updated[i].rate_unit = p.rate_unit;
+        // Default the per-acre price from the customer's tier (chemical preview).
+        const cust = customers.find((c) => c.id === customerId);
+        const tier = cust?.assigned_tier ?? 1;
+        const tierPrice = tier === 3 ? p.tier3_price : tier === 2 ? p.tier2_price : p.tier1_price;
+        if (tierPrice != null) updated[i].price_per_unit_cents = Math.round(tierPrice * 100).toString();
+        // Re-derive the quantity now that a rate auto-filled.
+        updated[i] = recomputeChemRowForAcres(updated[i], sumAcres(fieldRows));
       }
     }
-    // 3-way calculator (rate ⇄ quantity via total acres). The driver flag is recorded
-    // even with no fields chosen yet (acres === 0), so a rate/total entered before fields
-    // are added is filled in by recomputeChemQtyFromAcres once acres exist rather than
-    // being dropped to a 0 quantity. Pure logic + tests in lib/chemCalculator. (Codex r15)
+    // 3-way calculator (rate ⇄ quantity via total acres).
     updated[i] = applyChemEdit(updated[i], key, value, sumAcres(fieldRows));
     setChemRows(updated);
   };
@@ -822,6 +1068,9 @@ export default function JobDetail() {
   const canEdit = isEditable && (isNew || status === 'scheduled' || status === 'in_progress');
   const canComplete = !isNew && status === 'in_progress';
   const canTransfer = !isNew && status === 'completed';
+
+  // Selectable customers for a share row = the field owner + any customer (cross-bill).
+  const shareInputCls = 'w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50';
 
   return (
     <div className="space-y-6">
@@ -848,8 +1097,11 @@ export default function JobDetail() {
       <div className="flex items-center gap-4">
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-nav-dark">
-            {isNew ? 'New Job' : jobNumber}
+            {isNew ? (jobNumber ? `New Job — ${jobNumber}` : 'New Job') : jobNumber}
           </h1>
+          {isNew && jobNumber && (
+            <p className="text-xs text-secondary mt-0.5">Next job number (assigned on save)</p>
+          )}
           {!isNew && (
             <div className="flex items-center gap-2 mt-0.5">
               <Badge variant={statusVariant[status]}>{status.replace('_', ' ')}</Badge>
@@ -900,7 +1152,7 @@ export default function JobDetail() {
           )}
           {canEdit && (
             <Button icon={<Save className="w-4 h-4" />} onClick={handleSave} loading={saving}>
-              {isNew ? 'Create Job' : 'Save Changes'}
+              {isNew ? `Save Job ${jobNumber || ''}`.trim() : 'Save Changes'}
             </Button>
           )}
         </div>
@@ -913,7 +1165,7 @@ export default function JobDetail() {
             <label className="block text-sm font-medium text-nav-dark mb-1">Customer *</label>
             <select
               value={customerId}
-              onChange={(e) => { setCustomerId(e.target.value); setFieldRows([]); }}
+              onChange={(e) => { setCustomerId(e.target.value); setFieldRows([]); setShareRows([]); }}
               disabled={!canEdit}
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
             >
@@ -984,187 +1236,419 @@ export default function JobDetail() {
             disabled={!canEdit}
           />
         </div>
-        <div className="mt-4">
-          <label className="block text-sm font-medium text-nav-dark mb-1">Notes</label>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={2}
-            disabled={!canEdit}
-            className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
-            placeholder="Job notes..."
-          />
-        </div>
       </Card>
 
-      {/* Fields */}
-      <Card>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-nav-dark">Fields ({fieldRows.length})</h2>
-          {canEdit && (
-            <Button size="sm" variant="secondary" onClick={addFieldRow} disabled={!customerId}>
-              <Plus className="w-4 h-4" /> Add Field
-            </Button>
-          )}
-        </div>
-        {fieldRows.length === 0 ? (
-          <p className="text-sm text-secondary text-center py-4">
-            {customerId ? 'No fields added. Click "Add Field" to assign fields.' : 'Select a customer first.'}
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {fieldRows.map((f, i) => (
-              <div key={i} className="flex items-center gap-3 bg-gray-50 rounded-lg p-3">
+      {/* Tabs */}
+      <div className="border-b">
+        <nav className="flex gap-1 px-1 overflow-x-auto">
+          {TABS.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                activeTab === tab.key
+                  ? 'border-crx-green text-crx-green'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              {tab.icon}
+              {tab.label}
+              {tab.key === 'locations' && fieldRows.length > 0 && (
+                <span className="ml-1 text-xs bg-gray-100 rounded-full px-1.5">{fieldRows.length}</span>
+              )}
+              {tab.key === 'chemicals' && chemRows.length > 0 && (
+                <span className="ml-1 text-xs bg-gray-100 rounded-full px-1.5">{chemRows.length}</span>
+              )}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {/* ─────────────── LOCATIONS TAB ─────────────── */}
+      {activeTab === 'locations' && (
+        <>
+          {/* Scheduling fields */}
+          <Card>
+            <h2 className="text-lg font-semibold text-nav-dark mb-3">Scheduling</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Input label="Call Date" type="date" value={callDate} onChange={(e) => setCallDate(e.target.value)} disabled={!canEdit} />
+              <Input label="Date Proposed" type="date" value={dateProposed} onChange={(e) => setDateProposed(e.target.value)} disabled={!canEdit} />
+              <Input label="Time Proposed" type="time" value={timeProposed} onChange={(e) => setTimeProposed(e.target.value)} disabled={!canEdit} />
+              <Input label="Schedule Date" type="date" value={scheduleDate} onChange={(e) => setScheduleDate(e.target.value)} disabled={!canEdit} />
+              <Input label="Date Expires" type="date" value={dateExpires} onChange={(e) => setDateExpires(e.target.value)} disabled={!canEdit} />
+              <div>
+                <label className="block text-sm font-medium text-nav-dark mb-1">Consultant</label>
                 <select
-                  value={f.field_id}
-                  onChange={(e) => updateFieldRow(i, 'field_id', e.target.value)}
+                  value={consultantId}
+                  onChange={(e) => setConsultantId(e.target.value)}
                   disabled={!canEdit}
-                  className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
                 >
-                  <option value="">Select field...</option>
-                  {customerFields.map((cf) => (
-                    <option key={cf.id} value={cf.id}>{cf.field_name}</option>
+                  <option value="">Select consultant...</option>
+                  {applicators.map((a) => (
+                    <option key={a.id} value={a.id}>{a.full_name} ({a.role})</option>
                   ))}
                 </select>
-                <Input
-                  type="number"
-                  value={f.acres_to_treat}
-                  onChange={(e) => updateFieldRow(i, 'acres_to_treat', e.target.value)}
-                  placeholder="Acres"
-                  disabled={!canEdit}
-                  className="w-28"
-                  min={0}
-                />
-                {canEdit && (
-                  <button onClick={() => removeFieldRow(i)} className="text-red-500 hover:text-red-700 p-1">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
               </div>
-            ))}
-            <p className="text-xs text-secondary text-right">Total: {totalAcres.toLocaleString()} acres</p>
-          </div>
-        )}
-      </Card>
+            </div>
+          </Card>
 
-      {/* Chemicals */}
-      <Card>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-nav-dark">Chemicals ({chemRows.length})</h2>
-          <div className="flex gap-2">
-            {canEdit && !isNew && (
-              <Button size="sm" variant="secondary" onClick={() => { loadRecipeIdem.resetKey(); setSelectedRecipeId(''); setShowRecipeModal(true); }}>
-                <Beaker className="w-4 h-4" /> Load Recipe
-              </Button>
-            )}
-            {canEdit && (
-              <Button size="sm" variant="secondary" onClick={addChemRow}>
-                <Plus className="w-4 h-4" /> Add Chemical
-              </Button>
-            )}
-          </div>
-        </div>
-        {chemRows.length === 0 ? (
-          <p className="text-sm text-secondary text-center py-4">No chemicals added.</p>
-        ) : (
-          <div className="space-y-2">
-            {chemRows.map((c, i) => (
-              <div key={i} className="grid grid-cols-12 gap-2 items-center bg-gray-50 rounded-lg p-3">
-                <div className="col-span-12 md:col-span-3">
-                  <select
-                    value={c.product_id}
-                    onChange={(e) => updateChemRow(i, 'product_id', e.target.value)}
-                    disabled={!canEdit}
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg"
-                  >
-                    <option value="">Select product...</option>
-                    {allProducts.map((p) => (
-                      <option key={p.id} value={p.id}>{p.product_name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="col-span-3 md:col-span-1">
-                  <input type="number" value={c.quantity} onChange={(e) => updateChemRow(i, 'quantity', e.target.value)}
-                    disabled={!canEdit} placeholder="Qty" step="0.01" min="0"
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg" />
-                </div>
-                <div className="col-span-3 md:col-span-1">
-                  <input type="text" value={c.unit} onChange={(e) => updateChemRow(i, 'unit', e.target.value)}
-                    disabled={!canEdit} placeholder="Unit"
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg" />
-                </div>
-                <div className="col-span-3 md:col-span-1">
-                  <input type="number" value={c.rate_per_acre} onChange={(e) => updateChemRow(i, 'rate_per_acre', e.target.value)}
-                    disabled={!canEdit} placeholder="Rate" step="0.01"
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg" />
-                </div>
-                <div className="col-span-3 md:col-span-1">
-                  <input type="text" value={c.rate_unit} onChange={(e) => updateChemRow(i, 'rate_unit', e.target.value)}
-                    disabled={!canEdit} placeholder="oz/ac"
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg" />
-                </div>
-                <div className="col-span-4 md:col-span-2">
-                  <input type="number" value={c.cost_per_unit_cents} onChange={(e) => updateChemRow(i, 'cost_per_unit_cents', e.target.value)}
-                    disabled={!canEdit} placeholder="Cost ¢" step="1"
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg" />
-                </div>
-                <div className="col-span-4 md:col-span-2">
-                  <input type="number" value={c.price_per_unit_cents} onChange={(e) => updateChemRow(i, 'price_per_unit_cents', e.target.value)}
-                    disabled={!canEdit} placeholder="Price ¢" step="1"
-                    className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg" />
-                </div>
-                {canEdit && (
-                  <div className="col-span-4 md:col-span-1">
-                    <button onClick={() => removeChemRow(i)} className="text-red-500 hover:text-red-700 p-1">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
+          {/* Fields + per-field agronomy + customer shares */}
+          <Card>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-nav-dark">Fields ({fieldRows.length})</h2>
+              {canEdit && (
+                <Button size="sm" variant="secondary" onClick={addFieldRow} disabled={!customerId}>
+                  <Plus className="w-4 h-4" /> Add Field
+                </Button>
+              )}
+            </div>
+            {fieldRows.length === 0 ? (
+              <p className="text-sm text-secondary text-center py-4">
+                {customerId ? 'No fields added. Click "Add Field" to assign fields.' : 'Select a customer first.'}
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {fieldRows.map((f, i) => {
+                  const fieldShares = shareRows
+                    .map((s, idx) => ({ ...s, idx }))
+                    .filter((s) => f.field_id && s.field_id === f.field_id);
+                  const shareSum = fieldShares.reduce((sum, s) => sum + (parseFloat(s.split_pct) || 0), 0);
+                  const shareOk = fieldShares.length === 0 || Math.abs(shareSum - 100) < 0.01;
+                  return (
+                    <div key={i} className="border border-gray-200 rounded-lg p-3 space-y-3">
+                      {/* Field selection + agronomy grid */}
+                      <div className="grid grid-cols-2 md:grid-cols-7 gap-2 items-end">
+                        <div className="col-span-2 md:col-span-2">
+                          <label className="block text-xs font-medium text-secondary mb-1">Field</label>
+                          <select
+                            value={f.field_id}
+                            onChange={(e) => updateFieldRow(i, 'field_id', e.target.value)}
+                            disabled={!canEdit}
+                            className={shareInputCls}
+                          >
+                            <option value="">Select field...</option>
+                            {customerFields.map((cf) => (
+                              <option key={cf.id} value={cf.id}>{cf.field_name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-secondary mb-1">Acres</label>
+                          <input type="number" value={f.acres_to_treat} onChange={(e) => updateFieldRow(i, 'acres_to_treat', e.target.value)}
+                            disabled={!canEdit} min={0} className={shareInputCls} />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-secondary mb-1">Planted ac</label>
+                          <input type="number" value={f.planted_acres} onChange={(e) => updateFieldRow(i, 'planted_acres', e.target.value)}
+                            disabled={!canEdit} min={0} className={shareInputCls} />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-secondary mb-1">Crop</label>
+                          <input type="text" value={f.crop} onChange={(e) => updateFieldRow(i, 'crop', e.target.value)}
+                            disabled={!canEdit} className={shareInputCls} />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-secondary mb-1">Strip</label>
+                          <input type="text" value={f.strip} onChange={(e) => updateFieldRow(i, 'strip', e.target.value)}
+                            disabled={!canEdit} placeholder="N/Y" className={shareInputCls} />
+                        </div>
+                        <div className="flex items-end gap-1">
+                          <div className="flex-1">
+                            <label className="block text-xs font-medium text-secondary mb-1">Pests</label>
+                            <input type="text" value={f.pests} onChange={(e) => updateFieldRow(i, 'pests', e.target.value)}
+                              disabled={!canEdit} className={shareInputCls} />
+                          </div>
+                          {canEdit && (
+                            <button onClick={() => removeFieldRow(i)} className="text-red-500 hover:text-red-700 p-1.5" title="Remove field">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Per-field customer shares */}
+                      {f.field_id && (
+                        <div className="bg-gray-50 rounded-lg p-2.5">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-xs font-semibold text-nav-dark">Customer Shares</span>
+                            <span className={`text-xs font-medium ${shareOk ? 'text-secondary' : 'text-red-600'}`}>
+                              Total: {shareSum.toFixed(1)}%{!shareOk && ' — must equal 100%'}
+                            </span>
+                          </div>
+                          <div className="space-y-1.5">
+                            {fieldShares.map((s) => (
+                              <div key={s.idx} className="flex items-center gap-2">
+                                <select
+                                  value={s.customer_id}
+                                  onChange={(e) => updateShareRow(s.idx, 'customer_id', e.target.value)}
+                                  disabled={!canEdit}
+                                  className="flex-1 px-2 py-1 text-sm border border-gray-200 rounded disabled:bg-gray-50"
+                                >
+                                  <option value="">Select customer...</option>
+                                  {customers.map((c) => (
+                                    <option key={c.id} value={c.id}>{c.farm_name}</option>
+                                  ))}
+                                </select>
+                                <input
+                                  type="number" min={0} max={100} step="0.01"
+                                  value={s.split_pct}
+                                  onChange={(e) => updateShareRow(s.idx, 'split_pct', e.target.value)}
+                                  disabled={!canEdit} placeholder="%"
+                                  className="w-20 px-2 py-1 text-sm border border-gray-200 rounded text-right disabled:bg-gray-50"
+                                />
+                                <label className="flex items-center gap-1 text-xs text-secondary whitespace-nowrap">
+                                  <input type="checkbox" checked={s.is_primary} disabled={!canEdit}
+                                    onChange={(e) => updateShareRow(s.idx, 'is_primary', e.target.checked)} />
+                                  Primary
+                                </label>
+                                {canEdit && (
+                                  <button onClick={() => removeShareRow(s.idx)} className="text-red-500 hover:text-red-700 p-1" title="Remove share">
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          {canEdit && (
+                            <button onClick={() => addShareRow(f.field_id)} className="mt-1.5 text-xs font-medium text-crx-green hover:underline inline-flex items-center gap-0.5">
+                              <Plus className="w-3 h-3" /> Add customer share
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <p className="text-xs text-secondary text-right">Total: {totalAcres.toLocaleString()} acres</p>
               </div>
-            ))}
-            <div className="flex justify-between text-sm text-secondary pt-2">
-              <span>Total Cost: ${(totalCostCents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-              <span>Total Price: ${(totalPriceCents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+            )}
+          </Card>
+        </>
+      )}
+
+      {/* ─────────────── CHEMICALS / CHARGES TAB ─────────────── */}
+      {activeTab === 'chemicals' && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-nav-dark">Chemicals / Charges ({chemRows.length})</h2>
+            <div className="flex gap-2">
+              {canEdit && !isNew && (
+                <Button size="sm" variant="secondary" onClick={() => { loadRecipeIdem.resetKey(); setSelectedRecipeId(''); setShowRecipeModal(true); }}>
+                  <Beaker className="w-4 h-4" /> Load Recipe
+                </Button>
+              )}
+              {canEdit && (
+                <Button size="sm" variant="secondary" onClick={addChemRow}>
+                  <Plus className="w-4 h-4" /> Add Chemical
+                </Button>
+              )}
             </div>
           </div>
-        )}
-      </Card>
+          {chemRows.length === 0 ? (
+            <p className="text-sm text-secondary text-center py-4">No chemicals added.</p>
+          ) : (
+            <div className="space-y-3">
+              {chemRows.map((c, i) => {
+                const totalApplied = parseFloat(c.quantity) || 0;
+                const conv = toGallonOrLbEquivalent(totalApplied, c.unit);
+                return (
+                  <div key={i} className="border border-gray-200 rounded-lg p-3 space-y-2">
+                    <div className="grid grid-cols-12 gap-2 items-end">
+                      <div className="col-span-12 md:col-span-3">
+                        <label className="block text-xs font-medium text-secondary mb-1">Chemical</label>
+                        <select value={c.product_id} onChange={(e) => updateChemRow(i, 'product_id', e.target.value)}
+                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50">
+                          <option value="">Select product...</option>
+                          {allProducts.map((p) => (<option key={p.id} value={p.id}>{p.product_name}</option>))}
+                        </select>
+                      </div>
+                      <div className="col-span-6 md:col-span-2">
+                        <label className="block text-xs font-medium text-secondary mb-1">Warehouse</label>
+                        <input type="text" value={c.warehouse} onChange={(e) => updateChemRow(i, 'warehouse', e.target.value)}
+                          disabled={!canEdit} placeholder="Warehouse" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-6 md:col-span-2">
+                        <label className="block text-xs font-medium text-secondary mb-1">Vendor</label>
+                        <input type="text" value={c.vendor} onChange={(e) => updateChemRow(i, 'vendor', e.target.value)}
+                          disabled={!canEdit} placeholder="Vendor" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-4 md:col-span-2">
+                        <label className="block text-xs font-medium text-secondary mb-1">Rate/ac</label>
+                        <input type="number" value={c.rate_per_acre} onChange={(e) => updateChemRow(i, 'rate_per_acre', e.target.value)}
+                          disabled={!canEdit} step="0.01" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-4 md:col-span-2">
+                        {/* The per-acre RATE unit (e.g. pt/ac) — this is what the job
+                            list summary and the WPS notice read from rate_unit. */}
+                        <label className="block text-xs font-medium text-secondary mb-1">Rate Unit</label>
+                        <input type="text" value={c.rate_unit} onChange={(e) => updateChemRow(i, 'rate_unit', e.target.value)}
+                          disabled={!canEdit} placeholder="pt/ac" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-4 md:col-span-1 flex items-end">
+                        {canEdit && (
+                          <button onClick={() => removeChemRow(i)} className="text-red-500 hover:text-red-700 p-1.5" title="Remove chemical">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-      {/* Loader Worksheet */}
-      {selectedVehicle && totalGallons > 0 && (
+                    <div className="grid grid-cols-12 gap-2 items-end">
+                      <div className="col-span-6 md:col-span-2">
+                        <label className="block text-xs font-medium text-secondary mb-1">Total Applied</label>
+                        <input type="number" value={c.quantity} onChange={(e) => updateChemRow(i, 'quantity', e.target.value)}
+                          disabled={!canEdit} step="0.01" min="0" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-6 md:col-span-1">
+                        {/* Measure unit of the total applied (e.g. GAL / LB) — drives the
+                            gallon/lb conversion and the loader-worksheet total. */}
+                        <label className="block text-xs font-medium text-secondary mb-1">Unit</label>
+                        <input type="text" value={c.unit} onChange={(e) => updateChemRow(i, 'unit', e.target.value)}
+                          disabled={!canEdit} placeholder="gal/lb" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-6 md:col-span-1">
+                        <label className="block text-xs font-medium text-secondary mb-1">Equiv.</label>
+                        <div className="px-2 py-1.5 text-sm bg-gray-50 border border-gray-100 rounded-lg text-secondary">
+                          {conv ? `${conv.value.toLocaleString()} ${conv.unit}` : '—'}
+                        </div>
+                      </div>
+                      <div className="col-span-6 md:col-span-2">
+                        <label className="block text-xs font-medium text-secondary mb-1">Diluent Rate</label>
+                        <input type="number" value={c.diluent_rate} onChange={(e) => updateChemRow(i, 'diluent_rate', e.target.value)}
+                          disabled={!canEdit} step="0.01" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-6 md:col-span-2">
+                        <label className="block text-xs font-medium text-secondary mb-1">REI (hrs)</label>
+                        <input type="number" value={c.rei_hours} onChange={(e) => updateChemRow(i, 'rei_hours', e.target.value)}
+                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-6 md:col-span-2">
+                        <label className="block text-xs font-medium text-secondary mb-1">PHI (days)</label>
+                        <input type="number" value={c.phi_days} onChange={(e) => updateChemRow(i, 'phi_days', e.target.value)}
+                          disabled={!canEdit} className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-6 md:col-span-2">
+                        {/* Cost stays editable — current_cost can be stale/0; total_cost_cents
+                            persists from this value (Codex P2). */}
+                        <label className="block text-xs font-medium text-secondary mb-1">Cost ¢/unit</label>
+                        <input type="number" value={c.cost_per_unit_cents} onChange={(e) => updateChemRow(i, 'cost_per_unit_cents', e.target.value)}
+                          disabled={!canEdit} step="1" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                      <div className="col-span-6 md:col-span-2">
+                        <label className="block text-xs font-medium text-secondary mb-1">Price ¢/unit</label>
+                        <input type="number" value={c.price_per_unit_cents} onChange={(e) => updateChemRow(i, 'price_per_unit_cents', e.target.value)}
+                          disabled={!canEdit} step="1" className="w-full px-2 py-1.5 text-sm border border-gray-200 rounded-lg disabled:bg-gray-50" />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="flex justify-between text-sm text-secondary pt-2">
+                <span>Total Cost: ${(totalCostCents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                <span>Total Price: ${(totalPriceCents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* ─────────────── LOADER WORKSHEET TAB ─────────────── */}
+      {activeTab === 'loader' && (
         <Card>
           <h2 className="text-lg font-semibold text-nav-dark mb-3">Loader Worksheet</h2>
-          <div className="grid grid-cols-3 gap-4 text-center">
-            <div className="bg-gray-50 rounded-lg p-3">
-              <p className="text-2xl font-bold text-nav-dark">{totalGallons.toLocaleString()}</p>
-              <p className="text-xs text-secondary">Total Gallons</p>
+          {selectedVehicle && totalGallons > 0 ? (
+            <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-2xl font-bold text-nav-dark">{totalGallons.toLocaleString()}</p>
+                <p className="text-xs text-secondary">Total Gallons</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-2xl font-bold text-nav-dark">
+                  {selectedVehicle.capacity_gallons?.toLocaleString() || '-'}
+                </p>
+                <p className="text-xs text-secondary">Tank Capacity ({selectedVehicle.capacity_unit || 'gal'})</p>
+              </div>
+              <div className="bg-crx-green-tint rounded-lg p-3">
+                <p className="text-2xl font-bold text-crx-green">{loadsNeeded ?? '-'}</p>
+                <p className="text-xs text-secondary">Loads Needed</p>
+              </div>
             </div>
-            <div className="bg-gray-50 rounded-lg p-3">
-              <p className="text-2xl font-bold text-nav-dark">
-                {selectedVehicle.capacity_gallons?.toLocaleString() || '-'}
-              </p>
-              <p className="text-xs text-secondary">Tank Capacity ({selectedVehicle.capacity_unit || 'gal'})</p>
-            </div>
-            <div className="bg-crx-green-tint rounded-lg p-3">
-              <p className="text-2xl font-bold text-crx-green">{loadsNeeded ?? '-'}</p>
-              <p className="text-xs text-secondary">Loads Needed</p>
-            </div>
+          ) : (
+            <p className="text-sm text-secondary py-2">
+              Select a vehicle and add liquid (gallon) chemicals to compute loads.
+            </p>
+          )}
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-nav-dark mb-1">Loader Comment</label>
+            <textarea
+              value={loaderComment}
+              onChange={(e) => setLoaderComment(e.target.value)}
+              rows={2}
+              disabled={!canEdit}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
+              placeholder="Instructions for the loader (mix order, etc.)..."
+            />
           </div>
         </Card>
       )}
 
-      {/* Applied Info (read-only for completed/invoiced) */}
-      {!isNew && (status === 'completed' || status === 'invoiced') && (
+      {/* ─────────────── APPLIED INFO TAB ─────────────── */}
+      {activeTab === 'applied' && (
         <Card>
           <h2 className="text-lg font-semibold text-nav-dark mb-3">Applied Information</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div><span className="text-xs text-secondary">Wind Speed</span><p className="font-medium">{appliedInfo.wind_speed || '-'} mph</p></div>
-            <div><span className="text-xs text-secondary">Wind Direction</span><p className="font-medium">{appliedInfo.wind_direction || '-'}</p></div>
-            <div><span className="text-xs text-secondary">Temperature</span><p className="font-medium">{appliedInfo.temperature || '-'}&deg;F</p></div>
-            <div><span className="text-xs text-secondary">Humidity</span><p className="font-medium">{appliedInfo.humidity || '-'}%</p></div>
-            <div><span className="text-xs text-secondary">Actual Gallons</span><p className="font-medium">{appliedInfo.actual_gallons_applied || '-'}</p></div>
-            {appliedInfo.notes && (
-              <div className="col-span-2 md:col-span-3"><span className="text-xs text-secondary">Notes</span><p className="font-medium">{appliedInfo.notes}</p></div>
+          {!isNew && (status === 'completed' || status === 'invoiced') ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div><span className="text-xs text-secondary">Wind Speed</span><p className="font-medium">{appliedInfo.wind_speed || '-'} mph</p></div>
+              <div><span className="text-xs text-secondary">Wind Direction</span><p className="font-medium">{appliedInfo.wind_direction || '-'}</p></div>
+              <div><span className="text-xs text-secondary">Temperature</span><p className="font-medium">{appliedInfo.temperature || '-'}&deg;F</p></div>
+              <div><span className="text-xs text-secondary">Humidity</span><p className="font-medium">{appliedInfo.humidity || '-'}%</p></div>
+              <div><span className="text-xs text-secondary">Actual Gallons</span><p className="font-medium">{appliedInfo.actual_gallons_applied || '-'}</p></div>
+              {appliedInfo.notes && (
+                <div className="col-span-2 md:col-span-3"><span className="text-xs text-secondary">Notes</span><p className="font-medium">{appliedInfo.notes}</p></div>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-secondary py-2">
+              {canComplete
+                ? 'Applied weather + actual data is captured when you Complete the job.'
+                : 'Applied information is recorded once the job is started and completed.'}
+            </p>
+          )}
+        </Card>
+      )}
+
+      {/* ─────────────── NOTIFICATIONS TAB ─────────────── */}
+      {activeTab === 'notifications' && (
+        <Card>
+          <h2 className="text-lg font-semibold text-nav-dark mb-3">Notifications &amp; Memos</h2>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-nav-dark mb-1">Job Notes</label>
+              <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} disabled={!canEdit}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
+                placeholder="Job notes..." />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-nav-dark mb-1">Additional Info</label>
+              <textarea value={additionalInfo} onChange={(e) => setAdditionalInfo(e.target.value)} rows={2} disabled={!canEdit}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
+                placeholder="Gate codes, directions, customer requests..." />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-nav-dark mb-1">
+                Internal Job/Invoice Memo
+                <span className="ml-2 text-xs font-normal px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">Not printed</span>
+              </label>
+              <textarea value={internalMemo} onChange={(e) => setInternalMemo(e.target.value)} rows={2} disabled={!canEdit}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green resize-none disabled:bg-gray-50"
+                placeholder="Internal only — never appears on customer-facing documents." />
+            </div>
+            {!isNew && (
+              <p className="text-xs text-secondary">
+                Print status: {' '}
+                <span className="font-medium">{/* printed_at lives on the row; the list shows it */}Generate the WPS notice to mark this job printed.</span>
+              </p>
             )}
           </div>
         </Card>
@@ -1255,7 +1739,6 @@ export default function JobDetail() {
         />
       )}
 
-      {/* Complete Job Confirm */}
       {/* License-override confirm (admin only, B5) */}
       <ConfirmModal
         open={showLicenseOverrideConfirm}

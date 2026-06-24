@@ -3767,39 +3767,54 @@ export type Database = {
       job_chemicals: {
         Row: {
           cost_per_unit_cents: number | null
+          diluent_rate: number | null
           id: string
           job_id: string
+          phi_days: number | null
           price_per_unit_cents: number | null
           product_id: string
           quantity: number
           rate_per_acre: number | null
           rate_unit: string | null
+          rei_hours: number | null
           sort_order: number | null
           unit: string | null
+          vendor: string | null
+          warehouse: string | null
         }
         Insert: {
           cost_per_unit_cents?: number | null
+          diluent_rate?: number | null
           id?: string
           job_id: string
+          phi_days?: number | null
           price_per_unit_cents?: number | null
           product_id: string
           quantity?: number
           rate_per_acre?: number | null
           rate_unit?: string | null
+          rei_hours?: number | null
           sort_order?: number | null
           unit?: string | null
+          vendor?: string | null
+          warehouse?: string | null
         }
         Update: {
           cost_per_unit_cents?: number | null
+          diluent_rate?: number | null
           id?: string
           job_id?: string
+          phi_days?: number | null
           price_per_unit_cents?: number | null
           product_id?: string
           quantity?: number
           rate_per_acre?: number | null
           rate_unit?: string | null
+          rei_hours?: number | null
           sort_order?: number | null
           unit?: string | null
+          vendor?: string | null
+          warehouse?: string | null
         }
         Relationships: [
           {
@@ -3825,27 +3840,91 @@ export type Database = {
           },
         ]
       }
+      job_field_shares: {
+        Row: {
+          created_at: string
+          customer_id: string
+          field_id: string
+          id: string
+          is_primary: boolean
+          job_id: string
+          split_pct: number
+        }
+        Insert: {
+          created_at?: string
+          customer_id: string
+          field_id: string
+          id?: string
+          is_primary?: boolean
+          job_id: string
+          split_pct: number
+        }
+        Update: {
+          created_at?: string
+          customer_id?: string
+          field_id?: string
+          id?: string
+          is_primary?: boolean
+          job_id?: string
+          split_pct?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_field_shares_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_field_shares_field_id_fkey"
+            columns: ["field_id"]
+            isOneToOne: false
+            referencedRelation: "fields"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "job_field_shares_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       job_fields: {
         Row: {
           acres_to_treat: number | null
+          crop: string | null
           field_id: string
           id: string
           job_id: string
+          pests: string | null
+          planted_acres: number | null
           sort_order: number | null
+          strip: string | null
         }
         Insert: {
           acres_to_treat?: number | null
+          crop?: string | null
           field_id: string
           id?: string
           job_id: string
+          pests?: string | null
+          planted_acres?: number | null
           sort_order?: number | null
+          strip?: string | null
         }
         Update: {
           acres_to_treat?: number | null
+          crop?: string | null
           field_id?: string
           id?: string
           job_id?: string
+          pests?: string | null
+          planted_acres?: number | null
           sort_order?: number | null
+          strip?: string | null
         }
         Relationships: [
           {
@@ -3866,87 +3945,124 @@ export type Database = {
       }
       jobs: {
         Row: {
+          additional_info: string | null
           application_service_id: string | null
           applicator_id: string | null
+          applied_acres: number
           batch_id: string | null
+          call_date: string | null
+          consultant_id: string | null
           created_at: string
           created_by: string | null
           customer_id: string
+          date_expires: string | null
+          date_proposed: string | null
           deleted_at: string | null
           estimated_hours: number | null
           id: string
+          internal_memo: string | null
           invoice_id: string | null
           job_date: string
           job_number: string
+          loader_comment: string | null
           notes: string | null
+          printed_at: string | null
           priority: string
           quote_id: string | null
           quote_section_id: string | null
           recipe_id: string | null
+          remaining_acres: number | null
+          schedule_date: string | null
           scheduled_time: string | null
           season: number | null
           status: string
           tags: string[] | null
+          time_proposed: string | null
           total_acres: number | null
           total_cost_cents: number | null
           total_price_cents: number | null
           updated_at: string
+          updated_by: string | null
           vehicle_id: string | null
         }
         Insert: {
+          additional_info?: string | null
           application_service_id?: string | null
           applicator_id?: string | null
+          applied_acres?: number
           batch_id?: string | null
+          call_date?: string | null
+          consultant_id?: string | null
           created_at?: string
           created_by?: string | null
           customer_id: string
+          date_expires?: string | null
+          date_proposed?: string | null
           deleted_at?: string | null
           estimated_hours?: number | null
           id?: string
+          internal_memo?: string | null
           invoice_id?: string | null
           job_date: string
           job_number: string
+          loader_comment?: string | null
           notes?: string | null
+          printed_at?: string | null
           priority?: string
           quote_id?: string | null
           quote_section_id?: string | null
           recipe_id?: string | null
+          schedule_date?: string | null
           scheduled_time?: string | null
           season?: number | null
           status?: string
           tags?: string[] | null
+          time_proposed?: string | null
           total_acres?: number | null
           total_cost_cents?: number | null
           total_price_cents?: number | null
           updated_at?: string
+          updated_by?: string | null
           vehicle_id?: string | null
         }
         Update: {
+          additional_info?: string | null
           application_service_id?: string | null
           applicator_id?: string | null
+          applied_acres?: number
           batch_id?: string | null
+          call_date?: string | null
+          consultant_id?: string | null
           created_at?: string
           created_by?: string | null
           customer_id?: string
+          date_expires?: string | null
+          date_proposed?: string | null
           deleted_at?: string | null
           estimated_hours?: number | null
           id?: string
+          internal_memo?: string | null
           invoice_id?: string | null
           job_date?: string
           job_number?: string
+          loader_comment?: string | null
           notes?: string | null
+          printed_at?: string | null
           priority?: string
           quote_id?: string | null
           quote_section_id?: string | null
           recipe_id?: string | null
+          schedule_date?: string | null
           scheduled_time?: string | null
           season?: number | null
           status?: string
           tags?: string[] | null
+          time_proposed?: string | null
           total_acres?: number | null
           total_cost_cents?: number | null
           total_price_cents?: number | null
           updated_at?: string
+          updated_by?: string | null
           vehicle_id?: string | null
         }
         Relationships: [

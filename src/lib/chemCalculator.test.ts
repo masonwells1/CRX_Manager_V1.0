@@ -4,6 +4,7 @@ import {
   sumAcres,
   applyChemEdit,
   recomputeChemRowForAcres,
+  toGallonOrLbEquivalent,
   type ChemCalcRow,
 } from './chemCalculator';
 
@@ -101,5 +102,31 @@ describe('chemCalculator — Codex r16: removing the last field (acres → 0)', 
   it('no-driver line is untouched at acres 0', () => {
     const saved = row({ rate_per_acre: '1', quantity: '42', driver: undefined });
     expect(recomputeChemRowForAcres(saved, 0)).toEqual(saved);
+  });
+});
+
+describe('chemCalculator — toGallonOrLbEquivalent (ChemMan parity #1)', () => {
+  it('converts liquid units to gallons', () => {
+    expect(toGallonOrLbEquivalent(4, 'qt')).toEqual({ value: 1, unit: 'gal' });
+    expect(toGallonOrLbEquivalent(8, 'pt')).toEqual({ value: 1, unit: 'gal' });
+    expect(toGallonOrLbEquivalent(128, 'fl oz')).toEqual({ value: 1, unit: 'gal' });
+    expect(toGallonOrLbEquivalent(3, 'GL')).toEqual({ value: 3, unit: 'gal' });
+  });
+
+  it('converts dry units to pounds', () => {
+    expect(toGallonOrLbEquivalent(16, 'oz')).toEqual({ value: 1, unit: 'lb' });
+    expect(toGallonOrLbEquivalent(5, 'lb')).toEqual({ value: 5, unit: 'lb' });
+    expect(toGallonOrLbEquivalent(1, 'ton')).toEqual({ value: 2000, unit: 'lb' });
+  });
+
+  it('is case- and whitespace-insensitive', () => {
+    expect(toGallonOrLbEquivalent(8, '  Pt ')).toEqual({ value: 1, unit: 'gal' });
+  });
+
+  it('returns null for blank/zero quantity or an unknown unit', () => {
+    expect(toGallonOrLbEquivalent(0, 'gal')).toBeNull();
+    expect(toGallonOrLbEquivalent(10, '')).toBeNull();
+    expect(toGallonOrLbEquivalent(10, null)).toBeNull();
+    expect(toGallonOrLbEquivalent(10, 'widgets')).toBeNull();
   });
 });

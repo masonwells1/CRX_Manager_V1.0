@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2 } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -21,11 +21,34 @@ import { localToday, formatLocalDate, parseLocalDate } from '../lib/dateUtils';
 import { SkeletonTable } from '../components/ui/Skeleton';
 import type { Job, JobStatus } from '../types';
 
+interface JobChemSummary {
+  product_name: string;
+  rate_per_acre: number | null;
+  rate_unit: string | null;
+}
+
+interface JobCustomerSummary {
+  customer_name: string;
+  account_number: string | null;
+}
+
 type JobRow = Job & {
   customer_name: string;
   applicator_name: string;
   vehicle_name: string;
   field_count: number;
+  /** All billed customers (primary + shared) with their account IDs. */
+  customers: JobCustomerSummary[];
+  /** Flattened "name (account)" text of all billed customers — drives search. */
+  customers_search: string;
+  /** Field/location names on the job. */
+  locations: string[];
+  /** Distinct crops across the job's fields. */
+  crops: string[];
+  /** Chemicals with rate + unit. */
+  chemicals: JobChemSummary[];
+  created_by_name: string;
+  updated_by_name: string;
 };
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
@@ -35,6 +58,9 @@ const statusVariant: Record<JobStatus, BadgeVariant> = {
   cancelled: 'default',
   invoiced: 'success',
 };
+
+// How many overflow chips before the "Click for full list" expander appears.
+const OVERFLOW_LIMIT = 2;
 
 // Crop season = October 1 to September 30
 function getPresetDates(preset: string): { start: string; end: string } {
@@ -60,6 +86,42 @@ function getPresetDates(preset: string): { start: string; end: string } {
 
 const DELETABLE: JobStatus[] = ['scheduled', 'in_progress', 'completed'];
 
+/** Expander chip list: shows up to OVERFLOW_LIMIT then "+N — Click for full list". */
+function OverflowChips({ items, expanded, onToggle, jobId, field }: {
+  items: string[];
+  expanded: boolean;
+  onToggle: (key: string) => void;
+  jobId: string;
+  field: string;
+}) {
+  if (items.length === 0) return <span className="text-secondary">-</span>;
+  const visible = expanded ? items : items.slice(0, OVERFLOW_LIMIT);
+  const hidden = items.length - visible.length;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {visible.map((it, i) => (
+        <span key={i} className="inline-block px-1.5 py-0.5 text-xs bg-gray-100 rounded">{it}</span>
+      ))}
+      {!expanded && hidden > 0 && (
+        <button
+          onClick={() => onToggle(`${jobId}:${field}`)}
+          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs font-medium text-crx-green hover:underline"
+        >
+          <ChevronRight className="w-3 h-3" />+{hidden} — Click for full list
+        </button>
+      )}
+      {expanded && items.length > OVERFLOW_LIMIT && (
+        <button
+          onClick={() => onToggle(`${jobId}:${field}`)}
+          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs font-medium text-secondary hover:underline"
+        >
+          <ChevronDown className="w-3 h-3" />Show less
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function Jobs() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -74,6 +136,16 @@ export default function Jobs() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Per-row expander state, keyed "<jobId>:<field>" (customers | locations).
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggleExpanded = useCallback((key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
@@ -93,9 +165,11 @@ export default function Jobs() {
       .from('jobs')
       .select(`
         *,
-        customer:customers(farm_name),
+        customer:customers(farm_name, account_number),
         vehicle:vehicles(vehicle_name),
-        job_fields(id)
+        job_fields(crop, field:fields(field_name, crop_type)),
+        job_chemicals(rate_per_acre, rate_unit, product:products(product_name)),
+        job_field_shares(customer_id, split_pct, is_primary, customer:customers(farm_name, account_number))
       `)
       .is('deleted_at', null)
       .order('job_date', { ascending: false })
@@ -104,7 +178,20 @@ export default function Jobs() {
     if (statusFilter) query = query.eq('status', statusFilter);
     if (startDate) query = query.gte('job_date', startDate);
     if (endDate) query = query.lte('job_date', endDate);
-    if (customerFilter) query = query.eq('customer_id', customerFilter);
+    // Customer filter is applied SERVER-side (before the 500-row limit) and matches
+    // the primary jobs.customer_id OR any job carrying a per-field share for that
+    // customer — so an older job billed to a share customer isn't truncated away
+    // (Codex). Pull the share job_ids first, then OR them into the main query.
+    if (customerFilter) {
+      const { data: shareJobs } = await supabase
+        .from('job_field_shares')
+        .select('job_id')
+        .eq('customer_id', customerFilter);
+      const shareJobIds = [...new Set(((shareJobs || []) as { job_id: string }[]).map((s) => s.job_id))];
+      query = shareJobIds.length > 0
+        ? query.or(`customer_id.eq.${customerFilter},id.in.(${shareJobIds.join(',')})`)
+        : query.eq('customer_id', customerFilter);
+    }
 
     const { data, error } = await query;
 
@@ -115,27 +202,84 @@ export default function Jobs() {
       return;
     }
 
-    const applicatorIds = [...new Set(
-      ((data || []) as Array<{ applicator_id?: string | null }>)
-        .map((j) => j.applicator_id)
-        .filter(Boolean) as string[]
+    // Resolve applicator + created/updated-by names via the public profile view.
+    type RawJob = Record<string, unknown> & {
+      customer?: { farm_name?: string; account_number?: string | null };
+      vehicle?: { vehicle_name?: string };
+      job_fields?: Array<{ crop?: string | null; field?: { field_name?: string; crop_type?: string | null } }>;
+      job_chemicals?: Array<{ rate_per_acre?: number | null; rate_unit?: string | null; product?: { product_name?: string } }>;
+      job_field_shares?: Array<{ customer_id: string; split_pct: number; is_primary: boolean; customer?: { farm_name?: string; account_number?: string | null } }>;
+      applicator_id?: string | null;
+      created_by?: string | null;
+      updated_by?: string | null;
+    };
+    const raw = (data || []) as RawJob[];
+
+    const profileIds = [...new Set(
+      raw.flatMap((j) => [j.applicator_id, j.created_by, j.updated_by]).filter(Boolean) as string[]
     )];
-    const applicatorMap: Record<string, string> = {};
-    if (applicatorIds.length > 0) {
-      const { data: applicators } = await supabase
+    const nameMap: Record<string, string> = {};
+    if (profileIds.length > 0) {
+      const { data: profs } = await supabase
         .from('profile_public_view')
         .select('id, full_name')
-        .in('id', applicatorIds);
-      (applicators || []).forEach((a: { id: string | null; full_name: string | null }) => { if (a.id) applicatorMap[a.id] = a.full_name ?? ''; });
+        .in('id', profileIds);
+      (profs || []).forEach((a: { id: string | null; full_name: string | null }) => { if (a.id) nameMap[a.id] = a.full_name ?? ''; });
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name?: string }; vehicle?: { vehicle_name?: string }; job_fields?: unknown[]; applicator_id?: string | null }>).map((j) => ({
-      ...j,
-      customer_name: j.customer?.farm_name || 'Unknown',
-      applicator_name: j.applicator_id ? applicatorMap[j.applicator_id] || '-' : '-',
-      vehicle_name: j.vehicle?.vehicle_name || '-',
-      field_count: Array.isArray(j.job_fields) ? j.job_fields.length : 0,
-    })) as unknown as JobRow[];
+    const rows: JobRow[] = raw.map((j) => {
+      // Billed customers: prefer the per-field shares (multi-customer); else the
+      // single job customer. Dedup by name+account.
+      const shareCustomers = (j.job_field_shares || [])
+        .map((s) => s.customer)
+        .filter(Boolean) as { farm_name?: string; account_number?: string | null }[];
+      const custMap = new Map<string, JobCustomerSummary>();
+      shareCustomers.forEach((c) => {
+        const name = c.farm_name || 'Unknown';
+        custMap.set(`${name}|${c.account_number ?? ''}`, { customer_name: name, account_number: c.account_number ?? null });
+      });
+      if (custMap.size === 0 && j.customer) {
+        const name = j.customer.farm_name || 'Unknown';
+        custMap.set(`${name}|${j.customer.account_number ?? ''}`, { customer_name: name, account_number: j.customer.account_number ?? null });
+      }
+      const jobCustomers = [...custMap.values()];
+      // Flattened customer text so the table search matches a DISPLAYED share
+      // customer, not only the primary jobs.customer_id (Codex).
+      const customersSearch = jobCustomers
+        .map((c) => c.account_number ? `${c.customer_name} ${c.account_number}` : c.customer_name)
+        .join(' ');
+
+      const locations = (j.job_fields || [])
+        .map((f) => f.field?.field_name)
+        .filter(Boolean) as string[];
+
+      const crops = [...new Set(
+        (j.job_fields || [])
+          .map((f) => f.crop || f.field?.crop_type)
+          .filter(Boolean) as string[]
+      )];
+
+      const chemicals: JobChemSummary[] = (j.job_chemicals || []).map((c) => ({
+        product_name: c.product?.product_name || 'Product',
+        rate_per_acre: c.rate_per_acre ?? null,
+        rate_unit: c.rate_unit ?? null,
+      }));
+
+      return {
+        ...(j as unknown as Job),
+        customer_name: j.customer?.farm_name || 'Unknown',
+        applicator_name: j.applicator_id ? nameMap[j.applicator_id] || '-' : '-',
+        vehicle_name: j.vehicle?.vehicle_name || '-',
+        field_count: Array.isArray(j.job_fields) ? j.job_fields.length : 0,
+        customers: jobCustomers,
+        customers_search: customersSearch,
+        locations,
+        crops,
+        chemicals,
+        created_by_name: j.created_by ? nameMap[j.created_by] || '-' : '-',
+        updated_by_name: j.updated_by ? nameMap[j.updated_by] || '-' : '-',
+      };
+    });
     setJobs(rows);
     setLoading(false);
   }, [statusFilter, startDate, endDate, customerFilter, toast]);
@@ -174,6 +318,20 @@ export default function Jobs() {
   const fmtCents = (cents: number) =>
     `$${(cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
 
+  // Bottom totals row: sum total + remaining acres across the CURRENTLY-LISTED
+  // (filtered) jobs. DataTable filters its own search client-side, so we total
+  // the fetched/filtered set the page is showing (criterion #2).
+  const totals = useMemo(() => {
+    return jobs.reduce(
+      (acc, j) => {
+        acc.totalAcres += j.total_acres || 0;
+        acc.remainingAcres += j.remaining_acres ?? (j.total_acres || 0);
+        return acc;
+      },
+      { totalAcres: 0, remainingAcres: 0 }
+    );
+  }, [jobs]);
+
   const handleExportCSV = () => {
     exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
       { key: 'job_number', header: 'Job #' },
@@ -181,7 +339,8 @@ export default function Jobs() {
       { key: 'status', header: 'Status' },
       { key: 'customer_name', header: 'Customer' },
       { key: 'applicator_name', header: 'Applicator' },
-      { key: 'total_acres', header: 'Acres', format: (v) => fmtCSV(v as number) },
+      { key: 'total_acres', header: 'Total Acres', format: (v) => fmtCSV(v as number) },
+      { key: 'remaining_acres', header: 'Remaining Acres', format: (v) => fmtCSV(v as number) },
       { key: 'vehicle_name', header: 'Vehicle' },
       { key: 'total_price_cents', header: 'Price', format: (v) => v ? fmtCSV((v as number) / 100) : '' },
     ], 'jobs');
@@ -197,7 +356,8 @@ export default function Jobs() {
         { header: 'Status', key: 'status' },
         { header: 'Customer', key: 'customer_name' },
         { header: 'Applicator', key: 'applicator_name' },
-        { header: 'Acres', key: 'total_acres', align: 'right', format: (v) => v ? Number(v).toLocaleString() : '-' },
+        { header: 'Tot. ac', key: 'total_acres', align: 'right', format: (v) => v ? Number(v).toLocaleString() : '-' },
+        { header: 'Rem. ac', key: 'remaining_acres', align: 'right', format: (v) => v != null ? Number(v).toLocaleString() : '-' },
         { header: 'Price', key: 'total_price_cents', align: 'right', format: (v) => v ? fmtCents(Number(v)) : '-' },
       ];
       await downloadReportPdf({
@@ -241,6 +401,19 @@ export default function Jobs() {
 
   const dataColumns: Column<JobRow>[] = [
     {
+      // Color tag chips — SLOT ONLY (section #4 builds the tag manager). Render
+      // any existing free-text tags as neutral chips so the layout is ready.
+      key: 'tags',
+      header: '',
+      render: (r) => (
+        <div className="flex flex-wrap gap-0.5 min-w-[1rem]">
+          {(r.tags || []).slice(0, 3).map((t, i) => (
+            <span key={i} className="inline-block w-2.5 h-2.5 rounded-full bg-gray-300" title={t} />
+          ))}
+        </div>
+      ),
+    },
+    {
       key: 'job_number',
       header: 'Job #',
       sortable: true,
@@ -254,10 +427,85 @@ export default function Jobs() {
       ),
     },
     {
-      key: 'job_date',
-      header: 'Date',
+      key: 'customer_name',
+      header: 'Customers',
       sortable: true,
-      render: (r) => parseLocalDate(r.job_date).toLocaleDateString(),
+      render: (r) => (
+        <OverflowChips
+          items={r.customers.map((c) => c.account_number ? `${c.customer_name} (${c.account_number})` : c.customer_name)}
+          expanded={expanded.has(`${r.id}:customers`)}
+          onToggle={toggleExpanded}
+          jobId={r.id}
+          field="customers"
+        />
+      ),
+    },
+    {
+      key: 'locations',
+      header: 'Locations',
+      render: (r) => (
+        <OverflowChips
+          items={r.locations}
+          expanded={expanded.has(`${r.id}:locations`)}
+          onToggle={toggleExpanded}
+          jobId={r.id}
+          field="locations"
+        />
+      ),
+    },
+    {
+      key: 'applicator_name',
+      header: 'Applicators',
+      sortable: true,
+    },
+    {
+      key: 'crops',
+      header: 'Crops',
+      render: (r) => r.crops.length > 0 ? r.crops.join(', ') : <span className="text-secondary">-</span>,
+    },
+    {
+      key: 'chemicals',
+      header: 'Chemicals',
+      render: (r) => (
+        r.chemicals.length === 0 ? <span className="text-secondary">-</span> : (
+          <div className="space-y-0.5">
+            {r.chemicals.slice(0, 3).map((c, i) => (
+              <div key={i} className="text-xs whitespace-nowrap">
+                {c.product_name}
+                {c.rate_per_acre != null && (
+                  <span className="text-secondary"> — {c.rate_per_acre}{c.rate_unit ? ` ${c.rate_unit}` : ''}</span>
+                )}
+              </div>
+            ))}
+            {r.chemicals.length > 3 && (
+              <div className="text-xs text-secondary">+{r.chemicals.length - 3} more</div>
+            )}
+          </div>
+        )
+      ),
+    },
+    {
+      key: 'total_acres',
+      header: 'Tot. ac',
+      sortable: true,
+      className: 'text-right tabular-nums',
+      render: (r) => r.total_acres?.toLocaleString() || '-',
+    },
+    {
+      key: 'remaining_acres',
+      header: 'Rem. ac',
+      sortable: true,
+      className: 'text-right tabular-nums',
+      render: (r) => (r.remaining_acres ?? r.total_acres)?.toLocaleString() || '-',
+    },
+    {
+      // "Scheduled" = job_date — the SAME date the Start/End filters and the
+      // CSV/PDF export use, so the column, filter, and export never disagree
+      // (Codex). schedule_date is a separate planning sub-field on the editor.
+      key: 'job_date',
+      header: 'Scheduled',
+      sortable: true,
+      render: (r) => r.job_date ? parseLocalDate(r.job_date).toLocaleDateString() : '-',
     },
     {
       key: 'status',
@@ -266,42 +514,24 @@ export default function Jobs() {
       render: (r) => <Badge variant={statusVariant[r.status]}>{r.status.replace('_', ' ')}</Badge>,
     },
     {
-      key: 'customer_name',
-      header: 'Customer',
+      key: 'created_by_name',
+      header: 'Created By',
       sortable: true,
-      render: (r) => <span className="font-medium">{r.customer_name}</span>,
+      render: (r) => <span className="text-xs">{r.created_by_name}</span>,
     },
     {
-      key: 'applicator_name',
-      header: 'Applicator',
+      key: 'updated_by_name',
+      header: 'Updated By',
       sortable: true,
+      render: (r) => <span className="text-xs">{r.updated_by_name}</span>,
     },
     {
-      key: 'field_count',
-      header: 'Fields',
+      key: 'printed_at',
+      header: 'Printed',
       sortable: true,
-      render: (r) => (
-        <Badge variant={r.field_count > 0 ? 'info' : 'default'}>
-          {r.field_count} field{r.field_count !== 1 ? 's' : ''}
-        </Badge>
-      ),
-    },
-    {
-      key: 'total_acres',
-      header: 'Acres',
-      sortable: true,
-      render: (r) => r.total_acres?.toLocaleString() || '-',
-    },
-    {
-      key: 'vehicle_name',
-      header: 'Vehicle',
-      sortable: true,
-    },
-    {
-      key: 'total_price_cents',
-      header: 'Price',
-      sortable: true,
-      render: (r) => r.total_price_cents ? `$${(r.total_price_cents / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}` : '-',
+      render: (r) => r.printed_at
+        ? <Badge variant="success">Printed</Badge>
+        : <Badge variant="default">Not printed</Badge>,
     },
   ];
 
@@ -413,7 +643,7 @@ export default function Jobs() {
             columns={columns as unknown as Column<Record<string, unknown>>[]}
             searchable
             searchPlaceholder="Search jobs..."
-            searchKeys={['job_number', 'customer_name', 'applicator_name']}
+            searchKeys={['job_number', 'customers_search', 'applicator_name']}
             emptyTitle="No jobs found"
             emptyDescription="Create your first job to get started with scheduling."
             loading={loading}
@@ -428,6 +658,14 @@ export default function Jobs() {
               ) : undefined
             }
           />
+          {/* Bottom totals row — sums the currently-listed jobs (criterion #2). */}
+          {jobs.length > 0 && (
+            <div className="mt-3 flex items-center justify-end gap-6 border-t pt-3 text-sm font-semibold text-nav-dark">
+              <span>{jobs.length} job{jobs.length !== 1 ? 's' : ''}</span>
+              <span>Tot. ac: <span className="tabular-nums">{totals.totalAcres.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></span>
+              <span>Rem. ac: <span className="tabular-nums">{totals.remainingAcres.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span></span>
+            </div>
+          )}
         </div>
       </Card>
 

@@ -85,3 +85,49 @@ export function recomputeChemRowForAcres<T extends ChemCalcRow>(row: T, acres: n
   }
   return row;
 }
+
+// ── Total Applied + gallon/lb-equivalent conversion (ChemMan parity #1) ──────
+//
+// ChemMan's Chemical/Charges tab shows, per product line, the "Total Applied"
+// (the quantity column already = rate × total acres) AND a converted
+// gallon-or-pound equivalent so the loader can plan tank loads. The unit text a
+// user types is free-form (e.g. "GL", "gal", "fl oz", "pt", "qt", "LB", "oz").
+// We convert the typed unit to gallons (liquid) or pounds (dry) using the
+// standard US measure factors below. An unrecognized unit returns null (the UI
+// shows a dash) — we never guess a conversion we don't know.
+
+/** US fluid conversions → gallons (1 gal = 4 qt = 8 pt = 128 fl oz). */
+const TO_GALLONS: Record<string, number> = {
+  gal: 1, gallon: 1, gallons: 1, gl: 1,
+  qt: 1 / 4, quart: 1 / 4, quarts: 1 / 4,
+  pt: 1 / 8, pint: 1 / 8, pints: 1 / 8,
+  'fl oz': 1 / 128, floz: 1 / 128, 'fluid ounce': 1 / 128,
+};
+
+/** Dry-weight conversions → pounds (1 lb = 16 oz). */
+const TO_POUNDS: Record<string, number> = {
+  lb: 1, lbs: 1, pound: 1, pounds: 1,
+  oz: 1 / 16, ounce: 1 / 16, ounces: 1 / 16,
+  ton: 2000, tons: 2000,
+};
+
+export interface AppliedConversion {
+  /** The converted magnitude (e.g. 30 if 240 pints → 30 gal). */
+  value: number;
+  /** Which equivalent the value is expressed in. */
+  unit: 'gal' | 'lb';
+}
+
+/**
+ * Convert a total-applied quantity in `unit` to its gallon (liquid) or pound
+ * (dry) equivalent. Returns null for a blank/zero quantity or an unrecognized
+ * unit (caller renders a dash — never a guessed number). Pure + tested.
+ */
+export function toGallonOrLbEquivalent(quantity: number, unit: string | null | undefined): AppliedConversion | null {
+  if (!Number.isFinite(quantity) || quantity === 0) return null;
+  const key = (unit || '').trim().toLowerCase();
+  if (key === '') return null;
+  if (key in TO_GALLONS) return { value: Math.round(quantity * TO_GALLONS[key] * 10000) / 10000, unit: 'gal' };
+  if (key in TO_POUNDS) return { value: Math.round(quantity * TO_POUNDS[key] * 10000) / 10000, unit: 'lb' };
+  return null;
+}
