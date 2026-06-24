@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> F5 Receiving Hub DONE (board + inline Receive write, compliance CLEAN, Mason tests). Original 5 features (F1–F5) all shipped to the branch. Remaining: F6 dashboard Finance Snapshot + alerts, then F7 quick wins — then write the Morning Summary + STOP.
+> F6 DONE — admin Finance Snapshot card on the home Dashboard (Open AR/Overdue 60+/Prepay/On Order/Profit + over-credit alert, all deep-linked). Last item: F7 quick wins (Invoices Order# column + balance filter, sticky AR cards, sidebar "Operations"→"Dashboard" rename) — then Morning Summary + STOP.
 
 ---
 
@@ -41,8 +41,8 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [!] Live exercise of receive → Mason tests. READY TO TEST: Receiving Hub → "Receive" button on a PO line (enter a quantity ≤ remaining). Loop did NOT fire it against live prod.
 
 ## F6 — Dashboard at-a-glance numbers + alerts  (frontend, reuses existing RPCs — added 2026-06-23 eve)
-- [ ] `Dashboard.tsx` — admin-only "Finance Snapshot" card via existing `financial_dashboard_summary` RPC (overdue AR 60+/90+, bills due this week, prepay balance, MTD profit), each a clickable deep-link; gate on role==='admin'
-- [ ] Alert cards: overdue bills · blend tickets awaiting approval · AR 60+ (only if the count already comes from operational/financial summary; else mark `[!]` that one, no new query)
+- [x] `Dashboard.tsx` — admin-only "Finance Snapshot" card (new `components/dashboard/FinanceSnapshotCard.tsx`) via the existing `financial_dashboard_summary` RPC (values are dollars): Open AR · Overdue 60+ (days_61_90+days_90_plus) · Unused Prepay · On Order · Period Profit — each a clickable deep-link. Rendered only when role==='admin' (RPC is admin-gated). Read-only, zero DB. ("Bills due this week" OMITTED — no field in the RPC; no new query per the envelope.)
+- [~] Alert cards — included: AR Overdue-60+ tile + a "customers over credit limit" banner (customers_over_credit_count). DEFERRED `[!]`: overdue **bills** (no AP-due field in the summary RPC) + blend tickets awaiting approval (no field + 0 live blend tickets) — both would need a new query, skipped per the no-new-query rule.
 
 ## F7 — Quick wins batch  (tiny, low-risk — added 2026-06-23 eve)
 - [ ] `Invoices.tsx` — clickable Order # column (join order_number off order_id)
@@ -56,6 +56,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F6: admin Finance Snapshot card on the home Dashboard. New components/dashboard/FinanceSnapshotCard.tsx reuses financial_dashboard_summary (dollars) → Open AR · Overdue 60+ · Unused Prepay · On Order · Period Profit tiles (each deep-linked) + a customers-over-credit alert banner. Admin-only render. Read-only, zero DB. Units verified (fmt = plain USD). Gate green (lint+typecheck+build+2179 tests). Bills-due/blend-approvals omitted (no RPC field).
 - F5b: Receiving Hub inline "Receive" write. Per-PO-line Receive button → Modal w/ qty input (capped at remaining) → receive_po_items (one line, in-full, condition 'good', via runCriticalAction; idempotent + actor-bound + no over-receive). Verified live RPC signature/guards (item shape {po_item_id,quantity,condition}; in-progress-of-receiving over-receive guard) before building; compliance-reviewer CLEAN (fixed 1 LOW stale comment). NOT fired against live. Zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F5a: Receiving Hub read-only board. New /receiving-hub (admin+sales_rep) + route + pagePermissions + Sidebar link. Search a product → open PO lines across vendors (ordered/received/remaining + arrival) grouped by product + a commitment snapshot (On Floor/Hold/Order/Spoken-For/Net) from get_inventory_position. "Open PO" link to receive (inline receive write = next tick). Zero DB. Cross-checked live (10 POs/18 products/14,715 units). Gate green (lint+typecheck+build+2179 tests). Gotcha: pulled get_inventory_position out of Promise.all so assertRpcCoverage's `= await` regex sees the assertRpcResult capture.
 - F4b: "Net Money Position" summary strip on the AR workspace — Total Owed (get_ar_aging) · Unused Prepay (sum prepay_credits.balance_cents) · Net (owed−prepay). Read-only, zero DB. Cross-checked live ($60,941.02 owed / $0 prepay), units verified. Gate green (lint+typecheck+build+2179 tests).

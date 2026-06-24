@@ -33,6 +33,7 @@ import { Sentry } from '../lib/sentry';
 import { runPeriodicNotificationChecks } from '../lib/notificationTriggers';
 import ActionQueue from '../components/dashboard/ActionQueue';
 import DailyBrief from '../components/dashboard/DailyBrief';
+import FinanceSnapshotCard from '../components/dashboard/FinanceSnapshotCard';
 import ExpiringLicensesCard from '../components/compliance/ExpiringLicensesCard';
 
 // --- Types ---
@@ -467,6 +468,9 @@ export default function Dashboard() {
           </div>
         </Card>
       )}
+
+      {/* Finance Snapshot (admin only; F6 — money + alerts at a glance) */}
+      {isAdmin && <FinanceSnapshotCard />}
 
       {/* License renewal reminders (admin + sales; B5 license gates) */}
       {(isAdmin || role === 'sales_rep') && <ExpiringLicensesCard />}
