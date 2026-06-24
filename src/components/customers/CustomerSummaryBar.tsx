@@ -5,6 +5,8 @@ import type { CustomerSummary } from '../../types';
 
 interface CustomerSummaryBarProps {
   customerId: string;
+  /** Optional: makes a card clickable, jumping to the matching CustomerDetail tab. */
+  onCardClick?: (tab: string) => void;
 }
 
 function formatCents(cents: number): string {
@@ -31,7 +33,7 @@ const TIER_LABELS: Record<number, string> = {
   3: 'Tier 3',
 };
 
-export default function CustomerSummaryBar({ customerId }: CustomerSummaryBarProps) {
+export default function CustomerSummaryBar({ customerId, onCardClick }: CustomerSummaryBarProps) {
   const [summary, setSummary] = useState<CustomerSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -73,50 +75,73 @@ export default function CustomerSummaryBar({ customerId }: CustomerSummaryBarPro
 
   if (!summary) return null;
 
-  const cards = [
+  const cards: { label: string; value: string; icon: React.ReactNode; color: string; tab?: string }[] = [
     {
       label: 'AR Balance',
       value: formatCents(summary.ar_balance_cents),
       icon: <DollarSign className="w-4 h-4" />,
       color: summary.ar_balance_cents > 0 ? 'text-red-600' : 'text-crx-green',
+      tab: 'financials',
     },
     {
       label: 'Orders (Season)',
       value: String(summary.order_count),
       icon: <ClipboardList className="w-4 h-4" />,
       color: 'text-nav-dark',
+      tab: 'orders',
     },
     {
       label: 'Deliveries (Season)',
       value: String(summary.delivery_count),
       icon: <Truck className="w-4 h-4" />,
       color: 'text-nav-dark',
+      tab: 'deliveries',
     },
     {
       label: 'Credit Tier',
       value: TIER_LABELS[summary.credit_tier] || `Tier ${summary.credit_tier}`,
       icon: <Star className="w-4 h-4" />,
       color: summary.credit_tier === 1 ? 'text-crx-green' : summary.credit_tier === 3 ? 'text-amber-600' : 'text-nav-dark',
+      tab: 'info',
     },
     {
       label: 'Last Activity',
       value: summary.last_activity ? timeAgo(summary.last_activity) : 'None',
       icon: <Clock className="w-4 h-4" />,
       color: 'text-secondary',
+      tab: 'timeline',
     },
   ];
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-      {cards.map((card) => (
-        <div key={card.label} className="bg-white rounded-lg border border-gray-100 shadow-sm p-3">
-          <div className="flex items-center gap-1.5 mb-1">
-            <span className="text-gray-400">{card.icon}</span>
-            <span className="text-[11px] font-medium text-secondary uppercase tracking-wide">{card.label}</span>
+      {cards.map((card) => {
+        const clickable = !!onCardClick && !!card.tab;
+        const body = (
+          <>
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="text-gray-400">{card.icon}</span>
+              <span className="text-[11px] font-medium text-secondary uppercase tracking-wide">{card.label}</span>
+            </div>
+            <p className={`text-lg font-semibold font-heading ${card.color}`}>{card.value}</p>
+          </>
+        );
+        return clickable ? (
+          <button
+            key={card.label}
+            type="button"
+            onClick={() => onCardClick!(card.tab!)}
+            title={`View ${card.label}`}
+            className="text-left bg-white rounded-lg border border-gray-100 shadow-sm p-3 transition-colors hover:border-crx-green/40 hover:shadow focus:outline-none focus:ring-2 focus:ring-crx-green/20"
+          >
+            {body}
+          </button>
+        ) : (
+          <div key={card.label} className="bg-white rounded-lg border border-gray-100 shadow-sm p-3">
+            {body}
           </div>
-          <p className={`text-lg font-semibold font-heading ${card.color}`}>{card.value}</p>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

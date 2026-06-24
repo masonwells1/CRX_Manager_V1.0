@@ -594,7 +594,7 @@ export default function CustomerDetail() {
         </div>
       </div>
 
-      {!isNew && id && <CustomerSummaryBar customerId={id} />}
+      {!isNew && id && <CustomerSummaryBar customerId={id} onCardClick={(t) => setTab(t as typeof tab)} />}
 
       {!isNew && (
         <div className="flex gap-1 border-b border-gray-200 overflow-x-auto">
