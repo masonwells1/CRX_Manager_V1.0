@@ -4,6 +4,16 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-23 (eve) — UI/workflow overhaul: Operations Command Center + visual refresh (SHIPPED LIVE)
+
+Owner asked to fix the app being "very clicky / spread out." Built on `feat/ui-overhaul` (read-only, branch-only, hold-for-review), reviewed by Mason on a Vercel branch preview, then merged to `main` (merge `5a1d659b`) and deployed to croprxsolutions.app (`dpl_FX5GPwW6DcXvroJhyAWaUBu7vMKm`; rollback = prior prod `2a0e20f7`). Pure frontend — **zero DB changes**.
+
+- **Operations Command Center** (`src/pages/ToShip.tsx`, route `/to-ship`, admin+sales_rep; sidebar link + dashboard quick-action): one screen, 4 sections via a switcher — **To-Ship** (open demand By Product / By Customer; owed vs free-stock vs inbound-PO; Ready/Short; $ to ship; line aging), **Low Stock** (reorder pressure), **Deliveries** (open scheduled/in-progress, overdue + unassigned flags), **Inbound POs** (open POs by arrival, ordered/received/remaining). Frontend queries against existing data + `get_inventory_position()`; product/customer search + Short-only filter + remember-last-view. Answers "how much more do I owe customers" ($541k / 23 orders / 58 products live) without opening every order.
+- **Findability:** visible **Search** button in the TopBar (opens the ⌘K command palette) + a To-Ship dashboard shortcut.
+- **Option A visual refresh** propagated via shared components + Tailwind tokens with ZERO page edits (all 80 pages): hairline card borders + softer shadows; richer status badges (bg-100/text-800 + inset ring); data tables get zebra rows, a tinted header, crisper borders; cleaner inputs/buttons. Component APIs unchanged.
+- **`/design-preview`** dev/preview-only component gallery (hidden on the production domain by hostname guard) as the review surface — needed because a git worktree has no `.env`, so the app can't boot a local dev server for screenshots; review happens on a Vercel branch preview instead.
+- Every commit lint+typecheck+build+tests green (2123 on the branch; **2173** after merging the field-acre work). Follow-ups: act-in-place buttons (Schedule/Reorder/Pick-list — review-gated, they write live data) + optional Modal/Combobox/shell polish.
+
 ## 2026-06-23 — Field mapping + per-acre billing (Track A: A1–A8 SHIPPED LIVE)
 
 Field-mapping → per-acre-billing foundation built on `feat/field-acre-billing` (autonomous Codex-gated build loop), then **applied to the live DB, merged to main, and deployed**. The keystone fix: a redraw — or an import — can no longer silently change a billed acre.

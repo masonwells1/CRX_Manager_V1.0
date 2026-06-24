@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul` · Started: 2026-06-23 · Mode: hold-for-review (NO d
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (committed, screenshot-proven) · `[!]` Needs Mason.
 
 ## Current focus
-> ⏸️ LOOP PAUSED at a clean milestone (see Morning summary at bottom). Build A read-only command center = 4 sections DONE (To-Ship, Low Stock, Deliveries, Inbound) + TopBar search + dashboard shortcut + remember-last-view. Next = whole-app visual refresh (PAUSE for Mason's direction) + Build B act-in-place (review-gated). All on feat/ui-overhaul, nothing deployed. Awaiting Mason's review.
+> ✅ SHIPPED LIVE 2026-06-23 eve (Mason approved on Vercel preview → "ship it"). Merged feat/ui-overhaul→main (`5a1d659b`), prod deploy `dpl_FX5GPwW6DcXvroJhyAWaUBu7vMKm` READY on croprxsolutions.app; rollback = `2a0e20f7`. LIVE: 4-section command center (To-Ship/Low Stock/Deliveries/Inbound) + TopBar search + dashboard shortcut + Option A visual refresh across all pages. Zero DB changes. NEXT (not started): Build B act-in-place buttons (review-gated; write live data) + optional Modal/Combobox/shell polish.
 
 ---
 
