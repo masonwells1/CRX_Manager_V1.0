@@ -1,13 +1,14 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { parseLocalDate } from '../lib/dateUtils';
-import { Plus, Upload, Copy, Download, FileText, Trash2, Layers, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Upload, Copy, Download, FileText, Trash2, Layers, ChevronDown, ChevronUp, PackageCheck } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
+import ConfirmModal from '../components/ui/ConfirmModal';
 import BulkQuoteImport from '../components/quotes/BulkQuoteImport';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -42,6 +43,10 @@ export default function Quotes() {
   const { toast } = useToast();
   const { profile } = useAuth();
   const duplicateQuoteIdem = useIdempotencyKey('duplicate_quote', profile?.id || '');
+  // F3 act-from-list: convert a sent/revised quote to an order in place (confirm popup).
+  const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
+  const [convertTarget, setConvertTarget] = useState<QuoteRow | null>(null);
+  const [converting, setConverting] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -97,6 +102,48 @@ export default function Quotes() {
       navigate(`/quotes/${dupResult.quote_id}`);
     } catch (err: unknown) {
       toast('error', `Failed to duplicate quote: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
+  };
+
+  // F3 act-from-list: convert a sent/revised quote to a confirmed order in place.
+  // Uses the same atomic RPC QuoteBuilder calls (order + items + prebooking +
+  // commissions); the RPC is idempotent + actor-bound and accepts sent/revised
+  // directly (status guard allows 'sent','revised','accepted').
+  const handleConvertConfirm = async () => {
+    if (!convertTarget || !profile) return;
+    setConverting(true);
+    try {
+      const idemKey = convertQuoteIdem.getKey();
+      const { data, error } = await supabase.rpc('convert_quote_to_order', {
+        p_quote_id: convertTarget.id,
+        p_performed_by: profile.id,
+        p_idempotency_key: idemKey,
+      });
+      if (error) throw error;
+      convertQuoteIdem.resetKey();
+      const result = assertRpcResult<{ status: string; order_id?: string; order_number?: string; warnings?: string[] }>(data, 'convert_quote_to_order');
+      if (result.status === 'already_converted') {
+        toast('info', 'This booking was already converted — opening the order.');
+      } else {
+        toast('success', `Order ${result.order_number || ''} created`);
+      }
+      if (result.warnings && result.warnings.length > 0) {
+        result.warnings.forEach((w) => toast('warning', `Inventory: ${w}`));
+      }
+      setConvertTarget(null);
+      if (result.order_id) navigate(`/orders/${result.order_id}`);
+      else fetchQuotes();
+    } catch (err: unknown) {
+      if (hasRpcCode(err, RpcErrorCodes.BOOKING_PARTIALLY_DRAWN)) {
+        toast('warning', 'This booking has partial draw-downs — draw the remaining balance from the quote instead of converting.');
+      } else if (hasRpcCode(err, RpcErrorCodes.BOOKING_CLOSED)) {
+        toast('error', 'This booking is closed — only sent or revised quotes can be converted.');
+      } else {
+        Sentry.captureException(err instanceof Error ? err : new Error(String(err)), { tags: { source: 'critical_action', action: 'convert_quote_to_order' } });
+        toast('error', sanitizeError(err));
+      }
+    } finally {
+      setConverting(false);
     }
   };
 
@@ -326,13 +373,25 @@ export default function Quotes() {
       key: 'id',
       header: '',
       render: (row) => (
-        <button
-          onClick={(e) => handleDuplicate(row.id, e)}
-          className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
-          title="Duplicate this quote"
-        >
-          <Copy className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          {(row.status === 'sent' || row.status === 'revised') && (
+            <button
+              onClick={(e) => { e.stopPropagation(); setConvertTarget(row); }}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
+              title="Convert to order"
+              aria-label={`Convert quote ${row.quote_number} to an order`}
+            >
+              <PackageCheck className="w-4 h-4" />
+            </button>
+          )}
+          <button
+            onClick={(e) => handleDuplicate(row.id, e)}
+            className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
+            title="Duplicate this quote"
+          >
+            <Copy className="w-4 h-4" />
+          </button>
+        </div>
       ),
     },
   ];
@@ -510,6 +569,22 @@ export default function Quotes() {
         entityName="quote"
         onConfirm={handleDelete}
         loading={deleting}
+      />
+
+      <ConfirmModal
+        open={!!convertTarget}
+        onClose={() => setConvertTarget(null)}
+        onConfirm={handleConvertConfirm}
+        title="Convert to Order?"
+        message={
+          convertTarget
+            ? `Create a confirmed order from quote ${convertTarget.quote_number} for ${convertTarget.customer_name || 'this customer'}? This reserves inventory (holds → prebooked) and can't be undone from here.`
+            : ''
+        }
+        confirmLabel="Convert to Order"
+        variant="info"
+        icon={PackageCheck}
+        loading={converting}
       />
     </div>
   );

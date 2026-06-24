@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> F2 (Customer 360) nearly done. Cards clickable (F2a) + drawer on Orders/Invoices/Deliveries (F2b–d). Next: the Fields-tab per-field balance (only if data already available, else `[!]`), then F3 (act-from-list, the first WRITE feature — confirm-popup buttons, review-gated, Mason tests).
+> F3 (act-from-list) started — first WRITE button shipped: Quotes "Convert to Order" (confirm-popup → convert_quote_to_order; compliance CLEAN; Mason click-tests in review). Orders "Create Invoice" deferred to its detail page (unsafe to replicate blind). Next: Deliveries "Mark Complete" (two-step confirm/complete), then InventoryPage "Reorder" deep-link, then BlendTickets inline, then F4/F5/F6/F7.
 
 ---
 
@@ -18,15 +18,15 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [~] Read + extend `components/customers/CustomerSummaryBar.tsx` (done — cards now clickable) + `components/team/CustomerContextCard.tsx` (next, for the drawer)
 - [~] `CustomerDetail.tsx` — summary strip ALREADY existed + rendered (line 597). Now each card deep-links to its tab (AR→Financials, Orders→Orders, Deliveries→Deliveries, Tier→Info, Last Activity→Timeline). REMAINING: extra numbers (# fields · license expiry · next compliance) need `get_customer_summary` to return them (RPC change = gated `[!]`) or extra frontend queries; "sticky" is visual polish for Mason. Deferring those two.
 - [x] Customer 360 slide-out drawer from list rows — `components/customers/CustomerDrawer.tsx` (right slide-over reusing CustomerSummaryBar + "Open full profile"; plain-Tailwind translate slide since tailwindcss-animate isn't installed). Wired into **Orders + Invoices + Deliveries** lists (peek button per row). Customers list SKIPPED (the row already is the customer).
-- [ ] Fields tab — per-field outstanding balance, color-coded (only if data already available)
+- [!] Fields tab — per-field outstanding balance DEFERRED. No clean existing per-field balance source (billing is invoice/customer-level; field-level attribution would need a new join/RPC = gated) AND field-app billing data is ~0 live. Revisit with per-acre billing.
 
 ## F3 — Act from the list (confirm-popup writes)  (REAL WRITES — review-gated, Mason-tested)
-- [ ] `Orders.tsx` — "Create Invoice" (reuse OrderDetail's exact RPC) + confirm popup + idempotency/assertRpcResult
-- [ ] `Quotes.tsx` — "Convert to Order" (`convert_quote_to_order`) + confirm popup
+- [!] `Orders.tsx` "Create Invoice" — DEFERRED to the detail page. OrderDetail.handleCreateInvoice branches on allocations (`create_split_invoices_from_order` vs `create_invoice_from_order`) and is gated by per-delivery/draft-consolidation logic that needs the order's full context; replicating it blind on a list row could create wrong invoices. Stays on OrderDetail (the row already links there).
+- [x] `Quotes.tsx` "Convert to Order" — DONE. Per-row button on sent/revised quotes → ConfirmModal → `convert_quote_to_order` (same atomic RPC QuoteBuilder uses; idempotent + actor-bound; status guard allows sent/revised; handles partial-draws/already-converted). compliance-reviewer = CLEAN (0 blocker/high/med). Verified the live RPC status guard before building.
 - [ ] `Deliveries.tsx` — "Mark Complete" (two-step confirm_delivery → complete_delivery, capture signed-by) + popup
 - [ ] `InventoryPage.tsx` — "Reorder" low-stock row → pre-filled New PO (deep-link is fine here)
 - [ ] `BlendTickets.tsx` — inline "Link Order" / "Create Invoice"
-- [!] Live exercise of each write button → Mason clicks in review (loop must NOT fire against live prod)
+- [!] Live exercise of each write button → Mason clicks in review (loop must NOT fire against live prod). READY TO TEST: Quotes → "Convert to Order" (PackageCheck icon on a sent/revised quote row).
 
 ## F4 — Merge the 4 money pages → one AR workspace  (frontend consolidation, review-gated)
 - [ ] One tabbed Accounts Receivable workspace = `ARaging` + `PaymentHistory` + `PrepaymentManager` + `CustomerTransactionReview`
@@ -56,6 +56,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F3a: Quotes "Convert to Order" act-from-list button (first WRITE feature). Per-row PackageCheck button on sent/revised quotes → ConfirmModal → convert_quote_to_order (idempotent + p_performed_by actor-bound + assertRpcResult; maps BOOKING_PARTIALLY_DRAWN/BOOKING_CLOSED). Verified the live RPC status guard accepts sent/revised before building; compliance-reviewer CLEAN (fixed 1 LOW: BOOKING_CLOSED toast now matches QuoteBuilder). NOT clicked against live — Mason tests in review. Zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F2d: Customer 360 peek drawer wired into the Deliveries list (per-row peek button in the customer column). Drawer now on Orders+Invoices+Deliveries. Zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F2c: Customer 360 peek drawer wired into the Invoices list (per-row peek button next to the customer link, reuses CustomerDrawer). Zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F2b: Customer 360 drawer. New CustomerDrawer slide-over (reuses CustomerSummaryBar + "Open full profile" link; plain-Tailwind translate slide). Wired a per-row "peek customer" button into the Orders list (stops row-nav, opens the drawer). Reuses get_customer_summary (already proven); zero DB. Gate green (lint+typecheck+build+2179 tests). NOTE: tailwindcss-animate isn't installed → CommandPalette/Modal `animate-in` classes are dead (cosmetic, pre-existing).
