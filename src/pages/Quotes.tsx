@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { parseLocalDate } from '../lib/dateUtils';
-import { Plus, Upload, Copy, Download, FileText, Trash2, Layers, ChevronDown, ChevronUp, PackageCheck } from 'lucide-react';
+import { parseLocalDate, localDatePlusDays } from '../lib/dateUtils';
+import { Plus, Upload, Copy, Download, FileText, Trash2, Layers, ChevronDown, ChevronUp, PackageCheck, AlertTriangle } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -50,6 +50,10 @@ export default function Quotes() {
   const convertQuoteIdem = useIdempotencyKey('convert_quote_to_order', profile?.id || '');
   const [convertTarget, setConvertTarget] = useState<QuoteRow | null>(null);
   const [converting, setConverting] = useState(false);
+  // F3 guardrail parity with QuoteBuilder: warn (not block) before the one-click
+  // convert if the quote is stale (>30d) or the customer already ordered recently.
+  const [convertStaleMsg, setConvertStaleMsg] = useState<string | null>(null);
+  const [convertDupMsg, setConvertDupMsg] = useState<string | null>(null);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -108,6 +112,43 @@ export default function Quotes() {
     }
   };
 
+  // Open the convert confirm modal, computing QuoteBuilder's two pre-conversion
+  // guardrails so they show INSIDE the dialog (warn, don't block — one informed
+  // click acknowledges them). The third QuoteBuilder guard (partial draw-down) is
+  // already covered server-side: convert_quote_to_order raises BOOKING_PARTIALLY_DRAWN
+  // which handleConvertConfirm catches.
+  const openConvert = async (row: QuoteRow) => {
+    convertQuoteIdem.resetKey();
+    setConvertTarget(row);
+    // Stale-price guard — same 30-day threshold as useStaleQuoteCheck (pure).
+    const ageDays = Math.floor((Date.now() - new Date(row.created_at).getTime()) / 86_400_000);
+    setConvertStaleMsg(ageDays > 30 ? `This quote is ${ageDays} days old - product prices may have changed since it was created.` : null);
+    // Duplicate-order guard — same query QuoteBuilder runs (last 7 days, same customer).
+    setConvertDupMsg(null);
+    try {
+      const { data: recent } = await supabase
+        .from('orders')
+        .select('order_number, order_date')
+        .eq('customer_id', row.customer_id)
+        .is('deleted_at', null)
+        .gte('order_date', localDatePlusDays(-7))
+        .order('order_date', { ascending: false })
+        .limit(1);
+      if (recent && recent.length > 0) {
+        const daysAgo = Math.max(0, Math.ceil((Date.now() - new Date(recent[0].order_date + 'T00:00:00').getTime()) / 86_400_000));
+        setConvertDupMsg(`${row.customer_name || 'This customer'} already has order ${recent[0].order_number} from ${daysAgo} day(s) ago - this would create another.`);
+      }
+    } catch {
+      // Non-blocking — a failed duplicate check must not stop conversion.
+    }
+  };
+
+  const closeConvert = () => {
+    setConvertTarget(null);
+    setConvertStaleMsg(null);
+    setConvertDupMsg(null);
+  };
+
   // F3 act-from-list: convert a sent/revised quote to a confirmed order in place.
   // Uses the same atomic RPC QuoteBuilder calls (order + items + prebooking +
   // commissions); the RPC is idempotent + actor-bound and accepts sent/revised
@@ -158,7 +199,7 @@ export default function Quotes() {
           // Non-blocking — credit limit check should not prevent navigation.
         }
       }
-      setConvertTarget(null);
+      closeConvert();
       if (result.order_id) navigate(`/orders/${result.order_id}`);
       else fetchQuotes();
     } catch (err: unknown) {
@@ -404,7 +445,7 @@ export default function Quotes() {
         <div className="flex items-center gap-1">
           {(row.status === 'sent' || row.status === 'revised') && (
             <button
-              onClick={(e) => { e.stopPropagation(); convertQuoteIdem.resetKey(); setConvertTarget(row); }}
+              onClick={(e) => { e.stopPropagation(); openConvert(row); }}
               className="p-1.5 rounded-lg text-gray-400 hover:text-crx-green hover:bg-crx-green-light transition-colors"
               title="Convert to order"
               aria-label={`Convert quote ${row.quote_number} to an order`}
@@ -601,17 +642,21 @@ export default function Quotes() {
 
       <ConfirmModal
         open={!!convertTarget}
-        onClose={() => setConvertTarget(null)}
+        onClose={closeConvert}
         onConfirm={handleConvertConfirm}
         title="Convert to Order?"
         message={
           convertTarget
-            ? `Create a confirmed order from quote ${convertTarget.quote_number} for ${convertTarget.customer_name || 'this customer'}? This reserves inventory (holds → prebooked) and can't be undone from here.`
+            ? [
+                `Create a confirmed order from quote ${convertTarget.quote_number} for ${convertTarget.customer_name || 'this customer'}? This reserves inventory (holds → prebooked) and can't be undone from here.`,
+                convertStaleMsg ? `Heads up: ${convertStaleMsg}` : '',
+                convertDupMsg ? `Heads up: ${convertDupMsg}` : '',
+              ].filter(Boolean).join('  ')
             : ''
         }
-        confirmLabel="Convert to Order"
-        variant="info"
-        icon={PackageCheck}
+        confirmLabel={convertStaleMsg || convertDupMsg ? 'Convert Anyway' : 'Convert to Order'}
+        variant={convertStaleMsg || convertDupMsg ? 'warning' : 'info'}
+        icon={convertStaleMsg || convertDupMsg ? AlertTriangle : PackageCheck}
         loading={converting}
       />
     </div>
