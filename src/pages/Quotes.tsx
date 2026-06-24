@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo , useCallback } from 'react';
+import { useEffect, useState, useMemo , useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { parseLocalDate, localDatePlusDays } from '../lib/dateUtils';
 import { Plus, Upload, Copy, Download, FileText, Trash2, Layers, ChevronDown, ChevronUp, PackageCheck, AlertTriangle } from 'lucide-react';
@@ -54,6 +54,11 @@ export default function Quotes() {
   // convert if the quote is stale (>30d) or the customer already ordered recently.
   const [convertStaleMsg, setConvertStaleMsg] = useState<string | null>(null);
   const [convertDupMsg, setConvertDupMsg] = useState<string | null>(null);
+  // Fire the non-idempotent post-conversion side effects (email/notifications) at
+  // most once per order. convert_quote_to_order is idempotent but returns no replay
+  // marker, so a same-key retry after a lost response replays status:'created' — the
+  // stable order_id is how we avoid duplicate alerts/emails on that replay (Codex P2).
+  const firedConvertSideEffects = useRef<Set<string>>(new Set());
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -176,8 +181,11 @@ export default function Quotes() {
       }
       // Mirror QuoteBuilder's post-conversion side effects (Codex P2): orders are
       // born 'confirmed' with no later transition to gate on, so the creation site
-      // is the ONLY place these fire. Skip on idempotent replay (already ran once).
-      if (result.status !== 'already_converted' && result.order_id) {
+      // is the ONLY place these fire. Run once per order_id — skips both an
+      // 'already_converted' result AND a same-key idempotency replay (which returns
+      // the cached status:'created' for the same order_id).
+      if (result.status !== 'already_converted' && result.order_id && !firedConvertSideEffects.current.has(result.order_id)) {
+        firedConvertSideEffects.current.add(result.order_id);
         trackBusinessEvent('quote_converted_to_order', {
           message: `Quote converted → Order ${result.order_number || ''}`,
           data: { orderId: result.order_id, orderNumber: result.order_number ?? '', quoteId: convertTarget.id },

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo , useCallback } from 'react';
+import { useEffect, useState, useMemo , useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus,
@@ -96,6 +96,11 @@ export default function Deliveries() {
   // F3 act-from-list: complete an in_progress delivery in place (signed-by popup).
   const completeIdem = useIdempotencyKey('complete_delivery', profile?.id || '');
   const [completeTarget, setCompleteTarget] = useState<DeliveryRow | null>(null);
+  // Send the in-app completion notification at most once per delivery. complete_delivery
+  // is idempotent but returns no replay marker, so a same-key retry after a lost
+  // response replays its cached success; the stable delivery id avoids duplicate
+  // driver/admin notifications on that replay (Codex P2).
+  const notifiedCompletionFor = useRef<Set<string>>(new Set());
   const [signedBy, setSignedBy] = useState('');
   const [completing, setCompleting] = useState(false);
   const navigate = useNavigate();
@@ -372,10 +377,14 @@ export default function Deliveries() {
       onSuccess: () => {
         completeIdem.resetKey();
         // Fire the same in-app completion notification the detail page sends
-        // (driver/admins/sales). The customer EMAIL receipt is sent from the
-        // delivery's page (rich HTML w/ items+photos the list doesn't load) —
-        // see the modal note. Fire-and-forget; never blocks the success path.
-        notifyDeliveryCompleted(target.id, target.delivery_number, target.customer_name, target.assigned_driver, target.order_id, false).catch(() => { /* non-critical */ });
+        // (driver/admins/sales) — once per delivery so a same-key RPC replay after
+        // a lost response can't duplicate it. The customer EMAIL receipt is sent
+        // from the delivery's page (rich HTML w/ items+photos the list doesn't
+        // load) — see the modal note. Fire-and-forget; never blocks the success path.
+        if (!notifiedCompletionFor.current.has(target.id)) {
+          notifiedCompletionFor.current.add(target.id);
+          notifyDeliveryCompleted(target.id, target.delivery_number, target.customer_name, target.assigned_driver, target.order_id, false).catch(() => { /* non-critical */ });
+        }
         setCompleteTarget(null);
         setSignedBy('');
         fetchDeliveries();
