@@ -164,8 +164,12 @@ export default function ReceivingHub() {
       toast('error', 'Enter a quantity greater than 0');
       return;
     }
-    if (qty > receiveTarget.line.remaining) {
-      toast('error', `Can't receive more than the ${fmtUnits(receiveTarget.line.remaining)} remaining`);
+    // Quick receive is FULL-receipt-only by design — a short/partial or damaged
+    // receipt must go through the PO detail flow that captures that context + the
+    // printed receipt (Codex P1/P2: don't let a partial silently post here as
+    // condition 'good'). The input is read-only at `remaining`; this is the backstop.
+    if (qty !== receiveTarget.line.remaining) {
+      toast('error', `Quick receive records the full ${fmtUnits(receiveTarget.line.remaining)} remaining. For a partial or damaged receipt, open the PO.`);
       return;
     }
     const line = receiveTarget.line;
@@ -349,17 +353,17 @@ export default function ReceivingHub() {
             {receiveTarget ? fmtUnits(receiveTarget.line.remaining) : '0'} units remaining.
           </p>
           <div>
-            <label htmlFor="receive-qty" className="block text-xs font-medium text-secondary mb-1">Quantity to receive</label>
+            <label htmlFor="receive-qty" className="block text-xs font-medium text-secondary mb-1">Quantity to receive (full receipt)</label>
             <input
               id="receive-qty"
               type="number"
-              min={0}
-              max={receiveTarget?.line.remaining}
               value={receiveQty}
-              onChange={(e) => setReceiveQty(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              readOnly
+              aria-readonly="true"
+              tabIndex={-1}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-gray-50 text-secondary cursor-not-allowed"
             />
-            <p className="text-[11px] text-secondary mt-1">Goes to Main Warehouse in good condition. For partial/damaged or a printed receipt, open the PO.</p>
+            <p className="text-[11px] text-secondary mt-1">Receives the full remaining quantity to Main Warehouse in good condition. For a partial/damaged receipt or a printed receipt, open the PO.</p>
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <Button variant="ghost" onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>

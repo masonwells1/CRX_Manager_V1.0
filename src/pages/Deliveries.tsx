@@ -155,6 +155,10 @@ export default function Deliveries() {
   const canCreate = role === 'admin' || role === 'sales_rep';
   const canQuickDeliver = role === 'admin' || role === 'sales_rep';
   const isDriver = role === 'driver';
+  // Customer 360 peek shows AR balance + credit tier — admin/sales only. Drivers
+  // are an allowed role on /deliveries, so this MUST be gated or it leaks customer
+  // finances to drivers (Codex P1).
+  const canPeekCustomer = role === 'admin' || role === 'sales_rep';
 
   const fetchDrivers = useCallback(async () => {
     // PR-07 follow-up: driver filter dropdown only uses d.id + d.full_name; safe via view.
@@ -957,7 +961,7 @@ export default function Deliveries() {
         <div>
           <div className="flex items-center gap-1.5">
             <span>{row.customer_name}</span>
-            {row.customer_id && (
+            {row.customer_id && canPeekCustomer && (
               <button
                 onClick={(e) => { e.stopPropagation(); setDrawerCustomer({ id: row.customer_id, name: row.customer_name }); }}
                 title="Peek customer"
@@ -1387,7 +1391,7 @@ export default function Deliveries() {
       />
 
       <CustomerDrawer
-        open={!!drawerCustomer}
+        open={canPeekCustomer && !!drawerCustomer}
         customerId={drawerCustomer?.id ?? ''}
         customerName={drawerCustomer?.name ?? ''}
         onClose={() => setDrawerCustomer(null)}
