@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, X } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -22,8 +22,17 @@ import { SkeletonTable } from '../components/ui/Skeleton';
 import JobTagChip from '../components/jobs/JobTagChip';
 import JobTagsManager from '../components/jobs/JobTagsManager';
 import JobTagsBulkModal from '../components/jobs/JobTagsBulkModal';
-import { jobMatchesTagFilter } from '../components/jobs/jobTagFilter';
-import type { Job, JobStatus, JobTag } from '../types';
+import GroundCrewsManager from '../components/jobs/GroundCrewsManager';
+import MultiSelectDropdown, { type MultiSelectOption } from '../components/jobs/MultiSelectDropdown';
+import {
+  type JobFilters,
+  type JobFilterFacts,
+  emptyJobFilters,
+  isJobFiltersEmpty,
+  activeJobFilterCount,
+  jobMatchesClientFilters,
+} from '../components/jobs/jobFilters';
+import type { Job, JobStatus, JobTag, GroundCrew } from '../types';
 
 interface JobChemSummary {
   product_name: string;
@@ -55,6 +64,10 @@ type JobRow = Job & {
   updated_by_name: string;
   /** Color-coded tags assigned to this job (field-app parity #4). */
   jobTags: JobTag[];
+  /** Field-app parity #6: joined facts the client-side filters read. */
+  counties: string[];
+  states: string[];
+  chemicalNames: string[];
 };
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
@@ -134,21 +147,35 @@ export default function Jobs() {
   const { role } = useAuth();
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<JobStatus | ''>('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [customerFilter, setCustomerFilter] = useState('');
+  // Field-app parity #6: the FULL filter set, AND-combined. Two copies:
+  //   - `draft` is what the user edits in the bar.
+  //   - `applied` is what actually drives the query + the visibleJobs memo.
+  // SEARCH copies draft -> applied; CLEAR ALL resets both. Filters do NOT
+  // auto-run (matches ChemMan's explicit SEARCH / CLEAR ALL FILTERS controls).
+  const [draft, setDraft] = useState<JobFilters>(emptyJobFilters);
+  const [applied, setApplied] = useState<JobFilters>(emptyJobFilters);
+  const [showMore, setShowMore] = useState(false);
+  // Reference lists for the multi-select pickers.
   const [customers, setCustomers] = useState<{ id: string; farm_name: string }[]>([]);
-  // Field-app parity #4: tag catalog + the Job Tags multi-select filter.
+  const [applicators, setApplicators] = useState<{ id: string; full_name: string }[]>([]);
+  const [vehicles, setVehicles] = useState<{ id: string; vehicle_name: string }[]>([]);
+  const [appServices, setAppServices] = useState<{ id: string; name: string }[]>([]);
+  const [crews, setCrews] = useState<GroundCrew[]>([]);
+  // Field-app parity #4: tag catalog (drives the Job Tags multi-select filter).
   const [allTags, setAllTags] = useState<JobTag[]>([]);
-  const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [bulkTagsOpen, setBulkTagsOpen] = useState(false);
+  const [manageCrewsOpen, setManageCrewsOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
   // Per-row expander state, keyed "<jobId>:<field>" (customers | locations).
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // Tiny setters that patch a single field on the draft filter object.
+  const patchDraft = useCallback(<K extends keyof JobFilters>(key: K, value: JobFilters[K]) => {
+    setDraft((prev) => ({ ...prev, [key]: value }));
+  }, []);
 
   const toggleExpanded = useCallback((key: string) => {
     setExpanded((prev) => {
@@ -160,13 +187,36 @@ export default function Jobs() {
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
-  const fetchCustomers = useCallback(async () => {
-    const { data } = await supabase
-      .from('customers')
-      .select('id, farm_name')
+  // Field-app parity #6: load every reference list the filter pickers need in
+  // one shot (customers, applicators, vehicles, application-service "types").
+  const fetchReferenceLists = useCallback(async () => {
+    const [custRes, applRes, vehRes, svcRes] = await Promise.all([
+      supabase.from('customers').select('id, farm_name').eq('is_active', true).order('farm_name'),
+      // Applicator picker only uses id + full_name; safe via the public profile view.
+      supabase.from('profile_public_view').select('id, full_name')
+        .in('role', ['applicator', 'admin', 'sales_rep']).eq('is_active', true).order('full_name'),
+      supabase.from('vehicles').select('id, vehicle_name').eq('status', 'active').order('vehicle_name'),
+      supabase.from('application_services').select('id, name').eq('is_active', true).order('sort_order'),
+    ]);
+    setCustomers((custRes.data || []) as { id: string; farm_name: string }[]);
+    setApplicators(((applRes.data || []) as { id: string | null; full_name: string | null }[])
+      .filter((a) => a.id).map((a) => ({ id: a.id as string, full_name: a.full_name ?? '—' })));
+    setVehicles((vehRes.data || []) as { id: string; vehicle_name: string }[]);
+    setAppServices((svcRes.data || []) as { id: string; name: string }[]);
+  }, []);
+
+  // Field-app parity #6: ground crews drive the Ground Crew filter + manager.
+  const fetchCrews = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('ground_crews')
+      .select('*')
       .eq('is_active', true)
-      .order('farm_name');
-    setCustomers((data || []) as { id: string; farm_name: string }[]);
+      .order('name');
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_ground_crews' } });
+      return;
+    }
+    setCrews((data || []) as GroundCrew[]);
   }, []);
 
   // Field-app parity #4: load the full tag catalog for the filter + managers.
@@ -185,13 +235,15 @@ export default function Jobs() {
   const fetchJobs = useCallback(async () => {
     setLoading(true);
     // PR-07 follow-up: dropped applicator FK embed; resolve via profile_public_view.
+    // Field-app parity #6: county/state pulled on the joined field so the
+    // client-side County/State filters can read them.
     let query = supabase
       .from('jobs')
       .select(`
         *,
         customer:customers(farm_name, account_number),
         vehicle:vehicles(vehicle_name),
-        job_fields(crop, field:fields(field_name, crop_type)),
+        job_fields(crop, field:fields(field_name, crop_type, county, state)),
         job_chemicals(rate_per_acre, rate_unit, product:products(product_name)),
         job_field_shares(customer_id, split_pct, is_primary, customer:customers(farm_name, account_number)),
         job_tag_assignments(tag:job_tags(id, name, color, created_by, created_at, updated_at))
@@ -200,22 +252,29 @@ export default function Jobs() {
       .order('job_date', { ascending: false })
       .limit(500);
 
-    if (statusFilter) query = query.eq('status', statusFilter);
-    if (startDate) query = query.gte('job_date', startDate);
-    if (endDate) query = query.lte('job_date', endDate);
+    // ---- SERVER-side filters (indexed scalar columns on jobs) ----
+    if (applied.statuses.length > 0) query = query.in('status', applied.statuses);
+    if (applied.startDate) query = query.gte('job_date', applied.startDate);
+    if (applied.endDate) query = query.lte('job_date', applied.endDate);
+    if (applied.jobNumber.trim()) query = query.ilike('job_number', `%${applied.jobNumber.trim()}%`);
+    if (applied.applicatorIds.length > 0) query = query.in('applicator_id', applied.applicatorIds);
+    if (applied.vehicleIds.length > 0) query = query.in('vehicle_id', applied.vehicleIds);
+    if (applied.typeIds.length > 0) query = query.in('application_service_id', applied.typeIds);
+    if (applied.groundCrewIds.length > 0) query = query.in('ground_crew_id', applied.groundCrewIds);
     // Customer filter is applied SERVER-side (before the 500-row limit) and matches
-    // the primary jobs.customer_id OR any job carrying a per-field share for that
-    // customer — so an older job billed to a share customer isn't truncated away
-    // (Codex). Pull the share job_ids first, then OR them into the main query.
-    if (customerFilter) {
+    // the primary jobs.customer_id OR any job carrying a per-field share for one of
+    // the selected customers — so an older job billed to a share customer isn't
+    // truncated away (Codex). Pull the share job_ids first, then OR them in.
+    if (applied.customerIds.length > 0) {
       const { data: shareJobs } = await supabase
         .from('job_field_shares')
         .select('job_id')
-        .eq('customer_id', customerFilter);
+        .in('customer_id', applied.customerIds);
       const shareJobIds = [...new Set(((shareJobs || []) as { job_id: string }[]).map((s) => s.job_id))];
+      const custList = applied.customerIds.join(',');
       query = shareJobIds.length > 0
-        ? query.or(`customer_id.eq.${customerFilter},id.in.(${shareJobIds.join(',')})`)
-        : query.eq('customer_id', customerFilter);
+        ? query.or(`customer_id.in.(${custList}),id.in.(${shareJobIds.join(',')})`)
+        : query.in('customer_id', applied.customerIds);
     }
 
     const { data, error } = await query;
@@ -231,7 +290,7 @@ export default function Jobs() {
     type RawJob = Record<string, unknown> & {
       customer?: { farm_name?: string; account_number?: string | null };
       vehicle?: { vehicle_name?: string };
-      job_fields?: Array<{ crop?: string | null; field?: { field_name?: string; crop_type?: string | null } }>;
+      job_fields?: Array<{ crop?: string | null; field?: { field_name?: string; crop_type?: string | null; county?: string | null; state?: string | null } }>;
       job_chemicals?: Array<{ rate_per_acre?: number | null; rate_unit?: string | null; product?: { product_name?: string } }>;
       job_field_shares?: Array<{ customer_id: string; split_pct: number; is_primary: boolean; customer?: { farm_name?: string; account_number?: string | null } }>;
       job_tag_assignments?: Array<{ tag?: JobTag | null }>;
@@ -291,6 +350,15 @@ export default function Jobs() {
         rate_unit: c.rate_unit ?? null,
       }));
 
+      // Field-app parity #6: joined facts the client-side filters read.
+      const counties = [...new Set(
+        (j.job_fields || []).map((f) => f.field?.county).filter(Boolean) as string[]
+      )];
+      const states = [...new Set(
+        (j.job_fields || []).map((f) => f.field?.state).filter(Boolean) as string[]
+      )];
+      const chemicalNames = [...new Set(chemicals.map((c) => c.product_name))];
+
       const jobTags = (j.job_tag_assignments || [])
         .map((a) => a.tag)
         .filter(Boolean) as JobTag[];
@@ -310,41 +378,65 @@ export default function Jobs() {
         created_by_name: j.created_by ? nameMap[j.created_by] || '-' : '-',
         updated_by_name: j.updated_by ? nameMap[j.updated_by] || '-' : '-',
         jobTags,
+        counties,
+        states,
+        chemicalNames,
       };
     });
     setJobs(rows);
     setLoading(false);
-  }, [statusFilter, startDate, endDate, customerFilter, toast]);
+  }, [applied, toast]);
 
   useEffect(() => {
-    fetchCustomers();
+    fetchReferenceLists();
     fetchTags();
-  }, [fetchCustomers, fetchTags]);
+    fetchCrews();
+  }, [fetchReferenceLists, fetchTags, fetchCrews]);
 
+  // Refetch only when the APPLIED filters change (SEARCH / CLEAR ALL / preset).
   useEffect(() => {
     fetchJobs();
-  }, [statusFilter, startDate, endDate, customerFilter, fetchJobs]);
+  }, [fetchJobs]);
 
+  // SEARCH: commit the draft to the applied filters (triggers the query).
+  const runSearch = useCallback(() => {
+    setApplied(draft);
+  }, [draft]);
+
+  // CLEAR ALL: reset BOTH draft and applied back to empty (criterion #3).
+  const clearAll = useCallback(() => {
+    setDraft(emptyJobFilters);
+    setApplied(emptyJobFilters);
+    setShowMore(false);
+  }, []);
+
+  // Date presets write the draft AND apply immediately (a one-click shortcut).
   const applyPreset = (preset: string) => {
-    if (preset === 'all') {
-      setStartDate('');
-      setEndDate('');
-    } else {
-      const { start, end } = getPresetDates(preset);
-      setStartDate(start);
-      setEndDate(end);
-    }
+    const range = preset === 'all' ? { start: '', end: '' } : getPresetDates(preset);
+    const next = { ...draft, startDate: range.start, endDate: range.end };
+    setDraft(next);
+    setApplied(next);
   };
 
-  // Field-app parity #4: the Job Tags filter is applied CLIENT-side (tags ride
-  // along on the joined query) and AND-combines with the server filters above —
-  // a job must already have survived status/customer/date, then carry at least
-  // one selected tag. The table, totals, and selection all read this filtered
-  // view so they never disagree (criterion #6).
-  const visibleJobs = useMemo(
-    () => jobs.filter((j) => jobMatchesTagFilter(j.jobTags.map((t) => t.id), tagFilter)),
-    [jobs, tagFilter]
-  );
+  // Field-app parity #6: the CLIENT-side filters (job tags, crop, county, state,
+  // chemical, field name) AND-combine over the joined data already pulled. They
+  // run on top of the server filters (status/customer/date/applicator/vehicle/
+  // type/crew/job#) so a job must clear EVERY active filter. The table, totals,
+  // and selection all read this single filtered view so they never disagree
+  // (criteria #2 + #5 + #6).
+  const visibleJobs = useMemo(() => {
+    return jobs.filter((j) => {
+      const facts: JobFilterFacts = {
+        tagIds: new Set(j.jobTags.map((t) => t.id)),
+        crops: j.crops,
+        counties: j.counties,
+        states: j.states,
+        chemicals: j.chemicalNames,
+        fieldNames: j.locations,
+      };
+      return jobMatchesClientFilters(facts, applied);
+    });
+  }, [jobs, applied]);
 
   // jobId -> set of assigned tag ids, for the bulk modal's starting state.
   const assignmentsByJob = useMemo(() => {
@@ -383,6 +475,30 @@ export default function Jobs() {
       { totalAcres: 0, remainingAcres: 0 }
     );
   }, [visibleJobs]);
+
+  // Field-app parity #6: multi-select option lists for the filter pickers.
+  const customerOptions: MultiSelectOption[] = useMemo(
+    () => customers.map((c) => ({ value: c.id, label: c.farm_name })), [customers]);
+  const applicatorOptions: MultiSelectOption[] = useMemo(
+    () => applicators.map((a) => ({ value: a.id, label: a.full_name })), [applicators]);
+  const vehicleOptions: MultiSelectOption[] = useMemo(
+    () => vehicles.map((v) => ({ value: v.id, label: v.vehicle_name })), [vehicles]);
+  const typeOptions: MultiSelectOption[] = useMemo(
+    () => appServices.map((s) => ({ value: s.id, label: s.name })), [appServices]);
+  const crewOptions: MultiSelectOption[] = useMemo(
+    () => crews.map((c) => ({ value: c.id, label: c.name })), [crews]);
+  const tagOptions: MultiSelectOption[] = useMemo(
+    () => allTags.map((t) => ({ value: t.id, label: t.name, color: t.color })), [allTags]);
+  const statusOptions: MultiSelectOption[] = useMemo(() => [
+    { value: 'scheduled', label: 'Scheduled' },
+    { value: 'in_progress', label: 'In Progress' },
+    { value: 'completed', label: 'Completed' },
+    { value: 'invoiced', label: 'Invoiced' },
+    { value: 'cancelled', label: 'Cancelled' },
+  ], []);
+
+  const activeCount = activeJobFilterCount(applied);
+  const draftDirty = JSON.stringify(draft) !== JSON.stringify(applied);
 
   const handleExportCSV = () => {
     exportToCSV(selectedRows as unknown as Record<string, unknown>[], [
@@ -621,14 +737,24 @@ export default function Jobs() {
         </div>
         <div className="flex items-center gap-2">
           {canBulkAction && (
-            <Button
-              variant="secondary"
-              icon={<Tags className="w-4 h-4" />}
-              onClick={() => setManageTagsOpen(true)}
-              showChevron={false}
-            >
-              Manage Tags
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                icon={<Users className="w-4 h-4" />}
+                onClick={() => setManageCrewsOpen(true)}
+                showChevron={false}
+              >
+                Crews
+              </Button>
+              <Button
+                variant="secondary"
+                icon={<Tags className="w-4 h-4" />}
+                onClick={() => setManageTagsOpen(true)}
+                showChevron={false}
+              >
+                Manage Tags
+              </Button>
+            </>
           )}
           <Button
             icon={<Plus className="w-4 h-4" />}
@@ -639,124 +765,215 @@ export default function Jobs() {
         </div>
       </div>
 
-      {/* Filters */}
+      {/* Field-app parity #6: full filter set, AND-combined. Primary filters on
+          the first row; secondary filters behind a MORE expander. An explicit
+          SEARCH applies the draft; CLEAR ALL resets everything. */}
       <Card>
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="block text-xs font-medium text-secondary mb-1">Start Date</label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+        <div className="space-y-3">
+          {/* Primary row */}
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label className="block text-xs font-medium text-secondary mb-1">Job #</label>
+              <input
+                type="text"
+                value={draft.jobNumber}
+                onChange={(e) => patchDraft('jobNumber', e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+                placeholder="Job number"
+                aria-label="Filter by job number"
+                className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+            </div>
+            <MultiSelectDropdown
+              label="Customers"
+              options={customerOptions}
+              selected={draft.customerIds}
+              onChange={(v) => patchDraft('customerIds', v)}
+              placeholder="All Customers"
+              emptyText="No customers"
             />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-secondary mb-1">End Date</label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            <MultiSelectDropdown
+              label="Applicators"
+              options={applicatorOptions}
+              selected={draft.applicatorIds}
+              onChange={(v) => patchDraft('applicatorIds', v)}
+              placeholder="All Applicators"
+              emptyText="No applicators"
             />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-secondary mb-1">Status</label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as JobStatus | '')}
-              aria-label="Filter by status"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">All Statuses</option>
-              <option value="scheduled">Scheduled</option>
-              <option value="in_progress">In Progress</option>
-              <option value="completed">Completed</option>
-              <option value="invoiced">Invoiced</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-secondary mb-1">Customer</label>
-            <select
-              value={customerFilter}
-              onChange={(e) => setCustomerFilter(e.target.value)}
-              aria-label="Filter by customer"
-              className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
-            >
-              <option value="">All Customers</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.farm_name}</option>
-              ))}
-            </select>
-          </div>
-          {/* Field-app parity #4: Job Tags multi-select. AND-combines with the
-              filters above (a job must pass them all) and narrows to jobs
-              carrying any selected tag. */}
-          <div>
-            <label className="block text-xs font-medium text-secondary mb-1">Job Tags</label>
-            <details className="relative group">
-              <summary className="flex items-center gap-2 px-3 py-2 text-sm border border-gray-200 rounded-lg cursor-pointer list-none hover:border-crx-green min-w-[10rem]">
-                <Tag className="w-3.5 h-3.5 text-secondary" />
-                <span className={tagFilter.length === 0 ? 'text-secondary' : 'text-nav-dark'}>
-                  {tagFilter.length === 0 ? 'All Tags' : `${tagFilter.length} selected`}
-                </span>
-              </summary>
-              <div className="absolute z-20 mt-1 w-56 max-h-64 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg p-2 space-y-0.5">
-                {allTags.length === 0 ? (
-                  <p className="text-xs text-secondary px-2 py-3 text-center">No tags yet</p>
-                ) : (
-                  <>
-                    {tagFilter.length > 0 && (
-                      <button
-                        onClick={() => setTagFilter([])}
-                        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-xs font-medium text-secondary hover:bg-gray-50 rounded"
-                      >
-                        <X className="w-3 h-3" /> Clear tag filter
-                      </button>
-                    )}
-                    {allTags.map((t) => {
-                      const checked = tagFilter.includes(t.id);
-                      return (
-                        <label
-                          key={t.id}
-                          className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() =>
-                              setTagFilter((prev) =>
-                                checked ? prev.filter((id) => id !== t.id) : [...prev, t.id]
-                              )
-                            }
-                            className="rounded border-gray-300 text-crx-green focus:ring-crx-green/30"
-                          />
-                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: t.color }} aria-hidden="true" />
-                          <span className="text-sm text-nav-dark">{t.name}</span>
-                        </label>
-                      );
-                    })}
-                  </>
-                )}
-              </div>
-            </details>
-          </div>
-          <div className="flex gap-1.5">
-            {[
-              { key: 'all', label: 'All' },
-              { key: 'today', label: 'Today' },
-              { key: 'this_week', label: 'This Week' },
-              { key: 'this_season', label: 'This Season' },
-            ].map((preset) => (
+            <div>
+              <label className="block text-xs font-medium text-secondary mb-1">Start Date</label>
+              <input
+                type="date"
+                value={draft.startDate}
+                onChange={(e) => patchDraft('startDate', e.target.value)}
+                aria-label="Schedule date from"
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-secondary mb-1">End Date</label>
+              <input
+                type="date"
+                value={draft.endDate}
+                onChange={(e) => patchDraft('endDate', e.target.value)}
+                aria-label="Schedule date to"
+                className="px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+            </div>
+            <MultiSelectDropdown
+              label="Job Tags"
+              options={tagOptions}
+              selected={draft.tagIds}
+              onChange={(v) => patchDraft('tagIds', v)}
+              placeholder="All Tags"
+              emptyText="No tags yet"
+            />
+            <div className="flex items-end gap-1.5">
+              <Button icon={<Search className="w-4 h-4" />} onClick={runSearch} showChevron={false}>
+                Search{draftDirty ? ' *' : ''}
+              </Button>
               <button
-                key={preset.key}
-                onClick={() => applyPreset(preset.key)}
-                className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 hover:bg-crx-green-tint hover:border-crx-green hover:text-crx-green transition-colors"
+                type="button"
+                onClick={clearAll}
+                disabled={activeCount === 0 && isJobFiltersEmpty(draft)}
+                className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 text-secondary hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
-                {preset.label}
+                Clear All
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => setShowMore((s) => !s)}
+                className="flex items-center gap-1 px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 hover:bg-crx-green-tint hover:border-crx-green hover:text-crx-green transition-colors"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                {showMore ? 'Less' : 'More'}
+                {showMore ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Secondary row (MORE expander) */}
+          {showMore && (
+            <div className="flex flex-wrap items-end gap-3 border-t border-gray-100 pt-3">
+              <MultiSelectDropdown
+                label="Status"
+                options={statusOptions}
+                selected={draft.statuses}
+                onChange={(v) => patchDraft('statuses', v)}
+                placeholder="All Statuses"
+              />
+              <MultiSelectDropdown
+                label="Type"
+                options={typeOptions}
+                selected={draft.typeIds}
+                onChange={(v) => patchDraft('typeIds', v)}
+                placeholder="All Types"
+                emptyText="No application services"
+              />
+              <MultiSelectDropdown
+                label="Vehicle"
+                options={vehicleOptions}
+                selected={draft.vehicleIds}
+                onChange={(v) => patchDraft('vehicleIds', v)}
+                placeholder="All Vehicles"
+                emptyText="No vehicles"
+              />
+              <MultiSelectDropdown
+                label="Ground Crew"
+                options={crewOptions}
+                selected={draft.groundCrewIds}
+                onChange={(v) => patchDraft('groundCrewIds', v)}
+                placeholder="All Crews"
+                emptyText="No crews yet"
+              />
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Crop</label>
+                <input
+                  type="text"
+                  value={draft.crop}
+                  onChange={(e) => patchDraft('crop', e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+                  placeholder="Crop"
+                  aria-label="Filter by crop"
+                  className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Chemical</label>
+                <input
+                  type="text"
+                  value={draft.chemical}
+                  onChange={(e) => patchDraft('chemical', e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+                  placeholder="Product"
+                  aria-label="Filter by chemical"
+                  className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">Field Name</label>
+                <input
+                  type="text"
+                  value={draft.fieldName}
+                  onChange={(e) => patchDraft('fieldName', e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+                  placeholder="Field"
+                  aria-label="Filter by field name"
+                  className="w-32 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">County</label>
+                <input
+                  type="text"
+                  value={draft.county}
+                  onChange={(e) => patchDraft('county', e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+                  placeholder="County"
+                  aria-label="Filter by county"
+                  className="w-28 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-secondary mb-1">State</label>
+                <input
+                  type="text"
+                  value={draft.state}
+                  onChange={(e) => patchDraft('state', e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+                  placeholder="State"
+                  aria-label="Filter by state"
+                  className="w-20 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Quick date presets + active-filter summary */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3">
+            <div className="flex gap-1.5">
+              {[
+                { key: 'all', label: 'All' },
+                { key: 'today', label: 'Today' },
+                { key: 'this_week', label: 'This Week' },
+                { key: 'this_season', label: 'This Season' },
+              ].map((preset) => (
+                <button
+                  key={preset.key}
+                  type="button"
+                  onClick={() => applyPreset(preset.key)}
+                  className="px-3 py-2 text-xs font-medium rounded-lg border border-gray-200 hover:bg-crx-green-tint hover:border-crx-green hover:text-crx-green transition-colors"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            {activeCount > 0 && (
+              <span className="inline-flex items-center gap-1 text-xs font-medium text-crx-green">
+                <Tag className="w-3 h-3" />
+                {activeCount} active filter{activeCount !== 1 ? 's' : ''}
+              </span>
+            )}
           </div>
         </div>
       </Card>
@@ -818,6 +1035,15 @@ export default function Jobs() {
         assignmentsByJob={assignmentsByJob}
         onManageTags={() => { setBulkTagsOpen(false); setManageTagsOpen(true); }}
         onApplied={() => fetchJobs()}
+      />
+
+      {/* Field-app parity #6: ground crews manager (the Ground Crew filter's
+          managed list). */}
+      <GroundCrewsManager
+        open={manageCrewsOpen}
+        onClose={() => setManageCrewsOpen(false)}
+        crews={crews}
+        onChanged={() => { fetchCrews(); fetchJobs(); }}
       />
     </div>
   );

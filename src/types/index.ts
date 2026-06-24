@@ -1939,6 +1939,8 @@ export interface Job {
   updated_by: string | null;
   /** Stamped when the WPS notice / applicator printout is generated. */
   printed_at: string | null;
+  /** Field-app parity #6: nullable FK to a ground crew (filterable job attribute). */
+  ground_crew_id: string | null;
   created_by: string | null;
   deleted_at: string | null;
   created_at: string;
@@ -1975,6 +1977,31 @@ export interface JobTagAssignment {
   job_id: string;
   tag_id: string;
   created_at: string;
+}
+
+// Field-app parity #6 (2026-06-24): Ground crews.
+// A managed crew (the extra hands on the ground for a job). Surfaced first as a
+// FILTERABLE job attribute (ChemMan's "Ground Crews" filter); the Applied-Info
+// section (#13) attaches crew/members per application later.
+export interface GroundCrew {
+  id: string;
+  name: string;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A person belonging to a ground crew (crew has-many members). */
+export interface GroundCrewMember {
+  id: string;
+  crew_id: string;
+  name: string;
+  /** Optional link to a system user; null for a typed-name seasonal hand. */
+  profile_id: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 // Phase 4 (2026-04-30): compute_application_service_fee RPC result.

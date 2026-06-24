@@ -48,6 +48,8 @@ interface JobDbRow {
   schedule_date?: string | null;
   date_expires?: string | null;
   consultant_id?: string | null;
+  // Field-app parity #6: filterable ground crew (set via direct .update()).
+  ground_crew_id?: string | null;
   loader_comment?: string | null;
   additional_info?: string | null;
   internal_memo?: string | null;
@@ -219,6 +221,11 @@ export default function JobDetail() {
   const [scheduleDate, setScheduleDate] = useState('');
   const [dateExpires, setDateExpires] = useState('');
   const [consultantId, setConsultantId] = useState('');
+  // Field-app parity #6: ground crew (a filterable job attribute). Persisted via
+  // a direct .update() after save_job — NOT through the save_job payload, since
+  // that RPC's 6-arg contract is frozen and does not handle ground_crew_id.
+  const [groundCrewId, setGroundCrewId] = useState('');
+  const [groundCrews, setGroundCrews] = useState<{ id: string; name: string }[]>([]);
   // Memo fields
   const [loaderComment, setLoaderComment] = useState('');
   const [additionalInfo, setAdditionalInfo] = useState('');
@@ -374,11 +381,11 @@ export default function JobDetail() {
   // A stable string of every editable form field — the unit of dirty comparison.
   const formSnapshot = useCallback(() => JSON.stringify({
     customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
-    callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId,
+    callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId, groundCrewId,
     loaderComment, additionalInfo, internalMemo,
     fieldRows, chemRows, shareRows,
   }), [customerId, jobDate, scheduledTime, applicatorId, vehicleId, notes, batchId,
-       callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId,
+       callDate, dateProposed, timeProposed, scheduleDate, dateExpires, consultantId, groundCrewId,
        loaderComment, additionalInfo, internalMemo, fieldRows, chemRows, shareRows]);
 
   // Single dirty engine: when no baseline is set yet, ADOPT the current form as the
@@ -413,6 +420,11 @@ export default function JobDetail() {
     setVehicles((vehicleResult.data || []) as Vehicle[]);
     setApplicators((appResult.data || []) as Profile[]);
     setRecipes((recipeResult.data || []) as BlendRecipe[]);
+
+    // Field-app parity #6: active ground crews for the crew picker.
+    const crewResult = await supabase
+      .from('ground_crews').select('id, name').eq('is_active', true).order('name');
+    setGroundCrews((crewResult.data || []) as { id: string; name: string }[]);
 
     // Staff-held license rows for the license-gate badge + pre-save check (B5)
     const licResult = await supabase
@@ -472,6 +484,7 @@ export default function JobDetail() {
     setScheduleDate(j.schedule_date || '');
     setDateExpires(j.date_expires || '');
     setConsultantId(j.consultant_id || '');
+    setGroundCrewId(j.ground_crew_id || '');
     setLoaderComment(j.loader_comment || '');
     setAdditionalInfo(j.additional_info || '');
     setInternalMemo(j.internal_memo || '');
@@ -791,6 +804,20 @@ export default function JobDetail() {
       if (error) throw error;
       saveJobIdem.resetKey();
       const result = assertRpcResult<SaveJobResult>(data, 'save_job');
+
+      // Field-app parity #6: persist the ground crew via a direct .update().
+      // save_job's contract is frozen (6 args, one overload) and never touches
+      // ground_crew_id, so this dedicated write is safe — it won't be clobbered
+      // on the next save. RLS gates it to admin/sales_rep.
+      {
+        const savedJobId = isNew ? result.job_id : id!;
+        const crewResult = await supabase
+          .from('jobs')
+          .update({ ground_crew_id: groundCrewId || null })
+          .eq('id', savedJobId)
+          .select('id');
+        checkMutationResult(crewResult, 'Assign ground crew');
+      }
 
       if (shouldReassignApplicatorAfterSave({ licenseOverride, applicatorId, savedApplicatorId })) {
         try {
@@ -1429,6 +1456,22 @@ export default function JobDetail() {
                   <option value="">Select consultant...</option>
                   {applicators.map((a) => (
                     <option key={a.id} value={a.id}>{a.full_name} ({a.role})</option>
+                  ))}
+                </select>
+              </div>
+              {/* Field-app parity #6: ground crew — a filterable job attribute. */}
+              <div>
+                <label className="block text-sm font-medium text-nav-dark mb-1">Ground Crew</label>
+                <select
+                  value={groundCrewId}
+                  onChange={(e) => setGroundCrewId(e.target.value)}
+                  disabled={!canEdit}
+                  aria-label="Ground crew"
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50"
+                >
+                  <option value="">No crew</option>
+                  {groundCrews.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
               </div>

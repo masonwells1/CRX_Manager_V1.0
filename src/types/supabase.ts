@@ -2937,6 +2937,100 @@ export type Database = {
         }
         Relationships: []
       }
+      ground_crew_members: {
+        Row: {
+          created_at: string
+          crew_id: string
+          id: string
+          is_active: boolean
+          name: string
+          profile_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          crew_id: string
+          id?: string
+          is_active?: boolean
+          name: string
+          profile_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          crew_id?: string
+          id?: string
+          is_active?: boolean
+          name?: string
+          profile_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ground_crew_members_crew_id_fkey"
+            columns: ["crew_id"]
+            isOneToOne: false
+            referencedRelation: "ground_crews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ground_crew_members_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ground_crew_members_profile_id_fkey"
+            columns: ["profile_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ground_crews: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ground_crews_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profile_public_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ground_crews_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       idempotency_keys: {
         Row: {
           created_at: string | null
@@ -4027,6 +4121,7 @@ export type Database = {
           date_proposed: string | null
           deleted_at: string | null
           estimated_hours: number | null
+          ground_crew_id: string | null
           id: string
           internal_memo: string | null
           invoice_id: string | null
@@ -4068,6 +4163,7 @@ export type Database = {
           date_proposed?: string | null
           deleted_at?: string | null
           estimated_hours?: number | null
+          ground_crew_id?: string | null
           id?: string
           internal_memo?: string | null
           invoice_id?: string | null
@@ -4108,6 +4204,7 @@ export type Database = {
           date_proposed?: string | null
           deleted_at?: string | null
           estimated_hours?: number | null
+          ground_crew_id?: string | null
           id?: string
           internal_memo?: string | null
           invoice_id?: string | null
@@ -4167,6 +4264,13 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "jobs_ground_crew_id_fkey"
+            columns: ["ground_crew_id"]
+            isOneToOne: false
+            referencedRelation: "ground_crews"
             referencedColumns: ["id"]
           },
           {
