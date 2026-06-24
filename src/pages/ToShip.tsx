@@ -581,6 +581,7 @@ export default function ToShip() {
                       <th className="font-normal text-right">Reorder pt</th>
                       <th className="font-normal text-right">Owed</th>
                       <th className="font-normal text-right">Status</th>
+                      <th className="font-normal"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -592,6 +593,15 @@ export default function ToShip() {
                         <td className="text-right text-secondary">{p.reorder > 0 ? fmtUnits(p.reorder) : '—'}</td>
                         <td className="text-right">{p.owed > 0 ? fmtUnits(p.owed) : '—'}</td>
                         <td className="text-right">{p.owed > p.net ? <Badge variant="error">Reorder</Badge> : <Badge variant="warning">Low</Badge>}</td>
+                        <td className="text-right">
+                          <button
+                            onClick={() => navigate(`/purchase-orders/new?product=${p.product_id}`)}
+                            title="Start a purchase order for this product (pre-fills the product)"
+                            className="text-xs font-medium px-2.5 py-1 rounded-md bg-crx-green text-white hover:bg-crx-green-hover transition-colors"
+                          >
+                            Reorder
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
