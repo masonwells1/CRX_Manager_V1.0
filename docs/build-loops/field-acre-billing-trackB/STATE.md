@@ -45,6 +45,9 @@ Pulled live `pg_get_functiondef` for all four engine RPCs. The overnight batch `
 - [ ] Merge `feat/field-acre-billing-trackB` → main (resolve doc conflicts keeping both intents) → push = deploy → Vercel READY
 - [ ] PARK-not-force rule: any failed/unavailable gate → stop that piece, keep the rest moving, hand off a plain-English morning summary
 
+## ✅ LOOP COMPLETE (2026-06-23 overnight)
+Track B's substantive work (B1+B2 per-acre billing tie-in + hardening) is **APPLIED LIVE + merged + deployed** (prod `dpl_ESJrBYiqjy3Hvfy3xa44Gewq5M1m` READY on croprxsolutions.app; rollback `dpl_B3xaihLgbSTRemmDqf4NHmrANkJi`). B3/B4/B5 were already live (verified). B6 loose ends (schema-registry / supabase-types regen) NOT needed — this migration changed only function bodies (no tables/columns/signatures). Only owner item left: Mason's in-app real-file smoke. Optional periodic follow-up: full `node scripts/db-invariant-sweeps/run-sweeps.mjs` (the one predicate touching my change — actor-forgery into financial_audit_log — returned 0).
+
 ## Run log (append-only)
 - 2026-06-23 — Harness authored; B0 grounding DONE (live function bodies pulled + analyzed); branch `feat/field-acre-billing-trackB` cut off `db9b32ea`. Next: B1+B2.
 - 2026-06-23 — **🚀 B1+B2 APPLIED LIVE to prod `rhyzpcqhnizqbxphqdkr`** (migration `20260623140000`, stamped version `20260624…`). Post-apply on live: all 3 fns single-overload; patches confirmed present (save: 0-acre guard + v_qa_unit_cost + salesman gate + 5 deleted_at filters; post_invoice_group: 4 filters; preview: clamp); **plpgsql_check clean** (only pre-existing `'{}'`-cast + unused-var warnings, byte-faithful); **functional smoke `SMOKE_PASS_ROLLBACK`** (0, −5, NULL applied acres all rejected with ZERO_APPLIED_ACRES); `get_advisors` security = baseline unchanged (no new finding; no GRANT/REVOKE in migration). Apply-guard gotcha logged below. Next: merge + deploy.
