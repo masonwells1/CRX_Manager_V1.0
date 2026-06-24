@@ -1995,6 +1995,20 @@ export interface JobBatch {
   updated_at: string;
 }
 
+// Field-app parity #8 (2026-06-24): per-user, per-list saved view config.
+// One row per (user_id, list_key). `settings` is an opaque jsonb blob whose
+// shape the frontend owns (e.g. visible-column ids + show-completed flag).
+// RLS-scoped to the owner (auth.uid() = user_id) — a user reads/writes only
+// their own rows.
+export interface UserListSettings {
+  id: string;
+  user_id: string;
+  list_key: string;
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 // Field-app parity #6 (2026-06-24): Ground crews.
 // A managed crew (the extra hands on the ground for a job). Surfaced first as a
 // FILTERABLE job attribute (ChemMan's "Ground Crews" filter); the Applied-Info

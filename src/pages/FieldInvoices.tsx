@@ -10,6 +10,14 @@ import { supabase, sanitizeError } from '../lib/db';
 import { Sentry } from '../lib/sentry';
 import { exportToCSV } from '../lib/csvExport';
 import { downloadReportPdf } from '../lib/reportPdf';
+import { useAuth } from '../contexts/AuthContext';
+import {
+  JOBS_LIST_KEY,
+  defaultJobListSettings,
+  mergeJobListSettings,
+  isInvoiceColumnVisible,
+  type JobListSettings,
+} from '../components/jobs/jobListColumns';
 import type { Invoice, InvoiceStatus } from '../types';
 import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
@@ -53,11 +61,34 @@ const statusBadge = (status: InvoiceStatus) => {
 export default function FieldInvoices() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { profile } = useAuth();
   const [invoices, setInvoices] = useState<FieldInvoiceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
   const [cardFilter, setCardFilter] = useState<'unposted' | 'posted' | 'outstanding' | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
+  // Field-app parity #8: the SHARED column toggles (Customers / Applicators /
+  // Total Acres) are governed by the same per-user list settings as the job
+  // list, so the choice carries over to this list (acceptance criterion #5).
+  const [listSettings, setListSettings] = useState<JobListSettings>(defaultJobListSettings);
+
+  useEffect(() => {
+    if (!profile?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('user_list_settings')
+        .select('settings')
+        .eq('user_id', profile.id)
+        .eq('list_key', JOBS_LIST_KEY)
+        .maybeSingle();
+      if (error) {
+        Sentry.captureException(error, { tags: { source: 'fetch', page: 'field-invoices', action: 'load_list_settings' } });
+      }
+      if (!cancelled) setListSettings(mergeJobListSettings(data?.settings));
+    })();
+    return () => { cancelled = true; };
+  }, [profile?.id]);
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
@@ -347,7 +378,7 @@ export default function FieldInvoices() {
         <div className="p-5">
           <DataTable<FieldInvoiceRow>
             data={filtered}
-            columns={columns}
+            columns={columns.filter((c) => isInvoiceColumnVisible(listSettings, c.key))}
             searchable
             searchPlaceholder="Search field invoices..."
             searchKeys={['invoice_number', 'customer_name', 'applicator_name']}

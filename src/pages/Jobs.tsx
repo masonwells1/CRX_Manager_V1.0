@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers, Pencil, Settings2 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -26,6 +26,14 @@ import GroundCrewsManager from '../components/jobs/GroundCrewsManager';
 import JobBatchesManager from '../components/jobs/JobBatchesManager';
 import JobBatchAssignModal from '../components/jobs/JobBatchAssignModal';
 import JobMassEditModal from '../components/jobs/JobMassEditModal';
+import ListSettingsModal from '../components/jobs/ListSettingsModal';
+import {
+  JOBS_LIST_KEY,
+  defaultJobListSettings,
+  mergeJobListSettings,
+  orderedVisibleColumnIds,
+  type JobListSettings,
+} from '../components/jobs/jobListColumns';
 import MultiSelectDropdown, { type MultiSelectOption } from '../components/jobs/MultiSelectDropdown';
 import {
   type JobFilters,
@@ -36,6 +44,7 @@ import {
   jobMatchesClientFilters,
 } from '../components/jobs/jobFilters';
 import type { Job, JobStatus, JobTag, GroundCrew, JobBatch } from '../types';
+import type { Json } from '../types/supabase';
 
 interface JobChemSummary {
   product_name: string;
@@ -57,6 +66,8 @@ type JobRow = Job & {
   customers: JobCustomerSummary[];
   /** Flattened "name (account)" text of all billed customers — drives search. */
   customers_search: string;
+  /** Primary customer's phone (List Settings "Customer Phone" column). */
+  customer_phone: string | null;
   /** Field/location names on the job. */
   locations: string[];
   /** Distinct crops across the job's fields. */
@@ -149,7 +160,7 @@ function OverflowChips({ items, expanded, onToggle, jobId, field }: {
 export default function Jobs() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [loading, setLoading] = useState(true);
   // Field-app parity #6: the FULL filter set, AND-combined. Two copies:
@@ -181,6 +192,14 @@ export default function Jobs() {
   const [exporting, setExporting] = useState(false);
   // Per-row expander state, keyed "<jobId>:<field>" (customers | locations).
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  // Field-app parity #8: per-user List Settings (which columns show + whether
+  // completed jobs appear). Loaded from user_list_settings (RLS-scoped to the
+  // signed-in user); defaults until a saved row arrives. We only persist on an
+  // explicit user change in the modal, so a fresh load never clobbers a saved
+  // row with defaults.
+  const [listSettings, setListSettings] = useState<JobListSettings>(defaultJobListSettings);
+  const [listSettingsOpen, setListSettingsOpen] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   // Tiny setters that patch a single field on the draft filter object.
   const patchDraft = useCallback(<K extends keyof JobFilters>(key: K, value: JobFilters[K]) => {
@@ -255,6 +274,56 @@ export default function Jobs() {
     setAllTags((data || []) as JobTag[]);
   }, []);
 
+  // Field-app parity #8: load THIS user's saved job-list layout. RLS guarantees
+  // the row (if any) belongs to the signed-in user, so a different user gets
+  // their own row or — with none — the defaults via mergeJobListSettings.
+  const fetchListSettings = useCallback(async () => {
+    if (!profile?.id) return;
+    const { data, error } = await supabase
+      .from('user_list_settings')
+      .select('settings')
+      .eq('user_id', profile.id)
+      .eq('list_key', JOBS_LIST_KEY)
+      .maybeSingle();
+    if (error) {
+      // Non-fatal: fall back to defaults and let the user re-pick. Don't block
+      // the page on a preferences read.
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_list_settings' } });
+    }
+    setListSettings(mergeJobListSettings(data?.settings));
+  }, [profile?.id]);
+
+  // Persist a new layout for this user (upsert on the (user_id, list_key) key).
+  // Applies immediately in the UI; the write is best-effort with a toast on
+  // failure so the user knows it didn't stick.
+  const persistListSettings = useCallback(async (next: JobListSettings) => {
+    if (!profile?.id) return;
+    setSavingSettings(true);
+    const result = await supabase
+      .from('user_list_settings')
+      .upsert(
+        {
+          user_id: profile.id,
+          list_key: JOBS_LIST_KEY,
+          // JobListSettings is plain serializable data (string[] + boolean).
+          settings: next as unknown as Json,
+        },
+        { onConflict: 'user_id,list_key' }
+      )
+      .select();
+    if (result.error) {
+      Sentry.captureException(result.error, { tags: { source: 'mutation', action: 'save_list_settings' } });
+      toast('error', 'Could not save your list settings');
+    }
+    setSavingSettings(false);
+  }, [profile?.id, toast]);
+
+  // Apply + persist in one call from the modal.
+  const updateListSettings = useCallback((next: JobListSettings) => {
+    setListSettings(next);
+    void persistListSettings(next);
+  }, [persistListSettings]);
+
   const fetchJobs = useCallback(async () => {
     setLoading(true);
     // PR-07 follow-up: dropped applicator FK embed; resolve via profile_public_view.
@@ -264,7 +333,7 @@ export default function Jobs() {
       .from('jobs')
       .select(`
         *,
-        customer:customers(farm_name, account_number),
+        customer:customers(farm_name, account_number, phone),
         vehicle:vehicles(vehicle_name),
         job_fields(crop, field:fields(field_name, crop_type, county, state)),
         job_chemicals(rate_per_acre, rate_unit, product:products(product_name)),
@@ -314,7 +383,7 @@ export default function Jobs() {
 
     // Resolve applicator + created/updated-by names via the public profile view.
     type RawJob = Record<string, unknown> & {
-      customer?: { farm_name?: string; account_number?: string | null };
+      customer?: { farm_name?: string; account_number?: string | null; phone?: string | null };
       vehicle?: { vehicle_name?: string };
       job_fields?: Array<{ crop?: string | null; field?: { field_name?: string; crop_type?: string | null; county?: string | null; state?: string | null } }>;
       job_chemicals?: Array<{ rate_per_acre?: number | null; rate_unit?: string | null; product?: { product_name?: string } }>;
@@ -399,6 +468,7 @@ export default function Jobs() {
         field_count: Array.isArray(j.job_fields) ? j.job_fields.length : 0,
         customers: jobCustomers,
         customers_search: customersSearch,
+        customer_phone: j.customer?.phone ?? null,
         locations,
         crops,
         chemicals,
@@ -421,6 +491,11 @@ export default function Jobs() {
     fetchCrews();
     fetchBatches();
   }, [fetchReferenceLists, fetchTags, fetchCrews, fetchBatches]);
+
+  // Load the per-user list layout once we know who's signed in.
+  useEffect(() => {
+    fetchListSettings();
+  }, [fetchListSettings]);
 
   // Refetch only when the APPLIED filters change (SEARCH / CLEAR ALL / preset).
   useEffect(() => {
@@ -455,6 +530,13 @@ export default function Jobs() {
   // (criteria #2 + #5 + #6).
   const visibleJobs = useMemo(() => {
     return jobs.filter((j) => {
+      // Field-app parity #8: "Show Completed Jobs" toggle. When OFF, hide
+      // completed jobs from the list (and therefore from totals + selection,
+      // which read this same view). An explicit status filter that DOES include
+      // 'completed' wins — the user clearly asked for them.
+      if (!listSettings.showCompleted && j.status === 'completed' && !applied.statuses.includes('completed')) {
+        return false;
+      }
       const facts: JobFilterFacts = {
         tagIds: new Set(j.jobTags.map((t) => t.id)),
         crops: j.crops,
@@ -465,7 +547,7 @@ export default function Jobs() {
       };
       return jobMatchesClientFilters(facts, applied);
     });
-  }, [jobs, applied]);
+  }, [jobs, applied, listSettings.showCompleted]);
 
   // jobId -> set of assigned tag ids, for the bulk modal's starting state.
   const assignmentsByJob = useMemo(() => {
@@ -684,6 +766,12 @@ export default function Jobs() {
       ),
     },
     {
+      key: 'customer_phone',
+      header: 'Customer Phone',
+      sortable: true,
+      render: (r) => r.customer_phone || <span className="text-secondary">-</span>,
+    },
+    {
       key: 'locations',
       header: 'Locations',
       render: (r) => (
@@ -728,6 +816,15 @@ export default function Jobs() {
       ),
     },
     {
+      // List Settings "Wind Direction" toggle (acceptance criterion #3). The
+      // job list has no wind-direction source yet — that rides the as-applied
+      // weather capture (Open-Meteo, section #19). The toggle/column exist now
+      // for parity; the cell renders "-" until that data lands on the job.
+      key: 'wind_direction',
+      header: 'Wind Dir.',
+      render: () => <span className="text-secondary">-</span>,
+    },
+    {
       key: 'total_acres',
       header: 'Tot. ac',
       sortable: true,
@@ -740,6 +837,14 @@ export default function Jobs() {
       sortable: true,
       className: 'text-right tabular-nums',
       render: (r) => (r.remaining_acres ?? r.total_acres)?.toLocaleString() || '-',
+    },
+    {
+      // List Settings "Call Date" toggle — when the customer called in the job
+      // (jobs.call_date, added in #1). OFF by default; "-" when unset.
+      key: 'call_date',
+      header: 'Call Date',
+      sortable: true,
+      render: (r) => r.call_date ? parseLocalDate(r.call_date).toLocaleDateString() : <span className="text-secondary">-</span>,
     },
     {
       // "Scheduled" = job_date — the SAME date the Start/End filters and the
@@ -755,6 +860,19 @@ export default function Jobs() {
       header: 'Status',
       sortable: true,
       render: (r) => <Badge variant={statusVariant[r.status]}>{r.status.replace('_', ' ')}</Badge>,
+    },
+    {
+      key: 'vehicle_name',
+      header: 'Vehicle',
+      sortable: true,
+      render: (r) => r.vehicle_name && r.vehicle_name !== '-' ? r.vehicle_name : <span className="text-secondary">-</span>,
+    },
+    {
+      key: 'total_price_cents',
+      header: 'Price',
+      sortable: true,
+      className: 'text-right tabular-nums',
+      render: (r) => r.total_price_cents ? fmtCents(r.total_price_cents) : <span className="text-secondary">-</span>,
     },
     {
       key: 'created_by_name',
@@ -778,7 +896,16 @@ export default function Jobs() {
     },
   ];
 
-  const columns = canBulkAction ? [checkboxCol, ...dataColumns] : dataColumns;
+  // Field-app parity #8: keep only the columns the user chose to show, IN
+  // REGISTRY ORDER (orderedVisibleColumnIds), so toggling visibility never
+  // reorders the table. The checkbox column is presentation-fixed and always
+  // leads when bulk actions are allowed.
+  const orderedVisibleIds = orderedVisibleColumnIds(listSettings);
+  const columnByKey = new Map(dataColumns.map((c) => [c.key, c]));
+  const visibleDataColumns = orderedVisibleIds
+    .map((id) => columnByKey.get(id))
+    .filter((c): c is Column<JobRow> => Boolean(c));
+  const columns = canBulkAction ? [checkboxCol, ...visibleDataColumns] : visibleDataColumns;
 
   if (loading) {
     return (
@@ -830,6 +957,14 @@ export default function Jobs() {
               </Button>
             </>
           )}
+          <Button
+            variant="secondary"
+            icon={<Settings2 className="w-4 h-4" />}
+            onClick={() => setListSettingsOpen(true)}
+            showChevron={false}
+          >
+            List Settings
+          </Button>
           <Button
             icon={<Plus className="w-4 h-4" />}
             onClick={() => navigate('/jobs/new')}
@@ -1156,6 +1291,17 @@ export default function Jobs() {
         applicators={applicators}
         batches={allBatches.map((b) => ({ id: b.id, name: b.name }))}
         onApplied={() => { fetchBatches(); fetchJobs(); }}
+      />
+
+      {/* Field-app parity #8: per-user List Settings (column on/off + show
+          completed). Changes apply immediately and persist to the signed-in
+          user's own row (RLS-scoped). */}
+      <ListSettingsModal
+        open={listSettingsOpen}
+        onClose={() => setListSettingsOpen(false)}
+        settings={listSettings}
+        onChange={updateListSettings}
+        saving={savingSettings}
       />
     </div>
   );
