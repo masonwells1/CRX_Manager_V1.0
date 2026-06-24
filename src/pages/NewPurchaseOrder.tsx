@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState , useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Plus, Trash2, Save } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
@@ -31,6 +31,7 @@ function nextKey() {
 
 export default function NewPurchaseOrder() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { profile } = useAuth();
   const { toast } = useToast();
 
@@ -94,6 +95,20 @@ export default function NewPurchaseOrder() {
     fetchProducts();
     setTimeout(() => { initialLoadDone.current = true; }, 0);
   }, [fetchProducts]);
+
+  // Reorder deep-link: pre-fill the first line from ?product=<id> once products load.
+  const preselectProductId = searchParams.get('product') || '';
+  const preselectApplied = useRef(false);
+  useEffect(() => {
+    if (preselectApplied.current || !preselectProductId || products.length === 0) return;
+    const prod = products.find((p) => p.id === preselectProductId);
+    if (!prod) return;
+    preselectApplied.current = true;
+    setItems((prev) => prev.map((i, idx) => (idx === 0
+      ? { ...i, product_id: prod.id, unit_cost: prod.current_cost || 0, unit_size: prod.unit_size || '' }
+      : i)));
+    if (prod.vendor) setVendor((v) => v || prod.vendor || '');
+  }, [products, preselectProductId]);
 
   const addItem = () => {
     setItems((prev) => [
