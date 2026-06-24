@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> F5 Receiving Hub read-only board shipped (search → open PO lines by product + commitment snapshot; 18 products / 14.7k units inbound). Next: the inline "Receive" confirm-popup write (reuse receive_po_items, compliance-review, Mason tests), then F6 dashboard alerts, F7 quick wins.
+> F5 Receiving Hub DONE (board + inline Receive write, compliance CLEAN, Mason tests). Original 5 features (F1–F5) all shipped to the branch. Remaining: F6 dashboard Finance Snapshot + alerts, then F7 quick wins — then write the Morning Summary + STOP.
 
 ---
 
@@ -36,9 +36,9 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 
 ## F5 — Receiving Hub  (frontend like To-Ship + confirm-popup receive — review-gated writes)
 - [x] New `/receiving-hub` page (admin+sales_rep) + pagePermissions + Sidebar link (Inventory group). Reuses To-Ship's PO query.
-- [~] Product/vendor/PO search → open PO lines grouped BY PRODUCT (ordered/received/remaining + arrival) → "Open PO" link per line. Read-only v1 (cross-checked live: 10 POs / 18 products / 14,715 units inbound). REMAINING: inline **"Receive"** confirm-popup write reusing `receive_po_items` (QuickReceive's RPC) — next tick, review-gated.
+- [x] Product/vendor/PO search → open PO lines grouped BY PRODUCT (ordered/received/remaining + arrival) → per-line **"Receive"** (Modal w/ qty input capped at remaining → `receive_po_items`, in-full, condition 'good', via runCriticalAction; idempotent + actor-bound + p_allow_over_receive:false) + "Open PO" link. Verified live RPC signature/guards before building; compliance-reviewer CLEAN. Cross-checked live (10 POs / 18 products / 14,715 units). NOT fired against live.
 - [x] Per-product Commitment Snapshot (On Floor · On Hold · On Order · Spoken-For · Net) via get_inventory_position() — included on each product card.
-- [!] Live exercise of receive → Mason tests (receive write not built yet — coming next tick).
+- [!] Live exercise of receive → Mason tests. READY TO TEST: Receiving Hub → "Receive" button on a PO line (enter a quantity ≤ remaining). Loop did NOT fire it against live prod.
 
 ## F6 — Dashboard at-a-glance numbers + alerts  (frontend, reuses existing RPCs — added 2026-06-23 eve)
 - [ ] `Dashboard.tsx` — admin-only "Finance Snapshot" card via existing `financial_dashboard_summary` RPC (overdue AR 60+/90+, bills due this week, prepay balance, MTD profit), each a clickable deep-link; gate on role==='admin'
@@ -56,6 +56,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F5b: Receiving Hub inline "Receive" write. Per-PO-line Receive button → Modal w/ qty input (capped at remaining) → receive_po_items (one line, in-full, condition 'good', via runCriticalAction; idempotent + actor-bound + no over-receive). Verified live RPC signature/guards (item shape {po_item_id,quantity,condition}; in-progress-of-receiving over-receive guard) before building; compliance-reviewer CLEAN (fixed 1 LOW stale comment). NOT fired against live. Zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F5a: Receiving Hub read-only board. New /receiving-hub (admin+sales_rep) + route + pagePermissions + Sidebar link. Search a product → open PO lines across vendors (ordered/received/remaining + arrival) grouped by product + a commitment snapshot (On Floor/Hold/Order/Spoken-For/Net) from get_inventory_position. "Open PO" link to receive (inline receive write = next tick). Zero DB. Cross-checked live (10 POs/18 products/14,715 units). Gate green (lint+typecheck+build+2179 tests). Gotcha: pulled get_inventory_position out of Promise.all so assertRpcCoverage's `= await` regex sees the assertRpcResult capture.
 - F4b: "Net Money Position" summary strip on the AR workspace — Total Owed (get_ar_aging) · Unused Prepay (sum prepay_credits.balance_cents) · Net (owed−prepay). Read-only, zero DB. Cross-checked live ($60,941.02 owed / $0 prepay), units verified. Gate green (lint+typecheck+build+2179 tests).
 - F4a: Accounts Receivable workspace. New admin-only `/accounts-receivable` page renders the 4 money screens (Aging/Payment History/Prepayments/Ledger) as tabs (?tab=, active-only mount). +route +pagePermissions(admin) +Sidebar link. Additive (old routes kept), zero new write/logic; /payments (PaymentAllocation, admin+sales_rep) deliberately NOT merged (verified untouched). Gate green (lint+typecheck+build+2179 tests). BlendTickets F3 deferred (0 live data + needs order-picker).

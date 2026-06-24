@@ -1,19 +1,26 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackageCheck, Search, Truck, ArrowRight } from 'lucide-react';
+import { PackageCheck, Search, Truck, ArrowRight, PackagePlus } from 'lucide-react';
 import Card from '../components/ui/Card';
+import Button from '../components/ui/Button';
+import Modal from '../components/ui/Modal';
 import { SkeletonCard } from '../components/ui/Skeleton';
 import EmptyState from '../components/ui/EmptyState';
 import { supabase, assertRpcResult } from '../lib/db';
+import { runCriticalAction } from '../lib/criticalAction';
 import { Sentry } from '../lib/sentry';
 import { useToast } from '../components/ui/Toast';
+import { useAuth } from '../contexts/AuthContext';
+import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import type { InventoryPositionRow } from '../types';
 
 // F5 — Receiving Hub: "To-Ship for inbound". Search a product and see every open
 // purchase-order line for it across vendors (ordered − received), with a
-// commitment snapshot from get_inventory_position(). v1 is READ-ONLY (open the PO
-// to receive); the inline confirm-popup receive (reuse receive_po_items) lands in
-// a follow-up tick and is review-gated + Mason-tested.
+// commitment snapshot from get_inventory_position(). A per-line "Receive" button
+// records receipt in place via the existing receive_po_items RPC (in-full qty,
+// condition 'good', Main Warehouse); partial/damaged receiving + printed receipts
+// stay on the PO detail page. Built + compliance-reviewed but NOT fired against
+// live — Mason click-tests it.
 
 type POItemRaw = {
   id: string;
@@ -34,6 +41,7 @@ type PORaw = {
 
 type POLine = {
   po_id: string;
+  po_item_id: string;
   po_number: string;
   vendor: string;
   expected_date: string | null;
@@ -56,9 +64,16 @@ const fmtUnits = (n: number) =>
 export default function ReceivingHub() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { profile } = useAuth();
   const [groups, setGroups] = useState<ProductGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
+  // F5 inline receive (confirm-popup write, reuses receive_po_items).
+  const receiveIdem = useIdempotencyKey('receive_po_items', profile?.id || '');
+  const [receiveTarget, setReceiveTarget] = useState<{ line: POLine; product_name: string } | null>(null);
+  const [receiveQty, setReceiveQty] = useState('');
+  const [receiving, setReceiving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -72,8 +87,8 @@ export default function ReceivingHub() {
           .order('expected_delivery_date', { ascending: true, nullsFirst: false })
           .limit(500);
 
-        // get_inventory_position pulled out of any Promise.all so the assertRpcCoverage
-        // regex sees the `= await supabase.rpc(...)` capture (it keys on `= await`).
+        // get_inventory_position is its own `= await supabase.rpc(...)` (not inside a
+        // Promise.all) so the assert-rpc-result lint rule tracks the destructured `data`.
         const { data: posRaw } = await supabase.rpc('get_inventory_position');
         const pos = assertRpcResult<InventoryPositionRow[]>(posRaw, 'get_inventory_position') || [];
         const posByProduct = new Map<string, InventoryPositionRow>();
@@ -98,6 +113,7 @@ export default function ReceivingHub() {
             }
             g.lines.push({
               po_id: po.id,
+              po_item_id: it.id,
               po_number: po.po_number ?? '—',
               vendor: po.vendor ?? 'Unknown',
               expected_date: po.expected_delivery_date,
@@ -122,7 +138,45 @@ export default function ReceivingHub() {
     return () => {
       cancelled = true;
     };
-  }, [toast]);
+  }, [toast, refreshKey]);
+
+  const handleReceiveConfirm = async () => {
+    if (!receiveTarget || !profile) return;
+    const qty = Number(receiveQty);
+    if (!qty || qty <= 0) {
+      toast('error', 'Enter a quantity greater than 0');
+      return;
+    }
+    if (qty > receiveTarget.line.remaining) {
+      toast('error', `Can't receive more than the ${fmtUnits(receiveTarget.line.remaining)} remaining`);
+      return;
+    }
+    const line = receiveTarget.line;
+    const name = receiveTarget.product_name;
+    const idemKey = receiveIdem.getKey();
+    await runCriticalAction({
+      action: async () => {
+        const { data, error } = await supabase.rpc('receive_po_items', {
+          p_items: [{ po_item_id: line.po_item_id, quantity: qty, condition: 'good' }],
+          p_performed_by: profile.id,
+          p_idempotency_key: idemKey,
+          p_allow_over_receive: false,
+        });
+        if (error) throw error;
+        assertRpcResult(data, 'receive_po_items');
+      },
+      toast,
+      setLoading: setReceiving,
+      successMessage: `Received ${fmtUnits(qty)} of ${name}`,
+      sentryTag: 'receive_po_items',
+      onSuccess: () => {
+        receiveIdem.resetKey();
+        setReceiveTarget(null);
+        setReceiveQty('');
+        setRefreshKey((k) => k + 1);
+      },
+    });
+  };
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -230,11 +284,19 @@ export default function ReceivingHub() {
                             <td className="px-2 py-1.5 text-right font-mono">{fmtUnits(l.ordered)}</td>
                             <td className="px-2 py-1.5 text-right font-mono text-secondary">{fmtUnits(l.received)}</td>
                             <td className="px-2 py-1.5 text-right font-mono font-semibold text-amber-600">{fmtUnits(l.remaining)}</td>
-                            <td className="px-2 py-1.5 text-right">
+                            <td className="px-2 py-1.5 text-right whitespace-nowrap">
+                              <button
+                                onClick={() => { setReceiveTarget({ line: l, product_name: g.product_name }); setReceiveQty(String(l.remaining)); }}
+                                className="inline-flex items-center gap-1 px-2 py-1 mr-2 rounded-lg bg-crx-green text-white text-xs font-medium hover:bg-crx-green/90 transition-colors"
+                                title="Receive this line"
+                              >
+                                <PackagePlus className="w-3.5 h-3.5" />
+                                Receive
+                              </button>
                               <button
                                 onClick={() => navigate(`/purchase-orders/${l.po_id}`)}
                                 className="inline-flex items-center gap-1 text-xs font-medium text-crx-green hover:underline"
-                                title="Open the purchase order to receive"
+                                title="Open the purchase order"
                               >
                                 Open PO
                                 <ArrowRight className="w-3 h-3" />
@@ -254,8 +316,47 @@ export default function ReceivingHub() {
 
       <p className="text-xs text-secondary flex items-center gap-1.5">
         <Truck className="w-3.5 h-3.5" />
-        Receiving happens on the purchase order. An inline one-click receive is coming next.
+        Receive a line in place, or open the PO for partial/damaged receiving and a printed receipt.
       </p>
+
+      <Modal
+        open={!!receiveTarget}
+        onClose={() => { setReceiveTarget(null); setReceiveQty(''); }}
+        title="Receive Stock"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-secondary">
+            Receive <span className="font-medium text-nav-dark">{receiveTarget?.product_name}</span> on PO{' '}
+            <span className="font-medium text-nav-dark">{receiveTarget?.line.po_number}</span> from{' '}
+            <span className="font-medium text-nav-dark">{receiveTarget?.line.vendor}</span>.{' '}
+            {receiveTarget ? fmtUnits(receiveTarget.line.remaining) : '0'} units remaining.
+          </p>
+          <div>
+            <label htmlFor="receive-qty" className="block text-xs font-medium text-secondary mb-1">Quantity to receive</label>
+            <input
+              id="receive-qty"
+              type="number"
+              min={0}
+              max={receiveTarget?.line.remaining}
+              value={receiveQty}
+              onChange={(e) => setReceiveQty(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            />
+            <p className="text-[11px] text-secondary mt-1">Goes to Main Warehouse in good condition. For partial/damaged or a printed receipt, open the PO.</p>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <Button variant="ghost" onClick={() => { setReceiveTarget(null); setReceiveQty(''); }}>Cancel</Button>
+            <Button
+              icon={<PackagePlus className="w-4 h-4" />}
+              onClick={handleReceiveConfirm}
+              loading={receiving}
+              disabled={!receiveQty || Number(receiveQty) <= 0}
+            >
+              Receive
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }
