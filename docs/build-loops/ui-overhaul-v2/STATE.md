@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> F6 DONE — admin Finance Snapshot card on the home Dashboard (Open AR/Overdue 60+/Prepay/On Order/Profit + over-credit alert, all deep-linked). Last item: F7 quick wins (Invoices Order# column + balance filter, sticky AR cards, sidebar "Operations"→"Dashboard" rename) — then Morning Summary + STOP.
+> ✅ ALL BUILD WORK DONE (F1–F7). 20 feature commits on `feat/ui-overhaul-v2`, nothing on main, nothing deployed. Loop STOPPED. Only `[!]` Mason-gated items remain (live-exercise of the write buttons in review; per-feature "ship it"; the deferred follow-ups). See Morning Summary below.
 
 ---
 
@@ -45,10 +45,10 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [~] Alert cards — included: AR Overdue-60+ tile + a "customers over credit limit" banner (customers_over_credit_count). DEFERRED `[!]`: overdue **bills** (no AP-due field in the summary RPC) + blend tickets awaiting approval (no field + 0 live blend tickets) — both would need a new query, skipped per the no-new-query rule.
 
 ## F7 — Quick wins batch  (tiny, low-risk — added 2026-06-23 eve)
-- [ ] `Invoices.tsx` — clickable Order # column (join order_number off order_id)
-- [ ] `Invoices.tsx` — "Has a balance" filter toggle (balance_cents > 0)
-- [ ] `ARaging.tsx` — sticky summary cards (Total/Current/30-89/90+) on scroll
-- [ ] `Sidebar.tsx` — rename home link "Operations" → "Dashboard" (fixes label collision) + auto-close mobile drawer after tap
+- [x] `Invoices.tsx` — clickable Order # column (resolve order_number via an order_ids→orders map, like the salesman lookup). Cross-checked: 4/4 chem invoices carry order_id.
+- [x] `Invoices.tsx` — "Has a balance" filter toggle (balance_cents > 0).
+- [!] `ARaging.tsx` sticky summary cards — DEFERRED. ARaging shows aging as a column table (current/30/60/90 per customer), not a row of pinnable stat cards, so "pin the cards" doesn't cleanly apply. Low value; skipped.
+- [x] `Sidebar.tsx` — renamed home link "Operations" → "Dashboard" (fixes the collision with the Operations nav group). Mobile drawer auto-close on tap was ALREADY present (onClick={onClose} on every mobile nav link).
 
 ---
 
@@ -56,6 +56,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F7: quick wins. Invoices list — clickable Order # column (order_ids→orders map) + "Has a balance" filter toggle. Sidebar — home link "Operations"→"Dashboard" (fixes label collision; mobile auto-close already present). ARaging sticky-cards deferred (column table, not pinnable cards). Zero DB. Cross-checked 4/4 chem invoices have order_id + balance. Gate green (lint+typecheck+build+2179 tests).
 - F6: admin Finance Snapshot card on the home Dashboard. New components/dashboard/FinanceSnapshotCard.tsx reuses financial_dashboard_summary (dollars) → Open AR · Overdue 60+ · Unused Prepay · On Order · Period Profit tiles (each deep-linked) + a customers-over-credit alert banner. Admin-only render. Read-only, zero DB. Units verified (fmt = plain USD). Gate green (lint+typecheck+build+2179 tests). Bills-due/blend-approvals omitted (no RPC field).
 - F5b: Receiving Hub inline "Receive" write. Per-PO-line Receive button → Modal w/ qty input (capped at remaining) → receive_po_items (one line, in-full, condition 'good', via runCriticalAction; idempotent + actor-bound + no over-receive). Verified live RPC signature/guards (item shape {po_item_id,quantity,condition}; in-progress-of-receiving over-receive guard) before building; compliance-reviewer CLEAN (fixed 1 LOW stale comment). NOT fired against live. Zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F5a: Receiving Hub read-only board. New /receiving-hub (admin+sales_rep) + route + pagePermissions + Sidebar link. Search a product → open PO lines across vendors (ordered/received/remaining + arrival) grouped by product + a commitment snapshot (On Floor/Hold/Order/Spoken-For/Net) from get_inventory_position. "Open PO" link to receive (inline receive write = next tick). Zero DB. Cross-checked live (10 POs/18 products/14,715 units). Gate green (lint+typecheck+build+2179 tests). Gotcha: pulled get_inventory_position out of Promise.all so assertRpcCoverage's `= await` regex sees the assertRpcResult capture.
@@ -73,5 +74,27 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - F1a: Orders list searchable by product name. Reused the existing per-order order_items query (added product_name col), built a `product_names` string per order, added it to DataTable searchKeys. Zero DB. Gate green (lint+typecheck+build+2179 tests); cross-checked 277/277 order_items carry product_name (94 distinct).
 - Scaffolding: PLAN.md + STATE.md + LOOP_PROMPT.md for the 5-feature v2 loop. Branch off prod db9b32ea.
 
-## Morning summary
-_(written when the loop stops)_
+## Morning summary — loop finished clean 2026-06-24 (~00:55)
+
+**Everything is built and pushed to the branch `feat/ui-overhaul-v2`. NOTHING is on `main`, NOTHING is deployed.** 20 feature commits, every one passing lint + typecheck + build + 2179 tests, each write button compliance-reviewed and NOT fired against live.
+
+**What's built (all 7):**
+1. **Search by product everywhere** — Orders list + Quotes list search by product; ⌘K palette jumps to individual Sales reports. (Quotes also gained a working customer search — fixed a dead one.)
+2. **Customer 360** — summary cards on the customer page are now clickable to their tabs; a slide-out "peek" drawer opens from the Orders, Invoices, and Deliveries lists (AR, orders, deliveries, tier at a glance).
+3. **Act from the list** — Quotes → "Convert to Order"; Deliveries → "Mark Complete" (signed-by popup); Inventory low-stock → "Reorder"; (Orders "Create Invoice" + BlendTickets deferred — see below).
+4. **One money screen** — new `/accounts-receivable` workspace tabs AR Aging / Payments / Prepayments / Ledger, with a **Net Money Position** strip (owed − unused prepay). `/payments` kept separate so sales reps keep access.
+5. **Receiving Hub** — `/receiving-hub`: search a product → every open PO for it + a commitment snapshot; inline **Receive** button.
+6. **Dashboard Finance Snapshot** (admin) — Open AR / Overdue 60+ / Unused Prepay / On Order / Period Profit + an over-credit alert, all clickable.
+7. **Quick wins** — Invoices: clickable Order # column + "Has a balance" filter; sidebar "Operations" → "Dashboard".
+
+**👉 You need to test these 3 WRITE buttons on the preview (the loop did NOT click them):**
+- Quotes → **Convert to Order** (the box-check icon on a sent/revised quote).
+- Deliveries → **Complete** (on an in-progress delivery; type a signed-by name).
+- Receiving Hub → **Receive** (on a PO line; enter a qty ≤ remaining).
+Each reuses the exact RPC the detail page already uses; all idempotent, actor-bound, compliance-clean.
+
+**How to review:** open the Vercel preview for `feat/ui-overhaul-v2`, log in, click through. Tell me which features to **ship** and I'll merge them to `main` per your OK.
+
+**Deferred (honest, low-value-now):** Orders "Create Invoice" inline (gating logic belongs on the detail page) · BlendTickets inline (0 live blend tickets) · field-app product search + Fields-tab balance (0 field-app data) · ARaging sticky cards (it's a column table, not cards) · "bills due" / blend-approval dashboard alerts (no field in the RPC) · converting old AR routes to redirects + a customer-once AR refactor (your call — changes muscle memory). All recorded above.
+
+**Safety:** branch only, zero DB changes the whole way, one-click Vercel rollback is moot since nothing deployed. Resume any deferred item by pointing me at this file.

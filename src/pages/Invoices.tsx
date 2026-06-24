@@ -23,7 +23,7 @@ import { formatCents as fmt } from '../lib/money';
 import { SkeletonTable, SkeletonCard } from '../components/ui/Skeleton';
 import { getSeasonDates } from '../utils/season';
 
-type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null };
+type InvoiceRow = Invoice & { customer_name: string; salesman_name: string | null; order_number: string | null };
 
 const STATUS_OPTIONS: { value: InvoiceStatus | ''; label: string }[] = [
   { value: '', label: 'All Statuses' },
@@ -82,6 +82,7 @@ export default function Invoices() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [quickDeliveryOnly, setQuickDeliveryOnly] = useState(false);
+  const [balanceOnly, setBalanceOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [posting, setPosting] = useState(false);
 
@@ -151,10 +152,21 @@ export default function Invoices() {
       ((salesmen || []) as { id: string; full_name: string }[]).forEach((s) => { salesmanMap[s.id] = s.full_name; });
     }
 
-    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman_id?: string | null }>).map((inv) => ({
+    // F7: resolve the source order number so the list can show + link to it.
+    const orderIds = [...new Set(
+      ((data || []) as Array<{ order_id?: string | null }>).map((inv) => inv.order_id).filter(Boolean) as string[]
+    )];
+    const orderMap: Record<string, string> = {};
+    if (orderIds.length > 0) {
+      const { data: ords } = await supabase.from('orders').select('id, order_number').in('id', orderIds);
+      ((ords || []) as { id: string; order_number: string }[]).forEach((o) => { orderMap[o.id] = o.order_number; });
+    }
+
+    const rows = ((data || []) as Array<Record<string, unknown> & { customer?: { farm_name: string }; salesman_id?: string | null; order_id?: string | null }>).map((inv) => ({
       ...inv,
       customer_name: inv.customer?.farm_name || 'Unknown',
       salesman_name: inv.salesman_id ? salesmanMap[inv.salesman_id] || null : null,
+      order_number: inv.order_id ? orderMap[inv.order_id] || null : null,
     })) as unknown as InvoiceRow[];
     setInvoices(rows);
     setLoading(false);
@@ -168,6 +180,7 @@ export default function Invoices() {
     if (statusFilter && inv.status !== statusFilter) return false;
     if (typeFilter && inv.invoice_type !== typeFilter) return false;
     if (quickDeliveryOnly && !inv.is_quick_delivery) return false;
+    if (balanceOnly && !(inv.balance_cents > 0)) return false;
     return true;
   });
 
@@ -471,6 +484,23 @@ export default function Invoices() {
       ),
     },
     {
+      key: 'order_number',
+      header: 'Order #',
+      sortable: true,
+      render: (row) =>
+        row.order_number && row.order_id ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); navigate(`/orders/${row.order_id}`); }}
+            className="text-crx-green hover:underline font-medium"
+            title="Open the source order"
+          >
+            {row.order_number}
+          </button>
+        ) : (
+          <span className="text-gray-400">—</span>
+        ),
+    },
+    {
       key: 'customer_name',
       header: 'Customer',
       sortable: true,
@@ -744,6 +774,17 @@ export default function Invoices() {
                 >
                   <Zap className="w-3.5 h-3.5" />
                   Quick Deliveries
+                </button>
+                <button
+                  onClick={() => setBalanceOnly((v) => !v)}
+                  className={`flex items-center gap-1 px-3 py-2 text-sm border rounded-lg transition-colors ${
+                    balanceOnly
+                      ? 'border-crx-green/50 bg-crx-green-tint text-crx-green'
+                      : 'border-gray-200 text-secondary hover:border-gray-300'
+                  }`}
+                  title="Show only invoices with money still owed"
+                >
+                  Has a balance
                 </button>
                 {filtered.some((i) => selectableStatuses.includes(i.status)) && (
                   <button
