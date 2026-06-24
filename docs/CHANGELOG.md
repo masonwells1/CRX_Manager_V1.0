@@ -4,6 +4,15 @@ All significant development milestones, in reverse chronological order.
 
 ---
 
+## 2026-06-23 (night) — Field-acre-billing Track B #1: applicator-mix-up auto-alert (SHIPPED LIVE)
+
+Owner approved "ship to main". The first Track B item on top of the now-live Track A two-acre model. **Frontend-only, no DB change.** Built on `feat/applied-acres-divergence-alert`, merged to `main` (merge `90177c75`) and deployed to croprxsolutions.app (`dpl_8zpi1tbV5cRmKEAPY89U5d2r5ssP`; rollback = prior prod `dpl_7yTXs3oFWDcSoK9PZ7Y5KTM749se`).
+
+- **As-applied vs system-acreage review flag** on the Field Application Invoice billing page (`src/pages/FieldApplicationInvoice.tsx`, the `field_app_locations`/`applied_acres` engine). Each field row now shows the billable **System acres** on file (`billableAcres` = override ?? measured ?? legacy total) next to the **Applied acres** input, and auto-flags any field ≥10% off — **over OR under** — with a per-row amber badge ("30% over — review") + a top-of-tab banner counting the off fields. Automates the owner's manual catch ("the as-applied is X% off what our system says" → an applicator sprayed part of one field under the wrong name). **Advisory only** — never blocks or changes the bill; `system_acres` is display-only (never written).
+- New tested helper `acreDivergence(entered, reference)` → `{pct, direction:'over'|'under'} | null` in `src/lib/fieldGeometry.ts` (+6 unit tests; reuses Track A's `acreDivergencePct`/threshold). Relabeled the page's "Total Acres" column → "System Acres" (ties Track A's billable number into billing).
+- typecheck + lint + build clean; **2179 tests pass**; Codex `review --base main` = no correctness issues. (Caught + fixed a JSX em-dash rendering as literal text — use the `&mdash;` entity; proven in the built bundle.)
+- Open: Mason's in-app real-file smoke on the live page (prod operationally empty). Rest of Track B (per-acre billing tie-in) still gated on Mason's word.
+
 ## 2026-06-23 (eve) — UI/workflow overhaul: Operations Command Center + visual refresh (SHIPPED LIVE)
 
 Owner asked to fix the app being "very clicky / spread out." Built on `feat/ui-overhaul` (read-only, branch-only, hold-for-review), reviewed by Mason on a Vercel branch preview, then merged to `main` (merge `5a1d659b`) and deployed to croprxsolutions.app (`dpl_FX5GPwW6DcXvroJhyAWaUBu7vMKm`; rollback = prior prod `2a0e20f7`). Pure frontend — **zero DB changes**.
