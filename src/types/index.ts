@@ -1941,6 +1941,9 @@ export interface Job {
   printed_at: string | null;
   /** Field-app parity #6: nullable FK to a ground crew (filterable job attribute). */
   ground_crew_id: string | null;
+  /** Field-app parity #3: nullable FK to a named job batch. The OLD free-text
+   *  batch_id label is separate and unchanged. */
+  batch_ref: string | null;
   created_by: string | null;
   deleted_at: string | null;
   created_at: string;
@@ -1977,6 +1980,19 @@ export interface JobTagAssignment {
   job_id: string;
   tag_id: string;
   created_at: string;
+}
+
+// Field-app parity #3 (2026-06-24): job batches.
+// A NAMED batch groups a set of jobs so the office can process/print them as
+// one unit. A job belongs to at most one batch via jobs.batch_ref (a separate
+// column from the OLD free-text jobs.batch_id label, which is unchanged).
+export interface JobBatch {
+  id: string;
+  name: string;
+  description: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // Field-app parity #6 (2026-06-24): Ground crews.

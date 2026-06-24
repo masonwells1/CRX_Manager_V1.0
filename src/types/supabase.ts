@@ -4105,6 +4105,41 @@ export type Database = {
           },
         ]
       }
+      job_batches: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          description: string | null
+          id: string
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          name?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_batches_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       jobs: {
         Row: {
           additional_info: string | null
@@ -4112,6 +4147,7 @@ export type Database = {
           applicator_id: string | null
           applied_acres: number
           batch_id: string | null
+          batch_ref: string | null
           call_date: string | null
           consultant_id: string | null
           created_at: string
@@ -4154,6 +4190,7 @@ export type Database = {
           applicator_id?: string | null
           applied_acres?: number
           batch_id?: string | null
+          batch_ref?: string | null
           call_date?: string | null
           consultant_id?: string | null
           created_at?: string
@@ -4195,6 +4232,7 @@ export type Database = {
           applicator_id?: string | null
           applied_acres?: number
           batch_id?: string | null
+          batch_ref?: string | null
           call_date?: string | null
           consultant_id?: string | null
           created_at?: string
@@ -4271,6 +4309,13 @@ export type Database = {
             columns: ["ground_crew_id"]
             isOneToOne: false
             referencedRelation: "ground_crews"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "jobs_batch_ref_fkey"
+            columns: ["batch_ref"]
+            isOneToOne: false
+            referencedRelation: "job_batches"
             referencedColumns: ["id"]
           },
           {

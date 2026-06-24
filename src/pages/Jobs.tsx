@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users } from 'lucide-react';
+import { Plus, Download, FileText, Trash2, ChevronDown, ChevronRight, Tag, Tags, Search, SlidersHorizontal, Users, Layers } from 'lucide-react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Badge, { type BadgeVariant } from '../components/ui/Badge';
@@ -23,6 +23,8 @@ import JobTagChip from '../components/jobs/JobTagChip';
 import JobTagsManager from '../components/jobs/JobTagsManager';
 import JobTagsBulkModal from '../components/jobs/JobTagsBulkModal';
 import GroundCrewsManager from '../components/jobs/GroundCrewsManager';
+import JobBatchesManager from '../components/jobs/JobBatchesManager';
+import JobBatchAssignModal from '../components/jobs/JobBatchAssignModal';
 import MultiSelectDropdown, { type MultiSelectOption } from '../components/jobs/MultiSelectDropdown';
 import {
   type JobFilters,
@@ -32,7 +34,7 @@ import {
   activeJobFilterCount,
   jobMatchesClientFilters,
 } from '../components/jobs/jobFilters';
-import type { Job, JobStatus, JobTag, GroundCrew } from '../types';
+import type { Job, JobStatus, JobTag, GroundCrew, JobBatch } from '../types';
 
 interface JobChemSummary {
   product_name: string;
@@ -68,6 +70,8 @@ type JobRow = Job & {
   counties: string[];
   states: string[];
   chemicalNames: string[];
+  /** Field-app parity #3: the named batch this job belongs to (null = none). */
+  batch_name: string | null;
 };
 
 const statusVariant: Record<JobStatus, BadgeVariant> = {
@@ -161,11 +165,15 @@ export default function Jobs() {
   const [vehicles, setVehicles] = useState<{ id: string; vehicle_name: string }[]>([]);
   const [appServices, setAppServices] = useState<{ id: string; name: string }[]>([]);
   const [crews, setCrews] = useState<GroundCrew[]>([]);
+  // Field-app parity #3: batch catalog (drives the Batch filter + assign modal).
+  const [allBatches, setAllBatches] = useState<JobBatch[]>([]);
   // Field-app parity #4: tag catalog (drives the Job Tags multi-select filter).
   const [allTags, setAllTags] = useState<JobTag[]>([]);
   const [manageTagsOpen, setManageTagsOpen] = useState(false);
   const [bulkTagsOpen, setBulkTagsOpen] = useState(false);
   const [manageCrewsOpen, setManageCrewsOpen] = useState(false);
+  const [manageBatchesOpen, setManageBatchesOpen] = useState(false);
+  const [assignBatchOpen, setAssignBatchOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -219,6 +227,19 @@ export default function Jobs() {
     setCrews((data || []) as GroundCrew[]);
   }, []);
 
+  // Field-app parity #3: load the full batch catalog for the filter + managers.
+  const fetchBatches = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('job_batches')
+      .select('*')
+      .order('name');
+    if (error) {
+      Sentry.captureException(error, { tags: { source: 'fetch', action: 'load_job_batches' } });
+      return;
+    }
+    setAllBatches((data || []) as JobBatch[]);
+  }, []);
+
   // Field-app parity #4: load the full tag catalog for the filter + managers.
   const fetchTags = useCallback(async () => {
     const { data, error } = await supabase
@@ -246,7 +267,8 @@ export default function Jobs() {
         job_fields(crop, field:fields(field_name, crop_type, county, state)),
         job_chemicals(rate_per_acre, rate_unit, product:products(product_name)),
         job_field_shares(customer_id, split_pct, is_primary, customer:customers(farm_name, account_number)),
-        job_tag_assignments(tag:job_tags(id, name, color, created_by, created_at, updated_at))
+        job_tag_assignments(tag:job_tags(id, name, color, created_by, created_at, updated_at)),
+        batch:job_batches(name)
       `)
       .is('deleted_at', null)
       .order('job_date', { ascending: false })
@@ -261,6 +283,8 @@ export default function Jobs() {
     if (applied.vehicleIds.length > 0) query = query.in('vehicle_id', applied.vehicleIds);
     if (applied.typeIds.length > 0) query = query.in('application_service_id', applied.typeIds);
     if (applied.groundCrewIds.length > 0) query = query.in('ground_crew_id', applied.groundCrewIds);
+    // Field-app parity #3: filter by named batch (server-side on jobs.batch_ref).
+    if (applied.batchIds.length > 0) query = query.in('batch_ref', applied.batchIds);
     // Customer filter is applied SERVER-side (before the 500-row limit) and matches
     // the primary jobs.customer_id OR any job carrying a per-field share for one of
     // the selected customers — so an older job billed to a share customer isn't
@@ -294,6 +318,7 @@ export default function Jobs() {
       job_chemicals?: Array<{ rate_per_acre?: number | null; rate_unit?: string | null; product?: { product_name?: string } }>;
       job_field_shares?: Array<{ customer_id: string; split_pct: number; is_primary: boolean; customer?: { farm_name?: string; account_number?: string | null } }>;
       job_tag_assignments?: Array<{ tag?: JobTag | null }>;
+      batch?: { name?: string } | null;
       applicator_id?: string | null;
       created_by?: string | null;
       updated_by?: string | null;
@@ -381,6 +406,7 @@ export default function Jobs() {
         counties,
         states,
         chemicalNames,
+        batch_name: j.batch?.name ?? null,
       };
     });
     setJobs(rows);
@@ -391,7 +417,8 @@ export default function Jobs() {
     fetchReferenceLists();
     fetchTags();
     fetchCrews();
-  }, [fetchReferenceLists, fetchTags, fetchCrews]);
+    fetchBatches();
+  }, [fetchReferenceLists, fetchTags, fetchCrews, fetchBatches]);
 
   // Refetch only when the APPLIED filters change (SEARCH / CLEAR ALL / preset).
   useEffect(() => {
@@ -447,6 +474,22 @@ export default function Jobs() {
     return map;
   }, [jobs]);
 
+  // Field-app parity #3: jobId -> its current batch_ref (null = no batch), for
+  // the assign modal's coverage hints + member counts in the batch manager.
+  const batchByJob = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const j of jobs) map.set(j.id, j.batch_ref ?? null);
+    return map;
+  }, [jobs]);
+
+  const batchMemberCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const j of jobs) {
+      if (j.batch_ref) counts[j.batch_ref] = (counts[j.batch_ref] ?? 0) + 1;
+    }
+    return counts;
+  }, [jobs]);
+
   const { selected, toggleSelect, toggleAll, clearSelection, selectedCount, selectedRows, allSelected } =
     useRowSelection({
       data: visibleJobs,
@@ -487,6 +530,8 @@ export default function Jobs() {
     () => appServices.map((s) => ({ value: s.id, label: s.name })), [appServices]);
   const crewOptions: MultiSelectOption[] = useMemo(
     () => crews.map((c) => ({ value: c.id, label: c.name })), [crews]);
+  const batchOptions: MultiSelectOption[] = useMemo(
+    () => allBatches.map((b) => ({ value: b.id, label: b.name })), [allBatches]);
   const tagOptions: MultiSelectOption[] = useMemo(
     () => allTags.map((t) => ({ value: t.id, label: t.name, color: t.color })), [allTags]);
   const statusOptions: MultiSelectOption[] = useMemo(() => [
@@ -562,6 +607,7 @@ export default function Jobs() {
   };
 
   const bulkActions = [
+    { key: 'batch', label: 'Add to Batch', icon: <Layers className="w-4 h-4" />, onClick: () => setAssignBatchOpen(true) },
     { key: 'tags', label: 'Edit Job Tags', icon: <Tag className="w-4 h-4" />, onClick: () => setBulkTagsOpen(true) },
     { key: 'csv', label: 'Export CSV', icon: <Download className="w-4 h-4" />, onClick: handleExportCSV },
     { key: 'pdf', label: 'Download PDF', icon: <FileText className="w-4 h-4" />, onClick: handleExportPDF, loading: exporting },
@@ -587,6 +633,23 @@ export default function Jobs() {
               <span className="text-xs text-secondary self-center">+{r.jobTags.length - 3}</span>
             )}
           </div>
+        )
+      ),
+    },
+    {
+      // Field-app parity #3: the named batch this job belongs to (a single
+      // chip; "-" when un-batched). Multi-select assign sets it from the list.
+      key: 'batch_name',
+      header: 'Batch',
+      sortable: true,
+      render: (r) => (
+        r.batch_name ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded bg-crx-green/10 text-crx-green">
+            <Layers className="w-3 h-3" />
+            {r.batch_name}
+          </span>
+        ) : (
+          <span className="text-secondary">-</span>
         )
       ),
     },
@@ -740,6 +803,14 @@ export default function Jobs() {
             <>
               <Button
                 variant="secondary"
+                icon={<Layers className="w-4 h-4" />}
+                onClick={() => setManageBatchesOpen(true)}
+                showChevron={false}
+              >
+                Batches
+              </Button>
+              <Button
+                variant="secondary"
                 icon={<Users className="w-4 h-4" />}
                 onClick={() => setManageCrewsOpen(true)}
                 showChevron={false}
@@ -885,6 +956,14 @@ export default function Jobs() {
                 onChange={(v) => patchDraft('groundCrewIds', v)}
                 placeholder="All Crews"
                 emptyText="No crews yet"
+              />
+              <MultiSelectDropdown
+                label="Batch"
+                options={batchOptions}
+                selected={draft.batchIds}
+                onChange={(v) => patchDraft('batchIds', v)}
+                placeholder="All Batches"
+                emptyText="No batches yet"
               />
               <div>
                 <label className="block text-xs font-medium text-secondary mb-1">Crop</label>
@@ -1044,6 +1123,24 @@ export default function Jobs() {
         onClose={() => setManageCrewsOpen(false)}
         crews={crews}
         onChanged={() => { fetchCrews(); fetchJobs(); }}
+      />
+
+      {/* Field-app parity #3: job batches manager + bulk assign-to-batch. */}
+      <JobBatchesManager
+        open={manageBatchesOpen}
+        onClose={() => setManageBatchesOpen(false)}
+        batches={allBatches}
+        memberCounts={batchMemberCounts}
+        onChanged={() => { fetchBatches(); fetchJobs(); }}
+      />
+      <JobBatchAssignModal
+        open={assignBatchOpen}
+        onClose={() => setAssignBatchOpen(false)}
+        selectedJobIds={selectedRows.map((j) => j.id)}
+        batches={allBatches}
+        batchByJob={batchByJob}
+        onManageBatches={() => { setAssignBatchOpen(false); setManageBatchesOpen(true); }}
+        onApplied={() => { fetchBatches(); fetchJobs(); }}
       />
     </div>
   );

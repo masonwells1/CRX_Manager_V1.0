@@ -35,6 +35,8 @@ describe('emptyJobFilters / isJobFiltersEmpty', () => {
     expect(isJobFiltersEmpty(filters({ customerIds: ['c1'] }))).toBe(false);
     expect(isJobFiltersEmpty(filters({ startDate: '2026-01-01' }))).toBe(false);
     expect(isJobFiltersEmpty(filters({ tagIds: ['t1'] }))).toBe(false);
+    // Field-app parity #3: the batch filter is a real dimension too.
+    expect(isJobFiltersEmpty(filters({ batchIds: ['b1'] }))).toBe(false);
   });
 
   it('whitespace-only text filters are still empty', () => {
@@ -56,6 +58,18 @@ describe('activeJobFilterCount', () => {
       startDate: '2026-01-01',
     });
     expect(activeJobFilterCount(f)).toBe(5);
+  });
+
+  it('counts the batch filter as one dimension (field-app parity #3)', () => {
+    expect(activeJobFilterCount(filters({ batchIds: ['b1', 'b2'] }))).toBe(1);
+    // batch combines additively with another dimension.
+    expect(activeJobFilterCount(filters({ batchIds: ['b1'], crop: 'corn' }))).toBe(2);
+  });
+
+  it('the batch filter never affects the client-side predicate (server-side)', () => {
+    // batchIds is applied on the PostgREST query, not in jobMatchesClientFilters,
+    // so adding it must leave the client predicate result unchanged (inert here).
+    expect(jobMatchesClientFilters(facts(), filters({ batchIds: ['b1'] }))).toBe(true);
   });
 
   it('ignores whitespace-only text dimensions', () => {

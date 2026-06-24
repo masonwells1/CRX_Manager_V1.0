@@ -30,6 +30,7 @@ export interface JobFilters {
   vehicleIds: string[];       // multi-select on jobs.vehicle_id
   typeIds: string[];          // multi-select on jobs.application_service_id ("Type")
   groundCrewIds: string[];    // multi-select on jobs.ground_crew_id
+  batchIds: string[];         // multi-select on jobs.batch_ref (field-app parity #3)
   statuses: string[];         // multi-select on jobs.status
   startDate: string;          // job_date >=
   endDate: string;            // job_date <=
@@ -49,6 +50,7 @@ export const emptyJobFilters: JobFilters = {
   vehicleIds: [],
   typeIds: [],
   groundCrewIds: [],
+  batchIds: [],
   statuses: [],
   startDate: '',
   endDate: '',
@@ -69,6 +71,7 @@ export function isJobFiltersEmpty(f: JobFilters): boolean {
     f.vehicleIds.length === 0 &&
     f.typeIds.length === 0 &&
     f.groundCrewIds.length === 0 &&
+    f.batchIds.length === 0 &&
     f.statuses.length === 0 &&
     f.startDate === '' &&
     f.endDate === '' &&
@@ -90,6 +93,7 @@ export function activeJobFilterCount(f: JobFilters): number {
   if (f.vehicleIds.length) n++;
   if (f.typeIds.length) n++;
   if (f.groundCrewIds.length) n++;
+  if (f.batchIds.length) n++;
   if (f.statuses.length) n++;
   if (f.startDate) n++;
   if (f.endDate) n++;
