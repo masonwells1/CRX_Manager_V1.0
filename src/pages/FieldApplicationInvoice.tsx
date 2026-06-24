@@ -14,7 +14,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { logActivity } from '../lib/activityLogger';
 import { Sentry } from '../lib/sentry';
 import { formatCents as fmt } from '../lib/money';
-import { billableAcres, acreDivergence } from '../lib/fieldGeometry';
+import { billableAcres, acreDivergence, appliedMatchesSystem } from '../lib/fieldGeometry';
 import Breadcrumbs from '../components/ui/Breadcrumbs';
 import ConfirmModal from '../components/ui/ConfirmModal';
 import SelectLocationsModal from '../components/field-app/SelectLocationsModal';
@@ -833,6 +833,20 @@ export default function FieldApplicationInvoice() {
                               <AlertTriangle className="w-3 h-3" />
                               {Math.round(div.pct)}% {div.direction} &mdash; review
                             </div>
+                          )}
+                          {/* F2 Branch B: make the common auto-fill case visible — the >=10% flag above
+                              never fires when applied == system, so show whether this row still bills the
+                              full field (the unedited default) or was changed. Advisory only. */}
+                          {!div && loc.applied_acres != null && loc.applied_acres > 0 && loc.system_acres != null && (
+                            appliedMatchesSystem(loc.applied_acres, loc.system_acres) ? (
+                              <div className="mt-1 text-right text-xs text-gray-500">
+                                Full field &mdash; matches acres on file
+                              </div>
+                            ) : (
+                              <div className="mt-1 text-right text-xs text-gray-500">
+                                Edited (field is {loc.system_acres.toFixed(1)} ac)
+                              </div>
+                            )
                           )}
                         </td>
                       </tr>

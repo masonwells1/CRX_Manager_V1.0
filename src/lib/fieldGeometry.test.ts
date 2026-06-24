@@ -11,6 +11,7 @@ import {
   isAcreDenominatedColumn,
   parseAcreInput,
   drawingRingMetrics,
+  appliedMatchesSystem,
   ACRE_BAND_MIN,
   ACRE_BAND_MAX,
 } from './fieldGeometry';
@@ -227,5 +228,23 @@ describe('drawingRingMetrics (live draw HUD)', () => {
   it('reports 0 acres until there are at least 3 distinct corners', () => {
     expect(drawingRingMetrics([[-100, 40], [-100, 40.01], [-100, 40]])).toEqual({ acres: 0, corners: 2 });
     expect(drawingRingMetrics([[-100, 40]])).toEqual({ acres: 0, corners: 1 });
+  });
+});
+
+describe('appliedMatchesSystem (F2 full-field vs edited display)', () => {
+  it('true when applied equals system (the auto-filled full-field default)', () => {
+    expect(appliedMatchesSystem(40, 40)).toBe(true);
+    expect(appliedMatchesSystem(40.02, 40)).toBe(true); // within float epsilon
+  });
+
+  it('false when the biller edited applied to a different number', () => {
+    expect(appliedMatchesSystem(30, 40)).toBe(false); // sprayed part of the field
+    expect(appliedMatchesSystem(40.1, 40)).toBe(false);
+  });
+
+  it('false when either value is missing (nothing to compare)', () => {
+    expect(appliedMatchesSystem(null, 40)).toBe(false);
+    expect(appliedMatchesSystem(40, null)).toBe(false);
+    expect(appliedMatchesSystem(undefined, undefined)).toBe(false);
   });
 });

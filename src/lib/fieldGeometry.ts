@@ -180,3 +180,19 @@ export function acreDivergence(
   // acreDivergencePct already guaranteed both are non-null and reference !== 0.
   return { pct, direction: (entered as number) > (reference as number) ? 'over' : 'under' };
 }
+
+/**
+ * Whether the as-applied acres on a field-application invoice line still EQUAL the field's system
+ * acres on file — i.e. the biller accepted the auto-filled default (billing the whole field) rather
+ * than typing a different number. Compared within a small epsilon to absorb float/rounding noise;
+ * both values must be present. Powers the "full field / edited" display on the billing page
+ * (SOW-F2 Branch B): the >=10% divergence flag never fires on this common auto-fill case, so this
+ * makes "this bills the whole field" visible at a glance for a conscious confirm.
+ */
+export function appliedMatchesSystem(
+  applied: number | null | undefined,
+  system: number | null | undefined,
+): boolean {
+  if (applied == null || system == null) return false;
+  return Math.abs(applied - system) < 0.05;
+}

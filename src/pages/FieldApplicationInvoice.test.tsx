@@ -335,6 +335,80 @@ describe('FieldApplicationInvoice — existing GROUP member invoice', () => {
 });
 
 /**
+ * F2 Branch B — make the common auto-fill case visible. applied_acres defaults to the field's
+ * system acres, so the >=10% divergence flag never fires on a full-field bill. The Locations tab
+ * (the default tab) now shows whether each row still bills the full field (unedited default) or
+ * was changed — advisory only.
+ */
+describe('FieldApplicationInvoice — applied-acres "full field vs edited" display (F2)', () => {
+  function setupWithLocation(appliedAcres: number) {
+    mockUseParams.mockReturnValue({ id: 'inv-loc' });
+    mockFrom.mockImplementation(
+      makeFromMock({
+        invoices: {
+          data: [
+            {
+              id: 'inv-loc',
+              invoice_number: 'INV-3001',
+              invoice_type: 'field_application',
+              job_id: null,
+              blend_ticket_id: null,
+              invoice_date: '2026-04-29',
+              header_notes: '',
+              status: 'draft',
+              application_service_id: null,
+              invoice_group_id: null,
+              total_amount_cents: 100000,
+            },
+          ],
+        },
+        field_app_locations: {
+          data: [
+            {
+              field_id: 'f1',
+              map_number: 1,
+              total_acres: 40,
+              planted_acres: null,
+              applied_acres: appliedAcres,
+              crop_type: 'corn',
+              wind_direction: null,
+              sort_order: 0,
+              // system_acres = billableAcres(override, measured, total) = 40
+              field: {
+                field_name: 'North 80',
+                crop_type: 'corn',
+                total_acres: 40,
+                measured_acres: 40,
+                override_acres: null,
+                customer: { farm_name: 'Farm A' },
+              },
+            },
+          ],
+        },
+        invoice_items: { data: [] },
+        invoice_shares: { data: [] },
+      }),
+    );
+  }
+
+  it('shows "Full field — matches acres on file" when applied equals system (the auto-fill)', async () => {
+    setupWithLocation(40); // applied == system (40)
+    await renderPage();
+    await waitFor(() => expect(screen.getByText('North 80')).toBeInTheDocument());
+    expect(screen.getByText(/Full field/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Edited/i)).not.toBeInTheDocument();
+  });
+
+  it('shows "Edited (field is 40.0 ac)" when applied was changed within the divergence threshold', async () => {
+    setupWithLocation(38); // 5% under system — not divergent, but edited off the full-field default
+    await renderPage();
+    await waitFor(() => expect(screen.getByText('North 80')).toBeInTheDocument());
+    expect(screen.getByText(/Edited \(field is 40\.0 ac\)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Full field/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
  * Codex r13 — segregation routing: only an ENGINE-built field invoice (neither job_id
  * nor blend_ticket_id) belongs in this per-acre editor. A blend-ticket-built field
  * invoice (blend_ticket_id set, job_id NULL) has quantity lines and no

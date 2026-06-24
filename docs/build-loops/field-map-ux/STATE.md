@@ -17,8 +17,8 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
 | #  | Feature                         | Risk                         | Status        | Ship (commit / deploy / rollback) |
 |----|---------------------------------|------------------------------|---------------|-----------------------------------|
 | F1 | Guided map drawing              | frontend-only                | ✅ SHIPPED LIVE | af43b4ad / dpl_p4bBKSNZ… / dpl_4XMB3Uti… |
-| F3 | Per-field customer on import    | frontend-only                | GREEN — SHIPPING |                                |
-| F2 | Applicator mix-up flag (Branch B display) | frontend-only + investigate | IN PROGRESS  |                       |
+| F3 | Per-field customer on import    | frontend-only                | ✅ SHIPPED LIVE | 7781b9e7 / dpl_BJnLLXsu… / dpl_AkUf5oqh… |
+| F2 | Applicator mix-up flag (Branch B display) | frontend-only + investigate | GREEN — SHIPPING (auto-nudge PARKED) |    |
 
 ## Session / worktree
 - Running in worktree `C:\CRX_Manager\.claude\worktrees\modest-chatelet-7b2c74` on branch **`feat/field-map-ux`**
@@ -75,6 +75,24 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
   auto-fill case). **PARK the auto-nudge** (below) for Mason.
 
 ## Owner gates / parked items
+- **⛔ PARKED FOR MASON — F2 applicator mix-up AUTO-NUDGE (a decision, not code).** What I shipped for F2
+  is the safe DISPLAY improvement (each billing row now says "Full field — matches acres on file" when it
+  bills the whole field's acreage unedited, or "Edited (field is X ac)" when you changed it). What I did
+  **not** build — because it needs your call — is an *automatic* "this might be wrong, confirm before posting"
+  nudge on a full-field bill. The reason: to flag a full-field bill as *possibly* wrong, the system needs an
+  independent signal of *what was actually sprayed*, and **today there isn't one** — the "applied acres" are
+  typed at billing time and default to the whole field, so "applied = whole field" is just the normal case;
+  auto-nudging every full-field job would cry wolf. Your options (pick one when you're ready — I'll build it):
+  1. **Capture it at application time.** Add a quick "Did you spray the whole field? ☑ Yes / ◻ I sprayed
+     less → ___ ac" when an application is recorded, so billing has a real number to compare. **This needs a
+     new data field = a database migration → owner-gated, I did NOT build it.**
+  2. **A per-job "partial application" toggle** the biller flips, which then turns the advisory into a
+     stronger confirm. Lighter than #1; still a small data addition.
+  3. **Leave it as the clearer display only** (what shipped). No automatic nudge; the biller eyeballs the
+     "Full field" label and edits when they know only part was sprayed.
+  My recommendation: **option 3 for now** (it shipped, zero risk), and revisit #1 if/when you start
+  recording applications in the field — that's the only place a trustworthy "actually applied" number can
+  come from. None of these is urgent; all of #1/#2 wait for your word (they touch the database).
 - **(F1 review — confirmed + fixed, not parked)** The review caught a real footgun: because the field
   map always runs in "multi-part capable" mode, an early version of the new headline button would have
   wiped ALL parts of a multi-part field in one click. Fixed: the button is now part-count aware and
@@ -107,7 +125,19 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
   sets only the fallback + clears overrides; the UI, the step gate, and the save all resolve via one
   `resolveFieldCustomerId`) and added aria-labels to the per-row pickers. NEW pure helpers
   `lib/fieldImportCustomers.ts` (+ tests) + `components/fields/FieldCustomerAssignment.tsx` (+ tests);
-  edited `BulkFieldImport.tsx`. _(commit sha / deploy / rollback filled after push.)_
+  edited `BulkFieldImport.tsx`.
+  - commit: **7781b9e7** on `main`. Vercel prod deploy: **dpl_BJnLLXsufAX6V9kMp6YUw64r6A3F** — READY on
+    croprxsolutions.app. Rollback target: **dpl_AkUf5oqhtrnSc7bNPDmMShpZLEmG** (prev prod c2cccbc6 = F1 state).
+  - Mason does the in-app click-test with a real multi-grower `.zip` (auth wall → no logged-in smoke here).
+- **F2 — Applicator mix-up flag → Branch B display (SHIPPING; auto-nudge PARKED).** Investigate-first
+  concluded there is no independent "actually applied" signal (see plan above), so per Mason's pre-made
+  decision I built ONLY the safe display: a per-row "Full field — matches acres on file" vs "Edited (field
+  is X ac)" badge on the field-application billing page, making the common auto-fill case visible (the ≥10%
+  divergence flag never fires on it). NEW pure helper `fieldGeometry.appliedMatchesSystem` (+ tests); badge
+  in `FieldApplicationInvoice.tsx` (+ 2 page render tests proving both states). Focused adversarial review:
+  **CONFIRMED-CLEAN** (mutually exclusive with the existing flag, null-safe, display-only, no billing-logic
+  change). The auto-nudge is PARKED for Mason (see Owner gates above). _(commit / deploy / rollback filled
+  after push.)_
 
 ## Final summary
 - _(fill at end: what shipped, what parked, what Mason still needs to do - in-app click-tests, any
