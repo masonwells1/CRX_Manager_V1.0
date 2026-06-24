@@ -56,6 +56,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'cycle-counts', label: 'Cycle Counts', category: 'Inventory', roles: ['admin'] },
   { key: 'purchase-orders', label: 'Supplier POs', category: 'Inventory', roles: ['admin', 'sales_rep'] },
   { key: 'receiving', label: 'Receiving', category: 'Inventory', roles: ['admin', 'sales_rep'] },
+  { key: 'receiving-hub', label: 'Receiving Hub', category: 'Inventory', roles: ['admin', 'sales_rep'] },
   { key: 'returns', label: 'Returns', category: 'Inventory', roles: ['admin', 'sales_rep'] },
 
   // Finance

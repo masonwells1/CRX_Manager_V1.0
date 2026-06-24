@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> F4 DONE — AR workspace (tabs) + Net Money Position card, /payments kept separate (old-route redirects left as a Mason follow-up). Next: F5 Receiving Hub (To-Ship for inbound; has real data — open POs; confirm-popup receive write reusing QuickReceive's RPC), then F6 dashboard alerts, F7 quick wins.
+> F5 Receiving Hub read-only board shipped (search → open PO lines by product + commitment snapshot; 18 products / 14.7k units inbound). Next: the inline "Receive" confirm-popup write (reuse receive_po_items, compliance-review, Mason tests), then F6 dashboard alerts, F7 quick wins.
 
 ---
 
@@ -35,10 +35,10 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [x] "Net Money Position" card — DONE. Summary strip on the AR workspace: Total Owed (get_ar_aging dollars) · Unused Prepay (sum prepay_credits.balance_cents ÷100) · Net Position (owed − prepay). Read-only, zero DB. Cross-checked live: $60,941.02 owed / $0 prepay / $60,941.02 net (matches SUM(invoices.balance_cents)). Units verified (get_ar_aging=dollars per CustomerContextCard usage; prepay=cents).
 
 ## F5 — Receiving Hub  (frontend like To-Ship + confirm-popup receive — review-gated writes)
-- [ ] New `/receiving-hub` page + `pagePermissions.ts` entry (admin+sales_rep) + nav link
-- [ ] Product search → open PO lines across vendors (ordered − received) → inline "Receive" confirm popup (reuse QuickReceive's RPC)
-- [ ] Per-product Commitment Snapshot (On Floor · On Hold · On Order · Spoken-For · Available) via get_inventory_position()
-- [!] Live exercise of receive → Mason tests (loop must NOT auto-receive against live prod)
+- [x] New `/receiving-hub` page (admin+sales_rep) + pagePermissions + Sidebar link (Inventory group). Reuses To-Ship's PO query.
+- [~] Product/vendor/PO search → open PO lines grouped BY PRODUCT (ordered/received/remaining + arrival) → "Open PO" link per line. Read-only v1 (cross-checked live: 10 POs / 18 products / 14,715 units inbound). REMAINING: inline **"Receive"** confirm-popup write reusing `receive_po_items` (QuickReceive's RPC) — next tick, review-gated.
+- [x] Per-product Commitment Snapshot (On Floor · On Hold · On Order · Spoken-For · Net) via get_inventory_position() — included on each product card.
+- [!] Live exercise of receive → Mason tests (receive write not built yet — coming next tick).
 
 ## F6 — Dashboard at-a-glance numbers + alerts  (frontend, reuses existing RPCs — added 2026-06-23 eve)
 - [ ] `Dashboard.tsx` — admin-only "Finance Snapshot" card via existing `financial_dashboard_summary` RPC (overdue AR 60+/90+, bills due this week, prepay balance, MTD profit), each a clickable deep-link; gate on role==='admin'
@@ -56,6 +56,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F5a: Receiving Hub read-only board. New /receiving-hub (admin+sales_rep) + route + pagePermissions + Sidebar link. Search a product → open PO lines across vendors (ordered/received/remaining + arrival) grouped by product + a commitment snapshot (On Floor/Hold/Order/Spoken-For/Net) from get_inventory_position. "Open PO" link to receive (inline receive write = next tick). Zero DB. Cross-checked live (10 POs/18 products/14,715 units). Gate green (lint+typecheck+build+2179 tests). Gotcha: pulled get_inventory_position out of Promise.all so assertRpcCoverage's `= await` regex sees the assertRpcResult capture.
 - F4b: "Net Money Position" summary strip on the AR workspace — Total Owed (get_ar_aging) · Unused Prepay (sum prepay_credits.balance_cents) · Net (owed−prepay). Read-only, zero DB. Cross-checked live ($60,941.02 owed / $0 prepay), units verified. Gate green (lint+typecheck+build+2179 tests).
 - F4a: Accounts Receivable workspace. New admin-only `/accounts-receivable` page renders the 4 money screens (Aging/Payment History/Prepayments/Ledger) as tabs (?tab=, active-only mount). +route +pagePermissions(admin) +Sidebar link. Additive (old routes kept), zero new write/logic; /payments (PaymentAllocation, admin+sales_rep) deliberately NOT merged (verified untouched). Gate green (lint+typecheck+build+2179 tests). BlendTickets F3 deferred (0 live data + needs order-picker).
 - F3c: InventoryPage low-stock "Reorder" button → deep-links to a pre-filled New PO (`?product=`). No write (navigation only), reuses NewPurchaseOrder's v1 pre-fill. Zero DB. Gate green (lint+typecheck+build+2179 tests).
