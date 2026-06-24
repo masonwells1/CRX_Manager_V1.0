@@ -1,4 +1,8 @@
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { supabase, assertRpcResult } from '../lib/db';
+import { formatUSD } from '../lib/money';
+import Card from '../components/ui/Card';
 import ARaging from './ARaging';
 import PaymentHistory from './PaymentHistory';
 import PrepaymentManager from './PrepaymentManager';
@@ -6,10 +10,10 @@ import CustomerTransactionReview from './CustomerTransactionReview';
 
 // F4: one Accounts Receivable workspace that gathers the four previously-separate
 // admin-only money screens (Aging / Payment History / Prepayments / Ledger) under
-// one tabbed page. This v1 renders each existing page as-is in a tab (only the
-// active tab mounts, so each fetches only when shown) — it does NOT change any
-// page's logic or roles. The old routes still work; converting them to redirects
-// and sharing a single customer picker across tabs are follow-ups for Mason.
+// one tabbed page, with a "Net Money Position" summary strip on top. This v1
+// renders each existing page as-is in a tab (only the active tab mounts) — it does
+// NOT change any page's logic or roles. The old routes still work; converting them
+// to redirects and sharing a single customer picker across tabs are follow-ups.
 // NOTE: /payments (PaymentAllocation) is intentionally NOT merged here — it is
 // admin+sales_rep and must stay its own page (CLAUDE.md red line).
 
@@ -25,6 +29,36 @@ export default function AccountsReceivable() {
   const raw = searchParams.get('tab');
   const tab = TABS.some((t) => t.key === raw) ? (raw as (typeof TABS)[number]['key']) : 'aging';
 
+  // Net Money Position: total owed (get_ar_aging, dollars) minus unused customer
+  // prepay credits (prepay_credits.balance_cents). Read-only summary, zero DB.
+  const [owed, setOwed] = useState<number | null>(null);
+  const [prepay, setPrepay] = useState<number>(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const { data: arData } = await supabase.rpc('get_ar_aging', { p_as_of_date: today });
+        const arRows = assertRpcResult<Array<{ total_outstanding?: number }>>(arData, 'get_ar_aging');
+        const owedSum = (arRows || []).reduce((s, r) => s + Number(r.total_outstanding || 0), 0);
+        const { data: prepayRows } = await supabase.from('prepay_credits').select('balance_cents');
+        const prepaySum = (prepayRows || []).reduce((s, r) => s + Number(r.balance_cents || 0), 0) / 100;
+        if (!cancelled) {
+          setOwed(owedSum);
+          setPrepay(prepaySum);
+        }
+      } catch {
+        if (!cancelled) setOwed(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const net = owed !== null ? owed - prepay : null;
+
   return (
     <div className="space-y-4">
       <div>
@@ -33,6 +67,30 @@ export default function AccountsReceivable() {
           Aging, payments, prepayments, and the customer ledger — in one place.
         </p>
       </div>
+
+      {owed !== null && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <Card>
+            <p className="text-[11px] font-medium text-secondary uppercase tracking-wide">Total Owed</p>
+            <p className={`text-2xl font-semibold font-heading mt-1 ${owed > 0 ? 'text-red-600' : 'text-crx-green'}`}>
+              {formatUSD(owed)}
+            </p>
+            <p className="text-xs text-secondary mt-1">outstanding on open invoices</p>
+          </Card>
+          <Card>
+            <p className="text-[11px] font-medium text-secondary uppercase tracking-wide">Unused Prepay</p>
+            <p className="text-2xl font-semibold font-heading mt-1 text-crx-green">{formatUSD(prepay)}</p>
+            <p className="text-xs text-secondary mt-1">customer credits not yet applied</p>
+          </Card>
+          <Card>
+            <p className="text-[11px] font-medium text-secondary uppercase tracking-wide">Net Position</p>
+            <p className={`text-2xl font-semibold font-heading mt-1 ${(net ?? 0) > 0 ? 'text-red-600' : 'text-crx-green'}`}>
+              {formatUSD(net ?? 0)}
+            </p>
+            <p className="text-xs text-secondary mt-1">true exposure = owed minus unused prepay</p>
+          </Card>
+        </div>
+      )}
 
       <div className="flex gap-1 border-b border-gray-200 overflow-x-auto">
         {TABS.map((t) => (

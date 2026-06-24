@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> F3 done (Convert/Complete/Reorder shipped; Orders-Create-Invoice + BlendTickets deferred). F4 started: AR workspace tabbed page shipped (additive, admin-only, /payments kept separate). Next: F4 "Net Money Position" card (optional), then F5 Receiving Hub, F6 dashboard alerts, F7 quick wins.
+> F4 DONE — AR workspace (tabs) + Net Money Position card, /payments kept separate (old-route redirects left as a Mason follow-up). Next: F5 Receiving Hub (To-Ship for inbound; has real data — open POs; confirm-popup receive write reusing QuickReceive's RPC), then F6 dashboard alerts, F7 quick wins.
 
 ---
 
@@ -32,7 +32,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [x] One tabbed Accounts Receivable workspace — new `AccountsReceivable.tsx` at `/accounts-receivable` (admin-only) renders ARaging / PaymentHistory / PrepaymentManager / CustomerTransactionReview as tabs (`?tab=`, only the active tab mounts). Route + pagePermissions(admin) + Sidebar link added. Additive, no page-logic change. NO new write → gate-proven + Mason's preview is the review (verified /payments untouched).
 - [x] 🚩 KEEP `/payments` (PaymentAllocation, admin+sales_rep) SEPARATE — confirmed NOT merged/modified (git diff clean of PaymentAllocation).
 - [!] Old routes → redirects — FOLLOW-UP. v1 keeps the 4 old routes + sidebar links live (zero risk); converting them to redirects + pruning the 4 nav links changes Mason's muscle memory → his call in review.
-- [ ] "Net Money Position" card (owed − unused prepay) — remaining; needs a combined owed-minus-prepay read (next F4 tick).
+- [x] "Net Money Position" card — DONE. Summary strip on the AR workspace: Total Owed (get_ar_aging dollars) · Unused Prepay (sum prepay_credits.balance_cents ÷100) · Net Position (owed − prepay). Read-only, zero DB. Cross-checked live: $60,941.02 owed / $0 prepay / $60,941.02 net (matches SUM(invoices.balance_cents)). Units verified (get_ar_aging=dollars per CustomerContextCard usage; prepay=cents).
 
 ## F5 — Receiving Hub  (frontend like To-Ship + confirm-popup receive — review-gated writes)
 - [ ] New `/receiving-hub` page + `pagePermissions.ts` entry (admin+sales_rep) + nav link
@@ -56,6 +56,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F4b: "Net Money Position" summary strip on the AR workspace — Total Owed (get_ar_aging) · Unused Prepay (sum prepay_credits.balance_cents) · Net (owed−prepay). Read-only, zero DB. Cross-checked live ($60,941.02 owed / $0 prepay), units verified. Gate green (lint+typecheck+build+2179 tests).
 - F4a: Accounts Receivable workspace. New admin-only `/accounts-receivable` page renders the 4 money screens (Aging/Payment History/Prepayments/Ledger) as tabs (?tab=, active-only mount). +route +pagePermissions(admin) +Sidebar link. Additive (old routes kept), zero new write/logic; /payments (PaymentAllocation, admin+sales_rep) deliberately NOT merged (verified untouched). Gate green (lint+typecheck+build+2179 tests). BlendTickets F3 deferred (0 live data + needs order-picker).
 - F3c: InventoryPage low-stock "Reorder" button → deep-links to a pre-filled New PO (`?product=`). No write (navigation only), reuses NewPurchaseOrder's v1 pre-fill. Zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F3b: Deliveries "Mark Complete" act-from-list button. Per-row Complete on in_progress deliveries → Modal w/ signed-by input → complete_delivery (full delivery, idempotent + actor-bound, via runCriticalAction). Verified the live RPC is in_progress-only before building; compliance-reviewer CLEAN (fixed the runCriticalAction consistency nit). NOT fired against live. Zero DB. Gate green (lint+typecheck+build+2179 tests).
