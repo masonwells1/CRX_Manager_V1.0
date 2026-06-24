@@ -187,6 +187,7 @@ export default function FieldApplicationInvoice() {
         .from('invoices')
         .select('id, invoice_number, customer_id, total_amount_cents, status, customer:customers!invoices_customer_id_fkey(farm_name)')
         .eq('invoice_group_id', groupId)
+        .is('deleted_at', null) // [B1.2] don't surface a soft-deleted split member in the banner
         .order('invoice_number');
       if (sibs) {
         setSiblings(

@@ -300,7 +300,7 @@ BEGIN
         v_chem_qty_a   numeric := 0;
         v_chem_qty_b   numeric := 0;
         v_rate         numeric;
-        v_qa_cost      bigint;        -- [B1.3] cost of product used on override (grower-share) acres
+        v_qa_unit_cost bigint;        -- [B1.3] PER-UNIT product cost for grower-share lines
       BEGIN
         v_rate := COALESCE((v_chem->>'rate_per_acre')::numeric, 0);
 
@@ -317,10 +317,12 @@ BEGIN
         END LOOP;
 
         IF v_chem_qty_a > 0 THEN
-          -- [B1.3] Capture product COST on the grower-share line. Revenue stays $0
-          -- (the override $/ac line carries revenue), but the cost must count or
-          -- margin is overstated on override-acre invoices.
-          v_qa_cost := safe_cents_qty(COALESCE((v_chem->>'cost_cents')::bigint, 0), v_chem_qty_a);
+          -- [B1.3] Capture product COST on the grower-share line. cost_cents is PER-UNIT
+          -- (same semantics as the priced qty_b branch below, and InvoiceDetail multiplies
+          -- cost_cents * quantity); v_invoice_cost gets the EXTENDED cost. Revenue stays $0
+          -- (the override $/ac line carries revenue), but the cost must count or margin is
+          -- overstated on override-acre invoices.
+          v_qa_unit_cost := COALESCE((v_chem->>'cost_cents')::bigint, 0);
           INSERT INTO invoice_items (
             invoice_id, product_id, description, quantity, unit_size,
             unit_price_cents, extended_cents, cost_cents,
@@ -332,14 +334,14 @@ BEGIN
             (v_chem->>'description') || ' — included in grower share',
             ROUND(v_chem_qty_a, 4),
             v_chem->>'unit_size',
-            0, 0, v_qa_cost,
+            0, 0, v_qa_unit_cost,
             COALESCE((v_chem->>'sort_order')::int, 0),
             v_rate,
             v_chem->>'rate_unit',
             false,
             'manual'
           );
-          v_invoice_cost := v_invoice_cost + v_qa_cost;
+          v_invoice_cost := v_invoice_cost + safe_cents_qty(v_qa_unit_cost, v_chem_qty_a);
         END IF;
 
         IF v_chem_qty_b > 0 THEN
@@ -730,5 +732,88 @@ BEGIN
     'customer_count',    jsonb_array_length(v_customers),
     'shares_detail',     v_shares
   );
+END;
+$function$;
+
+
+-- [B1.2] post_invoice_group must also skip soft-deleted members. delete_invoices
+-- sets invoices.deleted_at but KEEPS invoice_group_id, so without this filter a
+-- soft-deleted split member would be counted, locked, validated, and POSTED here
+-- (or block the group). Reproduced byte-faithful from live + AND deleted_at IS NULL
+-- on every invoice_group_id loop. (Codex P1, 2026-06-23.)
+CREATE OR REPLACE FUNCTION public.post_invoice_group(p_invoice_group_id uuid, p_performed_by uuid, p_idempotency_key text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_actor          uuid := auth.uid();
+  v_existing       jsonb;
+  v_inv            record;
+  v_posted_ids     uuid[] := '{}';
+  v_total_cents    bigint := 0;
+  v_member_count   int := 0;
+  v_result         jsonb;
+BEGIN
+  IF v_actor IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
+  IF p_performed_by IS DISTINCT FROM v_actor THEN
+    RAISE EXCEPTION 'p_performed_by does not match authenticated user';
+  END IF;
+  IF NOT (is_admin() OR is_sales_rep()) THEN
+    RAISE EXCEPTION 'Not authorized: admin or sales role required to post invoice groups';
+  END IF;
+
+  IF p_idempotency_key IS NOT NULL THEN
+    SELECT result INTO v_existing FROM idempotency_keys WHERE idempotency_key = p_idempotency_key AND operation = 'post_invoice_group';
+    IF v_existing IS NOT NULL THEN RETURN v_existing; END IF;
+  END IF;
+
+  IF p_invoice_group_id IS NULL THEN RAISE EXCEPTION 'invoice_group_id is required'; END IF;
+
+  PERFORM 1 FROM invoices WHERE invoice_group_id = p_invoice_group_id AND deleted_at IS NULL FOR UPDATE;
+
+  SELECT COUNT(*) INTO v_member_count FROM invoices WHERE invoice_group_id = p_invoice_group_id AND deleted_at IS NULL;
+  IF v_member_count = 0 THEN RAISE EXCEPTION 'No invoices found in group %', p_invoice_group_id; END IF;
+
+  FOR v_inv IN SELECT * FROM invoices WHERE invoice_group_id = p_invoice_group_id AND deleted_at IS NULL
+  LOOP
+    IF v_inv.status NOT IN ('draft', 'unposted') THEN
+      RAISE EXCEPTION 'Cannot post group — invoice % has status %', v_inv.invoice_number, v_inv.status;
+    END IF;
+    -- PRICING_INCOMPLETE gate (sell-side #2): fail fast before posting any member;
+    -- post_invoice() (called below) also enforces the order-level check.
+    IF v_inv.pricing_pending THEN
+      RAISE EXCEPTION 'PRICING_INCOMPLETE';
+    END IF;
+    PERFORM check_period_open(v_inv.invoice_date);
+  END LOOP;
+
+  FOR v_inv IN SELECT * FROM invoices WHERE invoice_group_id = p_invoice_group_id AND deleted_at IS NULL ORDER BY invoice_number
+  LOOP
+    PERFORM post_invoice(v_inv.id, NULL);
+    v_posted_ids := array_append(v_posted_ids, v_inv.id);
+    v_total_cents := v_total_cents + v_inv.total_amount_cents;
+  END LOOP;
+
+  INSERT INTO activity_feed (event_type, description, performed_by, related_entity_type, related_entity_id)
+  VALUES ('invoice_group_posted',
+          'Posted ' || v_member_count || ' invoice(s) in group — total $' ||
+            (v_total_cents / 100.0)::numeric(12,2),
+          p_performed_by, 'invoice', v_posted_ids[1]);
+
+  v_result := jsonb_build_object(
+    'posted_invoice_ids', to_jsonb(v_posted_ids),
+    'invoice_group_id',   p_invoice_group_id,
+    'total_posted_cents', v_total_cents,
+    'member_count',       v_member_count
+  );
+
+  IF p_idempotency_key IS NOT NULL THEN
+    INSERT INTO idempotency_keys (idempotency_key, operation, result)
+    VALUES (p_idempotency_key, 'post_invoice_group', v_result);
+  END IF;
+
+  RETURN v_result;
 END;
 $function$;
