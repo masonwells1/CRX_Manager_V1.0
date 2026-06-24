@@ -18,7 +18,7 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
 |----|---------------------------------|------------------------------|---------------|-----------------------------------|
 | F1 | Guided map drawing              | frontend-only                | ✅ SHIPPED LIVE | af43b4ad / dpl_p4bBKSNZ… / dpl_4XMB3Uti… |
 | F3 | Per-field customer on import    | frontend-only                | ✅ SHIPPED LIVE | 7781b9e7 / dpl_BJnLLXsu… / dpl_AkUf5oqh… |
-| F2 | Applicator mix-up flag (Branch B display) | frontend-only + investigate | GREEN — SHIPPING (auto-nudge PARKED) |    |
+| F2 | Applicator mix-up flag (Branch B display) | frontend-only + investigate | ✅ SHIPPED LIVE (auto-nudge PARKED) | 062d5cfa / dpl_97vmTtp1… / dpl_BJnLLXsu… |
 
 ## Session / worktree
 - Running in worktree `C:\CRX_Manager\.claude\worktrees\modest-chatelet-7b2c74` on branch **`feat/field-map-ux`**
@@ -136,9 +136,38 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
   divergence flag never fires on it). NEW pure helper `fieldGeometry.appliedMatchesSystem` (+ tests); badge
   in `FieldApplicationInvoice.tsx` (+ 2 page render tests proving both states). Focused adversarial review:
   **CONFIRMED-CLEAN** (mutually exclusive with the existing flag, null-safe, display-only, no billing-logic
-  change). The auto-nudge is PARKED for Mason (see Owner gates above). _(commit / deploy / rollback filled
-  after push.)_
+  change). The auto-nudge is PARKED for Mason (see Owner gates above).
+  - commit: **062d5cfa** on `main`. Vercel prod deploy: **dpl_97vmTtp1HPMuAqzzWQ2gC2yw3TKz** — READY on
+    croprxsolutions.app. Rollback target: **dpl_BJnLLXsufAX6V9kMp6YUw64r6A3F** (prev prod 7781b9e7 = F3 state).
 
-## Final summary
-- _(fill at end: what shipped, what parked, what Mason still needs to do - in-app click-tests, any
-  parked owner decisions)_
+## Final summary (loop COMPLETE — 2026-06-24)
+
+**All three features shipped live to `main` / croprxsolutions.app, one at a time, each behind its own
+review fan-out + full pre-commit gate (lint + build + ~2,100-test suite). Auto-push (frontend-only + green).
+No migration / edge-fn / data-delete was needed or done — the hard line was never crossed.**
+
+| # | What shipped | commit | deploy | rollback |
+|---|---|---|---|---|
+| F1 | Guided map drawing (live acreage chip + instructions + Done/Start-over, part-count-aware Draw/Redraw/Add-part, map loading+retry state) | `af43b4ad` | `dpl_p4bBKSNZbH2mPKjh3jE4iTZMDD5C` | `dpl_4XMB3UtiuhnD1CuSHYF6LYE986sr` |
+| F3 | Per-field customer on shapefile import (Apply-to-all fast path + per-field overrides, single source of truth) | `7781b9e7` | `dpl_BJnLLXsufAX6V9kMp6YUw64r6A3F` | `dpl_AkUf5oqhtrnSc7bNPDmMShpZLEmG` |
+| F2 | "Full field vs edited" badge on the field-app billing page (Branch B display; auto-nudge PARKED) | `062d5cfa` | `dpl_97vmTtp1HPMuAqzzWQ2gC2yw3TKz` | `dpl_BJnLLXsufAX6V9kMp6YUw64r6A3F` |
+
+Built in worktree `C:\CRX_Manager\.claude\worktrees\modest-chatelet-7b2c74` on branch `feat/field-map-ux`
+(off origin/main `5c09c297`; also pushed as a branch). Each Vercel deploy reached READY on production.
+
+**What MASON still needs to do:**
+1. **In-app click-tests** (the app is behind a login wall with no field data, so a logged-in browser smoke
+   was impossible here — component render-tests were the proof; Mason confirms in the real app):
+   - F1: Fields → a field → draw a boundary (watch the live acreage + Done button); the loading/retry state.
+   - F3: import a real multi-grower `.zip`, assign per-field customers (+ the "Apply to all" one-click path).
+   - F2: open a field-application invoice → Locations tab → see the "Full field / Edited" labels.
+   - Rollback is one click in Vercel per feature if anything looks wrong (rollback ids above).
+2. **One parked OWNER DECISION (no code until he says):** the **F2 auto-nudge** — see "Owner gates / parked
+   items" above for the 3 plain-English options. My recommendation: leave it as the display for now (option 3),
+   revisit the in-field capture (option 1) when applications start being recorded in the field. Touches the
+   database, so it waits for his word.
+
+**One pre-existing follow-up noted (NOT a blocker, not introduced by this loop):** hand-drawing a brand-new
+field is single-boundary by design (multi-part fields come from import); the long-standing single→multi
+promotion gap means drawing a 2nd disjoint polygon by hand on a fresh field overwrites the 1st in form state.
+F1's part-count-aware button never leads a user there. Optional future polish; drive multi-part via import today.
