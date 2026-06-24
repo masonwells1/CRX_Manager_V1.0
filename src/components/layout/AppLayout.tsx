@@ -44,6 +44,7 @@ export default function AppLayout() {
       <div className="flex-1 flex flex-col min-w-0">
         <TopBar
           onMenuClick={() => setMobileOpen(true)}
+          onSearchClick={() => setPaletteOpen(true)}
           title={title}
           accent={accent}
         />

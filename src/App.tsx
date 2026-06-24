@@ -85,6 +85,12 @@ const Vendors = lazy(() => import('./pages/Vendors'));
 const SalesReports = lazy(() => import('./pages/SalesReports'));
 const GettingStarted = lazy(() => import('./pages/GettingStarted'));
 const FieldApplicationInvoice = lazy(() => import('./pages/FieldApplicationInvoice'));
+const ToShip = lazy(() => import('./pages/ToShip'));
+// Design-system gallery — available on dev + preview hosts, hidden on the production domain.
+const DesignPreview = lazy(() => import('./pages/DesignPreview'));
+const SHOW_DESIGN_PREVIEW =
+  import.meta.env.DEV ||
+  (typeof window !== 'undefined' && !/(^|\.)croprxsolutions\.app$/.test(window.location.hostname));
 
 // Simple loading spinner shown briefly while a page loads
 function PageLoader() {
@@ -145,6 +151,11 @@ function RootLayout() {
 }
 
 const router = createBrowserRouter([
+  // Dev-only design-system gallery — top-level (outside the auth provider) so it
+  // renders standalone for visual verification. Excluded from production builds.
+  ...(SHOW_DESIGN_PREVIEW
+    ? [{ path: '/design-preview', element: <Suspense fallback={<PageLoader />}><DesignPreview /></Suspense> }]
+    : []),
   {
     element: <RootLayout />,
     children: [
@@ -182,6 +193,7 @@ const router = createBrowserRouter([
           { path: 'orders', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Orders /></ProtectedRoute> },
           { path: 'orders/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><NewOrder /></ProtectedRoute> },
           { path: 'orders/:id', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><OrderDetail /></ProtectedRoute> },
+          { path: 'to-ship', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><ToShip /></ProtectedRoute> },
           { path: 'inventory', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><InventoryPage /></ProtectedRoute> },
           { path: 'invoices', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><Invoices /></ProtectedRoute> },
           { path: 'invoices/field-app/new', element: <ProtectedRoute allowedRoles={['admin', 'sales_rep']}><FieldApplicationInvoice /></ProtectedRoute> },

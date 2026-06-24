@@ -1,13 +1,14 @@
-import { Menu } from 'lucide-react';
+import { Menu, Search } from 'lucide-react';
 import NotificationsPanel from '../team/NotificationsPanel';
 
 interface TopBarProps {
   onMenuClick: () => void;
+  onSearchClick: () => void;
   title: string;
   accent?: string;
 }
 
-export default function TopBar({ onMenuClick, title, accent }: TopBarProps) {
+export default function TopBar({ onMenuClick, onSearchClick, title, accent }: TopBarProps) {
   return (
     <header className="sticky top-0 z-30 bg-cream/80 backdrop-blur-md border-b border-gray-200/50">
       <div className="flex items-center justify-between h-16 px-4 lg:px-6">
@@ -26,6 +27,15 @@ export default function TopBar({ onMenuClick, title, accent }: TopBarProps) {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={onSearchClick}
+            aria-label="Search (Ctrl+K)"
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-secondary border border-gray-200/70 bg-white/60 hover:bg-white hover:shadow-sm transition-all"
+          >
+            <Search className="w-4 h-4" />
+            <span className="hidden md:inline text-sm">Search…</span>
+            <kbd className="hidden md:inline text-[11px] border border-gray-200 rounded px-1.5 py-0.5">⌘K</kbd>
+          </button>
           <NotificationsPanel />
         </div>
       </div>

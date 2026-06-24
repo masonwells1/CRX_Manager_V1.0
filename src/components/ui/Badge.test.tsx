@@ -17,19 +17,19 @@ describe('Badge', () => {
   it('applies success variant classes', () => {
     render(<Badge variant="success">Paid</Badge>);
     const badge = screen.getByText('Paid');
-    expect(badge.className).toContain('bg-emerald-50');
+    expect(badge.className).toContain('bg-emerald-100');
   });
 
   it('applies error variant classes', () => {
     render(<Badge variant="error">Failed</Badge>);
     const badge = screen.getByText('Failed');
-    expect(badge.className).toContain('bg-red-50');
+    expect(badge.className).toContain('bg-red-100');
   });
 
   it('applies warning variant classes', () => {
     render(<Badge variant="warning">Pending</Badge>);
     const badge = screen.getByText('Pending');
-    expect(badge.className).toContain('bg-amber-50');
+    expect(badge.className).toContain('bg-amber-100');
   });
 
   it('renders small size by default', () => {
