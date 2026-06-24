@@ -91,8 +91,21 @@ export default function ReceivingHub() {
         // Promise.all) so the assert-rpc-result lint rule tracks the destructured `data`.
         const { data: posRaw } = await supabase.rpc('get_inventory_position');
         const pos = assertRpcResult<InventoryPositionRow[]>(posRaw, 'get_inventory_position') || [];
+        // get_inventory_position returns one row per (product, location). On-Floor
+        // (quantity_available) + Spoken-For (quantity_prebooked) are per-location →
+        // SUM them; On-Order / On-Hold are product-level (identical on every row) →
+        // keep. Net = available − prebooked + on_order, recomputed off the totals.
         const posByProduct = new Map<string, InventoryPositionRow>();
-        for (const p of pos) if (!posByProduct.has(p.product_id)) posByProduct.set(p.product_id, p);
+        for (const p of pos) {
+          const existing = posByProduct.get(p.product_id);
+          if (!existing) {
+            posByProduct.set(p.product_id, { ...p });
+          } else {
+            existing.quantity_available += p.quantity_available;
+            existing.quantity_prebooked += p.quantity_prebooked;
+            existing.net_position = existing.quantity_available - existing.quantity_prebooked + existing.quantity_on_order;
+          }
+        }
 
         const byProduct = new Map<string, ProductGroup>();
         for (const po of ((poRes.data || []) as unknown as PORaw[])) {

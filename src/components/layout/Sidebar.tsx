@@ -255,7 +255,8 @@ function getVisibleItems(items: NavSubItem[], userRole: UserRole | undefined, de
 function categoryHasActiveRoute(items: NavSubItem[], pathname: string): boolean {
   return items.some((item) => {
     if (item.path === '/') return pathname === '/';
-    return pathname.startsWith(item.path);
+    // Segment-aware so e.g. /receiving-hub doesn't also light up /receiving.
+    return pathname === item.path || pathname.startsWith(item.path + '/');
   });
 }
 
@@ -305,7 +306,8 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
 
   const isRouteActive = (path: string) => {
     if (path === '/') return location.pathname === '/';
-    return location.pathname.startsWith(path);
+    // Segment-aware so e.g. /receiving-hub doesn't also light up /receiving.
+    return location.pathname === path || location.pathname.startsWith(path + '/');
   };
 
   // --- Mobile: always show full expanded sidebar (legacy behavior) ---
