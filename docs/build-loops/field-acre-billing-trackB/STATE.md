@@ -1,0 +1,49 @@
+# STATE — Field Acre Billing **Track B** (per-acre billing tie-in) build loop
+
+> The loop reads this at the start of every turn and updates it after every phase. Status values: `PENDING` · `IN-PROGRESS` · `DONE` · `BLOCKED` · `PARKED`.
+> Run the **first `PENDING`** phase each turn. Append-only run log; never delete history.
+
+**Owner mandate (Mason, 2026-06-23, before sleep):**
+- **"Go all the way live overnight"** — explicit advance OK to **apply each migration to live prod `rhyzpcqhnizqbxphqdkr`, merge to `main`, and deploy** — **but ONLY after that change passes EVERY automated gate** (rls-security + migration-drift + types-drift + compliance reviewers CLEAN, an independent **Codex** review CLEAN, a **rolled-back live smoke** ending `SMOKE_PASS_ROLLBACK`, apply-guard proof, and `get_advisors` showing **no new** findings). **Anything that fails a gate, or any gate that is unavailable (e.g. Codex rate-limited), is PARKED for Mason — never self-certify, never bypass the apply-guard.** One-click Vercel rollback stays available.
+- **Scope = Track B + small loose ends.** NOT Phase 4 (grower portal) / Phase 5 (auto-ingest).
+
+**Worktree:** `C:\CRX_FieldMapping` · **Branch:** `feat/field-acre-billing-trackB` (off `main` `db9b32ea`).
+**Prod:** `rhyzpcqhnizqbxphqdkr`. One DB writer at a time — the parallel `feat/ui-overhaul` session is **frontend-only** (no DB collision) but **pushes to `main`** → expect push races (fetch→merge→re-verify→re-push).
+**Migration stamps:** start at `20260623140000` (latest on disk = Track A's `20260623130000`).
+**Apply-guard gotcha (carried from B1/Track A):** bind the proof `queryHash` to the **exact SQL string passed to `apply_migration`**, and the MCP **strips a trailing newline** — hash the transmitted bytes, not the file's. Write proof JSON with **Node, not PowerShell** (BOM). 30-min expiry → regenerate at apply time.
+
+---
+
+## B0 grounding — VERIFIED LIVE 2026-06-23 (don't re-derive; this is ground truth)
+Pulled live `pg_get_functiondef` for all four engine RPCs. The overnight batch `e8145393` did **not** close these:
+- **`save_field_app_invoice`** (single overload, 20735 chars): acres line is `COALESCE((v_loc->>'applied_acres'), (v_loc->>'total_acres'), 0)` → **0 silently becomes full-field acres** (B1.1/B2 open). The "included in grower share" chem line (`v_chem_qty_a>0`) inserts `cost_cents = 0` and never adds to `v_invoice_cost` → **margin overstated** (B1.3 open). `salesman_id` taken from `p_invoice` **unchecked** on both INSERT and UPDATE (B1.5 open). Group selects (locked_count, orphan loop, sibling reuse) filter by `invoice_group_id` **without** `deleted_at IS NULL` (B1.2 — `invoices.deleted_at` EXISTS; `invoice_items.deleted_at` does NOT; verify `delete_invoices` can soft-delete a single field-app group member to set severity). Actor binding + scoped idempotency are present (good).
+- **`preview_field_app_invoice_split`** (single overload, 7256 chars): same `COALESCE(applied, total, 0)` fallback → needs the **same 0-acre reject** for parity. No internal-cost path (preview only).
+- **`derive_customer_shares_from_fields`** (single overload): applied_acres = `COALESCE(map ->> field_id, f.total_acres)` (secondary fallback; dead once save/preview guard 0). `share_acres` rounded to 2dp (B1.4 — **DEFER**, lowest-priority MED, touching the math is higher-risk than the guards).
+- **`transfer_job_to_invoice`** (single overload, 14926 chars): actor-bound + references the service-fee path already → **B3 likely already converged by the overnight batch; VERIFY the body actually emits the `is_application_fee` line, don't blind-rewrite.**
+- **B4 recipe:** `blend_recipe_items.price_per_unit_cents` **already exists** + `load_recipe_into_job` exists → **VERIFY** whether load already seeds the price; only patch if it still inserts 0.
+- **B4b reconciliation:** `application_records.invoice_id` exists → "applied-but-unbilled" query is feasible.
+
+---
+
+## Phase checklist
+| Phase | Status | Migration / files | Notes |
+|---|---|---|---|
+| B0 — Re-ground vs live code | DONE | — | findings above; all 4 RPCs single-overload |
+| B1+B2 — `save_field_app_invoice` + `preview_field_app_invoice_split`: 0-acre reject (no total fallback) + override-acre cost capture + salesman gate + deleted_at-aware group selects | PENDING | `20260623140000_field_app_per_acre_billing_and_hardening.sql` + `src/pages/FieldApplicationInvoice.tsx` | reproduce both fns byte-faithful, then patch; bundle B1.1/B1.3/B1.5/B1.2 + B2 server-side. Smoke matrix: 0→reject, −5→reject, override-cost in total_cost, sales_rep foreign salesman→forced self, deleted group member ignored. Frontend: default applied_acres from `system_acres` (override??measured??total — already loaded by the divergence alert), block 0 on submit. |
+| B3 — `transfer_job_to_invoice` convergence | PENDING | (migration only if body lacks the fee line) | VERIFY first; if already emits service-fee + binds actor → mark DONE (no-op) |
+| B4 — recipe pricing (`load_recipe_into_job` seeds `price_per_unit_cents`) | PENDING | (migration only if it still inserts 0) | VERIFY first |
+| B5 — "applied but not yet billed" reconciliation view + page | PENDING | read-only view/RPC + lazy page | completed jobs + approved-unbilled blend tickets + `application_records WHERE invoice_id IS NULL` |
+| B6 — loose ends: regen schema-registry + supabase types | PENDING | `.claude/schema-registry.json`, `src/types/supabase.ts` | from live, post-apply |
+| Z — handoff + docs + ship | PENDING | CHANGELOG, migration-history, doc-drift | go-live: apply migs (fresh proofs) → merge → deploy → memory + morning summary |
+
+## Hard gates (binding — encode the owner mandate)
+- [ ] Each migration: rls-security + migration-drift + types-drift + compliance reviewers CLEAN
+- [ ] Each migration: Codex `codex review --base main` CLEAN (≤3 fix rounds; if Codex unavailable → PARK)
+- [ ] Each migration: rolled-back live smoke `SMOKE_PASS_ROLLBACK` (BEGIN…ROLLBACK against prod; zero footprint)
+- [ ] Each migration: apply-guard proof bound to transmitted SQL → `apply_migration` live → post-apply `plpgsql_check` + `get_advisors` no-new-findings
+- [ ] Frontend: `npm run typecheck` (tsconfig.app.json — the ONLY real one) + lint + build + test green
+- [ ] Merge `feat/field-acre-billing-trackB` → main (resolve doc conflicts keeping both intents) → push = deploy → Vercel READY
+- [ ] PARK-not-force rule: any failed/unavailable gate → stop that piece, keep the rest moving, hand off a plain-English morning summary
+
+## Run log (append-only)
+- 2026-06-23 — Harness authored; B0 grounding DONE (live function bodies pulled + analyzed); branch `feat/field-acre-billing-trackB` cut off `db9b32ea`. Next: B1+B2.
