@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">76 routes · 176 RPC calls · 0 issues · Updated Jun 23, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">77 routes · 179 RPC calls · 0 issues · Updated Jun 23, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -774,6 +774,14 @@ const NODES = [
       "type": "page-sales",
       "group": "Finance",
       "path": "/compliance",
+      "problem": false
+    },
+    {
+      "id": "lot-trace",
+      "label": "LotTrace",
+      "type": "page-sales",
+      "group": "Core",
+      "path": "/lot-trace",
       "problem": false
     },
     {

@@ -1804,6 +1804,73 @@ export interface ApplicationRecordField {
   field?: Field;
 }
 
+// B1 Lot Capture & Trace (2026-06-22): one row per (application record, product, lot).
+// Multiple lots per product allowed. Written ONLY via set_application_record_lots /
+// create_application_record_from_blend_ticket (RPC-only — direct writes are RLS-denied).
+// Table application_record_lots (migration 20260622170000); no updated_at (rows are replaced).
+export interface ApplicationRecordLot {
+  id: string;
+  application_record_id: string;
+  product_id: string;
+  lot_number: string;
+  /** Set when the lot was chosen from a received lot; null if free-typed. */
+  source_receiving_record_id: string | null;
+  /** Informational "how much from this lot" — NOT inventory math. >= 0 or null. */
+  quantity_from_lot: number | null;
+  unit: string | null;
+  notes: string | null;
+  created_at: string;
+  created_by: string | null;
+}
+
+// Input entry for set_application_record_lots(p_lots jsonb). The RPC validates each
+// product_id is on the record, any source_receiving_record_id matches the product+lot,
+// rejects blank lots and duplicate (product, normalized-lot) pairs.
+export interface ApplicationRecordLotInput {
+  product_id: string;
+  lot_number: string;
+  source_receiving_record_id?: string | null;
+  quantity_from_lot?: number | null;
+  unit?: string | null;
+  notes?: string | null;
+}
+
+// set_application_record_lots return shape.
+export interface SetApplicationRecordLotsResult {
+  success: boolean;
+  count: number;
+}
+
+// get_recent_lots_for_product return row — the application-time suggestion dropdown.
+// receiving_record_id lets the editor save source_receiving_record_id so the receipt link
+// (and the RPC's provenance validation) is preserved when a suggested lot is chosen.
+export interface RecentLotForProduct {
+  lot_number: string;
+  last_received_at: string;
+  receiving_record_id: string;
+  source: string;
+}
+
+// get_lot_application_trace return row — the recall / compliance lookup (one row per
+// application×lot). field_names falls back to the legacy application_records.field_id.
+export interface LotApplicationTraceRow {
+  application_record_id: string;
+  record_number: string;
+  product_id: string;
+  product_name: string | null;
+  lot_number: string;
+  quantity_from_lot: number | null;
+  unit: string | null;
+  application_date: string;
+  customer_id: string | null;
+  customer_name: string | null;
+  applicator_id: string | null;
+  applicator_name: string | null;
+  field_names: string | null;
+  invoice_id: string | null;
+  source_receiving_record_id: string | null;
+}
+
 // Phase 2 (2026-04-30): start_job RPC return shape.
 export interface StartJobResult {
   job_id: string;

@@ -3,6 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
   Package,
+  PackageSearch,
   Users,
   FileText,
   ClipboardList,
@@ -185,6 +186,7 @@ const navigation: NavEntry[] = [
         { path: '/reports', label: 'Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/sales-reports', label: 'Sales Reports', icon: <BarChart3 className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
         { path: '/compliance', label: 'Compliance', icon: <ShieldCheck className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
+        { path: '/lot-trace', label: 'Lot Trace', icon: <PackageSearch className="w-4 h-4" />, roles: ['admin', 'sales_rep'] },
       ],
     },
   },

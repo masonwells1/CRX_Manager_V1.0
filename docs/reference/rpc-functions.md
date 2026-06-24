@@ -1,6 +1,6 @@
-# RPC Functions Reference (225 callable RPCs + 51 trigger/internal functions — live as of 2026-06-21)
+# RPC Functions Reference (228 callable RPCs + 51 trigger/internal functions — live as of 2026-06-23)
 
-> Live function inventory (Supabase `pg_proc`, 2026-06-21): **225 callable RPCs**, **51 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here). The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
+> Live function inventory (Supabase `pg_proc`, 2026-06-23): **228 callable RPCs** (incl. the 3 B1 lot RPCs live since the `20260622170000` apply on 2026-06-23), **51 trigger functions**, plus 24 `plpgsql_check` extension helpers (not documented here). The detailed sections below document the notable functions, not an exhaustive per-function enumeration.
 
 > **IMPORTANT:** As of migration 20260331600000, all mutating RPCs have exactly ONE overload with `p_idempotency_key text DEFAULT NULL`. Never create function overloads — see SAFE_DEVELOPMENT_RULES.md.
 
@@ -101,6 +101,12 @@
 - `save_blend_ticket_fields(p_blend_ticket_id, p_fields, p_performed_by, p_idempotency_key)` — save per-field application assignments (delete+reinsert)
 - `check_duplicate_blend_ticket(p_ticket_number, p_ticket_date)` — check for duplicate ticket by number+date
 - `reverse_blend_ticket_approval(p_ticket_id, p_reason, p_performed_by, p_idempotency_key)` → jsonb — admin/sales_rep, strict-actor. Reverts an approved blend ticket back to `unreviewed` so it can be re-reviewed.
+
+## Lot Capture & Trace (B1) — ✅ live (migration `20260622170000` applied 2026-06-23; the 3 RPCs are counted above)
+- `set_application_record_lots(p_application_record_id, p_lots, p_performed_by, p_idempotency_key)` → jsonb `{success, count}` — replace-all save of one application record's lots from a JSON array of `{product_id, lot_number, source_receiving_record_id?, quantity_from_lot?, unit?, notes?}`. SECURITY DEFINER, `search_path=public,pg_temp`, canonical idempotency (op `set_application_record_lots`), strict-actor (`ACTOR_MISMATCH`), in-body admin/sales gate, parent `FOR UPDATE` race-lock; validates each product is on the record, the cited source receipt matches the product+lot, and rejects a duplicate (product, lot). Writes an `activity_feed` audit row (the replace-all edit otherwise leaves no trace of a clear-to-zero). Admin/sales only.
+- `get_recent_lots_for_product(p_product_id)` → TABLE(lot_number, last_received_at, receiving_record_id, source) — recent distinct (case-insensitive) received lots for the application-time suggestion dropdown, newest first, ≤50. `receiving_record_id` lets the editor preserve the source-receipt link. Read-only, admin/sales.
+- `get_lot_application_trace(p_lot_number)` → TABLE(application_record_id, record_number, product_id, product_name, lot_number, quantity_from_lot, unit, application_date, customer_id, customer_name, applicator_id, applicator_name, field_names, invoice_id, source_receiving_record_id) — the recall/compliance payoff: every application that used a lot (case-insensitive). `field_names` falls back to the legacy single `application_records.field_id`; `invoice_id` falls back to the newest active blend-ticket invoice when `ar.invoice_id` is unset. Read-only, admin/sales.
+- *Blend propagation:* the `CREATE OR REPLACE create_application_record_from_blend_ticket` in the same migration adds an auto-INSERT into `application_record_lots` from `blend_ticket_products.lot_number` (case-insensitive dedup, skips null product / blank lot) — body otherwise reproduced verbatim from live; no new overload.
 
 ## Returns & Credits
 - `approve_return()` — approve a return request

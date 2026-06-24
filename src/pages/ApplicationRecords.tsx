@@ -8,6 +8,8 @@ import SplitHeading from '../components/ui/SplitHeading';
 import Button from '../components/ui/Button';
 import { useToast } from '../components/ui/Toast';
 import { supabase } from '../lib/db';
+import { useAuth } from '../contexts/AuthContext';
+import LotsEditorModal from '../components/LotsEditorModal';
 import { exportToCSV, fmtDateCSV } from '../lib/csvExport';
 import { Sentry } from '../lib/sentry';
 import { Download } from 'lucide-react';
@@ -45,6 +47,11 @@ function getPresetDates(preset: string): { start: string; end: string } {
 
 export default function ApplicationRecords() {
   const { toast } = useToast();
+  const { role } = useAuth();
+  // Lot capture is a write action gated to admin/sales (the RPC is admin/sales only);
+  // applicators can view records but not edit lots.
+  const canEditLots = role === 'admin' || role === 'sales_rep';
+  const [lotsRecord, setLotsRecord] = useState<AppRecordRow | null>(null);
   const [records, setRecords] = useState<AppRecordRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [startDate, setStartDate] = useState('');
@@ -214,6 +221,27 @@ export default function ApplicationRecords() {
     },
   ];
 
+  // Lot capture LANDS TOGETHER with migration 20260622170000 (SOW hard gate): this branch is
+  // never merged/deployed until the migration is live, so the button only reaches users once the
+  // table + RPCs exist. Defense-in-depth if that gate is ever bypassed: the modal's load catch
+  // (loadError) shows a friendly "couldn't load" message and disables Save — no crash, no data loss.
+  if (canEditLots) {
+    columns.push({
+      key: 'lots_action',
+      header: '',
+      render: (r) => (
+        <Button
+          variant="secondary"
+          size="sm"
+          showChevron={false}
+          onClick={() => setLotsRecord(r)}
+        >
+          Lots
+        </Button>
+      ),
+    });
+  }
+
   return (
     <div className="space-y-6">
       <SplitHeading title="Application" accent="Records" />
@@ -297,6 +325,12 @@ export default function ApplicationRecords() {
           />
         </div>
       </Card>
+
+      <LotsEditorModal
+        open={!!lotsRecord}
+        record={lotsRecord}
+        onClose={() => setLotsRecord(null)}
+      />
     </div>
   );
 }
