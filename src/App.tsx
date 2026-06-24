@@ -54,6 +54,7 @@ const BlendRecipes = lazy(() => import('./pages/BlendRecipes'));
 const CycleCounts = lazy(() => import('./pages/CycleCounts'));
 const Returns = lazy(() => import('./pages/Returns'));
 const ARaging = lazy(() => import('./pages/ARaging'));
+const AccountsReceivable = lazy(() => import('./pages/AccountsReceivable'));
 const Compliance = lazy(() => import('./pages/Compliance'));
 const Rebates = lazy(() => import('./pages/Rebates'));
 const Vehicles = lazy(() => import('./pages/Vehicles'));
@@ -253,6 +254,7 @@ const router = createBrowserRouter([
           { path: 'commission-payments', element: <ProtectedRoute allowedRoles={['admin']}><CommissionPayments /></ProtectedRoute> },
           { path: 'customer-transactions', element: <ProtectedRoute allowedRoles={['admin']}><CustomerTransactionReview /></ProtectedRoute> },
           { path: 'prepayments', element: <ProtectedRoute allowedRoles={['admin']}><PrepaymentManager /></ProtectedRoute> },
+          { path: 'accounts-receivable', element: <ProtectedRoute allowedRoles={['admin']}><AccountsReceivable /></ProtectedRoute> },
           { path: 'prepay-workspace', element: <ProtectedRoute allowedRoles={['admin']}><PrepayWorkspace /></ProtectedRoute> },
           { path: 'accounts-payable', element: <ProtectedRoute allowedRoles={['admin']}><AccountsPayable /></ProtectedRoute> },
           { path: 'accounts-payable/bills', element: <ProtectedRoute allowedRoles={['admin']}><VendorBills /></ProtectedRoute> },

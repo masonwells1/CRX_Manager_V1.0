@@ -182,6 +182,7 @@ const navigation: NavEntry[] = [
       icon: <DollarSign className="w-5 h-5" />,
       items: [
         { path: '/financial-dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" />, roles: ['admin'] },
+        { path: '/accounts-receivable', label: 'Accounts Receivable', icon: <DollarSign className="w-4 h-4" />, roles: ['admin'] },
         { path: '/ar-aging', label: 'AR Aging', icon: <Clock className="w-4 h-4" />, roles: ['admin'] },
         { path: '/accounts-payable', label: 'Accounts Payable', icon: <Receipt className="w-4 h-4" />, roles: ['admin'] },
         { path: '/vendors', label: 'Vendors', icon: <Building2 className="w-4 h-4" />, roles: ['admin'] },

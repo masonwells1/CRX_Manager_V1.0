@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> F3 (act-from-list) nearly done. Quotes Convert (F3a) + Deliveries Complete (F3b) + InventoryPage Reorder deep-link (F3c). Next: BlendTickets inline Link Order / Create Invoice (last F3 item — read BlendTicketDetail for the exact RPCs first), then F4 (merge money pages), F5 (Receiving Hub), F6 (dashboard), F7 (quick wins).
+> F3 done (Convert/Complete/Reorder shipped; Orders-Create-Invoice + BlendTickets deferred). F4 started: AR workspace tabbed page shipped (additive, admin-only, /payments kept separate). Next: F4 "Net Money Position" card (optional), then F5 Receiving Hub, F6 dashboard alerts, F7 quick wins.
 
 ---
 
@@ -25,14 +25,14 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - [x] `Quotes.tsx` "Convert to Order" — DONE. Per-row button on sent/revised quotes → ConfirmModal → `convert_quote_to_order` (same atomic RPC QuoteBuilder uses; idempotent + actor-bound; status guard allows sent/revised; handles partial-draws/already-converted). compliance-reviewer = CLEAN (0 blocker/high/med). Verified the live RPC status guard before building.
 - [x] `Deliveries.tsx` — "Mark Complete" DONE. Per-row Complete button on **in_progress** deliveries → Modal with signed-by input → `complete_delivery` (full delivery; p_quantities omitted; idempotent + actor-bound; routed through runCriticalAction). Verified live RPC is in_progress-only before building. Scheduled deliveries start from the detail page first; partial qty / signature-image / issue flags stay on the detail page (v1). compliance-reviewer CLEAN (MED consistency nit fixed).
 - [x] `InventoryPage.tsx` — "Reorder" button on each low-stock alert row → `/purchase-orders/new?product=ID` (NewPurchaseOrder already pre-fills product/cost/unit/vendor from v1). Deep-link, NO write → no compliance gate.
-- [ ] `BlendTickets.tsx` — inline "Link Order" / "Create Invoice"
+- [!] `BlendTickets.tsx` inline "Link Order" / "Create Invoice" — DEFERRED. **0 blend tickets live** (nothing to prove against), "Link Order" needs an order-PICKER (not a simple confirm) + the create-invoice path has multi-axis preconditions (completed+approved+unbilled+linked) that live on BlendTicketDetail. Revisit when blend tickets are in use.
 - [!] Live exercise of each write button → Mason clicks in review (loop must NOT fire against live prod). READY TO TEST: (1) Quotes → "Convert to Order" (PackageCheck icon on a sent/revised quote row); (2) Deliveries → "Complete" button on an in_progress delivery (enter a signed-by name).
 
 ## F4 — Merge the 4 money pages → one AR workspace  (frontend consolidation, review-gated)
-- [ ] One tabbed Accounts Receivable workspace = `ARaging` + `PaymentHistory` + `PrepaymentManager` + `CustomerTransactionReview`
-- [ ] 🚩 KEEP `/payments` (PaymentAllocation, admin+sales_rep) SEPARATE — do not fold it in (would lock out sales reps)
-- [ ] Old routes → redirects to the right tab (no broken links)
-- [ ] "Net Money Position" card (owed − unused prepay)
+- [x] One tabbed Accounts Receivable workspace — new `AccountsReceivable.tsx` at `/accounts-receivable` (admin-only) renders ARaging / PaymentHistory / PrepaymentManager / CustomerTransactionReview as tabs (`?tab=`, only the active tab mounts). Route + pagePermissions(admin) + Sidebar link added. Additive, no page-logic change. NO new write → gate-proven + Mason's preview is the review (verified /payments untouched).
+- [x] 🚩 KEEP `/payments` (PaymentAllocation, admin+sales_rep) SEPARATE — confirmed NOT merged/modified (git diff clean of PaymentAllocation).
+- [!] Old routes → redirects — FOLLOW-UP. v1 keeps the 4 old routes + sidebar links live (zero risk); converting them to redirects + pruning the 4 nav links changes Mason's muscle memory → his call in review.
+- [ ] "Net Money Position" card (owed − unused prepay) — remaining; needs a combined owed-minus-prepay read (next F4 tick).
 
 ## F5 — Receiving Hub  (frontend like To-Ship + confirm-popup receive — review-gated writes)
 - [ ] New `/receiving-hub` page + `pagePermissions.ts` entry (admin+sales_rep) + nav link
@@ -56,6 +56,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F4a: Accounts Receivable workspace. New admin-only `/accounts-receivable` page renders the 4 money screens (Aging/Payment History/Prepayments/Ledger) as tabs (?tab=, active-only mount). +route +pagePermissions(admin) +Sidebar link. Additive (old routes kept), zero new write/logic; /payments (PaymentAllocation, admin+sales_rep) deliberately NOT merged (verified untouched). Gate green (lint+typecheck+build+2179 tests). BlendTickets F3 deferred (0 live data + needs order-picker).
 - F3c: InventoryPage low-stock "Reorder" button → deep-links to a pre-filled New PO (`?product=`). No write (navigation only), reuses NewPurchaseOrder's v1 pre-fill. Zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F3b: Deliveries "Mark Complete" act-from-list button. Per-row Complete on in_progress deliveries → Modal w/ signed-by input → complete_delivery (full delivery, idempotent + actor-bound, via runCriticalAction). Verified the live RPC is in_progress-only before building; compliance-reviewer CLEAN (fixed the runCriticalAction consistency nit). NOT fired against live. Zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F3a: Quotes "Convert to Order" act-from-list button (first WRITE feature). Per-row PackageCheck button on sent/revised quotes → ConfirmModal → convert_quote_to_order (idempotent + p_performed_by actor-bound + assertRpcResult; maps BOOKING_PARTIALLY_DRAWN/BOOKING_CLOSED). Verified the live RPC status guard accepts sent/revised before building; compliance-reviewer CLEAN (fixed 1 LOW: BOOKING_CLOSED toast now matches QuoteBuilder). NOT clicked against live — Mason tests in review. Zero DB. Gate green (lint+typecheck+build+2179 tests).

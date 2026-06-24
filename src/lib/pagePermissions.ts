@@ -59,6 +59,7 @@ export const PAGE_PERMISSIONS: PagePermission[] = [
   { key: 'returns', label: 'Returns', category: 'Inventory', roles: ['admin', 'sales_rep'] },
 
   // Finance
+  { key: 'accounts-receivable', label: 'Accounts Receivable', category: 'Finance', roles: ['admin'] },
   { key: 'ar-aging', label: 'AR Aging', category: 'Finance', roles: ['admin'] },
   { key: 'accounts-payable', label: 'Accounts Payable', category: 'Finance', roles: ['admin'] },
   { key: 'vendors', label: 'Vendors', category: 'Finance', roles: ['admin'] },

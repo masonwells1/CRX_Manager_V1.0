@@ -84,7 +84,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(
 <div id="header">
   <h1>⬡ CRX Manager — Architecture Map</h1>
   <!-- __STATS_START__ -->
-  <span id="stat-line" style="color:var(--muted);font-size:.8rem">79 routes · 179 RPC calls · 0 issues · Updated Jun 23, 2026</span>
+  <span id="stat-line" style="color:var(--muted);font-size:.8rem">80 routes · 179 RPC calls · 0 issues · Updated Jun 24, 2026</span>
   <!-- __STATS_END__ -->
   <div id="tabs">
     <button class="tab active" onclick="showTab('graph')">Graph</button>
@@ -982,6 +982,14 @@ const NODES = [
       "type": "page-admin",
       "group": "Finance",
       "path": "/prepayments",
+      "problem": false
+    },
+    {
+      "id": "accounts-receivable",
+      "label": "AccountsReceivable",
+      "type": "page-admin",
+      "group": "Core",
+      "path": "/accounts-receivable",
       "problem": false
     },
     {
