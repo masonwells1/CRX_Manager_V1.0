@@ -16,8 +16,8 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
 ## Feature status
 | #  | Feature                         | Risk                         | Status        | Ship (commit / deploy / rollback) |
 |----|---------------------------------|------------------------------|---------------|-----------------------------------|
-| F1 | Guided map drawing              | frontend-only                | GREEN — SHIPPING |                                |
-| F3 | Per-field customer on import    | frontend-only                | TODO          |                                   |
+| F1 | Guided map drawing              | frontend-only                | ✅ SHIPPED LIVE | af43b4ad / dpl_p4bBKSNZ… / dpl_4XMB3Uti… |
+| F3 | Per-field customer on import    | frontend-only                | IN PROGRESS   |                                   |
 | F2 | Applicator mix-up flag          | frontend-only + investigate  | TODO          |                                   |
 
 ## Session / worktree
@@ -63,10 +63,15 @@ Created 2026-06-24 by the planning session. Run by a fresh session. **Update thi
   multi-part fields ever becomes a real need. Today: drive multi-part via import.
 
 ## Ship log
-- **F1 — Guided map drawing.** Frontend-only. Lint + typecheck + build + full suite (2192 pass / 113 skip)
-  all green; 2 adversarial review rounds (fan-out: 5 raised / 1 confirmed MED + 3 LOW, all fixed; focused
-  re-verify: all 4 fixes CONFIRMED-CORRECT, no new issues). _(commit sha / Vercel deploy id / rollback —
-  filled after push + deploy.)_
+- **F1 — Guided map drawing. ✅ SHIPPED LIVE 2026-06-24.** Frontend-only. Lint + typecheck + build + full
+  suite (2192 pass / 113 skip) all green; 2 adversarial review rounds (fan-out: 5 raised / 1 confirmed MED
+  + 3 LOW, all fixed; focused re-verify: all 4 fixes CONFIRMED-CORRECT, no new issues).
+  - commit: **af43b4ad** on `main` (branch `feat/field-map-ux` also pushed).
+  - Vercel prod deploy: **dpl_p4bBKSNZbH2mPKjh3jE4iTZMDD5C** — READY, aliased to **croprxsolutions.app**.
+  - One-click rollback target: **dpl_4XMB3UtiuhnD1CuSHYF6LYE986sr** (prev prod, commit 5c09c297).
+  - Files: NEW `src/components/map/DrawingHud.tsx` (+ test), edited `DrawControl.tsx` / `CRXMap.tsx`,
+    NEW pure helper `fieldGeometry.drawingRingMetrics` (+ tests).
+  - Mason still does the in-app click-test (auth wall → no logged-in browser smoke possible here).
 
 ## Final summary
 - _(fill at end: what shipped, what parked, what Mason still needs to do - in-app click-tests, any
