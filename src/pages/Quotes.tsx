@@ -54,6 +54,10 @@ export default function Quotes() {
   // convert if the quote is stale (>30d) or the customer already ordered recently.
   const [convertStaleMsg, setConvertStaleMsg] = useState<string | null>(null);
   const [convertDupMsg, setConvertDupMsg] = useState<string | null>(null);
+  // True while the async duplicate-order guard is still running — the modal's
+  // Convert button stays disabled until it resolves so a fast click can't bypass
+  // the warning before it renders (Codex P2 race).
+  const [convertChecking, setConvertChecking] = useState(false);
   // Fire the non-idempotent post-conversion side effects (email/notifications) at
   // most once per order. convert_quote_to_order is idempotent but returns no replay
   // marker, so a same-key retry after a lost response replays status:'created' — the
@@ -125,6 +129,7 @@ export default function Quotes() {
   const openConvert = async (row: QuoteRow) => {
     convertQuoteIdem.resetKey();
     setConvertTarget(row);
+    setConvertChecking(true);
     // Stale-price guard — same 30-day threshold as useStaleQuoteCheck (pure).
     const ageDays = Math.floor((Date.now() - new Date(row.created_at).getTime()) / 86_400_000);
     setConvertStaleMsg(ageDays > 30 ? `This quote is ${ageDays} days old - product prices may have changed since it was created.` : null);
@@ -145,6 +150,8 @@ export default function Quotes() {
       }
     } catch {
       // Non-blocking — a failed duplicate check must not stop conversion.
+    } finally {
+      setConvertChecking(false);
     }
   };
 
@@ -152,6 +159,7 @@ export default function Quotes() {
     setConvertTarget(null);
     setConvertStaleMsg(null);
     setConvertDupMsg(null);
+    setConvertChecking(false);
   };
 
   // F3 act-from-list: convert a sent/revised quote to a confirmed order in place.
@@ -662,10 +670,10 @@ export default function Quotes() {
               ].filter(Boolean).join('  ')
             : ''
         }
-        confirmLabel={convertStaleMsg || convertDupMsg ? 'Convert Anyway' : 'Convert to Order'}
+        confirmLabel={convertChecking ? 'Checking...' : (convertStaleMsg || convertDupMsg ? 'Convert Anyway' : 'Convert to Order')}
         variant={convertStaleMsg || convertDupMsg ? 'warning' : 'info'}
         icon={convertStaleMsg || convertDupMsg ? AlertTriangle : PackageCheck}
-        loading={converting}
+        loading={converting || convertChecking}
       />
     </div>
   );
