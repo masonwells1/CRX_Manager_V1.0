@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import Card from '../components/ui/Card';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
+import { hasPageAccess } from '../lib/pagePermissions';
 import Modal from '../components/ui/Modal';
 import Button from '../components/ui/Button';
 import DataTable, { type Column } from '../components/ui/DataTable';
@@ -88,7 +89,7 @@ const DATE_PRESETS = [
 ];
 
 export default function Deliveries() {
-  const { role, profile } = useAuth();
+  const { role, profile, deniedPages } = useAuth();
   const batchCancelIdem = useIdempotencyKey('batch_cancel_deliveries', profile?.id || '');
   const batchRescheduleIdem = useIdempotencyKey('batch_reschedule_deliveries', profile?.id || '');
   const reassignIdem = useIdempotencyKey('reassign_delivery', profile?.id || '');
@@ -155,10 +156,10 @@ export default function Deliveries() {
   const canCreate = role === 'admin' || role === 'sales_rep';
   const canQuickDeliver = role === 'admin' || role === 'sales_rep';
   const isDriver = role === 'driver';
-  // Customer 360 peek shows AR balance + credit tier — admin/sales only. Drivers
-  // are an allowed role on /deliveries, so this MUST be gated or it leaks customer
-  // finances to drivers (Codex P1).
-  const canPeekCustomer = role === 'admin' || role === 'sales_rep';
+  // Customer 360 peek shows AR balance + credit tier. Gate it with the canonical
+  // customers-page permission: this blocks drivers (not in the page's roles — Codex
+  // P1) AND a sales rep who has /customers in their deny-list (Codex P2).
+  const canPeekCustomer = hasPageAccess(role, deniedPages, 'customers');
 
   const fetchDrivers = useCallback(async () => {
     // PR-07 follow-up: driver filter dropdown only uses d.id + d.full_name; safe via view.

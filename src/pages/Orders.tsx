@@ -9,6 +9,7 @@ import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import BulkOrderImport from '../components/orders/BulkOrderImport';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
+import { hasPageAccess } from '../lib/pagePermissions';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -40,7 +41,10 @@ interface OrderWithFulfillment extends Order {
 export default function Orders() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { role } = useAuth();
+  const { role, deniedPages } = useAuth();
+  // Customer 360 peek exposes AR balance + credit tier — gate it with the canonical
+  // customers-page permission (blocks a rep who is denied /customers — Codex P2).
+  const canPeekCustomer = hasPageAccess(role, deniedPages, 'customers');
   const [orders, setOrders] = useState<OrderWithFulfillment[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('');
@@ -449,7 +453,7 @@ export default function Orders() {
           <div>
             <div className="flex items-center gap-1.5">
               <span>{name}</span>
-              {row.customer_id && (
+              {row.customer_id && canPeekCustomer && (
                 <button
                   onClick={(e) => { e.stopPropagation(); setDrawerCustomer({ id: row.customer_id, name }); }}
                   title="Peek customer"
@@ -664,7 +668,7 @@ export default function Orders() {
       />
 
       <CustomerDrawer
-        open={!!drawerCustomer}
+        open={canPeekCustomer && !!drawerCustomer}
         customerId={drawerCustomer?.id ?? ''}
         customerName={drawerCustomer?.name ?? ''}
         onClose={() => setDrawerCustomer(null)}

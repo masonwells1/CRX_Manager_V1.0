@@ -42,7 +42,11 @@ export default function AccountsReceivable() {
         const { data: arData } = await supabase.rpc('get_ar_aging', { p_as_of_date: today });
         const arRows = assertRpcResult<Array<{ total_outstanding?: number }>>(arData, 'get_ar_aging');
         const owedSum = (arRows || []).reduce((s, r) => s + Number(r.total_outstanding || 0), 0);
-        const { data: prepayRows } = await supabase.from('prepay_credits').select('balance_cents');
+        // A failed prepay load must NOT silently become $0 — that would overstate
+        // the Net Position finance total. Throw so the whole card is suppressed
+        // (catch sets owed=null) rather than showing a wrong number (Codex P2).
+        const { data: prepayRows, error: prepayErr } = await supabase.from('prepay_credits').select('balance_cents');
+        if (prepayErr) throw prepayErr;
         const prepaySum = (prepayRows || []).reduce((s, r) => s + Number(r.balance_cents || 0), 0) / 100;
         if (!cancelled) {
           setOwed(owedSum);

@@ -17,6 +17,7 @@ import BatchVoidModal from '../components/invoices/BatchVoidModal';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import InvoicePrintDialog from '../components/invoices/InvoicePrintDialog';
 import CustomerDrawer from '../components/customers/CustomerDrawer';
+import { hasPageAccess } from '../lib/pagePermissions';
 import type { Invoice, InvoiceStatus, InvoicePrintOptions } from '../types';
 import { generateBatchInvoicePdf, type InvoicePdfData, type InvoicePdfItem } from '../lib/invoicePdf';
 import { formatCents as fmt } from '../lib/money';
@@ -70,7 +71,10 @@ const typeBadge = (t: string) => {
 
 export default function Invoices() {
   const navigate = useNavigate();
-  const { profile } = useAuth();
+  const { profile, role, deniedPages } = useAuth();
+  // Customer 360 peek exposes AR balance + credit tier — gate with the canonical
+  // customers-page permission (blocks a rep denied /customers — Codex P2).
+  const canPeekCustomer = hasPageAccess(role, deniedPages, 'customers');
   const { toast } = useToast();
   const batchPostIdem = useIdempotencyKey('batch_post_invoices', profile?.id || '');
   const batchVoidIdem = useIdempotencyKey('batch_void_invoices', profile?.id || '');
@@ -515,7 +519,7 @@ export default function Invoices() {
           >
             {row.customer_name}
           </button>
-          {row.customer_id && (
+          {row.customer_id && canPeekCustomer && (
             <button
               onClick={(e) => { e.stopPropagation(); setDrawerCustomer({ id: row.customer_id, name: row.customer_name }); }}
               title="Peek customer"
@@ -830,7 +834,7 @@ export default function Invoices() {
       />
 
       <CustomerDrawer
-        open={!!drawerCustomer}
+        open={canPeekCustomer && !!drawerCustomer}
         customerId={drawerCustomer?.id ?? ''}
         customerName={drawerCustomer?.name ?? ''}
         onClose={() => setDrawerCustomer(null)}
