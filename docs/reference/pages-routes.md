@@ -1,4 +1,4 @@
-# Pages & Routes Reference (69 pages, 71 routes)
+# Pages & Routes Reference (75 pages, 77 routes)
 
 | Route | Page | Description |
 |-------|------|-------------|
@@ -73,3 +73,9 @@
 | `/invoices/field-app/:id` | FieldApplicationInvoice | Edit existing field application invoice |
 | `/integrity-report` | IntegrityReport | Admin-only. Read-only data integrity dashboard. Runs `runReconciliationChecks()` from `src/lib/reconciliation.ts` and shows pass/fail per check (order totals, inventory ledger, invoice payments via invoice_line_allocations, balance formula, commission splits, quote hold parity, delivery-invoice parity, prebooked inventory, return credit linkage, customer AR consistency). Discrepancy table per failed check with re-run button. Sprint F #4. |
 | `/integrity-cleanup` | IntegrityCleanup | Admin-only. Action-driven cleanup tooling for the three production-data issue classes flagged by the deep audit: (1) negative inventory rows — per-row reset form calling `reconcile_negative_inventory` RPC with mandatory reason; (2) over-received PO items — read-only listing for review; (3) completed deliveries without invoices — per-row "Create draft invoice" button calling `create_invoice_for_unbilled_delivery` RPC. Sprint G3 + G4 (Phase 22). |
+| `/to-ship` | ToShip | Admin/sales. Operations command center: To-Ship by Product/Customer + Low-Stock/reorder + Deliveries (overdue/unassigned) + Inbound POs, all from frontend queries. Schedule/Reorder act-buttons deep-link into the trusted create flows. (UI overhaul v1) |
+| `/receiving-hub` | ReceivingHub | Admin/sales. Open PO lines grouped by product across vendors (ordered/received/remaining + arrival) + a commitment snapshot (On Floor/Hold/Order/Spoken-For/Net) from `get_inventory_position`. Inline full-receipt "Receive" (reuses `receive_po_items`). (UI overhaul v2) |
+| `/accounts-receivable` | AccountsReceivable | **Admin-only.** One AR workspace: tabs for Aging / Payment History / Prepayments / Customer Ledger + a Net Money Position card (total owed via `get_ar_aging` minus unused `prepay_credits`). `/payments` (PaymentAllocation) stays SEPARATE (admin+sales). (UI overhaul v2) |
+| `/field-invoices` | FieldInvoices | Admin/sales. Field-application invoices area (as-applied billing); list + entry into the field-app invoice editor. |
+| `/field-invoices/unbilled` | UnbilledApplications | Admin/sales. Applied-but-unbilled field work awaiting an invoice (reconciliation worklist). |
+| `/design-preview` | DesignPreview | **Dev/preview only** (hostname-gated, never on croprxsolutions.app): shared-component visual gallery for the design system. |
