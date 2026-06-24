@@ -63,6 +63,10 @@ export default function Quotes() {
   // marker, so a same-key retry after a lost response replays status:'created' — the
   // stable order_id is how we avoid duplicate alerts/emails on that replay (Codex P2).
   const firedConvertSideEffects = useRef<Set<string>>(new Set());
+  // Monotonic token so an in-flight duplicate-order check from a previous
+  // open/close is discarded if the modal is reopened for another quote before it
+  // resolves — prevents quote A's warning landing on quote B (Codex P3 stale race).
+  const convertReqId = useRef(0);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -127,6 +131,7 @@ export default function Quotes() {
   // already covered server-side: convert_quote_to_order raises BOOKING_PARTIALLY_DRAWN
   // which handleConvertConfirm catches.
   const openConvert = async (row: QuoteRow) => {
+    const reqId = ++convertReqId.current;
     convertQuoteIdem.resetKey();
     setConvertTarget(row);
     setConvertChecking(true);
@@ -144,6 +149,8 @@ export default function Quotes() {
         .gte('order_date', localDatePlusDays(-7))
         .order('order_date', { ascending: false })
         .limit(1);
+      // Discard if a newer open/close superseded this check (stale-result race).
+      if (convertReqId.current !== reqId) return;
       if (recent && recent.length > 0) {
         const daysAgo = Math.max(0, Math.ceil((Date.now() - new Date(recent[0].order_date + 'T00:00:00').getTime()) / 86_400_000));
         setConvertDupMsg(`${row.customer_name || 'This customer'} already has order ${recent[0].order_number} from ${daysAgo} day(s) ago - this would create another.`);
@@ -151,11 +158,13 @@ export default function Quotes() {
     } catch {
       // Non-blocking — a failed duplicate check must not stop conversion.
     } finally {
-      setConvertChecking(false);
+      // Only clear the in-flight flag if this is still the active request.
+      if (convertReqId.current === reqId) setConvertChecking(false);
     }
   };
 
   const closeConvert = () => {
+    convertReqId.current++; // invalidate any in-flight duplicate-order check
     setConvertTarget(null);
     setConvertStaleMsg(null);
     setConvertDupMsg(null);
