@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo , useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Upload, Download, FileText, Trash2, Users, Truck, Printer, ClipboardList } from 'lucide-react';
+import { Plus, Upload, Download, FileText, Trash2, Users, Truck, Printer, ClipboardList, PanelRightOpen } from 'lucide-react';
 import Card from '../components/ui/Card';
 import DataTable, { type Column } from '../components/ui/DataTable';
 import Badge, { statusToBadgeVariant } from '../components/ui/Badge';
@@ -8,6 +8,7 @@ import Button from '../components/ui/Button';
 import BulkActionBar from '../components/ui/BulkActionBar';
 import BulkDeleteConfirmModal from '../components/ui/BulkDeleteConfirmModal';
 import BulkOrderImport from '../components/orders/BulkOrderImport';
+import CustomerDrawer from '../components/customers/CustomerDrawer';
 import { useRowSelection, createCheckboxColumn } from '../hooks/useRowSelection';
 import { useToast } from '../components/ui/Toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -52,6 +53,8 @@ export default function Orders() {
   const [exporting, setExporting] = useState(false);
   const [printingSummary, setPrintingSummary] = useState(false);
   const [printingPickList, setPrintingPickList] = useState(false);
+  // Customer 360 peek drawer (F2) — view a customer's numbers without leaving the list.
+  const [drawerCustomer, setDrawerCustomer] = useState<{ id: string; name: string } | null>(null);
 
   const canBulkAction = role === 'admin' || role === 'sales_rep';
 
@@ -444,7 +447,19 @@ export default function Orders() {
         const name = (row.customer as unknown as { farm_name: string })?.farm_name || '-';
         return (
           <div>
-            <span>{name}</span>
+            <div className="flex items-center gap-1.5">
+              <span>{name}</span>
+              {row.customer_id && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setDrawerCustomer({ id: row.customer_id, name }); }}
+                  title="Peek customer"
+                  aria-label={`Peek ${name}`}
+                  className="p-0.5 rounded text-gray-300 hover:text-crx-green hover:bg-crx-green-light transition-colors"
+                >
+                  <PanelRightOpen className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
             {row.farm_group_name && (
               <div className="flex items-center gap-1 mt-0.5">
                 <Users className="w-3 h-3 text-blue-500 flex-shrink-0" />
@@ -646,6 +661,13 @@ export default function Orders() {
         entityName="order"
         onConfirm={handleBulkDelete}
         loading={deleting}
+      />
+
+      <CustomerDrawer
+        open={!!drawerCustomer}
+        customerId={drawerCustomer?.id ?? ''}
+        customerName={drawerCustomer?.name ?? ''}
+        onClose={() => setDrawerCustomer(null)}
       />
     </div>
   );

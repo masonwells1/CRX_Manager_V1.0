@@ -4,7 +4,7 @@ Branch: `feat/ui-overhaul-v2` (off prod `db9b32ea`) · Started 2026-06-23 · Mod
 Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[x]` done (proven + committed) · `[!]` Needs Mason.
 
 ## Current focus
-> F1 done (field-invoice stretch DEFERRED — 0 field-app line items live, nothing to prove against + needs a multi-table join). F2 (Customer 360) started: the existing CustomerSummaryBar cards are now clickable to their tabs. Next: the Customer 360 slide-out drawer from list rows (reuse CustomerContextCard).
+> F2 (Customer 360) in progress. Summary cards clickable (F2a) + new CustomerDrawer slide-over wired into the Orders list (peek a customer's numbers without leaving the list). Next: wire the drawer into Invoices / Deliveries / Customers lists, then the Fields-tab per-field balance, then F3.
 
 ---
 
@@ -17,7 +17,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 ## F2 — One customer = one screen (Customer 360)  (frontend, reuses existing components)
 - [~] Read + extend `components/customers/CustomerSummaryBar.tsx` (done — cards now clickable) + `components/team/CustomerContextCard.tsx` (next, for the drawer)
 - [~] `CustomerDetail.tsx` — summary strip ALREADY existed + rendered (line 597). Now each card deep-links to its tab (AR→Financials, Orders→Orders, Deliveries→Deliveries, Tier→Info, Last Activity→Timeline). REMAINING: extra numbers (# fields · license expiry · next compliance) need `get_customer_summary` to return them (RPC change = gated `[!]`) or extra frontend queries; "sticky" is visual polish for Mason. Deferring those two.
-- [ ] Customer 360 slide-out drawer from list rows (`Orders`, `Invoices`, `Deliveries`, `Customers`) — reuse CustomerContextCard
+- [~] Customer 360 slide-out drawer from list rows — built `components/customers/CustomerDrawer.tsx` (right slide-over reusing CustomerSummaryBar + "Open full profile"; plain-Tailwind translate slide since tailwindcss-animate isn't installed — the `animate-in` classes CommandPalette uses are dead no-ops). Wired into **Orders** list (peek button per row). REMAINING: wire into Invoices / Deliveries / Customers lists.
 - [ ] Fields tab — per-field outstanding balance, color-coded (only if data already available)
 
 ## F3 — Act from the list (confirm-popup writes)  (REAL WRITES — review-gated, Mason-tested)
@@ -56,6 +56,7 @@ Loop reads + updates this file every tick. `[ ]` todo · `[~]` in progress · `[
 - _(none yet — populated as the loop hits gates)_
 
 ## Commit log (newest first)
+- F2b: Customer 360 drawer. New CustomerDrawer slide-over (reuses CustomerSummaryBar + "Open full profile" link; plain-Tailwind translate slide). Wired a per-row "peek customer" button into the Orders list (stops row-nav, opens the drawer). Reuses get_customer_summary (already proven); zero DB. Gate green (lint+typecheck+build+2179 tests). NOTE: tailwindcss-animate isn't installed → CommandPalette/Modal `animate-in` classes are dead (cosmetic, pre-existing).
 - F2a: CustomerSummaryBar cards are now clickable → jump to the matching CustomerDetail tab (added optional onCardClick prop + per-card tab; renders a button when wired, div otherwise — backward compatible, existing test green). Also deferred the F1 field-invoice stretch (0 live field-app line items). Interaction-only, zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F1c: ⌘K palette jumps to individual Sales reports. Added a `?tab=` reader to SalesReports.tsx (mount-time, validated against the Tab union) + 4 deep-link entries in CommandPalette ALL_PAGES (Product Mix/Customer Profitability/by Rep/by Month) + getPageIcon strips `?query`. AR Aging + Commissions already reachable. Routing-only, zero DB. Gate green (lint+typecheck+build+2179 tests).
 - F1b: Quotes list searchable by product. quote_items only has product_id → join to products.product_name, denormalize a `product_names` string per quote. Also fixed the latent `customer_name` searchKey (was undefined on every row) by denormalizing the customer join. Zero DB. Gate green (lint+typecheck+build+2179 tests); cross-checked 10/10 quote_items join to a product.
