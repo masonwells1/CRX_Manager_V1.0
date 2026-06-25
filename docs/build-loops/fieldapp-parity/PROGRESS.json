@@ -81,6 +81,189 @@
       "parkedLow": [],
       "openQuestions": []
     },
+    "29": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "96bf0cd2",
+      "criteria": "5/5",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Focused money/correctness review = CLEAN (no defects, all 6 probes pass). Frontend wiring of existing void_invoice RPC (signature (uuid,text,text); actor bound via auth.uid(); self-gates admin-only before any work). Client does ZERO money recompute (RPC owns reversal: deletes allocations, restores prepay+customer balance, cancels pending commissions, zeroes totals, append-only audit). Group-aware void: per-invoice voidKeysRef + RPC check_idempotency = no double-void/dup-audit; partial failure honest. voidTargets excludes terminal; after void fully locked + RPC refuses re-void. Required reason enforced UI+handler+RPC. Re-run Codex at reset: FieldApplicationInvoice.",
+      "migration": null,
+      "verified": "Spot-check: HEAD 96bf0cd2, tree clean, typecheck PASS, no migration. Focused review CLEAN. Agent proved void draft->cancelled + void posted+$1000-payment->voided (total/paid/balance->0, allocation reversed money-unstranded, audit total_impact -320000/allocations_reversed 100000), double-void guarded, idempotent, terminal-locked, in-app/DB.",
+      "parkedLow": [],
+      "openQuestions": []
+    },
+    "32": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "58b2682 + fix db592af",
+      "criteria": "6/6",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Fuel surcharge built OFF by default (app_settings.fuel_surcharge={enabled:false,basis:'',rate:''} = INERT, NO formula invented — confirmed). Money-lens review: default-OFF inertness/money math/RLS/grants/strict-actor/idempotency/per_acre+flat all CORRECT; found 3 MED + 1 Low — ALL FIXED in db592af (migration 20260625141000) + re-verified: MED1 preview-vs-save percent divergence (preview's whole-record `v_app_service IS NOT NULL` = FALSE on null vehicle/created_by dropped the app-fee -> understated percent base) -> preview now uses presence + is_active guard matching save (PROVEN preview total===save total=193200c); MED2 unguarded setting_value::jsonb cast aborted entire save/preview on malformed config -> wrapped EXCEPTION->RETURN 0; MED3 PDF printed flat surcharge as '$200/AC x 1.00 AC' -> isFuelSurchargeLine() render branch prints plain amount (both layouts); Low IMMUTABLE doc comment -> STABLE. ORCHESTRATOR RE-VERIFIED: save+preview 1 overload each, #24 CASE-gate + #25 warehouse PRESERVED after the recreation, no old migration touched. Re-run Codex at reset: both fuel migrations + invoicePdf + fuelSurcharge + SettingsPage.",
+      "migration": "20260625140000_fuel_surcharge_setting.sql + 20260625141000_fuel_surcharge_fixes.sql",
+      "verified": "Re-verified: HEAD db592af, tree clean, typecheck PASS, save+preview 1 overload each + #24/#25 PRESERVED, default OFF/blank, compute anon revoked. Fix smoke 3/3 (preview==save percent, malformed-config->0+save-ok, default-off inert) + original P1-P4. 58 tests.",
+      "parkedLow": [],
+      "openQuestions": [
+        "FUEL-SURCHARGE FORMULA (money rule — Mason must provide): the surcharge mechanism is built and OFF by default with a BLANK rate/basis (no rule invented). To ever apply a fuel surcharge, Mason enters the rate + basis (per-acre / percent / flat) in Settings -> Fuel Surcharge. Bring this to him at the production gate."
+      ]
+    },
+    "34": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "0bdaf5b",
+      "criteria": "5/5",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Read-only combined statement (unposted chem-sales + field-app), built client-side (no migration/RPC/mutation). Money review RECONCILE CONFIRMED: combinedBalance === exact integer sum of per-type subtotal balances (no float; addSummaryTotals field-by-field integer add); each row balance = live GENERATED balance_cents (total-paid-prepay-write_off); discount_earned_cents correctly EXCLUDED (display-only); PDF==screen (same buildCustomerInvoiceSummary object, no recompute); type partitioning (chem vs field_application) + unposted-scope (.in draft/unposted, .is deleted_at null) correct; split = 1 invoice row per customer (no double-count). Reviewer's 'MED phantom column' was a FALSE ALARM (it mis-read stale schema_migrations; orchestrator confirmed discount_earned_cents EXISTS on local + query runs + build agent rendered report in-app). Re-run Codex at reset: customerInvoiceSummary + invoiceSummaryPdf + CustomerInvoiceSummary.",
+      "migration": null,
+      "verified": "Spot-check: HEAD 0bdaf5b, tree clean, typecheck PASS, no migration. Orchestrator confirmed local query runs (all cols incl discount_earned_cents selectable). Money review reconcile CLEAN. Agent proved combined $1430=$430+$1000, posted excluded, discount display-only, PDF content-stream parse reconciles, in-app.",
+      "parkedLow": [
+        "[#34 Low / pre-existing app-wide] non-admin sales_rep sees only invoices they created/are salesman for (invoices_select RLS) -> a rep viewing a customer with other reps' invoices gets an understated combined balance (NOT a leak — RLS only restricts; identical to existing FieldInvoices.tsx list). Treat the summary as admin-facing or route through a SECURITY DEFINER RPC if reps need complete statements."
+      ],
+      "openQuestions": []
+    },
+    "33": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "5a41af6 + fix dd53598",
+      "criteria": "5/5",
+      "codex": "pending",
+      "codexDetail": "First build agent's connection dropped after the DB part; completion agent finished frontend + committed 5a41af6 (migration 20260625150000 + 7 frontend files). Discount Earned is OWNER-DRIVEN + DISPLAY-ONLY (NOT in GENERATED balance_cents — proven $50 discount left $1500 balance; no formula invented). save_field_app_invoice UNTOUCHED (separate RPC update_field_app_invoice_billing, admin/sales gated, actor-bound, editable-only, idempotent, anon-revoked). Money-lens review = security CLEAN; 2 MED (silent, no money corruption): (1) per-customer discount editor DEAD on a NEW invoice (customerToInvoiceId={} -> handleDiscountChange early-returns -> keystrokes dropped in create->Preview->discount->Save flow); (2) discount+payment_terms don't print/email from the 3 LIST pages (toPdfRow/fieldInvoiceList omit the cols). Frontend-only fix in flight (key discount draft by customer_id + translate at save; carry cols into list PDF path). 3 Low parked. RE-VERIFY new-invoice-discount-persists + list-print before BUILT.",
+      "migration": "20260625150000_invoice_header_footer_discount.sql",
+      "verified": "Re-verified: HEAD dd535989, tree clean, typecheck PASS, save_field_app_invoice untouched (separate billing RPC anon-revoked). Build proven in-app (fields persist+print both formats, internal memo absent, posted read-only, discount display-only). 2 Med FIXED in dd53598 + proven live: new split invoice discount persists ($25->Green Acres invoice 2500, Sunrise 0, balances unchanged); list-print re-fetches discount/terms by id (2500 + 'Net 15...'). 1657 tests.",
+      "parkedLow": [
+        "[#33 Low] billing idempotency key cached under id||'__new__'; on a new invoice whose billing RPC fails after row creation, retry uses a fresh key bypassing dedup (benign — RPC naturally idempotent, UPDATE to fixed values). Optional: migrate '__new__' cache to new id.",
+        "[#33 Low / pre-existing policy] update_field_app_invoice_billing gates (admin OR sales_rep) with no per-row ownership -> horizontal write within sales-rep cohort on non-PII draft billing metadata (matches shipped companion update_field_app_applied_info). Policy call; if isolation wanted add AND(is_admin() OR created_by=actor OR salesman_id=actor) to BOTH.",
+        "[#33 Low / systemic] idempotency_keys UNIQUE(idempotency_key) alone (not (key,operation)) — unreachable (op-prefixed UUID keys never collide). Cross-cutting, out of scope."
+      ],
+      "openQuestions": []
+    },
+    "31": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "a56c4604",
+      "criteria": "5/5",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Focused email safety review = CLEAN (no defects). Send-safety verified: recipient ALWAYS the invoice's own customer at 3 client layers (editor pdfSnapshot.customer_id, list emailRow re-fetch by row.customer_id no stale closure, InvoiceDetail invoice.customer_id) + SERVER backstop (send-email re-fetches customers.email by customer_id, 403 on mismatch); NEVER sends on missing/blank email (guard throws before send, null/empty/whitespace; server also rejects); no double-send (idempotency key + Edge dedup + disable); gate loosening SCOPED to invoice_type='field_application' non-terminal only, all routes admin/sales_rep, Edge allows invoice type for those roles; money-correct PDF (write-off carried). Verified with NO real send (intercepted payload; local send-email 503). Re-run Codex at reset: emailService + FieldApplicationInvoice + FieldInvoices + InvoiceDetail.",
+      "migration": null,
+      "verified": "Spot-check: HEAD a56c4604, tree clean, typecheck PASS, no migration. Email review CLEAN. Agent proved recipient resolves to right customer email + correct PDF attached + honest no-email error (zero sends) + NO real send, in-app vs local.",
+      "parkedLow": [
+        "[#31 Low / pre-existing, same as #22] buildEmailHtml doesn't HTML-escape interpolated invoice number/date (DB-sourced; same path as existing InvoiceDetail/list handlers). Optional: escapeHtml() across the shared email layer."
+      ],
+      "openQuestions": []
+    },
+    "30": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "bbd2d81 + fix d221aa2",
+      "criteria": "6/6",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Print review = everything CLEAN (field-mapping correct incl. agent's applicator->salesman self-fix, splits sum penny-exact, bulk-print over filtered set w/ Promise.allSettled + empty guard, format routing safe default-current no circular import, data completeness good) EXCEPT 1 MED money-display — write_off_cents dropped from BOTH layouts (balance_cents=total-paid-prepay-write_off) so write_off>0 made printed Subtotal-Payments-Prepay overstate Balance Due by the hidden write-off. FIXED in d221aa2 + PROVEN by parsing actual PDF Tj text operators: both formats now print '- Write-off' line, $185-50-15-30=90=Balance Due. No money math changed. Re-run Codex at reset: invoicePdf + 3 lists + FieldApplicationInvoice.",
+      "migration": null,
+      "verified": "Re-verified: HEAD d221aa2, tree clean, typecheck PASS. Fix proven via PDF content-stream parse (both formats reconcile with write-off). 58 tests. Build agent: both formats valid PDF, splits sum, legacy distinct from current.",
+      "parkedLow": [
+        "[#30 Low/resolved-by-fix] reconciliation test gap (no write_off case) — closed by the fix's new write_off>0 tests in both formats."
+      ],
+      "openQuestions": []
+    },
+    "28": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "9ac9b2f",
+      "criteria": "6/6",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Full money-lens review = CLEAN (all 3 lenses, proven live). New unpost_invoice RPC (migration 20260625130000): role gate admin+sales_rep, strict-actor ACTOR_MISMATCH, MONEY GUARD refuses paid/allocation/prepay/write-off, closed-period guard, status guards, operation-scoped idempotency (no double mutation/audit), status CHECK widened to SUPERSET (all 7 statuses verified present), transaction-local app.admin_override auto-clears, append-only audit (blocked even the agent's own cleanup DELETE). 5 smoke cases PASS (post->unpost money-intact, idempotent replay, paid REFUSED, never-posted REFUSED, closed-period REFUSED) + forged-actor + overdue->unposted. 1 overload, anon revoked, search_path. Wired Unpost on per-acre editor + InvoiceDetail + Posted-list bulk. Re-run Codex at reset: migration + 3 pages.",
+      "migration": "20260625130000_unpost_invoice.sql",
+      "verified": "Spot-check: HEAD 9ac9b2f, tree clean, typecheck PASS, unpost_invoice 1 overload + anon revoked, status CHECK = all 7 statuses (superset). Money-lens CLEAN. Agent proved post->unpost round-trip + paid-blocked + idempotency + append-only audit in-app/DB.",
+      "parkedLow": [
+        "[#28 Low / PRE-EXISTING shared infra] idempotency_keys UNIQUE on idempotency_key alone + save_idempotency ON CONFLICT(idempotency_key) DO NOTHING -> a key reused under a different operation would silently fail to save (post/void identical; READ side operation-scoped; clients mint per-(actor:invoice) UUIDs so collision ~impossible). Optional shared-layer hardening: make constraint + ON CONFLICT target (idempotency_key, operation).",
+        "[#28 Low / cosmetic] Unpost button gated isAdmin on InvoiceDetail but status-only on FieldApplicationInvoice (RPC role gate admin+sales_rep is the real boundary, enforced identically). Optional: pick one UI policy.",
+        "[#28 Low] Overdue invoice can be unposted after generate_finance_charges levied interest (accounting oddity, not money-stranding; finance-charge invoice references its own id; void_invoice shares this). Optional: confirm-copy heads-up for overdue targets."
+      ],
+      "openQuestions": []
+    },
+    "26": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "3098ac4 + fix a0fbe33a",
+      "criteria": "7/7",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Money review: PENNY-EXACT confirmed CLEAN BY CONSTRUCTION (basis toggle provably can't change dollars; integer cents throughout; reconcile cent-check non-tautological; engine unchanged, proven odd-total 1501c -> 500+1001 idempotent). 1 MED (correctness, ZERO money) FIXED in a0fbe33a: reconcileSplit ACRE half compared per_customer acres (excludes soft-deleted member) to GROSS total_applied_acres (includes them) -> false red 'Mismatch' on a valid split -> now compares acres over the SAME present customer set (money/cents byte-unchanged; proven vs real preview RPC: soft-deleted c3 OLD=120vs240 red, FIXED=120=120 green). Low split-ref -001 ordering (display-only, parked). Re-run Codex at reset: customerSplit + CustomerSharesTable.",
+      "migration": null,
+      "verified": "Re-verified: HEAD a0fbe33a, tree clean, typecheck PASS. Fix proven vs real preview_field_app_invoice_split RPC (false-Mismatch gone, genuine drift still red). 28 tests. Build agent proved penny-exact split (odd 1501c) + presentation-only basis toggle + Customers summary in-app.",
+      "parkedLow": [
+        "[#26 Low] Split-Ref -001/-002 suffix is a positional index, not guaranteed primary-first (display-only; invoice_number untouched; Primary badge shown separately). Optional: order primary-first or drop the implication."
+      ],
+      "openQuestions": []
+    },
+    "27": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "7f86101",
+      "criteria": "6/6",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. THE SPINE. Full money-lens review = CLEAN (no High/Med, all 3 lenses). Forward transfer already wired; agent ADDED reverse leg (new RPC transfer_invoice_to_job, migration 20260625120000). Verified: SECDEF + locked search_path + anon EXECUTE revoked+rejected + admin/sales_rep gate + non-forgeable ACTOR_MISMATCH; exact -total_amount_cents audit row, bigint cents, draft/unposted carry no payment so zeroing orphans nothing; whitelisted draft|unposted->cancelled (no override) + job invoiced->completed in TRANSACTION-SCOPED admin_override; two-sided race guard blocks double-reverse + engine-built; operation-scoped idempotency; append-only audit; smoke PASS (round-trip/idempotent-replay/forged-actor/posted-guard/no-job-guard). Re-run Codex at reset: migration + InvoiceDetail + FieldApplicationInvoice.",
+      "migration": "20260625120000_transfer_invoice_to_job.sql",
+      "verified": "Spot-check: HEAD 7f86101, tree clean, typecheck PASS, reverse RPC 1 overload + anon revoked + search_path pinned. Money-lens CLEAN. Agent proved end-to-end: completed 2-cust (60/40) job -> ONE unposted invoice $1200 (shares $720/$480 penny-exact), job=invoiced; reverse -> cancelled + job=completed + audit both ways; idempotency 2nd call=no dup.",
+      "parkedLow": [
+        "[#27 Low] Dead/unreachable Transfer-to-Scheduling button+handler+modal in FieldApplicationInvoice.tsx (forward transfer creates 0 field_app_locations so the discriminator always routes job-built invoices to InvoiceDetail before this editor renders; the working button lives in InvoiceDetail). Misleading comment ('transferred invoice has both job_id AND locations' — untrue). Optional cleanup: remove dead code + fix comment.",
+        "[#27 Low] Inverted lock order (forward jobs-then-invoice, reverse invoice-then-job) — deadlock window ~nil (mutually-exclusive states, retry-safe via idempotency). Optional: lock source job FOR UPDATE first in transfer_invoice_to_job."
+      ],
+      "openQuestions": []
+    },
+    "24": {
+      "status": "BUILT",
+      "date": "2026-06-24",
+      "commit": "cb642c0 + fix db061bc5",
+      "criteria": "7/7",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Money-lens review: security+lifecycle CLEAN (posted-lock, strict-actor, idempotency, RLS on 8 read tables). Found 1 MED + 2 Low — FIXED in db061bc5 + re-verified: MED save_field_app_invoice UPDATE coerced non-admin v_salesman_id:=v_actor + COALESCE -> non-admin save silently overwrote admin-chosen Consultant (commission) -> new migration CREATE OR REPLACE gates salesman_id = CASE WHEN is_admin() THEN COALESCE(v_salesman_id,salesman_id) ELSE salesman_id END (diff-proven single line, 1 overload, search_path/SECDEF preserved; smoke w/ control: non-admin preserves Alice, admin changes to Sam, OLD body overwrites). Low: placeholder applicator names could print on legal PDF -> unfiltered name map + realApplicatorName() null-coercion (#17 lesson); Notifications-tab copy honest + error check. Re-run Codex at reset: new migration + FieldApplicationInvoice + invoiceAppliedCarryover.",
+      "migration": "20260624211000_save_field_app_invoice_preserve_consultant.sql",
+      "verified": "Re-verified live: HEAD db061bc5, tree clean, old migration untouched, typecheck PASS, save_field_app_invoice has 1 overload + the CASE-gate present in the live fn. Attribution smoke proven w/ control. Build agent verified 5 tabs + carry-over (weather/tach/crew names resolved) + posted-lock on TST-24A/B/C.",
+      "parkedLow": [],
+      "openQuestions": []
+    },
+    "25": {
+      "status": "BUILT",
+      "date": "2026-06-25",
+      "commit": "b9e09c12 + fix ef668faa",
+      "criteria": "6/6",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Money+security lenses CLEAN: pricing/cents path byte-IDENTICAL after the RPC recreation (migration 20260624212000 added invoice_items.warehouse/vendor + recreated save_field_app_invoice), single overload, #24's salesman_id CASE-gate PRESERVED (orchestrator-verified, no regression), idempotency/posted-lock/actor-bind/RLS intact. 1 MED (informational, NOT money) FIXED in ef668faa: client gal/lb preview inferred liquid/dry from unit STRING but server convert_to_gl_lb uses product_form -> liquid 'oz' showed 5 lb on screen vs 0.625 GL saved/printed -> client now branches on product_form to match server (proven liquid 320oz screen 2.5gal=server 2.5GL=DB 2.5000; tests assert client==server). Re-run Codex at reset: FieldAppChemicalEntry + chemCalculator + migration.",
+      "migration": "20260624212000_field_app_invoice_line_warehouse_vendor_glb.sql",
+      "verified": "Re-verified: HEAD ef668faa, tree clean, typecheck PASS. Money path byte-identical + #24 gate preserved (live). gal/lb screen==server==DB proven. Build agent: tier auto-fill $28, $25.50x120=306000c, posted-lock on chemical lines.",
+      "parkedLow": [],
+      "openQuestions": []
+    },
+    "23": {
+      "status": "BUILT",
+      "date": "2026-06-24",
+      "commit": "7e7a2161",
+      "criteria": "7/7",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Money-lens review = CLEAN (no High/Med). Security+money lenses CLEAN: read-only page, no new RLS surface (live RLS blocks unauthorized reads), Unpost All genuinely inert (no unpost_invoice RPC, no mutation — verified), integer cents, committed-status filtering (posted/overdue/paid) correct, Balance Due reconciles with payments/prepay (FA-POST-J1 1000-300-100=600). Reuses #22 hardened helpers + split-location fix. Re-run Codex at reset: FieldInvoicesPosted + fieldInvoiceList scope helpers.",
+      "migration": null,
+      "verified": "Spot-check: HEAD 7e7a2161, tree clean, typecheck PASS, Unpost All inert (no mutation). Multi-lens CLEAN. Agent proved split posted invoice locations/acres, Balance Due reconcile, month-batch warning toggling by scope, posted/unposted disjoint, in-app vs local.",
+      "parkedLow": [
+        "[#23 Low] Orphaned batch-scope desync: pick a month batch then a filter excluding that month -> blank select + 'no invoices match' though matches exist (recoverable via Clear; no data/money impact). Fix: demote scope to season or render synthetic 0-count option.",
+        "[#23 Low] Cross-batch caution copy implies a destructive bulk action but Unpost All is inert (#28 placeholder) and Print doesn't touch totals. Soften copy or gate banner behind #28.",
+        "[#23 Low / SCALE-HEADROOM, flag at prod gate] Monthly-batch footer totals computed client-side over the loaded slice capped at QUERY_LIMIT=2000 rows (invoice_date DESC); a season >2000 posted invoices could truncate old batches and understate a batch total while the banner asserts committed numbers (mitigated by cap-hit toast; ~0 live invoices today). Fix before real volume: fetch the selected batch month server-side."
+      ],
+      "openQuestions": []
+    },
+    "22": {
+      "status": "BUILT",
+      "date": "2026-06-24",
+      "commit": "b8d7b8c + fix 2f1f93a3",
+      "criteria": "8/8",
+      "codex": "pending",
+      "codexDetail": "Codex unavailable. Money-lens review: security+money lenses CLEAN (post_invoice SECURITY DEFINER pinned search_path; RLS proven non-owner/anon=0 rows; idempotency minted-once no double-post; integer cents no float). Found 1 HIGH + Lows — FIXED in 2f1f93a3 (frontend) + re-verified live: HIGH split/grouped invoices showed blank locations/crops/0 acres (list embedded field_app_locations by invoice_id but grouped key by invoice_group_id) -> now resolve locations by group (mirrors FieldApplicationInvoice branch); proven split invoice shows East 40/West Pivot, Corn/Soybeans, 125 ac + PDF header + reconciled Subtotal-Payments=BalanceDue. Also fixed: toPdfRow now carries paid/prepay/write_off/total_cost cents (money foot-gun before #23 reuse), plain-English PRICING_INCOMPLETE, fetch windows on invoice_date not created_at. Re-run Codex at reset: FieldInvoicesUnposted + fieldInvoiceList + invoicePdf.",
+      "migration": null,
+      "verified": "Spot-check: HEAD 2f1f93a3, tree clean, typecheck PASS. Fix proven live (split-invoice locations/acres/PDF populate; in-range invoice_date now appears). 18 list tests + 2448 suite. Build agent proved Post All flips status via real post_invoice.",
+      "parkedLow": [
+        "[#22 Low / pre-existing, not a regression] shared email-layer buildEmailHtml doesn't HTML-escape interpolated body (DB-sourced invoice number/date; same path as InvoiceDetail). Optional: escapeHtml() across the shared email layer."
+      ],
+      "openQuestions": []
+    },
     "21": {
       "status": "BUILT",
       "date": "2026-06-24",
@@ -187,6 +370,17 @@
     }
   },
   "carryForward": [
+    "#22 → PHASE-3 INVOICING MAP: Field-app invoice pages = src/pages/FieldInvoices.tsx (combined list) + FieldInvoicesUnposted.tsx (new unposted tray). TWO editors: FieldApplicationInvoice.tsx (engine-built per-acre, /invoices/field-app/:id) + generic InvoiceDetail (/field-invoices/:id). /field-invoices/* auto-maps to 'field-invoices' permission. #23 POSTED list: REUSE src/lib/fieldInvoiceList.ts wholesale (status-agnostic mapFieldInvoiceRow/applyFieldInvoiceFilters/computeFieldInvoiceTotals/FieldInvoiceListFilters); query .in('status',['posted','overdue','paid']); the LIST_SELECT PostgREST join is the canonical field-invoice list query (customer + job:jobs!invoices_job_id_fkey(job_number) + field_app_locations + invoice_items). RPCs that EXIST: post_invoice(p_invoice_id,p_idempotency_key) returns VOID -> call with .throwOnError() NOT '=' capture (assertRpcCoverage gate); post_invoice_group(uuid,uuid,text); save_field_app_invoice; preview_field_app_invoice_split; transfer_job_to_invoice (snapshots field_names/crop_type/total_acres/applicator_name at invoice level + writes invoice_items). **NO unpost_invoice RPC EXISTS -> #28's unpost half needs a NEW migration.** Shared print: buildInvoicePdfDataFromRow(row,options) in src/lib/invoicePdf.ts -> reuse for #30. LOCAL SEED gotcha: invoices has enforce_invoice_draft_on_insert (forces status=draft) + enforce_invoice_status_transition; to seed non-draft statuses locally wrap in SET session_replication_role='replica' (throwaway DB only). Money = bigint cents; /100 ONLY for display (toLocaleString), never for math.",
+    "#31 → #40/#41 (customer pre/post notifications): send-email Edge Function gates email_type BY ROLE (drivers only delivery_completed; admin/sales other types). #40/#41 need a NEW email_type (pre_application_notice/post_application_notice) added to the EmailType union in src/lib/emailService.ts AND allowed in the Edge Function — else the send is rejected. NOTE: deploying the edge function NEEDS MASON APPROVAL (edge-function deploy is gated) — #40 can PREPARE the edge change but it can't be deployed during the run; handle at the production gate. RECIPIENT resolution for NOTIFICATIONS DIFFERS from invoice email: invoice email = single billing customer (invoices.customer_id); a JOB spans MULTIPLE customers via per-field shares -> use job_field_shares(job_id,field_id,customer_id,split_pct) (#1)/field_billing_defaults to resolve EACH customer then customers.email per recipient. The Notifications tab currently shows only VIEWER-facing notices (RLS user_id=auth.uid()), NOT customer-facing -> #41's 'addressed to the customer' post-notification log does NOT exist yet (needs its own table/log). REUSABLE: buildInvoiceEmailPayload (recipient missing-email guard throws BEFORE send + payload shape) in emailService.ts; runCriticalAction-wrapped send; idempotency key <op>-<entityId>-<Date.now()>; logActivity({event:'invoice_emailed'}) send record.",
+    "#30 → #31/#33/#34: PDF print = src/lib/invoicePdf.ts; generateInvoicePdf(data) honors data.options.format ('current'|'legacy', default current); generateLegacyInvoicePdf is the ChemMan 'Old Print' courier/monochrome layout. #31 email: thread format:'legacy' through InvoicePdfData.options (emailRow + InvoiceDetail handleEmailInvoice already use generateInvoicePdf); money reconciles identically in the attachment. #33: the legacy layout ALREADY prints purchase_order_ref/due_date/payment_terms/header_notes/footer_notes from InvoicePdfData (meta + notes blocks) -> when #33 adds inputs populating those, BOTH formats pick them up automatically; the legacy share block has a pricing_note slot but no Discount-Earned column yet (#33's $0.00 placeholder). #34 customer summary: reuse buildInvoicePdfDataFromRow + the format flag; legacy style is a ready template. Money-correct buildInvoicePdfDataFromRow carries paid/prepay/write_off so Total-Payments-Prepay=Balance in both formats; splits sum via deriveSplitRef labels (<base>-<NNN>). Legacy generator dynamic-imports customerSplit.deriveSplitRef (no circular import).",
+    "#28 → #29/#30: #29 Void — void_invoice routes draft/unposted->cancelled, posted->voided (Void on InvoiceDetail, posted-only). On the per-acre FieldApplicationInvoice editor Void is NOT yet exposed -> add gated on posted (admin), mirroring how #28 added Unpost (state + ConfirmModal + group-aware loop). A posted invoice can now be Unposted (->editable) OR Voided (terminal) — both buttons coexist. #30 Print — per-acre editor handlePrint reuses buildInvoicePdfDataFromRow (wired); InvoiceDetail uses showPrintDialog; LEGACY format -> add to src/lib/invoicePdf.ts. REUSABLE: the per-invoice idempotency-key REF-CACHE pattern (unpostKeysRef/postKeysRef) is the ESLint-clean way to do BULK RPC loops (the useIdempotencyKey single-key hook trips local-rules/idempotency-key-from-hook inside a loop). unpost_invoice (migration 20260625130000) is a clean model for any future guarded status-reversal RPC (money-guard refuses allocation/prepay/write-off, period-open respected, transaction-scoped app.admin_override, append-only audit, idempotent, anon revoked).",
+    "PRODUCTION GATE ORDERING (from #34 review): at promotion, APPLY ALL fieldapp-parity migrations (in timestamp order) to PROD *before* deploying the branch code. Several frontend queries SELECT columns added by these migrations (e.g. #33 FieldApplicationInvoice.tsx:534 + #34 CustomerInvoiceSummary select discount_earned_cents/payment_terms; job sections select the new job/job_fields/job_chemicals cols; as-applied selects job_applied_records cols) — deploying code ahead of its migration would 400. Migration filename timestamps already encode the correct order. (On LOCAL these were applied via direct psql so supabase_migrations.schema_migrations shows a stale 'latest' version — the COLUMNS/objects are all present; don't trust schema_migrations for what's applied locally.)",
+    "DOC-SYNC AT GATE (loop-wide): migration-history.md + CLAUDE.md counts are behind by ~15+ migrations (ALL of #1-#28's new migrations are unindexed) — build agents correctly DON'T touch these out-of-section docs (would conflict). Reconcile ALL counts (migrations/pages/RPCs/tables) via /update-docs + regenerate-* scripts at the END before the production gate.",
+    "#26 → #30/#33: per-customer split UI = src/components/field-app/CustomerSharesTable.tsx + pure helpers in customerSplit.ts (deriveSplitRef(base,idx,isSplit) renders ChemMan <base>-<NNN> display label [jobNumber if transferred else group primary invoice number]; invoice_number itself UNTOUCHED; reconcileSplit/customerShareAcres/customerSharePct pure+tested). The penny-exact engine (save_field_app_invoice per-customer loop + derive_customer_shares_from_fields + invoice_shares) is PRE-EXISTING/unchanged — proven penny-exact on ODD totals (1501c 1/3-2/3 -> 500+1001). 'Customer Shares By' basis toggle (Locations vs Share%) is PRESENTATION-ONLY (dollars unchanged). #30 Print: reuse deriveSplitRef for the printed <jobnumber>-<NNN> label. Discount Earned column is an honest $0.00 PLACEHOLDER pending #33 (no money rule invented; doesn't feed totals). smoke-specs.json now has a save_field_app_invoice spec (covers preview_field_app_invoice_split) — run at the Codex/prod gate.",
+    "#27 → #26/#28/#29/#30/#31 (SPINE ROUTING — corrects an earlier #24 note): a TRANSFERRED field invoice has job_id but NO field_app_locations rows (transfer_job_to_invoice writes field_names[] + invoice_items, NOT field_app_locations). Per the #24 discriminator it therefore opens in the GENERIC InvoiceDetail (/field-invoices/:id, routeArea='field'), NOT the per-acre FieldApplicationInvoice. So ANY toolbar action #28 (post/unpost), #29 (void), #30 (print), #31 (email) wants on TRANSFERRED invoices must live in InvoiceDetail.tsx (Post/Void/Print/Email/RecordPayment already there), gated on invoice_type==='field_application'. (Engine-built per-acre invoices WITH field_app_locations still open in FieldApplicationInvoice.) Multi-customer transfer = grouped invoice with per-customer invoice_shares (penny-exact, share-sum==header); separate-invoices-per-customer is #26. #28 unpost: NO unpost_invoice RPC exists -> needs a NEW migration; the new reverse RPC transfer_invoice_to_job(p_invoice_id,p_performed_by,p_idempotency_key) is a clean model (guarded, admin_override SET LOCAL hatch for invoiced->completed, audited both ways, idempotent FOR UPDATE, refuses posted/paid). #29 void: void_invoice already routes draft/unposted->cancelled, posted->voided (Void button on InvoiceDetail, posted-only).",
+    "#25 → #26/#27/#32: Field-app invoice chemical LINE model — lines persist to invoice_items with quantity (=rate*acres per customer), unit_price_cents, extended_cents (bigint via safe_cents_qty) + warehouse/vendor/total_applied/total_applied_unit/total_applied_gl_lb/gl_lb_unit/epa_registration/product_form. save_field_app_invoice has TWO write branches: grower-share/OVERRIDE (qty_a, revenue $0) and PRICED (qty_b) — EXTEND BOTH if adding a line attribute. Tier per-acre price auto-fills from product price book at customer tier (override allowed). #26 auto-split: the per-customer chemical INSERT ALREADY loops v_customers + prices each customer's share independently (cents engine per customer done) — remaining work is split numbering/'Customer Shares By' basis UI/RPC. #27 transfer: transfer_job_to_invoice already writes total_applied/gl_lb/epa/product_form via convert_to_gl_lb but NOT warehouse/vendor — source from job_chemicals.warehouse/.vendor in its FOR v_chem loop if wanted. #32 fuel surcharge: add as a new informational/priced line OR invoice-level field, OFF by default + blank formula; the is_application_fee + sort_order=9999 app-service-fee pattern is the model for a non-product surcharge line. readOnly/canEdit posted-lock prop on FieldAppChemicalEntry is reusable.",
+    "#24 → #25/#27/#29/#33/#16: Field-app invoice EDITOR = src/pages/FieldApplicationInvoice.tsx, now 5 tabs (Locations, Chemical/Charges, Customers, Applied Info, Notifications). ROUTING DISCRIMINATOR (load-bearing): the per-acre editor keeps any field invoice that HAS field_app_locations (count keyed on invoice_id); only bounces a field invoice with NO locations + job_id/blend_ticket_id to generic InvoiceDetail. A TRANSFERRED invoice (job_id + locations) stays in THIS editor. If #27 produces SPLIT transfers keyed by invoice_group_id (not invoice_id), EXTEND the discriminator count query to also check the group. Editor exposes canEdit/isLocked; posted=LOCKED (agent fixed location-acres + Change-Locations holes). #25: FieldAppChemicalEntry has NO disabled/readOnly prop -> posted-lock hole on chemical lines (Save hidden + RPC status-guard block the write, but UI stays interactive) -> #25 must add readOnly/disabled driven by canEdit. Consultant = invoices.salesman_id (NO separate consultant_id), admin-editable only (RPC rejects non-admin attributing to another; non-admin always sends own salesman_id). #27 'Transfer to Scheduling' button = honest info-toast placeholder (no mutation, gated to job_id+editable) -> replace with the real reverse-transfer RPC. #33: pdfSnapshot already carries due_date/purchase_order_ref/footer_notes; header currently exposes only header_notes -> #33 adds PO ref/footer notes/due-date/terms inputs to the header card + save payload + pdfSnapshot. Reusable pure/tested: src/components/field-app/invoiceAppliedCarryover.ts (carryoverRowsFromRecords/applicatorNameFor/formatNetTach); APPLIED_RECORD_SELECT mirrors AppliedRecordsManager read shape.",
+    "#23 → #28/#24/#30: #28 post/unpost — NO unpost_invoice RPC exists (needs a NEW migration in #28). The Posted page's 'Unpost All' button is wired to an INERT placeholder (unpostAll()->info toast, no mutation, verified no DB change); when #28 lands the RPC, replace the handler with real bulk unpost (per-invoice generateIdempotencyKey('unpost_invoice',...), .throwOnError()/assertRpcResult, ConfirmModal, then fetchInvoices). #24 editor — posted list opens rows at /field-invoices/:id (generic InvoiceDetail = read-only/locked path); #24 ensures that editor enforces the posted lifecycle + surfaces the posted-records warning. #30 print — posted list reuses buildInvoicePdfDataFromRow(toPdfRow(row)) (money-correct, paid/prepay carried). ChemMan 'Old Print All' LEGACY format is NOT built — that belongs to #30 (add legacy format to invoicePdf.ts). Reusable pure+tested batch-scope helpers in fieldInvoiceList.ts: deriveMonthBatches/applyPostedScope/spansMultipleBatches/batchMonthOf/currentBatchMonth (batch key = calendar month of invoice_date, same key close_accounting_period uses).",
     "LESSON (all sections rendering a person's name): NEVER resolve applicator/user/created-by names via a direct PostgREST `profiles` embed — the profiles SELECT RLS is `is_admin() OR id=auth.uid()`, so the embed returns NULL for sales_reps/applicators and the name renders '(removed)'. Use profile_public_view (or a prop/label-map sourced from it) for names. Caught as a Med in #17. Similarly, when an edit-modal <select> is populated from an active-only list (vehicles status='active', active applicators), INJECT the record's current value as an extra <option> if it's not in the active list, or editing silently nulls it.",
     "#1 → #26 auto-split: per-field per-customer shares persist in job_field_shares(job_id, field_id, customer_id, split_pct, is_primary), defaulted from field_billing_defaults, validated to 100% per field. save_job rejects shares for fields not on the job. Canonical split engine to reuse: derive_customer_shares_from_fields(uuid[], jsonb).",
     "#1 → #10/#18 remaining-acres: jobs.applied_acres (default 0) + GENERATED jobs.remaining_acres = GREATEST(total_acres - applied_acres, 0). As-applied work UPDATEs applied_acres; NEVER write remaining_acres directly.",
