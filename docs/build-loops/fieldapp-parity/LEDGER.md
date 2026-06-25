@@ -2,41 +2,58 @@
 
 **Branch:** `feat/fieldapp-parity` (off `origin/main` d65d15d7)  
 **Worktree:** `C:\CRX_Manager\.claude\worktrees\fieldapp-parity`  
-**Step-0 re-audit:** 2026-06-24 → **0 DONE · 19 PARTIAL · 22 TODO** (all 41 need work). Full evidence: `STEP0-AUDIT.json`.
+**Step-0 re-audit:** 2026-06-24 → **0 DONE · 19 PARTIAL · 22 TODO** (all 41 need work). Full evidence: `STEP0-AUDIT.json`.  
+**Progress this run:** 8 / 41 sections BUILT. Machine state: `PROGRESS.json`.
 
-**Status key:** `PENDING` (audited, awaiting build) · `IN-PROGRESS` · `BUILT` (built+verified+Codex-clean this run) · `DONE` (already met criteria — none).
+**Status key:** `PENDING` (awaiting build) · `IN-PROGRESS` · `BUILT` (built+verified+Codex-clean this run) · `BLOCKED`.
 
 ## Orchestration notes (read on resume)
-- **I am the orchestrator.** Build each section via a FRESH subagent in the topo order below following `BUILD-SUBAGENT-TEMPLATE.md`; verify (ran & proven); Codex-review; fix High/Med; commit to `feat/fieldapp-parity`; update THIS file; next.
-- **Harness gotcha:** this session is rooted at `C:\`, NOT the worktree → the project `.claude` apply-guard hook + reviewer subagents do NOT auto-fire. Migrations apply to LOCAL only during the run, so the prod apply-guard is not in play. Run the 5 reviewer concerns + apply-guard MANUALLY at the production gate. (git pre-commit/pre-push hooks DO still fire.)
-- **Cross-dep wrinkle:** #7 Mass-edit lists a dep "Loader worksheet (bulk-editable fields)" = section #10, which is built (P4) AFTER #7. Build #7's date/status/recipe mass-edit first; wire the loader-worksheet bulk column when #10 lands (revisit #7 after #10).
+- **I am the orchestrator.** Build each PENDING section via a FRESH subagent in the topo order below following `BUILD-SUBAGENT-TEMPLATE.md`; verify (ran & proven); Codex-review; fix High/Med; commit to `feat/fieldapp-parity`; update `PROGRESS.json` + regenerate this file; next. Build sequentially (all Phase-1 sections touch Jobs.tsx/JobDetail.tsx — concurrent agents in one worktree would clobber each other).
+- **Harness gotcha:** session rooted at `C:\`, NOT the worktree → project `.claude` apply-guard + reviewer subagents do NOT auto-fire. Migrations apply to LOCAL only during the run. Run the 5 reviewer concerns + apply-guard MANUALLY at the production gate. (git pre-commit/pre-push hooks DO still fire.)
+- **Cross-dep wrinkle:** #7 Mass-edit dep "Loader worksheet (bulk-editable fields)" = section #10, built (P4) AFTER #7. Build #7 date/status/recipe mass-edit first; wire loader-worksheet bulk column when #10 lands.
+- **Tag-chips column** in the job list is a SLOT (built in #1); section #4 populates it with the real tag manager/table/filter.
 
 ## Local environment (READY 2026-06-24)
-- **Local Supabase (throwaway):** API `http://127.0.0.1:54321` · DB `postgresql://postgres:postgres@127.0.0.1:54322/postgres` · project dir `C:\Users\mason\fieldapp-local-db`. Heavy services excluded (db+auth+rest+kong only).
-- **Worktree `.env`** (gitignored, NEVER commit) points `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` at the LOCAL stack.
-- **Local admin login:** `admin@local.test` / `localadmin123` (profiles.role=admin). DB otherwise empty of business data (2 seed entity profiles) — build agents seed their own test data against local.
-- **Query local DB:** no host `psql` — use `docker exec supabase_db_fieldapp-local-db psql -U postgres -d postgres -c "…"`.
-- **Test a new migration:** author in real `supabase/migrations/`, copy to `C:\Users\mason\fieldapp-local-db\supabase\migrations\`, apply via `docker exec -i supabase_db_fieldapp-local-db psql -U postgres -d postgres < file` (or `supabase migration up` from project dir); smoke RPCs via `SUPABASE_DB_URL=<DB_URL> node scripts/smoke/run-smoke.mjs --spec <rpc>`.
-- **Baseline caveat (pre-existing repo tech-debt, NOT mine):** the 517-migration history does not replay cleanly from scratch — needed 29 copy-renames (19 duplicate-version collisions + 2 short-ts), 5 shim objects that exist on live but no migration creates (`products.deleted_at`, `allocation_sets.season/payment_date`, `customers.prepay_balance_cents`, `rate_limits`, `cleanup_rate_limits()`, `execute_sql_readonly()`), ~34 content patches — ALL on COPIES (real files untouched). Local schema matches live structurally for field-app tables. My NEW additive migrations are well-formed and apply to live normally at the gate. Detail: `C:\Users\mason\fieldapp-local-db\copy-fixes.log`.
+- **Local Supabase (throwaway):** API `http://127.0.0.1:54321` · DB `postgresql://postgres:postgres@127.0.0.1:54322/postgres` · project dir `C:\Users\mason\fieldapp-local-db`. Heavy services excluded.
+- **Worktree `.env`** (gitignored, NEVER commit) → LOCAL stack. Local admin: `admin@local.test` / `localadmin123` (role=admin). DB empty of business data — agents seed their own.
+- **Query local DB:** `docker exec supabase_db_fieldapp-local-db psql -U postgres -d postgres -c "…"`. **Test new migration:** copy to `C:\Users\mason\fieldapp-local-db\supabase\migrations\`, apply via `docker exec -i … psql … < file`; smoke via `SUPABASE_DB_URL=<DB_URL> node scripts/smoke/run-smoke.mjs --spec <rpc>`.
+- **Baseline caveat (pre-existing repo tech-debt, NOT mine):** 517-migration history doesn't replay from scratch — 29 copy-renames + 5 shim objects + ~34 content patches, ALL on COPIES (real files untouched). New additive migrations apply to live normally at the gate. Detail: `C:\Users\mason\fieldapp-local-db\copy-fixes.log`.
 
-## Build order (topological; PLAN-phase tie-break) — PENDING unless marked
+## Carry-forward notes (from built sections — read before building dependents)
+- #1 → #26 auto-split: per-field per-customer shares persist in job_field_shares(job_id, field_id, customer_id, split_pct, is_primary), defaulted from field_billing_defaults, validated to 100% per field. save_job rejects shares for fields not on the job. Canonical split engine to reuse: derive_customer_shares_from_fields(uuid[], jsonb).
+- #1 → #10/#18 remaining-acres: jobs.applied_acres (default 0) + GENERATED jobs.remaining_acres = GREATEST(total_acres - applied_acres, 0). As-applied work UPDATEs applied_acres; NEVER write remaining_acres directly.
+- #1 new columns: jobs gained call_date,date_proposed,time_proposed,schedule_date,date_expires,consultant_id,loader_comment,additional_info,internal_memo(NOT printed - keep off customer PDFs),updated_by,printed_at(stamped by WPS-notice action). job_fields gained planted_acres,crop,strip,pests. job_chemicals gained diluent_rate,rei_hours,phi_days,warehouse(free text - products has no warehouse col),vendor.
+- #1 save_job signature unchanged (6 args, ONE overload). New data rides in p_job_payload (field_shares[], scheduling, memos) + p_fields/p_chemicals arrays. Don't add an overload.
+- #1 reusable: tabbed-editor pattern + snapshot-based dirty tracking in JobDetail.tsx; toGallonOrLbEquivalent + converter in src/lib/chemCalculator.ts.
+- ENV (local only, not code): the throwaway local DB needed the standard GRANT SELECT/INSERT/UPDATE/DELETE TO authenticated/anon on public tables (applied to local; live already has them). If a later section's local app can't load any page, that's the fix.
+- #4 → #6 filter set: job-tag filter state = useState<string[]>([]) of job_tags.id; pure predicate jobMatchesTagFilter(jobTagIds, selectedTagIds) in src/components/jobs/jobTagFilter.ts (empty=passes all, OR within tags). It's applied CLIENT-SIDE in a visibleJobs=useMemo() that drives DataTable+totals+useRowSelection. Status/customer/date are SERVER-side query filters; tags ride the joined query. #6 must FOLD into this same visibleJobs pipeline, not rebuild it. assignmentsByJob: Map<jobId,Set<tagId>> already built on the page.
+- #5 → #9/#16: job_fields.sort_order is the SINGLE authoritative applicator route order (0..n, contiguous, renumbered on every save). Read fields ORDER BY sort_order (PostgREST doesn't guarantee embedded-row order). Map pin # = sort_order+1 = 'Stop N'.
+- #6 → #3/#7/#8: Jobs filter is now ONE JobFilters object (draft edited, applied drives query+memo) feeding the SAME visibleJobs memo that drives DataTable + bottom totals + useRowSelection. Extend there; don't add a parallel filter. selectedRows (useRowSelection) operates over visibleJobs, so #3/#7 bulk actions get the filtered+selected set for free. REUSE src/components/jobs/MultiSelectDropdown.tsx (generic {value,label,color?}). Reference lists already on the page: customers/applicators/vehicles/appServices/crews/allTags.
+- #6 → #7: status multi-select uses canonical list scheduled/in_progress/completed/invoiced/cancelled — keep mass-edit status a SUPERSET of the live CHECK.
+- #6 → #13/#21: ground crews now EXIST (ground_crews + ground_crew_members tables w/ RLS, jobs.ground_crew_id). #6 owns the crew CATALOG + job-level crew (persisted via a direct .update() in JobDetail, NOT save_job — the 6-arg save_job contract is frozen; if a future section puts crew in the save_job payload, extend the RPC body too). #13/#21 should attach crew/members to the APPLIED-INFO record and reuse GroundCrewsManager — do NOT recreate the tables.
+- #3 → #7/#8: job batches = job_batches table (RLS) + jobs.batch_ref FK (ON DELETE SET NULL, one-batch-per-job, distinct from many-to-many tags). Batch filter = JobFilters.batchIds (SERVER-side on batch_ref); batchOptions/batchByJob Map/batchMemberCounts already on the Jobs page. #7 mass-edit can 'Set batch' via the same direct .update() (admin/sales gated) — reuse JobBatchAssignModal's single-choice pattern. #8 columns: a sortable 'Batch' column (key 'batch_name') is in dataColumns — include it in the per-column on/off toggle set.
+- #7 → #10: wire the loader-worksheet bulk option at the '#10 INSERTION POINT' comment in src/components/jobs/JobMassEditModal.tsx; add the opt-in flag(s) to MassEditDraft in jobMassEdit.ts and include the column(s) in buildFieldPatch() (clean patch object — drops in without touching date/status/applicator/batch).
+- #7 → any bulk-status section: reuse partitionByStatusLegality() + allowedSourceStatuses() in src/components/jobs/jobMassEdit.ts (they mirror _enforce_job_status_transition). FORWARD steps (in_progress/completed/invoiced) MUST go through start_job/complete_job/transfer_job_to_invoice (they create application records/inventory moves/invoices) — never a raw status update. Bulk mass-edit only applies 'cancelled'.
+- #8 → all later list work: the Jobs list now renders via a per-user VISIBLE set (orderedVisibleColumnIds, registry order). Any new job-list column must be added to JOB_COLUMN_REGISTRY in src/components/jobs/jobListColumns.ts (id,label,shared,defaultVisible) AND to dataColumns in Jobs.tsx, or it won't appear. user_list_settings is a GENERIC per-user table keyed (user_id, list_key) with RLS auth.uid()=user_id — REUSE it for the Phase-3 invoice lists (add a list_key or extend the shared map; isInvoiceColumnVisible already shares the 'jobs' list_key for 3 shared columns). showCompleted=false hides completed jobs UNLESS the status filter explicitly includes 'completed'.
 
-- [ ] ** 1.** (#1, P1-Jobs) `(DB)` **Job list + create/edit job parity** — _PARTIAL_ (2/11) · PENDING
-      ↳ gaps: Row is MISSING most required columns: no color tag chips, no chemicals+rate+unit, no crop(… / No totals row summing total acres + remaining acres across the list
-- [ ] ** 2.** (#2, P1-Jobs)       **Recipes (save/reuse tank mixes on a job)** — _PARTIAL_ (2/5) · PENDING
-      ↳ gaps: No 'use last used recipe' shortcut in the job editor (no last_used/lastUsed concept anywhe… / No 'save current job chemicals as a new recipe' control in the job editor — save_blend_rec…
-- [ ] ** 3.** (#4, P1-Jobs) `(DB)` **Color-coded job tags (create/edit/delete + chips + filter)** — _TODO_ (0/8) · PENDING
-      ↳ gaps: No job tag manager (create tag w/ name + color) / No edit-tag (name/color) flow for jobs
-- [ ] ** 4.** (#5, P1-Jobs)       **Field/location route-ordering (drag to set applicator drive order)** — _PARTIAL_ (3/5) · PENDING
-      ↳ gaps: No drag-and-drop reorder UI — fields can only be added/removed; order is implicitly the ad… / Order is NOT reflected on any applicator printout / map pin numbering as a deliberate rout…
-- [ ] ** 5.** (#6, P1-Jobs) `(DB)` **Full filter set (AND-combined)** — _PARTIAL_ (2/6) · PENDING
-      ↳ gaps: Filter bar supports only Status, Customer (single-select, not multi), Start/End date — MIS… / No explicit SEARCH/apply button (filters auto-run) and no CLEAR ALL control that resets ev…
-- [ ] ** 6.** (#3, P1-Jobs) `(DB)` **Job batches (group jobs into named batches)** — _TODO_ (0/5) · PENDING
-      ↳ gaps: No multi-select-to-batch from the job list (the only bulk actions are CSV/PDF/Delete) / No create-named-batch flow — jobs.batch_id is a single free-text field on the editor, ther…
-- [ ] ** 7.** (#7, P1-Jobs)       **Mass edit selected jobs (dates / status / loader worksheets)** — _TODO_ (0/7) · PENDING
-      ↳ gaps: No Mass Edit toolbar action (bulk actions are only Export CSV, Download PDF, Delete Jobs) / No Mass Edit modal stating 'N jobs selected'
-- [ ] ** 8.** (#8, P1-Jobs) `(DB)` **Customizable list columns (List Settings)** — _TODO_ (0/6) · PENDING
-      ↳ gaps: No List Settings control / gear on the job list / No per-column on/off toggles (columns are hard-coded in dataColumns)
+## Build order (topological; PLAN-phase tie-break)
+
+- [x] ** 1.** (#1, P1-Jobs) `(DB)` **Job list + create/edit job parity** — **BUILT** 11/11 · commit `faf90ad7` · mig `20260624120000_job_parity_scheduling_agronomy_shares.sql`
+      ↳ Independently confirmed: job_field_shares table + RLS, 10 new jobs cols (remaining_acres GENERATED), job_chemicals/job_fields extras all on local; typecheck+build+2226 tests green; agent ran full flow in-app vs local DB.
+- [x] ** 2.** (#2, P1-Jobs)       **Recipes (save/reuse tank mixes on a job)** — **BUILT** 5/5 · commit `7210f583`
+      ↳ Spot-checked: commit on branch, typecheck PASS, no active frontend load_recipe_into_job call. Agent verified save-as/last-used/load (merge+replace, price-preserving) in-app vs local DB.
+- [x] ** 3.** (#4, P1-Jobs) `(DB)` **Color-coded job tags (create/edit/delete + chips + filter)** — **BUILT** 8/8 · commit `ac1bf74` · mig `20260624130000_job_tags.sql`
+      ↳ Orchestrator spot-check: HEAD ac1bf74, tree clean, typecheck PASS, both tables RLS=true (4+3 policies) on local. Independent adversarial reviewer CLEAN (live RLS/constraint/index probing). Agent ran tag create/assign/chip/filter/bulk in Chrome vs local.
+- [x] ** 4.** (#5, P1-Jobs)       **Field/location route-ordering (drag to set applicator drive order)** — **BUILT** 5/5 · commit `6de0509`
+      ↳ Spot-check + agent ran in-app vs local: dragged + keyboard-reordered 3 fields, saved, DB sort_order confirmed (0=East 40,1=North 80,2=South Creek), persisted across reload; per-field shares moved with rows.
+- [x] ** 5.** (#6, P1-Jobs) `(DB)` **Full filter set (AND-combined)** — **BUILT** 6/6 · commit `c326e05e` · mig `20260624140000_job_ground_crews_and_filter_indexes.sql`
+      ↳ Spot-check: HEAD c326e05e, tree clean, typecheck PASS, crew tables RLS=true, ground_crew_id + filter indexes present on local. Reviewer CLEAN (live RLS/FK/index probing). Agent ran multi-filter AND-narrowing in-app (7→3 jobs, totals 645→325 ac) + CLEAR ALL reset.
+- [x] ** 6.** (#3, P1-Jobs) `(DB)` **Job batches (group jobs into named batches)** — **BUILT** 5/5 · commit `6357b94` · mig `20260624150000_job_batches.sql`
+      ↳ Spot-check: HEAD 6357b94, tree clean, typecheck PASS, job_batches RLS=true + jobs.batch_ref present. Multi-lens panel CLEAN. Agent ran create/assign/filter/remove/reload in-app vs local.
+- [x] ** 7.** (#7, P1-Jobs)       **Mass edit selected jobs (dates / status / loader worksheets)** — **BUILT** 7/7 · commit `5e827066`
+      ↳ Spot-check: HEAD 5e827066, tree clean, typecheck PASS, no cancel_job RPC to bypass. Reviewer CLEAN (status-legality + cancel side-effects + selection). Agent ran 3-job mass-edit (date/status/applicator/batch) in-app vs local; unselected + unfilled-field jobs proven untouched.
+- [x] ** 8.** (#8, P1-Jobs) `(DB)` **Customizable list columns (List Settings)** — **BUILT** 6/6 · commit `77ad2ef1` · mig `20260624160000_user_list_settings.sql`
+      ↳ Spot-check: HEAD 77ad2ef1, tree clean, typecheck PASS, user_list_settings RLS=true 4 policies all auth.uid()-bound. Multi-lens CLEAN. Agent ran toggle+persist+reload+per-user-isolation in-app/DB; 2326 tests pass.
 - [ ] ** 9.** (#17, P2-Applied) `(DB)` **As-applied entry record (applicator, vehicle, application date)** — _PARTIAL_ (1/6) · PENDING
       ↳ gaps: Applicator is a free-text input, NOT selected from the applicator/profile list (FieldAppli… / No Vehicle field at all on the field-app invoice, and no auto-default-from-applicator
 - [ ] **10.** (#18, P2-Applied) `(DB)` **Applied acres per location + remaining-acres tracking (partial / multi-day)** — _PARTIAL_ (2/7) · PENDING
@@ -107,13 +124,48 @@
 ---
 
 ## Parked-Low (Codex low-severity findings, deferred — review at end)
-_(none yet)_
+- [#1 P3] Job-list footer totals don't follow the DataTable's internal in-table search box (the named status/date/customer filters DO update totals). Fixing needs a shared DataTable API change — out of section scope.
+- [#3 Low] Batch member-count hints (JobBatchesManager 'N jobs', assign-modal coverage, delete-confirm copy) derive from the capped/filtered in-memory jobs list so can undercount with >500 jobs or an active filter (display-only; ON DELETE SET NULL still un-batches correctly). Same root as #6 row-cap. Fix: dedicated aggregate count query, or soften the copy.
+- [#3 Low / RECURRING across #3/#4/#6 new tables] INSERT policies gate on is_admin()/is_sales_rep() but don't bind created_by to auth.uid() (privileged-only audit-attribution nit; frontend always passes real profile.id). Consider a one-shot hardening migration before the production gate.
+- [#4 test-gap] No automated test asserts an applicator CANNOT write job_tag_assignments (RLS verified live by reviewer; a defense-in-depth test would be nice). Non-blocking.
+- [#6 Low] Deactivating a crew already on a job makes the JobDetail crew dropdown render blank (id retained in state; only lost if user actively changes the dropdown). Optional: include/append the inactive crew in the picker.
+- [#6 Low] Date-preset click spreads the current draft into applied, committing any pending non-date draft edits along with the date. Optional: base preset on applied.
+- [#6 Low] Direct crew .update() fires on every save even when unchanged (idempotent no-op write; harmless).
+- [#6 Low/known-limitation, PRE-EXISTING from #4] A job matching only a CLIENT-side filter (tags/crop/county/state/chemical/fieldName) that sorts past row 500 (job_date DESC) is truncated before the client filter sees it. Affects only >500 server-matched jobs. Long-term: move all filters server-side or paginate.
+- [#7 Low] Non-status field bulk update (date/applicator/batch) is one atomic .update().in() — if one job fails a trigger (e.g. enforce_applicator_license LICENSE_EXPIRED), the whole field batch rolls back all-or-nothing (surfaced honestly via toast, not swallowed). Could note atomicity in the modal copy.
+- [#7 Low] Mass-edit writes updated_by; single-job cancel (JobDetail) does not — cosmetic consistency nit (column nullable).
+- [#8 Low] List Settings toggles fire-and-forget full-snapshot upserts; rapid out-of-order completions could land a stale snapshot last (self-heals on next load/change; no money/cross-user). Optional: debounce ~300ms or serialize.
+- [#8 Low] anon retains an inherited table-level SELECT grant on user_list_settings, neutralized by RLS + no anon policy (anon SELECT=0 rows; matches project convention). Optional project-wide REVOKE.
 
 ## Migrations created this run (apply to PRODUCTION only at end, with Mason's approval)
-_(none yet)_
+- `20260624120000_job_parity_scheduling_agronomy_shares.sql` — section #1 (Job list + create/edit job parity)
+- `20260624130000_job_tags.sql` — section #4 (Color-coded job tags (create/edit/delete + chips + filter))
+- `20260624140000_job_ground_crews_and_filter_indexes.sql` — section #6 (Full filter set (AND-combined))
+- `20260624150000_job_batches.sql` — section #3 (Job batches (group jobs into named batches))
+- `20260624160000_user_list_settings.sql` — section #8 (Customizable list columns (List Settings))
+
+## Codex review status (gate — must be clean before production gate)
+- **Codex CLI hit its usage limit during section #2 (resets 2026-06-25 ~07:02). Interim gate = builder self-review + orchestrator spot-check + (for DB/money/RLS sections) a fresh adversarial reviewer agent. Run a real Codex pass over all codex:pending sections when limits reset, BEFORE the production gate.**
+- Sections awaiting a real Codex pass:
+  - #1 (partial, commit faf90ad7) — Job list + create/edit job parity
+  - #2 (pending, commit 7210f583) — Recipes (save/reuse tank mixes on a job)
+  - #4 (pending, commit ac1bf74) — Color-coded job tags (create/edit/delete + chips + filter)
+  - #5 (pending, commit 6de0509) — Field/location route-ordering (drag to set applicator drive order)
+  - #6 (pending, commit c326e05e) — Full filter set (AND-combined)
+  - #3 (pending, commit 6357b94) — Job batches (group jobs into named batches)
+  - #7 (pending, commit 5e827066) — Mass edit selected jobs (dates / status / loader worksheets)
+  - #8 (pending, commit 77ad2ef1) — Customizable list columns (List Settings)
 
 ## Open questions for Mason (don't block — keep building)
 _(none yet)_
 
 ## Run log (one line per section as completed)
-- 2026-06-24: Step-0 re-audit complete (5 area agents). Build order set. Local-DB baseline up (corrected-copy replay, no live touch). Local admin seeded. Build env green (typecheck+build pass).
+- 2026-06-24: Step-0 re-audit complete. Build order set. Local-DB baseline up (corrected-copy replay, no live touch). Local admin seeded. Build env green.
+- 2026-06-24: #1 Job list + create/edit job parity — BUILT 11/11 (commit faf90ad7)
+- 2026-06-24: #2 Recipes (save/reuse tank mixes on a job) — BUILT 5/5 (commit 7210f583)
+- 2026-06-24: #4 Color-coded job tags (create/edit/delete + chips + filter) — BUILT 8/8 (commit ac1bf74)
+- 2026-06-24: #5 Field/location route-ordering (drag to set applicator drive order) — BUILT 5/5 (commit 6de0509)
+- 2026-06-24: #6 Full filter set (AND-combined) — BUILT 6/6 (commit c326e05e)
+- 2026-06-24: #3 Job batches (group jobs into named batches) — BUILT 5/5 (commit 6357b94)
+- 2026-06-24: #7 Mass edit selected jobs (dates / status / loader worksheets) — BUILT 7/7 (commit 5e827066)
+- 2026-06-24: #8 Customizable list columns (List Settings) — BUILT 6/6 (commit 77ad2ef1)
