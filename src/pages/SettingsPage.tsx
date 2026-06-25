@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Save, UserPlus, Pencil, Shield, Users, KeyRound } from 'lucide-react';
+import { Save, UserPlus, Pencil, Shield, Users, KeyRound, Fuel } from 'lucide-react';
 import Card, { CardHeader } from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -17,6 +17,16 @@ import { supabase, checkMutationResult, sanitizeError, assertRpcResult } from '.
 import { useIdempotencyKey } from '../hooks/useIdempotencyKey';
 import { getPagesForRole, getCategories } from '../lib/pagePermissions';
 import { Sentry } from '../lib/sentry';
+import {
+  DEFAULT_FUEL_SURCHARGE,
+  parseFuelSurchargeConfig,
+  serializeFuelSurchargeConfig,
+  fuelSurchargeIsActive,
+  validateFuelSurchargeConfig,
+  fuelSurchargeRateUnit,
+  type FuelSurchargeConfig,
+  type FuelSurchargeBasis,
+} from '../lib/fuelSurcharge';
 import type { Profile, AppSetting, UserRole } from '../types';
 
 // --- Permissions Panel ---
@@ -127,6 +137,9 @@ export default function SettingsPage() {
   const [companyAddress, setCompanyAddress] = useState('');
   const [defaultValidDays, setDefaultValidDays] = useState('30');
   const [defaultTier, setDefaultTier] = useState('1');
+  // #32: Fuel Surcharge — OFF by default, rate blank. The owner sets the rule.
+  const [fuelSurcharge, setFuelSurcharge] = useState<FuelSurchargeConfig>(DEFAULT_FUEL_SURCHARGE);
+  const [savingFuel, setSavingFuel] = useState(false);
   const [users, setUsers] = useState<Profile[]>([]);
   const [savingCompany, setSavingCompany] = useState(false);
   const [savingDefaults, setSavingDefaults] = useState(false);
@@ -179,6 +192,8 @@ export default function SettingsPage() {
     setCompanyAddress(map['company_address'] || '');
     setDefaultValidDays(map['default_quote_valid_days'] || '30');
     setDefaultTier(map['default_tier'] || '1');
+    // #32: blank/absent => the inert OFF default (never invents a rate).
+    setFuelSurcharge(parseFuelSurchargeConfig(map['fuel_surcharge']));
   };
 
   const fetchUsers = async () => {
@@ -240,6 +255,30 @@ export default function SettingsPage() {
       toast('error', sanitizeError(err));
     }
     setSavingDefaults(false);
+  };
+
+  const saveFuelSurcharge = async () => {
+    // #32: UI guard. OFF/blank are never errors; only an inconsistent ON config is.
+    const err = validateFuelSurchargeConfig(fuelSurcharge);
+    if (err) {
+      toast('error', err);
+      return;
+    }
+    setSavingFuel(true);
+    try {
+      await saveSetting('fuel_surcharge', serializeFuelSurchargeConfig(fuelSurcharge));
+      toast('success', 'Fuel surcharge settings saved');
+      if (profile) {
+        logActivity({
+          event: 'settings_updated',
+          description: `Fuel surcharge ${fuelSurcharge.enabled ? 'enabled' : 'disabled'} (basis: ${fuelSurcharge.basis || 'none'}, rate: ${fuelSurcharge.rate.trim() || 'blank'})`,
+          performedBy: profile.id,
+        });
+      }
+    } catch (errUnknown: unknown) {
+      toast('error', sanitizeError(errUnknown));
+    }
+    setSavingFuel(false);
   };
 
   const handleCreateUser = async () => {
@@ -587,6 +626,88 @@ export default function SettingsPage() {
               <option value="3">Tier 3</option>
             </select>
           </div>
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Fuel"
+          accent="Surcharge"
+          action={
+            <Button
+              size="sm"
+              icon={<Save className="w-4 h-4" />}
+              onClick={saveFuelSurcharge}
+              loading={savingFuel}
+            >
+              Save
+            </Button>
+          }
+        />
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg bg-amber-50 border border-amber-100 p-3">
+            <Fuel className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+            <p className="text-sm text-amber-800">
+              <strong>Off by default.</strong> A fuel surcharge is only added to
+              field-application invoices when you turn it on <em>and</em> enter your own
+              rate below. Leave the rate blank for no surcharge. CropRX does not set a
+              rate for you &mdash; this is your billing decision.
+            </p>
+          </div>
+
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={fuelSurcharge.enabled}
+              onChange={(e) => setFuelSurcharge((c) => ({ ...c, enabled: e.target.checked }))}
+              className="w-4 h-4 rounded border-gray-300 text-crx-green focus:ring-crx-green/20"
+            />
+            <span className="text-sm font-medium text-secondary">
+              Apply a fuel surcharge to field-application invoices
+            </span>
+          </label>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-secondary mb-1">Basis</label>
+              <select
+                value={fuelSurcharge.basis}
+                onChange={(e) =>
+                  setFuelSurcharge((c) => ({ ...c, basis: e.target.value as FuelSurchargeBasis }))
+                }
+                disabled={!fuelSurcharge.enabled}
+                className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green disabled:bg-gray-50 disabled:text-gray-400"
+              >
+                <option value="">Select a basis…</option>
+                <option value="per_acre">Per acre ($/acre applied)</option>
+                <option value="percent">Percent of invoice (% of the bill)</option>
+                <option value="flat">Flat amount ($ per invoice)</option>
+              </select>
+            </div>
+            <Input
+              label={`Rate${fuelSurcharge.basis ? ` (${fuelSurchargeRateUnit(fuelSurcharge.basis)})` : ''}`}
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Blank = no surcharge"
+              value={fuelSurcharge.rate}
+              onChange={(e) => setFuelSurcharge((c) => ({ ...c, rate: e.target.value }))}
+              disabled={!fuelSurcharge.enabled}
+            />
+          </div>
+
+          <p className="text-xs text-secondary">
+            {fuelSurchargeIsActive(fuelSurcharge) ? (
+              <span className="text-amber-700 font-medium">
+                Active &mdash; a &ldquo;Fuel Surcharge&rdquo; line will be added to new
+                field-application invoices.
+              </span>
+            ) : (
+              <span className="text-gray-400">
+                Inert &mdash; no surcharge will be applied (off, or no rate entered).
+              </span>
+            )}
+          </p>
         </div>
       </Card>
 

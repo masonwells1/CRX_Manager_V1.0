@@ -2883,7 +2883,9 @@ export interface PostInvoiceGroupResult {
 
 // ── Phase 1: preview_field_app_invoice_split return shape
 export interface PreviewFieldAppSplitLine {
-  kind: 'grower_share' | 'chemical' | 'service_fee';
+  // #32: 'fuel_surcharge' = the owner-configured fuel surcharge line (only present
+  // when the admin enabled it AND set a rate; absent at the OFF/blank default).
+  kind: 'grower_share' | 'chemical' | 'service_fee' | 'fuel_surcharge';
   description: string;
   quantity: number;
   unit_price_cents: number;

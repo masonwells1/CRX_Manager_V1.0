@@ -86,6 +86,11 @@
       "description": "save_invoice field-application aware (#3 edit-path, REQUIRES 20260619160000): editing a field_application invoice PRESERVES the is_application_fee machine-fee line + re-balances the per-grower invoice_shares to the new total; a chemical_sale invoice's shares are NOT touched (field-only guard). Pre-apply the chain FAILS (live save_invoice drops the fee flag + never touches shares).",
       "covers": ["save_invoice"]
     },
+    "fuel_surcharge": {
+      "chain": "smoke-fuel-surcharge.sql",
+      "description": "Field-app parity #32 (REQUIRES 20260625140000): fuel surcharge is OFF by default and inert. Proves: with app_settings.fuel_surcharge at the shipped default (enabled=false, rate blank) a saved field-app invoice has NO 'Fuel Surcharge' line and the total is the pure pre-surcharge sum (DEFAULT-OFF INERT); after an admin sets enabled=true + a TEST per-acre rate, a re-save adds EXACTLY ONE is_application_fee 'Fuel Surcharge' line of ROUND(rate*100*acres) cents and the total rises by EXACTLY that amount (no drift); the surcharge flows into invoice_shares.amount_cents (share split / print); and enabled+BLANK rate produces NO line (off-if-formula-blank). The config writes are inside the rolled-back txn so the persisted OFF default is never changed. NEVER invents a rate.",
+      "covers": ["save_field_app_invoice", "compute_fuel_surcharge_cents", "preview_field_app_invoice_split"]
+    },
     "transfer_job_to_invoice": {
       "chain": "smoke-transfer_job_invoice_machine_fee.sql",
       "description": "Job->field-invoice billing (REQUIRES 20260619140000): forged actor -> ACTOR_MISMATCH (G3); a job with application_service_id gets ONE is_application_fee line (price_source 'tier') + the service FK on the invoice; a FLAT/unrated chemical line still bills; per-customer fee rate in split jobs (a grower's customer_application_rates override is honored — Codex P1); totals + shares reconcile in single / same-rate-split / different-rate-split cases. Pre-apply the chain FAILS (live body has no fee line). NOTE: the prior full start_job->complete->post->void loop chain file is absent; this chain certifies transfer_job_to_invoice's fee+actor behavior.",

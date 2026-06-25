@@ -192,6 +192,9 @@ export default function CustomerSharesTable({
                       {l.kind === 'service_fee' && (
                         <span className="text-xs px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 mr-2">service</span>
                       )}
+                      {l.kind === 'fuel_surcharge' && (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-orange-50 text-orange-700 mr-2">fuel</span>
+                      )}
                       {l.description}
                     </td>
                     <td className="px-4 py-1.5 text-right tabular-nums">{l.quantity.toFixed(2)}</td>
