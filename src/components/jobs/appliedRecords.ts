@@ -15,6 +15,23 @@ export interface AppliedFieldDraft {
   applied_acres: string;
 }
 
+// Field-app parity #19: one weather set (START or END) as edited in the form —
+// all string-valued (form inputs). `source` tracks whether the set was last
+// auto-pulled from Open-Meteo or hand-entered/edited, so the UI can badge it and
+// so an edit after an auto-pull flips it to 'manual'.
+export interface WeatherSetDraft {
+  time: string; // 'HH:MM'
+  temp_f: string;
+  wind_direction: string;
+  wind_mph: string;
+  humidity_pct: string;
+  source: 'auto' | 'manual' | '';
+}
+
+export function emptyWeatherSetDraft(): WeatherSetDraft {
+  return { time: '', temp_f: '', wind_direction: '', wind_mph: '', humidity_pct: '', source: '' };
+}
+
 export interface AppliedRecordDraft {
   applicator_id: string;
   vehicle_id: string;
@@ -25,6 +42,9 @@ export interface AppliedRecordDraft {
   // applied_acres total is DERIVED from these (the manual applied_acres input is
   // hidden in favour of this detail). Empty list = no per-location detail.
   fields: AppliedFieldDraft[];
+  // #19: START + END weather pair.
+  startWeather: WeatherSetDraft;
+  endWeather: WeatherSetDraft;
 }
 
 export function emptyAppliedRecordDraft(defaults?: Partial<AppliedRecordDraft>): AppliedRecordDraft {
@@ -35,7 +55,43 @@ export function emptyAppliedRecordDraft(defaults?: Partial<AppliedRecordDraft>):
     applied_acres: '',
     notes: '',
     fields: [],
+    startWeather: emptyWeatherSetDraft(),
+    endWeather: emptyWeatherSetDraft(),
     ...defaults,
+  };
+}
+
+// DB `time` values come back as 'HH:MM:SS'; the <input type="time"> wants 'HH:MM'.
+// Trim seconds for display/editing without losing a meaningful value.
+export function timeForInput(t: string | null | undefined): string {
+  if (!t) return '';
+  const m = /^(\d{2}:\d{2})/.exec(t);
+  return m ? m[1] : '';
+}
+
+// Turn a persisted weather set (START or END columns) back into a draft.
+function weatherSetFromRecord(
+  rec: JobAppliedRecord,
+  prefix: 'start' | 'end',
+): WeatherSetDraft {
+  const num = (v: number | null) => (v != null ? String(v) : '');
+  if (prefix === 'start') {
+    return {
+      time: timeForInput(rec.start_weather_time),
+      temp_f: num(rec.start_temp_f),
+      wind_direction: rec.start_wind_direction ?? '',
+      wind_mph: num(rec.start_wind_mph),
+      humidity_pct: num(rec.start_humidity_pct),
+      source: rec.start_weather_source ?? '',
+    };
+  }
+  return {
+    time: timeForInput(rec.end_weather_time),
+    temp_f: num(rec.end_temp_f),
+    wind_direction: rec.end_wind_direction ?? '',
+    wind_mph: num(rec.end_wind_mph),
+    humidity_pct: num(rec.end_humidity_pct),
+    source: rec.end_weather_source ?? '',
   };
 }
 
@@ -51,7 +107,80 @@ export function draftFromRecord(rec: JobAppliedRecord & { job_applied_record_fie
       field_id: f.field_id,
       applied_acres: f.applied_acres != null ? String(f.applied_acres) : '',
     })),
+    startWeather: weatherSetFromRecord(rec, 'start'),
+    endWeather: weatherSetFromRecord(rec, 'end'),
   };
+}
+
+// ── #19 weather pair: Total Time + persistence helpers (pure, DB-free, tested) ─
+
+// Minutes-from-midnight of an 'HH:MM' (or 'HH:MM:SS') time, or null if unparseable.
+function timeToMinutes(t: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec(t.trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// Total Time = end - start, in whole minutes. Returns null when either time is
+// missing/invalid. When end is earlier than start the window is assumed to cross
+// midnight (e.g. start 23:00, end 01:00 -> 120 min), matching how a crew would
+// read an overnight spray window. Pure — exported for tests and the UI display.
+export function computeTotalMinutes(startTime: string, endTime: string): number | null {
+  const s = timeToMinutes(startTime);
+  const e = timeToMinutes(endTime);
+  if (s == null || e == null) return null;
+  const diff = e - s;
+  return diff >= 0 ? diff : diff + 24 * 60;
+}
+
+// Format a minute count as 'Hh Mm' (e.g. 135 -> '2h 15m', 45 -> '45m'). Returns
+// '—' for null so the Total Time cell is never blank/NaN.
+export function formatTotalTime(minutes: number | null): string {
+  if (minutes == null) return '—';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+// True when a weather set has at least one entered value (used to decide whether
+// to default an un-flagged source to 'manual' on save, and to show the badge).
+export function weatherSetHasData(w: WeatherSetDraft): boolean {
+  return (
+    w.time.trim() !== '' ||
+    w.temp_f.trim() !== '' ||
+    w.wind_direction.trim() !== '' ||
+    w.wind_mph.trim() !== '' ||
+    w.humidity_pct.trim() !== ''
+  );
+}
+
+// A persisted weather set (the start_/end_ columns of a saved record).
+export interface PersistedWeatherSet {
+  time: string | null;
+  temp_f: number | null;
+  wind_direction: string | null;
+  wind_mph: number | null;
+  humidity_pct: number | null;
+}
+
+// Compact one-line summary of a persisted weather set for the entry list, e.g.
+// "08:30 · 72°F · NNW 8mph · 54%". Empty parts are omitted; returns '' when the
+// set has no data. Pure — exported for tests and the list cell.
+export function summarizeWeatherSet(w: PersistedWeatherSet): string {
+  const parts: string[] = [];
+  if (w.time) parts.push(timeForInput(w.time));
+  if (w.temp_f != null) parts.push(`${w.temp_f}°F`);
+  const wind: string[] = [];
+  if (w.wind_direction) wind.push(w.wind_direction);
+  if (w.wind_mph != null) wind.push(`${w.wind_mph}mph`);
+  if (wind.length) parts.push(wind.join(' '));
+  if (w.humidity_pct != null) parts.push(`${w.humidity_pct}%`);
+  return parts.join(' · ');
 }
 
 // ── #18 per-location applied-acres math (pure, DB-free, unit-tested) ─────────
@@ -199,7 +328,41 @@ export function validateAppliedRecord(draft: AppliedRecordDraft): AppliedRecordV
       return { ok: false, error: 'Location applied acres must be a number of 0 or more.' };
     }
   }
+  // #19: weather values, if entered, must be valid (mirror the DB CHECKs). Temp
+  // is unconstrained (can be below 0F); wind speed >= 0; humidity 0–100.
+  const wErr = validateWeatherSet(draft.startWeather, 'Start');
+  if (wErr) return { ok: false, error: wErr };
+  const eErr = validateWeatherSet(draft.endWeather, 'End');
+  if (eErr) return { ok: false, error: eErr };
   return { ok: true };
+}
+
+// Validate one weather set's numeric fields. Returns an error message or null.
+// Blank fields are allowed (every weather value is optional). Wind speed must be
+// >= 0 and humidity 0–100 to mirror the DB CHECK constraints; temp is free.
+function validateWeatherSet(w: WeatherSetDraft, label: string): string | null {
+  if (w.temp_f.trim() !== '' && !Number.isFinite(Number(w.temp_f))) {
+    return `${label} temperature must be a number.`;
+  }
+  if (w.wind_mph.trim() !== '') {
+    const n = Number(w.wind_mph);
+    if (!Number.isFinite(n) || n < 0) return `${label} wind speed must be a number of 0 or more.`;
+  }
+  if (w.humidity_pct.trim() !== '') {
+    const n = Number(w.humidity_pct);
+    if (!Number.isFinite(n) || n < 0 || n > 100) return `${label} humidity must be between 0 and 100.`;
+  }
+  return null;
+}
+
+// The persisted weather columns for one set (START or END). All nullable.
+export interface WeatherSetPatch {
+  time: string | null; // 'HH:MM' (Postgres `time`)
+  temp_f: number | null;
+  wind_direction: string | null;
+  wind_mph: number | null;
+  humidity_pct: number | null;
+  source: 'auto' | 'manual' | null;
 }
 
 export interface AppliedRecordPatch {
@@ -208,6 +371,39 @@ export interface AppliedRecordPatch {
   application_date: string;
   applied_acres: number | null;
   notes: string | null;
+  // #19 START + END weather columns (flattened with start_/end_ prefixes).
+  start_weather_time: string | null;
+  start_temp_f: number | null;
+  start_wind_direction: string | null;
+  start_wind_mph: number | null;
+  start_humidity_pct: number | null;
+  start_weather_source: 'auto' | 'manual' | null;
+  end_weather_time: string | null;
+  end_temp_f: number | null;
+  end_wind_direction: string | null;
+  end_wind_mph: number | null;
+  end_humidity_pct: number | null;
+  end_weather_source: 'auto' | 'manual' | null;
+}
+
+// Convert a weather-set draft into its persisted columns. Empty strings -> null.
+// `source` resolution: keep an explicit 'auto'/'manual' flag; otherwise mark a
+// set that has any data as 'manual' (the crew typed it), and leave a fully-empty
+// set's source NULL. Assumes the draft already passed validateAppliedRecord.
+export function buildWeatherSetPatch(w: WeatherSetDraft): WeatherSetPatch {
+  const numOrNull = (s: string) => (s.trim() === '' ? null : Number(s));
+  const hasData = weatherSetHasData(w);
+  const source: 'auto' | 'manual' | null = w.source === 'auto' || w.source === 'manual'
+    ? w.source
+    : (hasData ? 'manual' : null);
+  return {
+    time: w.time.trim() === '' ? null : w.time.trim(),
+    temp_f: numOrNull(w.temp_f),
+    wind_direction: w.wind_direction.trim() === '' ? null : w.wind_direction.trim(),
+    wind_mph: numOrNull(w.wind_mph),
+    humidity_pct: numOrNull(w.humidity_pct),
+    source,
+  };
 }
 
 // The persisted per-location child rows for an entry (job_applied_record_fields,
@@ -238,12 +434,26 @@ export function buildAppliedRecordPatch(
   const applied = perLocationMode
     ? sumDraftFieldAcres(draft.fields)
     : (manual === '' ? null : Number(manual));
+  const start = buildWeatherSetPatch(draft.startWeather);
+  const end = buildWeatherSetPatch(draft.endWeather);
   return {
     applicator_id: draft.applicator_id,
     vehicle_id: draft.vehicle_id || null,
     application_date: draft.application_date,
     applied_acres: applied,
     notes: draft.notes.trim() === '' ? null : draft.notes.trim(),
+    start_weather_time: start.time,
+    start_temp_f: start.temp_f,
+    start_wind_direction: start.wind_direction,
+    start_wind_mph: start.wind_mph,
+    start_humidity_pct: start.humidity_pct,
+    start_weather_source: start.source,
+    end_weather_time: end.time,
+    end_temp_f: end.temp_f,
+    end_wind_direction: end.wind_direction,
+    end_wind_mph: end.wind_mph,
+    end_humidity_pct: end.humidity_pct,
+    end_weather_source: end.source,
   };
 }
 

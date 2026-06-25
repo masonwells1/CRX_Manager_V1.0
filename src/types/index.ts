@@ -2126,6 +2126,23 @@ export interface JobAppliedRecord {
   application_date: string; // 'YYYY-MM-DD'
   applied_acres: number | null;
   notes: string | null;
+  // Field-app parity #19: START + END weather pair (the spray window). Each set
+  // has Time (HH:MM, field-local — date is application_date), Temp (F), Wind
+  // Direction (cardinal/free text), Wind mph, Humidity %, and a source flag
+  // ('auto' = Open-Meteo pull, 'manual' = hand-entered/edited). All nullable —
+  // weather is a convenience capture and never gates a save.
+  start_weather_time: string | null; // 'HH:MM' / 'HH:MM:SS'
+  start_temp_f: number | null;
+  start_wind_direction: string | null;
+  start_wind_mph: number | null;
+  start_humidity_pct: number | null;
+  start_weather_source: 'auto' | 'manual' | null;
+  end_weather_time: string | null;
+  end_temp_f: number | null;
+  end_wind_direction: string | null;
+  end_wind_mph: number | null;
+  end_humidity_pct: number | null;
+  end_weather_source: 'auto' | 'manual' | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;

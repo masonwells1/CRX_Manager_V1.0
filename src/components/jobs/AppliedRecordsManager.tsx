@@ -15,7 +15,7 @@
 // extend AppliedRecordDraft/buildAppliedRecordPatch in appliedRecords.ts.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Plus, Pencil, Trash2, Truck, User, CalendarDays, MapPin, AlertTriangle, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, Truck, User, CalendarDays, MapPin, AlertTriangle, X, CloudSun, Clock, Wind, Thermometer, Droplets } from 'lucide-react';
 import Button from '../ui/Button';
 import Input from '../ui/Input';
 import Modal from '../ui/Modal';
@@ -23,6 +23,7 @@ import ConfirmModal from '../ui/ConfirmModal';
 import { useToast } from '../ui/Toast';
 import { supabase, checkMutationResult } from '../../lib/db';
 import { logActivity } from '../../lib/activityLogger';
+import { fetchWeatherForDateTime } from '../../lib/weatherCapture';
 import type { Profile, Vehicle, JobAppliedRecordRow } from '../../types';
 import {
   emptyAppliedRecordDraft,
@@ -34,7 +35,11 @@ import {
   sumDraftFieldAcres,
   effectiveRecordAcres,
   computeRemainingAcres,
+  computeTotalMinutes,
+  formatTotalTime,
+  summarizeWeatherSet,
   type AppliedRecordDraft,
+  type WeatherSetDraft,
 } from './appliedRecords';
 
 // The job's planned locations, passed from JobDetail (field_id + name + the
@@ -55,6 +60,11 @@ interface Props {
   // applied-acres capture and the live remaining-acres counter.
   jobFields: AppliedJobField[];
   totalAcres: number;
+  // #19: the job's first field centroid (lat/lng), resolved by JobDetail via
+  // get_field_geojson. Drives the "Get Weather" Open-Meteo auto-pull. Null when
+  // the job has no mapped field — the button is then disabled and manual entry
+  // is the only path (still fully supported).
+  fieldCentroid: { lat: number; lng: number } | null;
   canEdit: boolean;
   performedBy: string | null;
 }
@@ -82,6 +92,7 @@ export default function AppliedRecordsManager({
   jobVehicleId,
   jobFields,
   totalAcres,
+  fieldCentroid,
   canEdit,
   performedBy,
 }: Props) {
@@ -93,6 +104,9 @@ export default function AppliedRecordsManager({
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<AppliedRecordDraft>(emptyAppliedRecordDraft());
+  // #19: which weather set (if any) is currently auto-pulling, to show a spinner
+  // on the right Get Weather button without blocking the other.
+  const [fetchingWeather, setFetchingWeather] = useState<null | 'start' | 'end'>(null);
 
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -331,6 +345,177 @@ export default function AppliedRecordsManager({
     });
   }
 
+  // ── #19 weather pair handlers ────────────────────────────────────────────
+  // Edit one field of a weather set. Any manual edit flips source -> 'manual' so
+  // the badge reflects that the crew corrected the value (legal record integrity).
+  function updateWeather(set: 'start' | 'end', key: keyof WeatherSetDraft, value: string) {
+    setDraft((d) => {
+      const cur = set === 'start' ? d.startWeather : d.endWeather;
+      const next: WeatherSetDraft = { ...cur, [key]: value, source: 'manual' };
+      return set === 'start' ? { ...d, startWeather: next } : { ...d, endWeather: next };
+    });
+  }
+
+  // NOW button: stamp the current local clock time (HH:MM) into a set's time.
+  function stampNow(set: 'start' | 'end') {
+    const now = new Date();
+    const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    updateWeather(set, 'time', hhmm);
+  }
+
+  // Get Weather: auto-pull from Open-Meteo for the application date + the set's
+  // time (falls back to a midday reading when the time is blank) at the field
+  // centroid. On success the five values fill and source -> 'auto'; on failure
+  // (offline / no data / no coordinates) the user gets a clear message and can
+  // still type the readings manually — auto-pull failure never blocks saving.
+  async function getWeather(set: 'start' | 'end') {
+    if (!fieldCentroid) {
+      toast('error', 'No mapped field location for this job — enter weather manually.');
+      return;
+    }
+    if (!draft.application_date) {
+      toast('error', 'Pick an application date first, then Get Weather.');
+      return;
+    }
+    const cur = set === 'start' ? draft.startWeather : draft.endWeather;
+    setFetchingWeather(set);
+    const w = await fetchWeatherForDateTime(fieldCentroid.lat, fieldCentroid.lng, draft.application_date, cur.time || null);
+    setFetchingWeather(null);
+    if (!w) {
+      toast('error', 'Could not fetch weather — enter conditions manually.');
+      return;
+    }
+    setDraft((d) => {
+      const prev = set === 'start' ? d.startWeather : d.endWeather;
+      const filled: WeatherSetDraft = {
+        ...prev,
+        temp_f: String(w.temperature_f),
+        wind_direction: w.wind_direction,
+        wind_mph: String(w.wind_speed_mph),
+        humidity_pct: String(w.humidity_pct),
+        source: 'auto',
+      };
+      return set === 'start' ? { ...d, startWeather: filled } : { ...d, endWeather: filled };
+    });
+    toast('success', 'Weather filled from Open-Meteo — adjust if needed.');
+  }
+
+  // Total Time = end - start (whole minutes), shown in the modal once both times
+  // are set. Pure helper so the display can never disagree with what's persisted.
+  const totalMinutes = computeTotalMinutes(draft.startWeather.time, draft.endWeather.time);
+
+  // Render one weather set (START or END): Time + NOW, Get Weather, then Temp /
+  // Wind Dir / Wind mph / Humidity — all editable. A badge shows whether the set
+  // was last auto-pulled or hand-entered.
+  function renderWeatherSet(set: 'start' | 'end', label: string) {
+    const w = set === 'start' ? draft.startWeather : draft.endWeather;
+    const busy = fetchingWeather === set;
+    return (
+      <div className="rounded-lg border border-gray-200 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-nav-dark">{label} Weather</span>
+            {w.source === 'auto' && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-crx-green/10 text-crx-green">Auto</span>
+            )}
+            {w.source === 'manual' && (
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-100 text-secondary">Manual</span>
+            )}
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => getWeather(set)}
+            loading={busy}
+            disabled={!fieldCentroid || fetchingWeather !== null}
+            title={fieldCentroid ? 'Auto-fill from Open-Meteo' : 'No mapped field location for this job'}
+          >
+            <CloudSun className="w-3.5 h-3.5" /> Get Weather
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-xs text-secondary mb-1">
+              <Clock className="w-3 h-3 inline mr-1" />Time
+            </label>
+            <div className="flex items-center gap-1">
+              <input
+                type="time"
+                value={w.time}
+                onChange={(e) => updateWeather(set, 'time', e.target.value)}
+                aria-label={`${label} weather time`}
+                className="flex-1 px-2 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+              />
+              <Button type="button" size="sm" variant="secondary" onClick={() => stampNow(set)} title="Stamp the current time">
+                Now
+              </Button>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs text-secondary mb-1">
+              <Thermometer className="w-3 h-3 inline mr-1" />Temp (&deg;F)
+            </label>
+            <input
+              type="number"
+              step="1"
+              value={w.temp_f}
+              onChange={(e) => updateWeather(set, 'temp_f', e.target.value)}
+              aria-label={`${label} temperature`}
+              placeholder="degrees F"
+              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-secondary mb-1">
+              <Wind className="w-3 h-3 inline mr-1" />Wind Dir
+            </label>
+            <input
+              type="text"
+              value={w.wind_direction}
+              onChange={(e) => updateWeather(set, 'wind_direction', e.target.value)}
+              aria-label={`${label} wind direction`}
+              placeholder="e.g. NNW"
+              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-secondary mb-1">
+              <Wind className="w-3 h-3 inline mr-1" />Wind (mph)
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.1"
+              value={w.wind_mph}
+              onChange={(e) => updateWeather(set, 'wind_mph', e.target.value)}
+              aria-label={`${label} wind speed`}
+              placeholder="mph"
+              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-secondary mb-1">
+              <Droplets className="w-3 h-3 inline mr-1" />Humidity (%)
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="1"
+              value={w.humidity_pct}
+              onChange={(e) => updateWeather(set, 'humidity_pct', e.target.value)}
+              aria-label={`${label} humidity`}
+              placeholder="%"
+              className="w-full px-2 py-2 text-sm border border-gray-200 rounded-lg tabular-nums focus:outline-none focus:ring-2 focus:ring-crx-green/20 focus:border-crx-green"
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Live "X of Y remaining" preview while editing: replace the entry being
   // edited (excludeId) with the current draft's per-location sum so the counter
   // reflects what saving WOULD make the job total, without double-counting.
@@ -418,6 +603,9 @@ export default function AppliedRecordsManager({
                   <Truck className="w-3.5 h-3.5 inline mr-1" />Vehicle
                 </th>
                 <th className="text-right font-medium px-3 py-2">Applied Acres</th>
+                <th className="text-left font-medium px-3 py-2">
+                  <CloudSun className="w-3.5 h-3.5 inline mr-1" />Weather (Start / End)
+                </th>
                 <th className="text-left font-medium px-3 py-2">Notes</th>
                 {canEdit && <th className="px-3 py-2"></th>}
               </tr>
@@ -454,6 +642,42 @@ export default function AppliedRecordsManager({
                     ) : (
                       '—'
                     )}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-secondary whitespace-nowrap">
+                    {(() => {
+                      const startSummary = summarizeWeatherSet({
+                        time: rec.start_weather_time,
+                        temp_f: rec.start_temp_f,
+                        wind_direction: rec.start_wind_direction,
+                        wind_mph: rec.start_wind_mph,
+                        humidity_pct: rec.start_humidity_pct,
+                      });
+                      const endSummary = summarizeWeatherSet({
+                        time: rec.end_weather_time,
+                        temp_f: rec.end_temp_f,
+                        wind_direction: rec.end_wind_direction,
+                        wind_mph: rec.end_wind_mph,
+                        humidity_pct: rec.end_humidity_pct,
+                      });
+                      const totalMin = computeTotalMinutes(
+                        rec.start_weather_time ?? '',
+                        rec.end_weather_time ?? '',
+                      );
+                      if (!startSummary && !endSummary) return '—';
+                      return (
+                        <div className="space-y-0.5">
+                          {startSummary && (
+                            <div><span className="font-medium text-nav-dark">Start</span> {startSummary}</div>
+                          )}
+                          {endSummary && (
+                            <div><span className="font-medium text-nav-dark">End</span> {endSummary}</div>
+                          )}
+                          {totalMin != null && (
+                            <div className="text-[11px]">Total Time: {formatTotalTime(totalMin)}</div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-secondary">{rec.notes ?? ''}</td>
                   {canEdit && (
@@ -624,6 +848,33 @@ export default function AppliedRecordsManager({
               placeholder="Acres covered in this pass"
             />
           )}
+
+          {/* #19 START + END weather pair (the spray window). Each set has Time
+              (+ NOW), Temp, Wind Direction, Wind mph, Humidity, all editable. The
+              Get Weather button auto-pulls from free Open-Meteo by application
+              date + field location. Total Time = end - start. Weather is a legal
+              compliance record; a failed/wrong pull can always be hand-corrected. */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium text-nav-dark">
+                <CloudSun className="w-3.5 h-3.5 inline mr-1" />Weather (Start &amp; End)
+              </label>
+              {totalMinutes != null && (
+                <span className="text-xs text-secondary">
+                  Total Time: <span className="font-semibold text-nav-dark tabular-nums">{formatTotalTime(totalMinutes)}</span>
+                </span>
+              )}
+            </div>
+            {!fieldCentroid && (
+              <p className="text-xs text-amber-700 mb-2">
+                This job has no mapped field location, so Get Weather is unavailable — enter conditions manually.
+              </p>
+            )}
+            <div className="space-y-2">
+              {renderWeatherSet('start', 'Start')}
+              {renderWeatherSet('end', 'End')}
+            </div>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-nav-dark mb-1">Notes</label>

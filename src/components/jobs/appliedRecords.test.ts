@@ -4,6 +4,13 @@ import {
   validateAppliedRecord,
   buildAppliedRecordPatch,
   buildAppliedFieldRows,
+  buildWeatherSetPatch,
+  computeTotalMinutes,
+  formatTotalTime,
+  weatherSetHasData,
+  summarizeWeatherSet,
+  timeForInput,
+  emptyWeatherSetDraft,
   sumDraftFieldAcres,
   sumRecordFieldAcres,
   effectiveRecordAcres,
@@ -11,8 +18,26 @@ import {
   computeRemainingAcres,
   draftFromRecord,
   emptyAppliedRecordDraft,
+  type WeatherSetDraft,
 } from './appliedRecords';
 import type { JobAppliedRecord, JobAppliedRecordField, JobAppliedRecordRow } from '../../types';
+
+// Null-filled #19 weather columns, so test records satisfy the JobAppliedRecord
+// shape without every case spelling them out (override via `over` as needed).
+const NULL_WEATHER = {
+  start_weather_time: null,
+  start_temp_f: null,
+  start_wind_direction: null,
+  start_wind_mph: null,
+  start_humidity_pct: null,
+  start_weather_source: null,
+  end_weather_time: null,
+  end_temp_f: null,
+  end_wind_direction: null,
+  end_wind_mph: null,
+  end_humidity_pct: null,
+  end_weather_source: null,
+} as const;
 
 function rec(over: Partial<JobAppliedRecordRow>): JobAppliedRecordRow {
   return {
@@ -23,6 +48,7 @@ function rec(over: Partial<JobAppliedRecordRow>): JobAppliedRecordRow {
     application_date: over.application_date ?? '2026-06-01',
     applied_acres: over.applied_acres ?? null,
     notes: over.notes ?? null,
+    ...NULL_WEATHER,
     created_by: null,
     created_at: over.created_at ?? '2026-06-01T00:00:00Z',
     updated_at: '2026-06-01T00:00:00Z',
@@ -115,6 +141,11 @@ describe('buildAppliedRecordPatch', () => {
       application_date: '2026-06-01',
       applied_acres: null,
       notes: null,
+      // #19: an empty draft persists every weather column as null (no source flag).
+      start_weather_time: null, start_temp_f: null, start_wind_direction: null,
+      start_wind_mph: null, start_humidity_pct: null, start_weather_source: null,
+      end_weather_time: null, end_temp_f: null, end_wind_direction: null,
+      end_wind_mph: null, end_humidity_pct: null, end_weather_source: null,
     });
   });
 
@@ -133,11 +164,13 @@ describe('draftFromRecord round-trip', () => {
     const row: JobAppliedRecord = {
       id: 'r1', job_id: 'j1', applicator_id: 'a1', vehicle_id: 'v1',
       application_date: '2026-06-05', applied_acres: 33.5, notes: 'n',
+      ...NULL_WEATHER,
       created_by: null, created_at: 'x', updated_at: 'y',
     };
     expect(draftFromRecord(row)).toEqual({
       applicator_id: 'a1', vehicle_id: 'v1', application_date: '2026-06-05',
       applied_acres: '33.5', notes: 'n', fields: [],
+      startWeather: emptyWeatherSetDraft(), endWeather: emptyWeatherSetDraft(),
     });
   });
 
@@ -145,11 +178,13 @@ describe('draftFromRecord round-trip', () => {
     const row: JobAppliedRecord = {
       id: 'r1', job_id: 'j1', applicator_id: null, vehicle_id: null,
       application_date: '2026-06-05', applied_acres: null, notes: null,
+      ...NULL_WEATHER,
       created_by: null, created_at: 'x', updated_at: 'y',
     };
     expect(draftFromRecord(row)).toEqual({
       applicator_id: '', vehicle_id: '', application_date: '2026-06-05',
       applied_acres: '', notes: '', fields: [],
+      startWeather: emptyWeatherSetDraft(), endWeather: emptyWeatherSetDraft(),
     });
   });
 
@@ -157,6 +192,7 @@ describe('draftFromRecord round-trip', () => {
     const row = {
       id: 'r1', job_id: 'j1', applicator_id: 'a1', vehicle_id: 'v1',
       application_date: '2026-06-05', applied_acres: 60, notes: null,
+      ...NULL_WEATHER,
       created_by: null, created_at: 'x', updated_at: 'y',
       job_applied_record_fields: [
         { field_id: 'f1', applied_acres: 40 },
@@ -383,5 +419,162 @@ describe('#18 computeRemainingAcres (Total / Applied / Remaining)', () => {
     const v = computeRemainingAcres(100, records, { excludeId: 'r1', draftSum: 10 });
     expect(v.applied).toBe(40);
     expect(v.remaining).toBe(60);
+  });
+});
+
+// ── #19 START + END weather pair ─────────────────────────────────────────────
+
+function wset(over: Partial<WeatherSetDraft>): WeatherSetDraft {
+  return { ...emptyWeatherSetDraft(), ...over };
+}
+
+describe('computeTotalMinutes / formatTotalTime', () => {
+  it('computes end - start in whole minutes', () => {
+    expect(computeTotalMinutes('08:00', '10:15')).toBe(135);
+    expect(computeTotalMinutes('08:00', '08:45')).toBe(45);
+  });
+
+  it('handles a window that crosses midnight', () => {
+    expect(computeTotalMinutes('23:00', '01:00')).toBe(120);
+  });
+
+  it('returns null when either time is missing or invalid', () => {
+    expect(computeTotalMinutes('', '10:00')).toBeNull();
+    expect(computeTotalMinutes('08:00', '')).toBeNull();
+    expect(computeTotalMinutes('99:99', '10:00')).toBeNull();
+  });
+
+  it('accepts HH:MM:SS (DB time format)', () => {
+    expect(computeTotalMinutes('08:00:00', '09:30:00')).toBe(90);
+  });
+
+  it('formats minutes as Hh Mm', () => {
+    expect(formatTotalTime(135)).toBe('2h 15m');
+    expect(formatTotalTime(45)).toBe('45m');
+    expect(formatTotalTime(120)).toBe('2h');
+    expect(formatTotalTime(null)).toBe('—');
+  });
+});
+
+describe('timeForInput', () => {
+  it('trims seconds from a DB time, leaves HH:MM, handles null', () => {
+    expect(timeForInput('08:30:00')).toBe('08:30');
+    expect(timeForInput('08:30')).toBe('08:30');
+    expect(timeForInput(null)).toBe('');
+    expect(timeForInput(undefined)).toBe('');
+  });
+});
+
+describe('weatherSetHasData', () => {
+  it('is false for an empty set and true once any field is filled', () => {
+    expect(weatherSetHasData(emptyWeatherSetDraft())).toBe(false);
+    expect(weatherSetHasData(wset({ temp_f: '72' }))).toBe(true);
+    expect(weatherSetHasData(wset({ wind_direction: 'NNW' }))).toBe(true);
+  });
+});
+
+describe('buildWeatherSetPatch', () => {
+  it('maps a filled set, coercing numbers and keeping an explicit auto source', () => {
+    const p = buildWeatherSetPatch(
+      wset({ time: '08:30', temp_f: '72', wind_direction: 'NNW', wind_mph: '8.3', humidity_pct: '54', source: 'auto' }),
+    );
+    expect(p).toEqual({
+      time: '08:30',
+      temp_f: 72,
+      wind_direction: 'NNW',
+      wind_mph: 8.3,
+      humidity_pct: 54,
+      source: 'auto',
+    });
+  });
+
+  it('nulls every column and source for a fully-empty set', () => {
+    const p = buildWeatherSetPatch(emptyWeatherSetDraft());
+    expect(p).toEqual({
+      time: null, temp_f: null, wind_direction: null, wind_mph: null, humidity_pct: null, source: null,
+    });
+  });
+
+  it('defaults a hand-entered set (no explicit flag) to manual', () => {
+    const p = buildWeatherSetPatch(wset({ temp_f: '70' }));
+    expect(p.source).toBe('manual');
+  });
+});
+
+describe('validateAppliedRecord — weather bounds', () => {
+  const base = emptyAppliedRecordDraft({ applicator_id: 'a1', application_date: '2026-06-01' });
+
+  it('accepts valid weather and blank weather', () => {
+    expect(validateAppliedRecord(base).ok).toBe(true);
+    expect(
+      validateAppliedRecord({ ...base, startWeather: wset({ temp_f: '72', wind_mph: '5', humidity_pct: '50' }) }).ok,
+    ).toBe(true);
+  });
+
+  it('rejects negative wind speed', () => {
+    const v = validateAppliedRecord({ ...base, startWeather: wset({ wind_mph: '-3' }) });
+    expect(v.ok).toBe(false);
+    expect(v.error).toMatch(/wind speed/i);
+  });
+
+  it('rejects humidity outside 0–100', () => {
+    expect(validateAppliedRecord({ ...base, endWeather: wset({ humidity_pct: '120' }) }).ok).toBe(false);
+    expect(validateAppliedRecord({ ...base, endWeather: wset({ humidity_pct: '-1' }) }).ok).toBe(false);
+  });
+
+  it('rejects a non-numeric temperature', () => {
+    expect(validateAppliedRecord({ ...base, startWeather: wset({ temp_f: 'hot' }) }).ok).toBe(false);
+  });
+});
+
+describe('buildAppliedRecordPatch — weather columns', () => {
+  it('flattens start + end weather into the persisted columns', () => {
+    const draft = emptyAppliedRecordDraft({
+      applicator_id: 'a1',
+      application_date: '2026-06-01',
+      startWeather: wset({ time: '08:00', temp_f: '68', wind_direction: 'N', wind_mph: '6', humidity_pct: '60', source: 'auto' }),
+      endWeather: wset({ time: '10:00', temp_f: '74', wind_direction: 'NE', wind_mph: '9', humidity_pct: '48' }),
+    });
+    const p = buildAppliedRecordPatch(draft);
+    expect(p.start_weather_time).toBe('08:00');
+    expect(p.start_temp_f).toBe(68);
+    expect(p.start_weather_source).toBe('auto');
+    expect(p.end_temp_f).toBe(74);
+    expect(p.end_weather_source).toBe('manual'); // hand-entered end set
+  });
+});
+
+describe('summarizeWeatherSet', () => {
+  it('joins the present parts into a compact line', () => {
+    expect(summarizeWeatherSet({ time: '08:30:00', temp_f: 72, wind_direction: 'NNW', wind_mph: 8, humidity_pct: 54 }))
+      .toBe('08:30 · 72°F · NNW 8mph · 54%');
+  });
+
+  it('omits missing parts and returns empty for a blank set', () => {
+    expect(summarizeWeatherSet({ time: null, temp_f: 70, wind_direction: null, wind_mph: null, humidity_pct: null }))
+      .toBe('70°F');
+    expect(summarizeWeatherSet({ time: null, temp_f: null, wind_direction: null, wind_mph: null, humidity_pct: null }))
+      .toBe('');
+  });
+});
+
+describe('draftFromRecord — weather round-trip', () => {
+  it('reads start/end weather columns back into the draft (trimming time seconds)', () => {
+    const r = rec({
+      start_weather_time: '08:30:00',
+      start_temp_f: 70,
+      start_wind_direction: 'SSW',
+      start_wind_mph: 7,
+      start_humidity_pct: 55,
+      start_weather_source: 'auto',
+      end_weather_time: '11:00:00',
+      end_temp_f: 78,
+    });
+    const d = draftFromRecord(r);
+    expect(d.startWeather).toEqual({
+      time: '08:30', temp_f: '70', wind_direction: 'SSW', wind_mph: '7', humidity_pct: '55', source: 'auto',
+    });
+    expect(d.endWeather.time).toBe('11:00');
+    expect(d.endWeather.temp_f).toBe('78');
   });
 });

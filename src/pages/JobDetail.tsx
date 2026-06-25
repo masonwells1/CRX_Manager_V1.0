@@ -1883,6 +1883,7 @@ export default function JobDetail() {
                     acres: parseFloat(f.acres_to_treat) || 0,
                   }))}
                 totalAcres={totalAcres}
+                fieldCentroid={jobFieldCentroid}
                 canEdit={canEdit}
                 performedBy={profile?.id ?? null}
               />
