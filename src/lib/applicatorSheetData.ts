@@ -133,6 +133,12 @@ export interface ApplicatorSheetProduct {
   rate_unit: string | null;
   /** Total applied across the whole job = rate × total acres (or a hand-entered total). */
   total_applied: number | null;
+  /**
+   * Measure unit of total_applied (e.g. "GAL" / "LB") — labels the Total Applied
+   * magnitude and drives the gallon/lb conversion. This is the job's `unit`, NOT
+   * the per-acre `rate_unit` (mirrors the in-page preview + loader worksheet).
+   */
+  total_unit: string | null;
   /** "12.5 gal" / "40 lb" gallon-or-pound equivalent of total_applied; null if not convertible. */
   total_gl_lb: string | null;
   rei_hours: number | null;
@@ -177,7 +183,14 @@ export interface RawSheetField {
 export interface RawSheetProduct {
   product_name: string;
   rate_per_acre: number | null;
+  /** Per-acre RATE unit (e.g. "pt/ac") — labels the Rate/Acre column ONLY. */
   rate_unit: string | null;
+  /**
+   * Measure unit of the Total Applied quantity (e.g. "GAL" / "LB"). This — NOT
+   * rate_unit — labels the Total Applied magnitude and drives the gal/lb
+   * conversion, matching the in-page preview + loader worksheet (JobDetail).
+   */
+  unit: string | null;
   /** Optional hand-entered total; when null we derive rate × total acres. */
   total_quantity: number | null;
   /** 'liquid' | 'dry' so the gal/lb conversion matches the server convert_to_gl_lb. */
@@ -231,16 +244,30 @@ export function buildApplicatorSheetData(input: BuildSheetInput): ApplicatorShee
   const totalAcres = fields.reduce((s, f) => s + (Number.isFinite(f.acres) ? f.acres : 0), 0);
 
   const products: ApplicatorSheetProduct[] = input.products.map((p) => {
-    // Total applied = the hand-entered total if present, else rate × total acres.
+    // Total applied = the saved total quantity (job_chemicals.quantity) if present, else
+    // rate × total acres. NOTE: in a saved job `quantity` IS the total — the 3-way
+    // calculator (chemCalculator) keeps it = rate × acres or back-solves the rate — so
+    // this normally takes the first branch and equals what the preview/loader read.
     const total = p.total_quantity != null && Number.isFinite(p.total_quantity)
       ? p.total_quantity
       : (p.rate_per_acre != null && Number.isFinite(p.rate_per_acre) ? p.rate_per_acre * totalAcres : null);
-    const conv = total != null ? toGallonOrLbEquivalent(total, p.rate_unit, p.product_form) : null;
+    // The Total Applied quantity is measured in p.unit (the job_chemicals.unit, e.g.
+    // GAL/LB) — that is what labels the total AND drives the gal/lb conversion, NOT the
+    // per-acre p.rate_unit. This MIRRORS the in-page preview (toGallonOrLbEquivalent(
+    // quantity, c.unit)) and the loader worksheet, so all three operational surfaces
+    // agree. (The rate/acre column keeps rate_unit — that's correct for the per-acre rate.)
+    //
+    // Fallback: only when a row has NO unit (legacy/blank job_chemicals.unit) do we fall
+    // back to rate_unit, preserving the pre-fix output (e.g. 240 pt -> 30 gal) for those
+    // rows rather than printing a dash. When unit IS set, unit always wins (the fix).
+    const totalUnit = (p.unit != null && p.unit !== '') ? p.unit : p.rate_unit;
+    const conv = total != null ? toGallonOrLbEquivalent(total, totalUnit, p.product_form) : null;
     return {
       product_name: p.product_name,
       rate_per_acre: p.rate_per_acre,
       rate_unit: p.rate_unit,
       total_applied: total != null ? Math.round(total * 10000) / 10000 : null,
+      total_unit: totalUnit,
       total_gl_lb: conv ? `${fmtNum(conv.value)} ${conv.unit}` : null,
       rei_hours: p.rei_hours,
       phi_days: p.phi_days,

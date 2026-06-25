@@ -194,7 +194,9 @@ function drawSheet(doc: JsPDFWithAutoTable, autoTable: typeof import('jspdf-auto
       const rate = p.rate_per_acre != null ? `${fmtNum(p.rate_per_acre)} ${p.rate_unit || ''}/ac`.trim() : '—';
       const row: string[] = [p.product_name, rate];
       if (theme.enhanced && theme.columns.total_applied) {
-        row.push(p.total_applied != null ? `${fmtNum(p.total_applied)} ${p.rate_unit || ''}`.trim() : '—');
+        // Label the Total Applied magnitude with its OWN measure unit (total_unit),
+        // not the per-acre rate_unit — matches the in-page preview / loader worksheet.
+        row.push(p.total_applied != null ? `${fmtNum(p.total_applied)} ${p.total_unit || ''}`.trim() : '—');
       }
       if (theme.enhanced && theme.columns.gl_lb) row.push(p.total_gl_lb || '—');
       if (theme.enhanced && theme.columns.rei) row.push(p.rei_hours != null ? `${p.rei_hours} hr` : '—');

@@ -26,6 +26,7 @@ const product = (over: Partial<RawSheetProduct>): RawSheetProduct => ({
   product_name: 'Product',
   rate_per_acre: null,
   rate_unit: null,
+  unit: null,
   total_quantity: null,
   product_form: null,
   rei_hours: null,
@@ -97,23 +98,78 @@ describe('buildApplicatorSheetData — totals + conversion', () => {
 
   it('converts a liquid total to gallons matching the server branch (240 pt → 30 gal)', () => {
     const data = buildApplicatorSheetData(baseInput({
-      products: [product({ rate_unit: 'pt', product_form: 'liquid', total_quantity: 240 })],
+      products: [product({ unit: 'pt', product_form: 'liquid', total_quantity: 240 })],
     }));
     expect(data.products[0].total_gl_lb).toBe('30 gal');
   });
 
   it('converts a dry total to pounds (32 oz → 2 lb)', () => {
     const data = buildApplicatorSheetData(baseInput({
-      products: [product({ rate_unit: 'oz', product_form: 'dry', total_quantity: 32 })],
+      products: [product({ unit: 'oz', product_form: 'dry', total_quantity: 32 })],
     }));
     expect(data.products[0].total_gl_lb).toBe('2 lb');
   });
 
   it('leaves the conversion null for an unrecognized unit (never guesses)', () => {
     const data = buildApplicatorSheetData(baseInput({
-      products: [product({ rate_unit: 'widgets', total_quantity: 5 })],
+      products: [product({ unit: 'widgets', total_quantity: 5 })],
     }));
     expect(data.products[0].total_gl_lb).toBeNull();
+  });
+
+  // ── #9 MED fix: the Total Applied magnitude is measured in `unit`, NOT the
+  // per-acre `rate_unit`. The conversion + the label must use `unit`, mirroring
+  // the in-page preview (toGallonOrLbEquivalent(quantity, c.unit)) and loader
+  // worksheet. The rate/acre column keeps using rate_unit.
+  it('uses unit (not rate_unit) for the Total Applied label + gal/lb when they differ', () => {
+    const data = buildApplicatorSheetData(baseInput({
+      products: [product({
+        rate_per_acre: 1,
+        rate_unit: 'pt/ac',     // per-acre rate unit — must NOT label/convert the total
+        unit: 'GAL',            // Total Applied measure unit — what the preview uses
+        product_form: 'liquid',
+        total_quantity: 12.5,
+      })],
+    }));
+    const p = data.products[0];
+    // Label the total with its own measure unit, not the per-acre rate unit.
+    expect(p.total_unit).toBe('GAL');
+    expect(p.rate_unit).toBe('pt/ac');
+    // 12.5 GAL → 12.5 gal (matches in-page preview toGallonOrLbEquivalent(12.5,'GAL')).
+    // If it had wrongly used rate_unit 'pt/ac' the conversion would NOT be 12.5 gal.
+    expect(p.total_gl_lb).toBe('12.5 gal');
+  });
+
+  it('converts when rate_unit is blank but unit is set — a real number, not a dash', () => {
+    const data = buildApplicatorSheetData(baseInput({
+      products: [product({
+        rate_per_acre: 2,
+        rate_unit: null,        // no per-acre rate unit captured
+        unit: 'gal',            // but the Total Applied measure unit IS set
+        product_form: 'liquid',
+        total_quantity: 40,     // saved total quantity, measured in unit
+      })],
+    }));
+    const p = data.products[0];
+    expect(p.total_unit).toBe('gal');
+    // Real tank quantity — NOT null/dash (the old rate_unit path printed a dash here).
+    expect(p.total_gl_lb).toBe('40 gal');
+  });
+
+  // Legacy/blank-unit row: when job_chemicals.unit is empty but rate_unit is set, fall
+  // back to rate_unit so the pre-fix output (240 pt → 30 gal) is preserved (not a dash).
+  it('falls back to rate_unit only when unit is blank (legacy row preserved)', () => {
+    const data = buildApplicatorSheetData(baseInput({
+      products: [product({
+        unit: '',               // legacy/blank measure unit
+        rate_unit: 'pt',        // only the rate unit is populated
+        product_form: 'liquid',
+        total_quantity: 240,
+      })],
+    }));
+    const p = data.products[0];
+    expect(p.total_unit).toBe('pt');     // fell back to rate_unit
+    expect(p.total_gl_lb).toBe('30 gal'); // 240 pt → 30 gal — same as before the fix
   });
 });
 

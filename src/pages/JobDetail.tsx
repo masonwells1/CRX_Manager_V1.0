@@ -422,6 +422,10 @@ export default function JobDetail() {
               product_name: c.product_name || 'Product',
               rate_per_acre: parseFloat(c.rate_per_acre) || null,
               rate_unit: c.rate_unit || null,
+              // The Total Applied quantity's measure unit (e.g. GAL/LB) — drives the
+              // gal/lb conversion + labels Total Applied, matching the in-page
+              // preview + loader worksheet. NOT rate_unit (per-acre).
+              unit: c.unit || null,
               total_quantity: parseFloat(c.quantity) || null,
               product_form: lbl?.product_form ?? null,
               rei_hours: c.rei_hours !== '' ? parseFloat(c.rei_hours) : (lbl?.rei_hours ?? null),
